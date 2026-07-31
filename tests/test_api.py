@@ -99,3 +99,56 @@ def test_cancel_and_delete(client):
     r = client.delete(f"/api/jobs/{job_id}")
     assert r.status_code == 200
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+# --- progress ---
+
+
+def test_progress_is_empty_when_idle(client):
+    r = client.get("/api/progress")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["job_id"] is None
+    assert body["progress"] is None
+    assert body["server_time"] > 0
+
+
+def test_progress_reports_the_running_job(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    worker = client.app.state.worker
+    worker.current_job_id = job_id
+    worker.progress.begin(job_id, "text")
+    worker.progress.update(
+        job_id, phase="trellis", label="Mesh decode", inner=0.5, detail="building mesh"
+    )
+    try:
+        body = client.get("/api/progress").json()
+        assert body["job_id"] == job_id
+        assert body["progress"]["label"] == "Mesh decode"
+        assert body["progress"]["percent"] > 0
+    finally:
+        worker.current_job_id = None
+        worker.progress.end(job_id)
+
+
+def test_job_list_carries_progress_only_for_the_running_job(client):
+    a = client.post("/api/jobs", data={"kind": "text", "prompt": "a"}).json()["id"]
+    b = client.post("/api/jobs", data={"kind": "text", "prompt": "b"}).json()["id"]
+    worker = client.app.state.worker
+    worker.progress.begin(a, "text")
+    worker.progress.update(a, phase="trellis", label="Texture", inner=0.3)
+    try:
+        jobs = {j["id"]: j for j in client.get("/api/jobs").json()}
+        assert jobs[a]["progress"]["label"] == "Texture"
+        assert jobs[b]["progress"] is None
+        assert client.get(f"/api/jobs/{b}").json()["progress"] is None
+    finally:
+        worker.progress.end(a)
+
+
+def test_progress_clears_when_the_job_ends(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    worker = client.app.state.worker
+    worker.progress.begin(job_id, "text")
+    worker.progress.end(job_id)
+    assert client.get(f"/api/jobs/{job_id}").json()["progress"] is None

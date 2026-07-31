@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -49,6 +50,21 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, Any]:
         return {"ok": True, "trellis_running": app.state.worker.trellis.running}
 
+    @app.get("/api/progress")
+    async def progress() -> dict[str, Any]:
+        """Live progress for the running job. Cheap by design: no DB, no disk.
+
+        The UI polls this every ~600 ms while a job is active, and the full job
+        list only every few seconds.
+        """
+        worker = app.state.worker
+        return {
+            "job_id": worker.current_job_id,
+            "progress": worker.progress.snapshot(),
+            # Lets the client correct for clock skew when rendering elapsed time.
+            "server_time": time.time(),
+        }
+
     @app.post("/api/jobs")
     async def create_job(
         kind: Annotated[str, Form()],
@@ -87,6 +103,7 @@ def create_app() -> FastAPI:
         jobs = await asyncio.to_thread(store().list)
         for job in jobs:
             _attach_files(job, config.job_dir(job["id"]))
+            _attach_progress(job, app.state.worker)
         return jobs
 
     @app.get("/api/jobs/{job_id}")
@@ -95,6 +112,7 @@ def create_app() -> FastAPI:
         if job is None:
             raise HTTPException(404, "no such job")
         _attach_files(job, config.job_dir(job_id))
+        _attach_progress(job, app.state.worker)
         return job
 
     @app.post("/api/jobs/{job_id}/cancel")
@@ -168,3 +186,8 @@ def _attach_files(job: dict[str, Any], job_dir: Path) -> None:
     job["files"] = [
         name for name in ("input.png", "model.glb") if (job_dir / name).exists()
     ]
+
+
+def _attach_progress(job: dict[str, Any], worker: Any) -> None:
+    """Live progress, only ever for the job actually running."""
+    job["progress"] = worker.progress.snapshot(job["id"])

@@ -47,12 +47,21 @@
   }
   #jobs li.selected { border-color: var(--accent); }
   #jobs img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--bg); }
+  #jobs li > div:nth-child(2) { min-width: 0; flex: 1; }
   .job-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .status { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
   .status.queued  { color: var(--muted); }
-  .status.running { color: var(--accent); }
+  .status.running, .status.cancelling { color: var(--accent); }
   .status.done    { color: var(--ok); }
   .status.error, .status.cancelled { color: var(--err); }
+  .job-stage {
+    font-size: 11px; color: var(--muted); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .job-error {
+    font-size: 11px; color: var(--err); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .job-actions { margin-left: auto; display: flex; gap: 4px; }
   .job-actions button {
     background: none; border: 1px solid var(--edge); border-radius: 4px;
@@ -62,7 +71,43 @@
   #viewer { width: 100%; height: 100%; display: block; }
   #placeholder {
     position: absolute; inset: 0; display: grid; place-items: center;
-    color: var(--muted); pointer-events: none;
+    color: var(--muted); pointer-events: none; text-align: center; padding: 24px;
+  }
+
+  /* --- progress --------------------------------------------------------- */
+  .bar { height: 3px; background: var(--edge); border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent);
+             transition: width .45s linear; }
+  .bar.indet > i { width: 35%; animation: a3d-indet 1.4s ease-in-out infinite; }
+  .bar.mini { margin-top: 6px; }
+
+  @keyframes a3d-spin { to { transform: rotate(360deg); } }
+  @keyframes a3d-indet {
+    0%   { margin-left: -35%; }
+    100% { margin-left: 100%; }
+  }
+
+  .spinner {
+    width: 34px; height: 34px; border-radius: 50%; margin: 0 auto 14px;
+    border: 3px solid var(--edge); border-top-color: var(--accent);
+    animation: a3d-spin .9s linear infinite;
+  }
+  /* The container is pointer-events:none so orbit controls keep working; the
+     card re-enables them for its own buttons. */
+  #ph-progress { pointer-events: auto; width: min(360px, 80%); }
+  #ph-label { font-size: 15px; color: var(--text); margin-bottom: 10px; }
+  #ph-detail { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 1.5em; }
+  #ph-time {
+    font-size: 12px; color: var(--muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  #ph-progress.failed #ph-label { color: var(--err); }
+  #ph-progress.failed .spinner { animation: none; border-top-color: var(--err); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+    .bar.indet > i { animation: none; width: 100%; opacity: .4; }
+    .bar > i { transition: none; }
   }
   #downloads {
     position: absolute; top: 16px; right: 16px; display: none; gap: 6px;
@@ -107,7 +152,16 @@
 </aside>
 <main>
   <canvas id="viewer"></canvas>
-  <div id="placeholder">Generate a model or select a finished job to preview it here.</div>
+  <div id="placeholder">
+    <div id="ph-idle">Generate a model or select a finished job to preview it here.</div>
+    <div id="ph-progress" hidden aria-live="polite">
+      <div class="spinner"></div>
+      <div id="ph-label">Starting</div>
+      <div class="bar"><i></i></div>
+      <div id="ph-detail"></div>
+      <div id="ph-time"></div>
+    </div>
+  </div>
   <div id="downloads">
     <a id="dl-glb" download>GLB</a>
     <a id="dl-obj" download>OBJ</a>

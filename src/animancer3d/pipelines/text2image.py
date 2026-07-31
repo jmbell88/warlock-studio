@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+STEPS = 4  # turbo/schnell models are distilled for 1-4 steps
 
 # Bias generations toward images TRELLIS handles well: one object, clean silhouette.
 PROMPT_TEMPLATE = (
@@ -32,12 +36,25 @@ class Text2Image:
     def loaded(self) -> bool:
         return self._pipe is not None
 
-    def load(self) -> None:
+    def cached(self) -> bool:
+        """True if the weights are already in the HuggingFace cache.
+
+        The first run downloads ~7 GB with no output of its own, which otherwise
+        looks like a hang. Intercepting huggingface_hub's tqdm is fragile, so we
+        just check the cache directory and report an indeterminate phase.
+        """
+        home = os.environ.get("HF_HOME")
+        hub = Path(home) / "hub" if home else Path.home() / ".cache" / "huggingface" / "hub"
+        return (hub / f"models--{self._model_id.replace('/', '--')}").exists()
+
+    def load(self, on_state: Callable[[str], None] | None = None) -> None:
         if self._pipe is not None:
             return
         import torch
         from diffusers import AutoPipelineForText2Image
 
+        if on_state is not None:
+            on_state("load" if self.cached() else "download")
         log.info("loading %s", self._model_id)
         self._pipe = AutoPipelineForText2Image.from_pretrained(
             self._model_id, torch_dtype=torch.bfloat16, variant="fp16"
@@ -56,18 +73,35 @@ class Text2Image:
         gc.collect()
         torch.cuda.empty_cache()
 
-    def generate(self, prompt: str, output_path: Path, *, seed: int = 42) -> Path:
+    def generate(
+        self,
+        prompt: str,
+        output_path: Path,
+        *,
+        seed: int = 42,
+        on_state: Callable[[str], None] | None = None,
+        on_step: Callable[[int, int], None] | None = None,
+    ) -> Path:
         import torch
 
-        self.load()
+        self.load(on_state)
         assert self._pipe is not None
+        if on_state is not None:
+            on_state("sample")
+
+        def step_cb(_pipe, i, _t, kwargs):
+            if on_step is not None:
+                on_step(i + 1, STEPS)
+            return kwargs  # diffusers requires the kwargs dict back, not None
+
         image = self._pipe(
             PROMPT_TEMPLATE.format(prompt=prompt),
-            num_inference_steps=4,  # turbo/schnell models are distilled for 1-4 steps
+            num_inference_steps=STEPS,
             guidance_scale=0.0,
             width=self._image_size,
             height=self._image_size,
             generator=torch.Generator("cuda").manual_seed(seed),
+            callback_on_step_end=step_cb,
         ).images[0]
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
