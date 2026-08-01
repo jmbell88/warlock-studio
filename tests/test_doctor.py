@@ -74,3 +74,22 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 
 def test_run_checks_returns_seven_checks(tmp_path):
     assert len(run_checks(_config(tmp_path))) == 7
+
+
+def test_cuda_check_is_not_fatal_when_torch_missing_or_unavailable(tmp_path):
+    checks = {c.name: c for c in run_checks(_config(tmp_path))}
+    assert checks["CUDA"].fatal is False
+
+
+def test_disk_check_is_not_fatal(tmp_path):
+    checks = {c.name: c for c in run_checks(_config(tmp_path))}
+    assert checks["free disk space"].fatal is False
+    assert isinstance(checks["free disk space"].ok, bool)
+
+
+def test_sdxl_cache_check_is_not_fatal_when_uncached(tmp_path, monkeypatch):
+    hf_home = tmp_path / "hf_home"
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    checks = {c.name: c for c in run_checks(_config(tmp_path))}
+    assert checks["SDXL-Turbo cache"].ok is False
+    assert checks["SDXL-Turbo cache"].fatal is False
