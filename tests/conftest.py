@@ -34,6 +34,12 @@ class FakeTrellisServer:
         self.slices = 5
         self.sleep_per_slice = 0.02
         self.should_raise: Exception | None = None
+        # When True, stop() no longer stands in for "the subprocess died and
+        # unblocked the in-flight request" -- it just records that it was
+        # called. Combined with a long generate() run, this simulates a
+        # trellis-server.exe that ignores termination, so the only thing that
+        # can end the run is Worker.shutdown()'s forced task.cancel() fallback.
+        self.ignore_stop = False
 
     async def generate(
         self, image_path: Path, output_path: Path, *, seed: int = 42, resolution: int = 1024
@@ -54,6 +60,8 @@ class FakeTrellisServer:
 
     def stop(self) -> None:
         self.stop_calls += 1
+        if self.ignore_stop:
+            return
         self.running = False
 
 

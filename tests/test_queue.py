@@ -7,7 +7,7 @@ import pytest
 
 from animancer3d.config import Config
 from animancer3d.db import JobStore
-from animancer3d.queue import Worker
+from animancer3d.queue import SHUTDOWN_TIMEOUT, Worker
 
 pytestmark = pytest.mark.asyncio
 
@@ -53,6 +53,31 @@ async def test_shutdown_with_job_running_returns_promptly(worker):
     start = time.monotonic()
     await asyncio.wait_for(worker.shutdown(), timeout=20.0)
     assert time.monotonic() - start < 20.0
+
+
+async def test_shutdown_forces_cancel_after_timeout_when_trellis_ignores_stop(worker):
+    # If shutdown()'s forced task.cancel() fallback (the branch that fires
+    # after asyncio.wait_for(self._task, timeout=SHUTDOWN_TIMEOUT) raises
+    # TimeoutError) were deleted, this test would hang past its own
+    # asyncio.wait_for budget and fail with TimeoutError instead of
+    # completing -- unlike test_shutdown_with_job_running_returns_promptly,
+    # whose fake job always finishes on its own in ~0.1s regardless of
+    # whether cancellation ever reached it.
+    _make_image_job(worker)
+    worker.trellis.ignore_stop = True
+    worker.trellis.slices = 100
+    worker.trellis.sleep_per_slice = 1.0  # total >> SHUTDOWN_TIMEOUT
+    worker.start()
+    await _wait_until(lambda: worker.trellis.running)
+
+    start = time.monotonic()
+    await asyncio.wait_for(worker.shutdown(), timeout=SHUTDOWN_TIMEOUT + 5.0)
+    elapsed = time.monotonic() - start
+
+    # Bounded by the forced-cancel fallback (~SHUTDOWN_TIMEOUT), not by the
+    # fake job's own ~100s runtime.
+    assert elapsed < SHUTDOWN_TIMEOUT + 5.0
+    assert worker.trellis.stop_calls >= 1
 
 
 async def test_cancel_mid_trellis_stops_process_and_leaves_no_glb(worker):
