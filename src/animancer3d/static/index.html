@@ -117,9 +117,23 @@
     color: var(--text); padding: 8px 14px; text-decoration: none; font-size: 13px;
   }
   #downloads a:hover { border-color: var(--accent); }
+  #banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+    display: flex; align-items: center; gap: 12px;
+    background: var(--err); color: #fff; font-size: 13px;
+    padding: 8px 16px;
+  }
+  #banner button {
+    margin-left: auto; background: none; border: none; color: inherit;
+    cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px;
+  }
 </style>
 </head>
 <body>
+<div id="banner" hidden>
+  <span id="banner-text"></span>
+  <button id="banner-close" type="button" aria-label="dismiss">&times;</button>
+</div>
 <aside>
   <h1>Animancer<span>3D</span></h1>
   <div class="tabs">

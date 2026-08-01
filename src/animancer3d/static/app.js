@@ -172,6 +172,35 @@ const jobsById = new Map();
 let selected = null;
 let shownModelFor = null;
 
+// --- banner --------------------------------------------------------------
+// A single dismissible slot; the last shown "kind" wins so a doctor warning
+// isn't clobbered by a transient disconnect and vice versa.
+
+const banner = document.getElementById("banner");
+const bannerText = document.getElementById("banner-text");
+const bannerClose = document.getElementById("banner-close");
+const dismissedBanners = new Set();
+let activeBannerKind = null;
+
+function showBanner(kind, text) {
+  if (dismissedBanners.has(kind)) return;
+  activeBannerKind = kind;
+  setText(bannerText, text);
+  banner.hidden = false;
+}
+
+function hideBanner(kind) {
+  if (activeBannerKind !== kind) return;
+  banner.hidden = true;
+  activeBannerKind = null;
+}
+
+bannerClose.addEventListener("click", () => {
+  if (activeBannerKind) dismissedBanners.add(activeBannerKind);
+  banner.hidden = true;
+  activeBannerKind = null;
+});
+
 function createNode(id) {
   const li = document.createElement("li");
   const img = document.createElement("img");
@@ -203,9 +232,17 @@ function createNode(id) {
     const job = jobsById.get(id);
     if (!job) return;
     const active = job.status === "queued" || job.status === "running";
-    await fetch(`/api/jobs/${id}${active ? "/cancel" : ""}`, {
-      method: active ? "POST" : "DELETE",
-    });
+    if (active) {
+      act.disabled = true;
+      setText(act, "cancelling…");
+    }
+    try {
+      await fetch(`/api/jobs/${id}${active ? "/cancel" : ""}`, {
+        method: active ? "POST" : "DELETE",
+      });
+    } finally {
+      act.disabled = false;
+    }
     if (!active && selected === id) {
       selected = null;
       hideOverlay();
@@ -312,6 +349,8 @@ let etaEma = null;
 const abort = new AbortController();
 window.addEventListener("beforeunload", () => abort.abort());
 
+let pollFailures = 0;
+
 async function poll(forceList = false) {
   if (forceList) wantList = true;
   if (inFlight) return;
@@ -319,6 +358,8 @@ async function poll(forceList = false) {
   try {
     const r = await fetch("/api/progress", { signal: abort.signal });
     const data = await r.json();
+    pollFailures = 0;
+    hideBanner("disconnected");
     skew = data.server_time - Date.now() / 1000;
 
     const changed = data.job_id !== liveJobId;
@@ -339,7 +380,11 @@ async function poll(forceList = false) {
     }
     renderOverlay();
   } catch (e) {
-    if (e.name !== "AbortError") console.error("poll failed", e);
+    if (e.name !== "AbortError") {
+      console.error("poll failed", e);
+      pollFailures++;
+      if (pollFailures >= 3) showBanner("disconnected", "Lost connection to the server — retrying…");
+    }
   } finally {
     inFlight = false;
   }
@@ -401,6 +446,19 @@ function renderClock() {
   setText(phTime, out);
 }
 setInterval(renderClock, 200);
+
+async function checkDoctor() {
+  try {
+    const health = await (await fetch("/api/health")).json();
+    const bad = (health.checks || []).filter((c) => c.fatal && !c.ok);
+    if (bad.length) {
+      showBanner("doctor", `Setup problem: ${bad.map((c) => c.detail).join("; ")}`);
+    }
+  } catch (e) {
+    console.error("doctor check failed", e);
+  }
+}
+checkDoctor();
 
 (function loop() {
   poll().finally(() => setTimeout(loop, liveJobId || pending ? FAST_MS : IDLE_MS));
