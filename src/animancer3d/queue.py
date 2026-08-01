@@ -215,10 +215,18 @@ class Worker:
                 glb = self.config.job_dir(job_id) / "model.glb"
                 with contextlib.suppress(OSError):
                     glb.unlink()
-            elif error is not None:
-                await asyncio.to_thread(self.store.set_status, job_id, "error", error)
             else:
-                await asyncio.to_thread(self.store.set_status, job_id, "done")
+                status = "error" if error is not None else "done"
+                finished = await asyncio.to_thread(self.store.finish, job_id, status, error)
+                if not finished:
+                    # A cancel landed between claim() succeeding and this
+                    # write (before self._cancel existed to observe it, or
+                    # the API route's atomic cancel() won the DB race) --
+                    # the DB already says cancelled; don't overwrite it and
+                    # don't leave a viewable artifact behind.
+                    glb = self.config.job_dir(job_id) / "model.glb"
+                    with contextlib.suppress(OSError):
+                        glb.unlink()
             self.current_job_id = None
             self._cancel = None
             self.progress.end(job_id)

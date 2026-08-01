@@ -143,18 +143,30 @@ def create_app() -> FastAPI:
         job = await asyncio.to_thread(store().get, job_id)
         if job is None:
             raise HTTPException(404, "no such job")
+        if job["status"] == "cancelled":
+            # Idempotent success: some earlier request (possibly this exact
+            # race) already cancelled it. Only a genuinely terminal
+            # done/error status below is "too late" and worth a 409.
+            return {"ok": True}
         if job["status"] not in ("queued", "running"):
             raise HTTPException(409, f"job is {job['status']}")
-        # Unconditional and safe: request_cancel no-ops unless job_id is the
-        # job actually running right now, which closes the race where this
-        # job was 'queued' at the read above but the worker claims it before
-        # the cancel below reaches the DB.
-        await app.state.worker.request_cancel(job_id)
+        if job["status"] == "running":
+            await app.state.worker.request_cancel(job_id)
         # Atomic: if the worker's own terminal write (done/error) landed
         # first, this is a no-op and the job's real outcome stands instead
-        # of being retroactively overwritten to "cancelled".
+        # of being retroactively overwritten to "cancelled". The DB-level
+        # JobStore.finish() conditional write (queue.py) is what actually
+        # closes the lost-cancel race for a job that was 'queued' here but
+        # got claimed before this request reached the DB -- not this call
+        # to request_cancel, which only matters for a job already running.
         cancelled = await asyncio.to_thread(store().cancel, job_id)
         if not cancelled:
+            # Could be "already cancelled" (idempotent success -- this
+            # request's own effect already landed, e.g. via the race above)
+            # or "already done/error" (genuinely too late).
+            current = await asyncio.to_thread(store().get, job_id)
+            if current and current["status"] == "cancelled":
+                return {"ok": True}
             raise HTTPException(409, "job already finished")
         return {"ok": True}
 

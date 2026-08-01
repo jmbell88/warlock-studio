@@ -123,6 +123,16 @@ def test_cancel_running_job_calls_request_cancel(client, monkeypatch):
         worker.current_job_id = None
 
 
+def test_cancel_is_idempotent_when_already_cancelled(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    worker = client.app.state.worker
+    worker.store.set_status(job_id, "running")
+    worker.store.cancel(job_id)  # simulate: already cancelled by the time this request lands
+    worker.current_job_id = None  # not the currently-running job from the route's perspective
+    r = client.post(f"/api/jobs/{job_id}/cancel")
+    assert r.status_code == 200
+
+
 def test_input_png_written_before_db_row_is_created(client, tmp_path, monkeypatch):
     from animancer3d.db import JobStore
 

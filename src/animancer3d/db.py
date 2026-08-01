@@ -118,6 +118,26 @@ class JobStore:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def finish(self, job_id: str, status: str, error: str | None = None) -> bool:
+        """Atomically transition running -> a terminal status (done/error).
+        False if the job was cancelled out from under it between claim()
+        and this call -- the caller must not overwrite that outcome or
+        leave a viewable artifact for a job the DB already says was
+        cancelled."""
+        now = time.time()
+        sets = ["status = ?", "finished_at = ?"]
+        args: list[Any] = [status, now]
+        if error is not None:
+            sets.append("error = ?")
+            args.append(error)
+        args.append(job_id)
+        cur = self._conn.execute(
+            f"UPDATE jobs SET {', '.join(sets)} WHERE id = ? AND status = 'running'",
+            args,
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def reconcile_startup(self) -> None:
         """Any job still 'running' at process start was orphaned by a crash
         or an unclean shutdown — not silently re-run, made visibly an error."""

@@ -78,6 +78,45 @@ def test_cancel_succeeds_on_queued_or_running_job(tmp_path):
     store.close()
 
 
+def test_cancel_succeeds_on_running_job(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    store.claim(job_id)
+    assert store.cancel(job_id) is True
+    assert store.get(job_id)["status"] == "cancelled"
+    store.close()
+
+
+def test_finish_succeeds_on_running_job(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    store.claim(job_id)
+    assert store.finish(job_id, "done") is True
+    assert store.get(job_id)["status"] == "done"
+    store.close()
+
+
+def test_finish_fails_if_job_was_cancelled_underneath(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    store.claim(job_id)
+    store.cancel(job_id)
+    assert store.finish(job_id, "done") is False
+    assert store.get(job_id)["status"] == "cancelled"
+    store.close()
+
+
+def test_finish_records_error_message(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    store.claim(job_id)
+    assert store.finish(job_id, "error", "boom") is True
+    job = store.get(job_id)
+    assert job["status"] == "error"
+    assert job["error"] == "boom"
+    store.close()
+
+
 def test_cancel_fails_on_already_terminal_job(tmp_path):
     store = JobStore(tmp_path / "jobs.sqlite")
     job_id = store.create("text", "x", {})

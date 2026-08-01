@@ -109,6 +109,23 @@ async def test_cancel_mid_t2i_never_starts_trellis(worker):
     assert worker.trellis.generate_calls == []
 
 
+async def test_worker_finish_does_not_overwrite_a_cancel_that_raced_it(worker):
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.current_job_id == job_id)
+    # Simulate the lost-cancel race: cancel lands at the DB level without
+    # ever reaching self._cancel.event (as if request_cancel ran before
+    # self._cancel existed to observe it, e.g. between claim() and the
+    # synchronous self._cancel = _Cancel(job_id) assignment).
+    worker.store.cancel(job_id)
+    await _wait_until(lambda: worker.store.get(job_id)["status"] != "running")
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "cancelled"
+    assert not (worker.config.job_dir(job_id) / "model.glb").exists()
+
+
 async def test_exception_in_generate_marks_error_and_worker_survives(worker):
     bad_id = _make_image_job(worker)
     worker.trellis.should_raise = RuntimeError("boom")
