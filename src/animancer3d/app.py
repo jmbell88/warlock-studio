@@ -145,11 +145,17 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "no such job")
         if job["status"] not in ("queued", "running"):
             raise HTTPException(409, f"job is {job['status']}")
-        if job["status"] == "running":
-            await app.state.worker.request_cancel(job_id)
-        # A running job finishes its current GPU stage; the worker preserves the
-        # cancelled status instead of marking it done.
-        await asyncio.to_thread(store().set_status, job_id, "cancelled")
+        # Unconditional and safe: request_cancel no-ops unless job_id is the
+        # job actually running right now, which closes the race where this
+        # job was 'queued' at the read above but the worker claims it before
+        # the cancel below reaches the DB.
+        await app.state.worker.request_cancel(job_id)
+        # Atomic: if the worker's own terminal write (done/error) landed
+        # first, this is a no-op and the job's real outcome stands instead
+        # of being retroactively overwritten to "cancelled".
+        cancelled = await asyncio.to_thread(store().cancel, job_id)
+        if not cancelled:
+            raise HTTPException(409, "job already finished")
         return {"ok": True}
 
     @app.delete("/api/jobs/{job_id}")

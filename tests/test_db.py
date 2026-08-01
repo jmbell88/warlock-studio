@@ -70,6 +70,23 @@ def test_claim_fails_on_cancelled_job(tmp_path):
     store.close()
 
 
+def test_cancel_succeeds_on_queued_or_running_job(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    assert store.cancel(job_id) is True
+    assert store.get(job_id)["status"] == "cancelled"
+    store.close()
+
+
+def test_cancel_fails_on_already_terminal_job(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite")
+    job_id = store.create("text", "x", {})
+    store.set_status(job_id, "done")
+    assert store.cancel(job_id) is False
+    assert store.get(job_id)["status"] == "done"
+    store.close()
+
+
 def test_reconcile_startup_marks_running_jobs_as_interrupted(tmp_path):
     store = JobStore(tmp_path / "jobs.sqlite")
     job_id = store.create("text", "x", {})

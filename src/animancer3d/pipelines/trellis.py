@@ -105,9 +105,12 @@ class TrellisServer:
             deadline = time.monotonic() + STARTUP_TIMEOUT
             async with httpx.AsyncClient() as client:
                 while time.monotonic() < deadline:
-                    if self._proc.poll() is not None:
+                    proc = self._proc
+                    if proc is None:
+                        raise RuntimeError("trellis-server was stopped during startup")
+                    if proc.poll() is not None:
                         raise RuntimeError(
-                            f"trellis-server exited during startup (code {self._proc.returncode})"
+                            f"trellis-server exited during startup (code {proc.returncode})"
                         )
                     with contextlib.suppress(httpx.TransportError):
                         r = await client.get(f"{self.base_url}/health", timeout=2.0)

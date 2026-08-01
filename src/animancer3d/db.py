@@ -104,6 +104,20 @@ class JobStore:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def cancel(self, job_id: str) -> bool:
+        """Atomically transition queued|running -> cancelled. False if the
+        job already reached a terminal state (done/error/cancelled) --
+        closes the race between this write and the worker's own terminal
+        write in Worker._process's finally block."""
+        now = time.time()
+        cur = self._conn.execute(
+            "UPDATE jobs SET status = 'cancelled', finished_at = ?"
+            " WHERE id = ? AND status IN ('queued', 'running')",
+            (now, job_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def reconcile_startup(self) -> None:
         """Any job still 'running' at process start was orphaned by a crash
         or an unclean shutdown — not silently re-run, made visibly an error."""

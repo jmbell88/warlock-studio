@@ -113,7 +113,7 @@ class Worker:
                 self._task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-        self.trellis.stop()
+        await asyncio.to_thread(self.trellis.stop)
 
     async def _run(self) -> None:
         while not self._stop.is_set():
