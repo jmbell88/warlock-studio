@@ -11,6 +11,7 @@ from __future__ import annotations
 import gc
 import logging
 import os
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,6 +25,10 @@ PROMPT_TEMPLATE = (
     "3/4 perspective view, studio lighting, game asset concept art, "
     "full object in frame, no cropping, no text, no watermark"
 )
+
+
+class JobCancelled(Exception):
+    """Raised from inside a diffusers step callback to abort mid-sample."""
 
 
 class Text2Image:
@@ -81,15 +86,22 @@ class Text2Image:
         seed: int = 42,
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Path:
         import torch
 
         self.load(on_state)
         assert self._pipe is not None
+        # load()/download() have no interruption point of their own; check
+        # once here so a cancel requested during either isn't silently lost.
+        if cancel_event is not None and cancel_event.is_set():
+            raise JobCancelled
         if on_state is not None:
             on_state("sample")
 
         def step_cb(_pipe, i, _t, kwargs):
+            if cancel_event is not None and cancel_event.is_set():
+                raise JobCancelled
             if on_step is not None:
                 on_step(i + 1, STEPS)
             return kwargs  # diffusers requires the kwargs dict back, not None
