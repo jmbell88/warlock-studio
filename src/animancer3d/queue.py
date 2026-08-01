@@ -40,6 +40,7 @@ class Worker:
             config.trellis_models_dir,
             config.trellis_port,
             log_path=config.data_dir / "trellis.log",
+            webp=config.trellis_webp,
         )
         self._text2image = None  # lazy: torch/diffusers may not be installed
         self._task: asyncio.Task[None] | None = None

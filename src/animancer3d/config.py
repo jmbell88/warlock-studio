@@ -49,6 +49,13 @@ class Config:
     t2i_image_size: int = field(
         default_factory=lambda: int(os.environ.get("ANIMANCER3D_T2I_SIZE", "512"))
     )
+    # trellis-server.exe's WebP textures declare EXT_texture_webp as required,
+    # which Godot's glTF importer does not implement (it refuses the file
+    # rather than skip the extension). Off is the correct default.
+    trellis_webp: bool = field(
+        default_factory=lambda: os.environ.get("ANIMANCER3D_TRELLIS_WEBP", "off").lower()
+        in ("1", "true", "on")
+    )
 
     def job_dir(self, job_id: str) -> Path:
         return self.data_dir / job_id

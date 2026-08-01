@@ -28,12 +28,18 @@ LOG_MAX_BYTES = 5 * 1024 * 1024  # the log used to grow forever; roll it instead
 
 class TrellisServer:
     def __init__(
-        self, exe: Path, models_dir: Path, port: int, log_path: Path | None = None
+        self,
+        exe: Path,
+        models_dir: Path,
+        port: int,
+        log_path: Path | None = None,
+        webp: bool = False,
     ) -> None:
         self._exe = exe
         self._models_dir = models_dir
         self._port = port
         self._log_path = log_path
+        self._webp = webp
         self._proc: subprocess.Popen[bytes] | None = None
         self._lock = asyncio.Lock()
         self.last_used = 0.0
@@ -50,8 +56,28 @@ class TrellisServer:
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def _argv(self) -> list[str]:
+        return [
+            str(self._exe),
+            "--models", str(self._models_dir),
+            "--host", "127.0.0.1",
+            "--port", str(self._port),
+            "--require-gpu",
+            "--webp", "on" if self._webp else "off",
+        ]
+
+    def _reap_if_dead(self) -> None:
+        """A self-crashed server otherwise leaks the old log handle and
+        reader thread the next time _proc/_reader/_logfh are overwritten."""
+        if self._proc is not None and self._proc.poll() is not None:
+            log.warning(
+                "trellis-server exited with code %s; reaping", self._proc.returncode
+            )
+            self.stop()
+
     async def ensure_started(self) -> None:
         async with self._lock:
+            self._reap_if_dead()
             if self.running:
                 return
             if not self._exe.exists():
@@ -66,13 +92,7 @@ class TrellisServer:
             # bufsize=0 is load-bearing: with the default buffering, read(65536)
             # blocks until 65536 bytes arrive and progress would arrive in bursts.
             self._proc = subprocess.Popen(
-                [
-                    str(self._exe),
-                    "--models", str(self._models_dir),
-                    "--host", "127.0.0.1",
-                    "--port", str(self._port),
-                    "--require-gpu",
-                ],
+                self._argv(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=0,
