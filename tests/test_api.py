@@ -95,10 +95,79 @@ def test_invalid_resolution_rejected(client):
 
 def test_cancel_and_delete(client):
     job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.post(f"/api/jobs/{job_id}/cancel").status_code in (200, 409)
+    r = client.post(f"/api/jobs/{job_id}/cancel")
+    assert r.status_code == 200
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
     r = client.delete(f"/api/jobs/{job_id}")
     assert r.status_code == 200
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_cancel_running_job_calls_request_cancel(client, monkeypatch):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    worker = client.app.state.worker
+    worker.store.set_status(job_id, "running")
+    worker.current_job_id = job_id
+    called = []
+
+    async def fake_request_cancel(jid):
+        called.append(jid)
+
+    monkeypatch.setattr(worker, "request_cancel", fake_request_cancel)
+    try:
+        r = client.post(f"/api/jobs/{job_id}/cancel")
+        assert r.status_code == 200
+        assert called == [job_id]
+        assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
+    finally:
+        worker.current_job_id = None
+
+
+def test_input_png_written_before_db_row_is_created(client, tmp_path, monkeypatch):
+    from animancer3d.db import JobStore
+
+    original_create = JobStore.create
+    seen = {}
+
+    def spying_create(self, kind, prompt, params, job_id=None):
+        if job_id is not None:
+            path = tmp_path / "assets" / job_id / "input.png"
+            seen["exists"] = path.exists()
+        return original_create(self, kind, prompt, params, job_id=job_id)
+
+    monkeypatch.setattr(JobStore, "create", spying_create)
+
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image"},
+        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
+    )
+    assert r.status_code == 200
+    assert seen.get("exists") is True
+
+
+def test_opaque_jpeg_upload_preserves_rgb(client, tmp_path):
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buf, "JPEG")
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image"},
+        files={"image": ("ref.jpg", io.BytesIO(buf.getvalue()), "image/jpeg")},
+    )
+    assert r.status_code == 200
+    stored = tmp_path / "assets" / r.json()["id"] / "input.png"
+    assert Image.open(stored).mode == "RGB"
+
+
+def test_health_reports_worker_alive_and_doctor_checks(client):
+    body = client.get("/api/health").json()
+    assert body["ok"] is True
+    assert body["worker_alive"] is True
+    assert body["fatal"] is None
+    assert isinstance(body["checks"], list)
+    assert len(body["checks"]) == 7
 
 
 # --- progress ---

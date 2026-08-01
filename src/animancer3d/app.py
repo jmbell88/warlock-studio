@@ -7,6 +7,8 @@ import contextlib
 import logging
 import shutil
 import time
+import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -14,6 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import doctor
 from .config import get_config
 from .db import JobStore
 from .queue import Worker
@@ -31,6 +34,14 @@ def create_app() -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         store = JobStore(config.db_path)
+        # A job still 'running' at process start was orphaned by a crash or
+        # an unclean shutdown -- surface it instead of silently re-running
+        # a 2-minute GPU job on every restart.
+        await asyncio.to_thread(store.reconcile_startup)
+        for check in await asyncio.to_thread(doctor.run_checks, config):
+            if not check.ok:
+                level = log.critical if check.fatal else log.warning
+                level("doctor: %s -- %s", check.name, check.detail)
         worker = Worker(config, store)
         worker.start()
         app.state.store = store
@@ -48,7 +59,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "trellis_running": app.state.worker.trellis.running}
+        worker: Worker = app.state.worker
+        checks = await asyncio.to_thread(doctor.run_checks, config)
+        return {
+            "ok": worker.alive and worker.fatal is None,
+            "worker_alive": worker.alive,
+            "fatal": str(worker.fatal) if worker.fatal else None,
+            "trellis_running": worker.trellis.running,
+            "checks": [asdict(c) for c in checks],
+        }
 
     @app.get("/api/progress")
     async def progress() -> dict[str, Any]:
@@ -90,12 +109,16 @@ def create_app() -> FastAPI:
             except Exception as exc:
                 raise HTTPException(400, "could not decode uploaded image") from exc
 
-        params = {"seed": seed, "resolution": resolution}
-        job_id = await asyncio.to_thread(store().create, kind, prompt, params)
+        # Write the file before the row exists: the worker's next_queued()
+        # poll can otherwise claim an image job in the gap and find no
+        # input.png on disk yet.
+        job_id = uuid.uuid4().hex[:12]
         if normalized is not None:
             job_dir = config.job_dir(job_id)
             job_dir.mkdir(parents=True, exist_ok=True)
             (job_dir / "input.png").write_bytes(normalized)
+        params = {"seed": seed, "resolution": resolution}
+        await asyncio.to_thread(store().create, kind, prompt, params, job_id)
         return {"id": job_id}
 
     @app.get("/api/jobs")
@@ -122,6 +145,8 @@ def create_app() -> FastAPI:
             raise HTTPException(404, "no such job")
         if job["status"] not in ("queued", "running"):
             raise HTTPException(409, f"job is {job['status']}")
+        if job["status"] == "running":
+            await app.state.worker.request_cancel(job_id)
         # A running job finishes its current GPU stage; the worker preserves the
         # cancelled status instead of marking it done.
         await asyncio.to_thread(store().set_status, job_id, "cancelled")
@@ -170,15 +195,19 @@ def create_app() -> FastAPI:
 def _to_png(data: bytes) -> bytes:
     """Re-encode any uploaded image as PNG; trellis.cpp only decodes PNG/JPEG.
 
-    RGBA is preserved so pre-matted images keep their alpha for background removal.
+    Alpha is preserved only when the source already had it, so a pre-matted
+    upload (RGBA/LA/PA, or a palette image with a transparency entry) keeps
+    its alpha for the server's bg-removal auto-detection, without forcing an
+    opaque photo through the same path.
     """
     import io
 
     from PIL import Image
 
     with Image.open(io.BytesIO(data)) as im:
+        has_alpha = im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
         out = io.BytesIO()
-        im.convert("RGBA").save(out, "PNG")
+        im.convert("RGBA" if has_alpha else "RGB").save(out, "PNG")
         return out.getvalue()
 
 
