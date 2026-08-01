@@ -24,6 +24,21 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
 
+# Append-only. Each entry is a list of SQL statements applied in one
+# transaction, bumping PRAGMA user_version by one. Never edit an entry once
+# it has shipped — only append. A fresh DB gets _SCHEMA then replays every
+# entry here, so fresh and pre-existing DBs converge on the same shape.
+MIGRATIONS: list[list[str]] = []
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    for i in range(version, len(MIGRATIONS)):
+        for stmt in MIGRATIONS[i]:
+            conn.execute(stmt)
+        conn.execute(f"PRAGMA user_version = {i + 1}")
+    conn.commit()
+
 
 class JobStore:
     def __init__(self, path: Path) -> None:
@@ -31,12 +46,15 @@ class JobStore:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        _migrate(self._conn)
 
     def close(self) -> None:
         self._conn.close()
 
-    def create(self, kind: str, prompt: str | None, params: dict[str, Any]) -> str:
-        job_id = uuid.uuid4().hex[:12]
+    def create(
+        self, kind: str, prompt: str | None, params: dict[str, Any], job_id: str | None = None
+    ) -> str:
+        job_id = job_id or uuid.uuid4().hex[:12]
         self._conn.execute(
             "INSERT INTO jobs (id, kind, status, prompt, params, created_at)"
             " VALUES (?, ?, 'queued', ?, ?, ?)",
@@ -56,16 +74,43 @@ class JobStore:
         return [self._to_dict(r) for r in rows]
 
     def set_status(self, job_id: str, status: str, error: str | None = None) -> None:
+        """Update status. ``error`` is only written when explicitly given —
+        an unrelated status transition (e.g. running -> cancelled) must not
+        wipe out a previously recorded error message."""
         now = time.time()
         stamp_col = {"running": "started_at", "done": "finished_at", "error": "finished_at",
                      "cancelled": "finished_at"}.get(status)
-        stamp_sql = f", {stamp_col} = ?" if stamp_col else ""
-        args: list[Any] = [status, error]
+        sets = ["status = ?"]
+        args: list[Any] = [status]
+        if error is not None:
+            sets.append("error = ?")
+            args.append(error)
         if stamp_col:
+            sets.append(f"{stamp_col} = ?")
             args.append(now)
         args.append(job_id)
+        self._conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", args)
+        self._conn.commit()
+
+    def claim(self, job_id: str) -> bool:
+        """Atomically transition queued -> running. False if the job was
+        already claimed, cancelled, or deleted since it was fetched —
+        closes the race between next_queued() and a concurrent cancel."""
+        now = time.time()
+        cur = self._conn.execute(
+            "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
+            (now, job_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def reconcile_startup(self) -> None:
+        """Any job still 'running' at process start was orphaned by a crash
+        or an unclean shutdown — not silently re-run, made visibly an error."""
+        now = time.time()
         self._conn.execute(
-            f"UPDATE jobs SET status = ?, error = ?{stamp_sql} WHERE id = ?", args
+            "UPDATE jobs SET status = 'error', error = ?, finished_at = ? WHERE status = 'running'",
+            ("interrupted by shutdown", now),
         )
         self._conn.commit()
 
