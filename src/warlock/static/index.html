@@ -88,6 +88,12 @@
   .job-quality.good { color: var(--ok); }
   .job-quality.warn { color: var(--warn); }
   .job-quality.bad  { color: var(--err); }
+  /* Composed prompt and the settings a job actually ran with -- collapsed by
+     default since most cards are read at a glance, not audited. */
+  .job-settings { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .settings-row { display: flex; justify-content: space-between; gap: 8px; }
+  .settings-row span:last-child { color: var(--text); text-align: right; word-break: break-word; }
+  button.link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font-size: 11px; }
   .job-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
   .job-actions button {
     background: none; border: 1px solid var(--edge); border-radius: 4px;

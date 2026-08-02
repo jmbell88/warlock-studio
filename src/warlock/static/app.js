@@ -294,6 +294,32 @@ async function loadGuidance() {
 
 loadGuidance().catch((e) => console.error("could not load guidance options", e));
 
+// Refill the form from a finished job, so a recipe that worked is one click from
+// being reused with a tweak. Only fields the form actually owns -- derived
+// values (composed_prompt, scale_factor, mesh_audit) describe that run, not this
+// one, exactly as the /rerun route already reasons.
+function copySettingsToForm(job) {
+  const p = job.params ?? {};
+  if (job.prompt) document.getElementById("prompt").value = job.prompt;
+  for (const field of GUIDANCE_FIELDS) {
+    const select = guidanceSelects[field];
+    if (select && p[field]) select.value = p[field];
+  }
+  if (p.size_m) {
+    sizeInput.value = p.size_m;
+    sizeEdited = true;
+  }
+  if (p.lora_weight !== undefined) {
+    loraWeight.value = p.lora_weight;
+    syncLoraWeight();
+  }
+  if (p.negative_prompt !== undefined) {
+    document.getElementById("negative-prompt").value = p.negative_prompt;
+  }
+  if (p.seed !== undefined) seedInput.value = p.seed;
+  syncPlatformHint();
+}
+
 // --- seed -------------------------------------------------------------------
 // Generation is deterministic in the seed, so a fixed default meant hitting
 // Generate twice on an unchanged form produced byte-identical output. Random
@@ -494,12 +520,20 @@ function createNode(id) {
   err.className = "job-error";
   const quality = document.createElement("div");
   quality.className = "job-quality";
+  const settings = document.createElement("div");
+  settings.className = "job-settings";
+  settings.hidden = true;
+  const settingsToggle = document.createElement("button");
+  settingsToggle.type = "button";
+  settingsToggle.className = "link";
+  setText(settingsToggle, "settings");
+  settingsToggle.hidden = true;
   const bar = document.createElement("div");
   bar.className = "bar mini";
   bar.hidden = true;
   const fill = document.createElement("i");
   bar.append(fill);
-  info.append(title, status, stage, err, quality, bar);
+  info.append(title, status, stage, err, quality, settingsToggle, settings, bar);
   const actions = document.createElement("div");
   actions.className = "job-actions";
   const reroll = document.createElement("button");
@@ -559,6 +593,11 @@ function createNode(id) {
     }
     poll(true);
   });
+  settingsToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    settings.hidden = !settings.hidden;
+    setText(settingsToggle, settings.hidden ? "settings" : "hide settings");
+  });
   act.addEventListener("click", async (e) => {
     e.stopPropagation();
     const job = jobsById.get(id);
@@ -584,7 +623,21 @@ function createNode(id) {
     poll(true);
   });
 
-  const n = { li, img, title, status, stage, err, quality, bar, fill, act, reroll, remesh, rigBtn };
+  // Bound once here (not in updateNode, which runs every ~600ms poll) so a
+  // poll never rebinds a stale closure; it looks the job up fresh at click
+  // time instead of capturing it.
+  const copySettings = document.createElement("button");
+  copySettings.type = "button";
+  copySettings.className = "link";
+  setText(copySettings, "copy settings to form");
+  copySettings.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const job = jobsById.get(id);
+    if (job) copySettingsToForm(job);
+  });
+
+  const n = { li, img, title, status, stage, err, quality, settings, settingsToggle,
+              copySettings, bar, fill, act, reroll, remesh, rigBtn };
   nodes.set(id, n);
   return n;
 }
@@ -636,6 +689,38 @@ function updateNode(n, job) {
   const badge = job.status === "done" ? qualityBadge(job.params?.mesh_audit) : null;
   n.quality.className = `job-quality ${badge ? badge.cls : ""}`;
   setText(n.quality, badge ? badge.text : "");
+
+  // Everything below is already in the API response and was never shown: without
+  // it a good result is not reproducible, because the card only ever said what
+  // the user typed, not what was actually sent to the model.
+  const p = job.params ?? {};
+  const rows = [
+    ["seed", p.seed],
+    ["reference seed", p.reference_seed],
+    ["mesh seed", p.mesh_seed],
+    ["model", p.base_model],
+    ["style", p.style_lora && `${p.style_lora} @ ${p.lora_weight ?? "?"}`],
+    ["resolution", p.resolution],
+    ["size", p.size_m && `${p.size_m} m`],
+    ["background", p.bg_removal],
+    ["prompt sent", p.composed_prompt],
+    ["negative", p.negative_prompt],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  n.settingsToggle.hidden = rows.length === 0;
+  n.settings.replaceChildren();
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    const k = document.createElement("span");
+    setText(k, label);
+    const v = document.createElement("span");
+    setText(v, String(value));
+    row.append(k, v);
+    n.settings.append(row);
+  }
+  // The button itself is created once in createNode (see the comment there);
+  // rebuilding the rows every poll must not touch its listener.
+  if (rows.length) n.settings.append(n.copySettings);
 
   const active = job.status === "queued" || job.status === "running";
   setText(n.act, active ? "cancel" : "delete");
