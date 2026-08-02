@@ -739,18 +739,21 @@ function updateNode(n, job) {
   // Everything below is already in the API response and was never shown: without
   // it a good result is not reproducible, because the card only ever said what
   // the user typed, not what was actually sent to the model.
-  const p = job.params ?? {};
+  // Named params, not p: `p` is already this function's progress snapshot a few
+  // lines above, and a second `const p` in the same scope is an early error --
+  // it stops the whole module parsing, not just this card.
+  const params = job.params ?? {};
   const rows = [
-    ["seed", p.seed],
-    ["reference seed", p.reference_seed],
-    ["mesh seed", p.mesh_seed],
-    ["model", p.base_model],
-    ["style", p.style_lora && `${p.style_lora} @ ${p.lora_weight ?? "?"}`],
-    ["resolution", p.resolution],
-    ["size", p.size_m && `${p.size_m} m`],
-    ["background", p.bg_removal],
-    ["prompt sent", p.composed_prompt],
-    ["negative", p.negative_prompt],
+    ["seed", params.seed],
+    ["reference seed", params.reference_seed],
+    ["mesh seed", params.mesh_seed],
+    ["model", params.base_model],
+    ["style", params.style_lora && `${params.style_lora} @ ${params.lora_weight ?? "?"}`],
+    ["resolution", params.resolution],
+    ["size", params.size_m && `${params.size_m} m`],
+    ["background", params.bg_removal],
+    ["prompt sent", params.composed_prompt],
+    ["negative", params.negative_prompt],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
   n.settingsToggle.hidden = rows.length === 0;
   n.settings.replaceChildren();
