@@ -169,3 +169,29 @@ def test_create_generates_id_when_not_given(tmp_path):
     assert job_id
     assert store.get(job_id) is not None
     store.close()
+
+
+def test_create_records_stage_and_parent(store):
+    parent = store.create("text", "a barrel", {}, stage="reference")
+    child = store.create("text", "a barrel", {}, parent_id=parent)
+    assert store.get(parent)["stage"] == "reference"
+    assert [c["id"] for c in store.children(parent)] == [child]
+
+
+def test_create_defaults_stage_to_model(store):
+    job_id = store.create("text", "x", {})
+    assert store.get(job_id)["stage"] == "model"
+    assert store.get(job_id)["parent_id"] is None
+
+
+def test_set_stage(store):
+    job_id = store.create("text", "x", {})
+    store.set_stage(job_id, "reference")
+    assert store.get(job_id)["stage"] == "reference"
+
+
+def test_children_ordered_oldest_first(store):
+    parent = store.create("text", "x", {})
+    first = store.create("text", "x", {}, parent_id=parent)
+    second = store.create("text", "x", {}, parent_id=parent)
+    assert [c["id"] for c in store.children(parent)] == [first, second]

@@ -20,22 +20,45 @@ CREATE TABLE IF NOT EXISTS jobs (
     error       TEXT,
     created_at  REAL NOT NULL,
     started_at  REAL,
-    finished_at REAL
+    finished_at REAL,
+    stage       TEXT NOT NULL DEFAULT 'model',  -- 'reference' | 'model'
+    parent_id   TEXT                            -- the reference job this was promoted from
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
+# idx_jobs_parent is created by the migration below, not here: _SCHEMA's
+# CREATE TABLE IF NOT EXISTS is a no-op against a pre-existing table that
+# predates the parent_id column, and an index on a column that doesn't exist
+# yet would fail before _migrate ever runs.
 
 # Append-only. Each entry is a list of SQL statements applied in one
 # transaction, bumping PRAGMA user_version by one. Never edit an entry once
 # it has shipped — only append. A fresh DB gets _SCHEMA then replays every
 # entry here, so fresh and pre-existing DBs converge on the same shape.
-MIGRATIONS: list[list[str]] = []
+MIGRATIONS: list[list[str]] = [
+    # 1 -- approve-reference-first. A row that predates the split was a
+    # single-stage generate, which is what stage='model' means.
+    [
+        "ALTER TABLE jobs ADD COLUMN stage TEXT NOT NULL DEFAULT 'model'",
+        "ALTER TABLE jobs ADD COLUMN parent_id TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id)",
+    ],
+]
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     for i in range(version, len(MIGRATIONS)):
         for stmt in MIGRATIONS[i]:
+            # A fresh DB got these columns from _SCHEMA; replaying the ALTER
+            # would fail on it. Skipping the statement rather than the whole
+            # entry keeps fresh and migrated DBs converging, which is the
+            # property the append-only contract exists to protect.
+            if stmt.startswith("ALTER TABLE jobs ADD COLUMN"):
+                name = stmt.split("ADD COLUMN", 1)[1].split()[0]
+                if name in columns:
+                    continue
             conn.execute(stmt)
         conn.execute(f"PRAGMA user_version = {i + 1}")
     conn.commit()
@@ -65,17 +88,37 @@ class JobStore:
             self._conn.close()
 
     def create(
-        self, kind: str, prompt: str | None, params: dict[str, Any], job_id: str | None = None
+        self,
+        kind: str,
+        prompt: str | None,
+        params: dict[str, Any],
+        job_id: str | None = None,
+        *,
+        stage: str = "model",
+        parent_id: str | None = None,
     ) -> str:
         job_id = job_id or uuid.uuid4().hex[:12]
         with self._lock:
             self._conn.execute(
-                "INSERT INTO jobs (id, kind, status, prompt, params, created_at)"
-                " VALUES (?, ?, 'queued', ?, ?, ?)",
-                (job_id, kind, prompt, json.dumps(params), time.time()),
+                "INSERT INTO jobs (id, kind, status, prompt, params, created_at,"
+                " stage, parent_id) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)",
+                (job_id, kind, prompt, json.dumps(params), time.time(), stage, parent_id),
             )
             self._conn.commit()
         return job_id
+
+    def set_stage(self, job_id: str, stage: str) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE jobs SET stage = ? WHERE id = ?", (stage, job_id))
+            self._conn.commit()
+
+    def children(self, parent_id: str) -> list[dict[str, Any]]:
+        """Every job promoted from this one, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE parent_id = ? ORDER BY created_at", (parent_id,)
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
