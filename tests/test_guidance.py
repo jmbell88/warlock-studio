@@ -174,3 +174,10 @@ def test_negative_prompt_defaults_and_is_length_capped():
     assert guidance.normalize({"negative_prompt": " smooth "})["negative_prompt"] == "smooth"
     with pytest.raises(ValueError):
         guidance.normalize({"negative_prompt": "x" * 1001})
+
+
+def test_explicit_empty_negative_prompt_means_none_not_the_default():
+    # Missing key -> default; explicit "" -> the user opted out entirely.
+    # A `if not negative:` refactor would silently collapse this back to the
+    # default, so this is pinned separately from the defaults/strip/cap test.
+    assert guidance.normalize({"negative_prompt": ""})["negative_prompt"] == ""
