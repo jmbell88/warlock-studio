@@ -165,6 +165,21 @@ async def test_worker_passes_negative_prompt(worker):
     assert worker._text2image.negatives[-1] == "blurry, two objects"
 
 
+async def test_worker_uses_each_stage_seed(worker):
+    # reference_seed and mesh_seed diverge from the legacy seed here, so the
+    # test would pass by accident if the worker still read plain "seed" for
+    # both -- 1 would show up somewhere and mask a real bug.
+    job_id = worker.store.create(
+        "text", "a barrel", {"seed": 1, "reference_seed": 11, "mesh_seed": 22}
+    )
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.seeds[-1] == 11
+    assert worker.trellis.generate_calls[-1]["seed"] == 22
+
+
 async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatch):
     import warlock.pipelines.postprocess as postprocess_mod
 

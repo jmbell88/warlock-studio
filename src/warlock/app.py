@@ -138,6 +138,8 @@ def create_app() -> FastAPI:
         kind: Annotated[str, Form()],
         prompt: Annotated[str | None, Form()] = None,
         seed: Annotated[int, Form()] = 42,
+        reference_seed: Annotated[int | None, Form()] = None,
+        mesh_seed: Annotated[int | None, Form()] = None,
         resolution: Annotated[int | None, Form()] = None,
         genre: Annotated[str | None, Form()] = None,
         art_style: Annotated[str | None, Form()] = None,
@@ -183,7 +185,13 @@ def create_app() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        # One seed used to drive both stages, so "keep this reference, try
+        # another mesh" was impossible without also redrawing the image. seed
+        # remains the fallback for both so old rows and old clients are
+        # unchanged.
         params["seed"] = seed
+        params["reference_seed"] = seed if reference_seed is None else reference_seed
+        params["mesh_seed"] = seed if mesh_seed is None else mesh_seed
         if rig:
             # Validated now rather than 90 seconds later: an unusable template
             # should cost the request, not the whole generation that precedes
@@ -332,7 +340,17 @@ def create_app() -> FastAPI:
             for k, v in source["params"].items()
             if k not in ("composed_prompt", "scale_factor", "mesh_audit")
         }
-        params["seed"] = seed if seed is not None else _random_seed()
+        fresh = seed if seed is not None else _random_seed()
+        params["seed"] = fresh
+        if mode == "remesh":
+            # The reference is being reused verbatim; only the 3D stage rerolls.
+            params["reference_seed"] = source["params"].get(
+                "reference_seed", source["params"].get("seed", fresh)
+            )
+            params["mesh_seed"] = fresh
+        else:
+            params["reference_seed"] = fresh
+            params["mesh_seed"] = fresh
         params["rerun_of"] = job_id
 
         new_id = uuid.uuid4().hex[:12]

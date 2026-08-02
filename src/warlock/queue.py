@@ -378,7 +378,11 @@ class Worker:
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)
         params = job["params"]
-        seed = int(params.get("seed", 42))
+        # Two seeds, one per stage, falling back to the single legacy seed so a
+        # job row written before the split still reproduces exactly.
+        legacy_seed = int(params.get("seed", 42))
+        reference_seed = int(params.get("reference_seed", legacy_seed))
+        mesh_seed = int(params.get("mesh_seed", legacy_seed))
         resolution = int(params.get("resolution", 1024))
         image_path = job_dir / "input.png"
 
@@ -414,7 +418,7 @@ class Worker:
                         t2i.generate,
                         composed,
                         image_path,
-                        seed=seed,
+                        seed=reference_seed,
                         lora=style_lora,
                         lora_weight=lora_weight,
                         negative_prompt=str(params.get("negative_prompt") or ""),
@@ -448,7 +452,7 @@ class Worker:
         await self.trellis.generate(
             image_path,
             glb_path,
-            seed=seed,
+            seed=mesh_seed,
             resolution=resolution,
             bg_removal=str(params.get("bg_removal") or "auto"),
         )

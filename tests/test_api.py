@@ -603,3 +603,18 @@ def test_rerun_carries_model_selection_forward(client):
     assert params["base_model"] == "sdxl"
     assert params["style_lora"] == "ps1"
     assert params["lora_weight"] == 0.6
+
+
+def test_seeds_split_and_legacy_seed_still_read(client):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "a barrel", "reference_seed": 11, "mesh_seed": 22},
+    )
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["reference_seed"] == 11
+    assert params["mesh_seed"] == 22
+
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel", "seed": 5})
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["reference_seed"] == 5
+    assert params["mesh_seed"] == 5
