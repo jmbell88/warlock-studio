@@ -985,3 +985,66 @@ def test_textures_zip_is_derived_on_demand(client, tmp_path):
     assert r.status_code == 200
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         assert "base_color.png" in zf.namelist()
+
+
+def test_bulk_export_zips_the_selected_jobs(client, tmp_path):
+    import zipfile
+
+    ids = []
+    for _ in range(2):
+        job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+        job_dir = tmp_path / "assets" / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "model.glb").write_bytes(b"glb")
+        ids.append(job_id)
+
+    r = client.post("/api/export", data={"ids": ids})
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = zf.namelist()
+    assert len(names) == 2
+    assert all(n.endswith("model.glb") for n in names)
+
+
+def test_bulk_export_rejects_an_unknown_file_name(client):
+    r = client.post("/api/export", data={"ids": "0" * 12, "files": "../secrets"})
+    assert r.status_code == 400
+
+
+def test_bulk_export_is_404_when_nothing_exists(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    assert client.post("/api/export", data={"ids": job_id}).status_code == 404
+
+
+def test_export_to_folder_is_404_when_unconfigured(client):
+    assert client.post("/api/export/folder", data={"ids": "0" * 12}).status_code == 404
+
+
+def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
+    # Its own client: export_dir is read once at Config construction.
+    from fastapi.testclient import TestClient
+
+    from warlock.app import create_app
+
+    target = tmp_path / "godot_project" / "assets"
+    monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path / "assets"))
+    monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
+    monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
+    monkeypatch.setenv("WARLOCK_EXPORT_DIR", str(target))
+    monkeypatch.setattr(config_mod, "_config", None)
+
+    with TestClient(create_app()) as c:
+        job_id = c.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+        job_dir = tmp_path / "assets" / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "model.glb").write_bytes(b"glb")
+
+        r = c.post("/api/export/folder", data={"ids": job_id})
+        assert r.status_code == 200
+        assert r.json()["copied"] == 1
+        assert (target / job_id / "model.glb").read_bytes() == b"glb"
+
+
+def test_health_reports_the_export_dir(client):
+    # The UI reveals its "save to project" button off this field alone.
+    assert client.get("/api/health").json()["export_dir"] is None

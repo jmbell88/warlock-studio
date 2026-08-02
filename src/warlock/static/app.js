@@ -563,7 +563,15 @@ function createNode(id) {
   another.title = "Same prompt and settings, new reference seed";
   another.hidden = true;
   const act = document.createElement("button");
-  actions.append(make3d, another, reroll, remesh, rigBtn, act);
+  // Bulk-export selection. Independent of `selected` (which is the one job the
+  // viewer is showing), so ticking a card must not also open it.
+  const pick = document.createElement("input");
+  pick.type = "checkbox";
+  pick.className = "job-pick";
+  pick.title = "Include in a bulk export";
+  pick.addEventListener("click", (e) => e.stopPropagation());
+  pick.addEventListener("change", updateBulkBar);
+  actions.append(pick, make3d, another, reroll, remesh, rigBtn, act);
   li.append(img, info, actions);
 
   // Bound once, so a poll never rebinds stale closures. Shared by reroll and
@@ -684,10 +692,64 @@ function createNode(id) {
   });
 
   const n = { li, img, title, status, stage, err, quality, settings, settingsToggle,
-              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another };
+              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another, pick };
   nodes.set(id, n);
   return n;
 }
+
+// --- bulk export ------------------------------------------------------------
+//
+// A selection of job ids POSTed to /api/export. Deliberately not fetch(): the
+// browser handles the download itself, including the filename, instead of us
+// buffering a 200 MB blob in the page.
+
+const bulkBar = document.getElementById("bulk-bar");
+const bulkCount = document.getElementById("bulk-count");
+const bulkFolder = document.getElementById("bulk-folder");
+
+function selectedIds() {
+  return [...nodes].filter(([, n]) => n.pick.checked).map(([id]) => id);
+}
+
+function updateBulkBar() {
+  const n = selectedIds().length;
+  bulkBar.hidden = n === 0;
+  setText(bulkCount, `${n} selected`);
+}
+
+document.getElementById("bulk-zip").addEventListener("click", () => {
+  const ids = selectedIds();
+  if (!ids.length) return;
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/api/export";
+  for (const id of ids) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "ids";
+    input.value = id;
+    form.append(input);
+  }
+  document.body.append(form);
+  form.submit();
+  form.remove();
+});
+
+bulkFolder.addEventListener("click", async () => {
+  const ids = selectedIds();
+  if (!ids.length) return;
+  bulkFolder.disabled = true;
+  try {
+    const fd = new FormData();
+    for (const id of ids) fd.append("ids", id);
+    const r = await fetch("/api/export/folder", { method: "POST", body: fd });
+    const body = await r.json();
+    if (!r.ok) alert(body.detail ?? "export failed");
+    else alert(`copied ${body.copied} file(s) into ${body.dir}`);
+  } finally {
+    bulkFolder.disabled = false;
+  }
+});
 
 // meshaudit measures the fraction of the worst-case silhouette you can see
 // straight through. ~0 is solid; the perforated crust trellis-server's default
@@ -827,6 +889,9 @@ function renderJobs(jobs) {
       jobsById.delete(id);
     }
   }
+  // A deleted job cannot stay in the export selection, and the count on the
+  // bar would otherwise keep counting cards that no longer exist.
+  updateBulkBar();
 }
 
 function select(id) {
@@ -1619,6 +1684,10 @@ setInterval(renderClock, 200);
 async function checkDoctor() {
   try {
     const health = await (await fetch("/api/health")).json();
+    // Writing outside the data dir is opt-in, so the button only exists when
+    // WARLOCK_EXPORT_DIR is configured.
+    bulkFolder.hidden = !health.export_dir;
+    if (health.export_dir) bulkFolder.title = `Copy into ${health.export_dir}`;
     const bad = (health.checks || []).filter((c) => c.fatal && !c.ok);
     if (bad.length) {
       showBanner("doctor", `Setup problem: ${bad.map((c) => c.detail).join("; ")}`);

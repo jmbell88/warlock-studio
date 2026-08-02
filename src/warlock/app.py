@@ -6,11 +6,14 @@ import asyncio
 import contextlib
 import functools
 import logging
+import os
 import re
 import secrets
 import shutil
+import tempfile
 import time
 import uuid
+import zipfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -18,6 +21,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from . import doctor, guidance, rigging
 from .config import get_config
@@ -114,6 +118,9 @@ def create_app() -> FastAPI:
             "worker_alive": worker.alive,
             "fatal": str(worker.fatal) if worker.fatal else None,
             "trellis_running": worker.trellis.running,
+            # The UI reveals its "save to project" button off this alone --
+            # the feature is off unless WARLOCK_EXPORT_DIR is set.
+            "export_dir": str(config.export_dir) if config.export_dir else None,
             "checks": [asdict(c) for c in checks],
         }
 
@@ -899,6 +906,92 @@ def create_app() -> FastAPI:
         if not path.exists():
             raise HTTPException(404, "file not ready")
         return FileResponse(path, media_type=_MEDIA[name], filename=f"{job_id}_{name}")
+
+    # --- bulk export ---------------------------------------------------------
+    #
+    # Defined after _MEDIA because the allowlist *is* _MEDIA: the point is that
+    # a caller-supplied name never becomes a path component without passing
+    # through it first.
+
+    def _export_names(files: list[str] | None) -> list[str]:
+        names = [f for f in (files or []) if f] or ["model.glb"]
+        unknown = [n for n in names if n not in _MEDIA]
+        if unknown:
+            raise HTTPException(400, f"unknown file(s): {sorted(unknown)}")
+        return names
+
+    def _collect(ids: list[str], names: list[str]) -> list[tuple[str, Path]]:
+        """-> (arcname, path) for every requested file that exists.
+
+        Silently skips what is missing rather than failing the batch: a
+        selection of ten jobs where one never produced an OBJ should still
+        deliver nine, and the zip's contents say which.
+        """
+        out: list[tuple[str, Path]] = []
+        for job_id in ids:
+            _check_job_id(job_id)
+            for name in names:
+                path = config.job_dir(job_id) / name
+                if path.exists():
+                    out.append((f"{job_id}/{name}", path))
+        return out
+
+    @app.post("/api/export")
+    async def bulk_export(
+        ids: Annotated[list[str], Form()],
+        files: Annotated[list[str] | None, Form()] = None,
+    ) -> FileResponse:
+        """Zip the named artifacts of several jobs into one download.
+
+        Built into a temp file rather than streamed from memory: a selection of
+        twenty 22 MB GLBs is not something to hold in the event loop's heap.
+        Derived artifacts are *not* generated on demand here -- a batch export
+        should not be able to kick off twenty Blender subprocesses.
+        """
+        names = _export_names(files)
+        members = await asyncio.to_thread(_collect, ids, names)
+        if not members:
+            raise HTTPException(404, "nothing to export")
+        fd, raw = tempfile.mkstemp(dir=config.data_dir, prefix=".export.", suffix=".zip")
+        os.close(fd)
+        archive = Path(raw)
+
+        def build() -> None:
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+                for arcname, path in members:
+                    zf.write(path, arcname)
+
+        await asyncio.to_thread(build)
+        return FileResponse(
+            archive,
+            media_type="application/zip",
+            filename="warlock_export.zip",
+            background=BackgroundTask(archive.unlink, missing_ok=True),
+        )
+
+    @app.post("/api/export/folder")
+    async def export_to_folder(
+        ids: Annotated[list[str], Form()],
+        files: Annotated[list[str] | None, Form()] = None,
+    ) -> dict[str, Any]:
+        """Copy the same selection into WARLOCK_EXPORT_DIR."""
+        if config.export_dir is None:
+            raise HTTPException(404, "no export folder configured (set WARLOCK_EXPORT_DIR)")
+        names = _export_names(files)
+        members = await asyncio.to_thread(_collect, ids, names)
+        if not members:
+            raise HTTPException(404, "nothing to export")
+
+        def copy() -> int:
+            copied = 0
+            for arcname, path in members:
+                dest = config.export_dir / arcname
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, dest)
+                copied += 1
+            return copied
+
+        return {"copied": await asyncio.to_thread(copy), "dir": str(config.export_dir)}
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

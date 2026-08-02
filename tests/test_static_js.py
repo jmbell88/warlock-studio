@@ -57,3 +57,28 @@ def test_there_is_a_script_to_check() -> None:
     """A guard on the guard: if static/ is reorganised and the glob stops
     matching, every test above silently becomes zero test cases."""
     assert OUR_SCRIPTS, f"no *.js found in {STATIC_DIR}"
+
+
+def test_every_element_the_module_grabs_at_load_time_exists_in_the_html():
+    """A top-level getElementById that returns null kills the whole page.
+
+    The bulk-export bar wires its handlers at module scope, so a typo'd or
+    missing id is not a dead button -- it is a TypeError before the viewer
+    initialises, exactly the failure mode this file exists to catch. Checked
+    by id text rather than by running the page, which is all that is possible
+    without a DOM.
+    """
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for element_id in (
+        "bulk-bar",
+        "bulk-count",
+        "bulk-zip",
+        "bulk-folder",
+        "g-profile",
+        "dl-collision",
+        "dl-textures",
+        "dl-fbx",
+    ):
+        assert f'id="{element_id}"' in html, (
+            f"app.js grabs #{element_id}; index.html has no such id"
+        )

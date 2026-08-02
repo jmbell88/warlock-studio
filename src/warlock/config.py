@@ -45,6 +45,16 @@ class Config:
             PROJECT_ROOT / "vendor" / "trellis" / "trellis-server.exe",
         )
     )
+    # Optional: a project folder assets can be copied straight into (e.g. a
+    # Godot project's assets/). Unset means the feature is off and its routes
+    # 404 -- writing outside data_dir is opt-in, never a default.
+    export_dir: Path | None = field(
+        default_factory=lambda: (
+            _env_path("WARLOCK_EXPORT_DIR", PROJECT_ROOT)
+            if os.environ.get("WARLOCK_EXPORT_DIR")
+            else None
+        )
+    )
     # Vendored like trellis-server.exe: a pinned native binary, never downloaded
     # at runtime. Missing it costs you the triangle budgets, not the app --
     # jobs then ship the raw reconstruction, which is what they did before.
