@@ -130,10 +130,31 @@ async def test_guidance_is_folded_into_the_image_prompt(worker):
     assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
 
 
-async def test_composed_prompt_is_read_from_last_prompt_not_recomputed(worker):
+async def test_composed_prompt_is_read_from_last_prompt_not_recomputed(worker, monkeypatch):
     """queue.py must record t2i.last_prompt, not its own local `composed` --
     otherwise the UI's "prompt sent" row would show the pre-trigger,
-    pre-PROMPT_TEMPLATE string forever, as it did before this change."""
+    pre-PROMPT_TEMPLATE string forever, as it did before this change.
+
+    To prove this: monkeypatch FakeText2Image.generate() to set last_prompt to a
+    value that differs from the raw composed string (simulating what the real
+    Text2Image would do by wrapping with PROMPT_TEMPLATE). If queue.py reads
+    the wrong variable (composed instead of last_prompt), the assertion fails.
+    """
+    from conftest import FakeText2Image
+
+    # Store the original generate method
+    original_generate = FakeText2Image.generate
+
+    def generate_with_wrapped_prompt(self, prompt, *args, **kwargs):
+        # Call the original to maintain all behavior
+        result = original_generate(self, prompt, *args, **kwargs)
+        # Simulate the real Text2Image: last_prompt would be the template-wrapped version
+        # (in reality it includes PROMPT_TEMPLATE and LoRA trigger wrapping)
+        self.last_prompt = f"{prompt} [TEMPLATE_WRAPPED]"
+        return result
+
+    monkeypatch.setattr(FakeText2Image, "generate", generate_with_wrapped_prompt)
+
     job_id = worker.store.create(
         "text", "a barrel", {"seed": 1, "resolution": 512, "genre": "scifi"},
     )
@@ -141,10 +162,12 @@ async def test_composed_prompt_is_read_from_last_prompt_not_recomputed(worker):
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
     await worker.shutdown()
 
-    assert (
-        worker.store.get(job_id)["params"]["composed_prompt"]
-        == worker._text2image.last_prompt
-    )
+    stored_prompt = worker.store.get(job_id)["params"]["composed_prompt"]
+
+    # This assertion would pass ONLY if queue.py reads t2i.last_prompt.
+    # If queue.py read the raw composed string instead, stored_prompt would
+    # NOT contain "[TEMPLATE_WRAPPED]" and the assertion would fail.
+    assert "[TEMPLATE_WRAPPED]" in stored_prompt
 
 
 async def test_resolution_from_params_reaches_trellis(worker):
