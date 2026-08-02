@@ -691,11 +691,27 @@ function createNode(id) {
 // meshaudit measures the fraction of the worst-case silhouette you can see
 // straight through. ~0 is solid; the perforated crust trellis-server's default
 // band produces measures 0.07-0.15. The thresholds mirror those bands.
-function qualityBadge(audit) {
-  const worst = audit?.worst;
+// Two different measurements, deliberately not merged: meshaudit says how much
+// of the silhouette you can see through (what a player notices) and meshreport
+// says whether an engine will accept it (topology, materials, budget, pivot).
+// Only the second may use the word watertight.
+function qualityBadge(job) {
+  const report = job.params?.mesh_report;
+  if (report) {
+    if (report.status === "invalid") return { cls: "bad", text: "invalid mesh" };
+    if (report.status === "ready") {
+      return { cls: "good", text: `ready · ${Number(report.triangles).toLocaleString()} tris` };
+    }
+    return {
+      cls: "warn",
+      text: `review · ${report.reasons.length} issue(s)`,
+      reasons: report.reasons,
+    };
+  }
+  const worst = job.params?.mesh_audit?.worst;
   if (typeof worst !== "number") return null;
   const pct = (worst * 100).toFixed(worst < 0.1 ? 1 : 0);
-  if (worst < 0.02) return { cls: "good", text: "watertight" };
+  if (worst < 0.02) return { cls: "good", text: "no visible holes" };
   if (worst < 0.08) return { cls: "warn", text: `${pct}% see-through` };
   return { cls: "bad", text: `${pct}% see-through — try another seed` };
 }
@@ -732,9 +748,10 @@ function updateNode(n, job) {
 
   setText(n.err, job.status === "error" && job.error ? job.error : "");
 
-  const badge = job.status === "done" ? qualityBadge(job.params?.mesh_audit) : null;
+  const badge = job.status === "done" ? qualityBadge(job) : null;
   n.quality.className = `job-quality ${badge ? badge.cls : ""}`;
   setText(n.quality, badge ? badge.text : "");
+  n.quality.title = badge?.reasons ? badge.reasons.join("\n") : "";
 
   // Everything below is already in the API response and was never shown: without
   // it a good result is not reproducible, because the card only ever said what

@@ -395,6 +395,60 @@ async def test_mesh_audit_is_recorded_on_the_finished_job(worker, monkeypatch):
     }
 
 
+async def test_finished_job_carries_a_mesh_report(worker, monkeypatch):
+    import warlock.meshaudit as meshaudit_mod
+    import warlock.meshreport as meshreport_mod
+
+    monkeypatch.setattr(
+        meshaudit_mod,
+        "hole_fraction",
+        lambda path, views, resolution: {
+            "worst": 0.0, "mean": 0.0, "faces": 1, "resolution": resolution,
+        },
+    )
+    monkeypatch.setattr(
+        meshreport_mod,
+        "build",
+        lambda *a, **k: {"status": "ready", "reasons": [], "triangles": 42},
+    )
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["params"]["mesh_report"]["status"] == "ready"
+
+
+async def test_a_failing_mesh_report_does_not_fail_the_job(worker, monkeypatch):
+    # Same rule the audit already follows: a diagnostic must never fail a job
+    # whose mesh is already on disk.
+    import warlock.meshaudit as meshaudit_mod
+    import warlock.meshreport as meshreport_mod
+
+    monkeypatch.setattr(
+        meshaudit_mod,
+        "hole_fraction",
+        lambda path, views, resolution: {
+            "worst": 0.0, "mean": 0.0, "faces": 1, "resolution": resolution,
+        },
+    )
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("trimesh said no")
+
+    monkeypatch.setattr(meshreport_mod, "build", explode)
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "done"
+    assert "mesh_report" not in job["params"]
+    # The silhouette measurement is unaffected by the report failing.
+    assert job["params"]["mesh_audit"]["worst"] == 0.0
+
+
 async def test_a_failing_mesh_audit_does_not_fail_the_job(worker, monkeypatch):
     # The mesh is already on disk and fine by the time this runs; a diagnostic
     # blowing up must not retroactively turn a good job into an errored one.

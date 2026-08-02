@@ -714,6 +714,23 @@ class Worker:
             "faces": report["faces"],
             "resolution": report["resolution"],
         }
+        # The silhouette number stays exactly as it was -- it is the only thing
+        # that catches trellis's disconnected-plate crust. The report adds what
+        # the silhouette cannot see: topology, materials, budget, and whether
+        # the thing will sit on an engine's floor.
+        try:
+            from . import meshreport
+
+            params["mesh_report"] = await asyncio.to_thread(
+                functools.partial(
+                    meshreport.build,
+                    glb_path,
+                    target_size_m=params.get("size_m"),
+                    silhouette=params["mesh_audit"],
+                )
+            )
+        except Exception:
+            log.exception("mesh report failed for job %s", job_id)
         log.info(
             "job %s mesh audit: worst %.3f, mean %.3f over %d faces",
             job_id, report["worst"], report["mean"], report["faces"],
