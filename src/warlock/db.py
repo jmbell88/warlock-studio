@@ -48,6 +48,10 @@ MIGRATIONS: list[list[str]] = [
 
 def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
+    # Snapshotted once, before any migration runs. Safe because no migration
+    # in this loop removes a column: a snapshot can only go stale by missing
+    # a column a later entry adds, which just means that entry's own ADD
+    # COLUMN runs instead of being skipped -- never a false skip.
     columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     for i in range(version, len(MIGRATIONS)):
         for stmt in MIGRATIONS[i]:
@@ -113,10 +117,13 @@ class JobStore:
             self._conn.commit()
 
     def children(self, parent_id: str) -> list[dict[str, Any]]:
-        """Every job promoted from this one, oldest first."""
+        """Every job promoted from this one, oldest first. ``id`` is a
+        secondary sort key: ``time.time()`` can tie across rows created in
+        quick succession, and rowid order isn't guaranteed by SQL, so
+        created_at alone leaves ties order-undefined."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM jobs WHERE parent_id = ? ORDER BY created_at", (parent_id,)
+                "SELECT * FROM jobs WHERE parent_id = ? ORDER BY created_at, id", (parent_id,)
             ).fetchall()
         return [self._to_dict(r) for r in rows]
 

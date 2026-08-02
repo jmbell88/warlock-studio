@@ -59,12 +59,8 @@ def test_fresh_and_migrated_dbs_have_identical_schema(tmp_path):
 def test_pre_migration_db_gains_stage_and_parent(tmp_path):
     """A DB created before the columns existed must converge on the same shape
     as a fresh one, with existing rows defaulted to stage='model'."""
-    import sqlite3
-
-    from warlock.db import JobStore
-
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
+    old_path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(old_path)
     conn.executescript(
         """
         CREATE TABLE jobs (
@@ -81,7 +77,7 @@ def test_pre_migration_db_gains_stage_and_parent(tmp_path):
     conn.commit()
     conn.close()
 
-    store = JobStore(path)
+    store = JobStore(old_path)
     try:
         row = store.list(10)[0]
         assert row["stage"] == "model"
@@ -89,24 +85,32 @@ def test_pre_migration_db_gains_stage_and_parent(tmp_path):
     finally:
         store.close()
 
+    fresh_path = tmp_path / "fresh.sqlite"
+    fresh = JobStore(fresh_path)
+    fresh.close()
 
-def test_fresh_db_has_stage_and_parent_columns_and_correct_version(tmp_path):
-    """The half the guard protects: a brand-new DB must end up with the same
-    columns as a migrated one and land on the latest user_version, i.e. the
-    guarded ALTER statements must not silently be skipped for a fresh DB in a
-    way that leaves the version counter behind."""
-    import sqlite3
+    def table_info(path):
+        c = sqlite3.connect(path)
+        info = c.execute("PRAGMA table_info(jobs)").fetchall()
+        c.close()
+        return info
 
-    from warlock.db import MIGRATIONS, JobStore
+    def user_version(path):
+        c = sqlite3.connect(path)
+        v = c.execute("PRAGMA user_version").fetchone()[0]
+        c.close()
+        return v
 
-    path = tmp_path / "fresh.sqlite"
-    store = JobStore(path)
-    store.close()
+    def index_names(path):
+        c = sqlite3.connect(path)
+        names = {r[1] for r in c.execute("PRAGMA index_list(jobs)")}
+        c.close()
+        return names
 
-    conn = sqlite3.connect(path)
-    columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    conn.close()
-
-    assert {"stage", "parent_id"} <= columns
-    assert version == len(MIGRATIONS)
+    # Full column tuples (name, type, notnull, default, pk), not just names --
+    # a type or default drift between the two paths would otherwise pass.
+    assert table_info(old_path) == table_info(fresh_path)
+    assert user_version(old_path) == len(MIGRATIONS)
+    assert user_version(fresh_path) == len(MIGRATIONS)
+    assert "idx_jobs_parent" in index_names(old_path)
+    assert "idx_jobs_parent" in index_names(fresh_path)
