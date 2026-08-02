@@ -59,8 +59,15 @@ def load_tokenizers(model_dir: Path) -> tuple[Any, Any]:
 def count(text: str, tokenizers: list[Any]) -> int:
     """Token count under the strictest of ``tokenizers``, BOS/EOS included --
     this is what the encoder actually receives and what the 77-token limit
-    means in practice."""
-    return max(len(tok(text)["input_ids"]) for tok in tokenizers)
+    means in practice.
+
+    Calls the tokenizer with ``verbose=False``: this is the one place we
+    deliberately measure text longer than the model's stated max length (the
+    whole point of chunking), and without it transformers logs its own
+    "Token indices sequence length is longer than..." warning every time --
+    a false alarm here since nothing is actually truncated, just measured.
+    """
+    return max(len(tok(text, verbose=False)["input_ids"]) for tok in tokenizers)
 
 
 def chunk(text: str, tokenizers: list[Any], limit: int = 75) -> list[str]:
