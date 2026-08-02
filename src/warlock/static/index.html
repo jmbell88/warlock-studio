@@ -322,11 +322,7 @@
         <select id="history"><option value="">recent…</option></select>
       </div>
       <textarea id="prompt" placeholder="a wooden treasure chest with iron bands, fantasy game prop"></textarea>
-      <div id="negative-row">
-        <label for="negative-prompt">Negative prompt</label>
-        <textarea id="negative-prompt" rows="2"></textarea>
-        <p class="hint">Only applies to CFG models (Playground); distilled 4-step bases ignore it.</p>
-      </div>
+      <div id="prompt-preview" class="hint"></div>
     </fieldset>
     <fieldset id="image-input" hidden>
       <legend>Reference image</legend>
@@ -334,19 +330,57 @@
       <p class="hint">Or drop an image here, or paste one from the clipboard.</p>
     </fieldset>
     <fieldset>
-      <legend>Design guidance</legend>
+      <legend>Subject</legend>
       <div id="g-category-row">
         <label for="g-category">Asset category</label>
         <select id="g-category" data-guidance="category"></select>
+      </div>
+      <div id="g-silhouette-row">
+        <label for="g-silhouette">Silhouette</label>
+        <select id="g-silhouette" data-guidance="silhouette"></select>
+      </div>
+      <div id="g-material-row">
+        <label for="g-material">Material</label>
+        <select id="g-material" data-guidance="material"></select>
+      </div>
+      <div id="g-condition-row">
+        <label for="g-condition">Condition</label>
+        <select id="g-condition" data-guidance="condition"></select>
+      </div>
+      <div id="g-rarity-row">
+        <label for="g-rarity">Rarity</label>
+        <select id="g-rarity" data-guidance="rarity"></select>
+      </div>
+      <div id="g-emissive-row">
+        <label for="g-emissive">Emissive detail</label>
+        <select id="g-emissive" data-guidance="emissive"></select>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Style</legend>
+      <div id="g-setting-row">
+        <label for="g-setting">Setting</label>
+        <select id="g-setting" data-guidance="setting"></select>
       </div>
       <div id="g-genre-row">
         <label for="g-genre">Genre</label>
         <select id="g-genre" data-guidance="genre"></select>
       </div>
+      <div id="g-mood-row">
+        <label for="g-mood">Mood</label>
+        <select id="g-mood" data-guidance="mood"></select>
+      </div>
       <div id="g-art_style-row">
         <label for="g-art_style">Art style</label>
         <select id="g-art_style" data-guidance="art_style"></select>
       </div>
+      <div id="g-palette-row">
+        <label for="g-palette">Colour palette</label>
+        <select id="g-palette" data-guidance="palette"></select>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Output</legend>
       <div id="g-base_model-row">
         <label for="g-base_model">Image model</label>
         <select id="g-base_model" data-guidance="base_model"></select>
@@ -376,13 +410,20 @@
           passed qualification (see docs/NEXT.md &sect;3).
         </p>
       </div>
+      <div id="g-size-row">
+        <label for="g-size">Physical size (metres)</label>
+        <input type="number" id="g-size" step="0.01" min="0.01" max="100">
+        <p class="hint">The longest axis of the finished model.</p>
+      </div>
       <div id="g-bg_removal-row">
         <label for="g-bg_removal">Background removal</label>
         <select id="g-bg_removal" data-guidance="bg_removal"></select>
       </div>
-      <label for="g-size">Physical size (metres)</label>
-      <input type="number" id="g-size" step="0.01" min="0.01" max="100">
-      <p class="hint">The longest axis of the finished model.</p>
+      <div id="negative-row">
+        <label for="negative-prompt">Negative prompt</label>
+        <textarea id="negative-prompt" rows="2"></textarea>
+        <p class="hint">Only applies to CFG models (Playground); distilled 4-step bases ignore it.</p>
+      </div>
     </fieldset>
     <fieldset>
       <legend>Options</legend>

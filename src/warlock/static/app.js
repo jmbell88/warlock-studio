@@ -386,6 +386,7 @@ function fmtDuration(seconds) {
 
 const GUIDANCE_FIELDS = [
   "category", "genre", "art_style", "base_model", "style_lora", "platform", "bg_removal",
+  "material", "condition", "setting", "palette", "emissive", "rarity", "silhouette", "mood",
 ];
 const guidanceSelects = {};
 const sizeInput = document.getElementById("g-size");
@@ -513,6 +514,53 @@ function copySettingsToForm(job) {
   syncPlatformHint();
 }
 
+// --- prompt preview ----------------------------------------------------
+// A live token/chunk count so twelve guidance selects don't feel like a
+// black box. Best-effort: /api/prompt-preview returns null tokens/chunks
+// when the tokenizer isn't available, and this just shows the prompt text
+// alone in that case.
+
+let previewTimer = null;
+
+async function refreshPromptPreview() {
+  const el = document.getElementById("prompt-preview");
+  if (kind !== "text") { setText(el, ""); return; }
+  const text = document.getElementById("prompt").value.trim();
+  if (!text) { setText(el, ""); return; }
+
+  const params = new URLSearchParams({ prompt: text });
+  for (const field of GUIDANCE_FIELDS) {
+    const value = guidanceSelects[field]?.value;
+    if (value) params.set(field, value);
+  }
+  if (sizeInput.value) params.set("size_m", sizeInput.value);
+  if (loraWeight.value) params.set("lora_weight", loraWeight.value);
+  const negative = document.getElementById("negative-prompt")?.value;
+  if (negative) params.set("negative_prompt", negative);
+
+  let body;
+  try {
+    const r = await fetch(`/api/prompt-preview?${params}`);
+    if (!r.ok) return;
+    body = await r.json();
+  } catch (e) {
+    console.error("prompt preview failed", e);
+    return;
+  }
+  const cost = body.tokens != null
+    ? `${body.tokens} tokens / ${body.chunks} chunk${body.chunks === 1 ? "" : "s"}`
+    : "token count unavailable";
+  setText(el, `${body.prompt} — ${cost}`);
+}
+
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshPromptPreview, 400);
+}
+
+document.getElementById("form").addEventListener("change", schedulePreview);
+document.getElementById("prompt").addEventListener("input", schedulePreview);
+
 // --- seed -------------------------------------------------------------------
 // Generation is deterministic in the seed, so a fixed default meant hitting
 // Generate twice on an unchanged form produced byte-identical output. Random
@@ -544,10 +592,14 @@ for (const [k, btn] of Object.entries(tabs)) {
     tabs.image.classList.toggle("active", k === "image");
     document.getElementById("text-input").hidden = k !== "text";
     document.getElementById("image-input").hidden = k !== "image";
-    // Genre, art style and the image-model selects only affect the SDXL stage,
-    // and image jobs never run SDXL -- hide them rather than offer controls
-    // that do nothing.
-    for (const field of ["genre", "art_style", "base_model", "style_lora"]) {
+    // Genre, art style, the image-model selects and all eight new fields are
+    // pure prompt fragments that only affect the SDXL stage, and image jobs
+    // never run SDXL -- hide them rather than offer controls that do nothing.
+    for (const field of [
+      "genre", "art_style", "base_model", "style_lora",
+      "material", "condition", "setting", "palette", "emissive", "rarity",
+      "silhouette", "mood",
+    ]) {
       document.getElementById(`g-${field}-row`).hidden = k !== "text";
     }
     // Image jobs never run SDXL, so a negative prompt has nothing to act on --

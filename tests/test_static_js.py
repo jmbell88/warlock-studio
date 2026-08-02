@@ -19,6 +19,7 @@ demanding it. It is the cheapest possible check that the page can run at all.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -82,3 +83,24 @@ def test_every_element_the_module_grabs_at_load_time_exists_in_the_html():
         assert f'id="{element_id}"' in html, (
             f"app.js grabs #{element_id}; index.html has no such id"
         )
+
+
+def test_every_guidance_field_has_a_matching_select_and_row():
+    """loadGuidance() in app.js queries `[data-guidance="<field>"]` for every
+    name in GUIDANCE_FIELDS and toggles `#g-<field>-row` on tab switch. A
+    field present in one but missing the matching HTML breaks initialization
+    silently (loadGuidance's promise chain ends in .catch(console.error)) or
+    throws from inside the tab-click handler. Parse app.js's own array so
+    this test can't drift from the source of truth.
+    """
+    app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    match = re.search(r"const GUIDANCE_FIELDS = \[(.*?)\];", app_js, re.DOTALL)
+    assert match, "GUIDANCE_FIELDS array not found in app.js"
+    fields = re.findall(r'"([\w]+)"', match.group(1))
+    assert fields, "GUIDANCE_FIELDS parsed empty"
+
+    for field in fields:
+        assert f'data-guidance="{field}"' in html, f"no select for guidance field {field!r}"
+        assert f'id="g-{field}-row"' in html, f"no row div for guidance field {field!r}"
