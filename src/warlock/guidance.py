@@ -36,6 +36,15 @@ DEFAULT_PLATFORM = "desktop"
 BG_REMOVAL = ("auto", "birefnet", "threshold")
 DEFAULT_BG_REMOVAL = "auto"
 
+# What a TRELLIS reference image must not be. A second subject or a cropped one
+# is the single most common cause of a mesh that reconstructs into nonsense, so
+# this is a default rather than an empty field the user has to discover.
+DEFAULT_NEGATIVE_PROMPT = (
+    "blurry, low quality, multiple objects, cropped, cut off, "
+    "text, watermark, signature, busy background, human hands"
+)
+MAX_NEGATIVE_PROMPT = 1000
+
 
 @dataclass(frozen=True, slots=True)
 class Option:
@@ -192,11 +201,22 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     elif str(bg_removal) not in BG_REMOVAL:
         raise ValueError(f"bg_removal must be one of {list(BG_REMOVAL)}")
 
+    # Unlike bg_removal, a missing key and an explicit "" are NOT the same
+    # thing here: missing means "use the game-asset default", an explicit
+    # empty string means the user deliberately wants no negative prompt at all.
+    negative = raw.get("negative_prompt")
+    if negative is None:
+        negative = DEFAULT_NEGATIVE_PROMPT
+    negative = str(negative).strip()
+    if len(negative) > MAX_NEGATIVE_PROMPT:
+        raise ValueError(f"negative_prompt must be at most {MAX_NEGATIVE_PROMPT} characters")
+
     out: dict[str, Any] = {
         "resolution": resolution,
         "size_m": size_m,
         "platform": platform.key,
         "bg_removal": str(bg_removal),
+        "negative_prompt": negative,
         # Always present, unlike the optional fields below: the worker needs a
         # base model for every text job and must never have to guess one.
         "base_model": base_model.key,
@@ -251,6 +271,7 @@ def catalog() -> dict[str, Any]:
             "base_model": models.DEFAULT_BASE_MODEL,
             "lora_weight": models.DEFAULT_LORA_WEIGHT,
             "bg_removal": DEFAULT_BG_REMOVAL,
+            "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
         },
         "size_range_m": [SIZE_MIN_M, SIZE_MAX_M],
         "lora_weight_range": [models.LORA_WEIGHT_MIN, models.LORA_WEIGHT_MAX],

@@ -165,3 +165,12 @@ def test_model_selection_never_leaks_into_the_prompt():
     assert prompt == guidance.compose_prompt("a barrel", {"platform": params["platform"]})
     for token in ("sdxl", "render3d", "3d render", "Hyper"):
         assert token.lower() not in prompt.lower()
+
+
+def test_negative_prompt_defaults_and_is_length_capped():
+    from warlock import guidance
+
+    assert guidance.normalize({})["negative_prompt"] == guidance.DEFAULT_NEGATIVE_PROMPT
+    assert guidance.normalize({"negative_prompt": " smooth "})["negative_prompt"] == "smooth"
+    with pytest.raises(ValueError):
+        guidance.normalize({"negative_prompt": "x" * 1001})

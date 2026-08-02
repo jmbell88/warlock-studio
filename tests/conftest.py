@@ -98,6 +98,7 @@ class FakeText2Image:
         self.sleep_per_step = 0.02
         self.prompts: list[str] = []
         self.lora_calls: list[tuple] = []
+        self.negatives: list[str | None] = []
 
     def generate(
         self,
@@ -107,12 +108,14 @@ class FakeText2Image:
         seed=42,
         lora=None,
         lora_weight=DEFAULT_LORA_WEIGHT,
+        negative_prompt=None,
         on_state=None,
         on_step=None,
         cancel_event=None,
     ):
         self.prompts.append(prompt)
         self.lora_calls.append((lora, lora_weight))
+        self.negatives.append(negative_prompt)
         if on_state is not None:
             on_state("load")
         self.loaded = True

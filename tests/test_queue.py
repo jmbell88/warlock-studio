@@ -154,6 +154,17 @@ async def test_worker_forwards_bg_removal_to_trellis(worker):
     assert worker.trellis.generate_calls[0]["bg_removal"] == "birefnet"
 
 
+async def test_worker_passes_negative_prompt(worker):
+    job_id = worker.store.create(
+        "text", "a barrel", {"seed": 1, "negative_prompt": "blurry, two objects"}
+    )
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.negatives[-1] == "blurry, two objects"
+
+
 async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatch):
     import warlock.pipelines.postprocess as postprocess_mod
 

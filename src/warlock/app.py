@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
         style_lora: Annotated[str | None, Form()] = None,
         lora_weight: Annotated[float | None, Form()] = None,
         bg_removal: Annotated[str | None, Form()] = None,
+        negative_prompt: Annotated[str | None, Form()] = None,
         rig: Annotated[bool, Form()] = False,
         rig_template: Annotated[str | None, Form()] = None,
         image: Annotated[UploadFile | None, File()] = None,
@@ -177,6 +178,7 @@ def create_app() -> FastAPI:
                     "style_lora": style_lora,
                     "lora_weight": lora_weight,
                     "bg_removal": bg_removal,
+                    "negative_prompt": negative_prompt,
                 }
             )
         except ValueError as exc:

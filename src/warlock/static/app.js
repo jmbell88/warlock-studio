@@ -272,6 +272,10 @@ async function loadGuidance() {
   }
   bgSelect.value = catalog.defaults?.bg_removal ?? "auto";
   guidanceSelects.bg_removal = bgSelect;
+  // Only seed it, never clobber -- a value the user already typed must survive
+  // a second catalog load (e.g. after loadGuidance is re-triggered).
+  const negative = document.getElementById("negative-prompt");
+  if (!negative.value) negative.value = catalog.defaults?.negative_prompt ?? "";
   guidanceSelects.platform.value = catalog.defaults.platform;
   guidanceSelects.base_model.value = catalog.defaults.base_model;
   sizeInput.value = catalog.defaults.size_m;
@@ -327,6 +331,10 @@ for (const [k, btn] of Object.entries(tabs)) {
     for (const field of ["genre", "art_style", "base_model", "style_lora"]) {
       document.getElementById(`g-${field}-row`).hidden = k !== "text";
     }
+    // Image jobs never run SDXL, so a negative prompt has nothing to act on --
+    // unlike bg_removal, which stays visible because trellis-server matting
+    // applies to both job kinds.
+    document.getElementById("negative-row").hidden = k !== "text";
   });
 }
 
@@ -397,6 +405,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     const prompt = document.getElementById("prompt").value.trim();
     if (!prompt) return;
     fd.set("prompt", prompt);
+    fd.set("negative_prompt", document.getElementById("negative-prompt").value);
   } else {
     const file = document.getElementById("image").files[0];
     if (!file) return;

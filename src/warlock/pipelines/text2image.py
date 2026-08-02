@@ -201,10 +201,18 @@ class Text2Image:
         seed: int = 42,
         lora: str | None = None,
         lora_weight: float = models.DEFAULT_LORA_WEIGHT,
+        negative_prompt: str | None = None,
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> Path:
+        """Generate a reference image and save it to ``output_path``.
+
+        ``negative_prompt`` only bites when the checkpoint runs with CFG: a
+        4-step distilled base at guidance_scale 0 discards it, which is why the
+        UI notes it applies to the CFG bases (playground) rather than silently
+        doing nothing.
+        """
         import torch
 
         self.load(on_state)
@@ -236,6 +244,7 @@ class Text2Image:
 
         image = self._pipe(
             text,
+            negative_prompt=negative_prompt or None,
             num_inference_steps=steps,
             guidance_scale=self.spec.guidance_scale,
             width=self.spec.image_size,

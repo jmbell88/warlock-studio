@@ -248,6 +248,11 @@
     <fieldset id="text-input">
       <legend>Prompt</legend>
       <textarea id="prompt" placeholder="a wooden treasure chest with iron bands, fantasy game prop"></textarea>
+      <div id="negative-row">
+        <label for="negative-prompt">Negative prompt</label>
+        <textarea id="negative-prompt" rows="2"></textarea>
+        <p class="hint">Only applies to CFG models (Playground); distilled 4-step bases ignore it.</p>
+      </div>
     </fieldset>
     <fieldset id="image-input" hidden>
       <legend>Reference image</legend>

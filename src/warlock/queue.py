@@ -417,6 +417,7 @@ class Worker:
                         seed=seed,
                         lora=style_lora,
                         lora_weight=lora_weight,
+                        negative_prompt=str(params.get("negative_prompt") or ""),
                         on_state=lambda s: self._t2i_state(job_id, s),
                         on_step=lambda i, n: self._t2i_step(job_id, i, n),
                         cancel_event=self._cancel.event,
