@@ -225,6 +225,8 @@ def create_app() -> FastAPI:
         style = models.STYLE_LORAS.get(params.get("style_lora") or "")
         trigger = style.trigger if style else ""
         user_prompt = request.query_params.get("prompt") or ""
+        if len(user_prompt) > MAX_PROMPT:
+            raise HTTPException(400, f"prompt must be at most {MAX_PROMPT} characters")
         positive = prompt_pipeline.build(user_prompt, params, trigger=trigger)
 
         tokens = chunks = None

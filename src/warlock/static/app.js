@@ -492,12 +492,25 @@ loadGuidance().catch((e) => console.error("could not load guidance options", e))
 // being reused with a tweak. Only fields the form actually owns -- derived
 // values (composed_prompt, scale_factor, mesh_audit) describe that run, not this
 // one, exactly as the /rerun route already reasons.
+// platform, base_model and bg_removal have no blank "-- any --"/"-- none --"
+// option (see loadGuidance's option-building loop), so assigning "" to them
+// would silently fall back to the browser's first-option default rather than
+// showing blank -- they're only overwritten when the incoming params supply
+// one. Every other field IS blanked when absent, or a value left over from a
+// previously applied preset/job would silently survive into this one.
+const NO_BLANK_OPTION_FIELDS = new Set(["platform", "base_model", "bg_removal"]);
+
 function copySettingsToForm(job) {
   const p = job.params ?? {};
   if (job.prompt) document.getElementById("prompt").value = job.prompt;
   for (const field of GUIDANCE_FIELDS) {
     const select = guidanceSelects[field];
-    if (select && p[field]) select.value = p[field];
+    if (!select) continue;
+    if (NO_BLANK_OPTION_FIELDS.has(field)) {
+      if (p[field]) select.value = p[field];
+    } else {
+      select.value = p[field] ?? "";
+    }
   }
   if (p.size_m) {
     sizeInput.value = p.size_m;
@@ -595,11 +608,12 @@ for (const [k, btn] of Object.entries(tabs)) {
     // Genre, art style, the image-model selects and all eight new fields are
     // pure prompt fragments that only affect the SDXL stage, and image jobs
     // never run SDXL -- hide them rather than offer controls that do nothing.
-    for (const field of [
-      "genre", "art_style", "base_model", "style_lora",
-      "material", "condition", "setting", "palette", "emissive", "rarity",
-      "silhouette", "mood",
-    ]) {
+    // Derived from GUIDANCE_FIELDS (minus category/platform/bg_removal, which
+    // stay visible for both job kinds) so a new taxonomy field can't be added
+    // there without also being wired into this list.
+    for (const field of GUIDANCE_FIELDS.filter(
+      (f) => !["category", "platform", "bg_removal"].includes(f),
+    )) {
       document.getElementById(`g-${field}-row`).hidden = k !== "text";
     }
     // Image jobs never run SDXL, so a negative prompt has nothing to act on --

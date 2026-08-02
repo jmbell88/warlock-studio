@@ -14,7 +14,7 @@ per-texel noise into the atlas above that.
 This module owns the taxonomy for both the API layer and the worker. The prompt
 fragments here describe the *subject* only; the single-object/plain-background
 scaffolding that keeps images TRELLIS-friendly stays in
-pipelines/text2image.PROMPT_TEMPLATE, which wraps whatever we produce.
+pipelines/prompt.PROMPT_TEMPLATE, which wraps whatever we produce.
 
 Every Option.prompt fragment here is kept to 2-4 words. Chunked encoding in
 pipelines/prompt.py and pipelines/text2image.py removes CLIP's hard 77-token

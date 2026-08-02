@@ -114,9 +114,11 @@ def chunk(text: str, tokenizers: list[Any], limit: int = 75) -> list[str]:
 def pad_pair(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
     """Pad the shorter list with "" so both have equal chunk counts.
 
-    Required before text2image._encode_long_prompt concatenates positive and
-    negative embeddings on the batch axis: torch.cat needs equal sequence
-    lengths, which here means equal chunk counts.
+    Required because diffusers' own StableDiffusionXLPipeline.__call__
+    concatenates positive and negative embeddings on the batch axis under
+    classifier-free guidance (torch.cat([negative_prompt_embeds,
+    prompt_embeds], dim=0)), which needs equal sequence lengths -- here,
+    equal chunk counts.
     """
     n = max(len(a), len(b))
     return (a + [""] * (n - len(a)), b + [""] * (n - len(b)))

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from warlock import guidance
+
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "warlock" / "static"
 
 # vendor/ is third-party three.js shipped as-is; it is not ours to lint and
@@ -104,3 +106,9 @@ def test_every_guidance_field_has_a_matching_select_and_row():
     for field in fields:
         assert f'data-guidance="{field}"' in html, f"no select for guidance field {field!r}"
         assert f'id="g-{field}-row"' in html, f"no row div for guidance field {field!r}"
+
+    # And the reverse direction: guidance.py is the source of truth for which
+    # fields the API accepts, so a taxonomy field added there but never wired
+    # into GUIDANCE_FIELDS would be invisible in the UI while still accepted
+    # by the API -- silently unreachable rather than loudly broken.
+    assert set(guidance.form_fields()) <= set(fields)
