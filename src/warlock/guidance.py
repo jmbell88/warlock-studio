@@ -31,6 +31,11 @@ SIZE_MAX_M = 100.0
 DEFAULT_SIZE_M = 1.0
 DEFAULT_PLATFORM = "desktop"
 
+# How trellis-server mattes the input image. Not an Option table: these are
+# server capabilities, not prompt fragments, so they never reach compose_prompt.
+BG_REMOVAL = ("auto", "birefnet", "threshold")
+DEFAULT_BG_REMOVAL = "auto"
+
 
 @dataclass(frozen=True, slots=True)
 class Option:
@@ -181,10 +186,17 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
                 f"and {models.LORA_WEIGHT_MAX}"
             )
 
+    bg_removal = raw.get("bg_removal")
+    if bg_removal in (None, ""):
+        bg_removal = DEFAULT_BG_REMOVAL
+    elif str(bg_removal) not in BG_REMOVAL:
+        raise ValueError(f"bg_removal must be one of {list(BG_REMOVAL)}")
+
     out: dict[str, Any] = {
         "resolution": resolution,
         "size_m": size_m,
         "platform": platform.key,
+        "bg_removal": str(bg_removal),
         # Always present, unlike the optional fields below: the worker needs a
         # base model for every text job and must never have to guess one.
         "base_model": base_model.key,
@@ -232,11 +244,13 @@ def catalog() -> dict[str, Any]:
             for field, table in _OPTION_TABLES.items()
         }
         | models.catalog(),
+        "bg_removal": list(BG_REMOVAL),
         "defaults": {
             "platform": DEFAULT_PLATFORM,
             "size_m": DEFAULT_SIZE_M,
             "base_model": models.DEFAULT_BASE_MODEL,
             "lora_weight": models.DEFAULT_LORA_WEIGHT,
+            "bg_removal": DEFAULT_BG_REMOVAL,
         },
         "size_range_m": [SIZE_MIN_M, SIZE_MAX_M],
         "lora_weight_range": [models.LORA_WEIGHT_MIN, models.LORA_WEIGHT_MAX],

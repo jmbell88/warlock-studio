@@ -202,7 +202,9 @@ function fmtDuration(seconds) {
 // The taxonomy lives in guidance.py and arrives via /api/guidance, so the
 // selects can never drift out of sync with what the API will accept.
 
-const GUIDANCE_FIELDS = ["category", "genre", "art_style", "base_model", "style_lora", "platform"];
+const GUIDANCE_FIELDS = [
+  "category", "genre", "art_style", "base_model", "style_lora", "platform", "bg_removal",
+];
 const guidanceSelects = {};
 const sizeInput = document.getElementById("g-size");
 const platformHint = document.getElementById("platform-hint");
@@ -238,7 +240,11 @@ function syncLoraWeight() {
 
 async function loadGuidance() {
   const catalog = await (await fetch("/api/guidance")).json();
+  // bg_removal is a server capability, not an Option table -- catalog.fields
+  // has no entry for it, so it gets its own pass below rather than joining
+  // this loop over {key,label} objects.
   for (const field of GUIDANCE_FIELDS) {
+    if (field === "bg_removal") continue;
     const select = document.querySelector(`[data-guidance="${field}"]`);
     guidanceSelects[field] = select;
     // Genre, art style, category and style LoRA are all optional. Platform
@@ -254,6 +260,18 @@ async function loadGuidance() {
       if (field === "style_lora" && opt.default_weight) loraDefaults[opt.key] = opt.default_weight;
     }
   }
+  const bgSelect = document.getElementById("g-bg_removal");
+  for (const key of catalog.bg_removal ?? []) {
+    const opt = document.createElement("option");
+    opt.value = key;
+    setText(
+      opt,
+      key === "birefnet" ? "BiRefNet (best)" : key === "threshold" ? "Threshold (fast)" : "Auto",
+    );
+    bgSelect.append(opt);
+  }
+  bgSelect.value = catalog.defaults?.bg_removal ?? "auto";
+  guidanceSelects.bg_removal = bgSelect;
   guidanceSelects.platform.value = catalog.defaults.platform;
   guidanceSelects.base_model.value = catalog.defaults.base_model;
   sizeInput.value = catalog.defaults.size_m;

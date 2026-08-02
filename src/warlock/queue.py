@@ -445,7 +445,11 @@ class Worker:
         glb_path = job_dir / "model.glb"
         _log_vram("before trellis generate")
         await self.trellis.generate(
-            image_path, glb_path, seed=seed, resolution=resolution
+            image_path,
+            glb_path,
+            seed=seed,
+            resolution=resolution,
+            bg_removal=str(params.get("bg_removal") or "auto"),
         )
         await self._apply_scale(job_id, glb_path, params)
         await self._audit_mesh(job_id, glb_path, params)

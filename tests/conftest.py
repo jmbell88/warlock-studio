@@ -48,10 +48,21 @@ class FakeTrellisServer:
         self.ignore_stop = False
 
     async def generate(
-        self, image_path: Path, output_path: Path, *, seed: int = 42, resolution: int = 1024
+        self,
+        image_path: Path,
+        output_path: Path,
+        *,
+        seed: int = 42,
+        resolution: int = 1024,
+        bg_removal: str | None = None,
     ) -> Path:
         self.generate_calls.append(
-            {"image_path": image_path, "seed": seed, "resolution": resolution}
+            {
+                "image_path": image_path,
+                "seed": seed,
+                "resolution": resolution,
+                "bg_removal": bg_removal,
+            }
         )
         if self.should_raise is not None:
             exc, self.should_raise = self.should_raise, None

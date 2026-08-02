@@ -12,6 +12,45 @@ from warlock.pipelines import trellis as trellis_mod
 from warlock.pipelines.trellis import TrellisServer
 
 
+def test_generate_forwards_bg_removal(tmp_path, monkeypatch):
+    """The exe accepts a bg_removal form field; we never used to send it."""
+    sent = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b"glb"
+        text = ""
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, files=None, data=None):
+            sent.update(data)
+            return FakeResponse()
+
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", FakeClient)
+    server = trellis_mod.TrellisServer(tmp_path / "x.exe", tmp_path, 1234)
+    monkeypatch.setattr(server, "ensure_started", _noop_async)
+    image = tmp_path / "in.png"
+    image.write_bytes(b"png")
+    asyncio.run(
+        server.generate(image, tmp_path / "out.glb", seed=7, bg_removal="birefnet")
+    )
+    assert sent["bg_removal"] == "birefnet"
+    assert sent["seed"] == "7"
+
+
+async def _noop_async(*_a, **_k):
+    return None
+
+
 def test_argv_defaults_webp_off(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
     argv = srv._argv()

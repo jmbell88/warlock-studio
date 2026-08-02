@@ -142,6 +142,18 @@ async def test_resolution_from_params_reaches_trellis(worker):
     assert worker.trellis.generate_calls[0]["resolution"] == 1536
 
 
+async def test_worker_forwards_bg_removal_to_trellis(worker):
+    job_id = worker.store.create("image", None, {"seed": 1, "bg_removal": "birefnet"})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls[0]["bg_removal"] == "birefnet"
+
+
 async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatch):
     import warlock.pipelines.postprocess as postprocess_mod
 

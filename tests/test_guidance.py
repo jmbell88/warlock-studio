@@ -133,6 +133,13 @@ def test_style_lora_brings_its_own_default_weight():
     assert params["lora_weight"] == models.STYLE_LORAS["ps1"].default_weight
 
 
+def test_bg_removal_defaults_to_auto_and_rejects_unknown():
+    assert guidance.normalize({})["bg_removal"] == "auto"
+    assert guidance.normalize({"bg_removal": "birefnet"})["bg_removal"] == "birefnet"
+    with pytest.raises(ValueError):
+        guidance.normalize({"bg_removal": "magic"})
+
+
 def test_explicit_lora_weight_overrides_the_default():
     assert guidance.normalize({"style_lora": "ps1", "lora_weight": 0.5})["lora_weight"] == 0.5
 

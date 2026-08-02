@@ -208,16 +208,27 @@ class TrellisServer:
         *,
         seed: int = 42,
         resolution: int = 1024,
+        bg_removal: str | None = None,
     ) -> Path:
-        """Run image -> 3D and write the returned GLB to output_path."""
+        """Run image -> 3D and write the returned GLB to output_path.
+
+        ``bg_removal`` picks how the server mattes the input: birefnet is the
+        learned matte (needs birefnet.gguf, see doctor), threshold is the cheap
+        cutout, auto lets the server decide. Omitted entirely when None so the
+        exe applies its own default rather than being handed a keyword it may
+        not know.
+        """
         await self.ensure_started()
         self.last_used = time.monotonic()
+        data = {"seed": str(seed), "resolution": str(resolution)}
+        if bg_removal is not None:
+            data["bg_removal"] = bg_removal
         async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:
             with image_path.open("rb") as fh:
                 r = await client.post(
                     f"{self.base_url}/generate",
                     files={"image": (image_path.name, fh)},
-                    data={"seed": str(seed), "resolution": str(resolution)},
+                    data=data,
                 )
         if r.status_code >= 400:
             detail = r.text[:500] if r.text else "(no body; see trellis.log)"
