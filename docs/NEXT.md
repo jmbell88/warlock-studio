@@ -39,9 +39,6 @@ is reachable only by hand until a control lands next to the downloads row.
 
 ## 2. Smaller open items
 
-- **Prompt preview**: a server-owned endpoint returning the composed prompt
-  before submission, so the form can show what will actually be sent. Today
-  the composed prompt is only visible after a run.
 - **GLB structure verification + provenance**: `normalize_glb` rewrites the
   JSON chunk without verifying the one-scene/one-root/no-skin shape it
   assumes, and records its transform only in job params — not in an
