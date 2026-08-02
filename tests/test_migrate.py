@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
+import warlock.db as db_mod
 from warlock.db import _SCHEMA, MIGRATIONS, JobStore
 
 
@@ -114,3 +115,33 @@ def test_pre_migration_db_gains_stage_and_parent(tmp_path):
     assert user_version(fresh_path) == len(MIGRATIONS)
     assert "idx_jobs_parent" in index_names(old_path)
     assert "idx_jobs_parent" in index_names(fresh_path)
+
+
+def test_add_column_guard_skips_the_column_less_add_spelling_on_a_fresh_db(
+    tmp_path, monkeypatch
+):
+    """SQLite's ALTER TABLE ADD does not require the COLUMN keyword. A
+    migration written that way must still be skipped on a fresh DB, exactly
+    like the canonical "ADD COLUMN" spelling -- otherwise a fresh database
+    fails to start the moment a future migration uses this legal alternative.
+
+    "status" is a column _SCHEMA already creates, so a fresh DB replaying
+    this statement verbatim (i.e. the hardening reverted to a bare
+    ``.startswith("ALTER TABLE jobs ADD COLUMN")`` check) raises
+    sqlite3.OperationalError: duplicate column name.
+    """
+    fake_migrations = [
+        [*MIGRATIONS[0]],
+        ["ALTER TABLE jobs ADD status TEXT NOT NULL DEFAULT 'queued'"],
+    ]
+    monkeypatch.setattr(db_mod, "MIGRATIONS", fake_migrations)
+
+    path = tmp_path / "jobs.sqlite"
+    store = JobStore(path)
+    try:
+        conn = sqlite3.connect(path)
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.close()
+        assert version == len(fake_migrations)
+    finally:
+        store.close()

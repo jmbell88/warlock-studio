@@ -718,9 +718,10 @@ def test_promote_creates_a_child_model_job(client, tmp_path):
     # reference in by hand, which is exactly the state promotion requires.
     import warlock.config as config_mod
 
+    reference_bytes = b"png-distinctive-parent-bytes-\x00\x01\x02"
     job_dir = config_mod.get_config().job_dir(ref_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "input.png").write_bytes(b"png")
+    (job_dir / "input.png").write_bytes(reference_bytes)
     # The fixture never runs a real pipeline, so nothing marks the row
     # "done" on its own -- stand that in too, exactly like input.png above.
     client.app.state.store.set_status(ref_id, "done")
@@ -731,6 +732,12 @@ def test_promote_creates_a_child_model_job(client, tmp_path):
     assert child["parent_id"] == ref_id
     assert child["kind"] == "image"
     assert child["stage"] == "model"
+    # The load-bearing half of promote: the child's input.png must actually
+    # be the parent's bytes, not just exist as an empty/wrong file. A worker
+    # picking this job up minutes later fails without it.
+    child_png = config_mod.get_config().job_dir(child["id"]) / "input.png"
+    assert child_png.exists()
+    assert child_png.read_bytes() == reference_bytes
 
 
 def test_promote_reuses_the_parents_reference_seed(client, tmp_path):
@@ -801,6 +808,11 @@ def test_count_creates_n_reference_jobs_with_distinct_seeds(client):
         for i in body["ids"]
     }
     assert len(seeds) == 4
+    # If stage regressed to the default "model", candidates 1..N-1 would each
+    # silently pay a full multi-minute trellis run instead of stopping after
+    # the reference image.
+    for job_id in body["ids"]:
+        assert client.get(f"/api/jobs/{job_id}").json()["stage"] == "reference"
 
 
 def test_count_above_one_requires_reference_output(client):

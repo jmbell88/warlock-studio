@@ -235,9 +235,20 @@ def create_app() -> FastAPI:
             candidate = dict(params)
             if i > 0:
                 # Candidate 0 keeps the requested seed so a pinned seed still
-                # reproduces; the rest fan out from it.
+                # reproduces; the rest fan out from it. mesh_seed follows
+                # reference_seed/seed here even though these rows are still
+                # stage="reference" and never reach the mesh stage as-is:
+                # the settings panel renders all three seeds together, and a
+                # candidate whose seed/reference_seed changed but whose
+                # mesh_seed silently didn't would read as a bug, not as the
+                # "seed is the legacy fallback for both stages" contract a
+                # few lines up. promote_to_model overwrites mesh_seed on
+                # promotion and reroll rewrites all of them, so this has no
+                # effect on what actually gets meshed -- it only keeps the
+                # displayed values internally consistent.
                 candidate["reference_seed"] = _random_seed()
                 candidate["seed"] = candidate["reference_seed"]
+                candidate["mesh_seed"] = candidate["reference_seed"]
             job_id = uuid.uuid4().hex[:12]
             if normalized is not None:
                 job_dir = config.job_dir(job_id)

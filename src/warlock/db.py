@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -46,6 +47,20 @@ MIGRATIONS: list[list[str]] = [
 ]
 
 
+# Matches any legal SQLite "ALTER TABLE jobs ADD [COLUMN] <name> ...": the
+# COLUMN keyword is optional, whitespace is free-form, and the name may be
+# quoted or bracketed. MIGRATIONS[0] was written to match a literal
+# ``.startswith("ALTER TABLE jobs ADD COLUMN")`` + ``split()`` template; that
+# template is correct for the one statement it was copied from but wrong for
+# anything a future migration might legally write, and a miss means a fresh
+# database tries to re-add an existing column and fails to start. This regex
+# removes the class rather than the instance -- match _check_job_id in
+# app.py for the same reasoning applied to job ids.
+_ADD_COLUMN_RE = re.compile(
+    r"^ALTER\s+TABLE\s+jobs\s+ADD\s+(?:COLUMN\s+)?[\"'\[]?(\w+)", re.IGNORECASE
+)
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     # Snapshotted once, before any migration runs. Safe because no migration
@@ -59,10 +74,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             # would fail on it. Skipping the statement rather than the whole
             # entry keeps fresh and migrated DBs converging, which is the
             # property the append-only contract exists to protect.
-            if stmt.startswith("ALTER TABLE jobs ADD COLUMN"):
-                name = stmt.split("ADD COLUMN", 1)[1].split()[0]
-                if name in columns:
-                    continue
+            match = _ADD_COLUMN_RE.match(stmt)
+            if match and match.group(1) in columns:
+                continue
             conn.execute(stmt)
         conn.execute(f"PRAGMA user_version = {i + 1}")
     conn.commit()
