@@ -90,6 +90,8 @@ def test_catalog_covers_every_field_and_is_json_safe():
     catalog = guidance.catalog()
     assert set(catalog["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "material", "condition", "setting", "palette", "emissive", "rarity",
+        "silhouette", "mood",
     }
     assert all(o["resolution"] for o in catalog["fields"]["platform"])
     assert all(o["default_size_m"] for o in catalog["fields"]["category"])
@@ -201,3 +203,49 @@ def test_presets_appear_in_the_catalog():
 
     keys = {p["key"] for p in guidance.catalog()["presets"]}
     assert "handpainted_prop" in keys
+
+
+def test_new_fields_validate_and_reject_unknown():
+    for field in (
+        "material", "condition", "setting", "palette", "emissive",
+        "rarity", "silhouette", "mood",
+    ):
+        table = getattr(guidance, {
+            "material": "MATERIALS", "condition": "CONDITIONS", "setting": "SETTINGS",
+            "palette": "PALETTES", "emissive": "EMISSIVES", "rarity": "RARITIES",
+            "silhouette": "SILHOUETTES", "mood": "MOODS",
+        }[field])
+        some_key = next(iter(table))
+        assert guidance.normalize({field: some_key})[field] == some_key
+        with pytest.raises(ValueError, match=field):
+            guidance.normalize({field: "nonsense"})
+
+
+def test_a_chosen_new_field_value_survives_into_params():
+    params = guidance.normalize({"material": "iron", "mood": "grim"})
+    assert params["material"] == "iron"
+    assert params["mood"] == "grim"
+
+
+def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
+    params = guidance.normalize(
+        {"category": "weapon", "silhouette": "angular", "material": "steel",
+         "genre": "scifi", "platform": "hero"}
+    )
+    composed = guidance.compose_prompt("a rifle", params)
+    positions = [
+        composed.index(guidance.CATEGORIES["weapon"].prompt),
+        composed.index(guidance.SILHOUETTES["angular"].prompt),
+        composed.index(guidance.MATERIALS["steel"].prompt),
+        composed.index(guidance.GENRES["scifi"].prompt),
+        composed.index(guidance.PLATFORMS["hero"].prompt),
+    ]
+    assert positions == sorted(positions)
+
+
+def test_form_fields_covers_every_table():
+    assert set(guidance.form_fields()) == {
+        "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "material", "condition", "setting", "palette", "emissive", "rarity",
+        "silhouette", "mood",
+    }

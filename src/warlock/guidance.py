@@ -15,6 +15,11 @@ This module owns the taxonomy for both the API layer and the worker. The prompt
 fragments here describe the *subject* only; the single-object/plain-background
 scaffolding that keeps images TRELLIS-friendly stays in
 pipelines/text2image.PROMPT_TEMPLATE, which wraps whatever we produce.
+
+Every Option.prompt fragment here is kept to 2-4 words. Chunked encoding in
+pipelines/prompt.py and pipelines/text2image.py removes CLIP's hard 77-token
+ceiling, but not the soft one -- a longer conditioning sequence still dilutes
+cross-attention, so brevity stays a rule even though truncation no longer is.
 """
 
 from __future__ import annotations
@@ -118,11 +123,103 @@ PLATFORMS = _table(
     ),
 )
 
+MATERIALS = _table(
+    Option("wood", "Wood", "wooden construction"),
+    Option("iron", "Iron", "iron construction"),
+    Option("steel", "Steel", "steel construction"),
+    Option("bronze", "Bronze", "bronze construction"),
+    Option("stone", "Stone", "carved stone"),
+    Option("leather", "Leather", "leather construction"),
+    Option("bone", "Bone", "bone construction"),
+    Option("crystal", "Crystal", "faceted crystal"),
+    Option("glass", "Glass", "glass construction"),
+    Option("ceramic", "Ceramic", "glazed ceramic"),
+    Option("gold", "Gold", "gilded gold accents"),
+    Option("fabric", "Fabric", "woven fabric"),
+)
+
+CONDITIONS = _table(
+    Option("pristine", "Pristine", "pristine condition"),
+    Option("worn", "Worn", "worn weathered surfaces"),
+    Option("damaged", "Damaged", "battle-damaged surfaces"),
+    Option("ancient", "Ancient", "ancient timeworn surfaces"),
+    Option("rusted", "Rusted", "rusted corroded surfaces"),
+    Option("overgrown", "Overgrown", "moss-covered and overgrown"),
+    Option("burned", "Burned", "charred burned surfaces"),
+)
+
+SETTINGS = _table(
+    Option("medieval", "Medieval", "medieval European setting"),
+    Option("norse", "Norse", "Norse Viking setting"),
+    Option("japanese", "Japanese", "feudal Japanese setting"),
+    Option("egyptian", "Egyptian", "ancient Egyptian setting"),
+    Option("greco", "Greco-Roman", "Greco-Roman setting"),
+    Option("steampunk", "Steampunk", "steampunk brass setting"),
+    Option("cyberpunk", "Cyberpunk", "cyberpunk neon setting"),
+    Option("tribal", "Tribal", "tribal primitive setting"),
+    Option("deco", "Art Deco", "art deco setting"),
+    Option("military", "Military", "modern military setting"),
+)
+
+PALETTES = _table(
+    Option("earth", "Earth tones", "earthy natural palette"),
+    Option("steel", "Cool steel", "cool steel palette"),
+    Option("muted", "Muted", "muted desaturated palette"),
+    Option("vibrant", "Vibrant", "vibrant saturated palette"),
+    Option("mono", "Monochrome", "monochrome palette"),
+    Option("crimson", "Crimson", "crimson red palette"),
+    Option("verdigris", "Verdigris", "verdigris green patina"),
+    Option("ivory", "Ivory", "ivory cream palette"),
+)
+
+EMISSIVES = _table(
+    Option("runes", "Glowing runes", "glowing magic runes"),
+    Option("neon", "Neon", "glowing neon accents"),
+    Option("molten", "Molten cracks", "glowing molten cracks"),
+    Option("holo", "Holographic", "holographic light accents"),
+    Option("arcane", "Arcane glow", "arcane energy glow"),
+    Option("toxic", "Toxic glow", "toxic green glow"),
+)
+
+RARITIES = _table(
+    Option("common", "Common", "common plain quality"),
+    Option("uncommon", "Uncommon", "uncommon refined quality"),
+    Option("rare", "Rare", "rare exceptional quality"),
+    Option("epic", "Epic", "epic masterwork quality"),
+    Option("legendary", "Legendary", "legendary mythical quality"),
+)
+
+SILHOUETTES = _table(
+    Option("bulky", "Bulky", "bulky heavy silhouette"),
+    Option("slender", "Slender", "slender narrow silhouette"),
+    Option("compact", "Compact", "compact dense silhouette"),
+    Option("angular", "Angular", "angular sharp silhouette"),
+    Option("rounded", "Rounded", "rounded soft silhouette"),
+    Option("elongated", "Elongated", "elongated tall silhouette"),
+)
+
+MOODS = _table(
+    Option("heroic", "Heroic", "heroic noble mood"),
+    Option("grim", "Grim", "grim dark mood"),
+    Option("whimsical", "Whimsical", "whimsical playful mood"),
+    Option("sacred", "Sacred", "sacred reverent mood"),
+    Option("sinister", "Sinister", "sinister menacing mood"),
+    Option("regal", "Regal", "regal majestic mood"),
+)
+
 _OPTION_TABLES: dict[str, dict[str, Option]] = {
     "genre": GENRES,
     "art_style": ART_STYLES,
     "category": CATEGORIES,
     "platform": PLATFORMS,
+    "material": MATERIALS,
+    "condition": CONDITIONS,
+    "setting": SETTINGS,
+    "palette": PALETTES,
+    "emissive": EMISSIVES,
+    "rarity": RARITIES,
+    "silhouette": SILHOUETTES,
+    "mood": MOODS,
 }
 
 # The model-selection fields are validated and stored here so the API gets its
@@ -136,8 +233,19 @@ _TABLES: dict[str, dict[str, Any]] = {
     "style_lora": models.STYLE_LORAS,
 }
 
-# Order matters: this is the order fragments appear in the composed prompt.
-_PROMPT_FIELDS = ("category", "genre", "art_style", "platform")
+# Order matters: this is the order fragments appear in the composed prompt, so
+# it should read like a sentence. This preserves the relative order of the
+# four original fields (category -> genre -> art_style -> platform), which
+# tests/test_guidance.py pins.
+_PROMPT_FIELDS = (
+    "category", "silhouette", "material", "condition", "rarity", "emissive",
+    "setting", "genre", "mood", "art_style", "palette", "platform",
+)
+
+
+def form_fields() -> tuple[str, ...]:
+    """Every field name the API accepts as a taxonomy value."""
+    return tuple(_TABLES)
 
 
 def _lookup(field: str, value: Any) -> Any | None:
@@ -226,7 +334,12 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if style_lora is not None:
         out["style_lora"] = style_lora.key
         out["lora_weight"] = lora_weight
-    for field in ("genre", "art_style", "category"):
+    # Every optional taxonomy field except platform, which is always written
+    # explicitly above. Derived from _OPTION_TABLES rather than a hand-picked
+    # tuple so a new table can never be silently dropped from params again.
+    for field in _OPTION_TABLES:
+        if field == "platform":
+            continue
         option = chosen[field]
         if option is not None:
             out[field] = option.key
@@ -265,6 +378,10 @@ PRESETS: tuple[dict[str, Any], ...] = (
             "platform": "desktop",
             "base_model": "sdxl",
             "style_lora": "render3d",
+            "material": "wood",
+            "condition": "worn",
+            "setting": "medieval",
+            "palette": "earth",
         },
     },
     {
@@ -278,6 +395,10 @@ PRESETS: tuple[dict[str, Any], ...] = (
             "platform": "mobile",
             "base_model": "sdxl",
             "style_lora": "ps1",
+            "silhouette": "slender",
+            "condition": "worn",
+            "setting": "medieval",
+            "mood": "heroic",
         },
     },
     {
@@ -290,6 +411,10 @@ PRESETS: tuple[dict[str, Any], ...] = (
             "art_style": "realistic",
             "platform": "hero",
             "base_model": "playground",
+            "material": "steel",
+            "condition": "pristine",
+            "emissive": "neon",
+            "rarity": "epic",
         },
     },
     {
@@ -302,6 +427,10 @@ PRESETS: tuple[dict[str, Any], ...] = (
             "art_style": "stylized",
             "platform": "mobile",
             "base_model": "turbo",
+            "material": "fabric",
+            "condition": "pristine",
+            "palette": "vibrant",
+            "rarity": "common",
         },
     },
 )
