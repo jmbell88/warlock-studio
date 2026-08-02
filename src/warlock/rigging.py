@@ -557,6 +557,21 @@ def sheet_spec(
     }
 
 
+def fbx_spec(source_glb: Path, out_fbx: Path, result_dir: Path) -> dict[str, Any]:
+    """The worker spec for converting a GLB to FBX.
+
+    Blender is the converter because it is already here and already
+    out-of-process; adding an FBX library to the app process would mean a second
+    importer disagreeing with the one that produces every other artifact.
+    """
+    return {
+        "op": "fbx",
+        "source_glb": str(source_glb),
+        "out_fbx": str(out_fbx),
+        "result_path": str(result_dir / ".fbx_result.json"),
+    }
+
+
 def pose_spec(job_dir: Path, pose_id: str, bones: dict[str, Any]) -> dict[str, Any]:
     """The worker spec for baking one saved pose into its own GLB."""
     return {

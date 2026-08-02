@@ -380,3 +380,25 @@ def test_posing_a_bone_the_rig_lacks_is_reported_not_fatal(tmp_path):
     assert result["bones"] == 1
     assert result["unknown"] == ["tail_01"]
     assert (tmp_path / "posed.glb").exists()
+
+
+def test_a_glb_round_trips_through_the_worker_into_a_real_fbx(tmp_path):
+    """op_fbx actually produces a file Unity/Unreal would accept.
+
+    The spec-shape test above only pins the wire format; this runs the real
+    Blender subprocess, because the failure mode worth catching is an export
+    operator that rejects one of its keyword arguments -- which no amount of
+    dict-shape assertion would find.
+    """
+    pytest.importorskip("bpy")
+    trimesh = pytest.importorskip("trimesh")
+
+    source = tmp_path / "model.glb"
+    trimesh.Scene(trimesh.creation.box(extents=(1.0, 2.0, 1.0))).export(source)
+    out = tmp_path / "model.fbx"
+
+    rigging.run_worker(rigging.fbx_spec(source, out, tmp_path), timeout=300)
+
+    assert out.exists()
+    # "Kaydara FBX Binary" is the magic every FBX reader looks for.
+    assert out.read_bytes()[:18] == b"Kaydara FBX Binary"

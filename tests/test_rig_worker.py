@@ -247,3 +247,13 @@ async def test_a_rig_job_does_not_recursively_queue_another(worker, monkeypatch)
     await asyncio.sleep(0.2)
     assert sum(1 for j in worker.store.list() if j["kind"] == "rig") == 1
     await worker.shutdown()
+
+
+def test_fbx_spec_names_the_op_and_paths(tmp_path):
+    from warlock import rigging
+
+    spec = rigging.fbx_spec(tmp_path / "model.glb", tmp_path / "model.fbx", tmp_path)
+    assert spec["op"] == "fbx"
+    assert spec["source_glb"].endswith("model.glb")
+    assert spec["out_fbx"].endswith("model.fbx")
+    assert spec["result_path"].startswith(str(tmp_path))

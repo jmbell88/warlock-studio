@@ -831,6 +831,7 @@ def create_app() -> FastAPI:
         "model.stl": "model/stl",
         "model_obj.zip": "application/zip",
         "collision.glb": "model/gltf-binary",
+        "model.fbx": "application/octet-stream",
         "rig.glb": "model/gltf-binary",
     }
 
@@ -847,6 +848,26 @@ def create_app() -> FastAPI:
         # mere existence can hand back a truncated GLB to a direct GET.
         if name == "rig.glb" and not (job_dir / "rig.json").exists():
             raise HTTPException(404, "file not ready")
+        # FBX needs a Blender subprocess rather than a trimesh call, so it does
+        # not fit the `derived` dict below -- but it takes the same per-artifact
+        # lock, for the same reason.
+        if name == "model.fbx" and not path.exists() and glb.exists():
+            lock = _convert_locks.setdefault((job_id, name), asyncio.Lock())
+            async with lock:
+                if not path.exists():
+                    spec = rigging.fbx_spec(glb, path, job_dir)
+                    try:
+                        # FBX export is import-plus-export like a pose bake, so
+                        # it reuses pose_timeout rather than gaining a knob.
+                        await asyncio.to_thread(
+                            functools.partial(
+                                rigging.run_worker, spec, timeout=config.pose_timeout
+                            )
+                        )
+                    except rigging.BlenderError as exc:
+                        log.error("fbx export for %s failed: %s", job_id, exc)
+                        raise HTTPException(500, "could not export FBX") from exc
+
         from .pipelines import postprocess
 
         # Everything that is a pure function of model.glb, derived on first

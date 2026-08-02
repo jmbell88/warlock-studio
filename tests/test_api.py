@@ -925,3 +925,23 @@ def test_collision_glb_is_derived_on_demand(client, tmp_path):
 def test_collision_glb_is_404_without_a_mesh(client):
     job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
     assert client.get(f"/api/jobs/{job_id}/files/collision.glb").status_code == 404
+
+
+def test_fbx_is_derived_on_demand_through_the_blender_worker(client, tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+    pytest.importorskip("bpy")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+
+    r = client.get(f"/api/jobs/{job_id}/files/model.fbx")
+    assert r.status_code == 200
+    assert r.content[:18] == b"Kaydara FBX Binary"
+    assert (job_dir / "model.fbx").exists()
+
+
+def test_fbx_is_404_without_a_mesh(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    assert client.get(f"/api/jobs/{job_id}/files/model.fbx").status_code == 404

@@ -866,6 +866,10 @@ function showSelected(job) {
   document.getElementById("dl-obj").href = `/api/jobs/${job.id}/files/model_obj.zip`;
   document.getElementById("dl-stl").href = `/api/jobs/${job.id}/files/model.stl`;
   document.getElementById("dl-collision").href = `/api/jobs/${job.id}/files/collision.glb`;
+  const dlFbx = document.getElementById("dl-fbx");
+  dlFbx.href = `/api/jobs/${job.id}/files/model.fbx`;
+  // Blender does the conversion, so hide it when rigging isn't installed.
+  dlFbx.hidden = !rig.available;
   downloads.style.display = "flex";
 }
 
@@ -1430,7 +1434,7 @@ function bindBusyDownload(anchor) {
 
 // Every artifact derived on demand: the first click pays for the conversion,
 // so each needs the busy state rather than looking like a dead link.
-for (const id of ["dl-obj", "dl-stl", "dl-collision"]) {
+for (const id of ["dl-obj", "dl-stl", "dl-collision", "dl-fbx"]) {
   bindBusyDownload(document.getElementById(id));
 }
 

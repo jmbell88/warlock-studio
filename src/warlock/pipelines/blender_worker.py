@@ -541,7 +541,37 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "frames": rendered, "bounds": {"min": lo, "max": hi}}
 
 
-OPS = {"rig": op_rig, "pose": op_pose, "sheet": op_sheet}
+def op_fbx(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Import a GLB and write it back out as FBX, skins and all."""
+    source = Path(spec["source_glb"])
+    if not source.exists():
+        raise RuntimeError(f"nothing to convert at {source}")
+
+    progress(0.10, "Loading model")
+    _reset_scene(bpy)
+    bpy.ops.import_scene.gltf(filepath=str(source), bone_heuristic="BLENDER")
+    _purge_import_helpers(bpy)
+
+    progress(0.60, "Writing FBX")
+    out = Path(spec["out_fbx"])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.fbx(
+        filepath=str(out),
+        use_selection=True,
+        path_mode="COPY",
+        embed_textures=True,
+        # Unity and Unreal both read Y-up FBX; matching the GLB's axes means the
+        # FBX and the GLB describe the same orientation rather than two.
+        axis_forward="-Z",
+        axis_up="Y",
+        bake_anim=False,
+    )
+    progress(1.0, "FBX written")
+    return {"ok": True, "objects": len(bpy.context.scene.objects)}
+
+
+OPS = {"rig": op_rig, "pose": op_pose, "sheet": op_sheet, "fbx": op_fbx}
 
 
 def main() -> int:
