@@ -160,6 +160,8 @@ def test_guidance_catalog_is_served(client):
     body = client.get("/api/guidance").json()
     assert set(body["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "material", "condition", "setting", "palette", "emissive", "rarity",
+        "silhouette", "mood",
     }
     assert body["defaults"]["platform"] in {o["key"] for o in body["fields"]["platform"]}
     assert body["defaults"]["base_model"] in {o["key"] for o in body["fields"]["base_model"]}
@@ -219,6 +221,59 @@ def test_rejected_guidance_leaves_no_input_png_behind(client, tmp_path):
     )
     assert r.status_code == 400
     assert not list((tmp_path / "assets").glob("*/input.png"))
+
+
+def test_new_guidance_fields_accepted_on_post(client):
+    r = client.post(
+        "/api/jobs",
+        data={
+            "kind": "text",
+            "prompt": "a rifle",
+            "material": "steel",
+            "condition": "pristine",
+            "rarity": "epic",
+        },
+    )
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["material"] == "steel"
+    assert params["condition"] == "pristine"
+    assert params["rarity"] == "epic"
+
+
+def test_unknown_new_guidance_field_value_is_a_400(client):
+    r = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "x", "material": "unobtainium"}
+    )
+    assert r.status_code == 400
+
+
+def test_prompt_preview_returns_the_composed_prompt(client):
+    r = client.get("/api/prompt-preview", params={"prompt": "a barrel", "genre": "scifi"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["prompt"].startswith("a barrel, ")
+    assert "science fiction" in body["prompt"]
+    assert body["negative_prompt"]  # falls back to the guidance default
+
+
+def test_prompt_preview_rejects_unknown_guidance(client):
+    r = client.get("/api/prompt-preview", params={"prompt": "x", "material": "unobtainium"})
+    assert r.status_code == 400
+
+
+def test_prompt_preview_degrades_to_null_tokens_when_tokenizer_unavailable(client, monkeypatch):
+    from warlock.pipelines import prompt as prompt_pipeline
+
+    def _raise(_model_dir):
+        raise OSError("no tokenizer on disk")
+
+    monkeypatch.setattr(prompt_pipeline, "load_tokenizers", _raise)
+    r = client.get("/api/prompt-preview", params={"prompt": "a barrel"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tokens"] is None
+    assert body["chunks"] is None
 
 
 def test_cancel_and_delete(client):

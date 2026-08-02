@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from . import doctor, guidance, rigging
+from . import doctor, guidance, models, rigging
 from .config import get_config
 from .db import JobStore
 from .queue import Worker
@@ -182,21 +182,84 @@ def create_app() -> FastAPI:
         """Taxonomy for the design-guidance selects, so the UI has one source."""
         return guidance.catalog()
 
+    def _pick_guidance(mapping: Any) -> dict[str, Any]:
+        """Every taxonomy field present in ``mapping``, keyed by name.
+
+        Shared between the POST form parser and the GET query-param parser
+        for /api/prompt-preview, so a new guidance.py table (Task 1) is
+        picked up by both without another app.py edit.
+        """
+        return {f: mapping.get(f) for f in guidance.form_fields() if f in mapping}
+
+    async def _form_guidance(request: Request) -> dict[str, Any]:
+        return _pick_guidance(await request.form())
+
+    def _query_guidance(request: Request) -> dict[str, Any]:
+        return _pick_guidance(request.query_params)
+
+    @app.get("/api/prompt-preview")
+    async def prompt_preview(request: Request) -> dict[str, Any]:
+        """The composed prompt and its token/chunk cost, before submission.
+
+        Closes docs/NEXT.md's "Prompt preview" item: today the composed
+        prompt is only visible after a run. tokens/chunks are best-effort --
+        null when transformers isn't installed or the base model's weights
+        aren't downloaded, the same degrade-not-fail pattern doctor.py uses.
+        """
+        from .pipelines import prompt as prompt_pipeline
+        from .pipelines.text2image import Text2Image
+
+        raw: dict[str, Any] = dict(_query_guidance(request))
+        raw["size_m"] = request.query_params.get("size_m")
+        raw["resolution"] = request.query_params.get("resolution")
+        raw["lora_weight"] = request.query_params.get("lora_weight")
+        raw["bg_removal"] = request.query_params.get("bg_removal")
+        if "negative_prompt" in request.query_params:
+            raw["negative_prompt"] = request.query_params["negative_prompt"]
+
+        try:
+            params = guidance.normalize(raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        style = models.STYLE_LORAS.get(params.get("style_lora") or "")
+        trigger = style.trigger if style else ""
+        user_prompt = request.query_params.get("prompt") or ""
+        positive = prompt_pipeline.build(user_prompt, params, trigger=trigger)
+
+        tokens = chunks = None
+        try:
+            spec = models.BASE_MODELS[params["base_model"]]
+            t2i = Text2Image(
+                spec,
+                config.t2i_model_root,
+                config.t2i_turbo_dir
+                if params["base_model"] == models.DEFAULT_BASE_MODEL
+                else None,
+            )
+            tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir)
+            tokens = prompt_pipeline.count(positive, tokenizers)
+            chunks = len(prompt_pipeline.chunk(positive, tokenizers))
+        except (ImportError, OSError):
+            pass  # transformers not installed, or this base model's weights aren't downloaded
+
+        return {
+            "prompt": positive,
+            "negative_prompt": params["negative_prompt"],
+            "tokens": tokens,
+            "chunks": chunks,
+        }
+
     @app.post("/api/jobs")
     async def create_job(
+        request: Request,
         kind: Annotated[str, Form()],
         prompt: Annotated[str | None, Form()] = None,
         seed: Annotated[int, Form()] = 42,
         reference_seed: Annotated[int | None, Form()] = None,
         mesh_seed: Annotated[int | None, Form()] = None,
         resolution: Annotated[int | None, Form()] = None,
-        genre: Annotated[str | None, Form()] = None,
-        art_style: Annotated[str | None, Form()] = None,
-        category: Annotated[str | None, Form()] = None,
-        platform: Annotated[str | None, Form()] = None,
         size_m: Annotated[float | None, Form()] = None,
-        base_model: Annotated[str | None, Form()] = None,
-        style_lora: Annotated[str | None, Form()] = None,
         lora_weight: Annotated[float | None, Form()] = None,
         bg_removal: Annotated[str | None, Form()] = None,
         negative_prompt: Annotated[str | None, Form()] = None,
@@ -239,14 +302,9 @@ def create_app() -> FastAPI:
         try:
             params = guidance.normalize(
                 {
-                    "genre": genre,
-                    "art_style": art_style,
-                    "category": category,
-                    "platform": platform,
+                    **await _form_guidance(request),
                     "size_m": size_m,
                     "resolution": resolution,
-                    "base_model": base_model,
-                    "style_lora": style_lora,
                     "lora_weight": lora_weight,
                     "bg_removal": bg_removal,
                     "negative_prompt": negative_prompt,
