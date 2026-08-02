@@ -397,7 +397,14 @@
       <div class="pose-row">
         <button type="button" id="pose-reset-bone">reset joint</button>
         <button type="button" id="pose-reset-all">reset all</button>
+        <button type="button" id="pose-mirror">mirror L↔R</button>
         <button type="button" id="pose-save">save pose…</button>
+        <select id="pose-preset"><option value="">preset…</option></select>
+      </div>
+      <div class="pose-row">
+        <button type="button" id="joint-toggle">adjust joints</button>
+        <button type="button" id="joint-apply" hidden>apply joints</button>
+        <button type="button" id="joint-revert" hidden>revert joints</button>
       </div>
     </div>
     <ul id="pose-list"></ul>
@@ -411,6 +418,16 @@
       <label for="sheet-rows">Poses (rows)</label>
       <select id="sheet-rows" multiple size="4"></select>
       <p class="pose-hint">Nothing selected renders the rest pose alone.</p>
+      <label class="check"><input type="checkbox" id="sheet-clip"> Animated clip</label>
+      <div id="sheet-clip-setup" hidden>
+        <p class="pose-hint">A clip replaces the pose rows: one row per frame.</p>
+        <select id="sheet-clip-from"></select>
+        <select id="sheet-clip-to"></select>
+        <label for="sheet-clip-frames">Frames</label>
+        <input type="number" id="sheet-clip-frames" min="2" max="32" value="8">
+      </div>
+      <label for="sheet-yaws">Directions</label>
+      <select id="sheet-yaws"></select>
       <label for="sheet-lighting">Look</label>
       <select id="sheet-lighting"></select>
       <label for="sheet-size">Frame size</label>

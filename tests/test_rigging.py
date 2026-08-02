@@ -7,6 +7,7 @@ tests/test_offline.py guards the heavy paths.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 import time
@@ -17,13 +18,51 @@ from warlock import rigging
 
 # --- template registry ------------------------------------------------------
 
+EXPECTED_TEMPLATES = {
+    "humanoid",
+    "quadruped",
+    "bird",
+    "fish",
+    "insect",
+    "serpent",
+    "biped_tail",
+}
+
 
 def test_both_templates_load():
     keys = set(rigging.templates())
     assert {"humanoid", "quadruped"} <= keys
 
 
-@pytest.mark.parametrize("key", ["humanoid", "quadruped"])
+def test_every_shipped_template_parses():
+    assert set(rigging.templates()) == EXPECTED_TEMPLATES
+
+
+@pytest.mark.parametrize("key", sorted(EXPECTED_TEMPLATES))
+def test_template_is_well_formed(key):
+    """Parsing already rejects unknown parents and bad roots; this pins the
+    things _parse_template does not check and that a hand-authored file gets
+    wrong: bones inside the unit box, and mirror pairs naming real bones."""
+    template = rigging.get_template(key)
+    names = {b["name"] for b in template.bones}
+    for bone in template.bones:
+        for end in ("head", "tail"):
+            x, y, z = bone[end]
+            assert -0.5 <= x <= 0.5, f"{key}/{bone['name']} {end} x out of box"
+            assert -0.5 <= y <= 0.5, f"{key}/{bone['name']} {end} y out of box"
+            assert 0.0 <= z <= 1.0, f"{key}/{bone['name']} {end} z out of box"
+    for a, b in template.mirror_pairs:
+        assert a in names and b in names, f"{key} mirrors a bone it does not have"
+
+
+@pytest.mark.parametrize("key", sorted(EXPECTED_TEMPLATES))
+def test_fitting_produces_no_zero_length_bones(key):
+    fitted = rigging.fit_template(rigging.get_template(key), [-1, -1, 0], [1, 1, 2])
+    for bone in fitted:
+        assert rigging._distance(bone["head"], bone["tail"]) > 0
+
+
+@pytest.mark.parametrize("key", sorted(EXPECTED_TEMPLATES))
 def test_template_hierarchy_is_well_formed(key):
     t = rigging.get_template(key)
     names = {b["name"] for b in t.bones}
@@ -38,7 +77,7 @@ def test_template_hierarchy_is_well_formed(key):
         assert a in names and b in names
 
 
-@pytest.mark.parametrize("key", ["humanoid", "quadruped"])
+@pytest.mark.parametrize("key", sorted(EXPECTED_TEMPLATES))
 def test_mirror_pairs_are_actually_mirrored(key):
     """A .L/.R pair must be reflections in X, or the future mirror-pose button
     silently produces a lopsided pose."""
@@ -138,6 +177,117 @@ def test_fit_preserves_parent_names():
     t = rigging.get_template("quadruped")
     fitted = rigging.fit_template(t, [-1, -2, 0], [1, 2, 1])
     assert [b["parent"] for b in fitted] == [b["parent"] for b in t.bones]
+
+
+# --- corrected joints ---------------------------------------------------------
+
+
+def test_validate_joints_accepts_a_full_corrected_skeleton():
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    payload = {
+        "bones": [
+            {"name": b["name"], "head": b["head"], "tail": b["tail"]} for b in fitted
+        ]
+    }
+    out = rigging.validate_joints(payload, template)
+    assert [b["name"] for b in out] == [b["name"] for b in template.bones]
+    assert out[0]["parent"] == template.bones[0]["parent"]
+
+
+def test_validate_joints_rejects_a_missing_bone():
+    template = rigging.get_template("humanoid")
+    with pytest.raises(ValueError):
+        rigging.validate_joints(
+            {"bones": [{"name": "hips", "head": [0, 0, 0], "tail": [0, 0, 1]}]}, template
+        )
+
+
+def test_validate_joints_rejects_an_unknown_bone():
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    payload = {
+        "bones": [
+            {"name": b["name"], "head": b["head"], "tail": b["tail"]} for b in fitted
+        ]
+        + [{"name": "wing.L", "head": [0, 0, 0], "tail": [0, 0, 1]}]
+    }
+    with pytest.raises(ValueError, match="unknown bone"):
+        rigging.validate_joints(payload, template)
+
+
+def test_validate_joints_rejects_a_zero_length_bone():
+    template = rigging.get_template("humanoid")
+    payload = {
+        "bones": [
+            {"name": b["name"], "head": [0.0, 0.0, 0.0], "tail": [0.0, 0.0, 0.0]}
+            for b in template.bones
+        ]
+    }
+    with pytest.raises(ValueError):
+        rigging.validate_joints(payload, template)
+
+
+def test_rig_spec_carries_corrected_bones_when_given_them(tmp_path):
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    assert "bones" not in rigging.rig_spec(tmp_path, "humanoid")
+    assert rigging.rig_spec(tmp_path, "humanoid", fitted)["bones"] == fitted
+
+
+# --- mirroring ---------------------------------------------------------------
+
+
+def test_mirror_quaternion_reflects_across_the_yz_plane():
+    # A rotation about Z becomes the opposite rotation about Z under an X mirror.
+    half = math.radians(30) / 2
+    q = [0.0, 0.0, math.sin(half), math.cos(half)]
+    assert rigging.mirror_quaternion(q) == pytest.approx(
+        [0.0, 0.0, -math.sin(half), math.cos(half)]
+    )
+
+
+def test_mirroring_twice_is_the_identity():
+    q = [0.1830, 0.2588, 0.3536, 0.8810]
+    twice = rigging.mirror_quaternion(rigging.mirror_quaternion(q))
+    assert twice == pytest.approx(q)
+
+
+def test_a_rotation_about_x_survives_mirroring():
+    """A limb swinging forward/back mirrors to the same swing, not its opposite."""
+    half = math.radians(40) / 2
+    q = [math.sin(half), 0.0, 0.0, math.cos(half)]
+    assert rigging.mirror_quaternion(q) == pytest.approx(q)
+
+
+def test_mirror_pose_fills_in_the_other_side_and_leaves_centre_bones_alone():
+    pairs = [["upper_arm.L", "upper_arm.R"]]
+    posed = {"upper_arm.L": [0.0, 0.5, 0.0, 0.8660], "spine": [0.1, 0.0, 0.0, 0.9950]}
+    out = rigging.mirror_pose(posed, pairs)
+    assert out["upper_arm.R"] == pytest.approx([0.0, -0.5, 0.0, 0.8660])
+    assert out["spine"] == pytest.approx([0.1, 0.0, 0.0, 0.9950])
+
+
+# --- shipped pose libraries -------------------------------------------------
+
+
+def test_preset_poses_validate_against_their_template():
+    for key in rigging.templates():
+        bone_names = [b["name"] for b in rigging.get_template(key).bones]
+        for preset in rigging.preset_poses(key):
+            # The same validation a browser-saved pose goes through: unknown
+            # bones and non-unit quaternions are rejected identically, so a
+            # shipped preset can never be a thing the API would refuse.
+            rigging.validate_pose(preset, bone_names)
+
+
+def test_a_template_with_no_preset_file_returns_an_empty_list():
+    assert rigging.preset_poses("serpent") == []
+
+
+def test_unknown_template_presets_raise():
+    with pytest.raises(ValueError):
+        rigging.preset_poses("not-a-template")
 
 
 # --- pose payloads ----------------------------------------------------------
@@ -402,3 +552,32 @@ def test_a_glb_round_trips_through_the_worker_into_a_real_fbx(tmp_path):
     assert out.exists()
     # "Kaydara FBX Binary" is the magic every FBX reader looks for.
     assert out.read_bytes()[:18] == b"Kaydara FBX Binary"
+
+
+@pytest.mark.gpu
+def test_op_rig_builds_the_armature_from_supplied_joints_not_the_fit(tmp_path):
+    """The adjust pass is only worth anything if the worker actually uses the
+    joints it is handed. Checked against rig.json, which records what was
+    built, and against a fit that is deliberately nothing like the override."""
+    pytest.importorskip("bpy")
+    import bpy
+
+    from warlock.pipelines import blender_worker
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0)
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
+
+    template = rigging.get_template("humanoid")
+    # A skeleton fitted to a box ten times the sphere: every joint lands
+    # somewhere the sphere's own fit never would.
+    override = rigging.fit_template(template, [-10, -10, 0], [10, 10, 20])
+    blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid", override))
+
+    rig = json.loads((tmp_path / "rig.json").read_text(encoding="utf-8"))
+    assert rig["adjusted"] is True
+    built = {b["name"]: b for b in rig["bones"]}
+    for bone in override:
+        assert built[bone["name"]]["head"] == pytest.approx(bone["head"])
+        assert built[bone["name"]]["tail"] == pytest.approx(bone["tail"])

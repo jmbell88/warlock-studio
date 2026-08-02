@@ -269,3 +269,19 @@ def test_re_saving_a_pose_invalidates_its_bake(pose_client, monkeypatch):
     client.post(f"/api/jobs/{job_id}/poses", json=body)
     client.get(url)
     assert len(calls) == 2
+
+
+# --- shipped preset library --------------------------------------------------
+
+
+def test_template_presets_route(pose_client):
+    client, _ = pose_client
+    r = client.get("/api/rig/templates/humanoid/poses")
+    assert r.status_code == 200
+    names = [p["name"] for p in r.json()["poses"]]
+    assert "idle" in names
+
+
+def test_unknown_template_presets_is_a_400(pose_client):
+    client, _ = pose_client
+    assert client.get("/api/rig/templates/nope/poses").status_code == 400

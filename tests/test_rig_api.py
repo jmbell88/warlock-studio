@@ -201,3 +201,64 @@ def test_rig_glb_404s_when_absent(rig_client):
     client, assets = rig_client
     job_id = _finished_mesh_job(client, assets)
     assert client.get(f"/api/jobs/{job_id}/files/rig.glb").status_code == 404
+
+
+# --- corrected joints ---------------------------------------------------------
+
+
+def _rigged_job(client, assets) -> tuple[str, list[dict]]:
+    """A job with a rig on disk, and the fitted bones the editor would show."""
+    from warlock import rigging
+
+    job_id = _finished_mesh_job(client, assets)
+    job_dir = assets / job_id
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    (job_dir / "rig.json").write_text(
+        json.dumps({"template": "humanoid", "bones": fitted}), encoding="utf-8"
+    )
+    (job_dir / "rig.glb").write_bytes(b"fake-rig")
+    return job_id, fitted
+
+
+def test_adjust_joints_queues_a_rerig(rig_client):
+    client, assets = rig_client
+    job_id, fitted = _rigged_job(client, assets)
+
+    r = client.post(
+        f"/api/jobs/{job_id}/rig/joints",
+        json={
+            "bones": [
+                {"name": b["name"], "head": b["head"], "tail": b["tail"]} for b in fitted
+            ]
+        },
+    )
+    assert r.status_code == 200
+    rig_job = client.get(f"/api/jobs/{r.json()['id']}").json()
+    assert rig_job["kind"] == "rig"
+    assert rig_job["params"]["source_job"] == job_id
+    assert rig_job["params"]["bones"]
+    assert rig_job["params"]["adjusted"] is True
+
+
+def test_adjust_joints_on_an_unrigged_job_is_a_400(rig_client):
+    client, assets = rig_client
+    job_id = _finished_mesh_job(client, assets)
+    assert client.post(f"/api/jobs/{job_id}/rig/joints", json={"bones": []}).status_code == 400
+
+
+def test_adjust_joints_on_a_missing_job_is_a_404(rig_client):
+    client, _ = rig_client
+    r = client.post("/api/jobs/0123456789ab/rig/joints", json={"bones": []})
+    assert r.status_code == 404
+
+
+def test_adjust_joints_rejects_a_partial_skeleton(rig_client):
+    client, assets = rig_client
+    job_id, fitted = _rigged_job(client, assets)
+    r = client.post(
+        f"/api/jobs/{job_id}/rig/joints",
+        json={"bones": [{"name": fitted[0]["name"], "head": [0, 0, 0], "tail": [0, 0, 1]}]},
+    )
+    assert r.status_code == 400
+    assert "missing bone" in r.json()["detail"]

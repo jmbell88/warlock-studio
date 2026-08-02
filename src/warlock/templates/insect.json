@@ -1,0 +1,37 @@
+{
+  "key": "insect",
+  "label": "Insect / spider (six-legged)",
+  "root": "thorax",
+  "comment": "Normalized landmark positions in a unit bounding box, Blender axes: +X is the subject's left, -Y is forward, +Z is up. x/y span -0.5..0.5, z spans 0 to 1.",
+  "bones": [
+    {"name": "thorax",   "parent": null,      "head": [0.00,  0.00, 0.60], "tail": [0.00, -0.16, 0.62]},
+    {"name": "head",     "parent": "thorax",  "head": [0.00, -0.16, 0.62], "tail": [0.00, -0.34, 0.62]},
+    {"name": "abdomen",  "parent": "thorax",  "head": [0.00,  0.00, 0.60], "tail": [0.00,  0.30, 0.58]},
+
+    {"name": "mandible.L", "parent": "head",  "head": [0.04, -0.32, 0.60], "tail": [0.10, -0.46, 0.56]},
+    {"name": "mandible.R", "parent": "head",  "head": [-0.04, -0.32, 0.60], "tail": [-0.10, -0.46, 0.56]},
+
+    {"name": "leg_a_upper.L", "parent": "thorax", "head": [0.06, -0.10, 0.58], "tail": [0.26, -0.22, 0.42]},
+    {"name": "leg_a_lower.L", "parent": "leg_a_upper.L", "head": [0.26, -0.22, 0.42], "tail": [0.40, -0.28, 0.00]},
+    {"name": "leg_b_upper.L", "parent": "thorax", "head": [0.06,  0.00, 0.58], "tail": [0.28,  0.00, 0.42]},
+    {"name": "leg_b_lower.L", "parent": "leg_b_upper.L", "head": [0.28,  0.00, 0.42], "tail": [0.44,  0.02, 0.00]},
+    {"name": "leg_c_upper.L", "parent": "thorax", "head": [0.06,  0.10, 0.58], "tail": [0.26,  0.22, 0.42]},
+    {"name": "leg_c_lower.L", "parent": "leg_c_upper.L", "head": [0.26,  0.22, 0.42], "tail": [0.40,  0.30, 0.00]},
+
+    {"name": "leg_a_upper.R", "parent": "thorax", "head": [-0.06, -0.10, 0.58], "tail": [-0.26, -0.22, 0.42]},
+    {"name": "leg_a_lower.R", "parent": "leg_a_upper.R", "head": [-0.26, -0.22, 0.42], "tail": [-0.40, -0.28, 0.00]},
+    {"name": "leg_b_upper.R", "parent": "thorax", "head": [-0.06,  0.00, 0.58], "tail": [-0.28,  0.00, 0.42]},
+    {"name": "leg_b_lower.R", "parent": "leg_b_upper.R", "head": [-0.28,  0.00, 0.42], "tail": [-0.44,  0.02, 0.00]},
+    {"name": "leg_c_upper.R", "parent": "thorax", "head": [-0.06,  0.10, 0.58], "tail": [-0.26,  0.22, 0.42]},
+    {"name": "leg_c_lower.R", "parent": "leg_c_upper.R", "head": [-0.26,  0.22, 0.42], "tail": [-0.40,  0.30, 0.00]}
+  ],
+  "mirror_pairs": [
+    ["mandible.L", "mandible.R"],
+    ["leg_a_upper.L", "leg_a_upper.R"],
+    ["leg_a_lower.L", "leg_a_lower.R"],
+    ["leg_b_upper.L", "leg_b_upper.R"],
+    ["leg_b_lower.L", "leg_b_lower.R"],
+    ["leg_c_upper.L", "leg_c_upper.R"],
+    ["leg_c_lower.L", "leg_c_lower.R"]
+  ]
+}

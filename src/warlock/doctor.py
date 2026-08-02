@@ -65,11 +65,13 @@ def blender_check() -> Check:
 
 
 def _probe_blender() -> Check:
-    missing = [k for k in ("humanoid", "quadruped") if k not in rigging.templates()]
-    if missing:
+    # Any template at all, not a hardcoded pair: templates are files, adding one
+    # is the supported way to add a skeleton, and naming two of them here made
+    # renaming or removing either a silent rigging outage.
+    if not rigging.templates():
         return Check(
             "Blender (rigging)", False,
-            f"skeleton templates missing: {', '.join(missing)} in {rigging.TEMPLATE_DIR}",
+            f"no skeleton templates found in {rigging.TEMPLATE_DIR}",
             fatal=False,
         )
     try:

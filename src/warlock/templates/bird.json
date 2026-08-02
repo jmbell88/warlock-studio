@@ -1,0 +1,41 @@
+{
+  "key": "bird",
+  "label": "Bird (winged biped)",
+  "root": "hips",
+  "comment": "Normalized landmark positions in a unit bounding box, Blender axes: +X is the subject's left, -Y is forward, +Z is up. x/y span -0.5..0.5, z spans 0 (feet) to 1 (top). rigging.fit_template scales these onto the mesh bbox.",
+  "bones": [
+    {"name": "hips",         "parent": null,          "head": [0.00,  0.05, 0.48], "tail": [0.00, -0.02, 0.55]},
+    {"name": "spine",        "parent": "hips",        "head": [0.00, -0.02, 0.55], "tail": [0.00, -0.10, 0.64]},
+    {"name": "chest",        "parent": "spine",       "head": [0.00, -0.10, 0.64], "tail": [0.00, -0.17, 0.72]},
+    {"name": "neck",         "parent": "chest",       "head": [0.00, -0.17, 0.72], "tail": [0.00, -0.24, 0.84]},
+    {"name": "head",         "parent": "neck",        "head": [0.00, -0.24, 0.84], "tail": [0.00, -0.34, 0.92]},
+    {"name": "beak",         "parent": "head",        "head": [0.00, -0.34, 0.92], "tail": [0.00, -0.46, 0.90]},
+
+    {"name": "tail",         "parent": "hips",        "head": [0.00,  0.05, 0.48], "tail": [0.00,  0.30, 0.44]},
+    {"name": "tail_tip",     "parent": "tail",        "head": [0.00,  0.30, 0.44], "tail": [0.00,  0.48, 0.40]},
+
+    {"name": "wing_base.L",  "parent": "chest",       "head": [0.04, -0.08, 0.68], "tail": [0.18, -0.04, 0.70]},
+    {"name": "wing_mid.L",   "parent": "wing_base.L", "head": [0.18, -0.04, 0.70], "tail": [0.34,  0.00, 0.68]},
+    {"name": "wing_tip.L",   "parent": "wing_mid.L",  "head": [0.34,  0.00, 0.68], "tail": [0.48,  0.06, 0.64]},
+
+    {"name": "wing_base.R",  "parent": "chest",       "head": [-0.04, -0.08, 0.68], "tail": [-0.18, -0.04, 0.70]},
+    {"name": "wing_mid.R",   "parent": "wing_base.R", "head": [-0.18, -0.04, 0.70], "tail": [-0.34,  0.00, 0.68]},
+    {"name": "wing_tip.R",   "parent": "wing_mid.R",  "head": [-0.34,  0.00, 0.68], "tail": [-0.48,  0.06, 0.64]},
+
+    {"name": "thigh.L",      "parent": "hips",        "head": [0.07,  0.02, 0.46], "tail": [0.08,  0.00, 0.28]},
+    {"name": "shin.L",       "parent": "thigh.L",     "head": [0.08,  0.00, 0.28], "tail": [0.08, -0.02, 0.10]},
+    {"name": "foot.L",       "parent": "shin.L",      "head": [0.08, -0.02, 0.10], "tail": [0.08, -0.16, 0.00]},
+
+    {"name": "thigh.R",      "parent": "hips",        "head": [-0.07,  0.02, 0.46], "tail": [-0.08,  0.00, 0.28]},
+    {"name": "shin.R",       "parent": "thigh.R",     "head": [-0.08,  0.00, 0.28], "tail": [-0.08, -0.02, 0.10]},
+    {"name": "foot.R",       "parent": "shin.R",      "head": [-0.08, -0.02, 0.10], "tail": [-0.08, -0.16, 0.00]}
+  ],
+  "mirror_pairs": [
+    ["wing_base.L", "wing_base.R"],
+    ["wing_mid.L", "wing_mid.R"],
+    ["wing_tip.L", "wing_tip.R"],
+    ["thigh.L", "thigh.R"],
+    ["shin.L", "shin.R"],
+    ["foot.L", "foot.R"]
+  ]
+}

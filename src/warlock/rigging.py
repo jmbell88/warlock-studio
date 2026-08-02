@@ -141,6 +141,43 @@ def catalog() -> list[dict[str, str]]:
     return [{"key": t.key, "label": t.label} for t in templates().values()]
 
 
+# --- shipped pose libraries -------------------------------------------------
+#
+# A pose is a bone-name -> local-quaternion map, and fit_template puts a given
+# template's bones in the same place on every mesh. So a pose authored against
+# one humanoid rig applies to every other humanoid rig -- which is what makes a
+# shipped library possible at all, and why these live next to the templates
+# rather than being seeded into each job's poses/ directory.
+
+PRESET_DIR = TEMPLATE_DIR / "poses"
+
+_presets: dict[str, list[dict[str, Any]]] | None = None
+
+
+def _load_presets() -> dict[str, list[dict[str, Any]]]:
+    found: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(PRESET_DIR.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            found[path.stem] = [
+                {"name": str(p["name"]), "bones": p["bones"]} for p in raw["poses"]
+            ]
+        except Exception:
+            # A malformed library costs you that library, not the app -- the
+            # same rule _load_templates follows.
+            log.exception("skipping unusable pose library %s", path)
+    return found
+
+
+def preset_poses(template_key: str) -> list[dict[str, Any]]:
+    """The shipped poses for a template. Raises ValueError on an unknown key."""
+    global _presets
+    get_template(template_key)  # validates the key against the registry
+    if _presets is None:
+        _presets = _load_presets()
+    return [dict(p) for p in _presets.get(template_key, [])]
+
+
 # --- fitting ----------------------------------------------------------------
 
 Vec3 = Sequence[float]
@@ -188,6 +225,69 @@ def fit_template(
 
 def _distance(a: Vec3, b: Vec3) -> float:
     return sum((float(x) - float(y)) ** 2 for x, y in zip(a, b, strict=True)) ** 0.5
+
+
+def validate_joints(payload: dict[str, Any], template: Template) -> list[dict[str, Any]]:
+    """Normalize a corrected skeleton, or raise ValueError.
+
+    The whole skeleton, not a patch: a partial correction would leave the caller
+    and the worker disagreeing about which joints came from the fit and which
+    from the user, and the fitted positions are already in rig.json for the
+    editor to start from. Parentage comes from the template and is never
+    caller-supplied -- a client cannot restructure the hierarchy, only move it.
+
+    A zero-length bone is rejected rather than nudged: Blender silently deletes
+    one on leaving edit mode and takes its children with it, so accepting it
+    would produce a rig missing limbs with nothing to explain why.
+    """
+    raw = payload.get("bones")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("joints payload requires a non-empty 'bones' list")
+    by_name: dict[str, dict[str, Any]] = {}
+    for entry in raw:
+        name = str(entry.get("name") or "")
+        points: dict[str, list[float]] = {}
+        for end in ("head", "tail"):
+            point = entry.get(end)
+            if not isinstance(point, (list, tuple)) or len(point) != 3:
+                raise ValueError(f"bone {name!r} {end} must be a 3-vector")
+            try:
+                points[end] = [float(v) for v in point]
+            except (TypeError, ValueError):
+                raise ValueError(f"bone {name!r} {end} is not numeric") from None
+        by_name[name] = points
+
+    expected = [b["name"] for b in template.bones]
+    missing = [n for n in expected if n not in by_name]
+    if missing:
+        raise ValueError(f"joints payload is missing bone(s): {missing}")
+    unknown = [n for n in by_name if n not in expected]
+    if unknown:
+        raise ValueError(f"joints payload names unknown bone(s): {unknown}")
+
+    # The skeleton's own extent, so the minimum bone length scales with the
+    # mesh: MIN_BONE_FRACTION is a fraction of the subject, not of a metre.
+    heads = [by_name[n]["head"] for n in expected]
+    span = max(
+        (hi - lo)
+        for lo, hi in (
+            (min(p[axis] for p in heads), max(p[axis] for p in heads)) for axis in range(3)
+        )
+    ) or 1.0
+    out = []
+    for bone in template.bones:
+        entry = by_name[bone["name"]]
+        if _distance(entry["head"], entry["tail"]) < span * MIN_BONE_FRACTION:
+            raise ValueError(f"bone {bone['name']!r} would be zero-length")
+        out.append(
+            {
+                "name": bone["name"],
+                "parent": bone["parent"],
+                "head": entry["head"],
+                "tail": entry["tail"],
+            }
+        )
+    return out
 
 
 # --- pose payloads ----------------------------------------------------------
@@ -238,6 +338,43 @@ def validate_pose(
             values = [v / norm for v in values]
         bones[bone] = values
     return {"name": name, "bones": bones}
+
+
+def mirror_quaternion(q: Sequence[float]) -> list[float]:
+    """Reflect a local joint rotation across the subject's YZ plane.
+
+    Every template is symmetric about X (the mirror normal), and reflecting a
+    rotation conjugates it: the components perpendicular to the normal flip
+    sign and the one along it does not. So (x, y, z, w) -> (x, -y, -z, w).
+
+    Lives here rather than only in the browser because it is the kind of sign
+    convention that is wrong in a way you cannot see -- a mirrored arm that
+    rotates the wrong way about one axis still looks plausible in a static
+    pose. The JS copy in app.js must stay identical to this.
+    """
+    x, y, z, w = (float(v) for v in q)
+    return [x, -y, -z, w]
+
+
+def mirror_pose(
+    bones: dict[str, Any], pairs: Sequence[Sequence[str]]
+) -> dict[str, list[float]]:
+    """Copy every posed bone onto its mirror partner, reflected.
+
+    Bones with no partner (a spine, a tail) are left exactly as they are: they
+    sit on the mirror plane, so reflecting them would rotate a centred limb off
+    centre.
+    """
+    partner: dict[str, str] = {}
+    for a, b in pairs:
+        partner[a] = b
+        partner[b] = a
+    out = {name: [float(v) for v in q] for name, q in bones.items()}
+    for name, quat in bones.items():
+        other = partner.get(name)
+        if other is not None:
+            out[other] = mirror_quaternion(quat)
+    return out
 
 
 # --- the Blender subprocess -------------------------------------------------
@@ -342,10 +479,17 @@ def run_worker(
     return payload
 
 
-def rig_spec(job_dir: Path, template_key: str) -> dict[str, Any]:
-    """The worker spec for rigging a finished job's mesh."""
+def rig_spec(
+    job_dir: Path, template_key: str, bones: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """The worker spec for rigging a finished job's mesh.
+
+    ``bones`` overrides the bbox-proportional fit with joints the user moved.
+    The fit is deliberately approximate -- rig.json records what it chose so a
+    correction can be made without re-running anything else.
+    """
     get_template(template_key)  # fail here, not three seconds into a subprocess
-    return {
+    spec = {
         "op": "rig",
         "source_glb": str(job_dir / "model.glb"),
         "out_glb": str(job_dir / "rig.glb"),
@@ -353,6 +497,9 @@ def rig_spec(job_dir: Path, template_key: str) -> dict[str, Any]:
         "result_path": str(job_dir / ".blender_result.json"),
         "template": template_key,
     }
+    if bones is not None:
+        spec["bones"] = bones
+    return spec
 
 
 def read_rig(job_dir: Path) -> dict[str, Any] | None:

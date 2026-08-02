@@ -963,6 +963,12 @@ const poseState = {
   selected: null,
   current: null,    // id of the saved pose being edited, if any
   saved: [],
+  template: null,      // the rig's skeleton key, for the shipped preset library
+  mirrorPairs: [],     // from rig.json; empty for a serpent or a fish
+  presets: [],
+  mode: "pose",        // "pose" rotates a joint; "joints" moves where it sits
+  fitted: [],          // rig.json's bones: the fit this rig was built from
+  moved: new Map(),    // bone name -> [dx, dy, dz] in Blender space
 };
 
 let markers = null;   // THREE.Group of clickable joint spheres
@@ -982,7 +988,10 @@ function ensureGizmo() {
   // r170's TransformControls has no dragging-changed event; mouseDown/mouseUp
   // are the equivalent pair, and orbiting mid-drag would fight the gizmo.
   gizmo.addEventListener("mouseDown", () => { controls.enabled = false; });
-  gizmo.addEventListener("mouseUp", () => { controls.enabled = true; });
+  gizmo.addEventListener("mouseUp", () => {
+    controls.enabled = true;
+    recordJointDrag();
+  });
   scene.add(gizmo.getHelper());
   return gizmo;
 }
@@ -990,7 +999,10 @@ function ensureGizmo() {
 // Markers live in their own group rather than as children of the bones, so a
 // joint stays the same size on screen whatever the armature does to its scale.
 function syncJointMarkers() {
-  if (!markers) return;
+  // In joints mode a marker is the thing being dragged, not a readout of where
+  // its bone ended up -- snapping it back to matrixWorld every frame would undo
+  // the drag as fast as the user makes it.
+  if (!markers || poseState.mode === "joints") return;
   scene.updateMatrixWorld();
   for (const marker of markers.children) {
     marker.position.setFromMatrixPosition(marker.userData.bone.matrixWorld);
@@ -1040,12 +1052,26 @@ function bindRig(root, radius) {
 
 function selectJoint(bone) {
   poseState.selected = bone;
+  let handle = null;
   for (const marker of markers?.children ?? []) {
-    marker.material.color.setHex(marker.userData.bone === bone ? MARKER_ACTIVE : MARKER_IDLE);
+    const mine = marker.userData.bone === bone;
+    marker.material.color.setHex(mine ? MARKER_ACTIVE : MARKER_IDLE);
+    if (mine) handle = marker;
   }
-  if (bone) ensureGizmo().attach(bone);
+  // Rotate the bone, but *translate the marker*: a joint's position is a
+  // property of the armature's rest pose, which the viewer's copy of the rig
+  // cannot express -- so the marker is the handle and the server re-skins.
+  const target = poseState.mode === "joints" ? handle : bone;
+  if (target) ensureGizmo().attach(target);
   else gizmo?.detach();
-  setText(poseSelection, bone ? bone.name : "Click a joint to rotate it.");
+  setText(
+    poseSelection,
+    bone
+      ? bone.name
+      : poseState.mode === "joints"
+        ? "Click a joint to move it."
+        : "Click a joint to rotate it.",
+  );
 }
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -1099,14 +1125,71 @@ async function setPoseJob(job) {
   poseState.job = id;
   poseState.current = null;
   poseState.saved = [];
+  poseState.template = null;
+  poseState.mirrorPairs = [];
+  poseState.presets = [];
+  poseState.fitted = [];
+  poseState.moved.clear();
   sheetsSeen = "";
   renderPoses();
   if (!id) {
     sheetList.replaceChildren();
     return;
   }
-  if (rigged) await refreshPoses();
+  if (rigged) {
+    await loadRigMeta(id);
+    await refreshPoses();
+  }
   await refreshSheets();
+}
+
+// rig.json carries the skeleton key and its mirror pairs; both are properties
+// of the rig rather than of the job, which is why they are read once here and
+// not on every pose refresh.
+async function loadRigMeta(jobId) {
+  try {
+    const rig = await (await fetch(`/api/jobs/${jobId}/rig`)).json();
+    poseState.template = rig.template ?? null;
+    poseState.mirrorPairs = rig.mirror_pairs ?? [];
+    poseState.fitted = rig.bones ?? [];
+  } catch (e) {
+    console.error("could not read the rig", e);   // posing still works by hand
+  }
+  syncPoseTools();
+  await loadPresets(poseState.template);
+}
+
+// A skeleton with no mirror pairs (serpent, fish) has nothing to mirror, and a
+// button that can only be a no-op is worse than no button.
+function syncPoseTools() {
+  document.getElementById("pose-mirror").hidden = !(poseState.mirrorPairs ?? []).length;
+  // An older rig.json with no recorded fit has nothing for the editor to start
+  // from, and a correction has to be the whole skeleton or nothing.
+  document.getElementById("joint-toggle").hidden = !poseState.fitted.length;
+}
+
+async function loadPresets(templateKey) {
+  const select = document.getElementById("pose-preset");
+  select.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  setText(blank, "preset…");
+  select.append(blank);
+  poseState.presets = [];
+  if (!templateKey) return;
+  try {
+    const { poses } = await (await fetch(`/api/rig/templates/${templateKey}/poses`)).json();
+    poseState.presets = poses ?? [];
+    for (const p of poseState.presets) {
+      const opt = document.createElement("option");
+      opt.value = p.name;
+      setText(opt, p.name);
+      select.append(opt);
+    }
+  } catch (e) {
+    console.error("preset library failed", e);   // posing still works by hand
+  }
+  select.hidden = !poseState.presets.length;
 }
 
 async function refreshPoses() {
@@ -1179,6 +1262,10 @@ async function enterPoseEditing() {
 function exitPoseEditing(restore = true) {
   if (!poseState.editing) return;
   poseState.editing = false;
+  poseState.mode = "pose";
+  poseState.moved.clear();
+  gizmo?.setMode("rotate");
+  syncJointButtons();
   poseToggle.classList.remove("active");
   setText(poseToggle, "edit");
   poseEditor.hidden = true;
@@ -1199,6 +1286,173 @@ document.getElementById("pose-reset-bone").addEventListener("click", () => {
 });
 
 document.getElementById("pose-reset-all").addEventListener("click", resetPose);
+
+// --- joint adjustment --------------------------------------------------------
+//
+// rig.json's joint positions are in *Blender* world space for the source mesh;
+// the viewer shows the glTF export, which is Y-up. The exporter applies one
+// axis swap at the root, so blender (x, y, z) is glTF (x, z, -y). Both
+// directions live here, in one pair of functions, so they can never drift --
+// getting the sign wrong tilts a dragged knee into the mesh rather than
+// failing, which is not something you notice until the re-skin comes back.
+//
+// Only *displacements* are converted, never absolute positions: the viewer
+// translates the whole model to sit it on the grid, and a delta is immune to
+// that offset in a way an absolute coordinate is not.
+function gltfDeltaToBlender([x, y, z]) {
+  return [x, -z, y];
+}
+
+// The joint markers are the drag handles; each remembers where it started so a
+// drag is a displacement rather than an absolute position.
+function armJointHandles() {
+  for (const marker of markers?.children ?? []) {
+    marker.userData.home = marker.position.clone();
+  }
+}
+
+function recordJointDrag() {
+  const bone = poseState.selected;
+  if (!bone || poseState.mode !== "joints") return;
+  const marker = (markers?.children ?? []).find((m) => m.userData.bone === bone);
+  if (!marker?.userData.home) return;
+  const delta = marker.position.clone().sub(marker.userData.home);
+  if (delta.lengthSq() === 0) poseState.moved.delete(bone.name);
+  else poseState.moved.set(bone.name, gltfDeltaToBlender(delta.toArray()));
+  syncJointButtons();
+}
+
+function syncJointButtons() {
+  const on = poseState.mode === "joints";
+  const toggle = document.getElementById("joint-toggle");
+  toggle.classList.toggle("active", on);
+  setText(toggle, on ? "done adjusting" : "adjust joints");
+  document.getElementById("joint-apply").hidden = !on || !poseState.moved.size;
+  document.getElementById("joint-revert").hidden = !on || !poseState.moved.size;
+}
+
+// The corrected skeleton the API wants: the whole thing, fitted positions with
+// the dragged joints substituted.
+//
+// A bone's tail follows its first child's head where one exists, and otherwise
+// moves rigidly with its own head. That is the rule that keeps a dragged chain
+// connected -- moving a knee has to shorten the thigh and lengthen the shin,
+// not leave a gap where the thigh used to end.
+function correctedBones() {
+  const shift = (point, name) => {
+    const d = poseState.moved.get(name);
+    return d ? [point[0] + d[0], point[1] + d[1], point[2] + d[2]] : [...point];
+  };
+  const heads = new Map();
+  for (const bone of poseState.fitted) heads.set(bone.name, shift(bone.head, bone.name));
+  const firstChild = new Map();
+  for (const bone of poseState.fitted) {
+    if (bone.parent && !firstChild.has(bone.parent)) firstChild.set(bone.parent, bone.name);
+  }
+  return poseState.fitted.map((bone) => {
+    const child = firstChild.get(bone.name);
+    return {
+      name: bone.name,
+      head: heads.get(bone.name),
+      tail: child ? heads.get(child) : shift(bone.tail, bone.name),
+    };
+  });
+}
+
+function enterJointsMode() {
+  poseState.mode = "joints";
+  poseState.moved.clear();
+  // A rotation left over from posing would make the markers show joints where
+  // the *posed* bones are, and the correction is against the rest skeleton.
+  resetPose();
+  scene.updateMatrixWorld();
+  for (const marker of markers?.children ?? []) {
+    marker.position.setFromMatrixPosition(marker.userData.bone.matrixWorld);
+  }
+  armJointHandles();
+  ensureGizmo().setMode("translate");
+  selectJoint(null);
+  syncJointButtons();
+}
+
+function exitJointsMode() {
+  poseState.mode = "pose";
+  poseState.moved.clear();
+  ensureGizmo().setMode("rotate");
+  selectJoint(null);
+  syncJointButtons();
+}
+
+document.getElementById("joint-toggle").addEventListener("click", () => {
+  if (!poseState.editing || !poseState.fitted.length) return;
+  if (poseState.mode === "joints") exitJointsMode();
+  else enterJointsMode();
+});
+
+document.getElementById("joint-revert").addEventListener("click", () => {
+  poseState.moved.clear();
+  for (const marker of markers?.children ?? []) {
+    if (marker.userData.home) marker.position.copy(marker.userData.home);
+  }
+  syncJointButtons();
+});
+
+document.getElementById("joint-apply").addEventListener("click", async () => {
+  if (!poseState.moved.size) return;
+  const apply = document.getElementById("joint-apply");
+  apply.disabled = true;
+  try {
+    const r = await fetch(`/api/jobs/${poseState.job}/rig/joints`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bones: correctedBones() }),
+    });
+    const body = await r.json();
+    if (!r.ok) {
+      alert(body.detail ?? "could not adjust the joints");
+      return;
+    }
+    exitJointsMode();
+    exitPoseEditing();
+    poll(true);
+  } finally {
+    apply.disabled = false;
+  }
+});
+
+// Must stay identical to rigging.mirror_quaternion -- the templates are
+// symmetric about X, and reflecting a rotation flips the components
+// perpendicular to the mirror normal.
+function mirrorQuaternion([x, y, z, w]) {
+  return [x, -y, -z, w];
+}
+
+document.getElementById("pose-mirror").addEventListener("click", () => {
+  const pairs = poseState.mirrorPairs ?? [];
+  if (!pairs.length) return;
+  const partner = new Map();
+  for (const [a, b] of pairs) { partner.set(a, b); partner.set(b, a); }
+  const bones = currentPoseBones();
+  const mirrored = { ...bones };
+  // Both sides are read before either is written, so a pair that is posed on
+  // both sides swaps rather than one side overwriting the other mid-loop.
+  for (const [name, quat] of Object.entries(bones)) {
+    const other = partner.get(name);
+    if (other) mirrored[other] = mirrorQuaternion(quat);
+  }
+  applyPose({ bones: mirrored });
+});
+
+document.getElementById("pose-preset").addEventListener("change", (e) => {
+  const preset = (poseState.presets ?? []).find((p) => p.name === e.target.value);
+  if (!preset) return;
+  // A preset is applied to the live rig exactly like a saved pose: same bone
+  // map, same code path, so it can be adjusted before it is saved. Reset first
+  // because a preset lists only the bones it moves.
+  resetPose();
+  applyPose(preset);
+  e.target.value = "";
+});
 
 document.getElementById("pose-save").addEventListener("click", async () => {
   if (!poseState.bones.size) return;
@@ -1242,6 +1496,17 @@ const sheetSize = document.getElementById("sheet-size");
 const sheetElevation = document.getElementById("sheet-elevation");
 const sheetElevationOut = document.getElementById("sheet-elevation-out");
 const sheetList = document.getElementById("sheet-list");
+const sheetYaws = document.getElementById("sheet-yaws");
+const sheetClip = document.getElementById("sheet-clip");
+const sheetClipSetup = document.getElementById("sheet-clip-setup");
+const sheetClipFrom = document.getElementById("sheet-clip-from");
+const sheetClipTo = document.getElementById("sheet-clip-to");
+const sheetClipFrames = document.getElementById("sheet-clip-frames");
+
+// 4/8/16: the direction counts every 2D engine's facing conventions already
+// use. Not free-form, because a count that does not divide 360 into the
+// directions an engine indexes by is a sheet nothing can address.
+const YAW_CHOICES = [4, 8, 16];
 
 const PREVIEW_CELL = 64;
 const sheetOptions = { yaws: [], frame_sizes: [], lighting: [], defaults: {} };
@@ -1261,6 +1526,10 @@ async function loadSheetOptions() {
   for (const value of sheetOptions.frame_sizes) {
     sheetSize.append(new Option(`${value} px`, value));
   }
+  for (const value of YAW_CHOICES) {
+    sheetYaws.append(new Option(`${value} directions`, value));
+  }
+  sheetYaws.value = sheetOptions.yaws.length || 8;
   sheetLighting.value = sheetOptions.defaults.lighting;
   sheetSize.value = sheetOptions.defaults.frame_size;
   sheetElevation.value = sheetOptions.defaults.elevation;
@@ -1275,7 +1544,10 @@ let previewTarget = null;
 
 function renderSheetPreview() {
   if (sheetSetup.hidden || !model) return;
-  const yaws = sheetOptions.yaws.length ? sheetOptions.yaws : [0, 45, 90, 135, 180, 225, 270, 315];
+  // Computed the same way sheet.yaw_angles does, from the count the user
+  // picked -- the server's default list is only a default.
+  const count = Number(sheetYaws.value) || sheetOptions.yaws.length || 8;
+  const yaws = Array.from({ length: count }, (_, i) => (i * 360) / count);
   const flat = sheetLighting.value === "flat";
   const elevation = THREE.MathUtils.degToRad(Number(sheetElevation.value));
 
@@ -1326,11 +1598,19 @@ function renderSheetPreview() {
     restore();
   }
 
-  const rows = Math.max(sheetRows.selectedOptions.length, 1);
+  // The strip above is a direction preview -- it cannot pose the mesh, so
+  // drawing one row per pose would draw the same row N times. The grid the
+  // server will actually produce is stated here instead, and this line is the
+  // part that has to agree with plan().
+  const clipping = !sheetClip.hidden && sheetClip.checked;
+  const rows = clipping
+    ? Math.max(Number(sheetClipFrames.value) || 1, 1)
+    : Math.max(sheetRows.selectedOptions.length, 1);
   const px = Number(sheetSize.value);
   setText(
     sheetSummary,
-    `${rows} × ${yaws.length} cells · ${px * yaws.length}×${px * rows} px`,
+    `${rows} × ${yaws.length} cells · ${px * yaws.length}×${px * rows} px`
+      + (clipping ? " · animated clip" : ""),
   );
 }
 
@@ -1420,6 +1700,23 @@ function syncSheetRows() {
     option.selected = chosen.has(record.id);
     sheetRows.append(option);
   }
+  syncClipEnds();
+}
+
+// A clip interpolates between two *saved* poses, so it needs two of them --
+// and offering the control with nothing to put in it would only produce a 400.
+function syncClipEnds() {
+  const enough = poseState.saved.length >= 2;
+  sheetClip.parentElement.hidden = !enough;
+  if (!enough) sheetClip.checked = false;
+  for (const [select, fallback] of [[sheetClipFrom, 0], [sheetClipTo, 1]]) {
+    const previous = select.value;
+    select.replaceChildren();
+    for (const record of poseState.saved) select.append(new Option(record.name, record.id));
+    const keep = poseState.saved.some((p) => p.id === previous);
+    select.value = keep ? previous : (poseState.saved[fallback]?.id ?? "");
+  }
+  sheetClipSetup.hidden = !(enough && sheetClip.checked);
 }
 
 sheetToggle.addEventListener("click", () => {
@@ -1431,9 +1728,17 @@ sheetToggle.addEventListener("click", () => {
   }
 });
 
-for (const el of [sheetLighting, sheetSize, sheetRows]) {
+for (const el of [sheetLighting, sheetSize, sheetRows, sheetYaws, sheetClipFrom, sheetClipTo]) {
   el.addEventListener("change", renderSheetPreview);
 }
+sheetClipFrames.addEventListener("input", renderSheetPreview);
+sheetClip.addEventListener("change", () => {
+  sheetClipSetup.hidden = !sheetClip.checked;
+  // A clip replaces the pose rows; leaving both live would suggest the sheet
+  // carries the static poses too, which the route refuses to do.
+  sheetRows.disabled = sheetClip.checked;
+  renderSheetPreview();
+});
 sheetElevation.addEventListener("input", () => {
   sheetElevationOut.textContent = `${sheetElevation.value}°`;
   renderSheetPreview();
@@ -1444,10 +1749,18 @@ document.getElementById("sheet-render").addEventListener("click", async (e) => {
   btn.disabled = true;
   try {
     const fd = new FormData();
-    for (const option of sheetRows.selectedOptions) fd.append("poses", option.value);
+    const clipping = sheetClip.checked && sheetClipFrom.value && sheetClipTo.value;
+    if (clipping) {
+      fd.set("clip_from", sheetClipFrom.value);
+      fd.set("clip_to", sheetClipTo.value);
+      fd.set("clip_frames", sheetClipFrames.value);
+    } else {
+      for (const option of sheetRows.selectedOptions) fd.append("poses", option.value);
+    }
     fd.set("elevation", sheetElevation.value);
     fd.set("frame_size", sheetSize.value);
     fd.set("lighting", sheetLighting.value);
+    fd.set("yaws", sheetYaws.value);
     const r = await fetch(`/api/jobs/${poseState.job}/sheets`, { method: "POST", body: fd });
     const body = await r.json();
     if (!r.ok) alert(body.detail ?? "could not queue the sheet");

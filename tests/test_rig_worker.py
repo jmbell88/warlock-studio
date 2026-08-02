@@ -257,3 +257,35 @@ def test_fbx_spec_names_the_op_and_paths(tmp_path):
     assert spec["source_glb"].endswith("model.glb")
     assert spec["out_fbx"].endswith("model.fbx")
     assert spec["result_path"].startswith(str(tmp_path))
+
+
+async def test_a_rig_job_passes_corrected_joints_through_to_the_worker(worker, monkeypatch):
+    """The adjust pass re-skins with the user's joints; the queue is the only
+    thing between the route and the worker, so it must not drop them."""
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    rig_id = worker.store.create(
+        "rig",
+        None,
+        {"source_job": source, "template": "humanoid", "bones": fitted, "adjusted": True},
+    )
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert calls[0]["spec"]["bones"] == fitted
+    await worker.shutdown()
+
+
+async def test_an_ordinary_rig_job_sends_no_bones_so_the_worker_fits(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert "bones" not in calls[0]["spec"]
+    await worker.shutdown()

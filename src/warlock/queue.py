@@ -516,7 +516,7 @@ class Worker:
         def on_start(proc: Any) -> None:
             self._blender = proc
 
-        spec = rigging.rig_spec(source_dir, template)
+        spec = rigging.rig_spec(source_dir, template, params.get("bones"))
         result = await asyncio.to_thread(
             functools.partial(
                 rigging.run_worker,
@@ -566,11 +566,26 @@ class Worker:
                 raise RuntimeError(f"pose {pose_id} no longer exists")
             records.append(record)
 
+        clip = params.get("clip")
+        if clip:
+            # Rebuilt from the same two poses rather than shipped in params: the
+            # host is the single place a grid or a clip is decided (see
+            # pipelines/sheet.py), and storing the expanded frames would be a
+            # second copy that could disagree with it.
+            ends = [
+                await asyncio.to_thread(rigging.read_pose, source_dir, str(clip[k]))
+                for k in ("from", "to")
+            ]
+            if any(e is None for e in ends):
+                raise RuntimeError("a pose in this clip no longer exists")
+            records = sheetlib.interpolate(ends[0], ends[1], int(clip["frames"]))
+
         layout = sheetlib.plan(
             records,
             frame_size=int(params.get("frame_size", sheetlib.DEFAULT_FRAME_SIZE)),
             elevation=float(params.get("elevation", sheetlib.DEFAULT_ELEVATION)),
             lighting=str(params.get("lighting", "flat")),
+            yaws=int(params.get("yaws", sheetlib.DEFAULT_YAWS)),
         )
         # A rig if there is one, so poses can apply; otherwise the plain mesh,
         # which is all an unrigged prop's turnaround needs.
@@ -580,9 +595,18 @@ class Worker:
         if not source_glb.exists():
             raise RuntimeError("source job has no mesh to render")
 
-        bones = {r["id"]: r["bones"] for r in records}
+        # Keyed by (pose id, frame) rather than pose id: every frame of a clip
+        # shares an id by construction, and keying on the id alone would render
+        # frame 0 in every row of the clip.
+        bones = {(r.get("id"), r.get("frame", 0)): r["bones"] for r in records}
         cells = [
-            {"index": c.index, "yaw": c.yaw, "pose": c.pose, "bones": bones.get(c.pose) or {}}
+            {
+                "index": c.index,
+                "yaw": c.yaw,
+                "pose": c.pose,
+                "frame": c.frame,
+                "bones": bones.get((c.pose, c.frame)) or {},
+            }
             for c in layout.cells
         ]
 
@@ -611,7 +635,7 @@ class Worker:
                 elevation=layout.elevation,
                 lighting=layout.lighting,
             )
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 functools.partial(
                     rigging.run_worker,
                     spec,
@@ -625,10 +649,15 @@ class Worker:
                 inner_next=1.0, nominal=3.0, detail="",
             )
             frames = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
-            await asyncio.to_thread(sheetlib.pack, layout, frames, png)
+            trims = await asyncio.to_thread(sheetlib.pack, layout, frames, png)
 
         # The sidecar is written last and is what list_sheets treats as the
         # completion marker, the same way rig.json is for a rig.
+        #
+        # A worker that reported no pivot (an older result, or a fake in a test)
+        # falls back to the cell's centre-bottom rather than failing the sheet:
+        # the atlas is already on disk and correct, and the pivot is metadata.
+        pivot = result.get("pivot") if isinstance(result, dict) else None
         meta = sheetlib.sidecar(
             layout,
             sheet_id=sheet_id,
@@ -636,6 +665,8 @@ class Worker:
             image=png.name,
             created=time.time(),
             name=str(params.get("name") or ""),
+            pivot=(float(pivot[0]), float(pivot[1])) if pivot else None,
+            trims=trims,
         )
         await asyncio.to_thread(
             rigging.sheet_path(source_dir, sheet_id).write_text,

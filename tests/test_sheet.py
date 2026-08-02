@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from pathlib import Path
 
@@ -85,6 +86,78 @@ def test_yaw_angles_start_at_the_front_view():
     assert sheetlib.yaw_angles(4) == (0.0, 90.0, 180.0, 270.0)
 
 
+# --- animation ----------------------------------------------------------------
+
+
+def test_slerp_endpoints_and_midpoint():
+    a = [0.0, 0.0, 0.0, 1.0]
+    half = math.radians(90) / 2
+    b = [0.0, 0.0, math.sin(half), math.cos(half)]
+    assert sheetlib.slerp(a, b, 0.0) == pytest.approx(a)
+    assert sheetlib.slerp(a, b, 1.0) == pytest.approx(b)
+    quarter = math.radians(45) / 2
+    assert sheetlib.slerp(a, b, 0.5) == pytest.approx(
+        [0.0, 0.0, math.sin(quarter), math.cos(quarter)], abs=1e-6
+    )
+
+
+def test_slerp_takes_the_short_way_round():
+    """Negating a quaternion is the same rotation; without the sign fix the
+    interpolation spins the long way and the sprite counter-rotates."""
+    a = [0.0, 0.0, 0.0, 1.0]
+    b = [0.0, 0.0, 0.0, -1.0]
+    mid = sheetlib.slerp(a, b, 0.5)
+    assert abs(mid[3]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_interpolate_produces_numbered_frames_between_two_poses():
+    a = {"id": "a" * 12, "name": "contact A", "bones": {"thigh.L": [0.0, 0.0, 0.0, 1.0]}}
+    half = math.radians(60) / 2
+    b = {
+        "id": "b" * 12,
+        "name": "contact B",
+        "bones": {"thigh.L": [math.sin(half), 0.0, 0.0, math.cos(half)]},
+    }
+
+    frames = sheetlib.interpolate(a, b, 4)
+
+    assert len(frames) == 4
+    assert [f["frame"] for f in frames] == [0, 1, 2, 3]
+    assert frames[0]["bones"]["thigh.L"] == pytest.approx(a["bones"]["thigh.L"])
+    # The last frame stops short of B, so a looping clip does not hold a
+    # duplicate frame at the seam.
+    assert frames[-1]["bones"]["thigh.L"] != pytest.approx(b["bones"]["thigh.L"])
+
+
+def test_a_bone_posed_in_only_one_end_interpolates_from_rest():
+    a = {"id": "a" * 12, "name": "A", "bones": {}}
+    b = {"id": "b" * 12, "name": "B", "bones": {"head": [0.0, 0.0, 0.7071, 0.7071]}}
+    frames = sheetlib.interpolate(a, b, 2)
+    assert frames[0]["bones"]["head"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
+
+
+def test_interpolate_rejects_a_clip_length_it_cannot_render():
+    a = {"id": "a" * 12, "name": "A", "bones": {}}
+    with pytest.raises(ValueError):
+        sheetlib.interpolate(a, a, 0)
+    with pytest.raises(ValueError):
+        sheetlib.interpolate(a, a, sheetlib.MAX_CLIP_FRAMES + 1)
+
+
+def test_plan_honours_the_yaw_count():
+    layout = sheetlib.plan([], yaws=4)
+    assert layout.columns == 4
+    assert len(layout.cells) == 4
+
+
+def test_plan_carries_each_records_own_frame_index():
+    """A clip's rows differ only by frame; dropping it renders row 0 six times."""
+    a = {"id": "a" * 12, "name": "A", "bones": {}}
+    b = {"id": "b" * 12, "name": "B", "bones": {}}
+    layout = sheetlib.plan(sheetlib.interpolate(a, b, 3), yaws=2)
+    assert [c.frame for c in layout.cells] == [0, 0, 1, 1, 2, 2]
+
+
 # --- packing ----------------------------------------------------------------
 
 
@@ -101,7 +174,8 @@ def _frames(tmp_path, layout, colours=None):
 
 def test_pack_places_each_frame_at_its_own_cell(tmp_path):
     layout = sheetlib.plan([{"id": "a" * 12, "name": "idle"}], frame_size=64)
-    out = sheetlib.pack(layout, _frames(tmp_path, layout), tmp_path / "sheet.png")
+    out = tmp_path / "sheet.png"
+    sheetlib.pack(layout, _frames(tmp_path, layout), out)
     with Image.open(out) as atlas:
         assert atlas.size == (layout.width, layout.height)
         for cell in layout.cells:
@@ -113,7 +187,8 @@ def test_pack_resizes_a_frame_that_came_back_the_wrong_size(tmp_path):
     layout = sheetlib.plan([], frame_size=64)
     frames = _frames(tmp_path, layout)
     Image.new("RGBA", (32, 32), (10, 20, 30, 255)).save(frames[0])
-    out = sheetlib.pack(layout, frames, tmp_path / "sheet.png")
+    out = tmp_path / "sheet.png"
+    sheetlib.pack(layout, frames, out)
     with Image.open(out) as atlas:
         assert atlas.size == (layout.width, layout.height)
         assert atlas.getpixel((32, 32)) == (10, 20, 30, 255)
@@ -132,7 +207,8 @@ def test_pack_refuses_to_leave_a_hole(tmp_path):
 def test_untouched_cells_stay_transparent(tmp_path):
     layout = sheetlib.plan([], frame_size=64)
     frames = _frames(tmp_path, layout, colours={i: (0, 0, 0, 0) for i in range(8)})
-    out = sheetlib.pack(layout, frames, tmp_path / "sheet.png")
+    out = tmp_path / "sheet.png"
+    sheetlib.pack(layout, frames, out)
     with Image.open(out) as atlas:
         assert atlas.getpixel((10, 10))[3] == 0
 
@@ -155,7 +231,66 @@ def test_sidecar_describes_the_grid_and_every_cell():
     assert first == {
         "index": 0, "row": 0, "column": 0, "x": 0, "y": 0, "w": 64, "h": 64,
         "pose": "a" * 12, "pose_name": "idle", "yaw": 0.0, "frame": 0,
+        # Additive: an importer that ignores these reads the sheet exactly as
+        # it did before, which is why the version does not move.
+        "pivot_x": 32.0, "pivot_y": 64.0, "trim": None,
     }
+
+
+def test_sidecar_carries_a_pivot_per_cell():
+    layout = sheetlib.plan([], frame_size=128, yaws=4)
+    meta = sheetlib.sidecar(
+        layout, sheet_id="a" * 12, source_job="b" * 12, image="s.png",
+        created=1.0, pivot=(64.0, 118.0),
+    )
+    assert all(c["pivot_x"] == 64.0 and c["pivot_y"] == 118.0 for c in meta["cells"])
+
+
+def test_pivot_defaults_to_the_cell_centre_bottom_when_unmeasured():
+    layout = sheetlib.plan([], frame_size=128, yaws=4)
+    meta = sheetlib.sidecar(
+        layout, sheet_id="a" * 12, source_job="b" * 12, image="s.png", created=1.0
+    )
+    assert meta["cells"][0]["pivot_x"] == 64.0
+    assert meta["cells"][0]["pivot_y"] == 128.0
+
+
+def test_sidecar_carries_the_trim_it_was_measured(tmp_path):
+    layout = sheetlib.plan([], frame_size=64, yaws=2)
+    meta = sheetlib.sidecar(
+        layout, sheet_id="a" * 12, source_job="b" * 12, image="s.png", created=1.0,
+        trims={0: {"x": 1, "y": 2, "w": 3, "h": 4}},
+    )
+    assert meta["cells"][0]["trim"] == {"x": 1, "y": 2, "w": 3, "h": 4}
+    # A cell nothing was measured for says so, rather than claiming full bleed.
+    assert meta["cells"][1]["trim"] is None
+
+
+def test_trim_measures_the_alpha_bounding_box():
+    frame = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    frame.paste((255, 0, 0, 255), (10, 20, 30, 50))
+    assert sheetlib.measure_trim(frame) == {"x": 10, "y": 20, "w": 20, "h": 30}
+
+
+def test_trim_of_an_empty_frame_is_none():
+    assert sheetlib.measure_trim(Image.new("RGBA", (64, 64), (0, 0, 0, 0))) is None
+
+
+def test_pack_returns_a_trim_for_every_cell(tmp_path):
+    """Measured while packing because every frame is already open and decoded
+    there; a second pass over the atlas would be the same pixels twice."""
+    layout = sheetlib.plan([], frame_size=64, yaws=2)
+    frames = {}
+    for cell in layout.cells:
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        if cell.index == 0:
+            img.paste((0, 255, 0, 255), (8, 16, 24, 40))
+        path = tmp_path / f"{cell.index}.png"
+        img.save(path)
+        frames[cell.index] = path
+    trims = sheetlib.pack(layout, frames, tmp_path / "sheet.png")
+    assert trims[0] == {"x": 8, "y": 16, "w": 16, "h": 24}
+    assert trims[1] is None
 
 
 def test_sidecar_is_plain_json():
@@ -326,6 +461,70 @@ def test_sheet_routes_reject_malformed_sheet_ids(sheet_client, bad):
     assert client.delete(f"/api/jobs/{job_id}/sheets/{bad}").status_code == 404
 
 
+
+def test_a_clip_sheet_records_its_two_ends_not_the_expanded_frames(sheet_client):
+    """params carries the ends so the queue rebuilds the frames from the same
+    interpolate() the route validated against -- one source of truth."""
+    client, assets = sheet_client
+    job_id = _mesh_job(client, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
+    b = rigging.save_pose(
+        assets / job_id, {"name": "B", "bones": {"hips": [0.0, 0.0, 0.7071068, 0.7071068]}}
+    )
+
+    r = client.post(
+        f"/api/jobs/{job_id}/sheets",
+        data={"clip_from": a["id"], "clip_to": b["id"], "clip_frames": 4, "yaws": 4},
+    )
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["clip"] == {"from": a["id"], "to": b["id"], "frames": 4}
+    assert params["yaws"] == 4
+
+
+def test_a_clip_needs_both_ends(sheet_client):
+    client, assets = sheet_client
+    job_id = _mesh_job(client, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
+    r = client.post(f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"]})
+    assert r.status_code == 400
+    assert "both" in r.json()["detail"]
+
+
+def test_a_clip_needs_a_rig(sheet_client):
+    client, assets = sheet_client
+    job_id = _mesh_job(client, assets)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
+    b = rigging.save_pose(assets / job_id, {"name": "B", "bones": {"hips": IDENTITY}}, "b" * 12)
+    r = client.post(
+        f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"], "clip_to": b["id"]}
+    )
+    assert r.status_code == 400
+    assert "rigged" in r.json()["detail"]
+
+
+def test_a_clip_frame_count_over_the_limit_is_a_400(sheet_client):
+    client, assets = sheet_client
+    job_id = _mesh_job(client, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
+    b = rigging.save_pose(assets / job_id, {"name": "B", "bones": {"hips": IDENTITY}}, "b" * 12)
+    r = client.post(
+        f"/api/jobs/{job_id}/sheets",
+        data={"clip_from": a["id"], "clip_to": b["id"], "clip_frames": 999},
+    )
+    assert r.status_code == 400
+
+
+def test_a_clip_end_that_no_longer_exists_is_a_404(sheet_client):
+    client, assets = sheet_client
+    job_id = _mesh_job(client, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
+    r = client.post(
+        f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"], "clip_to": "b" * 12}
+    )
+    assert r.status_code == 404
+
+
 # --- the queue --------------------------------------------------------------
 
 
@@ -490,6 +689,65 @@ async def test_a_sheet_of_a_vanished_pose_fails_the_job_not_the_worker(worker, m
     assert worker.store.get(job_id)["status"] == "error"
 
 
+@pytest.mark.asyncio
+async def test_a_clip_job_gives_every_row_its_own_frames_rotations(worker, monkeypatch):
+    """The cache keys on the queue and in the worker both had to grow a frame
+    component. Get either wrong and every row of the clip renders frame 0 --
+    which looks like a posing bug, not a keying bug."""
+    calls = _fake_render(monkeypatch)
+    source = _source_job(worker, rigged=True)
+    source_dir = worker.config.job_dir(source)
+    a = rigging.save_pose(source_dir, {"name": "A", "bones": {"hips": IDENTITY}})
+    b = rigging.save_pose(
+        source_dir, {"name": "B", "bones": {"hips": [0.0, 0.0, 0.7071068, 0.7071068]}}
+    )
+    job_id = worker.store.create(
+        "sheet",
+        None,
+        {
+            "source_job": source,
+            "sheet_id": rigging.new_id(),
+            "frame_size": 64,
+            "yaws": 2,
+            "clip": {"from": a["id"], "to": b["id"], "frames": 4},
+        },
+    )
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+
+    cells = calls[0]["spec"]["cells"]
+    assert len(cells) == 8                      # 4 frames x 2 yaws
+    assert [c["frame"] for c in cells] == [0, 0, 1, 1, 2, 2, 3, 3]
+    # One distinct rotation per frame, and frame 0 is end A exactly.
+    per_frame = {c["frame"]: tuple(c["bones"]["hips"]) for c in cells}
+    assert len(set(per_frame.values())) == 4
+    assert per_frame[0] == pytest.approx(tuple(IDENTITY))
+    await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_a_clip_whose_pose_was_deleted_fails_the_job(worker, monkeypatch):
+    _fake_render(monkeypatch)
+    source = _source_job(worker, rigged=True)
+    source_dir = worker.config.job_dir(source)
+    a = rigging.save_pose(source_dir, {"name": "A", "bones": {"hips": IDENTITY}})
+    job_id = worker.store.create(
+        "sheet",
+        None,
+        {
+            "source_job": source,
+            "sheet_id": rigging.new_id(),
+            "clip": {"from": a["id"], "to": rigging.new_id(), "frames": 2},
+        },
+    )
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+    assert "no longer exists" in worker.store.get(job_id)["error"]
+    await worker.shutdown()
+
+
 # --- the real renderer ------------------------------------------------------
 
 
@@ -526,7 +784,8 @@ def test_a_rendered_sheet_actually_contains_eight_distinct_views(tmp_path, light
     assert result["frames"] == [c.index for c in layout.cells]
 
     frames = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
-    out = sheetlib.pack(layout, frames, tmp_path / "sheet.png")
+    out = tmp_path / "sheet.png"
+    sheetlib.pack(layout, frames, out)
     with Image.open(out) as atlas:
         assert atlas.size == (512, 64)
         cells = [atlas.crop((c.x, c.y, c.x + 64, c.y + 64)) for c in layout.cells]
@@ -578,3 +837,59 @@ def test_a_rigged_subject_is_framed_by_its_own_size(tmp_path):
     # 2.0 tall inside a 2.24 ortho window is ~89% of the frame; anything near a
     # third of that means something else got into the bounds again.
     assert height / 128 > 0.75, f"subject only fills {height}/128 px"
+
+
+@pytest.mark.gpu
+def test_the_reported_pivot_sits_at_the_subjects_feet_in_every_direction(tmp_path):
+    """The sidecar's pivot is only worth anything if an engine can place a
+    sprite by it without the subject drifting as it turns.
+
+    Rendered at elevation 0 with a lopsided subject, so a pivot computed from
+    the wrong point or projected with the wrong sign would land somewhere the
+    silhouette is not. Checked against each cell's own alpha bbox, which is the
+    same rectangle a Pygame ``subsurface`` blit would honour.
+    """
+    pytest.importorskip("bpy")
+    import bpy
+
+    from warlock.pipelines import blender_worker
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0)
+    bpy.context.object.scale = (0.3, 0.2, 1.0)
+    bpy.ops.mesh.primitive_cone_add(radius1=0.35, depth=0.6, location=(0, -0.5, 0.9))
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
+
+    layout = sheetlib.plan([], frame_size=128, elevation=0.0)
+    frames_dir = tmp_path / "frames"
+    spec = rigging.sheet_spec(
+        tmp_path / "model.glb",
+        frames_dir,
+        [{"index": c.index, "yaw": c.yaw, "pose": None, "bones": {}} for c in layout.cells],
+        frame_size=128,
+        elevation=0.0,
+        lighting="flat",
+    )
+    result = blender_worker.op_sheet(bpy, spec)
+    pivot = result["pivot"]
+
+    frames = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
+    trims = sheetlib.pack(layout, frames, tmp_path / "sheet.png")
+    meta = sheetlib.sidecar(
+        layout, sheet_id="a" * 12, source_job="b" * 12, image="s.png", created=1.0,
+        pivot=(pivot[0], pivot[1]), trims=trims,
+    )
+
+    px, py = meta["cells"][0]["pivot_x"], meta["cells"][0]["pivot_y"]
+    # Horizontally centred, and on the floor: at elevation 0 the bottom of the
+    # silhouette *is* the ground plane.
+    assert px == pytest.approx(64.0, abs=1.5)
+    for cell in meta["cells"]:
+        trim = cell["trim"]
+        assert trim is not None, f"column {cell['column']} rendered nothing"
+        # Every cell carries the same pivot -- that stability is the point.
+        assert (cell["pivot_x"], cell["pivot_y"]) == (px, py)
+        bottom = trim["y"] + trim["h"]
+        assert abs(py - bottom) <= 2, f"column {cell['column']}: pivot {py} vs floor {bottom}"
+        assert trim["x"] <= px <= trim["x"] + trim["w"]

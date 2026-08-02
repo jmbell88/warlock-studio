@@ -223,6 +223,30 @@ Download a PNG plus a JSON file with this stable structure:
 - Check for opaque backgrounds, clipped geometry, empty frames, and edge contact.
 - Treat sprite-export warnings separately from GLB readiness; a good GLB can still require reframing before becoming a good sprite sheet.
 
+#### Measured, 2026-08-02
+
+The sidecar now carries `pivot_x`/`pivot_y` and a per-cell `trim` (the alpha
+bounding box), both additive at `SHEET_VERSION = 1`. Three of the checks above
+are covered by
+`tests/test_sheet.py::test_the_reported_pivot_sits_at_the_subjects_feet_in_every_direction`,
+which renders a real lopsided subject at eight directions and asserts against
+each cell's own alpha bbox — the same rectangle a `subsurface()` blit honours:
+
+- **Stable across directions: yes.** The pivot is projected once from yaw 0 and
+  is byte-identical in all eight cells, because the ortho camera is framed once
+  from the rest bbox and only spins.
+- **Grounded and centred: yes.** At elevation 0 the pivot lands within 2 px of
+  the bottom of every cell's silhouette and within 1.5 px of the cell's
+  horizontal centre.
+- **Rectangles inside the sheet: yes**, by construction — `measure_trim` reads
+  `Image.getbbox()` on the already-decoded frame during `pack`.
+
+Still unmeasured: loading the PNG through Pygame-CE itself. Pygame is not a
+dependency of this project and adding one to assert `convert_alpha()` would be
+testing Pygame, not Warlock — the pixels and the rectangles are verified above
+with Pillow. Run it by hand once against a real character sheet before calling
+the Pygame path done.
+
 ## Additional Improvements
 
 - Correct README claims about generated PBR data.

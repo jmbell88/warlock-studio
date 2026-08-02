@@ -1,0 +1,20 @@
+{
+  "key": "serpent",
+  "label": "Serpent (limbless chain)",
+  "root": "spine_01",
+  "comment": "Normalized landmark positions in a unit bounding box, Blender axes: +X is the subject's left, -Y is forward, +Z is up. x/y span -0.5..0.5, z spans 0 to 1.",
+  "bones": [
+    {"name": "spine_01", "parent": null,       "head": [0.00, -0.34, 0.30], "tail": [0.00, -0.24, 0.30]},
+    {"name": "spine_02", "parent": "spine_01", "head": [0.00, -0.24, 0.30], "tail": [0.00, -0.14, 0.30]},
+    {"name": "spine_03", "parent": "spine_02", "head": [0.00, -0.14, 0.30], "tail": [0.00, -0.04, 0.30]},
+    {"name": "spine_04", "parent": "spine_03", "head": [0.00, -0.04, 0.30], "tail": [0.00,  0.06, 0.30]},
+    {"name": "spine_05", "parent": "spine_04", "head": [0.00,  0.06, 0.30], "tail": [0.00,  0.16, 0.30]},
+    {"name": "spine_06", "parent": "spine_05", "head": [0.00,  0.16, 0.30], "tail": [0.00,  0.26, 0.30]},
+    {"name": "spine_07", "parent": "spine_06", "head": [0.00,  0.26, 0.30], "tail": [0.00,  0.36, 0.30]},
+    {"name": "tail_tip", "parent": "spine_07", "head": [0.00,  0.36, 0.30], "tail": [0.00,  0.48, 0.30]},
+
+    {"name": "neck",     "parent": "spine_01", "head": [0.00, -0.34, 0.30], "tail": [0.00, -0.42, 0.36]},
+    {"name": "head",     "parent": "neck",     "head": [0.00, -0.42, 0.36], "tail": [0.00, -0.50, 0.40]}
+  ],
+  "mirror_pairs": []
+}

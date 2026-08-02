@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -416,6 +417,23 @@ def _aim_camera(
     cam.location = Vector(centre) - forward * distance
 
 
+def _project(bpy: Any, cam: Any, point: Sequence[float], size: int) -> tuple[float, float]:
+    """World point -> pixel coordinates within one square frame.
+
+    bpy_extras' own camera projection rather than reimplementing the ortho
+    matrix: it already accounts for ortho_scale, the sensor fit and the aspect,
+    and a hand-rolled version that disagreed would put every sprite's feet in
+    the wrong place with nothing to indicate why.
+    """
+    from bpy_extras.object_utils import world_to_camera_view
+    from mathutils import Vector
+
+    bpy.context.view_layer.update()
+    ndc = world_to_camera_view(bpy.context.scene, cam, Vector(point))
+    # world_to_camera_view returns 0..1 with y up; image pixels are y down.
+    return (float(ndc.x) * size, (1.0 - float(ndc.y)) * size)
+
+
 # --- operations -------------------------------------------------------------
 
 
@@ -431,7 +449,10 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
     progress(0.25, "Fitting skeleton")
     lo, hi = _world_bounds(mesh)
-    bones = rigging.fit_template(template, lo, hi)
+    # Caller-supplied joints win over the fit. They are already validated
+    # against the template host-side (rigging.validate_joints), so this is a
+    # straight substitution rather than a second, disagreeing check.
+    bones = spec.get("bones") or rigging.fit_template(template, lo, hi)
     arm_obj = _build_armature(bpy, bones)
 
     progress(0.40, "Computing weights")
@@ -449,6 +470,7 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         "bounds": {"min": lo, "max": hi},
         "bones": bones,
         "mirror_pairs": [list(pair) for pair in template.mirror_pairs],
+        "adjusted": bool(spec.get("bones")),
     }
     Path(spec["out_json"]).write_text(json.dumps(rig_meta, indent=2), encoding="utf-8")
     progress(1.0, "Rig complete")
@@ -520,12 +542,22 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         _world(bpy, 0.0)
     cam = _setup_camera(bpy, extent, distance)
 
-    posed: str | None = "__rest__"
+    # The subject's ground origin: horizontally centred, sitting on the bbox
+    # floor. Projected once, from yaw 0, because the ortho camera is framed once
+    # and only spins -- so this pixel is the same in every direction, which is
+    # exactly what makes it usable as a sprite pivot. Aiming here also keeps the
+    # projection out of the render loop.
+    _aim_camera(cam, centre, 0.0, elevation, distance)
+    pivot = _project(bpy, cam, (centre[0], centre[1], lo[2]), size)
+
+    posed: Any = "__rest__"
     rendered = []
     for i, cell in enumerate(cells):
-        # Cells arrive grouped by row, so this re-poses once per pose rather
-        # than once per frame -- eight times less work on an eight-yaw sheet.
-        key = cell.get("pose")
+        # Cells arrive grouped by row, so this re-poses once per row rather than
+        # once per frame -- eight times less work on an eight-yaw sheet. A
+        # clip's rows differ only by frame, which is why the cache key carries
+        # it: without that every frame of a clip would render the first one.
+        key = (cell.get("pose"), cell.get("frame", 0))
         if armature is not None and key != posed:
             _reset_pose(armature)
             _apply_pose(armature, cell.get("bones") or {})
@@ -538,7 +570,12 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         progress(0.10 + 0.85 * (i + 1) / max(len(cells), 1), f"Rendering {i + 1}/{len(cells)}")
 
     progress(1.0, "Frames rendered")
-    return {"ok": True, "frames": rendered, "bounds": {"min": lo, "max": hi}}
+    return {
+        "ok": True,
+        "frames": rendered,
+        "bounds": {"min": lo, "max": hi},
+        "pivot": list(pivot),
+    }
 
 
 def op_fbx(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:

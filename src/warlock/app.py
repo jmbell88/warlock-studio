@@ -499,6 +499,20 @@ def create_app() -> FastAPI:
             "templates": rigging.catalog(),
         }
 
+    @app.get("/api/rig/templates/{key}/poses")
+    async def template_presets(key: str) -> dict[str, Any]:
+        """The shipped pose library for a skeleton.
+
+        Read-only and job-independent: applying one saves an ordinary pose
+        through the existing POST route, so a preset and a hand-made pose are
+        the same thing by the time anything else sees them.
+        """
+        try:
+            poses = await asyncio.to_thread(rigging.preset_poses, key)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"poses": poses}
+
     @app.post("/api/jobs/{job_id}/rig")
     async def create_rig(
         job_id: str, template: Annotated[str | None, Form()] = None
@@ -523,6 +537,40 @@ def create_app() -> FastAPI:
             store().create, "rig", source["prompt"], params, uuid.uuid4().hex[:12]
         )
         return {"id": new_id, "source_job": job_id, "template": params["template"]}
+
+    @app.post("/api/jobs/{job_id}/rig/joints")
+    async def adjust_joints(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Re-rig a mesh with joints the user moved.
+
+        JSON rather than a form, for the same reason poses are: the body is a
+        list of 3-vectors. A queued rig job rather than an inline call, for the
+        same reason the original rig is: skinning is minutes of CPU and must
+        never overlap a trellis run.
+        """
+        _check_job_id(job_id)
+        source = await asyncio.to_thread(store().get, job_id)
+        if source is None:
+            raise HTTPException(404, "no such job")
+        job_dir = config.job_dir(job_id)
+        rig = await asyncio.to_thread(rigging.read_rig, job_dir)
+        if rig is None or not (job_dir / "model.glb").exists():
+            raise HTTPException(400, "job is not rigged")
+        try:
+            template = rigging.get_template(str(rig.get("template") or config.rig_template))
+            bones = rigging.validate_joints(payload, template)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        params = {
+            "source_job": job_id,
+            "template": template.key,
+            "bones": bones,
+            "adjusted": True,
+        }
+        new_id = await asyncio.to_thread(
+            store().create, "rig", source["prompt"], params, uuid.uuid4().hex[:12]
+        )
+        return {"id": new_id, "source_job": job_id}
 
     @app.get("/api/jobs/{job_id}/rig")
     async def get_rig(job_id: str) -> dict[str, Any]:
@@ -730,6 +778,10 @@ def create_app() -> FastAPI:
         frame_size: Annotated[int | None, Form()] = None,
         lighting: Annotated[str | None, Form()] = None,
         name: Annotated[str | None, Form()] = None,
+        clip_from: Annotated[str | None, Form()] = None,
+        clip_to: Annotated[str | None, Form()] = None,
+        clip_frames: Annotated[int, Form()] = 8,
+        yaws: Annotated[int | None, Form()] = None,
     ) -> dict[str, Any]:
         """Queue a pose x direction sprite sheet for a finished job's mesh.
 
@@ -758,6 +810,27 @@ def create_app() -> FastAPI:
         if records and not (job_dir / "rig.glb").exists():
             raise HTTPException(400, "posed sheets need a rigged mesh")
 
+        # A clip replaces the pose rows rather than adding to them: its rows
+        # *are* the animation, and mixing static poses into the same sheet
+        # would give an importer no way to tell which rows loop.
+        if clip_from or clip_to:
+            if not (clip_from and clip_to):
+                raise HTTPException(400, "a clip needs both clip_from and clip_to")
+            for pose_id in (clip_from, clip_to):
+                _check_pose_id(pose_id)
+            ends = [
+                await asyncio.to_thread(rigging.read_pose, job_dir, pid)
+                for pid in (clip_from, clip_to)
+            ]
+            if any(e is None for e in ends):
+                raise HTTPException(404, "no such pose")
+            if not (job_dir / "rig.glb").exists():
+                raise HTTPException(400, "an animated clip needs a rigged mesh")
+            try:
+                records = sheetlib.interpolate(ends[0], ends[1], clip_frames)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+
         try:
             # Built and thrown away: the worker plans it again from the same
             # inputs. This call is here purely so a bad frame size or an atlas
@@ -767,6 +840,7 @@ def create_app() -> FastAPI:
                 frame_size=frame_size or sheetlib.DEFAULT_FRAME_SIZE,
                 elevation=sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
                 lighting=lighting or "flat",
+                yaws=yaws or sheetlib.DEFAULT_YAWS,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -783,6 +857,15 @@ def create_app() -> FastAPI:
             "frame_size": frame_size or sheetlib.DEFAULT_FRAME_SIZE,
             "lighting": lighting or "flat",
             "name": (name or "").strip(),
+            "yaws": yaws or sheetlib.DEFAULT_YAWS,
+            # The two ends, not the expanded frames: the host is the single
+            # place a clip is decided, and storing the frames would be a second
+            # copy that could disagree with sheet.interpolate.
+            "clip": (
+                {"from": clip_from, "to": clip_to, "frames": clip_frames}
+                if clip_from
+                else None
+            ),
         }
         new_id = await asyncio.to_thread(
             store().create, "sheet", source["prompt"], params, uuid.uuid4().hex[:12]
