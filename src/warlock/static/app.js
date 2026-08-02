@@ -435,6 +435,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     // Text jobs only: an image job's reference is the upload itself.
     if (document.getElementById("approve-first").checked) {
       fd.set("output", "reference");
+      fd.set("count", document.getElementById("ref-count").value);
     }
   } else {
     const file = document.getElementById("image").files[0];

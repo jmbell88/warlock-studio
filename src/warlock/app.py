@@ -30,6 +30,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 ALLOWED_RESOLUTIONS = {512, 1024, 1536}
 
+# A submit may ask for several reference candidates at once. Bounded because each
+# is a real queued job holding a place in the serial worker.
+MAX_REFERENCE_COUNT = 8
+
 # Ceiling for /api/jobs?limit= and the internal full-history reads (prune).
 # Bounded so a caller can't ask the single sqlite connection for everything at
 # once and stall every other request behind it.
@@ -155,6 +159,7 @@ def create_app() -> FastAPI:
         rig_template: Annotated[str | None, Form()] = None,
         image: Annotated[UploadFile | None, File()] = None,
         output: Annotated[str, Form()] = "model",
+        count: Annotated[int, Form()] = 1,
     ) -> dict[str, Any]:
         if kind not in ("text", "image"):
             raise HTTPException(400, "kind must be 'text' or 'image'")
@@ -163,6 +168,12 @@ def create_app() -> FastAPI:
         if output == "reference" and kind != "text":
             # An image job's reference is the upload; there is nothing to approve.
             raise HTTPException(400, "only text jobs can stop at a reference")
+        if not 1 <= count <= MAX_REFERENCE_COUNT:
+            raise HTTPException(400, f"count must be between 1 and {MAX_REFERENCE_COUNT}")
+        if count > 1 and output != "reference":
+            # N meshes per submit is minutes of GPU each; only the cheap 4-step
+            # reference stage is worth batching.
+            raise HTTPException(400, "count > 1 requires output=reference")
         # An explicit resolution overrides the platform preset; the UI no longer
         # sends one, but the API keeps accepting it.
         if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
@@ -215,16 +226,30 @@ def create_app() -> FastAPI:
 
         # Write the file before the row exists: the worker's next_queued()
         # poll can otherwise claim an image job in the gap and find no
-        # input.png on disk yet.
-        job_id = uuid.uuid4().hex[:12]
-        if normalized is not None:
-            job_dir = config.job_dir(job_id)
-            job_dir.mkdir(parents=True, exist_ok=True)
-            (job_dir / "input.png").write_bytes(normalized)
-        await asyncio.to_thread(
-            functools.partial(store().create, kind, prompt, params, job_id, stage=output)
-        )
-        return {"id": job_id}
+        # input.png on disk yet. count > 1 only ever happens for text/reference
+        # jobs (normalized is None then), but count == 1 still carries an
+        # ordinary image job through this same loop, so the ordering must
+        # hold for every candidate.
+        ids: list[str] = []
+        for i in range(count):
+            candidate = dict(params)
+            if i > 0:
+                # Candidate 0 keeps the requested seed so a pinned seed still
+                # reproduces; the rest fan out from it.
+                candidate["reference_seed"] = _random_seed()
+                candidate["seed"] = candidate["reference_seed"]
+            job_id = uuid.uuid4().hex[:12]
+            if normalized is not None:
+                job_dir = config.job_dir(job_id)
+                job_dir.mkdir(parents=True, exist_ok=True)
+                (job_dir / "input.png").write_bytes(normalized)
+            await asyncio.to_thread(
+                functools.partial(
+                    store().create, kind, prompt, candidate, job_id, stage=output
+                )
+            )
+            ids.append(job_id)
+        return {"id": ids[0], "ids": ids}
 
     @app.get("/api/jobs")
     async def list_jobs(limit: int = 100) -> list[dict[str, Any]]:

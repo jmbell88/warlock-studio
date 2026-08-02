@@ -786,3 +786,83 @@ def test_promote_a_not_yet_done_reference_is_a_400(client):
     ref_id = r.json()["id"]
     # No input.png written and status left at "queued" -- not done yet.
     assert client.post(f"/api/jobs/{ref_id}/model").status_code == 400
+
+
+def test_count_creates_n_reference_jobs_with_distinct_seeds(client):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "a barrel", "output": "reference", "count": 4},
+    )
+    body = r.json()
+    assert len(body["ids"]) == 4
+    assert body["id"] == body["ids"][0]
+    seeds = {
+        client.get(f"/api/jobs/{i}").json()["params"]["reference_seed"]
+        for i in body["ids"]
+    }
+    assert len(seeds) == 4
+
+
+def test_count_above_one_requires_reference_output(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "count": 3})
+    assert r.status_code == 400
+
+
+def test_count_is_bounded(client):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "x", "output": "reference", "count": 99},
+    )
+    assert r.status_code == 400
+
+
+def test_candidate_zero_keeps_the_requested_seed(client):
+    # A pinned seed must still land on candidate 0 verbatim -- only 1..N-1 fan
+    # out to fresh random seeds. Use a value nowhere near _random_seed()'s
+    # 31-bit range collision odds, so an accidental match is not plausible.
+    r = client.post(
+        "/api/jobs",
+        data={
+            "kind": "text",
+            "prompt": "a barrel",
+            "output": "reference",
+            "count": 3,
+            "seed": 424242,
+        },
+    )
+    body = r.json()
+    first = client.get(f"/api/jobs/{body['ids'][0]}").json()
+    assert first["params"]["reference_seed"] == 424242
+    assert first["params"]["seed"] == 424242
+
+
+def test_count_one_text_job_behaves_exactly_as_before(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel", "count": 1})
+    body = r.json()
+    assert body["ids"] == [body["id"]]
+    job = client.get(f"/api/jobs/{body['id']}").json()
+    assert job["kind"] == "text"
+    assert job["prompt"] == "a barrel"
+
+
+def test_count_one_image_job_still_writes_input_png(client, tmp_path):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image", "count": 1},
+        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
+    )
+    body = r.json()
+    assert body["ids"] == [body["id"]]
+    stored = tmp_path / "assets" / body["id"] / "input.png"
+    assert stored.exists()
+
+
+def test_count_ids_are_distinct_and_all_exist(client):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "a barrel", "output": "reference", "count": 4},
+    )
+    ids = r.json()["ids"]
+    assert len(set(ids)) == 4
+    for job_id in ids:
+        assert client.get(f"/api/jobs/{job_id}").status_code == 200
