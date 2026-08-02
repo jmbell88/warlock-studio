@@ -100,6 +100,7 @@ class FakeText2Image:
         self.lora_calls: list[tuple] = []
         self.negatives: list[str | None] = []
         self.seeds: list[int] = []
+        self.last_prompt = ""
 
     def generate(
         self,
@@ -115,6 +116,7 @@ class FakeText2Image:
         cancel_event=None,
     ):
         self.prompts.append(prompt)
+        self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
         self.seeds.append(seed)

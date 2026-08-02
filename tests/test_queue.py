@@ -130,6 +130,23 @@ async def test_guidance_is_folded_into_the_image_prompt(worker):
     assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
 
 
+async def test_composed_prompt_is_read_from_last_prompt_not_recomputed(worker):
+    """queue.py must record t2i.last_prompt, not its own local `composed` --
+    otherwise the UI's "prompt sent" row would show the pre-trigger,
+    pre-PROMPT_TEMPLATE string forever, as it did before this change."""
+    job_id = worker.store.create(
+        "text", "a barrel", {"seed": 1, "resolution": 512, "genre": "scifi"},
+    )
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert (
+        worker.store.get(job_id)["params"]["composed_prompt"]
+        == worker._text2image.last_prompt
+    )
+
+
 async def test_resolution_from_params_reaches_trellis(worker):
     job_id = worker.store.create("image", None, {"seed": 1, "resolution": 1536})
     job_dir = worker.config.job_dir(job_id)

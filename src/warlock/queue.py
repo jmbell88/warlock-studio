@@ -438,7 +438,7 @@ class Worker:
                         cancel_event=self._cancel.event,
                     )
                 )
-                params["composed_prompt"] = composed
+                params["composed_prompt"] = t2i.last_prompt or composed
                 await asyncio.to_thread(self.store.set_params, job_id, params)
             finally:
                 if self.config.vram_exclusive:
