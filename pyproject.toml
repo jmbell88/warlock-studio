@@ -11,6 +11,10 @@ dependencies = [
     "pillow>=10.0",
     "trimesh>=4.4",
     "numpy>=1.26",
+    # QHull, via trimesh's convex_hull. The collision-mesh export is a convex
+    # hull and trimesh delegates the hull itself to scipy.spatial -- without
+    # this it raises ModuleNotFoundError at call time rather than at import.
+    "scipy>=1.11",
     # Process-tree kill for trellis-server.exe and VRAM/RSS reporting.
     "psutil>=5.9",
 ]

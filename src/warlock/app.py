@@ -830,6 +830,7 @@ def create_app() -> FastAPI:
         "input.png": "image/png",
         "model.stl": "model/stl",
         "model_obj.zip": "application/zip",
+        "collision.glb": "model/gltf-binary",
         "rig.glb": "model/gltf-binary",
     }
 
@@ -846,12 +847,17 @@ def create_app() -> FastAPI:
         # mere existence can hand back a truncated GLB to a direct GET.
         if name == "rig.glb" and not (job_dir / "rig.json").exists():
             raise HTTPException(404, "file not ready")
-        if not path.exists() and name in ("model.stl", "model_obj.zip") and glb.exists():
-            from .pipelines import postprocess
+        from .pipelines import postprocess
 
-            convert = (
-                postprocess.glb_to_stl if name == "model.stl" else postprocess.glb_to_obj_zip
-            )
+        # Everything that is a pure function of model.glb, derived on first
+        # request and cached. Each entry takes (glb, out_path).
+        derived = {
+            "model.stl": postprocess.glb_to_stl,
+            "model_obj.zip": postprocess.glb_to_obj_zip,
+            "collision.glb": postprocess.glb_to_collision,
+        }
+        if not path.exists() and name in derived and glb.exists():
+            convert = derived[name]
             # setdefault, not "if key not in": both are safe here because this
             # runs on the single event loop with no await between them, but
             # setdefault says so without relying on the reader to check.

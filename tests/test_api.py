@@ -903,3 +903,25 @@ def test_create_job_stores_a_valid_profile(client):
     assert r.status_code == 200
     job = client.get(f"/api/jobs/{r.json()['id']}").json()
     assert job["params"]["profile"] == "draft"
+
+
+def test_collision_glb_is_derived_on_demand(client, tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+    pytest.importorskip("scipy")  # trimesh delegates the convex hull to QHull
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=2).export(job_dir / "model.glb")
+
+    assert not (job_dir / "collision.glb").exists()
+    r = client.get(f"/api/jobs/{job_id}/files/collision.glb")
+    assert r.status_code == 200
+    assert r.content
+    # Cached beside the mesh, like the STL and OBJ exports.
+    assert (job_dir / "collision.glb").exists()
+
+
+def test_collision_glb_is_404_without_a_mesh(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    assert client.get(f"/api/jobs/{job_id}/files/collision.glb").status_code == 404

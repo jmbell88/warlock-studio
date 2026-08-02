@@ -107,6 +107,44 @@ def glb_to_obj_zip(glb_path: Path, zip_path: Path) -> Path:
     return zip_path
 
 
+def glb_to_collision(glb_path: Path, out_path: Path, *, max_hull_faces: int = 256) -> Path:
+    """A convex collision shape for the mesh, as its own GLB.
+
+    A hull rather than a decomposition: every engine accepts a convex shape
+    directly, hull generation is deterministic and takes milliseconds, and a
+    proper decomposition needs a VHACD binary this project would have to vendor.
+    For the props Warlock produces the hull is the shape a hand-made collider
+    would have been anyway.
+
+    Simplified to a face budget because a hull over a 290k-triangle
+    reconstruction can still carry thousands of faces, and a physics engine
+    pays for every one of them each frame.
+    """
+    mesh = _load_merged(glb_path)
+    hull = mesh.convex_hull
+    if len(hull.faces) > max_hull_faces:
+        # Simplify then re-hull: simplification can push vertices inward and
+        # make the result non-convex, and a collider that is not convex is
+        # silently wrong rather than loudly broken.
+        #
+        # Best-effort, because trimesh delegates decimation to an optional
+        # backend (fast_simplification) that this project does not depend on.
+        # An unsimplified hull is a correct collider that costs the physics
+        # engine more per frame; refusing to produce one, or pulling in a
+        # dependency to shave faces off it, are both worse trades.
+        try:
+            hull = hull.simplify_quadric_decimation(face_count=max_hull_faces).convex_hull
+        except Exception as exc:
+            log.info(
+                "collision hull for %s kept at %d faces (no decimation backend: %s)",
+                glb_path.name, len(hull.faces), exc,
+            )
+    data = trimesh.Scene(hull).export(file_type="glb")
+    with _staged(out_path) as tmp:
+        tmp.write_bytes(data)
+    return out_path
+
+
 def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
     """Scale to a real-world size, centre in X/Z and sit the model on Y=0.
 

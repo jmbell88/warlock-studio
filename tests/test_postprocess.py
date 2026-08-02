@@ -271,3 +271,25 @@ def test_normalize_without_a_target_still_grounds(tmp_path):
     postprocess.normalize_glb(path, None)
 
     assert abs(float(trimesh.load(path).to_mesh().bounds[0][1])) < 1e-6
+
+
+def test_collision_hull_is_convex_and_small(tmp_path):
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    # A sphere is the worst case for face count and the easiest convexity check.
+    src = tmp_path / "m.glb"
+    trimesh.Scene(trimesh.creation.icosphere(subdivisions=4)).export(src)
+
+    source_faces = len(trimesh.load(src).to_mesh().faces)
+    out = postprocess.glb_to_collision(src, tmp_path / "collision.glb")
+
+    hull = trimesh.load(out).to_mesh()
+    # Convexity and watertightness are the contract -- a collider that is not
+    # convex is silently wrong rather than loudly broken. The face count is
+    # best-effort: trimesh's decimation backend is optional and not a
+    # dependency here, so an unsimplified hull is an accepted outcome.
+    assert hull.is_convex
+    assert hull.is_watertight
+    assert len(hull.faces) <= source_faces
