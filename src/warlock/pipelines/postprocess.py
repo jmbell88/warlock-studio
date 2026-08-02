@@ -19,6 +19,7 @@ import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import trimesh
 
@@ -106,29 +107,44 @@ def glb_to_obj_zip(glb_path: Path, zip_path: Path) -> Path:
     return zip_path
 
 
-def scale_glb(glb_path: Path, target_max_m: float) -> float:
-    """Rescale the GLB in place so its longest bounding-box axis is target_max_m.
+def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
+    """Scale to a real-world size, centre in X/Z and sit the model on Y=0.
 
-    Returns the factor applied (1.0 when nothing was done).
+    Returns the transform that was applied. Scaling alone was never enough: a
+    trellis GLB's origin is wherever the reconstruction volume's centre happened
+    to be, so every import into Godot or Unity needed a manual origin fixup
+    before the asset would stand on the ground.
 
-    Measuring goes through trimesh, but the write does not: re-exporting would
-    re-encode every texture and material. Instead only the GLB's JSON chunk is
-    rewritten, inserting a node that carries the scale. Buffers and images are
-    copied through byte-for-byte.
+    The measurement goes through trimesh but the write does not -- re-exporting
+    would re-encode every texture. Only the JSON chunk is rewritten, inserting
+    one node below the scene root that carries both the scale and the
+    translation; buffers and images are copied through byte-for-byte. It goes
+    *below* the root and not on it because trimesh treats a scene root as the
+    graph's base frame and silently discards its transform, which would leave
+    the GLB transformed and the derived STL/OBJ exports not.
     """
-    extent = float(trimesh.load(glb_path).extents.max())
-    if not extent > 0 or target_max_m <= 0:
-        log.warning("skipping scale of %s: extent %s, target %s", glb_path, extent, target_max_m)
-        return 1.0
-    factor = target_max_m / extent
-    if abs(factor - 1.0) < 1e-6:
-        return 1.0
+    scene = trimesh.load(glb_path)
+    extents = scene.extents
+    bounds = scene.bounds
+    extent = float(max(extents))
+    factor = 1.0
+    if target_max_m and extent > 0 and target_max_m > 0:
+        factor = target_max_m / extent
+
+    # In the *scaled* frame: centre X and Z on the origin, put minimum Y at zero.
+    # glTF is Y-up, which is why Y is the odd one out here and Z is not.
+    lo, hi = bounds[0], bounds[1]
+    translation = [
+        -float(lo[0] + hi[0]) / 2.0 * factor,
+        -float(lo[1]) * factor,
+        -float(lo[2] + hi[2]) / 2.0 * factor,
+    ]
 
     header, gltf, rest = _split_glb(glb_path.read_bytes())
-    scene = gltf["scenes"][gltf.get("scene", 0)]
+    gltf_scene = gltf["scenes"][gltf.get("scene", 0)]
     nodes = gltf.setdefault("nodes", [])
-    for root in scene.get("nodes", []):
-        _insert_scale_below(nodes, root, factor)
+    for root in gltf_scene.get("nodes", []):
+        _insert_transform_below(nodes, root, factor, translation)
     # Write to a temp file and rename into place instead of write_bytes(),
     # which opens "wb" and truncates glb_path to 0 bytes before writing --
     # a concurrent reader (the file-serving route, or another export) could
@@ -137,23 +153,33 @@ def scale_glb(glb_path: Path, target_max_m: float) -> float:
     tmp = glb_path.with_suffix(".glb.tmp")
     tmp.write_bytes(_rebuild_glb(header, gltf, rest))
     os.replace(tmp, glb_path)
-    return factor
+    return {
+        "scale": factor,
+        "translation": translation,
+        "achieved_size_m": extent * factor,
+    }
 
 
-def _insert_scale_below(nodes: list[dict], root: int, factor: float) -> None:
-    """Push everything hanging off ``root`` into a new scaled child node.
+def scale_glb(glb_path: Path, target_max_m: float) -> float:
+    """Back-compatible wrapper: normalize and return only the scale factor."""
+    return normalize_glb(glb_path, target_max_m)["scale"]
 
-    The scale deliberately does not go on the root itself. trimesh treats a
-    scene root as the graph's base frame and silently discards its transform,
-    which would leave the GLB scaled but the trimesh-derived STL/OBJ exports
-    (glb_to_stl, glb_to_obj_zip) at the original size.
+
+def _insert_transform_below(
+    nodes: list[dict], root: int, factor: float, translation: list[float]
+) -> None:
+    """Push everything hanging off ``root`` into a new scaled+moved child node.
+
+    Same reasoning as the scale-only version this replaces: the transform must
+    not go on the root itself, because trimesh discards a scene root's transform
+    and the derived exports would come out untransformed.
     """
     node = nodes[root]
-    scaled: dict = {"scale": [factor] * 3}
+    child: dict = {"scale": [factor] * 3, "translation": translation}
     for key in ("mesh", "children", "skin", "weights"):
         if key in node:
-            scaled[key] = node.pop(key)
-    nodes.append(scaled)
+            child[key] = node.pop(key)
+    nodes.append(child)
     node["children"] = [len(nodes) - 1]
 
 

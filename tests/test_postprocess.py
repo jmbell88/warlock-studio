@@ -234,3 +234,40 @@ def test_concurrent_exports_produce_a_valid_file(cube_glb, tmp_path, export, nam
             assert "model.obj" in zf.namelist()
     else:
         assert trimesh.load(dest).extents.max() == pytest.approx(1.0, rel=1e-4)
+
+
+def test_normalize_grounds_and_centres(tmp_path):
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    box = trimesh.creation.box(extents=(1.0, 2.0, 1.0))
+    box.apply_translation((5.0, 7.0, -3.0))
+    path = tmp_path / "m.glb"
+    trimesh.Scene(box).export(path)
+
+    result = postprocess.normalize_glb(path, 4.0)
+
+    loaded = trimesh.load(path)
+    mesh = loaded.to_mesh()
+    lo, hi = mesh.bounds
+    assert abs(float(max(mesh.extents)) - 4.0) < 1e-4     # scaled
+    assert abs(float(lo[1])) < 1e-6                        # grounded: min Y == 0
+    assert abs(float(lo[0] + hi[0])) < 1e-6                # centred in X
+    assert abs(float(lo[2] + hi[2])) < 1e-6                # centred in Z
+    assert abs(result["achieved_size_m"] - 4.0) < 1e-4
+
+
+def test_normalize_without_a_target_still_grounds(tmp_path):
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    box = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    box.apply_translation((0.0, 9.0, 0.0))
+    path = tmp_path / "m.glb"
+    trimesh.Scene(box).export(path)
+
+    postprocess.normalize_glb(path, None)
+
+    assert abs(float(trimesh.load(path).to_mesh().bounds[0][1])) < 1e-6

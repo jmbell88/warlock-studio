@@ -639,30 +639,46 @@ class Worker:
     async def _apply_scale(
         self, job_id: str, glb_path: Path, params: dict[str, Any]
     ) -> None:
-        """Resize the finished mesh to the requested real-world size.
+        """Resize the finished mesh, centre it in X/Z and sit it on the floor.
+
+        The grounding half runs even when no ``size_m`` was requested -- a
+        pivot at the reconstruction volume's centre is a manual fixup on every
+        import regardless of whether the asset also needed rescaling.
 
         Runs after the GLB is on disk and holds no GPU memory, so it sits
         outside the VRAM handoff entirely. A cancel that landed during the
         trellis stage skips it -- the artifact is about to be deleted anyway.
         """
-        size_m = params.get("size_m")
-        if not size_m or (self._cancel is not None and self._cancel.event.is_set()):
+        if self._cancel is not None and self._cancel.event.is_set():
             return
+        size_m = params.get("size_m")
         self.progress.update(
             job_id,
             phase="scale",
-            label="Scaling to target size",
+            label="Scaling and grounding",
             inner=0.0,
             inner_next=1.0,
             nominal=2.0,
-            detail=f"{size_m} m",
+            detail=f"{size_m} m" if size_m else "grounding",
         )
         # Imported here, not at module scope: postprocess pulls in trimesh,
         # which app startup should not pay for.
         from .pipelines import postprocess
 
-        factor = await asyncio.to_thread(postprocess.scale_glb, glb_path, float(size_m))
-        params["scale_factor"] = factor
+        try:
+            transform = await asyncio.to_thread(
+                postprocess.normalize_glb, glb_path, float(size_m) if size_m else None
+            )
+        except Exception:
+            # Grounding runs on every job now, not just sized ones, so a mesh
+            # trimesh cannot parse must not fail a job whose GLB is already on
+            # disk -- the same rule _audit_mesh and the report follow. The
+            # report's achieved_size_m is what tells the user the size did not
+            # land, rather than a job that errored after producing a model.
+            log.exception("normalize failed for job %s; leaving the mesh as-is", job_id)
+            return
+        params["scale_factor"] = transform["scale"]
+        params["transform"] = transform
         await asyncio.to_thread(self.store.set_params, job_id, params)
 
     async def _audit_mesh(

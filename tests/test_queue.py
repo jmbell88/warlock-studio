@@ -212,8 +212,11 @@ async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatc
     calls = []
     monkeypatch.setattr(
         postprocess_mod,
-        "scale_glb",
-        lambda path, target: (calls.append((path, target)), 2.5)[1],
+        "normalize_glb",
+        lambda path, target: (
+            calls.append((path, target)),
+            {"scale": 2.5, "translation": [0.0, -1.0, 0.0], "achieved_size_m": 2.5},
+        )[1],
     )
     job_id = worker.store.create("image", None, {"seed": 1, "resolution": 512, "size_m": 2.5})
     job_dir = worker.config.job_dir(job_id)
@@ -227,19 +230,31 @@ async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatc
     assert worker.store.get(job_id)["params"]["scale_factor"] == 2.5
 
 
-async def test_no_size_means_no_scaling(worker, monkeypatch):
+async def test_no_size_still_grounds_but_does_not_rescale(worker, monkeypatch):
+    # Grounding is not conditional on a target size: a pivot at the
+    # reconstruction volume's centre is a manual fixup on every import.
+    # Without a size the scale factor must still come back exactly 1.0.
     import warlock.pipelines.postprocess as postprocess_mod
 
-    def explode(*_args):
-        raise AssertionError("scale_glb must not run without a target size")
-
-    monkeypatch.setattr(postprocess_mod, "scale_glb", explode)
+    calls = []
+    monkeypatch.setattr(
+        postprocess_mod,
+        "normalize_glb",
+        lambda path, target: (
+            calls.append((path, target)),
+            {"scale": 1.0, "translation": [0.0, -0.5, 0.0], "achieved_size_m": 1.0},
+        )[1],
+    )
     job_id = _make_image_job(worker)  # params carry no size_m
     worker.start()
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
     await worker.shutdown()
 
-    assert worker.store.get(job_id)["status"] == "done"
+    job = worker.store.get(job_id)
+    assert job["status"] == "done"
+    assert [target for _, target in calls] == [None]
+    assert job["params"]["scale_factor"] == 1.0
+    assert job["params"]["transform"]["translation"] == [0.0, -0.5, 0.0]
 
 
 async def test_worker_finish_does_not_overwrite_a_cancel_that_raced_it(worker):
@@ -478,7 +493,12 @@ async def test_mesh_audit_runs_after_scaling(worker, monkeypatch):
 
     order = []
     monkeypatch.setattr(
-        postprocess_mod, "scale_glb", lambda path, target: (order.append("scale"), 2.0)[1]
+        postprocess_mod,
+        "normalize_glb",
+        lambda path, target: (
+            order.append("scale"),
+            {"scale": 2.0, "translation": [0.0, 0.0, 0.0], "achieved_size_m": 2.0},
+        )[1],
     )
     monkeypatch.setattr(
         meshaudit_mod,
@@ -497,6 +517,30 @@ async def test_mesh_audit_runs_after_scaling(worker, monkeypatch):
     await worker.shutdown()
 
     assert order == ["scale", "audit"]
+
+
+async def test_a_failing_normalize_does_not_fail_the_job(worker, monkeypatch):
+    # Grounding runs on every job, including ones that never asked for a size,
+    # so an unparseable mesh must not turn a job that produced a GLB into an
+    # errored one.
+    import warlock.pipelines.postprocess as postprocess_mod
+
+    def explode(*_args, **_kwargs):
+        raise ValueError("incorrect header on GLB file")
+
+    monkeypatch.setattr(postprocess_mod, "normalize_glb", explode)
+    job_id = worker.store.create("image", None, {"seed": 1, "resolution": 512, "size_m": 2.0})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "done"
+    assert job["error"] is None
+    assert "transform" not in job["params"]
 
 
 async def test_worker_picks_up_the_next_queued_job_after_a_completed_one(worker):
