@@ -38,6 +38,7 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _exe_check(config),
         _gguf_check(config),
         _birefnet_check(config),
+        _gltfpack_check(config),
         _cuda_check(),
         _disk_check(config),
         _port_check(config, trellis_running),
@@ -110,6 +111,16 @@ def _birefnet_check(config: Config) -> Check:
         else f"missing at {path} -- background matting falls back to a threshold cutout"
     )
     return Check("birefnet.gguf (background removal)", ok, detail, fatal=False)
+
+
+def _gltfpack_check(config: Config) -> Check:
+    ok = config.gltfpack_exe.exists()
+    detail = (
+        str(config.gltfpack_exe)
+        if ok
+        else f"not found at {config.gltfpack_exe} -- meshes ship at full reconstruction density"
+    )
+    return Check("gltfpack (mesh optimizer)", ok, detail, fatal=False)
 
 
 def _cuda_check() -> Check:

@@ -410,6 +410,61 @@ async def test_mesh_audit_is_recorded_on_the_finished_job(worker, monkeypatch):
     }
 
 
+async def test_trellis_output_is_kept_as_source_glb(worker, monkeypatch):
+    # The on-disk contract: source.glb is what trellis returned and is never
+    # overwritten; model.glb is derived from it, so re-targeting a budget later
+    # never has to pay for another trellis run.
+    import warlock.pipelines.optimize as optimize_mod
+
+    monkeypatch.setattr(
+        optimize_mod,
+        "run",
+        lambda source, dest, **k: (
+            dest.write_bytes(source.read_bytes()),
+            {
+                "requested": 50_000,
+                "achieved": 50_000,
+                "source_triangles": 90_000,
+                "bytes": 1,
+            },
+        )[1],
+    )
+    job_id = worker.store.create(
+        "image", None, {"seed": 1, "resolution": 512, "profile": "standard"}
+    )
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert (job_dir / "source.glb").exists()
+    assert (job_dir / "model.glb").exists()
+    assert worker.store.get(job_id)["params"]["optimize"]["achieved"] == 50_000
+
+
+async def test_a_failing_optimize_still_ships_the_reconstruction(worker, monkeypatch):
+    # The reconstruction is on disk and usable; losing the budget costs file
+    # size, and failing the job would cost the user the mesh.
+    import warlock.pipelines.optimize as optimize_mod
+
+    def explode(*_args, **_kwargs):
+        raise optimize_mod.OptimizeError("gltfpack not found")
+
+    monkeypatch.setattr(optimize_mod, "run", explode)
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    job_dir = worker.config.job_dir(job_id)
+    assert job["status"] == "done"
+    assert "optimize" not in job["params"]
+    assert (job_dir / "model.glb").read_bytes() == (job_dir / "source.glb").read_bytes()
+
+
 async def test_finished_job_carries_a_mesh_report(worker, monkeypatch):
     import warlock.meshaudit as meshaudit_mod
     import warlock.meshreport as meshreport_mod

@@ -22,6 +22,7 @@ import contextlib
 import functools
 import json
 import logging
+import shutil
 import sys
 import tempfile
 import threading
@@ -363,7 +364,14 @@ class Worker:
                     rigging.sheet_png_path(job_dir, sheet_id),
                 ]
         else:
-            paths = [self.config.job_dir(job["id"]) / "model.glb"]
+            # Both halves of the contract: model.glb is what the user would
+            # see, source.glb is what it was derived from. Leaving the source
+            # behind would let a cancelled job be re-optimized back into
+            # existence.
+            paths = [
+                self.config.job_dir(job["id"]) / "model.glb",
+                self.config.job_dir(job["id"]) / "source.glb",
+            ]
         for path in paths:
             with contextlib.suppress(OSError):
                 path.unlink()
@@ -454,15 +462,21 @@ class Worker:
             nominal=6.0,
             detail="",
         )
+        # The reconstruction is kept verbatim as source.glb and never
+        # overwritten: model.glb is derived from it, so re-targeting a triangle
+        # budget later (POST /api/jobs/{id}/optimize) never has to pay for
+        # another trellis run.
+        source_glb = job_dir / "source.glb"
         glb_path = job_dir / "model.glb"
         _log_vram("before trellis generate")
         await self.trellis.generate(
             image_path,
-            glb_path,
+            source_glb,
             seed=mesh_seed,
             resolution=resolution,
             bg_removal=str(params.get("bg_removal") or "auto"),
         )
+        await self._optimize(job_id, source_glb, glb_path, params)
         await self._apply_scale(job_id, glb_path, params)
         await self._audit_mesh(job_id, glb_path, params)
 
@@ -635,6 +649,53 @@ class Worker:
             "rendered sheet %s for job %s: %dx%d cells at %dpx",
             sheet_id, source_id, layout.columns, layout.rows, layout.frame_size,
         )
+
+    async def _optimize(
+        self, job_id: str, source: Path, dest: Path, params: dict[str, Any]
+    ) -> None:
+        """Retarget the reconstruction to the job's triangle budget.
+
+        Before the transform, not after: gltfpack rewrites the node graph, and
+        running it over an already-grounded model would discard the transform
+        node normalize_glb inserted. Optimizing first and transforming second is
+        the only ordering where both survive.
+
+        A failure here is not fatal. The reconstruction is on disk and usable;
+        losing the budget costs the user file size, and failing the job would
+        cost them the mesh.
+        """
+        if self._cancel is not None and self._cancel.event.is_set():
+            return
+        from .pipelines import optimize
+
+        try:
+            budget = optimize.resolve(
+                str(params.get("profile") or self.config.mesh_profile),
+                params.get("custom_triangles"),
+            )
+        except ValueError:
+            log.warning("job %s has an unusable profile; shipping raw", job_id)
+            budget = None
+        self.progress.update(
+            job_id, phase="optimize", label="Optimizing mesh", inner=0.0,
+            inner_next=1.0, nominal=4.0, detail=f"{budget:,} tris" if budget else "raw",
+        )
+        try:
+            result = await asyncio.to_thread(
+                functools.partial(
+                    optimize.run,
+                    source,
+                    dest,
+                    target_triangles=budget,
+                    exe=self.config.gltfpack_exe,
+                )
+            )
+        except Exception:
+            log.exception("optimize failed for job %s; shipping the reconstruction", job_id)
+            await asyncio.to_thread(shutil.copyfile, source, dest)
+            return
+        params["optimize"] = result
+        await asyncio.to_thread(self.store.set_params, job_id, params)
 
     async def _apply_scale(
         self, job_id: str, glb_path: Path, params: dict[str, Any]

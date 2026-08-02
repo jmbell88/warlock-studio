@@ -76,6 +76,28 @@ The previously verified corrections remain:
 - Add `POST /api/jobs/{id}/optimize` to rebuild from `source.glb` without rerunning TRELLIS.
 - Display requested and achieved triangle counts instead of claiming exact enforcement.
 
+#### Qualification status
+
+The plumbing is built (`pipelines/optimize.py`, the `source.glb`/`model.glb`
+split, `POST /api/jobs/{id}/optimize`, `WARLOCK_GLTFPACK`, a non-fatal doctor
+check). What is *not* done is the qualification itself, and the UI reflects
+that: `#g-profile` offers only "Raw reconstruction".
+
+| Tier | Triangles | Qualified | Notes |
+|---|---|---|---|
+| Draft | 20,000 | no | not yet run |
+| Standard | 50,000 | no | not yet run |
+| Detailed | 100,000 | no | not yet run |
+| Custom | 5,000–200,000 | no | gated behind the named tiers |
+| Raw | — | n/a | always available, needs no binary |
+
+To qualify a tier: vendor `vendor/gltfpack/gltfpack.exe` (plus `LICENSE` and a
+`VERSION` file carrying the release tag and the exe's SHA-256), run a chest, a
+sword and a rock through it at that budget, confirm every item in the retention
+list above, then add the tier as an `<option>` in `static/index.html` and fill
+in its row here. The API already accepts every tier name — only the UI is
+gated, so a tier can be exercised with a direct POST before it is exposed.
+
 ### 4. Normalize scale and pivot
 
 - Optimize before applying transforms.

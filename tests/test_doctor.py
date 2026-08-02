@@ -74,9 +74,9 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 
 
 def test_run_checks_returns_every_check(tmp_path):
-    # Seven fixed checks plus one row per registry entry -- derived rather than
+    # Eight fixed checks plus one row per registry entry -- derived rather than
     # hardcoded so adding a model doesn't fail an unrelated assertion.
-    expected = 7 + len(model_registry.BASE_MODELS) + len(model_registry.STYLE_LORAS)
+    expected = 8 + len(model_registry.BASE_MODELS) + len(model_registry.STYLE_LORAS)
     assert len(run_checks(_config(tmp_path))) == expected
 
 
@@ -136,3 +136,14 @@ def test_turbo_dir_override_is_still_honoured(tmp_path):
     config = _config(tmp_path, t2i_model_root=tmp_path / "m", t2i_turbo_dir=override)
     checks = {c.name: c for c in run_checks(config)}
     assert checks[f"image model: {model_registry.BASE_MODELS['turbo'].label}"].ok is True
+
+
+def test_gltfpack_check_is_non_fatal_when_missing(tmp_path, monkeypatch):
+    from warlock import doctor
+    from warlock.config import Config
+
+    monkeypatch.setenv("WARLOCK_GLTFPACK", str(tmp_path / "nope.exe"))
+    monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path))
+    check = doctor._gltfpack_check(Config())
+    assert check.ok is False
+    assert check.fatal is False

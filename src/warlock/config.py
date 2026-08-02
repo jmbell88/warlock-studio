@@ -45,6 +45,18 @@ class Config:
             PROJECT_ROOT / "vendor" / "trellis" / "trellis-server.exe",
         )
     )
+    # Vendored like trellis-server.exe: a pinned native binary, never downloaded
+    # at runtime. Missing it costs you the triangle budgets, not the app --
+    # jobs then ship the raw reconstruction, which is what they did before.
+    gltfpack_exe: Path = field(
+        default_factory=lambda: _env_path(
+            "WARLOCK_GLTFPACK", PROJECT_ROOT / "vendor" / "gltfpack" / "gltfpack.exe"
+        )
+    )
+    # Default triangle profile for a new job. See pipelines/optimize.PROFILES.
+    mesh_profile: str = field(
+        default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "standard")
+    )
     trellis_models_dir: Path = field(
         default_factory=lambda: _env_path(
             "WARLOCK_TRELLIS_MODELS", PROJECT_ROOT / "models" / "trellis2-gguf"

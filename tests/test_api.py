@@ -245,7 +245,7 @@ def test_health_reports_worker_alive_and_doctor_checks(client):
     assert body["worker_alive"] is True
     assert body["fatal"] is None
     assert isinstance(body["checks"], list)
-    assert len(body["checks"]) == 7 + len(models.BASE_MODELS) + len(models.STYLE_LORAS)
+    assert len(body["checks"]) == 8 + len(models.BASE_MODELS) + len(models.STYLE_LORAS)
 
 
 # --- progress ---
@@ -878,3 +878,28 @@ def test_count_ids_are_distinct_and_all_exist(client):
     assert len(set(ids)) == 4
     for job_id in ids:
         assert client.get(f"/api/jobs/{job_id}").status_code == 200
+
+
+def test_optimize_requires_a_source(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
+    assert client.post(f"/api/jobs/{r.json()['id']}/optimize").status_code == 400
+
+
+def test_optimize_rejects_an_unknown_profile(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
+    job_id = r.json()["id"]
+    assert client.post(
+        f"/api/jobs/{job_id}/optimize", data={"profile": "nonsense"}
+    ).status_code == 400
+
+
+def test_create_job_rejects_an_unknown_profile(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "profile": "nonsense"})
+    assert r.status_code == 400
+
+
+def test_create_job_stores_a_valid_profile(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "profile": "draft"})
+    assert r.status_code == 200
+    job = client.get(f"/api/jobs/{r.json()['id']}").json()
+    assert job["params"]["profile"] == "draft"

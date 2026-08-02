@@ -419,6 +419,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     if (value) fd.set(field, value);
   }
   if (sizeInput.value) fd.set("size_m", sizeInput.value);
+  fd.set("profile", document.getElementById("g-profile").value);
   if (rig.available && rigEnable.checked) {
     fd.set("rig", "true");
     fd.set("rig_template", rigTemplate.value);

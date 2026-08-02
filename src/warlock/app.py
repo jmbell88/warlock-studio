@@ -157,6 +157,8 @@ def create_app() -> FastAPI:
         negative_prompt: Annotated[str | None, Form()] = None,
         rig: Annotated[bool, Form()] = False,
         rig_template: Annotated[str | None, Form()] = None,
+        profile: Annotated[str | None, Form()] = None,
+        custom_triangles: Annotated[int | None, Form()] = None,
         image: Annotated[UploadFile | None, File()] = None,
         output: Annotated[str, Form()] = "model",
         count: Annotated[int, Form()] = 1,
@@ -209,6 +211,19 @@ def create_app() -> FastAPI:
         params["seed"] = seed
         params["reference_seed"] = seed if reference_seed is None else reference_seed
         params["mesh_seed"] = seed if mesh_seed is None else mesh_seed
+        if profile is not None:
+            # Validated here for the same reason as rig_template below: an
+            # unusable budget should cost the request, not the two minutes of
+            # GPU that precede the optimize step.
+            from .pipelines import optimize
+
+            try:
+                optimize.resolve(profile, custom_triangles)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            params["profile"] = profile
+            if custom_triangles is not None:
+                params["custom_triangles"] = custom_triangles
         if rig:
             # Validated now rather than 90 seconds later: an unusable template
             # should cost the request, not the whole generation that precedes
@@ -515,6 +530,77 @@ def create_app() -> FastAPI:
     # asyncio.Lock is a few dozen bytes and the key space is jobs x a handful.
     _convert_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
+    @app.post("/api/jobs/{job_id}/optimize")
+    async def optimize_job(
+        job_id: str,
+        profile: Annotated[str, Form()] = "standard",
+        custom_triangles: Annotated[int | None, Form()] = None,
+    ) -> dict[str, Any]:
+        """Rebuild model.glb from source.glb at a different triangle budget.
+
+        Inline in the request rather than on the queue, under the same
+        per-artifact lock the STL/OBJ exports use: gltfpack is a two-second
+        subprocess, and putting it behind the serial GPU queue would make it
+        wait on a trellis run.
+        """
+        from .pipelines import optimize, postprocess
+
+        _check_job_id(job_id)
+        job = await asyncio.to_thread(store().get, job_id)
+        if job is None:
+            raise HTTPException(404, "no such job")
+        job_dir = config.job_dir(job_id)
+        source = job_dir / "source.glb"
+        if not source.exists():
+            raise HTTPException(400, "this job has no source reconstruction to re-optimize")
+        try:
+            budget = optimize.resolve(profile, custom_triangles)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        lock = _convert_locks.setdefault((job_id, "optimize"), asyncio.Lock())
+        async with lock:
+            try:
+                result = await asyncio.to_thread(
+                    functools.partial(
+                        optimize.run,
+                        source,
+                        job_dir / "model.glb",
+                        target_triangles=budget,
+                        exe=config.gltfpack_exe,
+                    )
+                )
+            except optimize.OptimizeError as exc:
+                raise HTTPException(500, str(exc)) from exc
+            # The optimizer rewrote the node graph, so the grounding transform
+            # went with it and has to be reapplied.
+            transform = await asyncio.to_thread(
+                postprocess.normalize_glb,
+                job_dir / "model.glb",
+                float(job["params"]["size_m"]) if job["params"].get("size_m") else None,
+            )
+            # Derived artifacts describe the old mesh; drop them so the next
+            # request rebuilds from the new one.
+            for name in (
+                "model.stl",
+                "model_obj.zip",
+                "model.fbx",
+                "collision.glb",
+                "textures.zip",
+            ):
+                with contextlib.suppress(OSError):
+                    (job_dir / name).unlink()
+
+        params = dict(job["params"])
+        params["profile"] = profile
+        if custom_triangles is not None:
+            params["custom_triangles"] = custom_triangles
+        params["optimize"] = result
+        params["transform"] = transform
+        params["scale_factor"] = transform["scale"]
+        await asyncio.to_thread(store().set_params, job_id, params)
+        return {"ok": True, "optimize": result, "transform": transform}
+
     # --- poses ---------------------------------------------------------------
     # A pose is a bone -> local rotation map saved against a job's rig, stored
     # as a file in that job's directory. No job kind and no DB row: a pose is
@@ -738,6 +824,9 @@ def create_app() -> FastAPI:
 
     _MEDIA = {
         "model.glb": "model/gltf-binary",
+        # The trellis response model.glb is derived from, kept downloadable so
+        # a user can take the full-density reconstruction if they want it.
+        "source.glb": "model/gltf-binary",
         "input.png": "image/png",
         "model.stl": "model/stl",
         "model_obj.zip": "application/zip",
