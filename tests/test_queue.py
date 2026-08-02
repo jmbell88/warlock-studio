@@ -180,6 +180,20 @@ async def test_worker_uses_each_stage_seed(worker):
     assert worker.trellis.generate_calls[-1]["seed"] == 22
 
 
+async def test_worker_falls_back_to_legacy_seed_for_both_stages(worker):
+    # A job row written before the split has only "seed" -- no reference_seed
+    # / mesh_seed keys at all. Both stages must still receive that one seed,
+    # not the int(params.get(..., 42)) default, or a legacy row stops
+    # reproducing its original output exactly.
+    job_id = worker.store.create("text", "a barrel", {"seed": 7})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.seeds[-1] == 7
+    assert worker.trellis.generate_calls[-1]["seed"] == 7
+
+
 async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatch):
     import warlock.pipelines.postprocess as postprocess_mod
 

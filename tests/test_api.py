@@ -457,6 +457,71 @@ def test_rerun_of_a_missing_job_is_404(client):
     assert client.post("/api/jobs/0123456789ab/rerun", data={"mode": "reroll"}).status_code == 404
 
 
+def test_remesh_inherits_legacy_seed_as_reference_and_rerolls_only_mesh(client, tmp_path):
+    # Source job predates the split, so it only has "seed" -- no reference_seed
+    # / mesh_seed keys at all. remesh must still treat that lone seed as the
+    # reference to inherit, and must not also reuse it for the mesh stage.
+    src = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "seed": 42}
+    ).json()["id"]
+    src_dir = tmp_path / "assets" / src
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "input.png").write_bytes(_png_bytes())
+
+    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["reference_seed"] == 42
+    assert params["mesh_seed"] != 42
+
+
+def test_remesh_inherits_explicit_reference_seed_not_legacy_seed(client, tmp_path):
+    # Source job already went through the split and has both keys, with
+    # different values. remesh must inherit reference_seed specifically --
+    # if it fell back to plain "seed" instead, this would still pass with
+    # matching fixture values, so the two are deliberately made to differ.
+    src = client.post(
+        "/api/jobs",
+        data={
+            "kind": "text",
+            "prompt": "a barrel",
+            "seed": 42,
+            "reference_seed": 99,
+            "mesh_seed": 42,
+        },
+    ).json()["id"]
+    src_dir = tmp_path / "assets" / src
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "input.png").write_bytes(_png_bytes())
+
+    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["reference_seed"] == 99
+    assert params["mesh_seed"] != 42
+    assert params["mesh_seed"] != 99
+
+
+def test_reroll_gives_both_seeds_the_same_fresh_value(client):
+    src = client.post(
+        "/api/jobs",
+        data={
+            "kind": "text",
+            "prompt": "a barrel",
+            "seed": 42,
+            "reference_seed": 11,
+            "mesh_seed": 22,
+        },
+    ).json()["id"]
+
+    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"})
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["reference_seed"] == params["mesh_seed"]
+    assert params["reference_seed"] != 11
+    assert params["mesh_seed"] != 22
+
+
 # --- on-demand conversion ---
 
 
