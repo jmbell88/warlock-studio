@@ -57,6 +57,16 @@ def test_phase_weights_cover_the_whole_bar():
             assert end == pytest.approx(start), "phases must be contiguous"
 
 
+def test_every_phase_the_worker_emits_is_declared_for_generate_jobs():
+    """update() falls back to (0.0, 1.0) for an unknown phase, which the
+    module's own docstring warns 'would drag the bar back to zero'. So every
+    phase queue.Worker emits for a text/image job must be declared in both
+    tables -- including the zero-width tail phases."""
+    for table in (PHASES_TEXT, PHASES_IMAGE):
+        for phase in ("trellis", "optimize", "scale", "audit"):
+            assert phase in table, phase
+
+
 def test_trellis_stage_weights_sum_to_one():
     total = sum(w for _, w in TRELLIS_STAGES.values())
     assert total == pytest.approx(1.0)

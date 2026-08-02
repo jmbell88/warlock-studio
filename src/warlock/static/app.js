@@ -346,6 +346,9 @@ function setText(el, s) { if (el.textContent !== s) el.textContent = s; }
 // showModel() used to hide the placeholder permanently; the overlay lives inside
 // it, so visibility has to be restored whenever a job starts.
 function showOverlay() {
+  // The progress view owns the pane; a reference image left showing under it
+  // would narrate one job over another's picture.
+  hideReference();
   placeholder.style.display = "grid";
   phIdle.hidden = true;
   phProgress.hidden = false;
@@ -355,7 +358,9 @@ function hideOverlay() {
   phProgress.hidden = true;
   phProgress.classList.remove("failed");
   phIdle.hidden = false;
-  if (model) placeholder.style.display = "none";
+  // A visible reference preview owns the pane as much as a loaded mesh does;
+  // dropping the idle text over either would read as a regression.
+  if (model || !refPreview.hidden) placeholder.style.display = "none";
 }
 
 function showOverlayError(message) {
@@ -1135,6 +1140,7 @@ function createNode(id) {
     if (!active && selected === id) {
       selected = null;
       hideOverlay();
+      hideReference();
       setPoseJob(null);
       downloads.style.display = "none";
     }
@@ -1373,6 +1379,37 @@ function renderJobs(jobs) {
   updateBulkBar();
 }
 
+// --- reference preview -------------------------------------------------------
+// A finished reference-stage job has no mesh, and approving one from the 44px
+// list thumbnail defeats the point of the approve-first split -- so a job with
+// an input.png and no model.glb shows that image large in the main pane.
+
+const refPreview = document.getElementById("ref-preview");
+// The links that describe a mesh; a reference has none, so they hide with it.
+const MESH_DL_IDS = ["dl-glb", "dl-obj", "dl-stl", "dl-fbx", "dl-collision", "dl-textures"];
+
+function showReference(job) {
+  const src = `/api/jobs/${job.id}/files/input.png`;
+  if (refPreview.getAttribute("src") !== src) refPreview.src = src;
+  refPreview.hidden = false;
+  placeholder.style.display = "none";
+  for (const id of MESH_DL_IDS) document.getElementById(id).hidden = true;
+  const dlPng = document.getElementById("dl-png");
+  dlPng.href = src;
+  dlPng.hidden = false;
+  document.getElementById("dl-rig").hidden = true;
+  downloads.style.display = "flex";
+}
+
+function hideReference() {
+  refPreview.hidden = true;
+  // Restore the mesh links showSelected relies on being visible; dl-fbx keeps
+  // its own gate (Blender does the conversion).
+  for (const id of MESH_DL_IDS) {
+    document.getElementById(id).hidden = id === "dl-fbx" && !rig.available;
+  }
+}
+
 function select(id) {
   const job = jobsById.get(id);
   if (!job) return;
@@ -1384,9 +1421,18 @@ function select(id) {
     shownModelFor = null;
     setPoseJob(job);
     downloads.style.display = "none";
-    if (job.status === "error") showOverlayError(job.error || "");
-    else if (job.progress) showOverlay();
-    else hideOverlay();
+    if (job.status === "error") {
+      hideReference();
+      showOverlayError(job.error || "");
+    } else if (job.progress) {
+      hideReference();
+      showOverlay();
+    } else if (job.files.includes("input.png")) {
+      showReference(job);
+    } else {
+      hideReference();
+      hideOverlay();
+    }
   }
 }
 
@@ -1414,6 +1460,9 @@ function captureThumbnail(jobId) {
 }
 
 function showSelected(job) {
+  // A mesh is about to occupy the pane; the reference preview must not sit
+  // on top of it.
+  hideReference();
   // The rig can land while the same job stays selected, so the download row
   // is refreshed even on the early-out path that skips reloading the mesh.
   const dlRig = document.getElementById("dl-rig");
@@ -2451,6 +2500,15 @@ async function refreshList() {
     showSelected(current);
   } else if (current?.status === "error" && selected !== shownModelFor) {
     showOverlayError(current.error || "");
+  } else if (
+    current?.status === "done" &&
+    current.files.includes("input.png") &&
+    refPreview.hidden
+  ) {
+    // A reference job the user was watching just finished: swap the pane
+    // from the progress overlay to the image awaiting approval.
+    phProgress.hidden = true;
+    showReference(current);
   }
 }
 

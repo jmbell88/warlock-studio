@@ -5,7 +5,7 @@ A local, self-hosted alternative to Meshy.ai for generating game-ready 3D assets
 - **Image → 3D**: reference image → textured GLB (base colour plus a combined metallic/roughness texture; surface detail rides on vertex normals, not a normal map), powered by Microsoft **TRELLIS.2-4B** running natively via [trellis.cpp](https://github.com/pwilkin/trellis.cpp) (C++/GGML, CUDA).
 - **Text → 3D**: prompt → reference image via **SDXL-Turbo** (diffusers, loaded from a local weights dir; FLUX.1-schnell swappable) → same image-to-3D pipeline.
 - **Rig → pose → sprite sheet**: fit a template skeleton, pose it with 3D gizmos in the browser, and bake the poses into a 2D sprite sheet with a JSON sidecar.
-- **Web UI**: generation form, job queue, and an interactive three.js preview with GLB download — ready to import into Godot, Blender, Unity, or Unreal.
+- **Web UI**: generation form, job queue, and an interactive three.js preview with GLB download — ready to import into Godot, Blender, Unity, or Unreal. Text jobs stop at the reference by default: the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
 
 ## Requirements
 
@@ -66,7 +66,7 @@ FLUX is not offered: both `dev` and `schnell` are click-through gated on Hugging
 uv sync --extra rig
 ```
 
-Fits a template skeleton (humanoid or quadruped) to a finished mesh and skins it with Blender's automatic weights, producing `rig.glb` alongside `model.glb`. Rig it on demand from the job's **rig** button, or tick "Fit a skeleton when the mesh is done" on the generate form to queue it automatically.
+Fits a template skeleton (humanoid, quadruped, bird, fish, insect, serpent, or tailed biped) to a finished mesh and skins it with Blender's automatic weights, producing `rig.glb` alongside `model.glb`. Rig it on demand from the job's **rig** button, or tick "Fit a skeleton when the mesh is done" on the generate form to queue it automatically.
 
 Blender runs as a subprocess, never inside the app — `bpy` is process-global and can take the interpreter down on the kind of non-manifold geometry trellis sometimes produces. Bone-heat weighting fails outright on such meshes; the worker catches that and falls back to envelope weights, recording which was used in `rig.json` rather than failing the job.
 

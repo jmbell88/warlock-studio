@@ -1,6 +1,6 @@
 [project]
 name = "warlock"
-version = "0.0.3"
+version = "0.0.4"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,8 +15,6 @@ dependencies = [
     # hull and trimesh delegates the hull itself to scipy.spatial -- without
     # this it raises ModuleNotFoundError at call time rather than at import.
     "scipy>=1.11",
-    # Process-tree kill for trellis-server.exe and VRAM/RSS reporting.
-    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]

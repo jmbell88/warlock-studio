@@ -88,6 +88,39 @@ def test_a_missing_exe_raises_and_does_not_silently_ship_the_source(tmp_path, mo
         )
 
 
+def test_a_failed_raw_copy_never_corrupts_an_existing_model(tmp_path, monkeypatch):
+    """The within-budget path overwrites a model.glb the file route may be
+    serving concurrently (POST /optimize runs on a *done* job), so the copy
+    must be staged: a failure mid-copy leaves the old file intact rather
+    than truncated."""
+    from pathlib import Path
+
+    monkeypatch.setattr(optimize, "_triangles", lambda p: 7)
+    src = tmp_path / "source.glb"
+    src.write_bytes(b"new")
+    dest = tmp_path / "model.glb"
+    dest.write_bytes(b"old-and-complete")
+
+    def partial_copy(a, b, *args, **kwargs):
+        Path(b).write_bytes(b"par")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(optimize.shutil, "copyfile", partial_copy)
+    with pytest.raises(OSError):
+        optimize.run(src, dest, target_triangles=None, exe=tmp_path / "missing.exe")
+    assert dest.read_bytes() == b"old-and-complete"
+
+
+def test_staged_copy_replaces_the_dest_atomically(tmp_path):
+    src = tmp_path / "a"
+    src.write_bytes(b"new")
+    dest = tmp_path / "b"
+    dest.write_bytes(b"old")
+    optimize.staged_copy(src, dest)
+    assert dest.read_bytes() == b"new"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_resolve_maps_names_and_validates_custom():
     assert optimize.resolve("draft") == 20_000
     assert optimize.resolve("raw") is None

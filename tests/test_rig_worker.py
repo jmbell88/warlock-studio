@@ -88,10 +88,13 @@ async def test_rig_job_runs_blender_against_the_source_job_dir(worker, monkeypat
     assert len(calls) == 1
     spec = calls[0]["spec"]
     # The rig belongs to the mesh: artifacts land beside model.glb in the
-    # source job's directory, not in the rig job's own.
+    # source job's directory, not in the rig job's own. The worker writes to
+    # temp names there and the queue renames them into place on success.
     source_dir = worker.config.job_dir(source)
     assert spec["source_glb"] == str(source_dir / "model.glb")
-    assert spec["out_glb"] == str(source_dir / "rig.glb")
+    assert Path(spec["out_glb"]).parent == source_dir
+    assert (source_dir / "rig.glb").exists()
+    assert (source_dir / "rig.json").exists()
     assert spec["template"] == "quadruped"
     assert calls[0]["timeout"] == worker.config.rig_timeout
     # Recorded on the job so the history row can say "envelope" without
@@ -195,6 +198,56 @@ async def test_rig_progress_uses_the_whole_bar(worker, monkeypatch):
     )
     hold.set()
     await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+    await worker.shutdown()
+
+
+async def test_cancelling_a_rerig_keeps_the_previous_rig(worker, monkeypatch):
+    """A re-rig is a correction of an existing, successful rig. Cancelling the
+    correction must not destroy the artifacts the first rig job produced --
+    every saved pose bakes against that rig.glb."""
+    hold = threading.Event()
+    _fake_worker_run(monkeypatch, hold=hold)
+    source = _mesh_job(worker)
+    source_dir = worker.config.job_dir(source)
+    (source_dir / "rig.glb").write_bytes(b"old-rig")
+    (source_dir / "rig.json").write_bytes(b'{"bones": ["old"]}')
+    rig_id = worker.store.create("rig", None, {"source_job": source, "adjusted": True})
+
+    worker.start()
+    await _wait_until(lambda: worker.current_job_id == rig_id)
+    await worker.request_cancel(rig_id)
+    hold.set()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "cancelled")
+
+    assert (source_dir / "rig.glb").read_bytes() == b"old-rig"
+    assert (source_dir / "rig.json").read_bytes() == b'{"bones": ["old"]}'
+    await worker.shutdown()
+
+
+async def test_the_worker_is_never_handed_the_served_rig_paths(worker, monkeypatch):
+    """Blender writes its GLB in place over seconds, and rig.json is the
+    completion gate -- which an earlier rig already satisfied. So the worker
+    must write to temp names and the queue renames them into place on success,
+    or a re-rig serves a truncated rig.glb to anyone who asks mid-run."""
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    source_dir = worker.config.job_dir(source)
+    (source_dir / "rig.glb").write_bytes(b"old-rig")
+    (source_dir / "rig.json").write_bytes(b'{"bones": ["old"]}')
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    spec = calls[0]["spec"]
+    assert spec["out_glb"] != str(source_dir / "rig.glb")
+    assert spec["out_json"] != str(source_dir / "rig.json")
+    # ...but the served names end up carrying the new artifacts, atomically.
+    assert (source_dir / "rig.glb").read_bytes() == b"fake-rig"
+    assert (source_dir / "rig.json").read_bytes() == b'{"bones": []}'
+    # No temp files left behind in the source job's directory.
+    assert not (source_dir / rigging.RIG_GLB_TMP).exists()
+    assert not (source_dir / rigging.RIG_JSON_TMP).exists()
     await worker.shutdown()
 
 

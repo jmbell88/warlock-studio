@@ -22,7 +22,6 @@ import contextlib
 import functools
 import json
 import logging
-import shutil
 import sys
 import tempfile
 import threading
@@ -354,7 +353,11 @@ class Worker:
                 return
             job_dir = self.config.job_dir(str(source))
             if job["kind"] == "rig":
-                paths = [job_dir / "rig.glb", job_dir / "rig.json"]
+                # Only the temps: the worker writes those, and finalize_rig
+                # only renames them into rig.glb/rig.json on success. The
+                # served names may belong to an earlier, successful rig job
+                # (a cancelled re-rig must not destroy the rig it corrects).
+                paths = [job_dir / rigging.RIG_GLB_TMP, job_dir / rigging.RIG_JSON_TMP]
             else:
                 sheet_id = str(params.get("sheet_id") or "")
                 if not rigging.is_valid_id(sheet_id):
@@ -517,15 +520,27 @@ class Worker:
             self._blender = proc
 
         spec = rigging.rig_spec(source_dir, template, params.get("bones"))
-        result = await asyncio.to_thread(
-            functools.partial(
-                rigging.run_worker,
-                spec,
-                on_progress=on_progress,
-                on_start=on_start,
-                timeout=self.config.rig_timeout,
+        try:
+            result = await asyncio.to_thread(
+                functools.partial(
+                    rigging.run_worker,
+                    spec,
+                    on_progress=on_progress,
+                    on_start=on_start,
+                    timeout=self.config.rig_timeout,
+                )
             )
-        )
+            # A cancel that landed after the solve finished must not publish
+            # the artifacts of a job about to be recorded as cancelled -- the
+            # finally below throws the temps away instead.
+            if self._cancel is None or not self._cancel.event.is_set():
+                await asyncio.to_thread(rigging.finalize_rig, source_dir)
+        finally:
+            # No-op on success (finalize renamed them away); on failure or
+            # cancel it removes the half-written temps and never touches the
+            # served rig.glb/rig.json, which may belong to an earlier,
+            # successful rig job.
+            await asyncio.to_thread(rigging.discard_rig_temps, source_dir)
         # Recorded on the rig job so the history row can say "envelope
         # weights" without the UI having to fetch rig.json for every card.
         params["weighting"] = result.get("weighting")
@@ -723,7 +738,9 @@ class Worker:
             )
         except Exception:
             log.exception("optimize failed for job %s; shipping the reconstruction", job_id)
-            await asyncio.to_thread(shutil.copyfile, source, dest)
+            # Staged, not copyfile: on the /optimize route dest is a done
+            # job's model.glb that a concurrent GET may be serving.
+            await asyncio.to_thread(optimize.staged_copy, source, dest)
             return
         params["optimize"] = result
         await asyncio.to_thread(self.store.set_params, job_id, params)

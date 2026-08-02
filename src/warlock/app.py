@@ -46,6 +46,44 @@ MAX_LIST_LIMIT = 5000
 # Exactly what create_job generates: uuid4().hex[:12].
 JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
+# The reference upload arrives as a raw multipart body; nothing between it and
+# the disk but these two numbers. Bytes are checked before decode (a 413, like
+# the thumbnail route), pixels after (a flat 20 MP PNG is tiny on disk and
+# enormous decoded -- the classic decompression bomb).
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_IMAGE_PIXELS = 16_000_000
+
+# Matches guidance.MAX_NEGATIVE_PROMPT: the prompt ends up in an SDXL text
+# encoder that truncates far earlier anyway, so anything longer is noise or a
+# mistake -- refuse it rather than store it forever.
+MAX_PROMPT = 1000
+
+# Seeds are 31-bit end to end: _random_seed generates them, JS Math rounds
+# above 2^53, and sqlite/torch/trellis all take this range without surprises.
+MAX_SEED = 2**31 - 1
+
+
+def _check_seed(name: str, value: int | None) -> None:
+    if value is not None and not 0 <= value <= MAX_SEED:
+        raise HTTPException(400, f"{name} must be between 0 and {MAX_SEED}")
+
+
+# Everything the worker records on a finished job about its *artifacts*. A
+# rerun or a promotion must not inherit these -- they describe the source
+# run's mesh, and a new job wearing the old job's mesh_report claims a quality
+# verdict about a mesh that doesn't exist yet. Keep in sync with what
+# queue.py writes into params.
+DERIVED_PARAMS = (
+    "composed_prompt",
+    "scale_factor",
+    "mesh_audit",
+    "mesh_report",
+    "optimize",
+    "transform",
+    "weighting",
+    "bone_count",
+)
+
 
 def _random_seed() -> int:
     """A fresh seed for a re-roll. 31-bit so it round-trips through JS numbers
@@ -189,8 +227,13 @@ def create_app() -> FastAPI:
             raise HTTPException(400, f"resolution must be one of {sorted(ALLOWED_RESOLUTIONS)}")
         if kind == "text" and not (prompt and prompt.strip()):
             raise HTTPException(400, "text jobs require a prompt")
+        if prompt is not None and len(prompt) > MAX_PROMPT:
+            raise HTTPException(400, f"prompt must be at most {MAX_PROMPT} characters")
         if kind == "image" and image is None:
             raise HTTPException(400, "image jobs require an image upload")
+        for name, value in (("seed", seed), ("reference_seed", reference_seed),
+                            ("mesh_seed", mesh_seed)):
+            _check_seed(name, value)
 
         # Validated up front: a rejected request must not leave an input.png behind.
         try:
@@ -240,9 +283,15 @@ def create_app() -> FastAPI:
 
         normalized: bytes | None = None
         if image is not None:
-            data = await image.read()
+            # One byte past the cap is all that's needed to know it's over,
+            # without buffering however much the client actually sent.
+            data = await image.read(MAX_UPLOAD_BYTES + 1)
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, "image upload is over 20 MB")
             try:
                 normalized = await asyncio.to_thread(_to_png, data)
+            except _ImageTooLarge as exc:
+                raise HTTPException(400, str(exc)) from exc
             except Exception as exc:
                 raise HTTPException(400, "could not decode uploaded image") from exc
 
@@ -251,37 +300,50 @@ def create_app() -> FastAPI:
         # input.png on disk yet. count > 1 only ever happens for text/reference
         # jobs (normalized is None then), but count == 1 still carries an
         # ordinary image job through this same loop, so the ordering must
-        # hold for every candidate.
+        # hold for every candidate. The flip side of that ordering is the
+        # except below: a failed insert must remove the dir it already wrote,
+        # or every DB hiccup leaves an orphan directory nothing will ever
+        # list or prune by id.
         ids: list[str] = []
-        for i in range(count):
-            candidate = dict(params)
-            if i > 0:
-                # Candidate 0 keeps the requested seed so a pinned seed still
-                # reproduces; the rest fan out from it. mesh_seed follows
-                # reference_seed/seed here even though these rows are still
-                # stage="reference" and never reach the mesh stage as-is:
-                # the settings panel renders all three seeds together, and a
-                # candidate whose seed/reference_seed changed but whose
-                # mesh_seed silently didn't would read as a bug, not as the
-                # "seed is the legacy fallback for both stages" contract a
-                # few lines up. promote_to_model overwrites mesh_seed on
-                # promotion and reroll rewrites all of them, so this has no
-                # effect on what actually gets meshed -- it only keeps the
-                # displayed values internally consistent.
-                candidate["reference_seed"] = _random_seed()
-                candidate["seed"] = candidate["reference_seed"]
-                candidate["mesh_seed"] = candidate["reference_seed"]
-            job_id = uuid.uuid4().hex[:12]
-            if normalized is not None:
-                job_dir = config.job_dir(job_id)
-                job_dir.mkdir(parents=True, exist_ok=True)
-                (job_dir / "input.png").write_bytes(normalized)
-            await asyncio.to_thread(
-                functools.partial(
-                    store().create, kind, prompt, candidate, job_id, stage=output
+        made_dirs: list[Path] = []
+        try:
+            for i in range(count):
+                candidate = dict(params)
+                if i > 0:
+                    # Candidate 0 keeps the requested seed so a pinned seed
+                    # still reproduces; the rest fan out from it. mesh_seed
+                    # follows reference_seed/seed here even though these rows
+                    # are still stage="reference" and never reach the mesh
+                    # stage as-is: the settings panel renders all three seeds
+                    # together, and a candidate whose seed/reference_seed
+                    # changed but whose mesh_seed silently didn't would read
+                    # as a bug, not as the "seed is the legacy fallback for
+                    # both stages" contract a few lines up. promote_to_model
+                    # overwrites mesh_seed on promotion and reroll rewrites
+                    # all of them, so this has no effect on what actually gets
+                    # meshed -- it only keeps the displayed values internally
+                    # consistent.
+                    candidate["reference_seed"] = _random_seed()
+                    candidate["seed"] = candidate["reference_seed"]
+                    candidate["mesh_seed"] = candidate["reference_seed"]
+                job_id = uuid.uuid4().hex[:12]
+                if normalized is not None:
+                    job_dir = config.job_dir(job_id)
+                    job_dir.mkdir(parents=True, exist_ok=True)
+                    (job_dir / "input.png").write_bytes(normalized)
+                    made_dirs.append(job_dir)
+                await asyncio.to_thread(
+                    functools.partial(
+                        store().create, kind, prompt, candidate, job_id, stage=output
+                    )
                 )
-            )
-            ids.append(job_id)
+                ids.append(job_id)
+        except Exception:
+            # Only the candidates whose insert never landed: a row that exists
+            # owns its directory, and deleting it here would orphan the row.
+            for job_dir in made_dirs[len(ids):]:
+                await asyncio.to_thread(shutil.rmtree, job_dir, ignore_errors=True)
+            raise
         return {"id": ids[0], "ids": ids}
 
     @app.get("/api/jobs")
@@ -472,6 +534,7 @@ def create_app() -> FastAPI:
         _check_job_id(job_id)
         if mode not in ("reroll", "remesh"):
             raise HTTPException(400, "mode must be 'reroll' or 'remesh'")
+        _check_seed("seed", seed)
         source = await asyncio.to_thread(store().get, job_id)
         if source is None:
             raise HTTPException(404, "no such job")
@@ -484,11 +547,7 @@ def create_app() -> FastAPI:
         # Derived values describe the *source* run, not this one: keeping them
         # would make the new job claim a composed prompt it never used and a
         # quality score for a mesh that doesn't exist yet.
-        params = {
-            k: v
-            for k, v in source["params"].items()
-            if k not in ("composed_prompt", "scale_factor", "mesh_audit")
-        }
+        params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
         fresh = seed if seed is not None else _random_seed()
         params["seed"] = fresh
         if mode == "remesh":
@@ -533,6 +592,7 @@ def create_app() -> FastAPI:
         attempts as one lineage instead of unrelated rows.
         """
         _check_job_id(job_id)
+        _check_seed("mesh_seed", mesh_seed)
         source = await asyncio.to_thread(store().get, job_id)
         if source is None:
             raise HTTPException(404, "no such job")
@@ -544,11 +604,7 @@ def create_app() -> FastAPI:
         if not src_png.exists():
             raise HTTPException(400, "reference has no image")
 
-        params = {
-            k: v
-            for k, v in source["params"].items()
-            if k not in ("composed_prompt", "scale_factor", "mesh_audit")
-        }
+        params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
         params["mesh_seed"] = mesh_seed if mesh_seed is not None else _random_seed()
         params["seed"] = params["mesh_seed"]
 
@@ -737,7 +793,25 @@ def create_app() -> FastAPI:
         params["transform"] = transform
         params["scale_factor"] = transform["scale"]
         await asyncio.to_thread(store().set_params, job_id, params)
-        return {"ok": True, "optimize": result, "transform": transform}
+
+        def _stale_rig_artifacts() -> list[str]:
+            """What still describes the old mesh. Reported, not deleted: the
+            rig and its poses are user work, and a warning the caller can act
+            on beats silently destroying them over a triangle retarget."""
+            out = [n for n in ("rig.glb", "rig.json") if (job_dir / n).exists()]
+            if out:
+                out += sorted(
+                    f"{rigging.POSE_DIR_NAME}/{p.name}"
+                    for p in rigging.pose_dir(job_dir).glob("*.glb")
+                )
+                out += sorted(
+                    f"{rigging.SHEET_DIR_NAME}/{p.name}"
+                    for p in rigging.sheet_dir(job_dir).glob("*.png")
+                )
+            return out
+
+        stale = await asyncio.to_thread(_stale_rig_artifacts)
+        return {"ok": True, "optimize": result, "transform": transform, "stale": stale}
 
     # --- poses ---------------------------------------------------------------
     # A pose is a bone -> local rotation map saved against a job's rig, stored
@@ -1173,6 +1247,10 @@ def _valid_template(key: str | None) -> str:
         raise HTTPException(400, str(exc)) from exc
 
 
+class _ImageTooLarge(ValueError):
+    """The upload decodes to more pixels than the pipeline will accept."""
+
+
 def _to_png(data: bytes) -> bytes:
     """Re-encode any uploaded image as PNG; trellis.cpp only decodes PNG/JPEG.
 
@@ -1186,6 +1264,14 @@ def _to_png(data: bytes) -> bytes:
     from PIL import Image
 
     with Image.open(io.BytesIO(data)) as im:
+        # Checked from the header, before any pixel is decoded: a flat 20 MP
+        # PNG is a few hundred KB on disk and hundreds of MB decoded, and
+        # PIL's own bomb guard doesn't bite until ~178 MP.
+        if im.width * im.height > MAX_IMAGE_PIXELS:
+            raise _ImageTooLarge(
+                f"image is {im.width}x{im.height}; the limit is "
+                f"{MAX_IMAGE_PIXELS:,} pixels"
+            )
         has_alpha = im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
         out = io.BytesIO()
         im.convert("RGBA" if has_alpha else "RGB").save(out, "PNG")

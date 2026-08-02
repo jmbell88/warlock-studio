@@ -173,6 +173,15 @@
     position: absolute; inset: 0; display: grid; place-items: center;
     color: var(--muted); pointer-events: none; text-align: center; padding: 24px;
   }
+  /* A finished reference shown large in the main pane -- approving one from
+     the 44px list thumbnail defeats the point of the two-stage split. */
+  #ref-preview {
+    position: absolute; inset: 24px; margin: auto;
+    max-width: calc(100% - 48px); max-height: calc(100% - 48px);
+    object-fit: contain; border-radius: 8px;
+    background: repeating-conic-gradient(#26283200 0% 25%, #262832 0% 50%) 50% / 16px 16px;
+  }
+  #ref-preview[hidden] { display: none; }
 
   /* --- progress --------------------------------------------------------- */
   .bar { height: 3px; background: var(--edge); border-radius: 2px; overflow: hidden; }
@@ -443,6 +452,7 @@
 <main>
   <canvas id="viewer"></canvas>
   <canvas id="viewer-b"></canvas>
+  <img id="ref-preview" alt="reference image" hidden>
   <div id="viewer-tools">
     <button type="button" id="tool-wire" title="Wireframe">wire</button>
     <button type="button" id="tool-spin" title="Turntable">spin</button>

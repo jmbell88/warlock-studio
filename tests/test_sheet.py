@@ -816,6 +816,7 @@ def test_a_rigged_subject_is_framed_by_its_own_size(tmp_path):
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
     blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid"))
+    rigging.finalize_rig(tmp_path)
 
     layout = sheetlib.plan([], frame_size=128, elevation=0.0)
     frames_dir = tmp_path / "frames"

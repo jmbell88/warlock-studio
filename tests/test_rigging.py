@@ -432,6 +432,8 @@ def test_end_to_end_rig_of_a_generated_cube(tmp_path):
 
     spec = rigging.rig_spec(tmp_path, "humanoid")
     result = blender_worker.op_rig(bpy, spec)
+    # The worker writes temp names; publishing them is the queue's job.
+    rigging.finalize_rig(tmp_path)
     assert result["ok"] is True
     assert result["weighting"] in ("automatic", "envelope")
     assert (tmp_path / "rig.glb").exists()
@@ -484,6 +486,7 @@ def test_a_posed_glb_carries_back_exactly_the_rotations_it_was_given(tmp_path):
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
     blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid"))
+    rigging.finalize_rig(tmp_path)
 
     # A parent and its child, so bone-chain accumulation is exercised too.
     want = {
@@ -518,6 +521,7 @@ def test_posing_a_bone_the_rig_lacks_is_reported_not_fatal(tmp_path):
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
     blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid"))
+    rigging.finalize_rig(tmp_path)
 
     result = blender_worker.op_pose(
         bpy,
@@ -574,6 +578,7 @@ def test_op_rig_builds_the_armature_from_supplied_joints_not_the_fit(tmp_path):
     # somewhere the sphere's own fit never would.
     override = rigging.fit_template(template, [-10, -10, 0], [10, 10, 20])
     blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid", override))
+    rigging.finalize_rig(tmp_path)
 
     rig = json.loads((tmp_path / "rig.json").read_text(encoding="utf-8"))
     assert rig["adjusted"] is True

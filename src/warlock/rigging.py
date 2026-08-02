@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import re
 import subprocess
@@ -479,6 +480,21 @@ def run_worker(
     return payload
 
 
+# The worker writes to these temp names; the queue renames them onto the
+# served names on success (finalize_rig). Two reasons, both load-bearing:
+# Blender's GLB export writes in place over seconds, and rig.json -- the
+# completion gate _attach_files and the file route key on -- is already
+# satisfied by an earlier rig during a re-rig, so pointing the worker at the
+# served names would let a concurrent GET read a truncated rig.glb. It also
+# makes cancellation naturally non-destructive: discarding a half-written
+# re-rig deletes the temps, never the previous successful rig's artifacts.
+# The suffixes are load-bearing: Blender's glTF exporter appends ".glb" to a
+# filepath that does not already end in it, so a ".tmp" suffix would make the
+# worker write ".rig.tmp.glb.glb" and finalize_rig find nothing.
+RIG_GLB_TMP = ".rig.tmp.glb"
+RIG_JSON_TMP = ".rig.tmp.json"
+
+
 def rig_spec(
     job_dir: Path, template_key: str, bones: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -492,14 +508,30 @@ def rig_spec(
     spec = {
         "op": "rig",
         "source_glb": str(job_dir / "model.glb"),
-        "out_glb": str(job_dir / "rig.glb"),
-        "out_json": str(job_dir / "rig.json"),
+        "out_glb": str(job_dir / RIG_GLB_TMP),
+        "out_json": str(job_dir / RIG_JSON_TMP),
         "result_path": str(job_dir / ".blender_result.json"),
         "template": template_key,
     }
     if bones is not None:
         spec["bones"] = bones
     return spec
+
+
+def finalize_rig(job_dir: Path) -> None:
+    """Rename the worker's temp artifacts onto the served names.
+
+    GLB first, json second: rig.json is the completion marker, so at the
+    moment it lands the rig.glb beside it is already the matching one.
+    """
+    os.replace(job_dir / RIG_GLB_TMP, job_dir / "rig.glb")
+    os.replace(job_dir / RIG_JSON_TMP, job_dir / "rig.json")
+
+
+def discard_rig_temps(job_dir: Path) -> None:
+    """Remove whatever a failed or cancelled rig run left behind. Idempotent."""
+    (job_dir / RIG_GLB_TMP).unlink(missing_ok=True)
+    (job_dir / RIG_JSON_TMP).unlink(missing_ok=True)
 
 
 def read_rig(job_dir: Path) -> dict[str, Any] | None:

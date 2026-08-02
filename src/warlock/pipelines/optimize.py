@@ -21,9 +21,12 @@ available and is what every job did before this existed.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +50,27 @@ class OptimizeError(RuntimeError):
     """gltfpack was missing, failed, timed out, or produced an unusable file."""
 
 
+def staged_copy(source: Path, dest: Path) -> None:
+    """Copy ``source`` onto ``dest`` via a temp file and an atomic rename.
+
+    ``dest`` here is model.glb, which the file route serves on mere existence
+    once a job is done -- and POST /optimize runs on done jobs. A plain
+    copyfile truncates ``dest`` before writing, so a concurrent reader could
+    observe a half-written file; this way it sees the old file or the new
+    one, never a mixture. Same idiom as postprocess._staged, kept local so
+    this module never has to import trimesh-heavy postprocess.
+    """
+    fd, raw = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp = Path(raw)
+    try:
+        shutil.copyfile(source, tmp)
+        os.replace(tmp, dest)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
 def run(
     source: Path,
     dest: Path,
@@ -65,7 +89,7 @@ def run(
         # Already inside the budget, or no budget asked for. Copying is honest:
         # running the simplifier to a ratio above 1.0 is a no-op that still
         # re-encodes the file.
-        shutil.copyfile(source, dest)
+        staged_copy(source, dest)
         return {
             "requested": target_triangles,
             "achieved": _triangles(dest),

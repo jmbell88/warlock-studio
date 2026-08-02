@@ -11,10 +11,10 @@ and turn it into a single 0-100 percentage plus a human label. Two properties ma
   for most of the job, so every milestone also carries a nominal duration and
   ``snapshot()`` eases the reported percent toward the next milestone over time.
 
-Progress is deliberately in-memory only. It is meaningless once a job ends, and
-``JobStore`` is a single sqlite3 connection with no locking that is only safe
-because every call funnels through ``asyncio.to_thread`` from one event loop --
-writing to it from the reader thread would break that.
+Progress is deliberately in-memory only: it is meaningless once a job ends, so
+persisting it would only add DB traffic (and a reader-thread writer) for data
+nobody reads back. ``JobStore`` serialises its own connection with an RLock,
+but this module still never touches it -- see ``ProgressBus``.
 """
 
 from __future__ import annotations
@@ -35,11 +35,12 @@ log = logging.getLogger(__name__)
 # SDXL-Turbo is 4 steps (~1.5 s of GPU work); its cost is loading, not sampling.
 
 #
-# "scale" and "audit" are zero-width on purpose. Rescaling the finished GLB
-# (see pipelines/postprocess.scale_glb) is sub-second JSON surgery and the mesh
+# "optimize", "scale" and "audit" are zero-width on purpose. The gltfpack
+# retarget is a two-second subprocess, rescaling the finished GLB (see
+# pipelines/postprocess.normalize_glb) is sub-second JSON surgery and the mesh
 # audit (meshaudit.hole_fraction) is a few seconds of CPU rasterisation --
-# neither is GPU work, so both get a label at 100% rather than a slice of the
-# bar. Reserving one would only make every job stall just short of done.
+# none of it is GPU work, so each gets a label at 100% rather than a slice of
+# the bar. Reserving one would only make every job stall just short of done.
 #
 # Any phase named here must exist in both dicts: update() falls back to
 # (0.0, 1.0) for an unknown phase, which would drag the bar back to zero.
@@ -50,11 +51,13 @@ PHASES_TEXT: dict[str, tuple[float, float]] = {
     "t2i_load": (0.00, 0.16),
     "t2i_sample": (0.16, 0.20),
     "trellis": (0.20, 1.00),
+    "optimize": (1.00, 1.00),
     "scale": (1.00, 1.00),
     "audit": (1.00, 1.00),
 }
 PHASES_IMAGE: dict[str, tuple[float, float]] = {
     "trellis": (0.00, 1.00),
+    "optimize": (1.00, 1.00),
     "scale": (1.00, 1.00),
     "audit": (1.00, 1.00),
 }

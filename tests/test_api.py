@@ -91,6 +91,66 @@ def test_invalid_image_upload_rejected(client):
     assert r.status_code == 400
 
 
+# --- input limits -----------------------------------------------------------
+
+
+def test_oversized_upload_is_rejected_before_decode(client):
+    blob = b"\x89PNG\r\n\x1a\n" + b"\0" * (20 * 1024 * 1024)
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image"},
+        files={"image": ("ref.png", io.BytesIO(blob), "image/png")},
+    )
+    assert r.status_code == 413
+
+
+def test_a_decompression_bomb_is_rejected_by_pixel_count(client):
+    # 5000x4000 = 20 MP: tiny on disk as a flat PNG, over the 16 MP cap decoded.
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (5000, 4000)).save(buf, "PNG")
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image"},
+        files={"image": ("ref.png", io.BytesIO(buf.getvalue()), "image/png")},
+    )
+    assert r.status_code == 400
+    assert "pixel" in r.json()["detail"].lower()
+
+
+def test_an_overlong_prompt_is_rejected(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x" * 1001})
+    assert r.status_code == 400
+
+
+@pytest.mark.parametrize("bad", ["-1", str(2**31)])
+def test_an_out_of_range_seed_is_rejected(client, bad):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "seed": bad})
+    assert r.status_code == 400
+
+
+def test_a_failed_db_insert_leaves_no_orphan_job_dir(client, tmp_path, monkeypatch):
+    """input.png is deliberately written before the row exists (the worker's
+    next_queued poll must never claim an image job with no file on disk), so
+    a failed insert has to clean up after itself or dirs accumulate forever."""
+    assets = tmp_path / "assets"
+    before = {p.name for p in assets.iterdir() if p.is_dir()}
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr(client.app.state.store, "create", explode)
+    with pytest.raises(RuntimeError):
+        client.post(
+            "/api/jobs",
+            data={"kind": "image"},
+            files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
+        )
+    after = {p.name for p in assets.iterdir() if p.is_dir()}
+    assert after == before
+
+
 def test_invalid_resolution_rejected(client):
     r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "resolution": "999"})
     assert r.status_code == 400
@@ -878,6 +938,86 @@ def test_count_ids_are_distinct_and_all_exist(client):
     assert len(set(ids)) == 4
     for job_id in ids:
         assert client.get(f"/api/jobs/{job_id}").status_code == 200
+
+
+def test_rerun_strips_every_derived_param_not_just_the_original_three(client):
+    """The strip list has to keep up with what the worker records: a reroll
+    wearing the source's mesh_report claims a quality verdict about a mesh
+    that doesn't exist yet."""
+    src = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
+    store = client.app.state.store
+    params = store.get(src)["params"]
+    params.update(
+        {
+            "mesh_report": {"status": "ready", "reasons": []},
+            "optimize": {"achieved": 5},
+            "transform": {"scale": 1.0},
+            "weighting": "automatic",
+            "bone_count": 19,
+        }
+    )
+    store.set_params(src, params)
+
+    new_id = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"}).json()["id"]
+    new = client.get(f"/api/jobs/{new_id}").json()
+    for key in ("mesh_report", "optimize", "transform", "weighting", "bone_count"):
+        assert key not in new["params"], key
+
+
+def test_promotion_strips_every_derived_param(client, tmp_path):
+    src = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "a barrel", "output": "reference"},
+    ).json()["id"]
+    store = client.app.state.store
+    src_dir = tmp_path / "assets" / src
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "input.png").write_bytes(_png_bytes())
+    params = store.get(src)["params"]
+    params.update({"mesh_report": {"status": "ready"}, "transform": {"scale": 1.0}})
+    store.set_params(src, params)
+    store.set_status(src, "done")
+
+    new_id = client.post(f"/api/jobs/{src}/model").json()["id"]
+    new = client.get(f"/api/jobs/{new_id}").json()
+    for key in ("mesh_report", "transform"):
+        assert key not in new["params"], key
+
+
+def test_optimize_reports_the_rig_artifacts_it_made_stale(client, tmp_path):
+    """Re-optimizing swaps model.glb for a different mesh; rig.glb and
+    everything baked from it still describe the old one. The route must say
+    so rather than silently serving a rig that no longer matches."""
+    trimesh = pytest.importorskip("trimesh")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
+    (job_dir / "rig.glb").write_bytes(b"rig")
+    (job_dir / "rig.json").write_text("{}")
+    (job_dir / "poses").mkdir()
+    (job_dir / "poses" / "0123456789ab.glb").write_bytes(b"baked")
+
+    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
+    assert r.status_code == 200
+    stale = r.json()["stale"]
+    assert "rig.glb" in stale
+    assert "rig.json" in stale
+    assert "poses/0123456789ab.glb" in stale
+
+
+def test_optimize_reports_nothing_stale_for_an_unrigged_job(client, tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
+
+    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
+    assert r.status_code == 200
+    assert r.json()["stale"] == []
 
 
 def test_optimize_requires_a_source(client):
