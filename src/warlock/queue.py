@@ -432,6 +432,13 @@ class Worker:
             finally:
                 if self.config.vram_exclusive:
                     await asyncio.to_thread(t2i.unload)
+
+            if job.get("stage") == "reference":
+                # The whole point of the split: the user judges the image before
+                # anything pays for a trellis run. The job is finished here --
+                # promotion creates a separate child job (app.promote_to_model).
+                _log_vram("after reference-only job")
+                return
         elif not image_path.exists():
             raise RuntimeError("image job has no uploaded input.png")
 

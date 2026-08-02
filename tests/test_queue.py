@@ -165,6 +165,18 @@ async def test_worker_passes_negative_prompt(worker):
     assert worker._text2image.negatives[-1] == "blurry, two objects"
 
 
+async def test_a_reference_job_never_reaches_trellis(worker):
+    job_id = worker.store.create("text", "a barrel", {"seed": 1}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls == []
+    assert (worker.config.job_dir(job_id) / "input.png").exists()
+    # Nothing pays for a trellis run just because the reference finished.
+    assert not (worker.config.job_dir(job_id) / "model.glb").exists()
+
+
 async def test_worker_uses_each_stage_seed(worker):
     # reference_seed and mesh_seed diverge from the legacy seed here, so the
     # test would pass by accident if the worker still read plain "seed" for

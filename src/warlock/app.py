@@ -154,9 +154,15 @@ def create_app() -> FastAPI:
         rig: Annotated[bool, Form()] = False,
         rig_template: Annotated[str | None, Form()] = None,
         image: Annotated[UploadFile | None, File()] = None,
+        output: Annotated[str, Form()] = "model",
     ) -> dict[str, Any]:
         if kind not in ("text", "image"):
             raise HTTPException(400, "kind must be 'text' or 'image'")
+        if output not in ("reference", "model"):
+            raise HTTPException(400, "output must be 'reference' or 'model'")
+        if output == "reference" and kind != "text":
+            # An image job's reference is the upload; there is nothing to approve.
+            raise HTTPException(400, "only text jobs can stop at a reference")
         # An explicit resolution overrides the platform preset; the UI no longer
         # sends one, but the API keeps accepting it.
         if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
@@ -215,7 +221,9 @@ def create_app() -> FastAPI:
             job_dir = config.job_dir(job_id)
             job_dir.mkdir(parents=True, exist_ok=True)
             (job_dir / "input.png").write_bytes(normalized)
-        await asyncio.to_thread(store().create, kind, prompt, params, job_id)
+        await asyncio.to_thread(
+            functools.partial(store().create, kind, prompt, params, job_id, stage=output)
+        )
         return {"id": job_id}
 
     @app.get("/api/jobs")
@@ -352,6 +360,11 @@ def create_app() -> FastAPI:
             params["reference_seed"] = fresh
             params["mesh_seed"] = fresh
         params["rerun_of"] = job_id
+        # A reroll of a reference-stage job is "try another": it must stop at
+        # the reference again, not fall through to the default "model" stage
+        # and silently pay for a trellis run the user never asked for. remesh
+        # always finishes at a mesh, so it keeps the default.
+        stage = source["stage"] if mode == "reroll" else "model"
 
         new_id = uuid.uuid4().hex[:12]
         if kind == "image":
@@ -361,8 +374,59 @@ def create_app() -> FastAPI:
             new_dir = config.job_dir(new_id)
             new_dir.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(shutil.copyfile, src_png, new_dir / "input.png")
-        await asyncio.to_thread(store().create, kind, source["prompt"], params, new_id)
+        await asyncio.to_thread(
+            functools.partial(store().create, kind, source["prompt"], params, new_id, stage=stage)
+        )
         return {"id": new_id, "seed": params["seed"]}
+
+    @app.post("/api/jobs/{job_id}/model")
+    async def promote_to_model(
+        job_id: str, mesh_seed: Annotated[int | None, Form()] = None
+    ) -> dict[str, Any]:
+        """Run the 3D stage from a reference the user approved.
+
+        The child is an ordinary image job whose input.png is the parent's, which
+        is the same reduction /rerun?mode=remesh already makes -- so the queue,
+        the progress model and cancellation need no special case. What is new is
+        parent_id, which is what lets the history show a reference and its
+        attempts as one lineage instead of unrelated rows.
+        """
+        _check_job_id(job_id)
+        source = await asyncio.to_thread(store().get, job_id)
+        if source is None:
+            raise HTTPException(404, "no such job")
+        if source["stage"] != "reference":
+            raise HTTPException(400, "this job is not a reference")
+        if source["status"] != "done":
+            raise HTTPException(400, f"reference is {source['status']}")
+        src_png = config.job_dir(job_id) / "input.png"
+        if not src_png.exists():
+            raise HTTPException(400, "reference has no image")
+
+        params = {
+            k: v
+            for k, v in source["params"].items()
+            if k not in ("composed_prompt", "scale_factor", "mesh_audit")
+        }
+        params["mesh_seed"] = mesh_seed if mesh_seed is not None else _random_seed()
+        params["seed"] = params["mesh_seed"]
+
+        new_id = uuid.uuid4().hex[:12]
+        new_dir = config.job_dir(new_id)
+        new_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(shutil.copyfile, src_png, new_dir / "input.png")
+        await asyncio.to_thread(
+            functools.partial(
+                store().create,
+                "image",
+                source["prompt"],
+                params,
+                new_id,
+                stage="model",
+                parent_id=job_id,
+            )
+        )
+        return {"id": new_id, "parent": job_id, "mesh_seed": params["mesh_seed"]}
 
     @app.get("/api/rig/templates")
     async def rig_templates() -> dict[str, Any]:

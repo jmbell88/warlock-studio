@@ -432,6 +432,10 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     if (!prompt) return;
     fd.set("prompt", prompt);
     fd.set("negative_prompt", document.getElementById("negative-prompt").value);
+    // Text jobs only: an image job's reference is the upload itself.
+    if (document.getElementById("approve-first").checked) {
+      fd.set("output", "reference");
+    }
   } else {
     const file = document.getElementById("image").files[0];
     if (!file) return;
@@ -548,37 +552,78 @@ function createNode(id) {
   setText(rigBtn, "rig");
   rigBtn.title = "Fit a skeleton to this mesh";
   rigBtn.hidden = true;
+  const make3d = document.createElement("button");
+  setText(make3d, "generate 3D");
+  make3d.title = "Run the 3D stage from this approved reference";
+  make3d.hidden = true;
+  const another = document.createElement("button");
+  setText(another, "try another");
+  another.title = "Same prompt and settings, new reference seed";
+  another.hidden = true;
   const act = document.createElement("button");
-  actions.append(reroll, remesh, rigBtn, act);
+  actions.append(make3d, another, reroll, remesh, rigBtn, act);
   li.append(img, info, actions);
 
-  // Bound once, so a poll never rebinds stale closures.
+  // Bound once, so a poll never rebinds stale closures. Shared by reroll and
+  // "try another" (mode is always "reroll" for the latter -- a fresh
+  // reference is exactly a re-roll of the reference job, and rerun_job keeps
+  // it at stage="reference" now that seeds are split).
   li.addEventListener("click", () => select(id));
+  async function runRerun(mode) {
+    const fd = new FormData();
+    fd.set("mode", mode);
+    const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
+    const body = await r.json();
+    if (!r.ok) {
+      alert(body.detail ?? "rerun failed");
+      return;
+    }
+    // Follow the new job the same way a fresh submit does.
+    selected = body.id;
+    shownModelFor = null;
+    pending = body.id;
+    downloads.style.display = "none";
+    showOverlay();
+  }
   for (const [btn, mode] of [[reroll, "reroll"], [remesh, "remesh"]]) {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       btn.disabled = true;
       try {
-        const fd = new FormData();
-        fd.set("mode", mode);
-        const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
-        const body = await r.json();
-        if (!r.ok) {
-          alert(body.detail ?? "rerun failed");
-          return;
-        }
-        // Follow the new job the same way a fresh submit does.
-        selected = body.id;
-        shownModelFor = null;
-        pending = body.id;
-        downloads.style.display = "none";
-        showOverlay();
+        await runRerun(mode);
       } finally {
         btn.disabled = false;
       }
       poll(true);
     });
   }
+  make3d.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    make3d.disabled = true;
+    try {
+      const r = await fetch(`/api/jobs/${id}/model`, { method: "POST" });
+      const body = await r.json();
+      if (!r.ok) { alert(body.detail ?? "could not start the 3D stage"); return; }
+      selected = body.id;
+      shownModelFor = null;
+      pending = body.id;
+      downloads.style.display = "none";
+      showOverlay();
+    } finally {
+      make3d.disabled = false;
+    }
+    poll(true);
+  });
+  another.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    another.disabled = true;
+    try {
+      await runRerun("reroll");
+    } finally {
+      another.disabled = false;
+    }
+    poll(true);
+  });
   rigBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
     rigBtn.disabled = true;
@@ -637,7 +682,7 @@ function createNode(id) {
   });
 
   const n = { li, img, title, status, stage, err, quality, settings, settingsToggle,
-              copySettings, bar, fill, act, reroll, remesh, rigBtn };
+              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another };
   nodes.set(id, n);
   return n;
 }
@@ -736,6 +781,13 @@ function updateNode(n, job) {
   // whatever poses were saved against it.
   n.rigBtn.hidden =
     !rig.available || !done || !generated || !job.files.includes("model.glb") || isRigged(job);
+
+  const isReference = job.stage === "reference";
+  n.make3d.hidden = !(isReference && done && job.files.includes("input.png"));
+  n.another.hidden = !(isReference && done);
+  // A reference has no mesh, so the mesh-only actions stay hidden for it.
+  n.remesh.hidden = n.remesh.hidden || isReference;
+  n.rigBtn.hidden = n.rigBtn.hidden || isReference;
 }
 
 function renderJobs(jobs) {

@@ -207,11 +207,11 @@ def test_input_png_written_before_db_row_is_created(client, tmp_path, monkeypatc
     original_create = JobStore.create
     seen = {}
 
-    def spying_create(self, kind, prompt, params, job_id=None):
+    def spying_create(self, kind, prompt, params, job_id=None, **kwargs):
         if job_id is not None:
             path = tmp_path / "assets" / job_id / "input.png"
             seen["exists"] = path.exists()
-        return original_create(self, kind, prompt, params, job_id=job_id)
+        return original_create(self, kind, prompt, params, job_id=job_id, **kwargs)
 
     monkeypatch.setattr(JobStore, "create", spying_create)
 
@@ -683,3 +683,106 @@ def test_seeds_split_and_legacy_seed_still_read(client):
     params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
     assert params["reference_seed"] == 5
     assert params["mesh_seed"] == 5
+
+
+def test_reference_output_stops_before_the_mesh(client):
+    r = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
+    )
+    ref_id = r.json()["id"]
+    assert client.get(f"/api/jobs/{ref_id}").json()["stage"] == "reference"
+
+
+def test_default_output_is_still_model(client):
+    # Backward compatibility: every existing client omits `output` and must
+    # keep getting the old one-job behaviour.
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
+    assert client.get(f"/api/jobs/{r.json()['id']}").json()["stage"] == "model"
+
+
+def test_image_job_cannot_request_a_reference_output(client, tmp_path):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "image", "output": "reference"},
+        files={"image": ("in.png", io.BytesIO(_png_bytes()), "image/png")},
+    )
+    assert r.status_code == 400
+
+
+def test_promote_creates_a_child_model_job(client, tmp_path):
+    r = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
+    )
+    ref_id = r.json()["id"]
+    # The worker is not running a real pipeline in this fixture; stand the
+    # reference in by hand, which is exactly the state promotion requires.
+    import warlock.config as config_mod
+
+    job_dir = config_mod.get_config().job_dir(ref_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"png")
+    # The fixture never runs a real pipeline, so nothing marks the row
+    # "done" on its own -- stand that in too, exactly like input.png above.
+    client.app.state.store.set_status(ref_id, "done")
+
+    r = client.post(f"/api/jobs/{ref_id}/model")
+    assert r.status_code == 200
+    child = client.get(f"/api/jobs/{r.json()['id']}").json()
+    assert child["parent_id"] == ref_id
+    assert child["kind"] == "image"
+    assert child["stage"] == "model"
+
+
+def test_promote_reuses_the_parents_reference_seed(client, tmp_path):
+    r = client.post(
+        "/api/jobs",
+        data={"kind": "text", "prompt": "a barrel", "output": "reference", "reference_seed": 11},
+    )
+    ref_id = r.json()["id"]
+    import warlock.config as config_mod
+
+    job_dir = config_mod.get_config().job_dir(ref_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"png")
+    client.app.state.store.set_status(ref_id, "done")
+
+    r = client.post(f"/api/jobs/{ref_id}/model")
+    child = client.get(f"/api/jobs/{r.json()['id']}").json()
+    # The reference is reused verbatim -- promotion must not redraw it.
+    assert child["params"]["reference_seed"] == 11
+    assert child["params"]["mesh_seed"] == r.json()["mesh_seed"]
+
+
+def test_promote_without_a_reference_is_a_400(client):
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
+    assert client.post(f"/api/jobs/{r.json()['id']}/model").status_code == 400
+
+
+def test_reroll_of_a_reference_stays_a_reference(client):
+    # "try another" delegates to reroll -- it must not silently fall through
+    # to the default "model" stage and pay for a trellis run.
+    r = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
+    )
+    ref_id = r.json()["id"]
+    r = client.post(f"/api/jobs/{ref_id}/rerun")
+    assert r.status_code == 200
+    assert client.get(f"/api/jobs/{r.json()['id']}").json()["stage"] == "reference"
+
+
+def test_promote_a_model_stage_job_is_a_400(client):
+    # A plain job's stage is already "model" -- there is no reference to
+    # promote, and it must not be treated as one.
+    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
+    job_id = r.json()["id"]
+    client.app.state.store.set_status(job_id, "done")
+    assert client.post(f"/api/jobs/{job_id}/model").status_code == 400
+
+
+def test_promote_a_not_yet_done_reference_is_a_400(client):
+    r = client.post(
+        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
+    )
+    ref_id = r.json()["id"]
+    # No input.png written and status left at "queued" -- not done yet.
+    assert client.post(f"/api/jobs/{ref_id}/model").status_code == 400
