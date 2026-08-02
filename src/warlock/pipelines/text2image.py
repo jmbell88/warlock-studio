@@ -24,15 +24,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .. import models
+from .prompt import PROMPT_TEMPLATE, chunk, pad_pair  # noqa: F401 -- re-exported
 
 log = logging.getLogger(__name__)
-
-# Bias generations toward images TRELLIS handles well: one object, clean silhouette.
-PROMPT_TEMPLATE = (
-    "{prompt}, single object centered on a plain light gray background, "
-    "3/4 perspective view, studio lighting, game asset concept art, "
-    "full object in frame, no cropping, no text, no watermark"
-)
 
 
 def _scheduler(name: str, current):
@@ -55,6 +49,54 @@ class JobCancelled(Exception):
     """Raised from inside a diffusers step callback to abort mid-sample."""
 
 
+def _encode_long_prompt(pipe, chunks: list[str]):
+    """Encode ``chunks`` through both SDXL text encoders and concatenate on
+    the sequence axis, replicating per-chunk what
+    StableDiffusionXLPipeline.encode_prompt does for a single <=77-token
+    prompt: padding="max_length", max_length=77, truncation=True,
+    hidden_states[-2], concatenated across the two encoders on the feature
+    axis. The UNet's cross-attention has no sequence-length limit, so N
+    encoded 77-token chunks concatenated on the sequence axis is a valid,
+    longer conditioning sequence -- this is what A1111, ComfyUI and compel
+    do to work around the same CLIP limit.
+
+    Pooled is a single vector, not a sequence, so it cannot be concatenated
+    across chunks: it comes from text_encoder_2's output on the first chunk
+    only, matching encode_prompt's own "only ALWAYS interested in the pooled
+    output of the final text encoder."
+    """
+    import torch
+
+    device = pipe._execution_device
+    per_chunk_embeds = []
+    pooled = None
+    for i, chunk_text in enumerate(chunks):
+        chunk_embeds = []
+        for tokenizer, text_encoder in (
+            (pipe.tokenizer, pipe.text_encoder),
+            (pipe.tokenizer_2, pipe.text_encoder_2),
+        ):
+            inputs = tokenizer(
+                chunk_text,
+                padding="max_length",
+                max_length=77,
+                truncation=True,
+                return_tensors="pt",
+            )
+            with torch.no_grad():
+                output = text_encoder(
+                    inputs.input_ids.to(device), output_hidden_states=True
+                )
+            if i == 0 and text_encoder is pipe.text_encoder_2:
+                pooled = output[0]
+            chunk_embeds.append(output.hidden_states[-2])
+        per_chunk_embeds.append(torch.cat(chunk_embeds, dim=-1))
+    embeds = torch.cat(per_chunk_embeds, dim=1)
+    assert pooled is not None
+    dtype = pipe.text_encoder_2.dtype
+    return embeds.to(dtype=dtype, device=device), pooled.to(dtype=dtype, device=device)
+
+
 class Text2Image:
     def __init__(
         self, spec: models.BaseModel, model_root: Path, model_dir: Path | None = None
@@ -71,10 +113,18 @@ class Text2Image:
         self._base_adapter: str | None = None
         self._pipe = None
         self.last_used: float = 0.0
+        self.last_prompt: str = ""
 
     @property
     def loaded(self) -> bool:
         return self._pipe is not None
+
+    @property
+    def model_dir(self) -> Path:
+        """Where this base model's weights live -- same resolution Text2Image
+        itself uses, exposed so a caller (the prompt-preview endpoint) can
+        load matching tokenizers without reimplementing WARLOCK_T2I_ROOT."""
+        return self._model_dir
 
     def load(self, on_state: Callable[[str], None] | None = None) -> None:
         if self._pipe is not None:
@@ -241,10 +291,29 @@ class Text2Image:
         text = PROMPT_TEMPLATE.format(prompt=prompt)
         if style is not None and style.trigger and lora in self._adapters:
             text = f"{style.trigger}, {text}"
+        self.last_prompt = text
+
+        tokenizers = [self._pipe.tokenizer, self._pipe.tokenizer_2]
+        positive_chunks = chunk(text, tokenizers)
+        # Only playground (guidance_scale > 1) runs classifier-free guidance;
+        # turbo and sdxl+Hyper-SD run at guidance_scale=0.0, where diffusers
+        # ignores the negative prompt outright (force_zeros_for_empty_prompt),
+        # so skipping the extra encode on the default path costs nothing.
+        negative_chunks: list[str] | None = None
+        if self.spec.guidance_scale > 1.0:
+            negative_chunks = chunk(negative_prompt or "", tokenizers)
+            positive_chunks, negative_chunks = pad_pair(positive_chunks, negative_chunks)
+
+        prompt_embeds, pooled_prompt_embeds = _encode_long_prompt(self._pipe, positive_chunks)
+        negative_embeds = negative_pooled = None
+        if negative_chunks is not None:
+            negative_embeds, negative_pooled = _encode_long_prompt(self._pipe, negative_chunks)
 
         image = self._pipe(
-            text,
-            negative_prompt=negative_prompt or None,
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_prompt_embeds=negative_embeds,
+            negative_pooled_prompt_embeds=negative_pooled,
             num_inference_steps=steps,
             guidance_scale=self.spec.guidance_scale,
             width=self.spec.image_size,
