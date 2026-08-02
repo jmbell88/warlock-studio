@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 import pytest
 
-from animancer3d.config import Config
-from animancer3d.db import JobStore
-from animancer3d.queue import SHUTDOWN_TIMEOUT, Worker
+from warlock.config import Config
+from warlock.db import JobStore
+from warlock.queue import SHUTDOWN_TIMEOUT, Worker
 
 pytestmark = pytest.mark.asyncio
 
@@ -109,6 +110,74 @@ async def test_cancel_mid_t2i_never_starts_trellis(worker):
     assert worker.trellis.generate_calls == []
 
 
+async def test_guidance_is_folded_into_the_image_prompt(worker):
+    job_id = worker.store.create(
+        "text",
+        "a plasma rifle",
+        {"seed": 1, "resolution": 512, "genre": "scifi", "art_style": "lowpoly"},
+    )
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    from warlock import guidance
+
+    prompt = worker._text2image.prompts[0]
+    assert prompt.startswith("a plasma rifle, ")
+    assert guidance.GENRES["scifi"].prompt in prompt
+    assert guidance.ART_STYLES["lowpoly"].prompt in prompt
+    # Recorded on the job so a finished asset can explain how it was made.
+    assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
+
+
+async def test_resolution_from_params_reaches_trellis(worker):
+    job_id = worker.store.create("image", None, {"seed": 1, "resolution": 1536})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls[0]["resolution"] == 1536
+
+
+async def test_finished_model_is_scaled_to_the_requested_size(worker, monkeypatch):
+    import warlock.pipelines.postprocess as postprocess_mod
+
+    calls = []
+    monkeypatch.setattr(
+        postprocess_mod,
+        "scale_glb",
+        lambda path, target: (calls.append((path, target)), 2.5)[1],
+    )
+    job_id = worker.store.create("image", None, {"seed": 1, "resolution": 512, "size_m": 2.5})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert calls == [(job_dir / "model.glb", 2.5)]
+    assert worker.store.get(job_id)["params"]["scale_factor"] == 2.5
+
+
+async def test_no_size_means_no_scaling(worker, monkeypatch):
+    import warlock.pipelines.postprocess as postprocess_mod
+
+    def explode(*_args):
+        raise AssertionError("scale_glb must not run without a target size")
+
+    monkeypatch.setattr(postprocess_mod, "scale_glb", explode)
+    job_id = _make_image_job(worker)  # params carry no size_m
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+
+
 async def test_worker_finish_does_not_overwrite_a_cancel_that_raced_it(worker):
     job_id = _make_image_job(worker)
     worker.start()
@@ -141,6 +210,177 @@ async def test_exception_in_generate_marks_error_and_worker_survives(worker):
     assert worker.store.get(good_id)["status"] == "done"
 
 
+def _make_worker(tmp_path, **config_overrides) -> Worker:
+    """Like the worker fixture, but with Config overrides (vram_exclusive etc.)."""
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        **config_overrides,
+    )
+    return Worker(config, JobStore(config.db_path))
+
+
+async def test_coexist_text_job_keeps_trellis_and_sdxl_resident(worker):
+    job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+
+    # Checked before shutdown() (which legitimately stops trellis): the job
+    # itself must not have stopped the 3D server or unloaded the image model.
+    assert worker.trellis.stop_calls == 0
+    assert worker._text2image.unload_calls == 0
+    assert worker._text2image.loaded is True
+    await worker.shutdown()
+
+
+async def test_exclusive_text_job_restores_handoff(tmp_path, fake_pipelines):
+    worker = _make_worker(tmp_path, vram_exclusive=True)
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        await worker.shutdown()
+
+        assert worker.trellis.stop_calls >= 1
+        assert worker._text2image.unload_calls == 1
+        assert worker._text2image.loaded is False
+    finally:
+        worker.store.close()
+
+
+async def test_idle_eviction_unloads_sdxl_in_coexist_mode(tmp_path, fake_pipelines):
+    worker = _make_worker(tmp_path, trellis_idle_timeout=0.05)
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        await _wait_until(lambda: worker._text2image.unload_calls == 1)
+        assert worker._text2image.loaded is False
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_exclusive_handoff_stops_trellis_off_the_event_loop(tmp_path, fake_pipelines):
+    # The handoff stop() fires the instant a text job starts -- exactly when
+    # the user is watching the bar. TrellisServer.stop() blocks for up to ~20 s
+    # (terminate, wait(15), reader join(5)), so running it on the loop freezes
+    # /api/progress and every other route for the duration.
+    worker = _make_worker(tmp_path, vram_exclusive=True)
+    loop_thread = threading.get_ident()
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        # Sampled before shutdown(), whose own stop() is already threaded and
+        # would mask a regression here.
+        handoff_threads = list(worker.trellis.stop_threads)
+        unload_threads = list(worker._text2image.unload_threads)
+        await worker.shutdown()
+
+        assert handoff_threads, "the exclusive handoff should have stopped trellis"
+        assert loop_thread not in handoff_threads
+        assert unload_threads and loop_thread not in unload_threads
+    finally:
+        worker.store.close()
+
+
+async def test_idle_eviction_runs_off_the_event_loop(tmp_path, fake_pipelines):
+    worker = _make_worker(tmp_path, trellis_idle_timeout=0.05)
+    loop_thread = threading.get_ident()
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        await _wait_until(lambda: worker.trellis.stop_threads != [])
+        await _wait_until(lambda: worker._text2image.unload_threads != [])
+
+        assert loop_thread not in worker.trellis.stop_threads
+        assert loop_thread not in worker._text2image.unload_threads
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_mesh_audit_is_recorded_on_the_finished_job(worker, monkeypatch):
+    import warlock.meshaudit as meshaudit_mod
+
+    calls = []
+
+    def fake_hole_fraction(path, views, resolution):
+        calls.append((path, views, resolution))
+        return {"worst": 0.11, "mean": 0.05, "faces": 1234, "resolution": resolution, "views": []}
+
+    monkeypatch.setattr(meshaudit_mod, "hole_fraction", fake_hole_fraction)
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    glb = worker.config.job_dir(job_id) / "model.glb"
+    assert [c[0] for c in calls] == [glb]
+    # Half the diagnostic default: the audit is superlinear in resolution and
+    # this runs on every job.
+    assert calls[0][2] == meshaudit_mod.REQUEST_PATH_RESOLUTION
+    # Only the summary is stored -- per-view detail would ride on every row of
+    # the job list.
+    assert worker.store.get(job_id)["params"]["mesh_audit"] == {
+        "worst": 0.11, "mean": 0.05, "faces": 1234, "resolution": 512,
+    }
+
+
+async def test_a_failing_mesh_audit_does_not_fail_the_job(worker, monkeypatch):
+    # The mesh is already on disk and fine by the time this runs; a diagnostic
+    # blowing up must not retroactively turn a good job into an errored one.
+    import warlock.meshaudit as meshaudit_mod
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("trimesh said no")
+
+    monkeypatch.setattr(meshaudit_mod, "hole_fraction", explode)
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "done"
+    assert job["error"] is None
+    # No badge is better than a wrong one.
+    assert "mesh_audit" not in job["params"]
+
+
+async def test_mesh_audit_runs_after_scaling(worker, monkeypatch):
+    # Ordering is load-bearing: the audit must measure the mesh the user will
+    # actually download, not the pre-scale one.
+    import warlock.meshaudit as meshaudit_mod
+    import warlock.pipelines.postprocess as postprocess_mod
+
+    order = []
+    monkeypatch.setattr(
+        postprocess_mod, "scale_glb", lambda path, target: (order.append("scale"), 2.0)[1]
+    )
+    monkeypatch.setattr(
+        meshaudit_mod,
+        "hole_fraction",
+        lambda path, views, resolution: (
+            order.append("audit"),
+            {"worst": 0.0, "mean": 0.0, "faces": 1, "resolution": resolution},
+        )[1],
+    )
+    job_id = worker.store.create("image", None, {"seed": 1, "resolution": 512, "size_m": 2.0})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert order == ["scale", "audit"]
+
+
 async def test_worker_picks_up_the_next_queued_job_after_a_completed_one(worker):
     first = _make_image_job(worker)
     second = _make_image_job(worker)
@@ -151,3 +391,117 @@ async def test_worker_picks_up_the_next_queued_job_after_a_completed_one(worker)
 
     assert worker.store.get(first)["status"] == "done"
     assert worker.store.get(second)["status"] == "done"
+
+
+# --- base-model switching ---------------------------------------------------
+
+
+async def test_same_base_model_across_jobs_reuses_the_resident_pipe(tmp_path, fake_pipelines):
+    """The pipe is process-lifetime cached, so two jobs on one base must not
+    pay a 7 GB reload between them."""
+    worker = _make_worker(tmp_path)
+    try:
+        first = worker.store.create(
+            "text", "a barrel", {"seed": 1, "resolution": 512, "base_model": "turbo"}
+        )
+        second = worker.store.create(
+            "text", "a crate", {"seed": 2, "resolution": 512, "base_model": "turbo"}
+        )
+        worker.start()
+        await _wait_until(lambda: worker.store.get(second)["status"] == "done")
+        assert worker.store.get(first)["status"] == "done"
+        assert worker._text2image.unload_calls == 0
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_switching_base_model_unloads_the_previous_one_exactly_once(
+    tmp_path, fake_pipelines
+):
+    """A 32 GB card holds trellis plus *one* SDXL-class pipe. If the switch
+    leaks the old pipe instead of freeing it, the second load OOMs -- and only
+    under real VRAM, never here -- so the unload is what gets asserted."""
+    worker = _make_worker(tmp_path)
+    try:
+        first = worker.store.create(
+            "text", "a barrel", {"seed": 1, "resolution": 512, "base_model": "turbo"}
+        )
+        worker.start()
+        # Queued only after the first finishes, so grabbing the resident pipe
+        # here cannot race the swap.
+        await _wait_until(lambda: worker.store.get(first)["status"] == "done")
+        first_pipe = worker._text2image
+        assert first_pipe.spec.key == "turbo"
+        second = worker.store.create(
+            "text", "a crate", {"seed": 2, "resolution": 512, "base_model": "sdxl"}
+        )
+        await _wait_until(lambda: worker.store.get(second)["status"] == "done")
+
+        assert first_pipe is not worker._text2image, "the switch must build a new pipe"
+        assert first_pipe.unload_calls == 1
+        assert worker._t2i_key == "sdxl"
+        assert worker._text2image.spec.key == "sdxl"
+        assert worker._text2image.unload_calls == 0
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_base_model_switch_unloads_off_the_event_loop(tmp_path, fake_pipelines):
+    """unload() pays a gc.collect() plus empty_cache(); on the event loop that
+    freezes /api/progress and every other route for its duration."""
+    worker = _make_worker(tmp_path)
+    try:
+        first = worker.store.create(
+            "text", "a barrel", {"seed": 1, "resolution": 512, "base_model": "turbo"}
+        )
+        loop_thread = threading.get_ident()
+        worker.start()
+        await _wait_until(lambda: worker.store.get(first)["status"] == "done")
+        # The swap makes the old pipe unreachable from the worker, so hold on
+        # to it before queueing the job that triggers the switch.
+        first_pipe = worker._text2image
+        second = worker.store.create(
+            "text", "a crate", {"seed": 2, "resolution": 512, "base_model": "sdxl"}
+        )
+        await _wait_until(lambda: worker.store.get(second)["status"] == "done")
+        await worker.shutdown()
+        assert first_pipe.unload_threads
+        assert loop_thread not in first_pipe.unload_threads
+    finally:
+        worker.store.close()
+
+
+async def test_style_lora_and_weight_reach_the_pipeline(tmp_path, fake_pipelines):
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create(
+            "text",
+            "a barrel",
+            {"seed": 1, "resolution": 512, "style_lora": "ps1", "lora_weight": 0.55},
+        )
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        assert worker._text2image.lora_calls == [("ps1", 0.55)]
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_unknown_base_model_in_params_falls_back_rather_than_failing(
+    tmp_path, fake_pipelines
+):
+    """Params outlive the registry: a row written before an entry was renamed
+    must still generate, since the user cannot edit a stored job's params."""
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create(
+            "text", "a barrel", {"seed": 1, "resolution": 512, "base_model": "retired"}
+        )
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        assert worker._t2i_key == worker.config.t2i_model
+        await worker.shutdown()
+    finally:
+        worker.store.close()

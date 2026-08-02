@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import socket
 
-from animancer3d.config import Config
-from animancer3d.doctor import run_checks
+from warlock import models as model_registry
+from warlock.config import Config
+from warlock.doctor import run_checks
 
 
 def _free_port() -> int:
@@ -72,8 +73,11 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
         assert checks["trellis port"].ok is False
 
 
-def test_run_checks_returns_seven_checks(tmp_path):
-    assert len(run_checks(_config(tmp_path))) == 7
+def test_run_checks_returns_every_check(tmp_path):
+    # Seven fixed checks plus one row per registry entry -- derived rather than
+    # hardcoded so adding a model doesn't fail an unrelated assertion.
+    expected = 7 + len(model_registry.BASE_MODELS) + len(model_registry.STYLE_LORAS)
+    assert len(run_checks(_config(tmp_path))) == expected
 
 
 def test_cuda_check_is_not_fatal_when_torch_missing_or_unavailable(tmp_path):
@@ -87,9 +91,48 @@ def test_disk_check_is_not_fatal(tmp_path):
     assert isinstance(checks["free disk space"].ok, bool)
 
 
-def test_sdxl_cache_check_is_not_fatal_when_uncached(tmp_path, monkeypatch):
-    hf_home = tmp_path / "hf_home"
-    monkeypatch.setenv("HF_HOME", str(hf_home))
-    checks = {c.name: c for c in run_checks(_config(tmp_path))}
-    assert checks["SDXL-Turbo cache"].ok is False
-    assert checks["SDXL-Turbo cache"].fatal is False
+def _t2i_names() -> list[str]:
+    return [f"image model: {m.label}" for m in model_registry.BASE_MODELS.values()] + [
+        f"style LoRA: {lora.label}" for lora in model_registry.STYLE_LORAS.values()
+    ]
+
+
+def test_every_image_model_and_lora_gets_its_own_non_fatal_row(tmp_path):
+    # One row per registry entry, so the report names *which* optional download
+    # is missing rather than collapsing five of them into one line.
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "m"))}
+    for name in _t2i_names():
+        assert checks[name].ok is False
+        assert checks[name].fatal is False
+        assert "hf download" in checks[name].detail
+
+
+def test_base_model_check_passes_with_local_weights(tmp_path):
+    root = tmp_path / "m"
+    spec = model_registry.BASE_MODELS["turbo"]
+    (root / spec.dir_name / "unet").mkdir(parents=True)
+    (root / spec.dir_name / "model_index.json").write_text("{}")
+    (root / spec.dir_name / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"")
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    assert checks[f"image model: {spec.label}"].ok is True
+
+
+def test_style_lora_check_passes_when_file_present(tmp_path):
+    root = tmp_path / "m"
+    lora = model_registry.STYLE_LORAS["render3d"]
+    (root / "loras").mkdir(parents=True)
+    (root / "loras" / lora.filename).write_bytes(b"")
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    assert checks[f"style LoRA: {lora.label}"].ok is True
+
+
+def test_turbo_dir_override_is_still_honoured(tmp_path):
+    # WARLOCK_T2I_DIR predates the registry; existing setups point it at an
+    # arbitrary diffusers dir and must keep working.
+    override = tmp_path / "elsewhere"
+    (override / "unet").mkdir(parents=True)
+    (override / "model_index.json").write_text("{}")
+    (override / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"")
+    config = _config(tmp_path, t2i_model_root=tmp_path / "m", t2i_turbo_dir=override)
+    checks = {c.name: c for c in run_checks(config)}
+    assert checks[f"image model: {model_registry.BASE_MODELS['turbo'].label}"].ok is True

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from animancer3d.db import JobStore
+from warlock.db import JobStore
 
 
 def test_create_and_get(store):

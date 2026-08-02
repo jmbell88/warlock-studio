@@ -6,13 +6,15 @@ testable without a GPU."""
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
-from animancer3d.db import JobStore
-from animancer3d.pipelines.text2image import JobCancelled
+from warlock.db import JobStore
+from warlock.models import DEFAULT_LORA_WEIGHT
+from warlock.pipelines.text2image import JobCancelled
 
 
 @pytest.fixture
@@ -30,6 +32,10 @@ class FakeTrellisServer:
         self.last_used = 0.0
         self.on_line = None
         self.stop_calls = 0
+        # Which thread each stop() ran on. The real stop() blocks for up to
+        # ~20 s (terminate, wait, join), so every call site must dispatch it
+        # off the event loop; this is how the tests can tell.
+        self.stop_threads: list[int] = []
         self.generate_calls: list[dict] = []
         self.slices = 5
         self.sleep_per_slice = 0.02
@@ -60,6 +66,7 @@ class FakeTrellisServer:
 
     def stop(self) -> None:
         self.stop_calls += 1
+        self.stop_threads.append(threading.get_ident())
         if self.ignore_stop:
             return
         self.running = False
@@ -68,11 +75,18 @@ class FakeTrellisServer:
 class FakeText2Image:
     """Stands in for Text2Image: no torch, no diffusers."""
 
-    def __init__(self, *_args, **_kwargs) -> None:
+    def __init__(self, spec=None, *_args, **_kwargs) -> None:
+        # The real class takes a models.BaseModel; keep it so tests can assert
+        # which base the worker constructed after a switch.
+        self.spec = spec
         self.loaded = False
+        self.last_used = 0.0
         self.unload_calls = 0
+        self.unload_threads: list[int] = []
         self.steps = 3
         self.sleep_per_step = 0.02
+        self.prompts: list[str] = []
+        self.lora_calls: list[tuple] = []
 
     def generate(
         self,
@@ -80,10 +94,14 @@ class FakeText2Image:
         output_path,
         *,
         seed=42,
+        lora=None,
+        lora_weight=DEFAULT_LORA_WEIGHT,
         on_state=None,
         on_step=None,
         cancel_event=None,
     ):
+        self.prompts.append(prompt)
+        self.lora_calls.append((lora, lora_weight))
         if on_state is not None:
             on_state("load")
         self.loaded = True
@@ -99,10 +117,12 @@ class FakeText2Image:
                 on_step(i + 1, self.steps)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fake-png")
+        self.last_used = time.monotonic()
         return output_path
 
     def unload(self) -> None:
         self.unload_calls += 1
+        self.unload_threads.append(threading.get_ident())
         self.loaded = False
 
 
@@ -113,8 +133,8 @@ def fake_pipelines(monkeypatch):
     namespace; Worker._get_text2image does `from .pipelines.text2image
     import Text2Image` fresh on every call, so patching the attribute on
     the text2image module is picked up immediately without touching queue.py."""
-    import animancer3d.pipelines.text2image as text2image_mod
-    import animancer3d.queue as queue_mod
+    import warlock.pipelines.text2image as text2image_mod
+    import warlock.queue as queue_mod
 
     monkeypatch.setattr(queue_mod, "TrellisServer", FakeTrellisServer)
     monkeypatch.setattr(text2image_mod, "Text2Image", FakeText2Image)

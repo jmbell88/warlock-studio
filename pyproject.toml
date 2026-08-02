@@ -1,5 +1,5 @@
 [project]
-name = "animancer3d"
+name = "warlock"
 version = "0.0.1"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
@@ -11,6 +11,8 @@ dependencies = [
     "pillow>=10.0",
     "trimesh>=4.4",
     "numpy>=1.26",
+    # Process-tree kill for trellis-server.exe and VRAM/RSS reporting.
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -19,25 +21,37 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
-# Text-to-image stage (Flux.1-schnell). Heavy: torch cu128 + diffusers.
+# Text-to-image stage (SDXL-class checkpoints). Heavy: torch cu128 + diffusers.
 text2image = [
     "torch>=2.7",
     "diffusers>=0.31",
     "transformers>=4.44",
     "accelerate>=0.34",
+    # Required by load_lora_weights(); diffusers does not pull it in itself.
+    "peft>=0.13",
     "sentencepiece>=0.2",
     "protobuf>=4.0",
 ]
+# Skeleton fitting and skinning. bpy ships cp313 wheels only, so this extra
+# effectively requires Python 3.13 even though the project floor stays 3.12 --
+# everything else here runs fine on 3.12 and rigging degrades to "unavailable"
+# rather than failing (see doctor.blender_check).
+rig = [
+    # The marker is not decoration: bpy's wheels declare
+    # Requires-Python >=3.13,<3.14, so an unmarked requirement makes the whole
+    # project unresolvable on 3.12 rather than just leaving rigging out of it.
+    "bpy>=5.2; python_version >= '3.13' and python_version < '3.14'",
+]
 
 [project.scripts]
-animancer3d = "animancer3d.cli:main"
+warlock = "warlock.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/animancer3d"]
+packages = ["src/warlock"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]

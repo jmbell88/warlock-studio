@@ -5,6 +5,9 @@ assets/
 models/
 /vendor/
 scratch/
+# `warlock sweep` output: measurement GLBs and logs, regenerable and large.
+sweep/
+.idea/
 .pytest_cache/
 .ruff_cache/
 dist/

@@ -1,0 +1,40 @@
+{
+  "key": "humanoid",
+  "label": "Humanoid (biped)",
+  "root": "hips",
+  "comment": "Normalized landmark positions in a unit bounding box, Blender axes: +X is the subject's left, -Y is forward, +Z is up. x/y span -0.5..0.5, z spans 0 (feet) to 1 (crown). rigging.fit_template scales these onto the mesh bbox.",
+  "bones": [
+    {"name": "hips",        "parent": null,        "head": [0.00,  0.00, 0.53], "tail": [0.00,  0.00, 0.60]},
+    {"name": "spine",       "parent": "hips",      "head": [0.00,  0.00, 0.60], "tail": [0.00,  0.00, 0.72]},
+    {"name": "chest",       "parent": "spine",     "head": [0.00,  0.00, 0.72], "tail": [0.00,  0.00, 0.83]},
+    {"name": "neck",        "parent": "chest",     "head": [0.00,  0.00, 0.83], "tail": [0.00,  0.00, 0.90]},
+    {"name": "head",        "parent": "neck",      "head": [0.00,  0.00, 0.90], "tail": [0.00,  0.00, 1.00]},
+
+    {"name": "shoulder.L",  "parent": "chest",     "head": [0.03,  0.00, 0.82], "tail": [0.10,  0.00, 0.81]},
+    {"name": "upper_arm.L", "parent": "shoulder.L","head": [0.10,  0.00, 0.81], "tail": [0.22,  0.00, 0.66]},
+    {"name": "forearm.L",   "parent": "upper_arm.L","head": [0.22, 0.00, 0.66], "tail": [0.32,  0.00, 0.52]},
+    {"name": "hand.L",      "parent": "forearm.L", "head": [0.32,  0.00, 0.52], "tail": [0.36,  0.00, 0.47]},
+
+    {"name": "shoulder.R",  "parent": "chest",     "head": [-0.03, 0.00, 0.82], "tail": [-0.10, 0.00, 0.81]},
+    {"name": "upper_arm.R", "parent": "shoulder.R","head": [-0.10, 0.00, 0.81], "tail": [-0.22, 0.00, 0.66]},
+    {"name": "forearm.R",   "parent": "upper_arm.R","head": [-0.22,0.00, 0.66], "tail": [-0.32, 0.00, 0.52]},
+    {"name": "hand.R",      "parent": "forearm.R", "head": [-0.32, 0.00, 0.52], "tail": [-0.36, 0.00, 0.47]},
+
+    {"name": "thigh.L",     "parent": "hips",      "head": [0.07,  0.00, 0.53], "tail": [0.07,  0.00, 0.29]},
+    {"name": "shin.L",      "parent": "thigh.L",   "head": [0.07,  0.00, 0.29], "tail": [0.07,  0.00, 0.06]},
+    {"name": "foot.L",      "parent": "shin.L",    "head": [0.07,  0.00, 0.06], "tail": [0.07, -0.10, 0.00]},
+
+    {"name": "thigh.R",     "parent": "hips",      "head": [-0.07, 0.00, 0.53], "tail": [-0.07, 0.00, 0.29]},
+    {"name": "shin.R",      "parent": "thigh.R",   "head": [-0.07, 0.00, 0.29], "tail": [-0.07, 0.00, 0.06]},
+    {"name": "foot.R",      "parent": "shin.R",    "head": [-0.07, 0.00, 0.06], "tail": [-0.07,-0.10, 0.00]}
+  ],
+  "mirror_pairs": [
+    ["shoulder.L", "shoulder.R"],
+    ["upper_arm.L", "upper_arm.R"],
+    ["forearm.L", "forearm.R"],
+    ["hand.L", "hand.R"],
+    ["thigh.L", "thigh.R"],
+    ["shin.L", "shin.R"],
+    ["foot.L", "foot.R"]
+  ]
+}

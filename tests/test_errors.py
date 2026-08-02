@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from animancer3d.errors import friendly, write_error_log
+from warlock.errors import friendly, write_error_log
 
 
 def test_oom_message_is_friendly():

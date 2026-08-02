@@ -3,22 +3,49 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import time
 
 import httpx
 import pytest
 
-from animancer3d.pipelines import trellis as trellis_mod
-from animancer3d.pipelines.trellis import TrellisServer
+from warlock.pipelines import trellis as trellis_mod
+from warlock.pipelines.trellis import TrellisServer
 
 
 def test_argv_defaults_webp_off(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
-    assert srv._argv()[-2:] == ["--webp", "off"]
+    argv = srv._argv()
+    assert argv[argv.index("--webp") + 1] == "off"
 
 
 def test_argv_webp_on_when_configured(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971, webp=True)
-    assert srv._argv()[-2:] == ["--webp", "on"]
+    argv = srv._argv()
+    assert argv[argv.index("--webp") + 1] == "on"
+
+
+def test_argv_tex_res_defaults_to_512(tmp_path):
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    argv = srv._argv()
+    assert argv[argv.index("--tex-res") + 1] == "512"
+
+
+def test_argv_tex_res_configurable(tmp_path):
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971, tex_res=1024)
+    argv = srv._argv()
+    assert argv[argv.index("--tex-res") + 1] == "1024"
+
+
+def test_argv_omits_band_when_unset(tmp_path):
+    """No band flag at all -- the exe's res/512 heuristic is what runs then."""
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    assert "--band" not in srv._argv()
+
+
+def test_argv_band_configurable(tmp_path):
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971, band=4)
+    argv = srv._argv()
+    assert argv[argv.index("--band") + 1] == "4"
 
 
 def test_argv_includes_models_host_port(tmp_path):
@@ -110,3 +137,93 @@ async def test_ensure_started_raises_cleanly_if_proc_cleared_mid_poll(tmp_path, 
 
     with pytest.raises(RuntimeError, match="stopped during startup"):
         await srv.ensure_started()
+
+
+# --- stop() concurrency -----------------------------------------------------
+#
+# stop() is reachable from several threads at once: queue.py dispatches it via
+# asyncio.to_thread for cancel, idle eviction, the VRAM handoff and shutdown,
+# and shutdown() can overlap with request_cancel's own call. The whole body is
+# check-then-act on _proc/_reader/_logfh, so without a lock two callers can
+# both join the reader, both close the log handle, and one can null _proc
+# between another's `is not None` and its `.poll()`.
+
+
+class _CountingProc:
+    """A process that is already dead. Records how often it is torn down."""
+
+    def __init__(self) -> None:
+        self.stdout = None
+        self.returncode = 0
+        self.terminates = 0
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminates += 1
+
+
+def test_stop_is_idempotent(tmp_path):
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    srv._proc = _CountingProc()
+    srv.stop()
+    assert srv._proc is None
+    # A second call has nothing left to tear down and must not raise.
+    srv.stop()
+    srv.stop()
+    assert srv._proc is None
+
+
+def test_stop_on_a_never_started_server_is_a_noop(tmp_path):
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    srv.stop()
+    assert srv._proc is None
+    assert srv._reader is None
+
+
+def test_concurrent_stops_do_not_double_tear_down(tmp_path):
+    """Eight threads racing stop(): exactly one teardown, no exceptions."""
+    import threading
+
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    closed = {"n": 0}
+
+    class _Log:
+        def close(self):
+            closed["n"] += 1
+
+    joins = {"n": 0}
+
+    class _Reader:
+        def join(self, timeout=None):
+            joins["n"] += 1
+            # Widen the window the unlocked version would have raced in.
+            time.sleep(0.01)
+
+    srv._proc = _CountingProc()
+    srv._reader = _Reader()
+    srv._logfh = _Log()
+
+    errors: list[BaseException] = []
+    start = threading.Barrier(8)
+
+    def run():
+        start.wait()
+        try:
+            srv.stop()
+        except BaseException as exc:  # noqa: BLE001 - the point is to see any
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == []
+    assert joins["n"] == 1
+    assert closed["n"] == 1
+    assert srv._proc is None
+    assert srv._reader is None
+    assert srv._logfh is None

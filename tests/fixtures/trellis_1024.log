@@ -1,4 +1,4 @@
-[trellis-server] models=D:\Projects\Animancer3D\models\trellis2-gguf gpu=0 listening on http://127.0.0.1:17973
+[trellis-server] models=D:\Projects\Warlock\models\trellis2-gguf gpu=0 listening on http://127.0.0.1:17973
 [trellis-server] generate: 91253-byte image, seed 42, res 1024, bg auto, uv xatlas
 [trellis] generating model with seed 42
 [1/6] preprocess C:\Users\ILWT\AppData\Local\Temp\trellis-req-0.png (BiRefNet bg removal, 1024 cascade)

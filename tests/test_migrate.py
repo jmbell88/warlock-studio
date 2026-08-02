@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from animancer3d.db import _SCHEMA, MIGRATIONS, JobStore
+from warlock.db import _SCHEMA, MIGRATIONS, JobStore
 
 
 def test_fresh_db_lands_on_the_latest_migration_version(tmp_path):

@@ -1,0 +1,40 @@
+{
+  "key": "quadruped",
+  "label": "Quadruped",
+  "root": "hips",
+  "comment": "Same normalized frame as humanoid.json: +X is the subject's left, -Y is forward (the head end), +Z is up. The body runs along Y rather than Z, so the bbox's long axis is depth, not height.",
+  "bones": [
+    {"name": "hips",           "parent": null,             "head": [0.00,  0.35, 0.70], "tail": [0.00,  0.10, 0.72]},
+    {"name": "spine",          "parent": "hips",           "head": [0.00,  0.10, 0.72], "tail": [0.00, -0.15, 0.72]},
+    {"name": "chest",          "parent": "spine",          "head": [0.00, -0.15, 0.72], "tail": [0.00, -0.30, 0.74]},
+    {"name": "neck",           "parent": "chest",          "head": [0.00, -0.30, 0.74], "tail": [0.00, -0.42, 0.90]},
+    {"name": "head",           "parent": "neck",           "head": [0.00, -0.42, 0.90], "tail": [0.00, -0.50, 1.00]},
+
+    {"name": "tail_01",        "parent": "hips",           "head": [0.00,  0.35, 0.70], "tail": [0.00,  0.45, 0.62]},
+    {"name": "tail_02",        "parent": "tail_01",        "head": [0.00,  0.45, 0.62], "tail": [0.00,  0.50, 0.50]},
+
+    {"name": "front_upper.L",  "parent": "chest",          "head": [0.12, -0.22, 0.68], "tail": [0.12, -0.20, 0.42]},
+    {"name": "front_lower.L",  "parent": "front_upper.L",  "head": [0.12, -0.20, 0.42], "tail": [0.12, -0.24, 0.14]},
+    {"name": "front_foot.L",   "parent": "front_lower.L",  "head": [0.12, -0.24, 0.14], "tail": [0.12, -0.32, 0.00]},
+
+    {"name": "front_upper.R",  "parent": "chest",          "head": [-0.12,-0.22, 0.68], "tail": [-0.12,-0.20, 0.42]},
+    {"name": "front_lower.R",  "parent": "front_upper.R",  "head": [-0.12,-0.20, 0.42], "tail": [-0.12,-0.24, 0.14]},
+    {"name": "front_foot.R",   "parent": "front_lower.R",  "head": [-0.12,-0.24, 0.14], "tail": [-0.12,-0.32, 0.00]},
+
+    {"name": "rear_upper.L",   "parent": "hips",           "head": [0.12,  0.32, 0.68], "tail": [0.12,  0.38, 0.44]},
+    {"name": "rear_lower.L",   "parent": "rear_upper.L",   "head": [0.12,  0.38, 0.44], "tail": [0.12,  0.28, 0.16]},
+    {"name": "rear_foot.L",    "parent": "rear_lower.L",   "head": [0.12,  0.28, 0.16], "tail": [0.12,  0.34, 0.00]},
+
+    {"name": "rear_upper.R",   "parent": "hips",           "head": [-0.12, 0.32, 0.68], "tail": [-0.12, 0.38, 0.44]},
+    {"name": "rear_lower.R",   "parent": "rear_upper.R",   "head": [-0.12, 0.38, 0.44], "tail": [-0.12, 0.28, 0.16]},
+    {"name": "rear_foot.R",    "parent": "rear_lower.R",   "head": [-0.12, 0.28, 0.16], "tail": [-0.12, 0.34, 0.00]}
+  ],
+  "mirror_pairs": [
+    ["front_upper.L", "front_upper.R"],
+    ["front_lower.L", "front_lower.R"],
+    ["front_foot.L", "front_foot.R"],
+    ["rear_upper.L", "rear_upper.R"],
+    ["rear_lower.L", "rear_lower.R"],
+    ["rear_foot.L", "rear_foot.R"]
+  ]
+}

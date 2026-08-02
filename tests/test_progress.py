@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from animancer3d.progress import (
+from warlock.progress import (
     PHASES_IMAGE,
     PHASES_TEXT,
     SUBSTEPS,
@@ -135,7 +135,7 @@ def test_flow_steps_always_advance_the_bar(monkeypatch):
     stage 6 that milestone sits at 0.98, so creep saturated within a second and
     every one of the 12 denoise lines then fell below it -- the bar sat frozen
     for the whole stage while the detail text counted up."""
-    import animancer3d.progress as mod
+    import warlock.progress as mod
 
     t = [1000.0]
     monkeypatch.setattr(mod.time, "monotonic", lambda: t[0])
@@ -162,7 +162,7 @@ def test_cold_model_load_keeps_moving(monkeypatch):
     """Stage 1 on a cold server absorbs the ~8 GB CUDA load (~14 s) and prints
     nothing until stage 2. It is the first thing a user sees, so a frozen bar
     there is the worst case."""
-    import animancer3d.progress as mod
+    import warlock.progress as mod
 
     t = [1000.0]
     monkeypatch.setattr(mod.time, "monotonic", lambda: t[0])
@@ -187,7 +187,7 @@ def test_cold_model_load_keeps_moving(monkeypatch):
 
 def test_silence_after_a_flow_run_still_creeps(monkeypatch):
     """Stage 6 spends ~3.5 s in a silent PBR decode once its flow run ends."""
-    import animancer3d.progress as mod
+    import warlock.progress as mod
 
     t = [1000.0]
     monkeypatch.setattr(mod.time, "monotonic", lambda: t[0])
@@ -346,7 +346,7 @@ def test_update_never_regresses():
 
 def test_creep_moves_the_bar_without_new_lines(monkeypatch):
     """A silent stage must still visibly advance, but never past the next milestone."""
-    import animancer3d.progress as mod
+    import warlock.progress as mod
 
     t = [1000.0]
     monkeypatch.setattr(mod.time, "monotonic", lambda: t[0])
