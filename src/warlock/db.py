@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at  REAL,
     finished_at REAL,
     stage       TEXT NOT NULL DEFAULT 'model',  -- 'reference' | 'model'
-    parent_id   TEXT                            -- the reference job this was promoted from
+    parent_id   TEXT,                           -- the reference job this was promoted from
+    name        TEXT NOT NULL DEFAULT '',       -- user-given title; the prompt is the fallback
+    tags        TEXT NOT NULL DEFAULT '',       -- comma-separated, normalized lowercase
+    favorite    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
@@ -43,6 +46,16 @@ MIGRATIONS: list[list[str]] = [
         "ALTER TABLE jobs ADD COLUMN stage TEXT NOT NULL DEFAULT 'model'",
         "ALTER TABLE jobs ADD COLUMN parent_id TEXT",
         "CREATE INDEX IF NOT EXISTS idx_jobs_parent ON jobs(parent_id)",
+    ],
+    # 2 -- workshop metadata. A job's identity used to be its raw prompt
+    # forever. Columns rather than params keys because these are what the list
+    # filters and sorts on, and params is a JSON string sqlite cannot index
+    # into.
+    [
+        "ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE jobs ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_favorite ON jobs(favorite)",
     ],
 ]
 
@@ -182,6 +195,39 @@ class JobStore:
                 "UPDATE jobs SET params = ? WHERE id = ?", (json.dumps(params), job_id)
             )
             self._conn.commit()
+
+    def set_meta(
+        self,
+        job_id: str,
+        *,
+        name: str | None = None,
+        tags: str | None = None,
+        favorite: bool | None = None,
+    ) -> bool:
+        """Update the user-facing metadata. Only the fields given are written.
+
+        Partial by design: the UI's star button and its rename field are
+        separate actions on the same row, and a full-row write from either
+        would silently clobber whatever the other just did.
+        """
+        sets: list[str] = []
+        args: list[Any] = []
+        for column, value in (("name", name), ("tags", tags)):
+            if value is not None:
+                sets.append(f"{column} = ?")
+                args.append(value)
+        if favorite is not None:
+            sets.append("favorite = ?")
+            args.append(1 if favorite else 0)
+        if not sets:
+            return self.get(job_id) is not None
+        args.append(job_id)
+        with self._lock:
+            cur = self._conn.execute(
+                f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", args
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def claim(self, job_id: str) -> bool:
         """Atomically transition queued -> running. False if the job was

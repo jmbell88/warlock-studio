@@ -248,6 +248,65 @@ def compose_prompt(user_prompt: str, params: dict[str, Any]) -> str:
     return ", ".join(p for p in parts if p)
 
 
+# Whole recipes: a prompt skeleton plus every guidance field that makes the
+# style land. Defined here rather than in the browser because the fields name
+# taxonomy and model keys, and normalize() is what decides whether those are
+# still valid -- a preset that names a removed LoRA should fail this module's
+# tests, not a user's submit.
+PRESETS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "handpainted_prop",
+        "label": "Hand-painted fantasy prop",
+        "prompt": "a weathered wooden crate bound with iron",
+        "fields": {
+            "category": "prop",
+            "genre": "fantasy",
+            "art_style": "handpainted",
+            "platform": "desktop",
+            "base_model": "sdxl",
+            "style_lora": "render3d",
+        },
+    },
+    {
+        "key": "ps1_character",
+        "label": "PS1 low-poly character",
+        "prompt": "a hooded adventurer standing in a neutral pose",
+        "fields": {
+            "category": "character",
+            "genre": "fantasy",
+            "art_style": "lowpoly",
+            "platform": "mobile",
+            "base_model": "sdxl",
+            "style_lora": "ps1",
+        },
+    },
+    {
+        "key": "scifi_hero_weapon",
+        "label": "Sci-fi hero weapon",
+        "prompt": "a compact energy rifle with panel seams and glowing vents",
+        "fields": {
+            "category": "weapon",
+            "genre": "scifi",
+            "art_style": "realistic",
+            "platform": "hero",
+            "base_model": "playground",
+        },
+    },
+    {
+        "key": "modern_pickup",
+        "label": "Modern consumable pickup",
+        "prompt": "a small first-aid kit",
+        "fields": {
+            "category": "consumable",
+            "genre": "modern",
+            "art_style": "stylized",
+            "platform": "mobile",
+            "base_model": "turbo",
+        },
+    },
+)
+
+
 def catalog() -> dict[str, Any]:
     """The taxonomy as JSON, so the UI builds its selects from one source."""
     return {
@@ -265,6 +324,9 @@ def catalog() -> dict[str, Any]:
         }
         | models.catalog(),
         "bg_removal": list(BG_REMOVAL),
+        # Copied, not handed out: the UI reads these and a shared dict would let
+        # a caller mutate the shipped table.
+        "presets": [dict(p) for p in PRESETS],
         "defaults": {
             "platform": DEFAULT_PLATFORM,
             "size_m": DEFAULT_SIZE_M,

@@ -181,3 +181,23 @@ def test_explicit_empty_negative_prompt_means_none_not_the_default():
     # A `if not negative:` refactor would silently collapse this back to the
     # default, so this is pinned separately from the defaults/strip/cap test.
     assert guidance.normalize({"negative_prompt": ""})["negative_prompt"] == ""
+
+
+def test_every_shipped_preset_normalizes():
+    from warlock import guidance
+
+    assert guidance.PRESETS
+    for preset in guidance.PRESETS:
+        # If a preset names a taxonomy or model key that has been renamed or
+        # removed, this is where it fails -- not in the user's browser as an
+        # uninterpretable 400 at submit time.
+        guidance.normalize(dict(preset["fields"]))
+        assert preset["prompt"]
+        assert preset["label"]
+
+
+def test_presets_appear_in_the_catalog():
+    from warlock import guidance
+
+    keys = {p["key"] for p in guidance.catalog()["presets"]}
+    assert "handpainted_prop" in keys

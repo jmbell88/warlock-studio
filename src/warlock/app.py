@@ -18,7 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
@@ -329,6 +329,89 @@ def create_app() -> FastAPI:
         _attach_files(job, config.job_dir(job_id))
         _attach_progress(job, app.state.worker)
         return job
+
+    MAX_JOB_NAME = 120
+    MAX_TAGS = 20
+    MAX_TAG_LEN = 32
+
+    def _normalize_tags(raw: Any) -> str:
+        """A list or a comma string -> a sorted, deduped, lowercase csv.
+
+        Normalized on the way in rather than at every read: a filter that has to
+        case-fold and trim on each keystroke over a thousand rows is the kind of
+        thing that makes a UI feel broken, and 'Prop' and 'prop ' being two tags
+        is the kind of thing that makes a workshop unsearchable.
+        """
+        if raw is None:
+            return ""
+        items = raw if isinstance(raw, list) else str(raw).split(",")
+        tags = sorted({t.strip().lower() for t in (str(i) for i in items) if t.strip()})
+        if len(tags) > MAX_TAGS:
+            raise HTTPException(400, f"at most {MAX_TAGS} tags")
+        if any(len(t) > MAX_TAG_LEN for t in tags):
+            raise HTTPException(400, f"a tag may be at most {MAX_TAG_LEN} characters")
+        return ",".join(tags)
+
+    @app.patch("/api/jobs/{job_id}")
+    async def update_job(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Rename, retag or (un)favourite a job.
+
+        JSON rather than a form like most of this API, for the same reason poses
+        are: tags are a list, which multipart can only carry as a re-encoded
+        string.
+        """
+        _check_job_id(job_id)
+        name = payload.get("name")
+        if name is not None:
+            name = str(name).strip()
+            if len(name) > MAX_JOB_NAME:
+                raise HTTPException(400, f"name must be at most {MAX_JOB_NAME} characters")
+        tags = _normalize_tags(payload["tags"]) if "tags" in payload else None
+        favorite = bool(payload["favorite"]) if "favorite" in payload else None
+
+        updated = await asyncio.to_thread(
+            functools.partial(
+                store().set_meta, job_id, name=name, tags=tags, favorite=favorite
+            )
+        )
+        if not updated:
+            raise HTTPException(404, "no such job")
+        job = await asyncio.to_thread(store().get, job_id)
+        _attach_files(job, config.job_dir(job_id))
+        _attach_progress(job, app.state.worker)
+        return job
+
+    # A canvas snapshot at list size. Bounded because it arrives as a raw body
+    # from the browser and the only thing between it and the disk is this number.
+    MAX_THUMB_BYTES = 512 * 1024
+    PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+    @app.post("/api/jobs/{job_id}/thumb.png")
+    async def put_thumbnail(job_id: str, request: Request) -> dict[str, Any]:
+        """Store a client-rendered preview of the mesh.
+
+        Rendered in the browser rather than on the server: the viewer already has
+        the model loaded and framed when the user first opens it, so the snapshot
+        is free -- while a server-side render would need Blender and a place on
+        the serial GPU queue for something purely cosmetic.
+
+        The magic-byte check is the whole validation: this is written under a
+        fixed filename inside a job directory that already exists, so the only
+        thing worth refusing is a body that is not the image it claims to be.
+        """
+        _check_job_id(job_id)
+        job = await asyncio.to_thread(store().get, job_id)
+        if job is None:
+            raise HTTPException(404, "no such job")
+        data = await request.body()
+        if len(data) > MAX_THUMB_BYTES:
+            raise HTTPException(413, "thumbnail too large")
+        if not data.startswith(PNG_MAGIC):
+            raise HTTPException(400, "thumbnail must be a PNG")
+        job_dir = config.job_dir(job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread((job_dir / "thumb.png").write_bytes, data)
+        return {"ok": True}
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str) -> dict[str, Any]:
@@ -924,6 +1007,7 @@ def create_app() -> FastAPI:
         "model.fbx": "application/octet-stream",
         "textures.zip": "application/zip",
         "rig.glb": "model/gltf-binary",
+        "thumb.png": "image/png",
     }
 
     @app.get("/api/jobs/{job_id}/files/{name}")
@@ -1143,6 +1227,10 @@ def _attach_files(job: dict[str, Any], job_dir: Path) -> None:
     # marker for the pair.
     if (job_dir / "rig.json").exists() and (job_dir / "rig.glb").exists():
         files.append("rig.glb")
+    # Ungated on status: the thumbnail is written by the browser after the job
+    # finished, and it is complete the moment it exists.
+    if (job_dir / "thumb.png").exists():
+        files.append("thumb.png")
     job["files"] = files
 
 

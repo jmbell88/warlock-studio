@@ -6,7 +6,10 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 // --- viewer -----------------------------------------------------------------
 
 const canvas = document.getElementById("viewer");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+// preserveDrawingBuffer is what makes canvas.toBlob return the frame that was
+// just drawn rather than a cleared buffer. It costs a little fill rate and is
+// the only way to snapshot a thumbnail without a second offscreen renderer.
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 // Set explicitly rather than relying on the default: ACES darkens noticeably,
 // and the exposure is what the environment intensity below is balanced against.
@@ -84,6 +87,16 @@ function resize() {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
+  // The compare canvas is sized by CSS (50% each), so it is measured the same
+  // way rather than by halving anything here -- one definition of the split.
+  if (comparing && rendererB) {
+    const bw = canvasB.clientWidth, bh = canvasB.clientHeight;
+    if (bw > 0 && bh > 0 && (canvasB.width !== bw || canvasB.height !== bh)) {
+      rendererB.setSize(bw, bh, false);
+      cameraB.aspect = bw / bh;
+      cameraB.updateProjectionMatrix();
+    }
+  }
 }
 new ResizeObserver(resize).observe(canvas);
 
@@ -92,6 +105,17 @@ renderer.setAnimationLoop(() => {
   controls.update();
   syncJointMarkers();
   renderer.render(scene, camera);
+  if (comparing && rendererB) {
+    // One camera state, two renders: the whole point of the compare view is
+    // that the two meshes are seen from the identical angle, so the second
+    // camera copies the first rather than having controls of its own.
+    cameraB.position.copy(camera.position);
+    cameraB.quaternion.copy(camera.quaternion);
+    cameraB.near = camera.near;
+    cameraB.far = camera.far;
+    cameraB.updateProjectionMatrix();
+    rendererB.render(sceneB, cameraB);
+  }
 });
 
 function disposeModel(root) {
@@ -105,6 +129,31 @@ function disposeModel(root) {
       material.dispose();
     }
   });
+}
+
+// Camera framing, split out of showModel so the "frame" button and the F key
+// can put a lost camera back without reloading the mesh. Returns the bounding
+// radius, which is what the pose editor sizes its joint markers against.
+//
+// Everything here is derived from the bounding box rather than fixed: guidance.py
+// sizes a model anywhere from 0.01 m to 100 m, so the old hardcoded near/far of
+// 0.01/100 and 4 m grid only ever framed a ~1 m prop.
+function frameModel(root = model) {
+  if (!root) return 0;
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const radius = Math.max(size.length() * 0.5, 1e-4);
+  camera.near = radius / 1000;
+  camera.far = radius * 100;
+  camera.updateProjectionMatrix();
+
+  const distance = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.25;
+  camera.position.set(distance * 0.62, distance * 0.47, distance * 0.62);
+  controls.target.set(0, size.y * 0.5, 0);
+  controls.minDistance = radius * 0.5;
+  controls.maxDistance = radius * 20;
+  controls.update();
+  return radius;
 }
 
 // onReady, when given, receives the placed root and the model's bounding
@@ -123,21 +172,8 @@ function showModel(url, onReady) {
     model.position.set(-center.x, -box.min.y, -center.z);
     scene.add(model);
 
-    // Everything below is derived from the bounding box rather than fixed:
-    // guidance.py sizes a model anywhere from 0.01 m to 100 m, so the old
-    // hardcoded near/far of 0.01/100 and 4 m grid only ever framed a ~1 m prop.
     const size = box.getSize(new THREE.Vector3());
-    const radius = Math.max(size.length() * 0.5, 1e-4);
-    camera.near = radius / 1000;
-    camera.far = radius * 100;
-    camera.updateProjectionMatrix();
-
-    const distance = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.25;
-    camera.position.set(distance * 0.62, distance * 0.47, distance * 0.62);
-    controls.target.set(0, size.y * 0.5, 0);
-    controls.minDistance = radius * 0.5;
-    controls.maxDistance = radius * 20;
-    controls.update();
+    const radius = frameModel(model);
 
     // A power-of-ten span that comfortably contains the footprint.
     const span = Math.pow(10, Math.ceil(Math.log10(Math.max(size.x, size.z) * 2.5)));
@@ -146,12 +182,153 @@ function showModel(url, onReady) {
     grid = new THREE.GridHelper(span, 16, 0x2c2f3a, 0x232530);
     scene.add(grid);
 
+    // Wireframe is a viewer mode, not a property of one mesh: a model loaded
+    // while it is on must come in wireframed too.
+    applyWireframe();
+    updateStats(model);
     onReady?.(model, radius);
     hideOverlay();
   }, undefined, () => {
     showOverlayError("Could not load the generated model.");
   });
 }
+
+// --- compare view -----------------------------------------------------------
+//
+// A second renderer over its own canvas rather than a split viewport: the main
+// scene, camera and controls are reached into by the pose editor and the sheet
+// preview, and a viewport split would mean each of them learning which half it
+// is drawing. This way none of them change.
+
+const canvasB = document.getElementById("viewer-b");
+let rendererB = null;
+let sceneB = null;
+let cameraB = null;
+let modelB = null;
+let comparing = null;   // the job id shown on the right
+
+function ensureCompare() {
+  if (rendererB) return;
+  rendererB = new THREE.WebGLRenderer({ canvas: canvasB, antialias: true });
+  rendererB.toneMapping = renderer.toneMapping;
+  rendererB.toneMappingExposure = renderer.toneMappingExposure;
+  rendererB.outputColorSpace = renderer.outputColorSpace;
+  sceneB = new THREE.Scene();
+  // The environment probe is a render target built once at startup; sharing it
+  // rather than generating a second one keeps the two halves lit identically,
+  // which is the only way a side-by-side comparison means anything.
+  sceneB.environment = scene.environment;
+  sceneB.environmentIntensity = scene.environmentIntensity;
+  sceneB.background = scene.background;
+  cameraB = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, camera.far);
+  sceneB.add(new THREE.HemisphereLight(0xffffff, 0x223, 0.3));
+  const keyB = new THREE.DirectionalLight(0xffffff, 1.5);
+  keyB.position.copy(key.position);
+  sceneB.add(keyB);
+  sceneB.add(new THREE.GridHelper(4, 16, 0x2c2f3a, 0x232530));
+}
+
+async function compareWith(jobId) {
+  ensureCompare();
+  comparing = jobId;
+  document.querySelector("main").classList.add("comparing");
+  if (modelB) { sceneB.remove(modelB); disposeModel(modelB); modelB = null; }
+  const gltf = await loader.loadAsync(`/api/jobs/${jobId}/files/model.glb`);
+  modelB = gltf.scene;
+  // Placed the same way showModel places the left-hand mesh: centred on the
+  // origin and resting on the grid, or the two would not line up.
+  const box = new THREE.Box3().setFromObject(modelB);
+  const centre = box.getCenter(new THREE.Vector3());
+  modelB.position.set(-centre.x, -box.min.y, -centre.z);
+  sceneB.add(modelB);
+  resize();
+  refreshCompareButtons();
+}
+
+function stopComparing() {
+  comparing = null;
+  document.querySelector("main").classList.remove("comparing");
+  if (modelB) { sceneB.remove(modelB); disposeModel(modelB); modelB = null; }
+  resize();
+  refreshCompareButtons();
+}
+
+// Toggling compare must relabel the buttons now, not on the next poll: a
+// button that still says "compare" after the pane opened reads as a no-op.
+function refreshCompareButtons() {
+  for (const [id, n] of nodes) {
+    const job = jobsById.get(id);
+    if (!job) continue;
+    n.compare.hidden =
+      job.status !== "done" || !job.files.includes("model.glb") || id === selected;
+    setText(n.compare, comparing === id ? "stop compare" : "compare");
+  }
+}
+
+// --- viewer tools -----------------------------------------------------------
+
+// Counted off the loaded scene rather than read from mesh_report: the report
+// describes model.glb, and the viewer may be showing rig.glb or a baked pose.
+// The number under the model should describe the model under it.
+function modelStats(root) {
+  let triangles = 0;
+  let vertices = 0;
+  root.traverse((o) => {
+    const g = o.isMesh ? o.geometry : null;
+    if (!g) return;
+    const position = g.getAttribute("position");
+    vertices += position ? position.count : 0;
+    triangles += g.index ? g.index.count / 3 : (position ? position.count / 3 : 0);
+  });
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  return { triangles: Math.round(triangles), vertices, size };
+}
+
+function updateStats(root) {
+  const el = document.getElementById("tool-stats");
+  if (!root) { setText(el, ""); return; }
+  const s = modelStats(root);
+  setText(
+    el,
+    `${s.triangles.toLocaleString()} tris · ${s.vertices.toLocaleString()} verts · ` +
+      `${s.size.x.toFixed(2)} × ${s.size.y.toFixed(2)} × ${s.size.z.toFixed(2)} m`,
+  );
+}
+
+let wireframe = false;
+
+function applyWireframe() {
+  if (!model) return;
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    // An array covers multi-material meshes, which a joined trellis export can
+    // still be after an OBJ round-trip.
+    for (const m of [].concat(o.material)) m.wireframe = wireframe;
+  });
+}
+
+document.getElementById("tool-wire").addEventListener("click", (e) => {
+  wireframe = !wireframe;
+  e.currentTarget.classList.toggle("on", wireframe);
+  applyWireframe();
+});
+
+const spinButton = document.getElementById("tool-spin");
+spinButton.addEventListener("click", (e) => {
+  // OrbitControls' own autoRotate, not a manual rotation of the model: rotating
+  // the model would move the thing the pose gizmo and the joint markers are
+  // positioned against.
+  controls.autoRotate = !controls.autoRotate;
+  e.currentTarget.classList.toggle("on", controls.autoRotate);
+});
+
+function stopSpinning() {
+  controls.autoRotate = false;
+  spinButton.classList.remove("on");
+}
+
+document.getElementById("tool-frame").addEventListener("click", () => frameModel());
 
 // --- viewer overlay ---------------------------------------------------------
 
@@ -288,8 +465,19 @@ async function loadGuidance() {
   loraWeight.addEventListener("input", () => {
     loraWeightOut.textContent = Number(loraWeight.value).toFixed(2);
   });
+  const presetSelect = document.getElementById("preset");
+  for (const preset of catalog.presets ?? []) {
+    const opt = document.createElement("option");
+    opt.value = preset.key;
+    setText(opt, preset.label);
+    presetSelect.append(opt);
+  }
+  presets = catalog.presets ?? [];
   syncPlatformHint();
   syncLoraWeight();
+  // Last: the selects must exist and be populated before a stored value can be
+  // checked against their options.
+  restoreFormState();
 }
 
 loadGuidance().catch((e) => console.error("could not load guidance options", e));
@@ -408,6 +596,9 @@ function isRigged(job) {
 document.getElementById("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData();
+  // The same field set the form sends, kept aside so a successful submit can be
+  // replayed from the history list by exactly the recipe that produced it.
+  const submittedFields = {};
   fd.set("kind", kind);
   fd.set("seed", seedInput.value || String(newSeed()));
   // No explicit resolution: the platform preset supplies it server-side.
@@ -417,8 +608,12 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     if (row && row.hidden) continue;
     const value = guidanceSelects[field]?.value;
     if (value) fd.set(field, value);
+    if (value) submittedFields[field] = value;
   }
-  if (sizeInput.value) fd.set("size_m", sizeInput.value);
+  if (sizeInput.value) {
+    fd.set("size_m", sizeInput.value);
+    submittedFields.size_m = sizeInput.value;
+  }
   fd.set("profile", document.getElementById("g-profile").value);
   if (rig.available && rigEnable.checked) {
     fd.set("rig", "true");
@@ -449,7 +644,7 @@ document.getElementById("form").addEventListener("submit", async (e) => {
     const r = await fetch("/api/jobs", { method: "POST", body: fd });
     const body = await r.json();
     if (!r.ok) {
-      alert(body.detail ?? "request failed");
+      toast(body.detail ?? "request failed");
     } else {
       // Follow the new job straight away instead of making the user find it.
       selected = body.id;
@@ -467,12 +662,194 @@ document.getElementById("form").addEventListener("submit", async (e) => {
       showOverlay();
       // Next submit gets a different mesh unless the user asked to pin it.
       if (!seedLock.checked) rollSeed();
+      recordSubmission(fd.get("prompt"), submittedFields);
+      saveFormState();
+      // Asked here, not on page load: an unprompted permission dialog on
+      // arrival is the one everybody dismisses without reading.
+      if (window.Notification?.permission === "default") Notification.requestPermission();
     }
   } finally {
     btn.disabled = false;
   }
   poll(true);
 });
+
+// --- reference input: drop and paste ----------------------------------------
+
+// The image tab was a bare <input type="file">. Dropping a reference or pasting
+// one from a screenshot tool is how people actually get an image into this.
+const imageInput = document.getElementById("image");
+const dropZone = document.getElementById("image-input");
+
+function acceptImage(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  // A DataTransfer is the only way to write to input.files, which is what the
+  // submit handler reads -- so a dropped file and a chosen one are one path.
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  imageInput.files = dt.files;
+  tabs.image.click();
+  toast(`Using ${file.name || "pasted image"}`, "ok");
+}
+
+for (const type of ["dragover", "dragenter"]) {
+  dropZone.addEventListener(type, (e) => { e.preventDefault(); dropZone.classList.add("drop"); });
+}
+for (const type of ["dragleave", "drop"]) {
+  dropZone.addEventListener(type, () => dropZone.classList.remove("drop"));
+}
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  acceptImage(e.dataTransfer?.files?.[0]);
+});
+window.addEventListener("paste", (e) => {
+  const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+  if (item) acceptImage(item.getAsFile());
+});
+
+// --- keyboard shortcuts -----------------------------------------------------
+
+// Deliberately few, and none that fire while typing: a prompt textarea that
+// eats Escape or F would be worse than having no shortcuts at all.
+window.addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    document.getElementById("form").requestSubmit();
+    return;
+  }
+  if (typing) return;
+  if (e.key === "Escape" && poseState.editing) exitPoseEditing();
+  if (e.key === "f" || e.key === "F") frameModel();
+});
+
+// --- finish notifications ---------------------------------------------------
+
+// Only for jobs that ran long enough that the user plausibly went elsewhere --
+// a notification for a 4-second reference render is noise.
+const NOTIFY_AFTER_SECONDS = 45;
+const lastStatus = new Map();
+
+function maybeNotify(job) {
+  const ran = (job.finished_at ?? 0) - (job.started_at ?? 0);
+  if (ran < NOTIFY_AFTER_SECONDS) return;
+  const title = job.name || job.prompt || job.id;
+  if (window.Notification?.permission === "granted") {
+    new Notification(job.status === "done" ? "Model ready" : "Job failed", { body: title });
+  }
+  toast(`${job.status === "done" ? "Finished" : "Failed"}: ${title}`,
+        job.status === "done" ? "ok" : "error");
+}
+
+// Only the transition is interesting: the list is re-rendered every few
+// seconds, and a job stays 'done' forever after it lands.
+function notifyTransitions(jobs) {
+  for (const job of jobs) {
+    const before = lastStatus.get(job.id);
+    lastStatus.set(job.id, job.status);
+    if (before === undefined || before === job.status) continue;
+    if (job.status === "done" || job.status === "error") maybeNotify(job);
+  }
+}
+
+// --- form state -------------------------------------------------------------
+
+// Every setting except the seed, which is deliberately rerolled per submit.
+const FORM_STATE_KEY = "warlock.form.v1";
+
+function saveFormState() {
+  const state = { prompt: document.getElementById("prompt").value };
+  for (const field of GUIDANCE_FIELDS) state[field] = guidanceSelects[field]?.value ?? "";
+  state.size_m = sizeInput.value;
+  state.lora_weight = loraWeight.value;
+  state.negative_prompt = document.getElementById("negative-prompt")?.value ?? "";
+  localStorage.setItem(FORM_STATE_KEY, JSON.stringify(state));
+}
+
+function restoreFormState() {
+  let state;
+  try {
+    state = JSON.parse(localStorage.getItem(FORM_STATE_KEY) || "null");
+  } catch {
+    return;   // a corrupt blob costs the restore, not the page
+  }
+  if (!state) return;
+  if (state.prompt) document.getElementById("prompt").value = state.prompt;
+  for (const field of GUIDANCE_FIELDS) {
+    const select = guidanceSelects[field];
+    // Only if the option still exists -- a stored model key can outlive a
+    // registry entry, and setting a select to a missing value blanks it.
+    if (select && state[field] && [...select.options].some((o) => o.value === state[field])) {
+      select.value = state[field];
+    }
+  }
+  if (state.size_m) { sizeInput.value = state.size_m; sizeEdited = true; }
+  if (state.lora_weight) { loraWeight.value = state.lora_weight; syncLoraWeight(); }
+  const negative = document.getElementById("negative-prompt");
+  if (negative && state.negative_prompt) negative.value = state.negative_prompt;
+  syncPlatformHint();
+}
+
+document.getElementById("form").addEventListener("change", saveFormState);
+
+// --- presets and history ----------------------------------------------------
+
+let presets = [];
+
+document.getElementById("preset").addEventListener("change", (e) => {
+  const preset = presets.find((p) => p.key === e.target.value);
+  if (!preset) return;
+  // Reuses the same filler a finished job's "copy settings" uses, so a preset
+  // and a past recipe land in the form by exactly one code path.
+  copySettingsToForm({ prompt: preset.prompt, params: preset.fields });
+  e.target.value = "";
+  saveFormState();
+});
+
+const HISTORY_KEY = "warlock.history.v1";
+const HISTORY_MAX = 20;
+
+function readHistory() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordSubmission(prompt, fields) {
+  if (!prompt) return;
+  const history = readHistory().filter((h) => h.prompt !== prompt);
+  history.unshift({ prompt, fields, at: Date.now() });
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_MAX)));
+  renderHistory();
+}
+
+function renderHistory() {
+  const select = document.getElementById("history");
+  select.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  setText(blank, "recent…");
+  select.append(blank);
+  readHistory().forEach((entry, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    setText(opt, entry.prompt.slice(0, 60));
+    select.append(opt);
+  });
+}
+
+document.getElementById("history").addEventListener("change", (e) => {
+  const entry = readHistory()[Number(e.target.value)];
+  if (!entry) return;
+  copySettingsToForm({ prompt: entry.prompt, params: entry.fields });
+  e.target.value = "";
+  saveFormState();
+});
+
+renderHistory();
 
 // --- job list ---------------------------------------------------------------
 
@@ -512,6 +889,57 @@ bannerClose.addEventListener("click", () => {
   activeBannerKind = null;
 });
 
+// --- toasts -----------------------------------------------------------------
+
+// alert() blocks the event loop, which in a page that polls every 600 ms means
+// the progress bar freezes behind the dialog the user has to dismiss to see it.
+function toast(message, kind = "error") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  setText(el, message);
+  document.getElementById("toasts").append(el);
+  setTimeout(() => el.remove(), kind === "error" ? 8000 : 4000);
+}
+
+// --- filtering --------------------------------------------------------------
+
+const filters = {
+  text: document.getElementById("filter-text"),
+  status: document.getElementById("filter-status"),
+  kind: document.getElementById("filter-kind"),
+  fav: document.getElementById("filter-fav"),
+};
+for (const el of Object.values(filters)) {
+  el.addEventListener("input", () => renderJobs([...jobsById.values()]));
+}
+
+// Client-side on purpose: /api/jobs already returns the whole workshop, and a
+// server-side search would be a second definition of "matches" that could
+// disagree with what the list is showing.
+function jobMatches(job) {
+  if (filters.status.value && job.status !== filters.status.value) return false;
+  if (filters.kind.value && job.kind !== filters.kind.value) return false;
+  if (filters.fav.checked && !job.favorite) return false;
+  const q = filters.text.value.trim().toLowerCase();
+  if (!q) return true;
+  return [job.name, job.prompt, job.tags, job.id]
+    .filter(Boolean)
+    .some((field) => String(field).toLowerCase().includes(q));
+}
+
+async function patchJob(id, body) {
+  const r = await fetch(`/api/jobs/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    toast(detail.detail ?? "could not update the job");
+  }
+  return r.ok;
+}
+
 function createNode(id) {
   const li = document.createElement("li");
   const img = document.createElement("img");
@@ -526,6 +954,10 @@ function createNode(id) {
   err.className = "job-error";
   const quality = document.createElement("div");
   quality.className = "job-quality";
+  // rerun_of has been stored since re-roll shipped and shown nowhere. A variant
+  // that does not say what it is a variant of is just another row.
+  const lineage = document.createElement("div");
+  lineage.className = "job-lineage";
   const settings = document.createElement("div");
   settings.className = "job-settings";
   settings.hidden = true;
@@ -539,7 +971,7 @@ function createNode(id) {
   bar.hidden = true;
   const fill = document.createElement("i");
   bar.append(fill);
-  info.append(title, status, stage, err, quality, settingsToggle, settings, bar);
+  info.append(title, status, stage, err, quality, lineage, settingsToggle, settings, bar);
   const actions = document.createElement("div");
   actions.className = "job-actions";
   const reroll = document.createElement("button");
@@ -562,6 +994,37 @@ function createNode(id) {
   setText(another, "try another");
   another.title = "Same prompt and settings, new reference seed";
   another.hidden = true;
+  const compare = document.createElement("button");
+  setText(compare, "compare");
+  compare.title = "Show this beside the selected model";
+  compare.hidden = true;
+  compare.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (comparing === id) stopComparing();
+    else compareWith(id).catch((err) => toast(`could not load that model to compare: ${err}`));
+  });
+  // Favouriting and renaming are actions on the row, not ways of opening it,
+  // so both stop the click that the <li> uses to select.
+  const star = document.createElement("button");
+  star.type = "button";
+  star.className = "star";
+  star.title = "Favourite";
+  setText(star, "☆");
+  star.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const job = jobsById.get(id);
+    await patchJob(id, { favorite: !job?.favorite });
+    poll(true);
+  });
+  title.title = "Double-click to rename";
+  title.addEventListener("dblclick", async (e) => {
+    e.stopPropagation();
+    const job = jobsById.get(id);
+    const next = window.prompt("Name this asset", job?.name || job?.prompt || "");
+    if (next === null) return;
+    await patchJob(id, { name: next });
+    poll(true);
+  });
   const act = document.createElement("button");
   // Bulk-export selection. Independent of `selected` (which is the one job the
   // viewer is showing), so ticking a card must not also open it.
@@ -571,7 +1034,7 @@ function createNode(id) {
   pick.title = "Include in a bulk export";
   pick.addEventListener("click", (e) => e.stopPropagation());
   pick.addEventListener("change", updateBulkBar);
-  actions.append(pick, make3d, another, reroll, remesh, rigBtn, act);
+  actions.append(star, pick, make3d, another, reroll, remesh, compare, rigBtn, act);
   li.append(img, info, actions);
 
   // Bound once, so a poll never rebinds stale closures. Shared by reroll and
@@ -585,7 +1048,7 @@ function createNode(id) {
     const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
     const body = await r.json();
     if (!r.ok) {
-      alert(body.detail ?? "rerun failed");
+      toast(body.detail ?? "rerun failed");
       return;
     }
     // Follow the new job the same way a fresh submit does.
@@ -613,7 +1076,7 @@ function createNode(id) {
     try {
       const r = await fetch(`/api/jobs/${id}/model`, { method: "POST" });
       const body = await r.json();
-      if (!r.ok) { alert(body.detail ?? "could not start the 3D stage"); return; }
+      if (!r.ok) { toast(body.detail ?? "could not start the 3D stage"); return; }
       selected = body.id;
       shownModelFor = null;
       pending = body.id;
@@ -642,7 +1105,7 @@ function createNode(id) {
       fd.set("template", rigTemplate.value);
       const r = await fetch(`/api/jobs/${id}/rig`, { method: "POST", body: fd });
       const body = await r.json();
-      if (!r.ok) alert(body.detail ?? "could not queue the rig");
+      if (!r.ok) toast(body.detail ?? "could not queue the rig");
     } finally {
       rigBtn.disabled = false;
     }
@@ -691,8 +1154,9 @@ function createNode(id) {
     if (job) copySettingsToForm(job);
   });
 
-  const n = { li, img, title, status, stage, err, quality, settings, settingsToggle,
-              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another, pick };
+  const n = { li, img, title, status, stage, err, quality, lineage, settings, settingsToggle,
+              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another, pick,
+              star, compare };
   nodes.set(id, n);
   return n;
 }
@@ -744,8 +1208,8 @@ bulkFolder.addEventListener("click", async () => {
     for (const id of ids) fd.append("ids", id);
     const r = await fetch("/api/export/folder", { method: "POST", body: fd });
     const body = await r.json();
-    if (!r.ok) alert(body.detail ?? "export failed");
-    else alert(`copied ${body.copied} file(s) into ${body.dir}`);
+    if (!r.ok) toast(body.detail ?? "export failed");
+    else toast(`copied ${body.copied} file(s) into ${body.dir}`, "ok");
   } finally {
     bulkFolder.disabled = false;
   }
@@ -782,16 +1246,25 @@ function qualityBadge(job) {
 function updateNode(n, job) {
   n.li.classList.toggle("selected", job.id === selected);
 
-  const src = `/api/jobs/${job.id}/files/input.png`;
-  const hasImage = job.files.includes("input.png");
+  // The mesh, not the reference image, is what the user is looking for in a
+  // list of a hundred assets -- the reference only stands in until one exists.
+  const preferred = job.files.includes("thumb.png") ? "thumb.png" : "input.png";
+  const hasImage = job.files.includes(preferred);
+  const src = `/api/jobs/${job.id}/files/${preferred}`;
   if (hasImage && n.img.getAttribute("src") !== src) n.img.src = src;
   n.img.hidden = !hasImage;
 
   // A rig job carries its source's prompt, so it needs the prefix or the
-  // history reads as the same model having been generated twice.
-  setText(n.title, job.kind === "rig"
+  // history reads as the same model having been generated twice. A user-given
+  // name outranks all of it: naming a thing is how it stops being a prompt.
+  setText(n.title, job.name || (job.kind === "rig"
     ? `rig · ${job.prompt ?? job.params?.source_job ?? job.id}`
-    : job.prompt ?? `image job ${job.id}`);
+    : job.prompt ?? `image job ${job.id}`));
+  setText(n.star, job.favorite ? "★" : "☆");
+  n.star.classList.toggle("on", Boolean(job.favorite));
+
+  const from = job.params?.rerun_of || job.parent_id;
+  setText(n.lineage, from ? `variant of ${from.slice(0, 6)}` : "");
 
   // A cancelled job keeps running until its current GPU stage ends.
   const cancelling = job.status === "cancelled" && job.progress;
@@ -866,6 +1339,9 @@ function updateNode(n, job) {
   n.rigBtn.hidden =
     !rig.available || !done || !generated || !job.files.includes("model.glb") || isRigged(job);
 
+  n.compare.hidden = !done || !job.files.includes("model.glb") || job.id === selected;
+  setText(n.compare, comparing === job.id ? "stop compare" : "compare");
+
   const isReference = job.stage === "reference";
   n.make3d.hidden = !(isReference && done && job.files.includes("input.png"));
   n.another.hidden = !(isReference && done);
@@ -879,6 +1355,9 @@ function renderJobs(jobs) {
     jobsById.set(job.id, job);
     const n = nodes.get(job.id) ?? createNode(job.id);
     updateNode(n, job);
+    // Hidden rather than removed: removal would fight the reuse-by-id logic
+    // below, which treats "not in the list" as "this job is gone".
+    n.li.hidden = !jobMatches(job);
     if (ul.children[i] !== n.li) ul.insertBefore(n.li, ul.children[i] ?? null);
   });
   const live = new Set(jobs.map((j) => j.id));
@@ -911,6 +1390,29 @@ function select(id) {
   }
 }
 
+// One snapshot per job, taken the first time its mesh is framed in the viewer.
+// Deliberately after a render rather than on load: the canvas is only correct
+// once the model has been drawn at least once with the camera framed.
+const thumbedJobs = new Set();
+
+function captureThumbnail(jobId) {
+  if (!jobId || thumbedJobs.has(jobId)) return;
+  const job = jobsById.get(jobId);
+  if (job?.files?.includes("thumb.png")) { thumbedJobs.add(jobId); return; }
+  thumbedJobs.add(jobId);
+  requestAnimationFrame(() => {
+    renderer.render(scene, camera);   // guarantee the buffer holds this model
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      fetch(`/api/jobs/${jobId}/thumb.png`, {
+        method: "POST",
+        headers: { "Content-Type": "image/png" },
+        body: blob,
+      }).catch((e) => console.error("thumbnail upload failed", e));
+    }, "image/png");
+  });
+}
+
 function showSelected(job) {
   // The rig can land while the same job stays selected, so the download row
   // is refreshed even on the early-out path that skips reloading the mesh.
@@ -926,7 +1428,7 @@ function showSelected(job) {
   if (poseState.editing && poseState.job === job.id) return;
   if (shownModelFor === job.id) return;
   shownModelFor = job.id;
-  showModel(`/api/jobs/${job.id}/files/model.glb`);
+  showModel(`/api/jobs/${job.id}/files/model.glb`, () => captureThumbnail(job.id));
   document.getElementById("dl-glb").href = `/api/jobs/${job.id}/files/model.glb`;
   document.getElementById("dl-obj").href = `/api/jobs/${job.id}/files/model_obj.zip`;
   document.getElementById("dl-stl").href = `/api/jobs/${job.id}/files/model.stl`;
@@ -1242,6 +1744,9 @@ function renderPoses() {
 
 async function enterPoseEditing() {
   if (poseState.editing || !poseState.job) return;
+  // A turntable and a gizmo drag fight each other: the joint follows the
+  // pointer while the whole scene rotates out from under it.
+  stopSpinning();
   poseState.editing = true;
   poseToggle.classList.add("active");
   setText(poseToggle, "done");
@@ -1409,7 +1914,7 @@ document.getElementById("joint-apply").addEventListener("click", async () => {
     });
     const body = await r.json();
     if (!r.ok) {
-      alert(body.detail ?? "could not adjust the joints");
+      toast(body.detail ?? "could not adjust the joints");
       return;
     }
     exitJointsMode();
@@ -1471,7 +1976,7 @@ document.getElementById("pose-save").addEventListener("click", async () => {
   });
   const record = await r.json();
   if (!r.ok) {
-    alert(record.detail ?? "could not save the pose");
+    toast(record.detail ?? "could not save the pose");
     return;
   }
   poseState.current = record.id;
@@ -1763,7 +2268,7 @@ document.getElementById("sheet-render").addEventListener("click", async (e) => {
     fd.set("yaws", sheetYaws.value);
     const r = await fetch(`/api/jobs/${poseState.job}/sheets`, { method: "POST", body: fd });
     const body = await r.json();
-    if (!r.ok) alert(body.detail ?? "could not queue the sheet");
+    if (!r.ok) toast(body.detail ?? "could not queue the sheet");
   } finally {
     btn.disabled = false;
   }
@@ -1786,7 +2291,7 @@ function bindBusyDownload(anchor) {
       const r = await fetch(anchor.href);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        alert(body.detail ?? `could not prepare ${anchor.textContent}`);
+        toast(body.detail ?? `could not prepare ${anchor.textContent}`);
         return;
       }
       const blob = await r.blob();
@@ -1804,7 +2309,7 @@ function bindBusyDownload(anchor) {
       // Revoking synchronously can cancel a download that hasn't started yet.
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
-      alert(`download failed: ${err}`);
+      toast(`download failed: ${err}`);
     } finally {
       anchor.classList.remove("busy");
     }
@@ -1852,7 +2357,7 @@ document.getElementById("prune").addEventListener("click", async () => {
     fd.set("keep", String(keep));
     const r = await fetch("/api/jobs/prune", { method: "POST", body: fd });
     const body = await r.json();
-    if (!r.ok) alert(body.detail ?? "prune failed");
+    if (!r.ok) toast(body.detail ?? "prune failed");
   } finally {
     btn.disabled = false;
   }
@@ -1927,6 +2432,7 @@ let listTick = 0;
 async function refreshList() {
   const jobs = await (await fetch("/api/jobs", { signal: abort.signal })).json();
   renderJobs(jobs);
+  notifyTransitions(jobs);
   if (listTick++ % STORAGE_EVERY === 0) refreshStorage();
   // A finished sheet job means a new file in the source job's directory, and
   // nothing else would tell the panel about it.

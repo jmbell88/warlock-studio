@@ -1,6 +1,6 @@
 [project]
 name = "warlock"
-version = "0.0.2"
+version = "0.0.3"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
 dependencies = [

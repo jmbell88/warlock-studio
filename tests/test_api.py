@@ -1048,3 +1048,50 @@ def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
 def test_health_reports_the_export_dir(client):
     # The UI reveals its "save to project" button off this field alone.
     assert client.get("/api/health").json()["export_dir"] is None
+
+
+def test_patch_job_metadata(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
+    r = client.patch(
+        f"/api/jobs/{job_id}",
+        json={"name": "Oak barrel", "tags": ["Prop", " Fantasy "], "favorite": True},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Oak barrel"
+    assert body["tags"] == "fantasy,prop"      # normalized and sorted
+    assert body["favorite"] == 1
+
+
+def test_patch_rejects_an_overlong_name(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    assert client.patch(f"/api/jobs/{job_id}", json={"name": "x" * 200}).status_code == 400
+
+
+def test_patch_a_missing_job_is_404(client):
+    assert client.patch(f"/api/jobs/{'0' * 12}", json={"name": "x"}).status_code == 404
+
+
+def test_thumbnail_upload_and_download(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    png = _png_bytes()
+    r = client.post(
+        f"/api/jobs/{job_id}/thumb.png", content=png, headers={"Content-Type": "image/png"}
+    )
+    assert r.status_code == 200
+    assert client.get(f"/api/jobs/{job_id}/files/thumb.png").status_code == 200
+    assert "thumb.png" in client.get(f"/api/jobs/{job_id}").json()["files"]
+
+
+def test_thumbnail_rejects_a_non_png(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    r = client.post(f"/api/jobs/{job_id}/thumb.png", content=b"not a png")
+    assert r.status_code == 400
+
+
+def test_thumbnail_rejects_an_oversized_body(client):
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    r = client.post(
+        f"/api/jobs/{job_id}/thumb.png", content=b"\x89PNG\r\n\x1a\n" + b"0" * 600_000
+    )
+    assert r.status_code == 413

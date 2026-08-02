@@ -145,3 +145,34 @@ def test_add_column_guard_skips_the_column_less_add_spelling_on_a_fresh_db(
         assert version == len(fake_migrations)
     finally:
         store.close()
+
+
+def test_a_db_without_metadata_columns_gains_them(tmp_path):
+    """The workshop metadata columns are additive: a DB that predates them must
+    converge on the fresh shape with every existing row defaulted to blank."""
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+            prompt TEXT, params TEXT NOT NULL DEFAULT '{}', error TEXT,
+            created_at REAL NOT NULL, started_at REAL, finished_at REAL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs (id, kind, status, params, created_at)"
+        " VALUES ('aaaaaaaaaaaa', 'text', 'done', '{}', 1.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = JobStore(path)
+    try:
+        row = store.list(10)[0]
+        assert row["name"] == ""
+        assert row["tags"] == ""
+        assert row["favorite"] == 0
+    finally:
+        store.close()

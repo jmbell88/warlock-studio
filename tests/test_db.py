@@ -195,3 +195,32 @@ def test_children_ordered_oldest_first(store):
     first = store.create("text", "x", {}, parent_id=parent)
     second = store.create("text", "x", {}, parent_id=parent)
     assert [c["id"] for c in store.children(parent)] == [first, second]
+
+
+def test_set_meta_updates_name_tags_and_favorite(store):
+    job_id = store.create("text", "a barrel", {})
+    assert store.set_meta(job_id, name="Oak barrel", tags="prop,fantasy", favorite=True)
+    row = store.get(job_id)
+    assert row["name"] == "Oak barrel"
+    assert row["tags"] == "prop,fantasy"
+    assert row["favorite"] == 1
+
+
+def test_set_meta_leaves_unspecified_fields_alone(store):
+    job_id = store.create("text", "a barrel", {})
+    store.set_meta(job_id, name="Oak barrel")
+    store.set_meta(job_id, favorite=True)
+    row = store.get(job_id)
+    assert row["name"] == "Oak barrel"
+    assert row["favorite"] == 1
+
+
+def test_set_meta_on_a_missing_job_is_false(store):
+    assert store.set_meta("0" * 12, name="x") is False
+
+
+def test_new_jobs_default_to_empty_metadata(store):
+    row = store.get(store.create("text", "a barrel", {}))
+    assert row["name"] == ""
+    assert row["tags"] == ""
+    assert row["favorite"] == 0
