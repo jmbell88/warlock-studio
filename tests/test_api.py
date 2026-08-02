@@ -945,3 +945,43 @@ def test_fbx_is_derived_on_demand_through_the_blender_worker(client, tmp_path):
 def test_fbx_is_404_without_a_mesh(client):
     job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
     assert client.get(f"/api/jobs/{job_id}/files/model.fbx").status_code == 404
+
+
+def test_textures_zip_is_404_on_an_untextured_mesh(client, tmp_path):
+    # A mesh with no maps is a fact about the model, not a server fault.
+    trimesh = pytest.importorskip("trimesh")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+
+    r = client.get(f"/api/jobs/{job_id}/files/textures.zip")
+    assert r.status_code == 404
+    # No empty zip left behind to be served as a success next time.
+    assert not (job_dir / "textures.zip").exists()
+
+
+def test_textures_zip_is_derived_on_demand(client, tmp_path):
+    import zipfile
+
+    np = pytest.importorskip("numpy")
+    trimesh = pytest.importorskip("trimesh")
+    from PIL import Image
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    mesh = trimesh.creation.box(extents=(1, 1, 1))
+    mesh.visual = trimesh.visual.TextureVisuals(
+        uv=np.zeros((len(mesh.vertices), 2)),
+        material=trimesh.visual.material.PBRMaterial(
+            baseColorTexture=Image.new("RGB", (8, 8), (0, 255, 0))
+        ),
+    )
+    trimesh.Scene(mesh).export(job_dir / "model.glb")
+
+    r = client.get(f"/api/jobs/{job_id}/files/textures.zip")
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert "base_color.png" in zf.namelist()

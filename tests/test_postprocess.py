@@ -293,3 +293,40 @@ def test_collision_hull_is_convex_and_small(tmp_path):
     assert hull.is_convex
     assert hull.is_watertight
     assert len(hull.faces) <= source_faces
+
+
+def test_textures_zip_contains_the_pbr_maps(tmp_path):
+    import zipfile
+
+    import numpy as np
+    import trimesh
+    from PIL import Image
+
+    from warlock.pipelines import postprocess
+
+    mesh = trimesh.creation.box(extents=(1, 1, 1))
+    mesh.visual = trimesh.visual.TextureVisuals(
+        uv=np.zeros((len(mesh.vertices), 2)),
+        material=trimesh.visual.material.PBRMaterial(
+            baseColorTexture=Image.new("RGB", (8, 8), (255, 0, 0))
+        ),
+    )
+    src = tmp_path / "m.glb"
+    trimesh.Scene(mesh).export(src)
+
+    out = postprocess.glb_to_textures_zip(src, tmp_path / "textures.zip")
+
+    with zipfile.ZipFile(out) as zf:
+        assert "base_color.png" in zf.namelist()
+
+
+def test_textures_zip_on_an_untextured_mesh_raises(tmp_path):
+    import pytest
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    src = tmp_path / "m.glb"
+    trimesh.Scene(trimesh.creation.box()).export(src)
+    with pytest.raises(ValueError):
+        postprocess.glb_to_textures_zip(src, tmp_path / "textures.zip")

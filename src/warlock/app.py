@@ -832,6 +832,7 @@ def create_app() -> FastAPI:
         "model_obj.zip": "application/zip",
         "collision.glb": "model/gltf-binary",
         "model.fbx": "application/octet-stream",
+        "textures.zip": "application/zip",
         "rig.glb": "model/gltf-binary",
     }
 
@@ -876,6 +877,7 @@ def create_app() -> FastAPI:
             "model.stl": postprocess.glb_to_stl,
             "model_obj.zip": postprocess.glb_to_obj_zip,
             "collision.glb": postprocess.glb_to_collision,
+            "textures.zip": postprocess.glb_to_textures_zip,
         }
         if not path.exists() and name in derived and glb.exists():
             convert = derived[name]
@@ -888,7 +890,12 @@ def create_app() -> FastAPI:
                 # for exactly this file, so the second request serves the
                 # finished artifact instead of exporting a 300K-face mesh again.
                 if not path.exists():
-                    await asyncio.to_thread(convert, glb, path)
+                    try:
+                        await asyncio.to_thread(convert, glb, path)
+                    except ValueError as exc:
+                        # "this model has no textures" is a fact about the mesh,
+                        # not a server fault -- 404, not 500.
+                        raise HTTPException(404, str(exc)) from exc
         if not path.exists():
             raise HTTPException(404, "file not ready")
         return FileResponse(path, media_type=_MEDIA[name], filename=f"{job_id}_{name}")

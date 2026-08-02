@@ -107,6 +107,45 @@ def glb_to_obj_zip(glb_path: Path, zip_path: Path) -> Path:
     return zip_path
 
 
+# glTF PBR slot -> the filename it gets in the zip. Named for what the map *is*
+# rather than what the GLB called it, because a texture pulled out for editing
+# ends up in an engine's material slot, not back in a glTF.
+_TEXTURE_SLOTS = {
+    "baseColorTexture": "base_color.png",
+    "metallicRoughnessTexture": "metallic_roughness.png",
+    "normalTexture": "normal.png",
+    "emissiveTexture": "emissive.png",
+    "occlusionTexture": "occlusion.png",
+}
+
+
+def glb_to_textures_zip(glb_path: Path, zip_path: Path) -> Path:
+    """Every PBR map in the GLB, as loose PNGs in a zip.
+
+    Raises ValueError when there is nothing to extract: an empty zip looks like
+    a successful export of a model with no textures, which is a different and
+    much more alarming thing than "this GLB has no maps".
+    """
+    mesh = _load_merged(glb_path)
+    material = getattr(getattr(mesh, "visual", None), "material", None)
+    found: list[tuple[str, Any]] = []
+    for slot, filename in _TEXTURE_SLOTS.items():
+        image = getattr(material, slot, None)
+        if image is not None:
+            found.append((filename, image))
+    if not found:
+        raise ValueError("this model has no textures to extract")
+
+    import io
+
+    with _staged(zip_path) as tmp, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, image in found:
+            buf = io.BytesIO()
+            image.save(buf, "PNG")
+            zf.writestr(filename, buf.getvalue())
+    return zip_path
+
+
 def glb_to_collision(glb_path: Path, out_path: Path, *, max_hull_faces: int = 256) -> Path:
     """A convex collision shape for the mesh, as its own GLB.
 
