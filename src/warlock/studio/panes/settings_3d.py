@@ -15,7 +15,8 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
-from ...service.validation import random_seed
+from ...service.errors import Invalid
+from ...service.validation import MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, theme, widgets
 
 # The only tier the UI offers. Every named tier needs a gltfpack that is not
@@ -173,7 +174,7 @@ def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> No
 def upload(ctx: Any, path: Path) -> None:
     """Start a mesh job from an image on disk (a picker, or a dropped file)."""
     form = ctx.state.form_3d
-    kwargs: dict[str, Any] = {"kind": "image", "image": path.read_bytes()}
+    kwargs: dict[str, Any] = {"kind": "image"}
     if form["platform"]:
         kwargs["guidance_fields"] = {"platform": form["platform"]}
     if float(form["size_m"]) > 0:
@@ -188,4 +189,18 @@ def upload(ctx: Any, path: Path) -> None:
         kwargs["rig"] = True
         if form["rig_template"]:
             kwargs["rig_template"] = form["rig_template"]
-    ctx.submit("submit", svc_jobs.create_job, ctx.svc, **kwargs)
+
+    # The form values are read here, on the frame thread, because they are UI
+    # state; the *file* is read in the task, because a large one would freeze
+    # the window for as long as the disk took. Only MAX_UPLOAD_BYTES + 1 bytes
+    # are ever read -- create_job's contract -- so an enormous file is refused
+    # rather than allocated.
+    def run():
+        try:
+            with path.open("rb") as fh:
+                data = fh.read(MAX_UPLOAD_BYTES + 1)
+        except OSError as exc:
+            raise Invalid(f"could not read {path.name}: {exc}") from exc
+        return svc_jobs.create_job(ctx.svc, image=data, **kwargs)
+
+    ctx.submit("submit", run)
