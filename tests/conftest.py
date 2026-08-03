@@ -49,6 +49,24 @@ def svc(tmp_path, monkeypatch):
     s.close()
 
 
+@pytest.fixture(scope="session")
+def gl():
+    """A standalone GL 3.3 context, or a skip.
+
+    Session-scoped because context creation is the expensive part and every
+    renderer test is read-only about the context itself. Skipped rather than
+    failed where there is no GPU (CI, a remote shell): these tests are about
+    what the driver draws, and there is nothing to learn without one.
+    """
+    moderngl = pytest.importorskip("moderngl")
+    try:
+        ctx = moderngl.create_context(standalone=True, require=330)
+    except Exception as exc:  # no display, no driver, software-only
+        pytest.skip(f"no GL 3.3 context: {exc}")
+    yield ctx
+    ctx.release()
+
+
 class FakeTrellisServer:
     """Stands in for TrellisServer: no subprocess, no GPU, no HTTP."""
 

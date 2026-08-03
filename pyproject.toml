@@ -38,6 +38,15 @@ text2image = [
 # effectively requires Python 3.13 even though the project floor stays 3.12 --
 # everything else here runs fine on 3.12 and rigging degrades to "unavailable"
 # rather than failing (see doctor.blender_check).
+# The desktop app: one window, one GL context, no browser. imgui-bundle draws
+# the panels and moderngl draws the viewport into an FBO the panels then show
+# as a texture -- which is why they have to share a context and therefore a
+# window, and why this is one extra rather than three.
+studio = [
+    "moderngl>=5.10",
+    "pygame-ce>=2.5",
+    "imgui-bundle>=1.6",
+]
 rig = [
     # The marker is not decoration: bpy's wheels declare
     # Requires-Python >=3.13,<3.14, so an unmarked requirement makes the whole
