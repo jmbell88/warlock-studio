@@ -39,6 +39,9 @@ class Ctx:
     rig_templates: list[dict[str, Any]] = field(default_factory=list)
     rig_default: str = ""
     export_dir: str | None = None
+    # Set by the App, which owns the task keys these results come back on.
+    load_presets: Any = lambda _template: None
+    refresh_rig_data: Any = lambda: None
     guidance: dict[str, Any] = field(default_factory=dict)
     sheet_options: dict[str, Any] = field(default_factory=dict)
     base_models: list[tuple[str, str]] = field(default_factory=list)

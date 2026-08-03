@@ -105,6 +105,8 @@ class App:
             viewer=self.viewer,
             textures=textures.ThumbnailCache(self.ctx),
         )
+        self.app_ctx.load_presets = self.load_presets
+        self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
         self._load_static_answers()
         self.app_ctx.cache.refresh_storage()
@@ -202,6 +204,21 @@ class App:
         if key == "preview" and isinstance(done.result, dict):
             ctx.state.preview.update(done.result)
             return
+        # The side data the pose and sheet panels read. Keyed by job so a
+        # result that arrives after the selection moved on can be dropped
+        # rather than shown against the wrong asset.
+        if key.startswith(("poses:", "sheets:", "presets:")):
+            name, _, job_id = key.partition(":")
+            if name != "presets" and job_id != ctx.state.selected:
+                return
+            if name == "poses" and isinstance(done.result, dict):
+                ctx.state.preview["poses"] = done.result.get("poses") or []
+                ctx.state.preview["bones"] = done.result.get("bones") or []
+            elif name == "sheets" and isinstance(done.result, dict):
+                ctx.state.preview["sheets"] = done.result.get("sheets") or []
+            elif name == "presets" and isinstance(done.result, dict):
+                ctx.state.preview["presets"] = done.result.get("poses") or []
+            return
         if key == "upload" and done.result is not None:
             from .panes import settings_3d
 
@@ -224,7 +241,7 @@ class App:
             ctx.cache.invalidate()
             return
         if key.startswith("pose-"):
-            self._refresh_rig_side_data(force=True)
+            self._refresh_rig_side_data()
             ctx.cache.invalidate()
 
     def _refresh(self) -> None:
@@ -284,20 +301,40 @@ class App:
             ctx.toast("Could not open that asset.", "error")
         self._refresh_rig_side_data()
 
-    def _refresh_rig_side_data(self, force: bool = False) -> None:
-        """Poses and sheets for the selected job, off-thread."""
+    def _refresh_rig_side_data(self) -> None:
+        """Poses, sheets and the shipped preset library, off-thread.
+
+        Cleared first: these belong to a job, and leaving the previous one's
+        poses on screen while the new one's are read would offer a list that
+        applies to nothing.
+        """
         from ..service import rig as svc_rig
         from ..service import sheets as svc_sheets
 
         ctx = self.app_ctx
         job = ctx.job()
+        for key in ("poses", "sheets", "bones"):
+            ctx.state.preview.pop(key, None)
         if job is None:
             return
         job_id = job["id"]
         if "rig.glb" in (job.get("files") or []):
             ctx.submit(f"poses:{job_id}", svc_rig.list_poses, ctx.svc, job_id)
         ctx.submit(f"sheets:{job_id}", svc_sheets.list_sheets, ctx.svc, job_id)
-        del force
+
+    def load_presets(self, template: str | None) -> None:
+        """The shipped pose library for a skeleton.
+
+        Read once per template rather than per job: it is a property of the
+        rig, not of the mesh, and applying one saves an ordinary pose through
+        the same path a hand-made one does.
+        """
+        from ..service import rig as svc_rig
+
+        if not template:
+            self.app_ctx.state.preview["presets"] = []
+            return
+        self.app_ctx.submit(f"presets:{template}", svc_rig.template_presets, template)
 
     def _events(self) -> None:
         import pygame

@@ -66,6 +66,14 @@ def _enter(ctx: Any, job: Any) -> None:
         rig = svc_rig.get_rig(ctx.svc, job_id)
     if not ctx.viewer.enter_pose_mode(rig):
         ctx.toast("That GLB carries no skeleton.", "error")
+        return
+    # The preset library follows the rig's skeleton, so it is fetched here
+    # rather than at startup -- there is no single answer before a rig is open.
+    ctx.load_presets((rig or {}).get("template"))
+    # And the saved poses, because opening the editor is the one moment the
+    # viewer changes what it shows without the selection changing -- which is
+    # what otherwise triggers a refresh.
+    ctx.refresh_rig_data()
 
 
 def guard(ctx: Any, action: str, proceed: Any) -> bool:
