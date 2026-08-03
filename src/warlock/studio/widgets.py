@@ -29,6 +29,23 @@ ARTIFACTS = (
 )
 
 
+def texture_ref(texture: Any) -> Any:
+    """A moderngl texture as something ``imgui.image`` will accept.
+
+    Two things happen here, and skipping the second is the bug where every
+    image in the UI renders as imgui's font atlas: imgui 1.92 wants an
+    ImTextureRef rather than a bare id, *and* the renderer has to be told which
+    moderngl object that id belongs to, because it binds through moderngl and
+    an unknown id leaves whatever was bound last in place.
+    """
+    from . import imgui_backend
+
+    renderer = imgui_backend.current()
+    if renderer is not None:
+        renderer.register_texture(texture)
+    return imgui.ImTextureRef(texture.glo)
+
+
 def text_colored(value: int, text: str, alpha: float = 1.0) -> None:
     imgui.text_colored(imgui.ImVec4(*theme.rgba(value, alpha)), text)
 

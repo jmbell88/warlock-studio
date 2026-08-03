@@ -1,4 +1,4 @@
-"""Sprite sheets: the pure layout/packing module, the HTTP surface, and the
+"""Sprite sheets: the pure layout/packing module, the service surface, and the
 queue's handling of the job kind.
 
 Blender is faked for all of it except the last section, which is behind the
@@ -15,16 +15,16 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 
-import warlock.config as config_mod
 from warlock import rigging
-from warlock.app import create_app
 from warlock.config import Config
 from warlock.db import JobStore
 from warlock.pipelines import sheet as sheetlib
 from warlock.queue import Worker
+from warlock.service import Invalid, NotFound
+from warlock.service import jobs as svc_jobs
+from warlock.service import sheets as svc_sheets
 
 IDENTITY = [0.0, 0.0, 0.0, 1.0]
 
@@ -336,48 +336,38 @@ def test_sheet_paths_reject_ids_that_are_not_ours(tmp_path, bad):
         rigging.sheet_path(tmp_path, bad)
 
 
-# --- HTTP -------------------------------------------------------------------
+# --- the service surface ----------------------------------------------------
 
 
 @pytest.fixture
-def sheet_client(tmp_path, monkeypatch):
-    assets = tmp_path / "assets"
-    monkeypatch.setenv("WARLOCK_DATA_DIR", str(assets))
-    monkeypatch.setenv("WARLOCK_DB", str(assets / "jobs.sqlite"))
-    monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
-    monkeypatch.setattr(config_mod, "_config", None)
-    monkeypatch.setattr(JobStore, "next_queued", lambda self: None)
-    with TestClient(create_app()) as c:
-        yield c, assets
+def assets(svc):
+    return svc.config.data_dir
 
 
-def _mesh_job(client, assets, *, rigged=False) -> str:
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "a knight"}).json()["id"]
+def _mesh_job(svc, assets, *, rigged=False) -> str:
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a knight")["id"]
     job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "model.glb").write_bytes(b"fake-glb")
     if rigged:
         (job_dir / "rig.glb").write_bytes(b"fake-rig")
         (job_dir / "rig.json").write_text(json.dumps({"bones": [{"name": "hips"}]}))
-    client.app.state.store.set_status(job_id, "done")
+    svc.store.set_status(job_id, "done")
     return job_id
 
 
-def test_options_route_is_the_single_source_for_the_form(sheet_client):
-    client, _ = sheet_client
-    body = client.get("/api/sheets/options").json()
+def test_the_options_call_is_the_single_source_for_the_form():
+    body = svc_sheets.sheet_options()
     assert body["frame_sizes"] == list(sheetlib.FRAME_SIZES)
     assert body["lighting"] == list(sheetlib.LIGHTING)
     assert len(body["yaws"]) == 8
     assert body["defaults"]["frame_size"] in body["frame_sizes"]
 
 
-def test_a_sheet_can_be_queued_for_an_unrigged_mesh(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
-    r = client.post(f"/api/jobs/{job_id}/sheets", data={"frame_size": 64})
-    assert r.status_code == 200
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
+def test_a_sheet_can_be_queued_for_an_unrigged_mesh(svc, assets):
+    job_id = _mesh_job(svc, assets)
+    out = svc_sheets.create_sheet(svc, job_id, frame_size=64)
+    job = svc.store.get(out["id"])
     assert job["kind"] == "sheet"
     assert job["params"]["source_job"] == job_id
     assert job["params"]["poses"] == []
@@ -385,144 +375,118 @@ def test_a_sheet_can_be_queued_for_an_unrigged_mesh(sheet_client):
     assert rigging.is_valid_id(job["params"]["sheet_id"])
 
 
-def test_a_sheet_needs_a_finished_mesh(sheet_client):
-    client, _ = sheet_client
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.post(f"/api/jobs/{job_id}/sheets").status_code == 400
+def test_a_sheet_needs_a_finished_mesh(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(Invalid):
+        svc_sheets.create_sheet(svc, job_id)
 
 
-def test_a_posed_sheet_needs_a_rig(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
-    pose = {"name": "idle", "bones": {"hips": IDENTITY}}
-    rigging.save_pose(assets / job_id, pose, "a" * 12)
-    r = client.post(f"/api/jobs/{job_id}/sheets", data={"poses": ["a" * 12]})
-    assert r.status_code == 400
-    assert "rigged" in r.json()["detail"]
+def test_a_posed_sheet_needs_a_rig(svc, assets):
+    job_id = _mesh_job(svc, assets)
+    rigging.save_pose(assets / job_id, {"name": "idle", "bones": {"hips": IDENTITY}}, "a" * 12)
+    with pytest.raises(Invalid, match="rigged"):
+        svc_sheets.create_sheet(svc, job_id, poses=["a" * 12])
 
 
-def test_a_sheet_names_the_poses_it_will_render(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
+def test_a_sheet_names_the_poses_it_will_render(svc, assets):
+    job_id = _mesh_job(svc, assets, rigged=True)
     ids = [
         rigging.save_pose(assets / job_id, {"name": n, "bones": {"hips": IDENTITY}})["id"]
         for n in ("idle", "run")
     ]
-    r = client.post(f"/api/jobs/{job_id}/sheets", data={"poses": ids, "lighting": "lit"})
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    out = svc_sheets.create_sheet(svc, job_id, poses=ids, lighting="lit")
+    params = svc.store.get(out["id"])["params"]
     assert params["poses"] == ids
     assert params["lighting"] == "lit"
 
 
-def test_a_sheet_of_a_deleted_pose_is_404(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
-    r = client.post(f"/api/jobs/{job_id}/sheets", data={"poses": ["a" * 12]})
-    assert r.status_code == 404
+def test_a_sheet_of_a_deleted_pose_is_not_found(svc, assets):
+    job_id = _mesh_job(svc, assets, rigged=True)
+    with pytest.raises(NotFound):
+        svc_sheets.create_sheet(svc, job_id, poses=["a" * 12])
 
 
 @pytest.mark.parametrize(
-    "data",
+    "kwargs",
     [
         {"frame_size": 100},
         {"lighting": "toon"},
         {"elevation": 91},
     ],
 )
-def test_an_unrenderable_sheet_is_refused_before_it_costs_a_queue_slot(sheet_client, data):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
-    assert client.post(f"/api/jobs/{job_id}/sheets", data=data).status_code == 400
+def test_an_unrenderable_sheet_is_refused_before_it_costs_a_queue_slot(svc, assets, kwargs):
+    job_id = _mesh_job(svc, assets)
+    with pytest.raises(Invalid):
+        svc_sheets.create_sheet(svc, job_id, **kwargs)
 
 
-def test_finished_sheets_are_listed_downloaded_and_deleted(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
+def test_finished_sheets_are_listed_read_and_deleted(svc, assets):
+    job_id = _mesh_job(svc, assets)
     rigging.sheet_dir(assets / job_id).mkdir(parents=True)
     _write_sheet(assets / job_id, "a" * 12)
 
-    listed = client.get(f"/api/jobs/{job_id}/sheets").json()["sheets"]
+    listed = svc_sheets.list_sheets(svc, job_id)["sheets"]
     assert [s["id"] for s in listed] == ["a" * 12]
-    assert client.get(f"/api/jobs/{job_id}/sheets/{'a' * 12}").json()["id"] == "a" * 12
-    png = client.get(f"/api/jobs/{job_id}/sheets/{'a' * 12}/sheet.png")
-    assert png.status_code == 200
-    assert png.headers["content-type"] == "image/png"
-    assert client.delete(f"/api/jobs/{job_id}/sheets/{'a' * 12}").status_code == 200
-    assert client.get(f"/api/jobs/{job_id}/sheets").json()["sheets"] == []
+    assert svc_sheets.get_sheet(svc, job_id, "a" * 12)["id"] == "a" * 12
+    assert svc_sheets.sheet_png(svc, job_id, "a" * 12).read_bytes().startswith(b"\x89PNG")
+    assert svc_sheets.delete_sheet(svc, job_id, "a" * 12) == {"ok": True}
+    assert svc_sheets.list_sheets(svc, job_id)["sheets"] == []
 
 
 @pytest.mark.parametrize("bad", ["not-an-id", "ABCDEF012345", "0123456789abcd"])
-def test_sheet_routes_reject_malformed_sheet_ids(sheet_client, bad):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
-    assert client.get(f"/api/jobs/{job_id}/sheets/{bad}").status_code == 404
-    assert client.get(f"/api/jobs/{job_id}/sheets/{bad}/sheet.png").status_code == 404
-    assert client.delete(f"/api/jobs/{job_id}/sheets/{bad}").status_code == 404
+def test_the_sheet_entry_points_reject_malformed_sheet_ids(svc, assets, bad):
+    job_id = _mesh_job(svc, assets)
+    for call in (svc_sheets.get_sheet, svc_sheets.sheet_png, svc_sheets.delete_sheet):
+        with pytest.raises(NotFound):
+            call(svc, job_id, bad)
 
 
-
-def test_a_clip_sheet_records_its_two_ends_not_the_expanded_frames(sheet_client):
+def test_a_clip_sheet_records_its_two_ends_not_the_expanded_frames(svc, assets):
     """params carries the ends so the queue rebuilds the frames from the same
-    interpolate() the route validated against -- one source of truth."""
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
+    interpolate() this validated against -- one source of truth."""
+    job_id = _mesh_job(svc, assets, rigged=True)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
     b = rigging.save_pose(
         assets / job_id, {"name": "B", "bones": {"hips": [0.0, 0.0, 0.7071068, 0.7071068]}}
     )
-
-    r = client.post(
-        f"/api/jobs/{job_id}/sheets",
-        data={"clip_from": a["id"], "clip_to": b["id"], "clip_frames": 4, "yaws": 4},
+    out = svc_sheets.create_sheet(
+        svc, job_id, clip_from=a["id"], clip_to=b["id"], clip_frames=4, yaws=4
     )
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    params = svc.store.get(out["id"])["params"]
     assert params["clip"] == {"from": a["id"], "to": b["id"], "frames": 4}
     assert params["yaws"] == 4
 
 
-def test_a_clip_needs_both_ends(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
+def test_a_clip_needs_both_ends(svc, assets):
+    job_id = _mesh_job(svc, assets, rigged=True)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
-    r = client.post(f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"]})
-    assert r.status_code == 400
-    assert "both" in r.json()["detail"]
+    with pytest.raises(Invalid, match="both"):
+        svc_sheets.create_sheet(svc, job_id, clip_from=a["id"])
 
 
-def test_a_clip_needs_a_rig(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets)
+def test_a_clip_needs_a_rig(svc, assets):
+    job_id = _mesh_job(svc, assets)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
     b = rigging.save_pose(assets / job_id, {"name": "B", "bones": {"hips": IDENTITY}}, "b" * 12)
-    r = client.post(
-        f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"], "clip_to": b["id"]}
-    )
-    assert r.status_code == 400
-    assert "rigged" in r.json()["detail"]
+    with pytest.raises(Invalid, match="rigged"):
+        svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to=b["id"])
 
 
-def test_a_clip_frame_count_over_the_limit_is_a_400(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
+def test_a_clip_frame_count_over_the_limit_is_refused(svc, assets):
+    job_id = _mesh_job(svc, assets, rigged=True)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
     b = rigging.save_pose(assets / job_id, {"name": "B", "bones": {"hips": IDENTITY}}, "b" * 12)
-    r = client.post(
-        f"/api/jobs/{job_id}/sheets",
-        data={"clip_from": a["id"], "clip_to": b["id"], "clip_frames": 999},
-    )
-    assert r.status_code == 400
+    with pytest.raises(Invalid):
+        svc_sheets.create_sheet(
+            svc, job_id, clip_from=a["id"], clip_to=b["id"], clip_frames=999
+        )
 
 
-def test_a_clip_end_that_no_longer_exists_is_a_404(sheet_client):
-    client, assets = sheet_client
-    job_id = _mesh_job(client, assets, rigged=True)
+def test_a_clip_end_that_no_longer_exists_is_not_found(svc, assets):
+    job_id = _mesh_job(svc, assets, rigged=True)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}}, "a" * 12)
-    r = client.post(
-        f"/api/jobs/{job_id}/sheets", data={"clip_from": a["id"], "clip_to": "b" * 12}
-    )
-    assert r.status_code == 404
+    with pytest.raises(NotFound):
+        svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to="b" * 12)
 
 
 # --- the queue --------------------------------------------------------------

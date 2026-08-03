@@ -107,10 +107,11 @@ def doctor_banner(ctx: Any) -> None:
     if ctx.state.last_error is None:
         return
     imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.25)))
-    if imgui.begin_child("doctor", (-1, 46), imgui.ChildFlags_.borders.value):
-        widgets.text_colored(theme.ERR, ctx.state.last_error)
+    if imgui.begin_child("doctor", (-1, 40), imgui.ChildFlags_.borders.value):
         if imgui.small_button("Dismiss"):
             ctx.state.last_error = None
+        imgui.same_line()
+        widgets.text_colored(theme.ERR, ctx.state.last_error)
     imgui.end_child()
     imgui.pop_style_color()
 

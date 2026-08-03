@@ -52,7 +52,12 @@ def draw(ctx: Any) -> None:
         form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field))
     for field in ("material", "condition", "palette", "mood", "silhouette", "emissive", "rarity"):
         form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field))
-    form["platform"] = widgets.combo("##g_platform", form["platform"], _options(ctx, "platform"))
+    # Narrowed to leave room for the marker: a full-width combo pushes it off
+    # the panel, and the note is the whole reason this control is not the 3D
+    # pane's platform.
+    form["platform"] = widgets.combo(
+        "##g_platform", form["platform"], _options(ctx, "platform"), width=-30
+    )
     widgets.help_marker(
         "A prompt hint about how much detail to draw. The mesh resolution is "
         "the 3D pane's own platform control."

@@ -4,10 +4,9 @@ version = "0.0.5"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    # The trellis-server.exe subprocess speaks HTTP on a local port; this is
+    # the client for it, not a web framework left over from the browser build.
     "httpx>=0.27",
-    "python-multipart>=0.0.9",
     "pillow>=10.0",
     "trimesh>=4.4",
     "numpy>=1.26",
@@ -42,6 +41,10 @@ text2image = [
 # the panels and moderngl draws the viewport into an FBO the panels then show
 # as a texture -- which is why they have to share a context and therefore a
 # window, and why this is one extra rather than three.
+#
+# An extra rather than a core dependency because `warlock doctor` and `warlock
+# sweep` have to work on a machine with no display: cli.py imports the window
+# only on the path that opens one.
 studio = [
     "moderngl>=5.10",
     "pygame-ce>=2.5",

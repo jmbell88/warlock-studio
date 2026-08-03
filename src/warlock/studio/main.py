@@ -25,6 +25,10 @@ WINDOW_TITLE = "Warlock Studio"
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
 SIDEBAR_WIDTH = 340.0
+# How much of the sidebar the settings form gets before the library starts.
+# The library is the thing a user scrolls, so it keeps the larger share of a
+# short window rather than the form.
+SETTINGS_SHARE = 0.55
 TARGET_FPS = 60
 
 
@@ -164,8 +168,15 @@ class App:
         self._refresh()
         self._events()
 
+        import pygame
+
         io = imgui.get_io()
         io.delta_time = max(dt, 1e-4)
+        # Set every frame rather than only on resize: a window that starts
+        # minimised, or a display scale change, reaches imgui no other way, and
+        # a zero display size is an assertion rather than a blank frame.
+        io.display_size = pygame.display.get_window_size()
+        io.display_framebuffer_scale = (1.0, 1.0)
         imgui.new_frame()
         self._build_ui()
         imgui.render()
@@ -240,6 +251,12 @@ class App:
         ctx = self.app_ctx
         job = ctx.job()
         if job is None:
+            return
+        if self.viewer.pose_mode:
+            # The pose editor is showing rig.glb on purpose. Without this the
+            # next cache tick decides the selection "should" be showing
+            # model.glb and reloads it, which drops the editor -- half a second
+            # after it was opened.
             return
         job_dir = ctx.job_dir(job["id"])
         files = job.get("files") or []
@@ -390,20 +407,28 @@ class App:
         imgui.begin("##host", None, flags)
         self._mode_switch()
 
-        if imgui.begin_child("settings", (SIDEBAR_WIDTH, 0), imgui.ChildFlags_.borders.value):
+        # The sidebar is two scrollers, not one: sharing a single scroll region
+        # meant the settings form pushed the library off the bottom of a
+        # 950-pixel window, which made the whole asset list unreachable.
+        imgui.begin_group()
+        form_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
+        borders = imgui.ChildFlags_.borders.value
+        if imgui.begin_child("settings", (SIDEBAR_WIDTH, form_height), borders):
             if ctx.state.mode == "2d":
                 settings_2d.draw(ctx)
             else:
                 settings_3d.draw(ctx)
-            imgui.separator()
+        imgui.end_child()
+        if imgui.begin_child("library", (SIDEBAR_WIDTH, 0), borders):
             library.draw(ctx)
         imgui.end_child()
+        imgui.end_group()
 
         imgui.same_line()
         self._viewport_pane()
         imgui.same_line()
 
-        if imgui.begin_child("inspector", (SIDEBAR_WIDTH, 0), imgui.ChildFlags_.borders.value):
+        if imgui.begin_child("inspector", (SIDEBAR_WIDTH, 0), borders):
             inspector.draw(ctx)
         imgui.end_child()
         imgui.end()
@@ -452,24 +477,32 @@ class App:
     def _draw_viewport_image(self, pos: Any, width: float, height: float) -> None:
         from imgui_bundle import imgui
 
+        from . import widgets
+
         ctx = self.app_ctx
         halves = 2 if ctx.state.comparing else 1
         cell = (width - (8 if halves == 2 else 0)) / halves
         texture = self.viewer.render((pos.x, pos.y, cell, height), imgui.get_io().delta_time)
         # UV flipped: GL's origin is bottom-left and imgui's is top-left.
-        imgui.image(texture.glo, (cell, height), (0, 1), (1, 0))
+        imgui.image(widgets.texture_ref(texture), (cell, height), (0, 1), (1, 0))
         if halves == 2 and self.viewer.compare_viewport is not None:
             imgui.same_line()
             imgui.image(
-                self.viewer.compare_viewport.texture.glo, (cell, height), (0, 1), (1, 0)
+                widgets.texture_ref(self.viewer.compare_viewport.texture),
+                (cell, height), (0, 1), (1, 0),
             )
 
     def _draw_reference(self, width: float, height: float) -> None:
         from imgui_bundle import imgui
 
+        from . import widgets
+
         texture = self.viewer.reference
         scale = min(width / texture.size[0], height / texture.size[1])
-        imgui.image(texture.glo, (texture.size[0] * scale, texture.size[1] * scale))
+        imgui.image(
+            widgets.texture_ref(texture),
+            (texture.size[0] * scale, texture.size[1] * scale),
+        )
 
     # -- teardown ----------------------------------------------------------
 

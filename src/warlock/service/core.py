@@ -105,8 +105,14 @@ class WarlockService:
         function, which is only ever called from a thread that is allowed to
         block.
         """
-        if self.worker is None or self.loop is None:
+        if self.worker is None:
             return None
+        if self.loop is None:
+            # No loop thread: run it here. A service standing on its own (a
+            # test, a headless tool) still has to *do* the thing rather than
+            # silently skip it -- a cancel that quietly does not cancel is the
+            # worst of the three possible behaviours.
+            return asyncio.run(coro_factory())
         fut: Future[Any] = asyncio.run_coroutine_threadsafe(coro_factory(), self.loop)
         return fut.result(timeout)
 

@@ -4,8 +4,8 @@ A local, self-hosted alternative to Meshy.ai for generating game-ready 3D assets
 
 - **Image → 3D**: reference image → textured GLB (base colour plus a combined metallic/roughness texture; surface detail rides on vertex normals, not a normal map), powered by Microsoft **TRELLIS.2-4B** running natively via [trellis.cpp](https://github.com/pwilkin/trellis.cpp) (C++/GGML, CUDA).
 - **Text → 3D**: prompt → reference image via **SDXL-Turbo** (diffusers, loaded from a local weights dir; FLUX.1-schnell swappable) → same image-to-3D pipeline.
-- **Rig → pose → sprite sheet**: fit a template skeleton, pose it with 3D gizmos in the browser, and bake the poses into a 2D sprite sheet with a JSON sidecar.
-- **Web UI**: generation form, job queue, and an interactive three.js preview with GLB download — ready to import into Godot, Blender, Unity, or Unreal. Text jobs stop at the reference by default: the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
+- **Rig → pose → sprite sheet**: fit a template skeleton, pose it with 3D gizmos in the viewport, and bake the poses into a 2D sprite sheet with a JSON sidecar.
+- **Desktop app**: one window — no server, no browser, no localhost. A settings pane, an interactive ModernGL preview and an asset inspector, with GLB download ready to import into Godot, Blender, Unity, or Unreal. Text jobs stop at the reference by default: the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
 
 ## Requirements
 
@@ -16,8 +16,9 @@ A local, self-hosted alternative to Meshy.ai for generating game-ready 3D assets
 ## Setup
 
 ```powershell
-# 1. Python deps (add --extra text2image for text-to-3D; pulls torch cu128)
-uv sync --extra dev
+# 1. Python deps. --extra studio is the app's window and renderer; add
+#    --extra text2image for text-to-3D (pulls torch cu128).
+uv sync --extra dev --extra studio
 
 # 2. trellis.cpp CUDA server binary -> vendor/trellis/
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
@@ -70,11 +71,11 @@ Fits a template skeleton (humanoid, quadruped, bird, fish, insect, serpent, or t
 
 Blender runs as a subprocess, never inside the app — `bpy` is process-global and can take the interpreter down on the kind of non-manifold geometry trellis sometimes produces. Bone-heat weighting fails outright on such meshes; the worker catches that and falls back to envelope weights, recording which was used in `rig.json` rather than failing the job.
 
-Once a job is rigged the viewer gains a **Pose** panel: click **edit** to swap the preview to the rig, click a joint to attach a rotation gizmo, and save the result under a name. Poses are forward-kinematic only — each joint's local rotation, nothing else — and each one can be downloaded as its own posed GLB, baked by Blender on first request and cached afterwards. Saving under an existing name replaces that pose rather than adding a near-duplicate.
+Once a job is rigged the inspector gains a **Pose** panel: click **Edit pose** to swap the preview to the rig, click a joint to attach a rotation gizmo, and save the result under a name. Poses are forward-kinematic only — each joint's local rotation, nothing else — and each one can be downloaded as its own posed GLB, baked by Blender on first request and cached afterwards. Saving under an existing name replaces that pose rather than adding a near-duplicate.
 
 ### Sprite sheets
 
-Any finished mesh can be baked to a 2D sprite sheet: **poses down, eight compass directions across**. The panel previews the eight views live in three.js so the framing, camera elevation and flat/lit choice can be judged before committing; the sheet that ships is rendered server-side in Blender's EEVEE with a transparent film, queued like any other job.
+Any finished mesh can be baked to a 2D sprite sheet: **poses down, eight compass directions across**. The panel previews the eight views live in the viewport so the framing, camera elevation and flat/lit choice can be judged before committing; the sheet that ships is rendered in Blender's EEVEE with a transparent film, queued like any other job.
 
 Each sheet is a PNG plus an engine-neutral JSON sidecar — pixel rectangles and what each one shows, with no Godot `AtlasTexture` or Unity `SpriteMetaData` opinions baked in. Cells are a flat list rather than a nested grid, so animated clips can join later as cells with a `frame` above zero without a format change:
 
@@ -87,12 +88,12 @@ Each sheet is a PNG plus an engine-neutral JSON sidecar — pixel rectangles and
 
 Sheets need Blender, so they live behind the same `rig` extra. An unrigged prop still gets one — a turnaround of its rest pose.
 
-`bpy` ships **CPython 3.13 wheels only**. On any other Python the extra installs nothing, `warlock doctor` reports rigging as unavailable, and the UI hides the rig controls — everything else works unchanged.
+`bpy` ships **CPython 3.13 wheels only**. On any other Python the extra installs nothing, `warlock doctor` reports rigging as unavailable, and the app hides the rig controls — everything else works unchanged.
 
 ## Run
 
 ```powershell
-uv run warlock          # serves http://127.0.0.1:8420
+uv run warlock          # opens the desktop app
 uv run warlock doctor   # checks dependencies, weights, and configuration
 ```
 
@@ -109,8 +110,15 @@ Everything is env-overridable: `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLI
 ## Development
 
 ```powershell
-uv run pytest -q            # unit tests (no GPU needed)
+uv run pytest -q            # unit tests; the renderer's skip without a GL 3.3 context
 uv run ruff check .
 ```
+
+The app is a single process: a pygame window, one ModernGL context, and
+[imgui-bundle](https://github.com/pthom/imgui_bundle) panels drawn through that
+same context (the 3D viewport is a texture the panels show). The queue, the job
+store and every pipeline are unchanged from the server version — they were
+always transport-agnostic, and `warlock.service` is the layer the app and the
+old HTTP routes both called.
 
 Outputs land in `assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json` once rigged — the rig lives beside the mesh it was fitted to, not in the rig job's own directory — `poses/<pose_id>.json` plus its baked `.glb` for each saved pose, and `sheets/<sheet_id>.png` plus its sidecar for each sprite sheet). The SQLite job store lives at `assets/jobs.sqlite`.

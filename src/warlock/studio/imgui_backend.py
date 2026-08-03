@@ -51,12 +51,25 @@ void main() {
 """
 
 
+# The renderer in use, so ``widgets.texture_ref`` can register a texture from
+# anywhere in the UI. A module-level current-thing mirrors imgui's own current
+# context, and for the same reason: the alternative is threading the renderer
+# through every pane that shows a picture.
+_current: ImguiRenderer | None = None
+
+
+def current() -> ImguiRenderer | None:
+    return _current
+
+
 class ImguiRenderer:
     """Draws imgui's vertex soup through a moderngl context."""
 
     def __init__(self, ctx: moderngl.Context) -> None:
+        global _current
         if imgui.get_current_context() is None:
             raise RuntimeError("create an imgui context before the renderer")
+        _current = self
         self.ctx = ctx
         self.io = imgui.get_io()
         self.io.delta_time = 1.0 / 60.0
@@ -126,9 +139,11 @@ class ImguiRenderer:
     def register_texture(self, texture: moderngl.Texture) -> int:
         """Make a viewer-owned texture showable with ``imgui.image``.
 
-        The id is the GL name, which is what ``ImTextureID`` is here; the
-        renderer only needs to know about it to bind it back, and viewer
-        textures are bound by the viewer itself for its own draws.
+        The id is the GL name, which is what ``ImTextureID`` is here -- but the
+        renderer binds through moderngl, which has no "bind this raw id", so it
+        needs the object as well. Overwritten on every call rather than
+        inserted once: a texture that was released and whose name the driver
+        handed to a different one would otherwise be bound from a stale entry.
         """
         self._textures[texture.glo] = texture
         return texture.glo
@@ -198,6 +213,9 @@ class ImguiRenderer:
         self.ctx.scissor = None
 
     def shutdown(self) -> None:
+        global _current
+        if _current is self:
+            _current = None
         for tex in imgui.get_platform_io().textures:
             if tex.ref_count == 1:
                 tex.status = imgui.ImTextureStatus.want_destroy

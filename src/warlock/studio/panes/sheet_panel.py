@@ -78,7 +78,7 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
         texture = _strip_texture(ctx, strip)
         if texture is not None:
             width = imgui.get_content_region_avail().x
-            imgui.image(texture.glo, (width, width * strip.height / strip.width))
+            imgui.image(widgets.texture_ref(texture), (width, width * strip.height / strip.width))
 
 
 def _strip_texture(ctx: Any, strip: Any) -> Any:

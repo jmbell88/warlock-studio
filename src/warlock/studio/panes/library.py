@@ -31,7 +31,10 @@ def draw(ctx: Any) -> None:
         widgets.text_colored(theme.ERR, "Could not read the job list.")
     if not jobs:
         widgets.muted("Nothing here yet." if not ctx.cache.jobs else "Nothing matches.")
-    height = -110 if ctx.state.checked else -70
+    # Leave room for the footer below: the bulk bar only exists when something
+    # is checked, so the reservation has to change with it or the list either
+    # overlaps the footer or floats above a gap.
+    height = -96 if ctx.state.checked else -34
     if imgui.begin_child("library-list", (0, height)):
         for job in jobs:
             _card(ctx, job)
@@ -105,7 +108,7 @@ def _card_body(ctx: Any, job: Any) -> None:
     if ctx.textures is not None and "thumb.png" in (job.get("files") or []):
         texture = ctx.textures.get(job_id, ctx.job_dir(job_id) / "thumb.png")
     if texture is not None:
-        imgui.image(texture.glo, (THUMB_SIZE, THUMB_SIZE))
+        imgui.image(widgets.texture_ref(texture), (THUMB_SIZE, THUMB_SIZE))
     else:
         imgui.dummy((THUMB_SIZE, THUMB_SIZE))
     imgui.same_line()

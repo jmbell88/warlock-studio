@@ -1,3 +1,10 @@
+"""The service surface: what a submit accepts, what it stores, what it refuses.
+
+This was the HTTP suite. It is now the same behaviours asserted against the
+service functions the desktop app calls, which is where they always lived --
+the routes only ever translated arguments and exceptions.
+"""
+
 from __future__ import annotations
 
 import io
@@ -5,55 +12,47 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from fastapi.testclient import TestClient
 
 import warlock.config as config_mod
 from warlock import guidance, models
-from warlock.app import create_app
-from warlock.db import JobStore
+from warlock.service import Conflict, Failed, Invalid, NotFound, NotReady, TooLarge
+from warlock.service import derive as svc_derive
+from warlock.service import export as svc_export
+from warlock.service import files as svc_files
+from warlock.service import jobs as svc_jobs
+from warlock.service import system as svc_system
+
+
+class FakeWorker:
+    """The little of Worker the service actually reaches for."""
+
+    def __init__(self) -> None:
+        from warlock.progress import ProgressBus
+
+        self.alive = True
+        self.fatal = None
+        self.current_job_id = None
+        self.progress = ProgressBus()
+        self.trellis = type("T", (), {"running": False})()
+        self.wakes = 0
+        self.cancelled: list[str] = []
+
+    def wake(self) -> None:
+        self.wakes += 1
+
+    async def request_cancel(self, job_id: str) -> None:
+        self.cancelled.append(job_id)
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path / "assets"))
-    monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
-    # Point at a nonexistent exe; the worker only touches it when a job runs.
-    monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
-    monkeypatch.setattr(config_mod, "_config", None)
-    # Same guard as test_rig_api/test_poses_api, and now load-bearing: these
-    # tests are about the HTTP surface and drive job statuses by hand, while a
-    # live worker would claim the row and rewrite them underneath. It used to
-    # be *accidentally* true, because dispatch only looked for work once a
-    # second and a route test finished sooner; POST /api/jobs now wakes the
-    # worker on submit, so a real Text2Image load is one queued job away.
-    monkeypatch.setattr(JobStore, "next_queued", lambda self: None)
-    with TestClient(create_app()) as c:
-        yield c
+def worker(svc):
+    svc.worker = FakeWorker()
+    return svc.worker
 
 
-def test_health(client):
-    r = client.get("/api/health")
-    assert r.status_code == 200
-    assert r.json()["ok"] is True
-
-
-def test_create_text_job(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
-    assert r.status_code == 200
-    job_id = r.json()["id"]
-    job = client.get(f"/api/jobs/{job_id}").json()
-    assert job["kind"] == "text"
-    assert job["prompt"] == "a barrel"
-
-
-def test_text_job_requires_prompt(client):
-    r = client.post("/api/jobs", data={"kind": "text"})
-    assert r.status_code == 400
-
-
-def test_image_job_requires_upload(client):
-    r = client.post("/api/jobs", data={"kind": "image"})
-    assert r.status_code == 400
+@pytest.fixture
+def assets(svc):
+    return svc.config.data_dir
 
 
 def _png_bytes(fmt: str = "PNG") -> bytes:
@@ -64,108 +63,131 @@ def _png_bytes(fmt: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
-def test_create_image_job_stores_upload(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    assert r.status_code == 200
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
-    assert "input.png" in job["files"]
+def _job(svc, job_id):
+    return svc_jobs.get_job(svc, job_id)
 
 
-def test_webp_upload_is_normalized_to_png(client, tmp_path):
+def _params(svc, job_id):
+    return svc.store.get(job_id)["params"]
+
+
+# --- creating jobs ----------------------------------------------------------
+
+
+def test_create_text_job(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    job = _job(svc, job_id)
+    assert job["kind"] == "text"
+    assert job["prompt"] == "a barrel"
+
+
+def test_text_job_requires_prompt(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text")
+
+
+def test_image_job_requires_upload(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="image")
+
+
+def test_create_image_job_stores_upload(svc):
+    job_id = svc_jobs.create_job(svc, kind="image", image=_png_bytes())["id"]
+    assert "input.png" in _job(svc, job_id)["files"]
+
+
+def test_webp_upload_is_normalized_to_png(svc, assets):
     # trellis.cpp only decodes PNG/JPEG; any upload (webp, bmp, ...) must be
     # stored as a real PNG regardless of its original format.
     from PIL import Image
 
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.webp", io.BytesIO(_png_bytes("WEBP")), "image/webp")},
-    )
-    assert r.status_code == 200
-    stored = tmp_path / "assets" / r.json()["id"] / "input.png"
-    assert Image.open(stored).format == "PNG"
+    job_id = svc_jobs.create_job(svc, kind="image", image=_png_bytes("WEBP"))["id"]
+    assert Image.open(assets / job_id / "input.png").format == "PNG"
 
 
-def test_invalid_image_upload_rejected(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(b"not an image"), "image/png")},
-    )
-    assert r.status_code == 400
+def test_opaque_jpeg_upload_preserves_rgb(svc, assets):
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buf, "JPEG")
+    job_id = svc_jobs.create_job(svc, kind="image", image=buf.getvalue())["id"]
+    assert Image.open(assets / job_id / "input.png").mode == "RGB"
+
+
+def test_invalid_image_upload_rejected(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="image", image=b"not an image")
 
 
 # --- input limits -----------------------------------------------------------
 
 
-def test_oversized_upload_is_rejected_before_decode(client):
+def test_oversized_upload_is_rejected_before_decode(svc):
     blob = b"\x89PNG\r\n\x1a\n" + b"\0" * (20 * 1024 * 1024)
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(blob), "image/png")},
-    )
-    assert r.status_code == 413
+    with pytest.raises(TooLarge):
+        svc_jobs.create_job(svc, kind="image", image=blob)
 
 
-def test_a_decompression_bomb_is_rejected_by_pixel_count(client):
+def test_a_decompression_bomb_is_rejected_by_pixel_count(svc):
     # 5000x4000 = 20 MP: tiny on disk as a flat PNG, over the 16 MP cap decoded.
     from PIL import Image
 
     buf = io.BytesIO()
     Image.new("RGB", (5000, 4000)).save(buf, "PNG")
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(buf.getvalue()), "image/png")},
-    )
-    assert r.status_code == 400
-    assert "pixel" in r.json()["detail"].lower()
+    with pytest.raises(Invalid, match="pixel"):
+        svc_jobs.create_job(svc, kind="image", image=buf.getvalue())
 
 
-def test_an_overlong_prompt_is_rejected(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x" * 1001})
-    assert r.status_code == 400
+def test_an_overlong_prompt_is_rejected(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x" * 1001)
 
 
-@pytest.mark.parametrize("bad", ["-1", str(2**31)])
-def test_an_out_of_range_seed_is_rejected(client, bad):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "seed": bad})
-    assert r.status_code == 400
+@pytest.mark.parametrize("bad", [-1, 2**31])
+def test_an_out_of_range_seed_is_rejected(svc, bad):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", seed=bad)
 
 
-def test_a_failed_db_insert_leaves_no_orphan_job_dir(client, tmp_path, monkeypatch):
+def test_a_failed_db_insert_leaves_no_orphan_job_dir(svc, assets, monkeypatch):
     """input.png is deliberately written before the row exists (the worker's
     next_queued poll must never claim an image job with no file on disk), so
     a failed insert has to clean up after itself or dirs accumulate forever."""
-    assets = tmp_path / "assets"
     before = {p.name for p in assets.iterdir() if p.is_dir()}
 
     def explode(*args, **kwargs):
         raise RuntimeError("db is on fire")
 
-    monkeypatch.setattr(client.app.state.store, "create", explode)
+    monkeypatch.setattr(svc.store, "create", explode)
     with pytest.raises(RuntimeError):
-        client.post(
-            "/api/jobs",
-            data={"kind": "image"},
-            files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-        )
-    after = {p.name for p in assets.iterdir() if p.is_dir()}
-    assert after == before
+        svc_jobs.create_job(svc, kind="image", image=_png_bytes())
+    assert {p.name for p in assets.iterdir() if p.is_dir()} == before
 
 
-def test_invalid_resolution_rejected(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "resolution": "999"})
-    assert r.status_code == 400
+def test_invalid_resolution_rejected(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", resolution=999)
 
 
-def test_guidance_catalog_is_served(client):
-    body = client.get("/api/guidance").json()
+def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch):
+    original = svc.store.create
+    seen = {}
+
+    def spying_create(kind, prompt, params, job_id=None, **kwargs):
+        if job_id is not None:
+            seen["exists"] = (assets / job_id / "input.png").exists()
+        return original(kind, prompt, params, job_id=job_id, **kwargs)
+
+    monkeypatch.setattr(svc.store, "create", spying_create)
+    svc_jobs.create_job(svc, kind="image", image=_png_bytes())
+    assert seen.get("exists") is True
+
+
+# --- guidance ---------------------------------------------------------------
+
+
+def test_the_guidance_catalog_is_served():
+    body = svc_system.guidance_catalog()
     assert set(body["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
         "material", "condition", "setting", "palette", "emissive", "rarity",
@@ -175,20 +197,19 @@ def test_guidance_catalog_is_served(client):
     assert body["defaults"]["base_model"] in {o["key"] for o in body["fields"]["base_model"]}
 
 
-def test_guidance_is_stored_on_the_job(client):
-    r = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a plasma rifle",
+def test_guidance_is_stored_on_the_job(svc):
+    job_id = svc_jobs.create_job(
+        svc,
+        kind="text",
+        prompt="a plasma rifle",
+        guidance_fields={
             "genre": "scifi",
             "art_style": "lowpoly",
             "category": "weapon",
             "platform": "mobile",
         },
-    )
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    )["id"]
+    params = _params(svc, job_id)
     assert params["genre"] == "scifi"
     assert params["art_style"] == "lowpoly"
     assert params["category"] == "weapon"
@@ -196,268 +217,204 @@ def test_guidance_is_stored_on_the_job(client):
     assert params["size_m"] == 1.0  # derived from the weapon category default
 
 
-def test_explicit_size_overrides_the_category_default(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "x", "category": "weapon", "size_m": "0.25"},
-    )
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
-    assert params["size_m"] == 0.25
+def test_explicit_size_overrides_the_category_default(svc):
+    job_id = svc_jobs.create_job(
+        svc, kind="text", prompt="x", size_m=0.25, guidance_fields={"category": "weapon"}
+    )["id"]
+    assert _params(svc, job_id)["size_m"] == 0.25
 
 
-def test_job_without_guidance_still_gets_usable_defaults(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+def test_a_job_without_guidance_still_gets_usable_defaults(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    params = _params(svc, job_id)
     assert params["resolution"] in (512, 1024, 1536)
     assert params["size_m"] > 0
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("genre", "nonsense"), ("category", "nonsense"), ("platform", "nonsense"), ("size_m", "500")],
+    [("genre", "nonsense"), ("category", "nonsense"), ("platform", "nonsense")],
 )
-def test_invalid_guidance_rejected(client, field, value):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", field: value})
-    assert r.status_code == 400
+def test_invalid_guidance_rejected(svc, field, value):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", guidance_fields={field: value})
 
 
-def test_rejected_guidance_leaves_no_input_png_behind(client, tmp_path):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image", "genre": "nonsense"},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    assert r.status_code == 400
-    assert not list((tmp_path / "assets").glob("*/input.png"))
+def test_an_out_of_range_size_is_rejected(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", size_m=500)
 
 
-def test_new_guidance_fields_accepted_on_post(client):
-    r = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a rifle",
-            "material": "steel",
-            "condition": "pristine",
-            "rarity": "epic",
-        },
-    )
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+def test_rejected_guidance_leaves_no_input_png_behind(svc, assets):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc, kind="image", image=_png_bytes(), guidance_fields={"genre": "nonsense"}
+        )
+    assert not list(assets.glob("*/input.png"))
+
+
+def test_the_newer_guidance_fields_are_accepted(svc):
+    job_id = svc_jobs.create_job(
+        svc,
+        kind="text",
+        prompt="a rifle",
+        guidance_fields={"material": "steel", "condition": "pristine", "rarity": "epic"},
+    )["id"]
+    params = _params(svc, job_id)
     assert params["material"] == "steel"
     assert params["condition"] == "pristine"
     assert params["rarity"] == "epic"
 
 
-def test_unknown_new_guidance_field_value_is_a_400(client):
-    r = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "x", "material": "unobtainium"}
-    )
-    assert r.status_code == 400
+def test_an_unknown_guidance_value_is_refused(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="x", guidance_fields={"material": "unobtainium"}
+        )
 
 
-def test_prompt_preview_returns_the_composed_prompt(client):
-    r = client.get("/api/prompt-preview", params={"prompt": "a barrel", "genre": "scifi"})
-    assert r.status_code == 200
-    body = r.json()
+# --- prompt preview ---------------------------------------------------------
+
+
+def test_the_prompt_preview_returns_the_composed_prompt(svc):
+    body = svc_system.prompt_preview(svc, {"genre": "scifi"}, "a barrel")
     assert body["prompt"].startswith("a barrel, ")
     assert "science fiction" in body["prompt"]
     assert body["negative_prompt"]  # falls back to the guidance default
 
 
-def test_prompt_preview_rejects_unknown_guidance(client):
-    r = client.get("/api/prompt-preview", params={"prompt": "x", "material": "unobtainium"})
-    assert r.status_code == 400
+def test_the_prompt_preview_rejects_unknown_guidance(svc):
+    with pytest.raises(Invalid):
+        svc_system.prompt_preview(svc, {"material": "unobtainium"}, "x")
 
 
-def test_prompt_preview_degrades_to_null_tokens_when_tokenizer_unavailable(client, monkeypatch):
+def test_the_prompt_preview_degrades_to_null_tokens_without_a_tokenizer(svc, monkeypatch):
     from warlock.pipelines import prompt as prompt_pipeline
 
     def _raise(_model_dir):
         raise OSError("no tokenizer on disk")
 
     monkeypatch.setattr(prompt_pipeline, "load_tokenizers", _raise)
-    r = client.get("/api/prompt-preview", params={"prompt": "a barrel"})
-    assert r.status_code == 200
-    body = r.json()
+    body = svc_system.prompt_preview(svc, {}, "a barrel")
     assert body["tokens"] is None
     assert body["chunks"] is None
 
 
-def test_cancel_and_delete(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    r = client.post(f"/api/jobs/{job_id}/cancel")
-    assert r.status_code == 200
-    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
-    r = client.delete(f"/api/jobs/{job_id}")
-    assert r.status_code == 200
-    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+# --- cancelling and deleting ------------------------------------------------
 
 
-def test_cancel_running_job_calls_request_cancel(client, monkeypatch):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    worker = client.app.state.worker
-    worker.store.set_status(job_id, "running")
+def test_cancel_and_delete(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc_jobs.cancel_job(svc, job_id)
+    assert _job(svc, job_id)["status"] == "cancelled"
+    svc_jobs.delete_job(svc, job_id)
+    with pytest.raises(NotFound):
+        _job(svc, job_id)
+
+
+def test_cancelling_a_running_job_reaches_the_worker(svc, worker):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "running")
     worker.current_job_id = job_id
-    called = []
-
-    async def fake_request_cancel(jid):
-        called.append(jid)
-
-    monkeypatch.setattr(worker, "request_cancel", fake_request_cancel)
-    try:
-        r = client.post(f"/api/jobs/{job_id}/cancel")
-        assert r.status_code == 200
-        assert called == [job_id]
-        assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
-    finally:
-        worker.current_job_id = None
+    svc_jobs.cancel_job(svc, job_id)
+    assert worker.cancelled == [job_id]
+    assert _job(svc, job_id)["status"] == "cancelled"
 
 
-def test_cancel_is_idempotent_when_already_cancelled(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    worker = client.app.state.worker
-    worker.store.set_status(job_id, "running")
-    worker.store.cancel(job_id)  # simulate: already cancelled by the time this request lands
-    worker.current_job_id = None  # not the currently-running job from the route's perspective
-    r = client.post(f"/api/jobs/{job_id}/cancel")
-    assert r.status_code == 200
+def test_cancel_is_idempotent_when_already_cancelled(svc, worker):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "running")
+    svc.store.cancel(job_id)  # already cancelled by the time this call lands
+    assert svc_jobs.cancel_job(svc, job_id) == {"ok": True}
 
 
-def test_input_png_written_before_db_row_is_created(client, tmp_path, monkeypatch):
-    from warlock.db import JobStore
-
-    original_create = JobStore.create
-    seen = {}
-
-    def spying_create(self, kind, prompt, params, job_id=None, **kwargs):
-        if job_id is not None:
-            path = tmp_path / "assets" / job_id / "input.png"
-            seen["exists"] = path.exists()
-        return original_create(self, kind, prompt, params, job_id=job_id, **kwargs)
-
-    monkeypatch.setattr(JobStore, "create", spying_create)
-
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    assert r.status_code == 200
-    assert seen.get("exists") is True
+# --- health and progress ----------------------------------------------------
 
 
-def test_opaque_jpeg_upload_preserves_rgb(client, tmp_path):
-    from PIL import Image
-
-    buf = io.BytesIO()
-    Image.new("RGB", (32, 32), (10, 20, 30)).save(buf, "JPEG")
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.jpg", io.BytesIO(buf.getvalue()), "image/jpeg")},
-    )
-    assert r.status_code == 200
-    stored = tmp_path / "assets" / r.json()["id"] / "input.png"
-    assert Image.open(stored).mode == "RGB"
-
-
-def test_health_reports_worker_alive_and_doctor_checks(client):
-    body = client.get("/api/health").json()
+def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
+    body = svc_system.health(svc)
     assert body["ok"] is True
     assert body["worker_alive"] is True
     assert body["fatal"] is None
-    assert isinstance(body["checks"], list)
     assert len(body["checks"]) == 8 + len(models.BASE_MODELS) + len(models.STYLE_LORAS)
 
 
-# --- progress ---
+def test_health_does_not_rerun_the_doctor_suite_on_every_call(svc, worker, monkeypatch):
+    """The suite binds a socket, stats the disk and probes a dozen paths, and
+    the UI asks continuously. None of those answers changes second to second."""
+    from warlock import doctor
 
-
-def test_progress_is_empty_when_idle(client):
-    r = client.get("/api/progress")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["job_id"] is None
-    assert body["progress"] is None
-    assert body["server_time"] > 0
-
-
-def test_progress_reports_the_running_job(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    worker = client.app.state.worker
-    worker.current_job_id = job_id
-    worker.progress.begin(job_id, "text")
-    worker.progress.update(
-        job_id, phase="trellis", label="Mesh decode", inner=0.5, detail="building mesh"
+    calls = []
+    real = doctor.run_checks
+    monkeypatch.setattr(
+        doctor, "run_checks", lambda *a, **k: (calls.append(1), real(*a, **k))[1]
     )
-    try:
-        body = client.get("/api/progress").json()
-        assert body["job_id"] == job_id
-        assert body["progress"]["label"] == "Mesh decode"
-        assert body["progress"]["percent"] > 0
-    finally:
-        worker.current_job_id = None
-        worker.progress.end(job_id)
+    svc_system.health(svc)
+    svc_system.health(svc)
+    assert len(calls) == 1
 
 
-def test_job_list_carries_progress_only_for_the_running_job(client):
-    a = client.post("/api/jobs", data={"kind": "text", "prompt": "a"}).json()["id"]
-    b = client.post("/api/jobs", data={"kind": "text", "prompt": "b"}).json()["id"]
-    worker = client.app.state.worker
+def test_progress_is_absent_when_idle(svc, worker):
+    assert worker.progress.snapshot() is None
+
+
+def test_a_job_carries_progress_only_while_it_runs(svc, worker):
+    a = svc_jobs.create_job(svc, kind="text", prompt="a")["id"]
+    b = svc_jobs.create_job(svc, kind="text", prompt="b")["id"]
     worker.progress.begin(a, "text")
     worker.progress.update(a, phase="trellis", label="Texture", inner=0.3)
     try:
-        jobs = {j["id"]: j for j in client.get("/api/jobs").json()}
+        jobs = {j["id"]: j for j in svc_jobs.list_jobs(svc)}
         assert jobs[a]["progress"]["label"] == "Texture"
         assert jobs[b]["progress"] is None
-        assert client.get(f"/api/jobs/{b}").json()["progress"] is None
     finally:
         worker.progress.end(a)
 
 
-def test_progress_clears_when_the_job_ends(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    worker = client.app.state.worker
+def test_progress_clears_when_the_job_ends(svc, worker):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
     worker.progress.begin(job_id, "text")
     worker.progress.end(job_id)
-    assert client.get(f"/api/jobs/{job_id}").json()["progress"] is None
+    assert _job(svc, job_id)["progress"] is None
 
 
-# --- file attachment ---
+def test_submitting_a_job_wakes_the_worker(svc, worker):
+    """Dispatch polls on an interval; without this a submit waits out up to a
+    second of it before anything starts."""
+    svc_jobs.create_job(svc, kind="text", prompt="a barrel")
+    assert worker.wakes == 1
 
 
-def test_model_glb_hidden_until_job_is_done(tmp_path):
-    from warlock.app import _attach_files
+# --- file attachment --------------------------------------------------------
 
+
+def test_model_glb_hidden_until_the_job_is_done(tmp_path):
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     (job_dir / "model.glb").write_bytes(b"placeholder")
 
     running = {"status": "running"}
-    _attach_files(running, job_dir)
+    svc_files.attach_files(running, job_dir)
     assert "model.glb" not in running["files"]
 
     done = {"status": "done"}
-    _attach_files(done, job_dir)
+    svc_files.attach_files(done, job_dir)
     assert "model.glb" in done["files"]
 
 
 def test_input_png_stays_existence_based_regardless_of_status(tmp_path):
-    from warlock.app import _attach_files
-
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     (job_dir / "input.png").write_bytes(b"placeholder")
 
     job = {"status": "running"}
-    _attach_files(job, job_dir)
+    svc_files.attach_files(job, job_dir)
     assert "input.png" in job["files"]
 
 
-# --- job id validation ---
+# --- job id validation ------------------------------------------------------
 #
-# config.job_dir() is a bare data_dir / job_id join. Only the file route could
+# config.job_dir() is a bare data_dir / job_id join. Only get_file could
 # actually be steered (the others gate on a DB lookup first), but the check
 # belongs at the boundary on all of them.
 
@@ -470,54 +427,44 @@ def test_input_png_stays_existence_based_regardless_of_status(tmp_path):
         "abcdef0123456",     # one too many
         "ABCDEF012345",      # uuid4().hex is lowercase
         "....",
-        "%2e%2e",
+        "..",
+        "../../etc",
         "0123456789ab.",
+        "",
     ],
 )
-def test_malformed_job_id_is_rejected_on_every_route(client, bad):
-    """Ids that reach the handler must 404 before any path is built from them."""
-    assert client.get(f"/api/jobs/{bad}").status_code == 404
-    assert client.get(f"/api/jobs/{bad}/files/model.glb").status_code == 404
-    assert client.post(f"/api/jobs/{bad}/cancel").status_code == 404
-    assert client.post(f"/api/jobs/{bad}/rerun", data={"mode": "reroll"}).status_code == 404
-    assert client.delete(f"/api/jobs/{bad}").status_code == 404
+def test_a_malformed_job_id_is_rejected_by_every_entry_point(svc, bad):
+    with pytest.raises(NotFound):
+        svc_jobs.get_job(svc, bad)
+    with pytest.raises(NotFound):
+        svc_derive.get_file(svc, bad, "model.glb")
+    with pytest.raises(NotFound):
+        svc_jobs.cancel_job(svc, bad)
+    with pytest.raises(NotFound):
+        svc_jobs.rerun_job(svc, bad, mode="reroll")
+    with pytest.raises(NotFound):
+        svc_jobs.delete_job(svc, bad)
 
 
-@pytest.mark.parametrize("bad", ["..", "../../etc", "..%2f..%2fwindows", ""])
-def test_traversal_shaped_job_ids_never_succeed(client, bad):
-    """These are absorbed by URL normalisation or routing before the handler
-    sees them (an empty segment can't even match the route). Asserting a
-    specific status would be testing Starlette; what matters is that none of
-    them reads or writes anything."""
-    for response in (
-        client.get(f"/api/jobs/{bad}"),
-        client.get(f"/api/jobs/{bad}/files/model.glb"),
-        client.post(f"/api/jobs/{bad}/cancel"),
-        client.delete(f"/api/jobs/{bad}"),
-    ):
-        assert not response.is_success
+# --- rerun ------------------------------------------------------------------
 
 
-# --- rerun ---
-
-
-def test_reroll_copies_the_prompt_and_guidance_with_a_new_seed(client):
-    src = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "seed": 42, "genre": "fantasy"},
-    ).json()["id"]
+def test_reroll_copies_the_prompt_and_guidance_with_a_new_seed(svc):
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", seed=42, guidance_fields={"genre": "fantasy"}
+    )["id"]
     # Pretend the worker finished it and recorded its derived values.
-    store = client.app.state.store
-    params = store.get(src)["params"]
-    params["composed_prompt"] = "a barrel, fantasy"
-    params["scale_factor"] = 2.0
-    params["mesh_audit"] = {"worst": 0.3, "mean": 0.2, "faces": 9, "resolution": 512}
-    store.set_params(src, params)
+    svc.store.merge_params(
+        src,
+        {
+            "composed_prompt": "a barrel, fantasy",
+            "scale_factor": 2.0,
+            "mesh_audit": {"worst": 0.3, "mean": 0.2, "faces": 9, "resolution": 512},
+        },
+    )
 
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"})
-    assert r.status_code == 200
-    new = client.get(f"/api/jobs/{r.json()['id']}").json()
-
+    new_id = svc_jobs.rerun_job(svc, src, mode="reroll")["id"]
+    new = svc.store.get(new_id)
     assert new["kind"] == "text"
     assert new["prompt"] == "a barrel"
     assert new["params"]["genre"] == "fantasy"
@@ -528,390 +475,248 @@ def test_reroll_copies_the_prompt_and_guidance_with_a_new_seed(client):
         assert key not in new["params"]
 
 
-def test_reroll_accepts_an_explicit_seed(client):
-    src = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll", "seed": 7})
-    assert r.json()["seed"] == 7
-    assert client.get(f"/api/jobs/{r.json()['id']}").json()["params"]["seed"] == 7
+def test_reroll_accepts_an_explicit_seed(svc):
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    out = svc_jobs.rerun_job(svc, src, mode="reroll", seed=7)
+    assert out["seed"] == 7
+    assert _params(svc, out["id"])["seed"] == 7
 
 
-def test_remesh_reuses_the_reference_image_as_an_image_job(client, tmp_path):
+def test_remesh_reuses_the_reference_image_as_an_image_job(svc, assets):
     """The point of remesh: when SDXL drew a good reference but trellis made a
     poor mesh, retry the 3D stage without paying for SDXL again."""
-    src = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
-    # Stand in for the SDXL output the worker would have written.
-    src_dir = tmp_path / "assets" / src
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    src_dir = assets / src
     src_dir.mkdir(parents=True, exist_ok=True)
     (src_dir / "input.png").write_bytes(_png_bytes())
 
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
-    assert r.status_code == 200
-    new_id = r.json()["id"]
-    new = client.get(f"/api/jobs/{new_id}").json()
-
+    new_id = svc_jobs.rerun_job(svc, src, mode="remesh")["id"]
+    new = svc.store.get(new_id)
     assert new["kind"] == "image"
-    assert (tmp_path / "assets" / new_id / "input.png").read_bytes() == _png_bytes()
+    assert (assets / new_id / "input.png").read_bytes() == _png_bytes()
     # The prompt rides along for display even though it won't be used again.
     assert new["prompt"] == "a barrel"
 
 
-def test_remesh_without_a_reference_image_is_rejected(client):
-    src = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
-    assert r.status_code == 400
+def test_remesh_without_a_reference_image_is_rejected(svc):
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.rerun_job(svc, src, mode="remesh")
 
 
-def test_reroll_of_an_image_job_carries_the_upload_across(client, tmp_path):
-    src = client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    ).json()["id"]
-    new_id = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"}).json()["id"]
-    assert (tmp_path / "assets" / new_id / "input.png").exists()
+def test_reroll_of_an_image_job_carries_the_upload_across(svc, assets):
+    src = svc_jobs.create_job(svc, kind="image", image=_png_bytes())["id"]
+    new_id = svc_jobs.rerun_job(svc, src, mode="reroll")["id"]
+    assert (assets / new_id / "input.png").exists()
 
 
-def test_rerun_rejects_an_unknown_mode(client):
-    src = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.post(f"/api/jobs/{src}/rerun", data={"mode": "sideways"}).status_code == 400
+def test_rerun_rejects_an_unknown_mode(svc):
+    src = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.rerun_job(svc, src, mode="sideways")
 
 
-def test_rerun_of_a_missing_job_is_404(client):
-    assert client.post("/api/jobs/0123456789ab/rerun", data={"mode": "reroll"}).status_code == 404
+def test_rerun_of_a_missing_job_is_not_found(svc):
+    with pytest.raises(NotFound):
+        svc_jobs.rerun_job(svc, "0123456789ab", mode="reroll")
 
 
-def test_remesh_inherits_legacy_seed_as_reference_and_rerolls_only_mesh(client, tmp_path):
-    # Source job predates the split, so it only has "seed" -- no reference_seed
-    # / mesh_seed keys at all. remesh must still treat that lone seed as the
+def test_remesh_inherits_a_legacy_seed_as_the_reference_and_rerolls_only_the_mesh(svc, assets):
+    # A source job that predates the split only has "seed" -- no reference_seed
+    # or mesh_seed keys at all. remesh must still treat that lone seed as the
     # reference to inherit, and must not also reuse it for the mesh stage.
-    src = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "seed": 42}
-    ).json()["id"]
-    src_dir = tmp_path / "assets" / src
-    src_dir.mkdir(parents=True, exist_ok=True)
-    (src_dir / "input.png").write_bytes(_png_bytes())
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel", seed=42)["id"]
+    (assets / src).mkdir(parents=True, exist_ok=True)
+    (assets / src / "input.png").write_bytes(_png_bytes())
 
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    params = _params(svc, svc_jobs.rerun_job(svc, src, mode="remesh")["id"])
     assert params["reference_seed"] == 42
     assert params["mesh_seed"] != 42
 
 
-def test_remesh_inherits_explicit_reference_seed_not_legacy_seed(client, tmp_path):
-    # Source job already went through the split and has both keys, with
-    # different values. remesh must inherit reference_seed specifically --
-    # if it fell back to plain "seed" instead, this would still pass with
-    # matching fixture values, so the two are deliberately made to differ.
-    src = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a barrel",
-            "seed": 42,
-            "reference_seed": 99,
-            "mesh_seed": 42,
-        },
-    ).json()["id"]
-    src_dir = tmp_path / "assets" / src
-    src_dir.mkdir(parents=True, exist_ok=True)
-    (src_dir / "input.png").write_bytes(_png_bytes())
+def test_remesh_inherits_the_explicit_reference_seed_not_the_legacy_one(svc, assets):
+    # This source already went through the split and has both keys, with
+    # different values -- if remesh fell back to plain "seed" instead, matching
+    # fixture values would hide it, so the two are deliberately made to differ.
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", seed=42, reference_seed=99, mesh_seed=42
+    )["id"]
+    (assets / src).mkdir(parents=True, exist_ok=True)
+    (assets / src / "input.png").write_bytes(_png_bytes())
 
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "remesh"})
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    params = _params(svc, svc_jobs.rerun_job(svc, src, mode="remesh")["id"])
     assert params["reference_seed"] == 99
     assert params["mesh_seed"] != 42
     assert params["mesh_seed"] != 99
 
 
-def test_reroll_gives_both_seeds_the_same_fresh_value(client):
-    src = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a barrel",
-            "seed": 42,
-            "reference_seed": 11,
-            "mesh_seed": 22,
-        },
-    ).json()["id"]
-
-    r = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"})
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+def test_reroll_gives_both_seeds_the_same_fresh_value(svc):
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", seed=42, reference_seed=11, mesh_seed=22
+    )["id"]
+    params = _params(svc, svc_jobs.rerun_job(svc, src, mode="reroll")["id"])
     assert params["reference_seed"] == params["mesh_seed"]
     assert params["reference_seed"] != 11
     assert params["mesh_seed"] != 22
 
 
-# --- on-demand conversion ---
-
-
-def test_concurrent_stl_requests_convert_only_once(client, tmp_path, monkeypatch):
-    """A double-clicked download link used to start two exports over the same
-    destination path, either racing each other or serving a torn file."""
-    import warlock.pipelines.postprocess as pp
-
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-    trimesh = pytest.importorskip("trimesh")
-    trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
-
-    calls = []
-    real = pp.glb_to_stl
-
-    def counting(glb, stl):
-        calls.append(glb)
-        time.sleep(0.05)      # widen the window a second request could enter
-        return real(glb, stl)
-
-    monkeypatch.setattr(pp, "glb_to_stl", counting)
-
-    url = f"/api/jobs/{job_id}/files/model.stl"
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = [f.result() for f in [pool.submit(client.get, url) for _ in range(4)]]
-
-    assert all(r.status_code == 200 for r in results)
-    assert all(r.content for r in results)
-    assert len(calls) == 1, "the second request should serve the finished file"
-
-
-# --- storage and pruning ---
-
-
-def test_storage_reports_zero_before_any_job(client):
-    body = client.get("/api/storage").json()
-    assert body == {"job_dirs": 0, "bytes": 0}
-
-
-def test_storage_counts_job_directories_and_bytes(client, tmp_path):
-    client.post(
-        "/api/jobs",
-        data={"kind": "image"},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    body = client.get("/api/storage").json()
-    assert body["job_dirs"] == 1
-    assert body["bytes"] > 0
-
-
-def test_prune_keeps_the_newest_and_deletes_their_files(client, tmp_path):
-    ids = [
-        client.post("/api/jobs", data={"kind": "text", "prompt": f"j{i}"}).json()["id"]
-        for i in range(5)
-    ]
-    # Give the oldest a job dir so the file cleanup is observable.
-    oldest_dir = tmp_path / "assets" / ids[0]
-    oldest_dir.mkdir(parents=True, exist_ok=True)
-    (oldest_dir / "model.glb").write_bytes(b"x" * 100)
-
-    r = client.post("/api/jobs/prune", data={"keep": 2})
-    assert r.status_code == 200
-    assert r.json()["deleted"] == 3
-
-    remaining = {j["id"] for j in client.get("/api/jobs").json()}
-    assert remaining == set(ids[-2:])
-    assert not oldest_dir.exists()
-
-
-def test_prune_refuses_to_delete_a_running_job(client):
-    ids = [
-        client.post("/api/jobs", data={"kind": "text", "prompt": f"j{i}"}).json()["id"]
-        for i in range(3)
-    ]
-    client.app.state.store.set_status(ids[0], "running")
-
-    assert client.post("/api/jobs/prune", data={"keep": 0}).json()["deleted"] == 2
-    assert client.get(f"/api/jobs/{ids[0]}").status_code == 200
-
-
-def test_prune_rejects_a_negative_keep(client):
-    assert client.post("/api/jobs/prune", data={"keep": -1}).status_code == 400
-
-
-def test_job_list_limit_is_honoured_and_capped(client):
-    for i in range(4):
-        client.post("/api/jobs", data={"kind": "text", "prompt": f"j{i}"})
-    assert len(client.get("/api/jobs?limit=2").json()) == 2
-    # Out-of-range values clamp rather than erroring or reaching the DB raw.
-    assert len(client.get("/api/jobs?limit=0").json()) == 1
-    assert len(client.get("/api/jobs?limit=999999").json()) == 4
-
-
-def test_model_selection_is_stored_on_the_job(client):
-    r = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a plasma rifle",
-            "base_model": "sdxl",
-            "style_lora": "render3d",
-            "lora_weight": "1.1",
-        },
-    )
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
-    assert params["base_model"] == "sdxl"
-    assert params["style_lora"] == "render3d"
-    assert params["lora_weight"] == 1.1
-
-
-def test_unknown_base_model_is_a_400(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "base_model": "dall-e"})
-    assert r.status_code == 400
-    assert "base_model" in r.json()["detail"]
-
-
-def test_out_of_range_lora_weight_is_a_400(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "x", "style_lora": "ps1", "lora_weight": "9"},
-    )
-    assert r.status_code == 400
-
-
-def test_rerun_carries_model_selection_forward(client):
+def test_rerun_carries_the_model_selection_forward(svc):
     """base_model/style_lora are inputs, not derived from the source run, so
     unlike composed_prompt they must survive the derived-key strip."""
-    first = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a barrel",
-            "base_model": "sdxl",
-            "style_lora": "ps1",
-            "lora_weight": "0.6",
-        },
-    ).json()["id"]
-    r = client.post(f"/api/jobs/{first}/rerun")
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    first = svc_jobs.create_job(
+        svc,
+        kind="text",
+        prompt="a barrel",
+        lora_weight=0.6,
+        guidance_fields={"base_model": "sdxl", "style_lora": "ps1"},
+    )["id"]
+    params = _params(svc, svc_jobs.rerun_job(svc, first)["id"])
     assert params["base_model"] == "sdxl"
     assert params["style_lora"] == "ps1"
     assert params["lora_weight"] == 0.6
 
 
-def test_seeds_split_and_legacy_seed_still_read(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "reference_seed": 11, "mesh_seed": 22},
+def test_rerun_strips_every_derived_param_not_just_the_original_three(svc):
+    """The strip list has to keep up with what the worker records: a reroll
+    wearing the source's mesh_report claims a quality verdict about a mesh
+    that doesn't exist yet."""
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    svc.store.merge_params(
+        src,
+        {
+            "mesh_report": {"status": "ready", "reasons": []},
+            "optimize": {"achieved": 5},
+            "transform": {"scale": 1.0},
+            "weighting": "automatic",
+            "bone_count": 19,
+        },
     )
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    params = _params(svc, svc_jobs.rerun_job(svc, src, mode="reroll")["id"])
+    for key in ("mesh_report", "optimize", "transform", "weighting", "bone_count"):
+        assert key not in params, key
+
+
+# --- models and seeds -------------------------------------------------------
+
+
+def test_the_model_selection_is_stored_on_the_job(svc):
+    job_id = svc_jobs.create_job(
+        svc,
+        kind="text",
+        prompt="a plasma rifle",
+        lora_weight=1.1,
+        guidance_fields={"base_model": "sdxl", "style_lora": "render3d"},
+    )["id"]
+    params = _params(svc, job_id)
+    assert params["base_model"] == "sdxl"
+    assert params["style_lora"] == "render3d"
+    assert params["lora_weight"] == 1.1
+
+
+def test_an_unknown_base_model_is_refused(svc):
+    with pytest.raises(Invalid, match="base_model"):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="x", guidance_fields={"base_model": "dall-e"}
+        )
+
+
+def test_an_out_of_range_lora_weight_is_refused(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="x", lora_weight=9, guidance_fields={"style_lora": "ps1"}
+        )
+
+
+def test_the_seeds_split_and_a_legacy_seed_is_still_read(svc):
+    job_id = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", reference_seed=11, mesh_seed=22
+    )["id"]
+    params = _params(svc, job_id)
     assert params["reference_seed"] == 11
     assert params["mesh_seed"] == 22
 
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel", "seed": 5})
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel", seed=5)["id"]
+    params = _params(svc, job_id)
     assert params["reference_seed"] == 5
     assert params["mesh_seed"] == 5
 
 
-def test_reference_output_stops_before_the_mesh(client):
-    r = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
-    )
-    ref_id = r.json()["id"]
-    assert client.get(f"/api/jobs/{ref_id}").json()["stage"] == "reference"
+# --- the two stages ---------------------------------------------------------
 
 
-def test_default_output_is_still_model(client):
-    # Backward compatibility: every existing client omits `output` and must
-    # keep getting the old one-job behaviour.
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
-    assert client.get(f"/api/jobs/{r.json()['id']}").json()["stage"] == "model"
+def test_a_reference_output_stops_before_the_mesh(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="reference")["id"]
+    assert svc.store.get(job_id)["stage"] == "reference"
 
 
-def test_image_job_cannot_request_a_reference_output(client, tmp_path):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image", "output": "reference"},
-        files={"image": ("in.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    assert r.status_code == 400
+def test_the_default_output_is_still_a_model(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    assert svc.store.get(job_id)["stage"] == "model"
 
 
-def test_promote_creates_a_child_model_job(client, tmp_path):
-    r = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
-    )
-    ref_id = r.json()["id"]
-    # The worker is not running a real pipeline in this fixture; stand the
-    # reference in by hand, which is exactly the state promotion requires.
-    import warlock.config as config_mod
-
-    reference_bytes = b"png-distinctive-parent-bytes-\x00\x01\x02"
-    job_dir = config_mod.get_config().job_dir(ref_id)
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "input.png").write_bytes(reference_bytes)
-    # The fixture never runs a real pipeline, so nothing marks the row
-    # "done" on its own -- stand that in too, exactly like input.png above.
-    client.app.state.store.set_status(ref_id, "done")
-
-    r = client.post(f"/api/jobs/{ref_id}/model")
-    assert r.status_code == 200
-    child = client.get(f"/api/jobs/{r.json()['id']}").json()
-    assert child["parent_id"] == ref_id
-    assert child["kind"] == "image"
-    assert child["stage"] == "model"
-    # The load-bearing half of promote: the child's input.png must actually
-    # be the parent's bytes, not just exist as an empty/wrong file. A worker
-    # picking this job up minutes later fails without it.
-    child_png = config_mod.get_config().job_dir(child["id"]) / "input.png"
-    assert child_png.exists()
-    assert child_png.read_bytes() == reference_bytes
+def test_an_image_job_cannot_request_a_reference_output(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="image", image=_png_bytes(), output="reference")
 
 
-def test_promote_reuses_the_parents_reference_seed(client, tmp_path):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "output": "reference", "reference_seed": 11},
-    )
-    ref_id = r.json()["id"]
-    import warlock.config as config_mod
-
-    job_dir = config_mod.get_config().job_dir(ref_id)
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "input.png").write_bytes(b"png")
-    client.app.state.store.set_status(ref_id, "done")
-
-    r = client.post(f"/api/jobs/{ref_id}/model")
-    child = client.get(f"/api/jobs/{r.json()['id']}").json()
-    # The reference is reused verbatim -- promotion must not redraw it.
-    assert child["params"]["reference_seed"] == 11
-    assert child["params"]["mesh_seed"] == r.json()["mesh_seed"]
-
-
-def _done_reference(client, **extra):
+def _done_reference(svc, **extra):
     """A finished reference-stage job, standing in for a real pipeline run."""
-    data = {"kind": "text", "prompt": "a barrel", "output": "reference", **extra}
-    ref_id = client.post("/api/jobs", data=data).json()["id"]
-    job_dir = config_mod.get_config().job_dir(ref_id)
+    ref_id = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference", **extra
+    )["id"]
+    job_dir = svc.job_dir(ref_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "input.png").write_bytes(b"png")
-    client.app.state.store.set_status(ref_id, "done")
+    svc.store.set_status(ref_id, "done")
     return ref_id
 
 
-def test_promote_records_the_mesh_overrides_it_was_given(client):
+def test_promote_creates_a_child_model_job(svc):
+    ref_id = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference"
+    )["id"]
+    reference_bytes = b"png-distinctive-parent-bytes-\x00\x01\x02"
+    job_dir = svc.job_dir(ref_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(reference_bytes)
+    svc.store.set_status(ref_id, "done")
+
+    child_id = svc_jobs.promote_to_model(svc, ref_id)["id"]
+    child = svc.store.get(child_id)
+    assert child["parent_id"] == ref_id
+    assert child["kind"] == "image"
+    assert child["stage"] == "model"
+    # The load-bearing half of promote: the child's input.png must actually be
+    # the parent's bytes, not just exist. A worker picking this job up minutes
+    # later fails without it.
+    assert (svc.job_dir(child_id) / "input.png").read_bytes() == reference_bytes
+
+
+def test_promote_reuses_the_parents_reference_seed(svc):
+    ref_id = _done_reference(svc, reference_seed=11)
+    out = svc_jobs.promote_to_model(svc, ref_id)
+    params = _params(svc, out["id"])
+    # The reference is reused verbatim -- promotion must not redraw it.
+    assert params["reference_seed"] == 11
+    assert params["mesh_seed"] == out["mesh_seed"]
+
+
+def test_promote_records_the_mesh_overrides_it_was_given(svc):
     # The 3D pane owns the mesh-side decisions, and the reference was made
     # without any of them being asked -- so promotion has to be able to say
     # what they are, not just inherit whatever the reference happened to store.
-    ref_id = _done_reference(client, platform="mobile", size_m=0.4)
-    r = client.post(
-        f"/api/jobs/{ref_id}/model",
-        data={
-            "platform": "hero",
-            "size_m": 2.5,
-            "bg_removal": "threshold",
-            "profile": "raw",
-            "rig": "true",
-            "rig_template": "quadruped",
-        },
+    ref_id = _done_reference(svc, size_m=0.4, guidance_fields={"platform": "mobile"})
+    out = svc_jobs.promote_to_model(
+        svc,
+        ref_id,
+        platform="hero",
+        size_m=2.5,
+        bg_removal="threshold",
+        profile="raw",
+        rig=True,
+        rig_template="quadruped",
     )
-    assert r.status_code == 200
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    params = _params(svc, out["id"])
     assert params["platform"] == "hero"
     assert params["size_m"] == 2.5
     assert params["bg_removal"] == "threshold"
@@ -923,21 +728,21 @@ def test_promote_records_the_mesh_overrides_it_was_given(client):
     assert params["resolution"] == guidance.PLATFORMS["hero"].resolution
 
 
-def test_promote_without_overrides_inherits_the_reference(client):
-    # The whole point of the params being optional: every existing client
-    # sends none of them and must be entirely unaffected.
-    ref_id = _done_reference(client, platform="mobile", size_m=0.4, bg_removal="birefnet")
-    r = client.post(f"/api/jobs/{ref_id}/model")
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+def test_promote_without_overrides_inherits_the_reference(svc):
+    # The whole point of the overrides being optional: omitting them all must
+    # leave the reference's own settings entirely alone.
+    ref_id = _done_reference(
+        svc, size_m=0.4, bg_removal="birefnet", guidance_fields={"platform": "mobile"}
+    )
+    params = _params(svc, svc_jobs.promote_to_model(svc, ref_id)["id"])
     assert params["platform"] == "mobile"
     assert params["size_m"] == 0.4
     assert params["bg_removal"] == "birefnet"
 
 
-def test_promote_can_clear_an_inherited_rig_request(client):
-    ref_id = _done_reference(client, rig="true")
-    r = client.post(f"/api/jobs/{ref_id}/model", data={"rig": "false"})
-    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+def test_promote_can_clear_an_inherited_rig_request(svc):
+    ref_id = _done_reference(svc, rig=True)
+    params = _params(svc, svc_jobs.promote_to_model(svc, ref_id, rig=False)["id"])
     assert "rig" not in params
     assert "rig_template" not in params
 
@@ -949,193 +754,185 @@ def test_promote_can_clear_an_inherited_rig_request(client):
         {"size_m": 9999},
         {"bg_removal": "magic"},
         {"profile": "not-a-tier"},
-        {"rig": "true", "rig_template": "octopus"},
+        {"rig": True, "rig_template": "octopus"},
     ],
 )
-def test_promote_with_an_unusable_override_is_a_400_and_creates_nothing(client, bad):
+def test_promote_with_an_unusable_override_creates_nothing(svc, bad):
     # Rejected at the door, for the same reason create_job validates up front:
     # an unusable value should cost the request, not the two minutes of GPU
     # that would precede the step that finally notices it.
-    ref_id = _done_reference(client)
-    before = len(client.get("/api/jobs").json())
-    r = client.post(f"/api/jobs/{ref_id}/model", data=bad)
-    assert r.status_code == 400
-    assert len(client.get("/api/jobs").json()) == before
+    ref_id = _done_reference(svc)
+    before = len(svc_jobs.list_jobs(svc))
+    with pytest.raises(Invalid):
+        svc_jobs.promote_to_model(svc, ref_id, **bad)
+    assert len(svc_jobs.list_jobs(svc)) == before
 
 
-def test_promote_without_a_reference_is_a_400(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
-    assert client.post(f"/api/jobs/{r.json()['id']}/model").status_code == 400
+def test_promote_without_a_reference_is_refused(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.promote_to_model(svc, job_id)
 
 
-def test_reroll_of_a_reference_stays_a_reference(client):
-    # "try another" delegates to reroll -- it must not silently fall through
-    # to the default "model" stage and pay for a trellis run.
-    r = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
-    )
-    ref_id = r.json()["id"]
-    r = client.post(f"/api/jobs/{ref_id}/rerun")
-    assert r.status_code == 200
-    assert client.get(f"/api/jobs/{r.json()['id']}").json()["stage"] == "reference"
+def test_reroll_of_a_reference_stays_a_reference(svc):
+    # "try another" delegates to reroll -- it must not silently fall through to
+    # the default "model" stage and pay for a trellis run.
+    ref_id = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference"
+    )["id"]
+    new_id = svc_jobs.rerun_job(svc, ref_id)["id"]
+    assert svc.store.get(new_id)["stage"] == "reference"
 
 
-def test_promote_a_model_stage_job_is_a_400(client):
+def test_promoting_a_model_stage_job_is_refused(svc):
     # A plain job's stage is already "model" -- there is no reference to
     # promote, and it must not be treated as one.
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"})
-    job_id = r.json()["id"]
-    client.app.state.store.set_status(job_id, "done")
-    assert client.post(f"/api/jobs/{job_id}/model").status_code == 400
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    svc.store.set_status(job_id, "done")
+    with pytest.raises(Invalid):
+        svc_jobs.promote_to_model(svc, job_id)
 
 
-def test_promote_a_not_yet_done_reference_is_a_400(client):
-    r = client.post(
-        "/api/jobs", data={"kind": "text", "prompt": "a barrel", "output": "reference"}
+def test_promoting_a_not_yet_done_reference_is_refused(svc):
+    ref_id = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference"
+    )["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.promote_to_model(svc, ref_id)
+
+
+def test_promotion_strips_every_derived_param(svc, assets):
+    src = svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="reference")["id"]
+    (assets / src).mkdir(parents=True, exist_ok=True)
+    (assets / src / "input.png").write_bytes(_png_bytes())
+    svc.store.merge_params(src, {"mesh_report": {"status": "ready"}, "transform": {"scale": 1.0}})
+    svc.store.set_status(src, "done")
+
+    params = _params(svc, svc_jobs.promote_to_model(svc, src)["id"])
+    for key in ("mesh_report", "transform"):
+        assert key not in params, key
+
+
+# --- candidate batches ------------------------------------------------------
+
+
+def test_count_creates_n_reference_jobs_with_distinct_seeds(svc):
+    body = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference", count=4
     )
-    ref_id = r.json()["id"]
-    # No input.png written and status left at "queued" -- not done yet.
-    assert client.post(f"/api/jobs/{ref_id}/model").status_code == 400
-
-
-def test_count_creates_n_reference_jobs_with_distinct_seeds(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "output": "reference", "count": 4},
-    )
-    body = r.json()
     assert len(body["ids"]) == 4
     assert body["id"] == body["ids"][0]
-    seeds = {
-        client.get(f"/api/jobs/{i}").json()["params"]["reference_seed"]
-        for i in body["ids"]
-    }
-    assert len(seeds) == 4
+    assert len({_params(svc, i)["reference_seed"] for i in body["ids"]}) == 4
     # If stage regressed to the default "model", candidates 1..N-1 would each
     # silently pay a full multi-minute trellis run instead of stopping after
     # the reference image.
     for job_id in body["ids"]:
-        assert client.get(f"/api/jobs/{job_id}").json()["stage"] == "reference"
+        assert svc.store.get(job_id)["stage"] == "reference"
 
 
-def test_count_above_one_requires_reference_output(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "count": 3})
-    assert r.status_code == 400
+def test_count_above_one_requires_a_reference_output(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", count=3)
 
 
-def test_count_is_bounded(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "x", "output": "reference", "count": 99},
-    )
-    assert r.status_code == 400
+def test_count_is_bounded(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", output="reference", count=99)
 
 
-def test_candidate_zero_keeps_the_requested_seed(client):
+def test_candidate_zero_keeps_the_requested_seed(svc):
     # A pinned seed must still land on candidate 0 verbatim -- only 1..N-1 fan
-    # out to fresh random seeds. Use a value nowhere near _random_seed()'s
-    # 31-bit range collision odds, so an accidental match is not plausible.
-    r = client.post(
-        "/api/jobs",
-        data={
-            "kind": "text",
-            "prompt": "a barrel",
-            "output": "reference",
-            "count": 3,
-            "seed": 424242,
-        },
+    # out to fresh random seeds.
+    body = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference", count=3, seed=424242
     )
-    body = r.json()
-    first = client.get(f"/api/jobs/{body['ids'][0]}").json()
-    assert first["params"]["reference_seed"] == 424242
-    assert first["params"]["seed"] == 424242
+    params = _params(svc, body["ids"][0])
+    assert params["reference_seed"] == 424242
+    assert params["seed"] == 424242
 
 
-def test_count_one_text_job_behaves_exactly_as_before(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel", "count": 1})
-    body = r.json()
+def test_a_single_text_job_behaves_exactly_as_before(svc):
+    body = svc_jobs.create_job(svc, kind="text", prompt="a barrel", count=1)
     assert body["ids"] == [body["id"]]
-    job = client.get(f"/api/jobs/{body['id']}").json()
+    job = svc.store.get(body["id"])
     assert job["kind"] == "text"
     assert job["prompt"] == "a barrel"
 
 
-def test_count_one_image_job_still_writes_input_png(client, tmp_path):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "image", "count": 1},
-        files={"image": ("ref.png", io.BytesIO(_png_bytes()), "image/png")},
-    )
-    body = r.json()
+def test_a_single_image_job_still_writes_input_png(svc, assets):
+    body = svc_jobs.create_job(svc, kind="image", image=_png_bytes(), count=1)
     assert body["ids"] == [body["id"]]
-    stored = tmp_path / "assets" / body["id"] / "input.png"
-    assert stored.exists()
+    assert (assets / body["id"] / "input.png").exists()
 
 
-def test_count_ids_are_distinct_and_all_exist(client):
-    r = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "output": "reference", "count": 4},
-    )
-    ids = r.json()["ids"]
+def test_candidate_ids_are_distinct_and_all_exist(svc):
+    ids = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference", count=4
+    )["ids"]
     assert len(set(ids)) == 4
     for job_id in ids:
-        assert client.get(f"/api/jobs/{job_id}").status_code == 200
+        assert svc.store.get(job_id) is not None
 
 
-def test_rerun_strips_every_derived_param_not_just_the_original_three(client):
-    """The strip list has to keep up with what the worker records: a reroll
-    wearing the source's mesh_report claims a quality verdict about a mesh
-    that doesn't exist yet."""
-    src = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
-    store = client.app.state.store
-    params = store.get(src)["params"]
-    params.update(
-        {
-            "mesh_report": {"status": "ready", "reasons": []},
-            "optimize": {"achieved": 5},
-            "transform": {"scale": 1.0},
-            "weighting": "automatic",
-            "bone_count": 19,
-        }
-    )
-    store.set_params(src, params)
-
-    new_id = client.post(f"/api/jobs/{src}/rerun", data={"mode": "reroll"}).json()["id"]
-    new = client.get(f"/api/jobs/{new_id}").json()
-    for key in ("mesh_report", "optimize", "transform", "weighting", "bone_count"):
-        assert key not in new["params"], key
+# --- storage and pruning ----------------------------------------------------
 
 
-def test_promotion_strips_every_derived_param(client, tmp_path):
-    src = client.post(
-        "/api/jobs",
-        data={"kind": "text", "prompt": "a barrel", "output": "reference"},
-    ).json()["id"]
-    store = client.app.state.store
-    src_dir = tmp_path / "assets" / src
-    src_dir.mkdir(parents=True, exist_ok=True)
-    (src_dir / "input.png").write_bytes(_png_bytes())
-    params = store.get(src)["params"]
-    params.update({"mesh_report": {"status": "ready"}, "transform": {"scale": 1.0}})
-    store.set_params(src, params)
-    store.set_status(src, "done")
-
-    new_id = client.post(f"/api/jobs/{src}/model").json()["id"]
-    new = client.get(f"/api/jobs/{new_id}").json()
-    for key in ("mesh_report", "transform"):
-        assert key not in new["params"], key
+def test_storage_reports_zero_before_any_job(svc):
+    assert svc_jobs.storage(svc) == {"job_dirs": 0, "bytes": 0}
 
 
-def test_optimize_reports_the_rig_artifacts_it_made_stale(client, tmp_path):
+def test_storage_counts_job_directories_and_bytes(svc):
+    svc_jobs.create_job(svc, kind="image", image=_png_bytes())
+    body = svc_jobs.storage(svc)
+    assert body["job_dirs"] == 1
+    assert body["bytes"] > 0
+
+
+def test_prune_keeps_the_newest_and_deletes_their_files(svc, assets):
+    ids = [svc_jobs.create_job(svc, kind="text", prompt=f"j{i}")["id"] for i in range(5)]
+    # Give the oldest a job dir so the file cleanup is observable.
+    oldest_dir = assets / ids[0]
+    oldest_dir.mkdir(parents=True, exist_ok=True)
+    (oldest_dir / "model.glb").write_bytes(b"x" * 100)
+
+    assert svc_jobs.prune_jobs(svc, keep=2)["deleted"] == 3
+    assert {j["id"] for j in svc_jobs.list_jobs(svc)} == set(ids[-2:])
+    assert not oldest_dir.exists()
+
+
+def test_prune_refuses_to_delete_a_running_job(svc):
+    ids = [svc_jobs.create_job(svc, kind="text", prompt=f"j{i}")["id"] for i in range(3)]
+    svc.store.set_status(ids[0], "running")
+    assert svc_jobs.prune_jobs(svc, keep=0)["deleted"] == 2
+    assert svc.store.get(ids[0]) is not None
+
+
+def test_prune_rejects_a_negative_keep(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.prune_jobs(svc, keep=-1)
+
+
+def test_the_list_limit_is_honoured_and_capped(svc):
+    for i in range(4):
+        svc_jobs.create_job(svc, kind="text", prompt=f"j{i}")
+    assert len(svc_jobs.list_jobs(svc, 2)) == 2
+    # Out-of-range values clamp rather than erroring or reaching the DB raw.
+    assert len(svc_jobs.list_jobs(svc, 0)) == 1
+    assert len(svc_jobs.list_jobs(svc, 999999)) == 4
+
+
+# --- optimize ---------------------------------------------------------------
+
+
+def test_optimize_reports_the_rig_artifacts_it_made_stale(svc, assets):
     """Re-optimizing swaps model.glb for a different mesh; rig.glb and
-    everything baked from it still describe the old one. The route must say
-    so rather than silently serving a rig that no longer matches."""
+    everything baked from it still describe the old one. It must say so rather
+    than silently leaving a rig that no longer matches."""
     trimesh = pytest.importorskip("trimesh")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    client.app.state.store.set_status(job_id, "done")
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
     (job_dir / "rig.glb").write_bytes(b"rig")
@@ -1143,160 +940,187 @@ def test_optimize_reports_the_rig_artifacts_it_made_stale(client, tmp_path):
     (job_dir / "poses").mkdir()
     (job_dir / "poses" / "0123456789ab.glb").write_bytes(b"baked")
 
-    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
-    assert r.status_code == 200
-    stale = r.json()["stale"]
+    stale = svc_jobs.optimize_job(svc, job_id, profile="raw")["stale"]
     assert "rig.glb" in stale
     assert "rig.json" in stale
     assert "poses/0123456789ab.glb" in stale
 
 
-def test_optimize_reports_nothing_stale_for_an_unrigged_job(client, tmp_path):
+def test_optimize_reports_nothing_stale_for_an_unrigged_job(svc, assets):
     trimesh = pytest.importorskip("trimesh")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    client.app.state.store.set_status(job_id, "done")
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
 
-    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
-    assert r.status_code == 200
-    assert r.json()["stale"] == []
+    assert svc_jobs.optimize_job(svc, job_id, profile="raw")["stale"] == []
 
 
-def test_optimize_requires_a_source(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
-    client.app.state.store.set_status(r.json()["id"], "done")
-    assert client.post(f"/api/jobs/{r.json()['id']}/optimize").status_code == 400
+def test_optimize_requires_a_source(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    with pytest.raises(Invalid):
+        svc_jobs.optimize_job(svc, job_id)
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
-def test_optimize_refuses_a_job_the_worker_may_still_be_writing(client, tmp_path, status):
-    """The route rewrites model.glb and the worker's own optimize/scale/audit
-    steps write the same file and the same params blob. Nothing can serialise
-    the two -- the worker half takes no lock -- so a job that hasn't reached a
-    terminal status is refused rather than raced."""
+def test_optimize_refuses_a_job_the_worker_may_still_be_writing(svc, assets, status):
+    """It rewrites model.glb, and the worker's own optimize/scale/audit steps
+    write the same file and the same params blob. Nothing can serialise the two
+    -- the worker half takes no lock -- so a job that hasn't reached a terminal
+    status is refused rather than raced."""
     trimesh = pytest.importorskip("trimesh")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    client.app.state.store.set_status(job_id, status)
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, status)
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
 
-    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
-    assert r.status_code == 409
+    with pytest.raises(Conflict):
+        svc_jobs.optimize_job(svc, job_id, profile="raw")
 
 
-def test_optimize_merges_params_instead_of_writing_a_stale_copy(client, tmp_path):
-    """params is one JSON blob. The route read the job at the top of the
-    request and used to write that whole copy back at the end, so anything
-    committed in between -- a rename, a tag, another derived value -- was
-    silently discarded."""
+def test_optimize_merges_params_instead_of_writing_a_stale_copy(svc, assets):
+    """params is one JSON blob. This used to read the job at the top and write
+    that whole copy back at the end, so anything committed in between -- a
+    rename, a tag, another derived value -- was silently discarded."""
     trimesh = pytest.importorskip("trimesh")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    store = client.app.state.store
-    store.set_status(job_id, "done")
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
-    store.merge_params(job_id, {"written_meanwhile": "keep me"})
+    svc.store.merge_params(job_id, {"written_meanwhile": "keep me"})
 
-    assert client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"}).status_code == 200
-    params = store.get(job_id)["params"]
+    svc_jobs.optimize_job(svc, job_id, profile="raw")
+    params = _params(svc, job_id)
     assert params["written_meanwhile"] == "keep me"
     assert params["profile"] == "raw"
 
 
-def test_optimize_rejects_an_unknown_profile(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
-    job_id = r.json()["id"]
-    client.app.state.store.set_status(job_id, "done")
-    assert client.post(
-        f"/api/jobs/{job_id}/optimize", data={"profile": "nonsense"}
-    ).status_code == 400
+def test_optimize_rejects_an_unknown_profile(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    with pytest.raises(Invalid):
+        svc_jobs.optimize_job(svc, job_id, profile="nonsense")
 
 
-def test_create_job_rejects_an_unknown_profile(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "profile": "nonsense"})
-    assert r.status_code == 400
+def test_a_submit_rejects_an_unknown_profile(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", profile="nonsense")
 
 
-def test_create_job_stores_a_valid_profile(client):
-    r = client.post("/api/jobs", data={"kind": "text", "prompt": "x", "profile": "draft"})
-    assert r.status_code == 200
-    job = client.get(f"/api/jobs/{r.json()['id']}").json()
-    assert job["params"]["profile"] == "draft"
+def test_a_submit_stores_a_valid_profile(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x", profile="draft")["id"]
+    assert _params(svc, job_id)["profile"] == "draft"
 
 
-def test_collision_glb_is_derived_on_demand(client, tmp_path):
+# --- derived artifacts ------------------------------------------------------
+
+
+def test_concurrent_stl_requests_convert_only_once(svc, assets, monkeypatch):
+    """A double-clicked download used to start two exports over the same
+    destination path, either racing each other or serving a torn file."""
+    import warlock.pipelines.postprocess as pp
+
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh = pytest.importorskip("trimesh")
+    trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+
+    calls = []
+    real = pp.glb_to_stl
+
+    def counting(glb, stl):
+        calls.append(glb)
+        time.sleep(0.05)  # widen the window a second caller could enter
+        return real(glb, stl)
+
+    monkeypatch.setattr(pp, "glb_to_stl", counting)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        paths = [
+            f.result()
+            for f in [
+                pool.submit(svc_derive.get_file, svc, job_id, "model.stl") for _ in range(4)
+            ]
+        ]
+
+    assert all(p.exists() and p.stat().st_size for p in paths)
+    assert len(calls) == 1, "the second caller should get the finished file"
+
+
+def test_collision_glb_is_derived_on_demand(svc, assets):
     trimesh = pytest.importorskip("trimesh")
     pytest.importorskip("scipy")  # trimesh delegates the convex hull to QHull
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=2).export(job_dir / "model.glb")
 
     assert not (job_dir / "collision.glb").exists()
-    r = client.get(f"/api/jobs/{job_id}/files/collision.glb")
-    assert r.status_code == 200
-    assert r.content
+    path = svc_derive.get_file(svc, job_id, "collision.glb")
+    assert path.stat().st_size
     # Cached beside the mesh, like the STL and OBJ exports.
     assert (job_dir / "collision.glb").exists()
 
 
-def test_collision_glb_is_404_without_a_mesh(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.get(f"/api/jobs/{job_id}/files/collision.glb").status_code == 404
+def test_collision_glb_is_unavailable_without_a_mesh(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(NotReady):
+        svc_derive.get_file(svc, job_id, "collision.glb")
 
 
-def test_fbx_is_derived_on_demand_through_the_blender_worker(client, tmp_path):
+def test_fbx_is_derived_on_demand_through_the_blender_worker(svc, assets):
     trimesh = pytest.importorskip("trimesh")
     pytest.importorskip("bpy")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
 
-    r = client.get(f"/api/jobs/{job_id}/files/model.fbx")
-    assert r.status_code == 200
-    assert r.content[:18] == b"Kaydara FBX Binary"
+    path = svc_derive.get_file(svc, job_id, "model.fbx")
+    assert path.read_bytes()[:18] == b"Kaydara FBX Binary"
     assert (job_dir / "model.fbx").exists()
 
 
-def test_fbx_is_404_without_a_mesh(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.get(f"/api/jobs/{job_id}/files/model.fbx").status_code == 404
+def test_fbx_is_unavailable_without_a_mesh(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(NotReady):
+        svc_derive.get_file(svc, job_id, "model.fbx")
 
 
-def test_textures_zip_is_404_on_an_untextured_mesh(client, tmp_path):
-    # A mesh with no maps is a fact about the model, not a server fault.
+def test_textures_zip_is_unavailable_on_an_untextured_mesh(svc, assets):
+    # A mesh with no maps is a fact about the model, not a fault.
     trimesh = pytest.importorskip("trimesh")
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
 
-    r = client.get(f"/api/jobs/{job_id}/files/textures.zip")
-    assert r.status_code == 404
+    with pytest.raises(NotReady):
+        svc_derive.get_file(svc, job_id, "textures.zip")
     # No empty zip left behind to be served as a success next time.
     assert not (job_dir / "textures.zip").exists()
 
 
-def test_textures_zip_is_derived_on_demand(client, tmp_path):
+def test_textures_zip_is_derived_on_demand(svc, assets):
     import zipfile
 
     np = pytest.importorskip("numpy")
     trimesh = pytest.importorskip("trimesh")
     from PIL import Image
 
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     mesh = trimesh.creation.box(extents=(1, 1, 1))
     mesh.visual = trimesh.visual.TextureVisuals(
@@ -1307,50 +1131,61 @@ def test_textures_zip_is_derived_on_demand(client, tmp_path):
     )
     trimesh.Scene(mesh).export(job_dir / "model.glb")
 
-    r = client.get(f"/api/jobs/{job_id}/files/textures.zip")
-    assert r.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+    path = svc_derive.get_file(svc, job_id, "textures.zip")
+    with zipfile.ZipFile(path) as zf:
         assert "base_color.png" in zf.namelist()
 
 
-def test_bulk_export_zips_the_selected_jobs(client, tmp_path):
+def test_an_unknown_artifact_name_is_refused(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(NotFound):
+        svc_derive.get_file(svc, job_id, "../secrets")
+
+
+# --- export -----------------------------------------------------------------
+
+
+def test_bulk_export_zips_the_selected_jobs(svc, assets, tmp_path):
     import zipfile
 
     ids = []
     for _ in range(2):
-        job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-        job_dir = tmp_path / "assets" / job_id
+        job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+        job_dir = assets / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "model.glb").write_bytes(b"glb")
         ids.append(job_id)
 
-    r = client.post("/api/export", data={"ids": ids})
-    assert r.status_code == 200
-    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+    dest = tmp_path / "out" / "export.zip"
+    out = svc_export.bulk_export(svc, ids, None, dest)
+    assert out["files"] == 2
+    with zipfile.ZipFile(dest) as zf:
         names = zf.namelist()
     assert len(names) == 2
     assert all(n.endswith("model.glb") for n in names)
 
 
-def test_bulk_export_rejects_an_unknown_file_name(client):
-    r = client.post("/api/export", data={"ids": "0" * 12, "files": "../secrets"})
-    assert r.status_code == 400
+def test_bulk_export_rejects_an_unknown_file_name(svc, tmp_path):
+    with pytest.raises(Invalid):
+        svc_export.bulk_export(svc, ["0" * 12], ["../secrets"], tmp_path / "o.zip")
 
 
-def test_bulk_export_is_404_when_nothing_exists(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.post("/api/export", data={"ids": job_id}).status_code == 404
+def test_bulk_export_is_refused_when_nothing_exists(svc, tmp_path):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(NotFound):
+        svc_export.bulk_export(svc, [job_id], None, tmp_path / "o.zip")
 
 
-def test_export_to_folder_is_404_when_unconfigured(client):
-    assert client.post("/api/export/folder", data={"ids": "0" * 12}).status_code == 404
+def test_export_to_folder_is_refused_when_unconfigured(svc):
+    with pytest.raises(NotFound):
+        svc_export.export_to_folder(svc, ["0" * 12], None)
 
 
 def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
-    # Its own client: export_dir is read once at Config construction.
-    from fastapi.testclient import TestClient
-
-    from warlock.app import create_app
+    # Its own service: export_dir is read once at Config construction.
+    from warlock.config import get_config
+    from warlock.db import JobStore
+    from warlock.service import WarlockService
 
     target = tmp_path / "godot_project" / "assets"
     monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path / "assets"))
@@ -1359,115 +1194,104 @@ def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("WARLOCK_EXPORT_DIR", str(target))
     monkeypatch.setattr(config_mod, "_config", None)
 
-    with TestClient(create_app()) as c:
-        job_id = c.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-        job_dir = tmp_path / "assets" / job_id
+    config = get_config()
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    store = JobStore(config.db_path)
+    try:
+        svc = WarlockService(config, store)
+        job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+        job_dir = config.job_dir(job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "model.glb").write_bytes(b"glb")
 
-        r = c.post("/api/export/folder", data={"ids": job_id})
-        assert r.status_code == 200
-        assert r.json()["copied"] == 1
+        out = svc_export.export_to_folder(svc, [job_id], None)
+        assert out["copied"] == 1
         assert (target / job_id / "model.glb").read_bytes() == b"glb"
+    finally:
+        store.close()
 
 
-def test_health_reports_the_export_dir(client):
-    # The UI reveals its "save to project" button off this field alone.
-    assert client.get("/api/health").json()["export_dir"] is None
+def test_health_reports_the_export_dir(svc, worker):
+    # The UI reveals its "save to project" action off this field alone.
+    assert svc_system.health(svc)["export_dir"] is None
 
 
-def test_patch_job_metadata(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).json()["id"]
-    r = client.patch(
-        f"/api/jobs/{job_id}",
-        json={"name": "Oak barrel", "tags": ["Prop", " Fantasy "], "favorite": True},
+# --- metadata ---------------------------------------------------------------
+
+
+def test_updating_job_metadata(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel")["id"]
+    body = svc_jobs.update_job(
+        svc, job_id, {"name": "Oak barrel", "tags": ["Prop", " Fantasy "], "favorite": True}
     )
-    assert r.status_code == 200
-    body = r.json()
     assert body["name"] == "Oak barrel"
-    assert body["tags"] == "fantasy,prop"      # normalized and sorted
+    assert body["tags"] == "fantasy,prop"  # normalized and sorted
     assert body["favorite"] == 1
 
 
-def test_patch_rejects_an_overlong_name(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    assert client.patch(f"/api/jobs/{job_id}", json={"name": "x" * 200}).status_code == 400
+def test_updating_rejects_an_overlong_name(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.update_job(svc, job_id, {"name": "x" * 200})
 
 
-def test_patch_a_missing_job_is_404(client):
-    assert client.patch(f"/api/jobs/{'0' * 12}", json={"name": "x"}).status_code == 404
+def test_updating_a_missing_job_is_not_found(svc):
+    with pytest.raises(NotFound):
+        svc_jobs.update_job(svc, "0" * 12, {"name": "x"})
 
 
-def test_thumbnail_upload_and_download(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    png = _png_bytes()
-    r = client.post(
-        f"/api/jobs/{job_id}/thumb.png", content=png, headers={"Content-Type": "image/png"}
-    )
-    assert r.status_code == 200
-    assert client.get(f"/api/jobs/{job_id}/files/thumb.png").status_code == 200
-    assert "thumb.png" in client.get(f"/api/jobs/{job_id}").json()["files"]
+# --- thumbnails -------------------------------------------------------------
 
 
-def test_thumbnail_rejects_a_non_png(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    r = client.post(f"/api/jobs/{job_id}/thumb.png", content=b"not a png")
-    assert r.status_code == 400
+def test_a_thumbnail_is_saved_and_then_listed(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    assert svc_files.save_thumbnail(svc, job_id, _png_bytes()) == {"ok": True}
+    assert svc_derive.get_file(svc, job_id, "thumb.png").exists()
+    assert "thumb.png" in _job(svc, job_id)["files"]
 
 
-def test_thumbnail_rejects_an_oversized_body(client):
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    r = client.post(
-        f"/api/jobs/{job_id}/thumb.png", content=b"\x89PNG\r\n\x1a\n" + b"0" * 600_000
-    )
-    assert r.status_code == 413
+def test_a_thumbnail_that_is_not_a_png_is_refused(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(Invalid):
+        svc_files.save_thumbnail(svc, job_id, b"not a png")
 
 
-def test_submitting_a_job_wakes_the_worker(client, monkeypatch):
-    """Dispatch polls on an interval; without this a submit waits out up to a
-    second of it before anything starts. Asserted on the call and not on the
-    event itself, which the idle loop clears again within milliseconds."""
-    worker = client.app.state.worker
-    woken = []
-    monkeypatch.setattr(worker, "wake", lambda: woken.append(1))
-    assert client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).status_code == 200
-    assert woken
+def test_an_oversized_thumbnail_is_refused(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(TooLarge):
+        svc_files.save_thumbnail(svc, job_id, b"\x89PNG\r\n\x1a\n" + b"0" * 600_000)
 
 
-def test_health_does_not_rerun_the_doctor_suite_on_every_call(client, monkeypatch):
-    """The suite binds a socket, stats the disk and probes a dozen paths, and
-    the UI polls this route. None of those answers changes second to second."""
-    from warlock import doctor
-
-    calls = []
-    real = doctor.run_checks
-    monkeypatch.setattr(
-        doctor, "run_checks", lambda *a, **k: (calls.append(1), real(*a, **k))[1]
-    )
-    assert client.get("/api/health").status_code == 200
-    assert client.get("/api/health").status_code == 200
-    assert len(calls) == 1
+# --- logs -------------------------------------------------------------------
 
 
-def test_a_failed_jobs_traceback_is_retrievable(client, tmp_path):
-    """The DB only ever holds the one-line friendly sentence. The traceback
-    has always been written to the job dir and was unreachable from the UI,
-    which made every failure a one-line dead end."""
-    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
-    job_dir = tmp_path / "assets" / job_id
+def test_a_failed_jobs_traceback_is_retrievable(svc, assets):
+    """The DB only ever holds the one-line friendly sentence. The traceback has
+    always been written to the job dir and was unreachable from the UI, which
+    made every failure a one-line dead end."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "error.log").write_text("Traceback (most recent call last):\n  boom\n")
-    client.app.state.store.set_status(job_id, "error", "it broke")
+    svc.store.set_status(job_id, "error", "it broke")
 
-    assert "error.log" in client.get(f"/api/jobs/{job_id}").json()["files"]
-    r = client.get(f"/api/jobs/{job_id}/files/error.log")
-    assert r.status_code == 200
-    assert "boom" in r.text
+    assert "error.log" in _job(svc, job_id)["files"]
+    assert "boom" in svc_derive.get_file(svc, job_id, "error.log").read_text()
 
 
-def test_the_trellis_log_tail_is_readable(client, tmp_path):
-    (tmp_path / "assets").mkdir(parents=True, exist_ok=True)
-    assert client.get("/api/logs/trellis").status_code == 404
-    (tmp_path / "assets" / "trellis.log").write_text("stage 1\nstage 2\n")
-    body = client.get("/api/logs/trellis").json()
-    assert "stage 2" in body["text"]
+def test_the_trellis_log_tail_is_readable(svc, assets):
+    with pytest.raises(NotFound):
+        svc_system.trellis_log(svc)
+    (assets / "trellis.log").write_text("stage 1\nstage 2\n")
+    assert "stage 2" in svc_system.trellis_log(svc)["text"]
+
+
+def test_a_service_error_carries_the_status_its_route_used_to_return():
+    """The hierarchy is small so this mapping stays mechanical: an extraction
+    that changed a status code should be a visible edit, not a silent one."""
+    assert NotFound("x").status == 404
+    assert NotReady("x").status == 404
+    assert Invalid("x").status == 400
+    assert Conflict("x").status == 409
+    assert TooLarge("x").status == 413
+    assert Failed("x").status == 500
