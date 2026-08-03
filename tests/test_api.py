@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -1032,6 +1033,7 @@ def test_concurrent_stl_requests_convert_only_once(svc, assets, monkeypatch):
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh = pytest.importorskip("trimesh")
     trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+    svc.store.set_status(job_id, "done")
 
     calls = []
     real = pp.glb_to_stl
@@ -1063,6 +1065,7 @@ def test_collision_glb_is_derived_on_demand(svc, assets):
     job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=2).export(job_dir / "model.glb")
+    svc.store.set_status(job_id, "done")
 
     assert not (job_dir / "collision.glb").exists()
     path = svc_derive.get_file(svc, job_id, "collision.glb")
@@ -1085,6 +1088,7 @@ def test_fbx_is_derived_on_demand_through_the_blender_worker(svc, assets):
     job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+    svc.store.set_status(job_id, "done")
 
     path = svc_derive.get_file(svc, job_id, "model.fbx")
     assert path.read_bytes()[:18] == b"Kaydara FBX Binary"
@@ -1105,6 +1109,7 @@ def test_textures_zip_is_unavailable_on_an_untextured_mesh(svc, assets):
     job_dir = assets / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(job_dir / "model.glb")
+    svc.store.set_status(job_id, "done")
 
     with pytest.raises(NotReady):
         svc_derive.get_file(svc, job_id, "textures.zip")
@@ -1130,6 +1135,7 @@ def test_textures_zip_is_derived_on_demand(svc, assets):
         ),
     )
     trimesh.Scene(mesh).export(job_dir / "model.glb")
+    svc.store.set_status(job_id, "done")
 
     path = svc_derive.get_file(svc, job_id, "textures.zip")
     with zipfile.ZipFile(path) as zf:
@@ -1154,6 +1160,7 @@ def test_bulk_export_zips_the_selected_jobs(svc, assets, tmp_path):
         job_dir = assets / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "model.glb").write_bytes(b"glb")
+        svc.store.set_status(job_id, "done")
         ids.append(job_id)
 
     dest = tmp_path / "out" / "export.zip"
@@ -1163,6 +1170,62 @@ def test_bulk_export_zips_the_selected_jobs(svc, assets, tmp_path):
         names = zf.namelist()
     assert len(names) == 2
     assert all(n.endswith("model.glb") for n in names)
+
+
+def test_bulk_export_skips_a_job_that_is_still_running(svc, assets, tmp_path):
+    """Export used to include any model.glb that existed -- including one the
+    worker was still writing (queue._apply_scale rewrites it in place)."""
+    running = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    done = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    for job_id in (running, done):
+        job_dir = assets / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "model.glb").write_bytes(b"glb")
+    svc.store.set_status(running, "running")
+    svc.store.set_status(done, "done")
+
+    dest = tmp_path / "export.zip"
+    out = svc_export.bulk_export(svc, [running, done], None, dest)
+    assert out["files"] == 1
+    with zipfile.ZipFile(dest) as zf:
+        assert zf.namelist() == [f"{done}/model.glb"]
+
+
+def test_export_skips_a_directory_with_no_job_row(svc, assets, tmp_path):
+    """An orphaned assets/ directory is not an exportable job."""
+    orphan = "a" * 12
+    (assets / orphan).mkdir(parents=True, exist_ok=True)
+    (assets / orphan / "model.glb").write_bytes(b"glb")
+    with pytest.raises(NotFound):
+        svc_export.bulk_export(svc, [orphan], None, tmp_path / "o.zip")
+
+
+def test_a_file_is_not_served_before_the_job_is_done(svc, assets):
+    """The file route used to serve on existence alone, disagreeing with the
+    listing that gated the same artifact on status."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "model.glb").write_bytes(b"glb")
+    (job_dir / "source.glb").write_bytes(b"glb")
+    svc.store.set_status(job_id, "running")
+
+    for name in ("model.glb", "source.glb"):
+        with pytest.raises(NotReady):
+            svc_derive.get_file(svc, job_id, name)
+
+    svc.store.set_status(job_id, "done")
+    assert svc_derive.get_file(svc, job_id, "model.glb").exists()
+    assert svc_derive.get_file(svc, job_id, "source.glb").exists()
+
+
+def test_a_file_from_a_job_that_does_not_exist_is_not_found(svc, assets):
+    """An orphaned directory used to serve files for a deleted job."""
+    orphan = "b" * 12
+    (assets / orphan).mkdir(parents=True, exist_ok=True)
+    (assets / orphan / "model.glb").write_bytes(b"glb")
+    with pytest.raises(NotFound):
+        svc_derive.get_file(svc, orphan, "model.glb")
 
 
 def test_bulk_export_rejects_an_unknown_file_name(svc, tmp_path):
@@ -1203,6 +1266,7 @@ def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
         job_dir = config.job_dir(job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "model.glb").write_bytes(b"glb")
+        svc.store.set_status(job_id, "done")
 
         out = svc_export.export_to_folder(svc, [job_id], None)
         assert out["copied"] == 1

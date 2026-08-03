@@ -108,30 +108,46 @@ def measure_storage(data_dir: Path) -> dict[str, Any]:
     return {"job_dirs": dirs, "bytes": total}
 
 
+# Everything that is a pure function of model.glb: derivable exactly when
+# model.glb itself is ready, and never independently of it.
+DERIVED = ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model.fbx")
+
+# The order attach_files lists them in. Derived artifacts are deliberately
+# absent: they are produced on request, so listing them would claim a file that
+# usually isn't on disk.
+LISTED = ("input.png", "model.glb", "source.glb", "rig.glb", "thumb.png", "error.log")
+
+
+def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
+    """Whether ``name`` may be served/exported for this job. The one place the
+    rules live.
+
+    They used to be restated in five callers and had drifted apart -- the
+    listing gated model.glb on status while the file route and the exporter
+    served it on mere existence, which is a half-written mesh handed to a
+    concurrent reader.
+    """
+    path = job_dir / name
+    if name in ("model.glb", "source.glb"):
+        # Gated on status, not just existence: the worker still writes to
+        # model.glb after the file first appears (queue.py:_apply_scale), and
+        # source.glb is the reconstruction the same run produced.
+        return job.get("status") == "done" and path.exists()
+    if name == "rig.glb":
+        # Gated on rig.json, not on its own existence and not on this job's
+        # status. The rig lands in the *source* job's directory, so this job is
+        # usually already 'done' while a separate rig job is still writing --
+        # and the worker writes rig.json last, which makes it the completion
+        # marker for the pair.
+        return (job_dir / "rig.json").exists() and path.exists()
+    if name in DERIVED:
+        # Derivable, not present: the caller still has to produce it.
+        return ready(job, job_dir, "model.glb")
+    # input.png, thumb.png and error.log are each written in one call and are
+    # complete the moment they exist -- error.log before the row is even marked
+    # failed, thumb.png by the viewer long after the job finished.
+    return path.exists()
+
+
 def attach_files(job: dict[str, Any], job_dir: Path) -> None:
-    # model.glb is gated on status, not just existence: the worker still
-    # writes to it after the file first appears on disk (see
-    # queue.py:_apply_scale), so "exists" alone can expose a half-written file
-    # to a concurrent reader.
-    files = []
-    if (job_dir / "input.png").exists():
-        files.append("input.png")
-    if job["status"] == "done" and (job_dir / "model.glb").exists():
-        files.append("model.glb")
-    # rig.glb is gated on rig.json, not on its own existence and not on this
-    # job's status. The rig lands in the *source* job's directory, so this job
-    # is usually already 'done' while a separate rig job is still writing --
-    # and the worker writes rig.json last, which makes it the completion
-    # marker for the pair.
-    if (job_dir / "rig.json").exists() and (job_dir / "rig.glb").exists():
-        files.append("rig.glb")
-    # Ungated on status: the thumbnail is written by the viewer after the job
-    # finished, and it is complete the moment it exists.
-    if (job_dir / "thumb.png").exists():
-        files.append("thumb.png")
-    # Written in one call by errors.write_error_log before the row is marked
-    # failed, so its existence is its own completion marker. Listed so the UI
-    # can offer the traceback behind the one-line message it shows.
-    if (job_dir / "error.log").exists():
-        files.append("error.log")
-    job["files"] = files
+    job["files"] = [n for n in LISTED if ready(job, job_dir, n)]

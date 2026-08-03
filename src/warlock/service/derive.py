@@ -13,10 +13,10 @@ import logging
 from pathlib import Path
 
 from .. import rigging
+from . import files
 from .core import WarlockService
 from .errors import Failed, NotFound, NotReady
 from .files import MEDIA
-from .validation import check_job_id
 
 log = logging.getLogger(__name__)
 
@@ -27,16 +27,16 @@ def get_file(svc: WarlockService, job_id: str, name: str) -> Path:
     Blocking: a cold STL of a 300k-face mesh is seconds and an FBX is a Blender
     subprocess, so this must never be called from the frame thread.
     """
-    check_job_id(job_id)
     if name not in MEDIA:
         raise NotFound("unknown file")
+    # The row is fetched, not just the id checked: readiness is a fact about
+    # the job (a mesh is only servable once it is *done*), and an orphaned
+    # directory used to serve files for a job that no longer exists.
+    job = svc.require_job(job_id)
     job_dir = svc.job_dir(job_id)
     path = job_dir / name
     glb = job_dir / "model.glb"
-    # Same gate as files.attach_files: the Blender export of rig.glb is not
-    # atomic and the worker writes rig.json last, so serving rig.glb on mere
-    # existence can hand back a truncated GLB.
-    if name == "rig.glb" and not (job_dir / "rig.json").exists():
+    if not files.ready(job, job_dir, name):
         raise NotReady("file not ready")
     # FBX needs a Blender subprocess rather than a trimesh call, so it does not
     # fit the `derived` dict below -- but it takes the same per-artifact lock,
@@ -90,4 +90,4 @@ def derivable(name: str) -> bool:
     The UI uses this to decide between a save button and a "derive, then save"
     one, without having to know which conversions exist.
     """
-    return name in ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model.fbx")
+    return name in files.DERIVED

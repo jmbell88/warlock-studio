@@ -153,7 +153,9 @@ def _downloads(ctx: Any, job: Any) -> None:
     files = set(job.get("files") or [])
     has_mesh = "model.glb" in files
     for name, label in widgets.ARTIFACTS:
-        ready = name in files or (ctx.job_dir(job_id) / name).exists()
+        # job["files"] is the sanctioned answer; a raw exists() check here used
+        # to re-enable buttons the service would then refuse.
+        ready = name in files
         derivable = has_mesh and svc_derive.derivable(name)
         blocked = _why_blocked(ctx, name, ready, derivable)
         key = f"save:{job_id}:{name}"

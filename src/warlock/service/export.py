@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from . import files
 from .core import WarlockService
 from .errors import Invalid, NotFound
 from .files import MEDIA
@@ -27,18 +28,23 @@ def export_names(files: list[str] | None) -> list[str]:
 
 
 def collect(svc: WarlockService, ids: list[str], names: list[str]) -> list[tuple[str, Path]]:
-    """-> (arcname, path) for every requested file that exists.
+    """-> (arcname, path) for every requested file that is ready to serve.
 
     Silently skips what is missing rather than failing the batch: a selection
     of ten jobs where one never produced an OBJ should still deliver nine, and
-    the zip's contents say which.
+    the zip's contents say which. Readiness, not existence -- exporting a
+    running job's model.glb would zip a file the worker is still writing.
     """
     out: list[tuple[str, Path]] = []
     for job_id in ids:
         check_job_id(job_id)
+        job = svc.store.get(job_id)
+        if job is None:
+            continue
+        job_dir = svc.job_dir(job_id)
         for name in names:
-            path = svc.job_dir(job_id) / name
-            if path.exists():
+            path = job_dir / name
+            if path.exists() and files.ready(job, job_dir, name):
                 out.append((f"{job_id}/{name}", path))
     return out
 
