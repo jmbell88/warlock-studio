@@ -24,6 +24,31 @@ def store(tmp_path):
     s.close()
 
 
+@pytest.fixture
+def svc(tmp_path, monkeypatch):
+    """A WarlockService over a throwaway data dir, with no worker.
+
+    No worker on purpose: wake_worker becomes a no-op and attach_progress
+    reports None, which is exactly the shape the service functions have to
+    tolerate anyway (the UI reads jobs before the queue has anything to say
+    about them). Tests that need dispatch drive the Worker directly.
+    """
+    import warlock.config as config_mod
+    from warlock.config import get_config
+    from warlock.service import WarlockService
+
+    monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path / "assets"))
+    monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
+    # Points at a nonexistent exe; nothing here ever runs a job.
+    monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
+    monkeypatch.setattr(config_mod, "_config", None)
+    config = get_config()
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    s = JobStore(config.db_path)
+    yield WarlockService(config, s)
+    s.close()
+
+
 class FakeTrellisServer:
     """Stands in for TrellisServer: no subprocess, no GPU, no HTTP."""
 
