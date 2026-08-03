@@ -84,17 +84,29 @@ def run(
     ``dest`` is only created on success -- a half-written or rejected output must
     never end up as the model the user downloads.
     """
+    if target_triangles is None:
+        # No budget asked for, so nothing here needs to know the count: this is
+        # a copy either way. Counting meant a full trimesh load of a ~22 MB,
+        # ~290k-face GLB, serially on the queue, purely to record a number the
+        # mesh report measures again a step later -- and `raw` is the profile
+        # every job runs today. None, not a guess: the field says "not
+        # measured" rather than claiming a figure nothing produced.
+        staged_copy(source, dest)
+        return {
+            "requested": None,
+            "achieved": None,
+            "source_triangles": None,
+            "bytes": dest.stat().st_size,
+        }
     source_triangles = _triangles(source)
-    if target_triangles is None or source_triangles <= target_triangles:
-        # Already inside the budget, or no budget asked for. Copying is honest:
-        # running the simplifier to a ratio above 1.0 is a no-op that still
-        # re-encodes the file.
+    if source_triangles <= target_triangles:
+        # Already inside the budget. Copying is honest: running the simplifier
+        # to a ratio above 1.0 is a no-op that still re-encodes the file.
         staged_copy(source, dest)
         return {
             "requested": target_triangles,
             # A byte-for-byte copy has exactly the source's count; loading the
-            # copy through trimesh just to re-measure it is wasted work on the
-            # hot path of every raw-profile job.
+            # copy through trimesh just to re-measure it is wasted work.
             "achieved": source_triangles,
             "source_triangles": source_triangles,
             "bytes": dest.stat().st_size,

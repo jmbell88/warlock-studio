@@ -8,7 +8,7 @@ import pytest
 
 from warlock.config import Config
 from warlock.db import JobStore
-from warlock.queue import SHUTDOWN_TIMEOUT, Worker
+from warlock.queue import POLL_INTERVAL, SHUTDOWN_TIMEOUT, Worker
 
 pytestmark = pytest.mark.asyncio
 
@@ -762,3 +762,34 @@ async def test_unknown_base_model_in_params_falls_back_rather_than_failing(
         await worker.shutdown()
     finally:
         worker.store.close()
+
+
+async def test_wake_ends_the_idle_wait_immediately(worker):
+    """Dispatch used to sleep out a full POLL_INTERVAL between looks at the
+    queue, so every submit paid up to a second of dead time before anything
+    started. wake() is the other half of that: the timeout stays as the
+    backstop, but a submit no longer waits for it."""
+    started = time.monotonic()
+    task = asyncio.ensure_future(worker._wait_for_work())
+    await asyncio.sleep(0)
+    worker.wake()
+    await asyncio.wait_for(task, timeout=POLL_INTERVAL)
+    assert time.monotonic() - started < POLL_INTERVAL
+
+
+async def test_the_wake_flag_is_cleared_after_it_is_observed(worker):
+    """Otherwise the loop spins: a permanently-set event makes every
+    subsequent wait return instantly with no work to do."""
+    worker.wake()
+    await asyncio.wait_for(worker._wait_for_work(), timeout=POLL_INTERVAL)
+    assert not worker._wake.is_set()
+
+
+async def test_a_wake_during_the_queue_read_is_not_swallowed(worker):
+    """next_queued() runs in a thread, so a submit can land while the loop is
+    already past its check. Clearing the flag before the wait rather than
+    after would turn that into a full poll interval of sleep."""
+    worker.wake()   # stands in for a submit that landed during the DB read
+    started = time.monotonic()
+    await asyncio.wait_for(worker._wait_for_work(), timeout=POLL_INTERVAL)
+    assert time.monotonic() - started < POLL_INTERVAL

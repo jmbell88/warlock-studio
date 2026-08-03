@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     favorite    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
 """
 # idx_jobs_parent is created by the migration below, not here: _SCHEMA's
 # CREATE TABLE IF NOT EXISTS is a no-op against a pre-existing table that
@@ -56,6 +57,12 @@ MIGRATIONS: list[list[str]] = [
         "ALTER TABLE jobs ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_jobs_favorite ON jobs(favorite)",
+    ],
+    # 3 -- created_at index. Both hot reads sort by it: list() pages the whole
+    # history newest-first and next_queued() runs on every dispatch tick, and
+    # without an index each is a full scan plus a sort of every row ever made.
+    [
+        "CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)",
     ],
 ]
 
@@ -195,6 +202,41 @@ class JobStore:
                 "UPDATE jobs SET params = ? WHERE id = ?", (json.dumps(params), job_id)
             )
             self._conn.commit()
+
+    def merge_params(
+        self,
+        job_id: str,
+        changes: dict[str, Any],
+        *,
+        remove: tuple[str, ...] = (),
+    ) -> dict[str, Any] | None:
+        """Apply ``changes`` (and drop ``remove``) onto the stored params blob.
+
+        The read and the write happen under one hold of the lock, which is the
+        whole point: params is a single JSON blob, so ``set_params`` from a copy
+        read earlier is a last-write-wins update that silently discards whatever
+        landed in between. Two writers really do exist -- the worker records
+        derived values while POST /optimize can rewrite the budget of the same
+        row -- and neither touches the keys the other cares about, so a merge
+        loses nothing a full-blob write wouldn't have destroyed.
+
+        Returns the params as written, or None if the job is gone.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT params FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            params = json.loads(row["params"] or "{}")
+            for key in remove:
+                params.pop(key, None)
+            params.update(changes)
+            self._conn.execute(
+                "UPDATE jobs SET params = ? WHERE id = ?", (json.dumps(params), job_id)
+            )
+            self._conn.commit()
+        return params
 
     def set_meta(
         self,

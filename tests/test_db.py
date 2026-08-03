@@ -224,3 +224,27 @@ def test_new_jobs_default_to_empty_metadata(store):
     assert row["name"] == ""
     assert row["tags"] == ""
     assert row["favorite"] == 0
+
+
+def test_merge_params_keeps_keys_it_was_not_asked_about(store):
+    """The reason this exists at all: params is one JSON blob, so a writer
+    holding a copy read earlier and calling set_params destroys whatever
+    landed in between. Merging under the lock is what makes two writers on
+    one row (the worker recording derived values, POST /optimize rewriting a
+    budget) not a lost update."""
+    job_id = store.create("text", "a barrel", {"seed": 7, "mesh_report": {"status": "ready"}})
+    written = store.merge_params(job_id, {"profile": "raw"}, remove=("mesh_report",))
+    assert written == {"seed": 7, "profile": "raw"}
+    assert store.get(job_id)["params"] == {"seed": 7, "profile": "raw"}
+
+
+def test_merge_params_on_a_missing_job_is_none(store):
+    assert store.merge_params("0" * 12, {"profile": "raw"}) is None
+
+
+def test_created_at_is_indexed(store):
+    """list() and next_queued() both sort on it, and next_queued runs on every
+    dispatch tick. Asserted through the schema rather than a timing, which is
+    the only thing that stays true on an empty test database."""
+    names = {r[1] for r in store._conn.execute("PRAGMA index_list(jobs)")}
+    assert "idx_jobs_created" in names

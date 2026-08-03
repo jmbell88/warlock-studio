@@ -147,12 +147,42 @@ def create_app() -> FastAPI:
     def store() -> JobStore:
         return app.state.store
 
+    def wake_worker() -> None:
+        """Dispatch immediately instead of on the next poll tick.
+
+        Every route that inserts a queued row calls this. It is advisory: the
+        worker still polls on its own interval, so a missed call costs a second
+        of latency rather than a stranded job.
+        """
+        worker = getattr(app.state, "worker", None)
+        if worker is not None:
+            worker.wake()
+
+    # /api/health used to run the full doctor suite -- a socket bind, a disk
+    # stat and a dozen path probes -- on every call, and the UI calls it. None
+    # of those answers can change second to second, so they are cached for a
+    # few seconds, keyed on trellis_running because the port check's answer
+    # depends on it.
+    HEALTH_TTL = 5.0
+    _health_cache: dict[str, Any] = {}
+
+    async def _cached_checks(trellis_running: bool) -> list[doctor.Check]:
+        now = time.monotonic()
+        if (
+            _health_cache.get("running") == trellis_running
+            and now - _health_cache.get("at", 0.0) < HEALTH_TTL
+        ):
+            return _health_cache["checks"]
+        checks = await asyncio.to_thread(
+            functools.partial(doctor.run_checks, config, trellis_running=trellis_running)
+        )
+        _health_cache.update(at=now, running=trellis_running, checks=checks)
+        return checks
+
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         worker: Worker = app.state.worker
-        checks = await asyncio.to_thread(
-            functools.partial(doctor.run_checks, config, trellis_running=worker.trellis.running)
-        )
+        checks = await _cached_checks(worker.trellis.running)
         return {
             "ok": worker.alive and worker.fatal is None,
             "worker_alive": worker.alive,
@@ -413,6 +443,7 @@ def create_app() -> FastAPI:
             for job_dir in made_dirs[len(ids):]:
                 await asyncio.to_thread(shutil.rmtree, job_dir, ignore_errors=True)
             raise
+        wake_worker()
         return {"id": ids[0], "ids": ids}
 
     @app.get("/api/jobs")
@@ -648,6 +679,7 @@ def create_app() -> FastAPI:
         await asyncio.to_thread(
             functools.partial(store().create, kind, source["prompt"], params, new_id, stage=stage)
         )
+        wake_worker()
         return {"id": new_id, "seed": params["seed"]}
 
     @app.post("/api/jobs/{job_id}/model")
@@ -748,6 +780,7 @@ def create_app() -> FastAPI:
                 parent_id=job_id,
             )
         )
+        wake_worker()
         return {"id": new_id, "parent": job_id, "mesh_seed": params["mesh_seed"]}
 
     @app.get("/api/rig/templates")
@@ -800,6 +833,7 @@ def create_app() -> FastAPI:
         new_id = await asyncio.to_thread(
             store().create, "rig", source["prompt"], params, uuid.uuid4().hex[:12]
         )
+        wake_worker()
         return {"id": new_id, "source_job": job_id, "template": params["template"]}
 
     @app.post("/api/jobs/{job_id}/rig/joints")
@@ -834,6 +868,7 @@ def create_app() -> FastAPI:
         new_id = await asyncio.to_thread(
             store().create, "rig", source["prompt"], params, uuid.uuid4().hex[:12]
         )
+        wake_worker()
         return {"id": new_id, "source_job": job_id}
 
     @app.get("/api/jobs/{job_id}/rig")
@@ -852,7 +887,7 @@ def create_app() -> FastAPI:
     @app.post("/api/jobs/{job_id}/optimize")
     async def optimize_job(
         job_id: str,
-        profile: Annotated[str, Form()] = "standard",
+        profile: Annotated[str | None, Form()] = None,
         custom_triangles: Annotated[int | None, Form()] = None,
     ) -> dict[str, Any]:
         """Rebuild model.glb from source.glb at a different triangle budget.
@@ -861,6 +896,12 @@ def create_app() -> FastAPI:
         per-artifact lock the STL/OBJ exports use: gltfpack is a two-second
         subprocess, and putting it behind the serial GPU queue would make it
         wait on a trellis run.
+
+        A terminal status is required. The two writers are otherwise genuinely
+        concurrent -- this route rewrites model.glb while the worker's own
+        _optimize/_apply_scale/_audit_mesh are still writing it and recording
+        what they measured -- and no lock here can help, because the worker's
+        half doesn't take one. Refusing beats racing.
         """
         from .pipelines import optimize, postprocess
 
@@ -868,10 +909,15 @@ def create_app() -> FastAPI:
         job = await asyncio.to_thread(store().get, job_id)
         if job is None:
             raise HTTPException(404, "no such job")
+        if job["status"] in ("queued", "running"):
+            raise HTTPException(409, f"job is {job['status']}; re-optimize it once it finishes")
         job_dir = config.job_dir(job_id)
         source = job_dir / "source.glb"
         if not source.exists():
             raise HTTPException(400, "this job has no source reconstruction to re-optimize")
+        # The configured default, not a hardcoded tier: every named tier needs
+        # a gltfpack that isn't vendored yet, so a bare POST used to 500.
+        profile = profile or config.mesh_profile
         try:
             budget = optimize.resolve(profile, custom_triangles)
         except ValueError as exc:
@@ -921,21 +967,22 @@ def create_app() -> FastAPI:
             except Exception:
                 log.exception("normalize failed after optimize for job %s", job_id)
 
-        params = dict(job["params"])
-        params["profile"] = profile
+        changes: dict[str, Any] = {"profile": profile, "optimize": result}
         if custom_triangles is not None:
-            params["custom_triangles"] = custom_triangles
-        params["optimize"] = result
+            changes["custom_triangles"] = custom_triangles
         # The old audit/report describe a mesh that no longer exists.
-        params.pop("mesh_audit", None)
-        params.pop("mesh_report", None)
+        drop = ["mesh_audit", "mesh_report"]
         if transform is None:
-            params.pop("transform", None)
-            params.pop("scale_factor", None)
+            drop += ["transform", "scale_factor"]
         else:
-            params["transform"] = transform
-            params["scale_factor"] = transform["scale"]
-        await asyncio.to_thread(store().set_params, job_id, params)
+            changes["transform"] = transform
+            changes["scale_factor"] = transform["scale"]
+        # Merged rather than written from the copy read at the top of this
+        # route: params is one JSON blob, and a full-blob write from a stale
+        # read silently discards anything committed in between.
+        await asyncio.to_thread(
+            functools.partial(store().merge_params, job_id, changes, remove=tuple(drop))
+        )
 
         def _stale_rig_artifacts() -> list[str]:
             """What still describes the old mesh. Reported, not deleted: the
@@ -1177,6 +1224,7 @@ def create_app() -> FastAPI:
         new_id = await asyncio.to_thread(
             store().create, "sheet", source["prompt"], params, uuid.uuid4().hex[:12]
         )
+        wake_worker()
         return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}
 
     @app.get("/api/jobs/{job_id}/sheets/{sheet_id}")
@@ -1235,7 +1283,36 @@ def create_app() -> FastAPI:
         "textures.zip": "application/zip",
         "rig.glb": "model/gltf-binary",
         "thumb.png": "image/png",
+        # The traceback errors.write_error_log already writes per job. The DB
+        # only ever holds the one-line friendly sentence, so without this route
+        # the actual failure was on disk and unreachable from the UI.
+        "error.log": "text/plain; charset=utf-8",
     }
+
+    # Tail size for the shared trellis log. errors.friendly() tells the user to
+    # look at it by name; this is how they can. Bounded because the server logs
+    # every stage of every run into one file that grows without limit.
+    TRELLIS_LOG_TAIL = 64 * 1024
+
+    @app.get("/api/logs/trellis")
+    async def trellis_log() -> dict[str, Any]:
+        """The tail of assets/trellis.log, as text.
+
+        Not a FileResponse: the file is append-only and unbounded, and the point
+        is the last few pages of it -- which is what a user chasing "The 3D
+        engine stopped unexpectedly" actually needs.
+        """
+        path = config.data_dir / "trellis.log"
+
+        def read() -> str:
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - TRELLIS_LOG_TAIL))
+                return fh.read().decode("utf-8", "replace")
+
+        if not path.exists():
+            raise HTTPException(404, "no trellis log yet")
+        return {"path": str(path), "text": await asyncio.to_thread(read)}
 
     @app.get("/api/jobs/{job_id}/files/{name}")
     async def get_file(job_id: str, name: str) -> FileResponse:
@@ -1474,6 +1551,11 @@ def _attach_files(job: dict[str, Any], job_dir: Path) -> None:
     # finished, and it is complete the moment it exists.
     if (job_dir / "thumb.png").exists():
         files.append("thumb.png")
+    # Written in one call by errors.write_error_log before the row is marked
+    # failed, so its existence is its own completion marker. Listed so the UI
+    # can offer the traceback behind the one-line message it shows.
+    if (job_dir / "error.log").exists():
+        files.append("error.log")
     job["files"] = files
 
 

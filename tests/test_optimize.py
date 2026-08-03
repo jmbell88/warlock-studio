@@ -19,15 +19,22 @@ def test_raw_profile_copies_without_invoking_the_exe(tmp_path, monkeypatch):
         raise AssertionError("gltfpack must not run for the raw profile")
 
     monkeypatch.setattr(subprocess, "run", explode)
-    monkeypatch.setattr(optimize, "_triangles", lambda p: 7)
+
+    def no_counting(path):
+        raise AssertionError("the raw profile must not load the mesh to count it")
+
+    monkeypatch.setattr(optimize, "_triangles", no_counting)
     src = tmp_path / "source.glb"
     src.write_bytes(b"glb")
     result = optimize.run(
         src, tmp_path / "model.glb", target_triangles=None, exe=tmp_path / "missing.exe"
     )
     assert (tmp_path / "model.glb").read_bytes() == b"glb"
+    # Not measured rather than guessed: nothing in this path needs the count,
+    # and the mesh report measures the finished model a step later anyway.
     assert result["requested"] is None
-    assert result["achieved"] == 7
+    assert result["achieved"] is None
+    assert result["source_triangles"] is None
 
 
 def test_command_uses_the_documented_flags(tmp_path, monkeypatch):

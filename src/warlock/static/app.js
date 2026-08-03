@@ -352,6 +352,24 @@ function stopSpinning() {
 
 document.getElementById("tool-frame").addEventListener("click", () => frameModel());
 
+// The same canvas.toBlob the thumbnail upload already uses (the renderer is
+// built with preserveDrawingBuffer for exactly this), pointed at the user
+// instead of at the server.
+document.getElementById("tool-shot").addEventListener("click", () => {
+  if (!model) { toast("Open a model first."); return; }
+  canvas.toBlob((blob) => {
+    if (!blob) { toast("Could not capture the view."); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `warlock_${selected ?? "view"}.png`;
+    a.click();
+    // Revoked on the next frame, not immediately: the click is dispatched
+    // synchronously but the browser reads the blob after this turn.
+    requestAnimationFrame(() => URL.revokeObjectURL(url));
+  }, "image/png");
+});
+
 // --- viewer overlay ---------------------------------------------------------
 
 const placeholder = document.getElementById("placeholder");
@@ -362,6 +380,27 @@ const phDetail = document.getElementById("ph-detail");
 const phTime = document.getElementById("ph-time");
 const phBar = phProgress.querySelector(".bar");
 const phFill = phBar.querySelector("i");
+const phCancel = document.getElementById("ph-cancel");
+
+// No confirm(): this button says exactly what it does, sits on the thing it
+// acts on, and a blocking dialog would freeze the very progress bar behind it
+// (which is why the card's confirm is worth avoiding here, not copying).
+phCancel.addEventListener("click", async () => {
+  const id = liveJobId;
+  if (!id) return;
+  phCancel.disabled = true;
+  setText(phCancel, "Cancelling…");
+  try {
+    const r = await fetch(`/api/jobs/${id}/cancel`, { method: "POST" });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      toast(body.detail ?? "Could not cancel the job.");
+    }
+  } finally {
+    phCancel.disabled = false;
+  }
+  poll(true);
+});
 
 function setText(el, s) { if (el.textContent !== s) el.textContent = s; }
 
@@ -379,6 +418,7 @@ function showOverlay() {
 function hideOverlay() {
   phProgress.hidden = true;
   phProgress.classList.remove("failed");
+  phCancel.hidden = true;
   phIdle.hidden = false;
   // A visible reference preview owns the pane as much as a loaded mesh does;
   // dropping the idle text over either would read as a regression.
@@ -388,6 +428,7 @@ function hideOverlay() {
 function showOverlayError(message) {
   showOverlay();
   phProgress.classList.add("failed");
+  phCancel.hidden = true;
   setText(phLabel, "Generation failed");
   setText(phDetail, message || "");
   setText(phTime, "");
@@ -524,6 +565,8 @@ async function loadGuidance() {
   presets = catalog.presets ?? [];
   syncPlatformHint();
   syncMeshPlatformHint();
+  // platformRes only exists once this resolves, and the cost line reads it.
+  syncSubmitCost();
   syncLoraWeight();
   // Last: the selects must exist and be populated before a stored value can be
   // checked against their options.
@@ -684,7 +727,32 @@ document.getElementById("inspector-close").addEventListener("click", () => {
   inspectorToggle.focus();
 });
 
+// What pressing Generate is about to cost. The queue is serial, so "8
+// candidates" is eight runs waiting on each other and a higher geometry
+// resolution is a longer reconstruction -- neither of which the form said
+// anywhere. The sheet panel already does exactly this arithmetic for its own
+// cell count; this is the same idea on the submit dock.
+function syncSubmitCost() {
+  const el = document.getElementById("submit-cost");
+  if (mode === "2d") {
+    const count = Number(document.getElementById("ref-count").value) || 1;
+    setText(el, count === 1
+      ? "One reference run."
+      : `${count} candidates queue as ${count} separate runs, one at a time.`);
+    return;
+  }
+  const res = platformRes[meshPlatform.value];
+  setText(el, res
+    ? `One reconstruction at ${res} voxels${res >= 1536 ? " — roughly twice the time of 1024" : ""}.`
+    : "One reconstruction.");
+}
+
+for (const el of ["ref-count", "m-platform"]) {
+  document.getElementById(el).addEventListener("change", syncSubmitCost);
+}
+
 function syncStageContext() {
+  syncSubmitCost();
   const kicker = document.getElementById("stage-context-kicker");
   const detail = document.getElementById("stage-context");
   if (mode === "2d") {
@@ -899,12 +967,29 @@ function clearValidation() {
   }
 }
 
+// A field the user cannot see cannot be fixed. #seed and #negative-prompt live
+// inside the collapsed <details id="advanced-settings">, and the settings pane
+// itself is off-screen on a narrow layout -- so "Fix this field" used to point
+// at nothing, and the hidden-check below missed it because a closed <details>
+// is not [hidden]. Open every ancestor disclosure and bring the pane forward
+// before focusing anything.
+function revealField(el) {
+  if (!el) return;
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.tagName === "DETAILS") node.open = true;
+  }
+  if (el.closest("#settings")) setWorkspace("settings");
+}
+
 function reportValidation(errors, { focus = true } = {}) {
   clearValidation();
   if (!errors.length) return true;
   for (const { field, message } of errors) {
     const input = document.getElementById(field);
     const output = document.querySelector(`[data-error-for="${field}"]`);
+    // Every flagged field, not only the focused one: the message beside a
+    // field inside a closed disclosure is as invisible as the field.
+    revealField(input);
     if (input) {
       input.setAttribute("aria-invalid", "true");
       if (output) {
@@ -918,8 +1003,10 @@ function reportValidation(errors, { focus = true } = {}) {
   formErrors.hidden = false;
   if (focus) {
     const first = document.getElementById(errors[0].field);
-    if (first?.hidden || first?.closest("[hidden]")) formErrors.focus();
-    else first?.focus();
+    // revealField has already opened whatever was merely collapsed; anything
+    // still [hidden] belongs to the other mode's pane and cannot be shown.
+    if (!first || first.hidden || first.closest("[hidden]")) formErrors.focus();
+    else first.focus();
   }
   return false;
 }
@@ -1398,15 +1485,23 @@ async function patchJob(id, body) {
 // A re-roll or a re-mesh, from a card or from the inspector. Module-level so
 // both reach it by one path: "try another" on a card and in the inspector must
 // not be able to mean two different requests.
-async function rerunJob(id, how) {
+// `seed` distinguishes the two things "run this again" can mean, which the API
+// has always accepted and nothing ever sent: omitted is a re-roll (a fresh
+// seed, a different result), and a given seed is a retry (the same recipe,
+// which is what you want after a transient failure rather than a new gamble).
+async function rerunJob(id, how, { seed = null } = {}) {
   const job = jobsById.get(id);
   const label = assetName(job);
-  const message = how === "remesh"
-    ? `Build a new 3D mesh for “${label}”? This reuses the reference but consumes another full 3D run.`
-    : `Generate another result for “${label}”? This consumes another generation run.`;
+  const retry = seed !== null && seed !== undefined;
+  const message = retry
+    ? `Run “${label}” again with seed ${seed}? This consumes another generation run.`
+    : how === "remesh"
+      ? `Build a new 3D mesh for “${label}”? This reuses the reference but consumes another full 3D run.`
+      : `Generate another result for “${label}”? This consumes another generation run.`;
   if (!window.confirm(message)) return false;
   const fd = new FormData();
   fd.set("mode", how);
+  if (retry) fd.set("seed", String(seed));
   const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) {
@@ -1416,6 +1511,15 @@ async function rerunJob(id, how) {
   followJob(body.id);
   poll(true);
   return true;
+}
+
+// Which number "the same seed" means. The API rewrites all three from one
+// value on a reroll, and `seed` is the legacy fallback both stages resolve
+// against, so it is the one that reproduces the original run.
+function retrySeed(job) {
+  const params = job?.params ?? {};
+  const seed = params.seed ?? params.reference_seed ?? params.mesh_seed;
+  return Number.isInteger(seed) ? seed : null;
 }
 
 function createNode(id) {
@@ -1489,6 +1593,24 @@ function createNode(id) {
   setText(remesh, "Rebuild 3D mesh");
   remesh.title = "Reuse this reference image, rerun only the 3D stage";
   remesh.hidden = true;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  setText(retry, "Retry with the same seed");
+  retry.title = "Run this exact recipe again — the same prompt, settings and seed";
+  retry.hidden = true;
+  retry.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const job = jobsById.get(id);
+    if (!job) return;
+    retry.disabled = true;
+    try {
+      await rerunJob(id, "reroll", { seed: retrySeed(job) });
+    } finally {
+      retry.disabled = false;
+    }
+    closeMenu();
+    poll(true);
+  });
   const rigBtn = document.createElement("button");
   rigBtn.type = "button";
   setText(rigBtn, "Fit a skeleton");
@@ -1544,7 +1666,7 @@ function createNode(id) {
   pick.title = "Select for bulk export";
   pick.addEventListener("click", (e) => e.stopPropagation());
   pick.addEventListener("change", updateBulkBar);
-  menuPanel.append(rename, another, reroll, remesh, compare, rigBtn, settingsToggle, act);
+  menuPanel.append(rename, another, reroll, retry, remesh, compare, rigBtn, settingsToggle, act);
   actions.append(star, pick, primary, menu);
   li.append(img, info, actions);
 
@@ -1664,7 +1786,7 @@ function createNode(id) {
   });
 
   const n = { li, img, title, status, stage, err, quality, lineage, settings, settingsToggle,
-              copySettings, bar, fill, act, reroll, remesh, rigBtn, another, pick,
+              copySettings, bar, fill, act, reroll, retry, remesh, rigBtn, another, pick,
               star, compare, primary, menu, menuSummary };
   nodes.set(id, n);
   return n;
@@ -1852,7 +1974,12 @@ function updateNode(n, job) {
     n.bar.removeAttribute("aria-valuenow");
   }
 
-  setText(n.err, job.status === "error" && job.error ? job.error : "");
+  // The line is one ellipsised row wide, so the full sentence goes in the
+  // tooltip; the traceback behind it is in the inspector.
+  const failed = job.status === "error";
+  setText(n.err, failed && job.error ? job.error : "");
+  if (failed && job.error) n.err.title = job.error;
+  else n.err.removeAttribute("title");
 
   const badge = job.status === "done" ? qualityBadge(job) : null;
   n.quality.className = `job-quality ${badge ? badge.cls : ""}`;
@@ -1870,13 +1997,18 @@ function updateNode(n, job) {
   setText(n.act, cancelling ? "Cancellation pending" : active ? "Cancel active job" : "Delete permanently");
   n.act.disabled = cancelling;
 
-  // Only offered on a finished job: re-rolling a queued one just races it, and
-  // re-3D needs a reference image that survived the run.
+  // Only offered on a settled job: re-rolling a queued one just races it, and
+  // re-3D needs a reference image that survived the run. A *failed* job is
+  // settled too, and is the case that most wants a re-run -- it had no retry
+  // affordance at all, which left the API's own rerun route unreachable from
+  // the one card that needed it.
   const done = job.status === "done";
+  const settled = done || failed;
   const generated = job.kind !== "rig";
   const isReference = job.stage === "reference";
-  n.reroll.hidden = !done || !generated || isReference;
-  n.remesh.hidden = !done || !generated || !job.files.includes("input.png");
+  n.reroll.hidden = !settled || !generated || isReference;
+  n.retry.hidden = !settled || !generated || retrySeed(job) === null;
+  n.remesh.hidden = !settled || !generated || !job.files.includes("input.png");
   // Offered once, on a finished mesh that isn't rigged yet. A rig job has no
   // mesh of its own, and re-rigging would silently overwrite the skeleton
   // whatever poses were saved against it.
@@ -1886,7 +2018,7 @@ function updateNode(n, job) {
   n.compare.hidden = !done || !job.files.includes("model.glb") || job.id === selected;
   setText(n.compare, comparing === job.id ? "Exit comparison" : "Compare with selected");
 
-  n.another.hidden = !(isReference && done);
+  n.another.hidden = !(isReference && settled);
   // A reference has no mesh, so the mesh-only actions stay hidden for it.
   n.remesh.hidden = n.remesh.hidden || isReference;
   n.rigBtn.hidden = n.rigBtn.hidden || isReference;
@@ -1958,6 +2090,35 @@ function inspAction(label, title, onClick, primary = false) {
   return btn;
 }
 
+// The message the DB holds is one friendly sentence; the traceback that
+// produced it has always been written to the job's error.log and had no route
+// out of the server, so "Review error" showed the same ellipsised line the card
+// already did. The log is fetched lazily -- opening the disclosure is the ask.
+function renderErrorDetail(job) {
+  const block = document.getElementById("insp-error");
+  const text = document.getElementById("insp-error-text");
+  const log = document.getElementById("insp-error-log");
+  const logText = document.getElementById("insp-error-log-text");
+  const failed = job?.status === "error";
+  block.hidden = !failed;
+  setText(text, failed ? (job.error || "The job failed without a message.") : "");
+  const hasLog = Boolean(failed && job.files?.includes("error.log"));
+  log.hidden = !hasLog;
+  log.open = false;
+  setText(logText, "Loading…");
+  if (!hasLog) return;
+  log.ontoggle = async () => {
+    if (!log.open || logText.dataset.jobId === job.id) return;
+    try {
+      const r = await fetch(`/api/jobs/${job.id}/files/error.log`);
+      setText(logText, r.ok ? await r.text() : "Could not read the error log.");
+      if (r.ok) logText.dataset.jobId = job.id;
+    } catch (e) {
+      setText(logText, `Could not read the error log: ${e}`);
+    }
+  };
+}
+
 // Rebuilt only when the job it describes actually changed: showSelected runs on
 // every list refresh, and re-creating the action buttons twice a second would
 // disable one out from under the click that is running it.
@@ -1965,7 +2126,7 @@ let inspectedFor = null;
 
 function renderInspector(job) {
   const signature = job
-    ? `${job.id}|${job.status}|${job.files?.join(",")}|${job.params?.composed_prompt ?? ""}|${job.name ?? ""}|${job.tags ?? ""}|${job.favorite ? 1 : 0}`
+    ? `${job.id}|${job.status}|${job.files?.join(",")}|${job.params?.composed_prompt ?? ""}|${job.name ?? ""}|${job.tags ?? ""}|${job.favorite ? 1 : 0}|${job.error ?? ""}`
     : "";
   if (signature === inspectedFor) return;
   inspectedFor = signature;
@@ -1994,6 +2155,7 @@ function renderInspector(job) {
   if (!job) {
     document.getElementById("insp-2d").setAttribute("aria-hidden", "true");
     document.getElementById("insp-3d").setAttribute("aria-hidden", "true");
+    renderErrorDetail(null);
     return;
   }
   document.getElementById("insp-2d").setAttribute("aria-hidden", String(job.stage !== "reference"));
@@ -2034,8 +2196,35 @@ function renderInspector(job) {
   renderSettingsRows(document.getElementById("insp-settings"), rows);
   document.getElementById("insp-generation").hidden = rows.length === 0;
 
+  renderErrorDetail(job);
+
   const actions = document.getElementById("insp-actions");
   actions.replaceChildren();
+  if (job.status === "error") {
+    // A failed job used to offer nothing at all, so the only way back was to
+    // retype the form. Retry first: after a transient failure the recipe was
+    // fine and a new seed would be a different gamble, not a second attempt.
+    const seed = retrySeed(job);
+    if (seed !== null) {
+      actions.append(
+        inspAction("Retry with the same seed", `Run this again with seed ${seed}`,
+                   () => rerunJob(job.id, "reroll", { seed }), true),
+      );
+    }
+    if (job.kind !== "rig") {
+      actions.append(
+        inspAction("Generate another result", "Same prompt and settings, new seed",
+                   () => rerunJob(job.id, "reroll")),
+      );
+    }
+    if (job.files?.includes("input.png")) {
+      actions.append(
+        inspAction("Rebuild 3D mesh", "Reuse this reference image, rerun only the 3D stage",
+                   () => rerunJob(job.id, "remesh")),
+      );
+    }
+    return;
+  }
   if (job.status !== "done") return;
   if (job.kind === "rig") return;   // a rig has no recipe of its own to re-run
   if (job.stage === "reference") {
@@ -3271,6 +3460,7 @@ async function poll(forceList = false) {
       if (pending === liveJobId || (p && p.status !== "queued")) pending = null;
     }
     renderOverlay();
+    syncTitle();
   } catch (e) {
     if (e.name !== "AbortError") {
       console.error("poll failed", e);
@@ -3337,6 +3527,10 @@ function renderOverlay() {
   showOverlay();
   phProgress.classList.toggle("failed", Boolean(live.error));
   setText(phLabel, live.error ? "Generation failed" : live.label);
+  // Offered while the job is actually running: a finished or failed one has
+  // nothing left to stop.
+  phCancel.hidden = Boolean(live.error);
+  if (!phCancel.hidden && !phCancel.disabled) setText(phCancel, "Cancel this job");
 
   const indeterminate = live.percent <= 0;
   phBar.classList.toggle("indet", indeterminate);
@@ -3358,6 +3552,20 @@ function renderOverlay() {
   renderClock();
 }
 
+// A backgrounded tab showed nothing at all until the 45-second completion
+// notification, so the only way to know whether a two-minute run had started
+// was to come back and look. The title is the one surface a hidden tab still
+// has. Unlike the overlay this narrates whatever is running, not only the job
+// the user happens to have selected -- a background tab has no selection.
+const BASE_TITLE = document.title;
+
+function syncTitle() {
+  const next = live && liveJobId && !live.error
+    ? `${Math.round(Math.max(0, Math.min(100, live.percent)))}% · ${live.label} — ${BASE_TITLE}`
+    : BASE_TITLE;
+  if (document.title !== next) document.title = next;
+}
+
 // Ticks locally between polls so elapsed time reads smoothly rather than
 // jumping once per request.
 function renderClock() {
@@ -3371,6 +3579,11 @@ function renderClock() {
     const remaining = (elapsed / live.percent) * (100 - live.percent);
     etaEma = etaEma === null ? remaining : etaEma * 0.7 + remaining * 0.3;
     out += ` · ~${fmtDuration(etaEma)} left`;
+  } else if (live.cold && live.percent < 100) {
+    // The case the suppression above is aimed at is also the slowest and most
+    // confusing one, and it used to read as a stalled bar. Naming the wait is
+    // not an estimate of the job -- it is an explanation of the silence.
+    out += " · warming up (loading the model, usually ~15s)";
   }
   setText(phTime, out);
 }

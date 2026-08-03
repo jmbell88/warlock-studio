@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import warlock.config as config_mod
 from warlock import guidance, models
 from warlock.app import create_app
+from warlock.db import JobStore
 
 
 @pytest.fixture
@@ -19,6 +20,13 @@ def client(tmp_path, monkeypatch):
     # Point at a nonexistent exe; the worker only touches it when a job runs.
     monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
     monkeypatch.setattr(config_mod, "_config", None)
+    # Same guard as test_rig_api/test_poses_api, and now load-bearing: these
+    # tests are about the HTTP surface and drive job statuses by hand, while a
+    # live worker would claim the row and rewrite them underneath. It used to
+    # be *accidentally* true, because dispatch only looked for work once a
+    # second and a route test finished sooner; POST /api/jobs now wakes the
+    # worker on submit, so a real Text2Image load is one queued job away.
+    monkeypatch.setattr(JobStore, "next_queued", lambda self: None)
     with TestClient(create_app()) as c:
         yield c
 
@@ -1126,6 +1134,7 @@ def test_optimize_reports_the_rig_artifacts_it_made_stale(client, tmp_path):
     trimesh = pytest.importorskip("trimesh")
 
     job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    client.app.state.store.set_status(job_id, "done")
     job_dir = tmp_path / "assets" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
@@ -1146,6 +1155,7 @@ def test_optimize_reports_nothing_stale_for_an_unrigged_job(client, tmp_path):
     trimesh = pytest.importorskip("trimesh")
 
     job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    client.app.state.store.set_status(job_id, "done")
     job_dir = tmp_path / "assets" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
@@ -1157,12 +1167,53 @@ def test_optimize_reports_nothing_stale_for_an_unrigged_job(client, tmp_path):
 
 def test_optimize_requires_a_source(client):
     r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
+    client.app.state.store.set_status(r.json()["id"], "done")
     assert client.post(f"/api/jobs/{r.json()['id']}/optimize").status_code == 400
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_optimize_refuses_a_job_the_worker_may_still_be_writing(client, tmp_path, status):
+    """The route rewrites model.glb and the worker's own optimize/scale/audit
+    steps write the same file and the same params blob. Nothing can serialise
+    the two -- the worker half takes no lock -- so a job that hasn't reached a
+    terminal status is refused rather than raced."""
+    trimesh = pytest.importorskip("trimesh")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    client.app.state.store.set_status(job_id, status)
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
+
+    r = client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"})
+    assert r.status_code == 409
+
+
+def test_optimize_merges_params_instead_of_writing_a_stale_copy(client, tmp_path):
+    """params is one JSON blob. The route read the job at the top of the
+    request and used to write that whole copy back at the end, so anything
+    committed in between -- a rename, a tag, another derived value -- was
+    silently discarded."""
+    trimesh = pytest.importorskip("trimesh")
+
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    store = client.app.state.store
+    store.set_status(job_id, "done")
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.icosphere(subdivisions=1).export(job_dir / "source.glb")
+    store.merge_params(job_id, {"written_meanwhile": "keep me"})
+
+    assert client.post(f"/api/jobs/{job_id}/optimize", data={"profile": "raw"}).status_code == 200
+    params = store.get(job_id)["params"]
+    assert params["written_meanwhile"] == "keep me"
+    assert params["profile"] == "raw"
 
 
 def test_optimize_rejects_an_unknown_profile(client):
     r = client.post("/api/jobs", data={"kind": "text", "prompt": "x"})
     job_id = r.json()["id"]
+    client.app.state.store.set_status(job_id, "done")
     assert client.post(
         f"/api/jobs/{job_id}/optimize", data={"profile": "nonsense"}
     ).status_code == 400
@@ -1370,3 +1421,53 @@ def test_thumbnail_rejects_an_oversized_body(client):
         f"/api/jobs/{job_id}/thumb.png", content=b"\x89PNG\r\n\x1a\n" + b"0" * 600_000
     )
     assert r.status_code == 413
+
+
+def test_submitting_a_job_wakes_the_worker(client, monkeypatch):
+    """Dispatch polls on an interval; without this a submit waits out up to a
+    second of it before anything starts. Asserted on the call and not on the
+    event itself, which the idle loop clears again within milliseconds."""
+    worker = client.app.state.worker
+    woken = []
+    monkeypatch.setattr(worker, "wake", lambda: woken.append(1))
+    assert client.post("/api/jobs", data={"kind": "text", "prompt": "a barrel"}).status_code == 200
+    assert woken
+
+
+def test_health_does_not_rerun_the_doctor_suite_on_every_call(client, monkeypatch):
+    """The suite binds a socket, stats the disk and probes a dozen paths, and
+    the UI polls this route. None of those answers changes second to second."""
+    from warlock import doctor
+
+    calls = []
+    real = doctor.run_checks
+    monkeypatch.setattr(
+        doctor, "run_checks", lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    )
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/health").status_code == 200
+    assert len(calls) == 1
+
+
+def test_a_failed_jobs_traceback_is_retrievable(client, tmp_path):
+    """The DB only ever holds the one-line friendly sentence. The traceback
+    has always been written to the job dir and was unreachable from the UI,
+    which made every failure a one-line dead end."""
+    job_id = client.post("/api/jobs", data={"kind": "text", "prompt": "x"}).json()["id"]
+    job_dir = tmp_path / "assets" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "error.log").write_text("Traceback (most recent call last):\n  boom\n")
+    client.app.state.store.set_status(job_id, "error", "it broke")
+
+    assert "error.log" in client.get(f"/api/jobs/{job_id}").json()["files"]
+    r = client.get(f"/api/jobs/{job_id}/files/error.log")
+    assert r.status_code == 200
+    assert "boom" in r.text
+
+
+def test_the_trellis_log_tail_is_readable(client, tmp_path):
+    (tmp_path / "assets").mkdir(parents=True, exist_ok=True)
+    assert client.get("/api/logs/trellis").status_code == 404
+    (tmp_path / "assets" / "trellis.log").write_text("stage 1\nstage 2\n")
+    body = client.get("/api/logs/trellis").json()
+    assert "stage 2" in body["text"]

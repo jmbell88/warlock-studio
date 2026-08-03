@@ -108,6 +108,9 @@ class Worker:
         self._t2i_key: str | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        # Set by wake() when something enqueues a job, so an idle dispatch loop
+        # starts it immediately instead of waiting out the poll interval.
+        self._wake = asyncio.Event()
         self.current_job_id: str | None = None
         self._cancel: _Cancel | None = None
         # The live Blender subprocess, if a rig job is running. Set from the
@@ -135,6 +138,35 @@ class Worker:
         if exc is not None:
             self.fatal = exc
             log.critical("gpu worker task died", exc_info=exc)
+
+    def wake(self) -> None:
+        """Tell an idle dispatch loop there is work now.
+
+        Called from the routes that insert a row, on the event loop the worker
+        runs on -- so this is a plain Event.set(), not a threadsafe hop. The
+        POLL_INTERVAL timeout in _run stays as the backstop: a caller that
+        forgets to wake costs a second of latency, not a stuck queue.
+        """
+        self._wake.set()
+
+    async def _wait_for_work(self) -> None:
+        """Sleep until a job is enqueued, shutdown is asked for, or the poll
+        interval elapses -- whichever comes first."""
+        waiters = [
+            asyncio.ensure_future(self._stop.wait()),
+            asyncio.ensure_future(self._wake.wait()),
+        ]
+        try:
+            await asyncio.wait(
+                waiters, timeout=POLL_INTERVAL, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+        # Cleared only after the wait, never before it: a wake() that landed
+        # while next_queued() was in its thread must still be observed here
+        # rather than swallowed into a full poll interval of sleep.
+        self._wake.clear()
 
     async def request_cancel(self, job_id: str) -> None:
         """No-op unless job_id is the job currently running."""
@@ -180,8 +212,7 @@ class Worker:
                 job = await asyncio.to_thread(self.store.next_queued)
                 if job is None:
                     await self._maybe_evict_idle()
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(self._stop.wait(), timeout=POLL_INTERVAL)
+                    await self._wait_for_work()
                     continue
                 await self._process(job)
             except Exception:

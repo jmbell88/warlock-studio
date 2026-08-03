@@ -64,8 +64,15 @@ class Config:
         )
     )
     # Default triangle profile for a new job. See pipelines/optimize.PROFILES.
+    #
+    # "raw" and not a named tier: every other tier needs gltfpack, which is
+    # vendored but not yet present, so the default used to name a profile that
+    # can only fail -- silently in the worker (which logs and ships the
+    # reconstruction) and with a 500 on POST /optimize. It is also the only
+    # tier the UI offers, because none of the others has been qualified yet.
+    # Set WARLOCK_MESH_PROFILE=standard once the binary is in place.
     mesh_profile: str = field(
-        default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "standard")
+        default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "raw")
     )
     trellis_models_dir: Path = field(
         default_factory=lambda: _env_path(

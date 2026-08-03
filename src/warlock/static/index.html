@@ -246,6 +246,14 @@
   }
   #ph-progress.failed #ph-label { color: var(--err); }
   #ph-progress.failed .spinner { animation: none; border-top-color: var(--err); }
+  #ph-cancel {
+    margin-top: 12px; background: none; border: 1px solid var(--edge);
+    border-radius: 6px; color: var(--muted); cursor: pointer;
+    font-size: 12px; padding: 4px 10px;
+  }
+  #ph-cancel:hover { color: var(--err); border-color: var(--err); }
+  #ph-cancel:disabled { opacity: .5; cursor: default; }
+  #ph-cancel[hidden] { display: none; }
 
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation: none; }
@@ -271,6 +279,20 @@
     word-break: break-word;
   }
   #insp-settings { font-size: 11px; color: var(--muted); }
+  #insp-error[hidden] { display: none; }
+  #insp-error-text {
+    font-size: 12px; color: var(--err); background: var(--bg);
+    border: 1px solid var(--edge); border-radius: 6px; padding: 8px;
+    word-break: break-word;
+  }
+  #insp-error-log { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  #insp-error-log[hidden] { display: none; }
+  /* The traceback is the one thing here that must not be reflowed. */
+  #insp-error-log-text {
+    font-size: 11px; margin: 6px 0 0; padding: 8px; max-height: 30vh;
+    overflow: auto; background: var(--bg); border: 1px solid var(--edge);
+    border-radius: 6px; color: var(--text); white-space: pre;
+  }
   #insp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
   #insp-actions button, #insp-actions a {
     background: none; border: 1px solid var(--edge); border-radius: 6px;
@@ -808,6 +830,10 @@
       <div id="stage-context-kicker">Stage 1 · Reference</div>
       <div id="stage-context">Create a reference from your prompt.</div>
       <div id="form-errors" class="validation-summary" role="alert" tabindex="-1" hidden></div>
+      <!-- What this submit actually costs. Nothing used to say that
+           "Candidates: 8" is eight serial runs, or that a higher geometry
+           resolution is a longer reconstruction. -->
+      <div id="submit-cost" class="hint"></div>
       <button id="generate" type="submit">Generate references</button>
       <span class="shortcut-hint">Ctrl/⌘ + Enter</span>
     </div>
@@ -887,6 +913,7 @@
     <button type="button" id="tool-wire" title="Toggle wireframe (W)" aria-pressed="false">Wireframe: off</button>
     <button type="button" id="tool-spin" title="Toggle turntable (S)" aria-pressed="false">Turntable: off</button>
     <button type="button" id="tool-frame" title="Frame model (F)">Frame</button>
+    <button type="button" id="tool-shot" title="Save the current view as a PNG">Save image</button>
     <span id="tool-stats"></span>
     <details id="viewer-help">
       <summary>Viewer help</summary>
@@ -901,6 +928,10 @@
       <div class="bar" role="progressbar" aria-label="Generation progress" aria-valuemin="0" aria-valuemax="100"><i></i></div>
       <div id="ph-detail"></div>
       <div id="ph-time"></div>
+      <!-- Cancel used to live only inside a card's collapsed Actions menu,
+           behind a confirm -- two clicks away from the thing the user is
+           actually watching. -->
+      <button type="button" id="ph-cancel" hidden>Cancel this job</button>
     </div>
   </div>
 </main>
@@ -926,6 +957,17 @@
       </label>
       <button type="button" id="insp-save-metadata">Save metadata</button>
       <div id="insp-meta"></div>
+      <!-- A failed job used to be one ellipsised line and nothing else. The
+           traceback has always been written to the job dir; this is where it
+           becomes reachable. -->
+      <div id="insp-error" hidden>
+        <div class="insp-head">What went wrong</div>
+        <div id="insp-error-text"></div>
+        <details id="insp-error-log" hidden>
+          <summary>Full traceback</summary>
+          <pre id="insp-error-log-text">Loading…</pre>
+        </details>
+      </div>
       <div id="insp-actions"></div>
       <details id="insp-generation">
         <summary>Generation metadata</summary>
