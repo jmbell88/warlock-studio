@@ -229,6 +229,8 @@ function ensureCompare() {
 }
 
 async function compareWith(jobId) {
+  if (poseState.editing && !confirmDiscardEdits("start a comparison")) return;
+  if (poseState.editing) exitPoseEditing();
   ensureCompare();
   comparing = jobId;
   document.querySelector("main").classList.add("comparing");
@@ -241,6 +243,13 @@ async function compareWith(jobId) {
   const centre = box.getCenter(new THREE.Vector3());
   modelB.position.set(-centre.x, -box.min.y, -centre.z);
   sceneB.add(modelB);
+  const selectedJob = jobsById.get(selected);
+  const comparedJob = jobsById.get(jobId);
+  setText(document.getElementById("compare-label-a"), `A · ${assetName(selectedJob)}`);
+  setText(document.getElementById("compare-label-b"), `B · ${assetName(comparedJob)}`);
+  document.getElementById("compare-label-a").hidden = false;
+  document.getElementById("compare-label-b").hidden = false;
+  document.getElementById("compare-exit").hidden = false;
   resize();
   refreshCompareButtons();
 }
@@ -248,10 +257,15 @@ async function compareWith(jobId) {
 function stopComparing() {
   comparing = null;
   document.querySelector("main").classList.remove("comparing");
+  document.getElementById("compare-label-a").hidden = true;
+  document.getElementById("compare-label-b").hidden = true;
+  document.getElementById("compare-exit").hidden = true;
   if (modelB) { sceneB.remove(modelB); disposeModel(modelB); modelB = null; }
   resize();
   refreshCompareButtons();
 }
+
+document.getElementById("compare-exit").addEventListener("click", stopComparing);
 
 // Toggling compare must relabel the buttons now, not on the next poll: a
 // button that still says "compare" after the pane opened reads as a no-op.
@@ -261,7 +275,7 @@ function refreshCompareButtons() {
     if (!job) continue;
     n.compare.hidden =
       job.status !== "done" || !job.files.includes("model.glb") || id === selected;
-    setText(n.compare, comparing === id ? "stop compare" : "compare");
+    setText(n.compare, comparing === id ? "Exit comparison" : "Compare with selected");
   }
 }
 
@@ -310,7 +324,10 @@ function applyWireframe() {
 
 document.getElementById("tool-wire").addEventListener("click", (e) => {
   wireframe = !wireframe;
-  e.currentTarget.classList.toggle("on", wireframe);
+  const button = e.currentTarget;
+  button.classList.toggle("on", wireframe);
+  button.setAttribute("aria-pressed", String(wireframe));
+  setText(button, `Wireframe: ${wireframe ? "on" : "off"}`);
   applyWireframe();
 });
 
@@ -320,12 +337,17 @@ spinButton.addEventListener("click", (e) => {
   // the model would move the thing the pose gizmo and the joint markers are
   // positioned against.
   controls.autoRotate = !controls.autoRotate;
-  e.currentTarget.classList.toggle("on", controls.autoRotate);
+  const button = e.currentTarget;
+  button.classList.toggle("on", controls.autoRotate);
+  button.setAttribute("aria-pressed", String(controls.autoRotate));
+  setText(button, `Turntable: ${controls.autoRotate ? "on" : "off"}`);
 });
 
 function stopSpinning() {
   controls.autoRotate = false;
   spinButton.classList.remove("on");
+  spinButton.setAttribute("aria-pressed", "false");
+  setText(spinButton, "Turntable: off");
 }
 
 document.getElementById("tool-frame").addEventListener("click", () => frameModel());
@@ -391,11 +413,21 @@ const GUIDANCE_FIELDS = [
 const guidanceSelects = {};
 const sizeInput = document.getElementById("g-size");
 const platformHint = document.getElementById("platform-hint");
+// The 3D pane's own copy of the platform field. Deliberately a second select
+// rather than a shared one: in the 2D pane the field is a prompt fragment
+// ("low-poly", "hero detail") and in the 3D pane it is the geometry resolution
+// trellis runs at. One control cannot be owned by two panes, and the mesh form
+// has to be overridable without editing the reference's recipe.
+const meshPlatform = document.getElementById("m-platform");
+const meshPlatformHint = document.getElementById("m-platform-hint");
 const loraWeight = document.getElementById("g-lora-weight");
 const loraWeightOut = document.getElementById("g-lora-weight-out");
 let categorySizes = {};
 let platformRes = {};
 let loraDefaults = {};
+// The catalog's own defaults, kept so the 3D pane can fall back to them for a
+// source that never recorded a value (an upload has no params at all).
+let guidanceDefaults = {};
 // Once the user types their own size, changing category must not clobber it.
 let sizeEdited = false;
 sizeInput.addEventListener("input", () => { sizeEdited = true; });
@@ -409,6 +441,11 @@ function syncSizeFromCategory() {
 function syncPlatformHint() {
   const res = platformRes[guidanceSelects.platform.value];
   platformHint.textContent = res ? `Geometry resolution ${res}` : "";
+}
+
+function syncMeshPlatformHint() {
+  const res = platformRes[meshPlatform.value];
+  meshPlatformHint.textContent = res ? `${res} voxels` : "";
 }
 
 // The slider is only meaningful once a style is picked, and each LoRA carries
@@ -441,6 +478,9 @@ async function loadGuidance() {
       if (field === "category" && opt.default_size_m) categorySizes[opt.key] = opt.default_size_m;
       if (field === "platform" && opt.resolution) platformRes[opt.key] = opt.resolution;
       if (field === "style_lora" && opt.default_weight) loraDefaults[opt.key] = opt.default_weight;
+      // The 3D pane's platform select is filled from the same catalog pass, so
+      // the two can never offer different tiers.
+      if (field === "platform") meshPlatform.append(new Option(opt.label, opt.key));
     }
   }
   const bgSelect = document.getElementById("g-bg_removal");
@@ -459,7 +499,9 @@ async function loadGuidance() {
   // a second catalog load (e.g. after loadGuidance is re-triggered).
   const negative = document.getElementById("negative-prompt");
   if (!negative.value) negative.value = catalog.defaults?.negative_prompt ?? "";
+  guidanceDefaults = catalog.defaults ?? {};
   guidanceSelects.platform.value = catalog.defaults.platform;
+  meshPlatform.value = catalog.defaults.platform;
   guidanceSelects.base_model.value = catalog.defaults.base_model;
   sizeInput.value = catalog.defaults.size_m;
   loraWeight.min = catalog.lora_weight_range[0];
@@ -467,6 +509,7 @@ async function loadGuidance() {
   loraWeight.value = catalog.defaults.lora_weight;
   guidanceSelects.category.addEventListener("change", syncSizeFromCategory);
   guidanceSelects.platform.addEventListener("change", syncPlatformHint);
+  meshPlatform.addEventListener("change", syncMeshPlatformHint);
   guidanceSelects.style_lora.addEventListener("change", syncLoraWeight);
   loraWeight.addEventListener("input", () => {
     loraWeightOut.textContent = Number(loraWeight.value).toFixed(2);
@@ -480,6 +523,7 @@ async function loadGuidance() {
   }
   presets = catalog.presets ?? [];
   syncPlatformHint();
+  syncMeshPlatformHint();
   syncLoraWeight();
   // Last: the selects must exist and be populated before a stored value can be
   // checked against their options.
@@ -537,7 +581,7 @@ let previewTimer = null;
 
 async function refreshPromptPreview() {
   const el = document.getElementById("prompt-preview");
-  if (kind !== "text") { setText(el, ""); return; }
+  if (mode !== "2d") { setText(el, ""); return; }
   const text = document.getElementById("prompt").value.trim();
   if (!text) { setText(el, ""); return; }
 
@@ -594,34 +638,173 @@ function rollSeed() {
 document.getElementById("seed-reroll").addEventListener("click", rollSeed);
 rollSeed();
 
-// --- job submission ---------------------------------------------------------
+// --- mode -------------------------------------------------------------------
+//
+// The app models one pipeline (text -> SDXL reference -> trellis -> mesh -> rig
+// -> pose -> sheet) and used to model it as one form. It is really two stages
+// with an approval between them, and the machinery for that split already
+// existed: output=reference stops at the image and POST /api/jobs/{id}/model
+// promotes it. The mode switch is that split made visible -- 2D owns every
+// prompt control, 3D owns every mesh control, and neither shows the other's.
 
-let kind = "text";
-const tabs = { text: document.getElementById("tab-text"), image: document.getElementById("tab-image") };
-for (const [k, btn] of Object.entries(tabs)) {
-  btn.addEventListener("click", () => {
-    kind = k;
-    tabs.text.classList.toggle("active", k === "text");
-    tabs.image.classList.toggle("active", k === "image");
-    document.getElementById("text-input").hidden = k !== "text";
-    document.getElementById("image-input").hidden = k !== "image";
-    // Genre, art style, the image-model selects and all eight new fields are
-    // pure prompt fragments that only affect the SDXL stage, and image jobs
-    // never run SDXL -- hide them rather than offer controls that do nothing.
-    // Derived from GUIDANCE_FIELDS (minus category/platform/bg_removal, which
-    // stay visible for both job kinds) so a new taxonomy field can't be added
-    // there without also being wired into this list.
-    for (const field of GUIDANCE_FIELDS.filter(
-      (f) => !["category", "platform", "bg_removal"].includes(f),
-    )) {
-      document.getElementById(`g-${field}-row`).hidden = k !== "text";
-    }
-    // Image jobs never run SDXL, so a negative prompt has nothing to act on --
-    // unlike bg_removal, which stays visible because trellis-server matting
-    // applies to both job kinds.
-    document.getElementById("negative-row").hidden = k !== "text";
+const MODE_KEY = "warlock.mode.v1";
+const WORKSPACE_KEY = "warlock.workspace.v1";
+const modeButtons = { "2d": document.getElementById("mode-2d"), "3d": document.getElementById("mode-3d") };
+let mode = "2d";
+// The finished 2D asset a "Make 3D" will promote. null means the 3D pane is
+// working from an upload instead.
+let source3d = null;
+
+function setWorkspace(next, { remember = true } = {}) {
+  if (!new Set(["settings", "preview", "inspector"]).has(next)) return;
+  for (const name of ["settings", "preview", "inspector"]) {
+    document.body.classList.toggle(`workspace-${name}`, name === next);
+  }
+  for (const button of document.querySelectorAll("[data-workspace]")) {
+    button.setAttribute("aria-selected", String(button.dataset.workspace === next));
+  }
+  if (remember) localStorage.setItem(WORKSPACE_KEY, next);
+  if (next === "preview") requestAnimationFrame(() => { resize(); frameModel(); });
+}
+
+for (const button of document.querySelectorAll("[data-workspace]")) {
+  button.addEventListener("click", () => setWorkspace(button.dataset.workspace));
+}
+
+const inspectorToggle = document.getElementById("inspector-toggle");
+function setInspectorOpen(open) {
+  document.body.classList.toggle("inspector-open", open);
+  inspectorToggle.setAttribute("aria-expanded", String(open));
+  localStorage.setItem("warlock.inspector.v1", open ? "open" : "closed");
+  if (open) document.getElementById("inspector").focus({ preventScroll: true });
+}
+inspectorToggle.addEventListener("click", () => setInspectorOpen(!document.body.classList.contains("inspector-open")));
+document.getElementById("inspector-close").addEventListener("click", () => {
+  setInspectorOpen(false);
+  inspectorToggle.focus();
+});
+
+function syncStageContext() {
+  const kicker = document.getElementById("stage-context-kicker");
+  const detail = document.getElementById("stage-context");
+  if (mode === "2d") {
+    setText(kicker, "Stage 1 · Reference");
+    const job = jobsById.get(selected);
+    setText(detail, job?.stage === "reference"
+      ? `Selected reference: ${assetName(job)}`
+      : "Create reference candidates from your prompt.");
+    return;
+  }
+  setText(kicker, "Stage 2 · Model");
+  const source = source3d ? jobsById.get(source3d) : null;
+  const file = document.getElementById("image")?.files?.[0];
+  setText(detail, source
+    ? `Selected reference: ${assetName(source)}`
+    : file ? `Uploaded reference: ${file.name}` : "Choose a reference or upload an image.");
+}
+
+function setMode(next, { remember = true, userInitiated = false } = {}) {
+  if (next !== "2d" && next !== "3d") return;
+  if (userInitiated && next !== mode && poseState.editing) {
+    if (!confirmDiscardEdits("change stages")) return;
+    exitPoseEditing();
+  }
+  const changed = mode !== next;
+  mode = next;
+  document.body.classList.toggle("mode-2d", next === "2d");
+  document.body.classList.toggle("mode-3d", next === "3d");
+  modeButtons["2d"].classList.toggle("active", next === "2d");
+  modeButtons["3d"].classList.toggle("active", next === "3d");
+  modeButtons["2d"].setAttribute("aria-selected", String(next === "2d"));
+  modeButtons["3d"].setAttribute("aria-selected", String(next === "3d"));
+  modeButtons["2d"].tabIndex = next === "2d" ? 0 : -1;
+  modeButtons["3d"].tabIndex = next === "3d" ? 0 : -1;
+  setText(document.getElementById("generate"), next === "2d" ? "Generate references" : "Build 3D model");
+  setText(
+    document.getElementById("stage-description"),
+    next === "2d"
+      ? "Create reference candidates and choose the strongest image before building a mesh."
+      : "Build a mesh from the selected reference or an uploaded image.",
+  );
+  syncStageContext();
+  renderJobs([...jobsById.values()]);
+  if (remember) localStorage.setItem(MODE_KEY, next);
+  if (next === "3d" && changed) {
+    // The canvas was visibility:hidden, not unmounted, so it kept its size --
+    // but the pane widths can have changed under it, and a camera framed
+    // against the old aspect reads as a collapsed or stretched viewport.
+    requestAnimationFrame(() => { resize(); frameModel(); });
+  }
+  if (next === "2d") refreshPromptPreview();
+}
+
+for (const [key, btn] of Object.entries(modeButtons)) {
+  btn.addEventListener("click", () => setMode(key, { userInitiated: true }));
+  btn.addEventListener("keydown", (e) => {
+    if (!new Set(["ArrowLeft", "ArrowRight"]).has(e.key)) return;
+    e.preventDefault();
+    const next = key === "2d" ? "3d" : "2d";
+    setMode(next, { userInitiated: true });
+    modeButtons[next].focus();
   });
 }
+
+// The source card in the 3D pane, and the mesh form seeded from it.
+const sourceCard = document.getElementById("source-card");
+const sourceThumb = document.getElementById("source-thumb");
+const sourceName = document.getElementById("source-name");
+const uploadZone = document.getElementById("image-input");
+
+function setSource3d(job) {
+  source3d = job?.id ?? null;
+  sourceCard.hidden = !job;
+  uploadZone.hidden = Boolean(job);
+  if (job) {
+    const src = `/api/jobs/${job.id}/files/input.png`;
+    if (sourceThumb.getAttribute("src") !== src) sourceThumb.src = src;
+    setText(sourceName, job.name || job.prompt || job.id);
+    sourceThumb.alt = `Reference for ${assetName(job)}`;
+  }
+  // Reseeded either way: clearing the source means the next mesh comes from an
+  // upload, which has no params to inherit and so wants the catalog defaults.
+  seedMeshForm(job);
+  syncStageContext();
+}
+
+// 3D mode has no prompt controls, so the mesh form seeds itself from whatever
+// the source recorded and falls back to the catalog otherwise. An upload has no
+// params at all, which is exactly the all-fallbacks case.
+function seedMeshForm(job) {
+  const p = job?.params ?? {};
+  const platform = p.platform ?? guidanceDefaults.platform;
+  if (platform && [...meshPlatform.options].some((o) => o.value === platform)) {
+    meshPlatform.value = platform;
+  }
+  syncMeshPlatformHint();
+  const size = p.size_m ?? categorySizes[p.category] ?? guidanceDefaults.size_m;
+  if (size !== undefined) sizeInput.value = size;
+  const bg = p.bg_removal ?? guidanceDefaults.bg_removal;
+  const bgSelect = guidanceSelects.bg_removal;
+  if (bg && bgSelect && [...bgSelect.options].some((o) => o.value === bg)) bgSelect.value = bg;
+  // The budget is a property of this run, not of the reference: raw is the only
+  // qualified tier, and a retarget is one POST away on a finished mesh.
+  document.getElementById("g-profile").value = "raw";
+  rigEnable.checked = false;
+}
+
+// The one meaning of "make this reference into a mesh": hand it to the 3D pane
+// with its settings pre-filled, and let the user decide before paying for it.
+function makeThreeD(job) {
+  if (poseState.editing && !confirmDiscardEdits("choose a different reference")) return;
+  if (poseState.editing) exitPoseEditing();
+  setSource3d(job);
+  setMode("3d");
+  setWorkspace("settings");
+}
+
+document.getElementById("source-clear").addEventListener("click", () => setSource3d(null));
+
+// --- job submission ---------------------------------------------------------
 
 // --- rigging ----------------------------------------------------------------
 // Rigging needs bpy, which is an optional extra. /api/rig/templates answers
@@ -664,91 +847,231 @@ function isRigged(job) {
   return Boolean(job.files?.includes("rig.glb"));
 }
 
-document.getElementById("form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+// Follow a job the page just created instead of making the user find it.
+function followJob(id) {
+  selected = id;
+  shownModelFor = null;
+  // Keep polling fast until the worker picks this up, otherwise the bar
+  // would not start moving until the next idle tick.
+  pending = id;
+  downloads.style.display = "none";
+  phProgress.classList.remove("failed");
+  setText(phLabel, "Queued");
+  setText(phDetail, "");
+  setText(phTime, "");
+  phBar.classList.add("indet");
+  phFill.style.width = "0%";
+  showOverlay();
+  // Asked here, not on page load: an unprompted permission dialog on
+  // arrival is the one everybody dismisses without reading.
+  if (window.Notification?.permission === "default") Notification.requestPermission();
+}
+
+// The mesh-side settings, sent by both 3D paths: they are Form() overrides on
+// the promote route and ordinary fields on an image job, and the names match
+// so one builder serves both.
+function meshFields(fd) {
+  fd.set("platform", meshPlatform.value);
+  if (sizeInput.value) fd.set("size_m", sizeInput.value);
+  if (guidanceSelects.bg_removal?.value) fd.set("bg_removal", guidanceSelects.bg_removal.value);
+  fd.set("profile", document.getElementById("g-profile").value);
+  if (rig.available) {
+    // Always sent as an explicit boolean: the promote route treats an absent
+    // rig as "inherit", so unchecking the box must send "false" to clear an
+    // inherited rig request rather than silently re-queueing it.
+    fd.set("rig", String(rigEnable.checked));
+    if (rigEnable.checked) fd.set("rig_template", rigTemplate.value);
+  }
+}
+
+const formErrors = document.getElementById("form-errors");
+
+function clearValidation() {
+  formErrors.hidden = true;
+  setText(formErrors, "");
+  for (const field of document.querySelectorAll("#form [aria-invalid='true']")) {
+    field.removeAttribute("aria-invalid");
+    field.removeAttribute("aria-describedby");
+  }
+  for (const error of document.querySelectorAll("#form .field-error")) {
+    error.hidden = true;
+    setText(error, "");
+  }
+}
+
+function reportValidation(errors, { focus = true } = {}) {
+  clearValidation();
+  if (!errors.length) return true;
+  for (const { field, message } of errors) {
+    const input = document.getElementById(field);
+    const output = document.querySelector(`[data-error-for="${field}"]`);
+    if (input) {
+      input.setAttribute("aria-invalid", "true");
+      if (output) {
+        output.id ||= `${field}-error`;
+        input.setAttribute("aria-describedby", output.id);
+      }
+    }
+    if (output) { setText(output, message); output.hidden = false; }
+  }
+  setText(formErrors, `Fix ${errors.length === 1 ? "this field" : `${errors.length} fields`} before continuing.`);
+  formErrors.hidden = false;
+  if (focus) {
+    const first = document.getElementById(errors[0].field);
+    if (first?.hidden || first?.closest("[hidden]")) formErrors.focus();
+    else first?.focus();
+  }
+  return false;
+}
+
+function reportRequestError(message) {
+  clearValidation();
+  setText(formErrors, message);
+  formErrors.hidden = false;
+  formErrors.focus();
+}
+
+function validateSeed(errors) {
+  if (!seedInput.value) return;
+  const seed = Number(seedInput.value);
+  if (!Number.isInteger(seed) || seed < 0 || seed > 2 ** 31 - 1) {
+    errors.push({ field: "seed", message: "Use a whole-number seed from 0 to 2,147,483,647." });
+  }
+}
+
+function validate2d() {
+  const errors = [];
+  const prompt = document.getElementById("prompt").value.trim();
+  if (!prompt) errors.push({ field: "prompt", message: "Describe the reference you want to create." });
+  else if (prompt.length > 1000) {
+    errors.push({ field: "prompt", message: `Shorten the prompt by ${prompt.length - 1000} characters.` });
+  }
+  validateSeed(errors);
+  return reportValidation(errors);
+}
+
+function validate3d() {
+  const errors = [];
+  const file = document.getElementById("image").files[0];
+  const source = source3d ? jobsById.get(source3d) : null;
+  if (!source && !file) {
+    errors.push({ field: "image", message: "Choose a finished reference asset or upload an image." });
+  } else if (source && (source.status !== "done" || !source.files?.includes("input.png"))) {
+    errors.push({ field: "image", message: "The selected reference is not ready. Choose a finished reference." });
+  } else if (file && !file.type.startsWith("image/")) {
+    errors.push({ field: "image", message: "Choose a PNG, JPEG, WebP, or another supported image file." });
+  } else if (file && file.size > 20 * 1024 * 1024) {
+    errors.push({ field: "image", message: "The source image must be 20 MB or smaller." });
+  }
+  const size = Number(sizeInput.value);
+  if (!sizeInput.value || !Number.isFinite(size) || size < 0.01 || size > 100) {
+    errors.push({ field: "g-size", message: "Enter a physical size from 0.01 to 100 metres." });
+  }
+  if (!source3d) validateSeed(errors);
+  return reportValidation(errors);
+}
+
+// 2D always stops at a reference: promotion is the 3D pane's job, and it is the
+// only thing that decides how the mesh is built.
+async function submit2d() {
+  const prompt = document.getElementById("prompt").value.trim();
+  if (!validate2d()) return false;
   const fd = new FormData();
   // The same field set the form sends, kept aside so a successful submit can be
   // replayed from the history list by exactly the recipe that produced it.
   const submittedFields = {};
-  fd.set("kind", kind);
+  fd.set("kind", "text");
   fd.set("seed", seedInput.value || String(newSeed()));
   // No explicit resolution: the platform preset supplies it server-side.
   for (const field of GUIDANCE_FIELDS) {
-    // Genre and art style are hidden for image jobs, so don't send them either.
-    const row = document.getElementById(`g-${field}-row`);
-    if (row && row.hidden) continue;
+    // bg_removal's select lives in the 3D pane; a 2D submit must not bake in
+    // state the 2D pane can't see. Same for size_m below it.
+    if (field === "bg_removal") continue;
     const value = guidanceSelects[field]?.value;
-    if (value) fd.set(field, value);
-    if (value) submittedFields[field] = value;
+    if (!value) continue;
+    fd.set(field, value);
+    submittedFields[field] = value;
   }
-  if (sizeInput.value) {
-    fd.set("size_m", sizeInput.value);
-    submittedFields.size_m = sizeInput.value;
+  if (guidanceSelects.style_lora?.value) fd.set("lora_weight", loraWeight.value);
+  fd.set("prompt", prompt);
+  fd.set("negative_prompt", document.getElementById("negative-prompt").value);
+  fd.set("output", "reference");
+  fd.set("count", document.getElementById("ref-count").value);
+  const r = await fetch("/api/jobs", { method: "POST", body: fd });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    reportRequestError(body.detail ?? "Could not start reference generation.");
+    return false;
   }
-  fd.set("profile", document.getElementById("g-profile").value);
-  if (rig.available && rigEnable.checked) {
-    fd.set("rig", "true");
-    fd.set("rig_template", rigTemplate.value);
-  }
-  // Only meaningful alongside a style LoRA, which is text-jobs-only.
-  if (kind === "text" && guidanceSelects.style_lora?.value) {
-    fd.set("lora_weight", loraWeight.value);
-  }
-  if (kind === "text") {
-    const prompt = document.getElementById("prompt").value.trim();
-    if (!prompt) return;
-    fd.set("prompt", prompt);
-    fd.set("negative_prompt", document.getElementById("negative-prompt").value);
-    // Text jobs only: an image job's reference is the upload itself.
-    if (document.getElementById("approve-first").checked) {
-      fd.set("output", "reference");
-      fd.set("count", document.getElementById("ref-count").value);
-    }
+  followJob(body.id);
+  // Next submit gets a different reference unless the user asked to pin it.
+  if (!seedLock.checked) rollSeed();
+  recordSubmission(prompt, submittedFields);
+  saveFormState();
+  return true;
+}
+
+// 3D either promotes the selected 2D asset (the normal path) or starts an
+// ordinary image job from an upload. Both carry the same mesh overrides.
+async function submit3d() {
+  if (!validate3d()) return false;
+  const fd = new FormData();
+  meshFields(fd);
+  let url;
+  if (source3d) {
+    url = `/api/jobs/${source3d}/model`;
   } else {
     const file = document.getElementById("image").files[0];
-    if (!file) return;
+    fd.set("kind", "image");
+    fd.set("seed", seedInput.value || String(newSeed()));
     fd.set("image", file);
+    url = "/api/jobs";
   }
+  const r = await fetch(url, { method: "POST", body: fd });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    reportRequestError(body.detail ?? "Could not start the 3D stage.");
+    return false;
+  }
+  followJob(body.id);
+  // The upload path consumed a seed like any 2D submit; the promote path
+  // didn't (the mesh seed is inherited or overridden server-side).
+  if (!source3d && !seedLock.checked) rollSeed();
+  return true;
+}
+
+document.getElementById("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
   const btn = document.getElementById("generate");
   btn.disabled = true;
+  document.getElementById("form").setAttribute("aria-busy", "true");
   try {
-    const r = await fetch("/api/jobs", { method: "POST", body: fd });
-    const body = await r.json();
-    if (!r.ok) {
-      toast(body.detail ?? "request failed");
-    } else {
-      // Follow the new job straight away instead of making the user find it.
-      selected = body.id;
-      shownModelFor = null;
-      // Keep polling fast until the worker picks this up, otherwise the bar
-      // would not start moving until the next idle tick.
-      pending = body.id;
-      downloads.style.display = "none";
-      phProgress.classList.remove("failed");
-      setText(phLabel, "Queued");
-      setText(phDetail, "");
-      setText(phTime, "");
-      phBar.classList.add("indet");
-      phFill.style.width = "0%";
-      showOverlay();
-      // Next submit gets a different mesh unless the user asked to pin it.
-      if (!seedLock.checked) rollSeed();
-      recordSubmission(fd.get("prompt"), submittedFields);
-      saveFormState();
-      // Asked here, not on page load: an unprompted permission dialog on
-      // arrival is the one everybody dismisses without reading.
-      if (window.Notification?.permission === "default") Notification.requestPermission();
-    }
+    if (mode === "2d") await submit2d();
+    else await submit3d();
   } finally {
     btn.disabled = false;
+    document.getElementById("form").removeAttribute("aria-busy");
   }
   poll(true);
 });
 
+for (const field of ["prompt", "seed", "g-size", "image"]) {
+  document.getElementById(field).addEventListener("input", () => {
+    const input = document.getElementById(field);
+    const output = document.querySelector(`[data-error-for="${field}"]`);
+    input.removeAttribute("aria-invalid");
+    input.removeAttribute("aria-describedby");
+    if (output) output.hidden = true;
+    formErrors.hidden = true;
+    if (field === "image") syncStageContext();
+  });
+}
+
 // --- reference input: drop and paste ----------------------------------------
 
-// The image tab was a bare <input type="file">. Dropping a reference or pasting
-// one from a screenshot tool is how people actually get an image into this.
+// The upload zone was a bare <input type="file">. Dropping a reference or
+// pasting one from a screenshot tool is how people actually get an image into
+// this.
 const imageInput = document.getElementById("image");
 const dropZone = document.getElementById("image-input");
 
@@ -759,7 +1082,9 @@ function acceptImage(file) {
   const dt = new DataTransfer();
   dt.items.add(file);
   imageInput.files = dt.files;
-  tabs.image.click();
+  // An upload is a 3D source and it replaces any picked 2D asset.
+  setSource3d(null);
+  setMode("3d");
   toast(`Using ${file.name || "pasted image"}`, "ok");
 }
 
@@ -790,8 +1115,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (typing) return;
-  if (e.key === "Escape" && poseState.editing) exitPoseEditing();
+  if (e.key === "Escape" && comparing) { stopComparing(); return; }
+  if (e.key === "Escape" && poseState.editing) {
+    if (confirmDiscardEdits("leave editing")) exitPoseEditing();
+    return;
+  }
   if (e.key === "f" || e.key === "F") frameModel();
+  if (e.key === "w" || e.key === "W") document.getElementById("tool-wire").click();
+  if (e.key === "s" || e.key === "S") document.getElementById("tool-spin").click();
 });
 
 // --- finish notifications ---------------------------------------------------
@@ -931,6 +1262,11 @@ const jobsById = new Map();
 let selected = null;
 let shownModelFor = null;
 
+function assetName(job) {
+  if (!job) return "Unknown asset";
+  return job.name || job.prompt || `${job.kind || "asset"} ${job.id}`;
+}
+
 // --- banner --------------------------------------------------------------
 // A single dismissible slot; the last shown "kind" wins so a doctor warning
 // isn't clobbered by a transient disconnect and vice versa.
@@ -967,6 +1303,7 @@ bannerClose.addEventListener("click", () => {
 function toast(message, kind = "error") {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
+  el.role = kind === "error" ? "alert" : "status";
   setText(el, message);
   document.getElementById("toasts").append(el);
   setTimeout(() => el.remove(), kind === "error" ? 8000 : 4000);
@@ -976,18 +1313,65 @@ function toast(message, kind = "error") {
 
 const filters = {
   text: document.getElementById("filter-text"),
+  stage: document.getElementById("filter-stage"),
   status: document.getElementById("filter-status"),
   kind: document.getElementById("filter-kind"),
   fav: document.getElementById("filter-fav"),
 };
-for (const el of Object.values(filters)) {
-  el.addEventListener("input", () => renderJobs([...jobsById.values()]));
+const FILTER_KEY = "warlock.filters.v2";
+
+function saveFilters() {
+  localStorage.setItem(FILTER_KEY, JSON.stringify({
+    text: filters.text.value,
+    stage: filters.stage.value,
+    status: filters.status.value,
+    kind: filters.kind.value,
+    fav: filters.fav.checked,
+  }));
 }
+
+function restoreFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || "null");
+    if (!saved) return;
+    for (const name of ["text", "stage", "status", "kind"]) {
+      if (typeof saved[name] === "string") filters[name].value = saved[name];
+    }
+    filters.fav.checked = Boolean(saved.fav);
+  } catch {
+    // Corrupt preferences should never keep the library from rendering.
+  }
+}
+
+function clearFilters() {
+  filters.text.value = "";
+  filters.stage.value = "";
+  filters.status.value = "";
+  filters.kind.value = "";
+  filters.fav.checked = false;
+  saveFilters();
+  renderJobs([...jobsById.values()]);
+  filters.text.focus();
+}
+
+restoreFilters();
+for (const el of Object.values(filters)) {
+  el.addEventListener("input", () => {
+    saveFilters();
+    renderJobs([...jobsById.values()]);
+  });
+}
+document.getElementById("clear-filters").addEventListener("click", clearFilters);
+document.getElementById("empty-clear-filters").addEventListener("click", clearFilters);
 
 // Client-side on purpose: /api/jobs already returns the whole workshop, and a
 // server-side search would be a second definition of "matches" that could
 // disagree with what the list is showing.
 function jobMatches(job) {
+  // "model" is everything that is not a reference: a rig and a sheet job are
+  // stored at the default stage, and they belong with the mesh they describe.
+  if (filters.stage.value === "reference" && job.stage !== "reference") return false;
+  if (filters.stage.value === "model" && job.stage === "reference") return false;
   if (filters.status.value && job.status !== filters.status.value) return false;
   if (filters.kind.value && job.kind !== filters.kind.value) return false;
   if (filters.fav.checked && !job.favorite) return false;
@@ -1011,16 +1395,46 @@ async function patchJob(id, body) {
   return r.ok;
 }
 
+// A re-roll or a re-mesh, from a card or from the inspector. Module-level so
+// both reach it by one path: "try another" on a card and in the inspector must
+// not be able to mean two different requests.
+async function rerunJob(id, how) {
+  const job = jobsById.get(id);
+  const label = assetName(job);
+  const message = how === "remesh"
+    ? `Build a new 3D mesh for “${label}”? This reuses the reference but consumes another full 3D run.`
+    : `Generate another result for “${label}”? This consumes another generation run.`;
+  if (!window.confirm(message)) return false;
+  const fd = new FormData();
+  fd.set("mode", how);
+  const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    toast(body.detail ?? "rerun failed");
+    return false;
+  }
+  followJob(body.id);
+  poll(true);
+  return true;
+}
+
 function createNode(id) {
   const li = document.createElement("li");
+  li.tabIndex = 0;
+  li.role = "option";
+  li.dataset.jobId = id;
+  li.setAttribute("aria-selected", "false");
   const img = document.createElement("img");
   img.hidden = true;
   const info = document.createElement("div");
   const title = document.createElement("div");
   title.className = "job-title";
+  const summaryLine = document.createElement("div");
+  summaryLine.className = "job-summary";
   const status = document.createElement("div");
   const stage = document.createElement("div");
   stage.className = "job-stage";
+  summaryLine.append(status, stage);
   const err = document.createElement("div");
   err.className = "job-error";
   const quality = document.createElement("div");
@@ -1035,51 +1449,71 @@ function createNode(id) {
   const settingsToggle = document.createElement("button");
   settingsToggle.type = "button";
   settingsToggle.className = "link";
-  setText(settingsToggle, "settings");
+  setText(settingsToggle, "Show generation settings");
+  settingsToggle.setAttribute("aria-expanded", "false");
   settingsToggle.hidden = true;
   const bar = document.createElement("div");
   bar.className = "bar mini";
   bar.hidden = true;
   const fill = document.createElement("i");
   bar.append(fill);
-  info.append(title, status, stage, err, quality, lineage, settingsToggle, settings, bar);
+  bar.role = "progressbar";
+  bar.setAttribute("aria-label", "Job progress");
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", "100");
+  info.append(title, summaryLine, err, quality, lineage, settings, bar);
   const actions = document.createElement("div");
   actions.className = "job-actions";
+  const primary = document.createElement("button");
+  primary.type = "button";
+  primary.className = "job-primary";
+  const menu = document.createElement("details");
+  menu.className = "job-menu";
+  const menuSummary = document.createElement("summary");
+  setText(menuSummary, "Actions");
+  menuSummary.setAttribute("aria-label", "Asset actions");
+  const menuPanel = document.createElement("div");
+  menuPanel.className = "job-menu-panel";
+  menu.append(menuSummary, menuPanel);
+  const closeMenu = () => {
+    menu.open = false;
+    menuSummary.focus();
+  };
   const reroll = document.createElement("button");
-  setText(reroll, "re-roll");
+  reroll.type = "button";
+  setText(reroll, "Generate another result");
   reroll.title = "Same prompt and settings, new seed";
   reroll.hidden = true;
   const remesh = document.createElement("button");
-  setText(remesh, "re-3D");
+  remesh.type = "button";
+  setText(remesh, "Rebuild 3D mesh");
   remesh.title = "Reuse this reference image, rerun only the 3D stage";
   remesh.hidden = true;
   const rigBtn = document.createElement("button");
-  setText(rigBtn, "rig");
+  rigBtn.type = "button";
+  setText(rigBtn, "Fit a skeleton");
   rigBtn.title = "Fit a skeleton to this mesh";
   rigBtn.hidden = true;
-  const make3d = document.createElement("button");
-  setText(make3d, "generate 3D");
-  make3d.title = "Run the 3D stage from this approved reference";
-  make3d.hidden = true;
   const another = document.createElement("button");
-  setText(another, "try another");
+  another.type = "button";
+  setText(another, "Generate another reference");
   another.title = "Same prompt and settings, new reference seed";
   another.hidden = true;
   const compare = document.createElement("button");
-  setText(compare, "compare");
+  compare.type = "button";
+  setText(compare, "Compare with selected");
   compare.title = "Show this beside the selected model";
   compare.hidden = true;
   compare.addEventListener("click", (e) => {
     e.stopPropagation();
     if (comparing === id) stopComparing();
     else compareWith(id).catch((err) => toast(`could not load that model to compare: ${err}`));
+    closeMenu();
   });
-  // Favouriting and renaming are actions on the row, not ways of opening it,
-  // so both stop the click that the <li> uses to select.
   const star = document.createElement("button");
   star.type = "button";
   star.className = "star";
-  star.title = "Favourite";
+  star.title = "Favorite";
   setText(star, "☆");
   star.addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -1087,85 +1521,72 @@ function createNode(id) {
     await patchJob(id, { favorite: !job?.favorite });
     poll(true);
   });
-  title.title = "Double-click to rename";
-  title.addEventListener("dblclick", async (e) => {
+  const rename = document.createElement("button");
+  rename.type = "button";
+  setText(rename, "Rename asset");
+  rename.addEventListener("click", async (e) => {
     e.stopPropagation();
     const job = jobsById.get(id);
     const next = window.prompt("Name this asset", job?.name || job?.prompt || "");
     if (next === null) return;
     await patchJob(id, { name: next });
+    closeMenu();
     poll(true);
   });
   const act = document.createElement("button");
+  act.type = "button";
+  act.className = "danger";
   // Bulk-export selection. Independent of `selected` (which is the one job the
   // viewer is showing), so ticking a card must not also open it.
   const pick = document.createElement("input");
   pick.type = "checkbox";
   pick.className = "job-pick";
-  pick.title = "Include in a bulk export";
+  pick.title = "Select for bulk export";
   pick.addEventListener("click", (e) => e.stopPropagation());
   pick.addEventListener("change", updateBulkBar);
-  actions.append(star, pick, make3d, another, reroll, remesh, compare, rigBtn, act);
+  menuPanel.append(rename, another, reroll, remesh, compare, rigBtn, settingsToggle, act);
+  actions.append(star, pick, primary, menu);
   li.append(img, info, actions);
 
-  // Bound once, so a poll never rebinds stale closures. Shared by reroll and
-  // "try another" (mode is always "reroll" for the latter -- a fresh
-  // reference is exactly a re-roll of the reference job, and rerun_job keeps
-  // it at stage="reference" now that seeds are split).
   li.addEventListener("click", () => select(id));
-  async function runRerun(mode) {
-    const fd = new FormData();
-    fd.set("mode", mode);
-    const r = await fetch(`/api/jobs/${id}/rerun`, { method: "POST", body: fd });
-    const body = await r.json();
-    if (!r.ok) {
-      toast(body.detail ?? "rerun failed");
-      return;
+  li.addEventListener("keydown", (e) => {
+    if (e.target !== li || !new Set(["Enter", " "]).has(e.key)) return;
+    e.preventDefault();
+    select(id);
+  });
+  primary.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const job = jobsById.get(id);
+    if (!job) return;
+    if (job.stage === "reference" && job.status === "done" && job.files.includes("input.png")) {
+      makeThreeD(job);
+    } else {
+      select(id);
+      if (window.matchMedia("(max-width: 900px)").matches) setWorkspace("preview");
     }
-    // Follow the new job the same way a fresh submit does.
-    selected = body.id;
-    shownModelFor = null;
-    pending = body.id;
-    downloads.style.display = "none";
-    showOverlay();
-  }
-  for (const [btn, mode] of [[reroll, "reroll"], [remesh, "remesh"]]) {
+  });
+  for (const [btn, how] of [[reroll, "reroll"], [remesh, "remesh"]]) {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       btn.disabled = true;
       try {
-        await runRerun(mode);
+        await rerunJob(id, how);
       } finally {
         btn.disabled = false;
       }
+      closeMenu();
       poll(true);
     });
   }
-  make3d.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    make3d.disabled = true;
-    try {
-      const r = await fetch(`/api/jobs/${id}/model`, { method: "POST" });
-      const body = await r.json();
-      if (!r.ok) { toast(body.detail ?? "could not start the 3D stage"); return; }
-      selected = body.id;
-      shownModelFor = null;
-      pending = body.id;
-      downloads.style.display = "none";
-      showOverlay();
-    } finally {
-      make3d.disabled = false;
-    }
-    poll(true);
-  });
   another.addEventListener("click", async (e) => {
     e.stopPropagation();
     another.disabled = true;
     try {
-      await runRerun("reroll");
+      await rerunJob(id, "reroll");
     } finally {
       another.disabled = false;
     }
+    closeMenu();
     poll(true);
   });
   rigBtn.addEventListener("click", async (e) => {
@@ -1175,31 +1596,45 @@ function createNode(id) {
       const fd = new FormData();
       fd.set("template", rigTemplate.value);
       const r = await fetch(`/api/jobs/${id}/rig`, { method: "POST", body: fd });
-      const body = await r.json();
+      const body = await r.json().catch(() => ({}));
       if (!r.ok) toast(body.detail ?? "could not queue the rig");
     } finally {
       rigBtn.disabled = false;
     }
+    closeMenu();
     poll(true);
   });
   settingsToggle.addEventListener("click", (e) => {
     e.stopPropagation();
     settings.hidden = !settings.hidden;
-    setText(settingsToggle, settings.hidden ? "settings" : "hide settings");
+    settingsToggle.setAttribute("aria-expanded", String(!settings.hidden));
+    setText(settingsToggle, settings.hidden ? "Show generation settings" : "Hide generation settings");
+    closeMenu();
   });
   act.addEventListener("click", async (e) => {
     e.stopPropagation();
     const job = jobsById.get(id);
     if (!job) return;
+    if (job.status === "cancelled" && job.progress) return;
     const active = job.status === "queued" || job.status === "running";
+    const label = assetName(job);
+    const question = active
+      ? `Cancel the active job “${label}”? The current compute stage may take a moment to stop.`
+      : `Permanently delete “${label}” and all of its generated files?`;
+    if (!window.confirm(question)) return;
     if (active) {
       act.disabled = true;
       setText(act, "cancelling…");
     }
     try {
-      await fetch(`/api/jobs/${id}${active ? "/cancel" : ""}`, {
+      const response = await fetch(`/api/jobs/${id}${active ? "/cancel" : ""}`, {
         method: active ? "POST" : "DELETE",
       });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        toast(body.detail ?? (active ? "Could not cancel the job." : "Could not delete the asset."));
+        return;
+      }
     } finally {
       act.disabled = false;
     }
@@ -1208,8 +1643,10 @@ function createNode(id) {
       hideOverlay();
       hideReference();
       setPoseJob(null);
+      renderInspector(null);
       downloads.style.display = "none";
     }
+    closeMenu();
     poll(true);
   });
 
@@ -1227,8 +1664,8 @@ function createNode(id) {
   });
 
   const n = { li, img, title, status, stage, err, quality, lineage, settings, settingsToggle,
-              copySettings, bar, fill, act, reroll, remesh, rigBtn, make3d, another, pick,
-              star, compare };
+              copySettings, bar, fill, act, reroll, remesh, rigBtn, another, pick,
+              star, compare, primary, menu, menuSummary };
   nodes.set(id, n);
   return n;
 }
@@ -1247,6 +1684,10 @@ function selectedIds() {
   return [...nodes].filter(([, n]) => n.pick.checked).map(([id]) => id);
 }
 
+function selectedExportFiles() {
+  return [...document.querySelectorAll("input[name='bulk-file']:checked")].map((input) => input.value);
+}
+
 function updateBulkBar() {
   const n = selectedIds().length;
   bulkBar.hidden = n === 0;
@@ -1256,6 +1697,8 @@ function updateBulkBar() {
 document.getElementById("bulk-zip").addEventListener("click", () => {
   const ids = selectedIds();
   if (!ids.length) return;
+  const files = selectedExportFiles();
+  if (!files.length) { toast("Choose at least one file type to export."); return; }
   const form = document.createElement("form");
   form.method = "POST";
   form.action = "/api/export";
@@ -1266,6 +1709,13 @@ document.getElementById("bulk-zip").addEventListener("click", () => {
     input.value = id;
     form.append(input);
   }
+  for (const file of files) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "files";
+    input.value = file;
+    form.append(input);
+  }
   document.body.append(form);
   form.submit();
   form.remove();
@@ -1274,12 +1724,15 @@ document.getElementById("bulk-zip").addEventListener("click", () => {
 bulkFolder.addEventListener("click", async () => {
   const ids = selectedIds();
   if (!ids.length) return;
+  const files = selectedExportFiles();
+  if (!files.length) { toast("Choose at least one file type to export."); return; }
   bulkFolder.disabled = true;
   try {
     const fd = new FormData();
     for (const id of ids) fd.append("ids", id);
+    for (const file of files) fd.append("files", file);
     const r = await fetch("/api/export/folder", { method: "POST", body: fd });
-    const body = await r.json();
+    const body = await r.json().catch(() => ({}));
     if (!r.ok) toast(body.detail ?? "export failed");
     else toast(`copied ${body.copied} file(s) into ${body.dir}`, "ok");
   } finally {
@@ -1297,26 +1750,62 @@ bulkFolder.addEventListener("click", async () => {
 function qualityBadge(job) {
   const report = job.params?.mesh_report;
   if (report) {
-    if (report.status === "invalid") return { cls: "bad", text: "invalid mesh" };
+    if (report.status === "invalid") {
+      return { cls: "bad", text: "× Invalid mesh", reasons: report.reasons ?? [] };
+    }
     if (report.status === "ready") {
-      return { cls: "good", text: `ready · ${Number(report.triangles).toLocaleString()} tris` };
+      return { cls: "good", text: `✓ Ready · ${Number(report.triangles).toLocaleString()} tris` };
     }
     return {
       cls: "warn",
-      text: `review · ${report.reasons.length} issue(s)`,
+      text: `! Review · ${report.reasons.length} issue(s)`,
       reasons: report.reasons,
     };
   }
   const worst = job.params?.mesh_audit?.worst;
   if (typeof worst !== "number") return null;
   const pct = (worst * 100).toFixed(worst < 0.1 ? 1 : 0);
-  if (worst < 0.02) return { cls: "good", text: "no visible holes" };
-  if (worst < 0.08) return { cls: "warn", text: `${pct}% see-through` };
-  return { cls: "bad", text: `${pct}% see-through — try another seed` };
+  if (worst < 0.02) return { cls: "good", text: "✓ No visible holes" };
+  if (worst < 0.08) return { cls: "warn", text: `! ${pct}% see-through` };
+  return { cls: "bad", text: `× ${pct}% see-through — try another seed` };
+}
+
+// What a job actually ran with. Already in the API response and never shown
+// before: without it a good result is not reproducible, because the card only
+// ever said what the user typed, not what was sent to the model. Shared by the
+// card's collapsed readout and the inspector's.
+function settingsRows(params) {
+  return [
+    ["seed", params.seed],
+    ["reference seed", params.reference_seed],
+    ["mesh seed", params.mesh_seed],
+    ["model", params.base_model],
+    ["style", params.style_lora && `${params.style_lora} @ ${params.lora_weight ?? "?"}`],
+    ["resolution", params.resolution],
+    ["size", params.size_m && `${params.size_m} m`],
+    ["background", params.bg_removal],
+    ["negative", params.negative_prompt],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+}
+
+function renderSettingsRows(target, rows) {
+  target.replaceChildren();
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    const k = document.createElement("span");
+    setText(k, label);
+    const v = document.createElement("span");
+    setText(v, String(value));
+    row.append(k, v);
+    target.append(row);
+  }
 }
 
 function updateNode(n, job) {
   n.li.classList.toggle("selected", job.id === selected);
+  n.li.setAttribute("aria-selected", String(job.id === selected));
+  n.li.setAttribute("aria-label", `${assetName(job)}, ${job.stage === "reference" ? "reference" : "model"}, ${job.status}`);
 
   // The mesh, not the reference image, is what the user is looking for in a
   // list of a hundred assets -- the reference only stands in until one exists.
@@ -1325,6 +1814,7 @@ function updateNode(n, job) {
   const src = `/api/jobs/${job.id}/files/${preferred}`;
   if (hasImage && n.img.getAttribute("src") !== src) n.img.src = src;
   n.img.hidden = !hasImage;
+  n.img.alt = hasImage ? `Thumbnail for ${assetName(job)}` : "";
 
   // A rig job carries its source's prompt, so it needs the prefix or the
   // history reads as the same model having been generated twice. A user-given
@@ -1334,6 +1824,10 @@ function updateNode(n, job) {
     : job.prompt ?? `image job ${job.id}`));
   setText(n.star, job.favorite ? "★" : "☆");
   n.star.classList.toggle("on", Boolean(job.favorite));
+  n.star.setAttribute("aria-pressed", String(Boolean(job.favorite)));
+  n.star.setAttribute("aria-label", `${job.favorite ? "Remove" : "Add"} ${assetName(job)} ${job.favorite ? "from" : "to"} favorites`);
+  n.pick.setAttribute("aria-label", `Select ${assetName(job)} for bulk export`);
+  n.menuSummary.setAttribute("aria-label", `Actions for ${assetName(job)}`);
 
   const from = job.params?.rerun_of || job.parent_id;
   setText(n.lineage, from ? `variant of ${from.slice(0, 6)}` : "");
@@ -1349,9 +1843,13 @@ function updateNode(n, job) {
     setText(n.stage, `${p.label}${p.detail ? ` · ${p.detail}` : ""}`);
     n.bar.hidden = false;
     n.fill.style.width = `${p.percent}%`;
+    n.bar.setAttribute("aria-valuenow", String(Math.max(0, Math.min(100, p.percent))));
   } else {
-    setText(n.stage, "");
+    const stageName = job.kind === "rig" ? "Rig job" : job.kind === "sheet" ? "Sprite sheet" :
+      job.stage === "reference" ? "Stage 1 · Reference" : "Stage 2 · Model";
+    setText(n.stage, stageName);
     n.bar.hidden = true;
+    n.bar.removeAttribute("aria-valuenow");
   }
 
   setText(n.err, job.status === "error" && job.error ? job.error : "");
@@ -1359,51 +1857,25 @@ function updateNode(n, job) {
   const badge = job.status === "done" ? qualityBadge(job) : null;
   n.quality.className = `job-quality ${badge ? badge.cls : ""}`;
   setText(n.quality, badge ? badge.text : "");
-  n.quality.title = badge?.reasons ? badge.reasons.join("\n") : "";
+  n.quality.removeAttribute("title");
 
-  // Everything below is already in the API response and was never shown: without
-  // it a good result is not reproducible, because the card only ever said what
-  // the user typed, not what was actually sent to the model.
-  // Named params, not p: `p` is already this function's progress snapshot a few
-  // lines above, and a second `const p` in the same scope is an early error --
-  // it stops the whole module parsing, not just this card.
-  const params = job.params ?? {};
-  const rows = [
-    ["seed", params.seed],
-    ["reference seed", params.reference_seed],
-    ["mesh seed", params.mesh_seed],
-    ["model", params.base_model],
-    ["style", params.style_lora && `${params.style_lora} @ ${params.lora_weight ?? "?"}`],
-    ["resolution", params.resolution],
-    ["size", params.size_m && `${params.size_m} m`],
-    ["background", params.bg_removal],
-    ["prompt sent", params.composed_prompt],
-    ["negative", params.negative_prompt],
-  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  const rows = settingsRows(job.params ?? {});
   n.settingsToggle.hidden = rows.length === 0;
-  n.settings.replaceChildren();
-  for (const [label, value] of rows) {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-    const k = document.createElement("span");
-    setText(k, label);
-    const v = document.createElement("span");
-    setText(v, String(value));
-    row.append(k, v);
-    n.settings.append(row);
-  }
+  renderSettingsRows(n.settings, rows);
   // The button itself is created once in createNode (see the comment there);
   // rebuilding the rows every poll must not touch its listener.
   if (rows.length) n.settings.append(n.copySettings);
 
   const active = job.status === "queued" || job.status === "running";
-  setText(n.act, active ? "cancel" : "delete");
+  setText(n.act, cancelling ? "Cancellation pending" : active ? "Cancel active job" : "Delete permanently");
+  n.act.disabled = cancelling;
 
   // Only offered on a finished job: re-rolling a queued one just races it, and
   // re-3D needs a reference image that survived the run.
   const done = job.status === "done";
   const generated = job.kind !== "rig";
-  n.reroll.hidden = !done || !generated;
+  const isReference = job.stage === "reference";
+  n.reroll.hidden = !done || !generated || isReference;
   n.remesh.hidden = !done || !generated || !job.files.includes("input.png");
   // Offered once, on a finished mesh that isn't rigged yet. A rig job has no
   // mesh of its own, and re-rigging would silently overwrite the skeleton
@@ -1412,17 +1884,23 @@ function updateNode(n, job) {
     !rig.available || !done || !generated || !job.files.includes("model.glb") || isRigged(job);
 
   n.compare.hidden = !done || !job.files.includes("model.glb") || job.id === selected;
-  setText(n.compare, comparing === job.id ? "stop compare" : "compare");
+  setText(n.compare, comparing === job.id ? "Exit comparison" : "Compare with selected");
 
-  const isReference = job.stage === "reference";
-  n.make3d.hidden = !(isReference && done && job.files.includes("input.png"));
   n.another.hidden = !(isReference && done);
   // A reference has no mesh, so the mesh-only actions stay hidden for it.
   n.remesh.hidden = n.remesh.hidden || isReference;
   n.rigBtn.hidden = n.rigBtn.hidden || isReference;
+
+  if (active || cancelling) setText(n.primary, "View progress");
+  else if (isReference && done && job.files.includes("input.png")) setText(n.primary, "Build model");
+  else if (done && job.files.includes("model.glb")) setText(n.primary, "Open model");
+  else if (job.status === "error") setText(n.primary, "Review error");
+  else setText(n.primary, "Open asset");
+  n.primary.setAttribute("aria-label", `${n.primary.textContent}: ${assetName(job)}`);
 }
 
 function renderJobs(jobs) {
+  let visible = 0;
   jobs.forEach((job, i) => {
     jobsById.set(job.id, job);
     const n = nodes.get(job.id) ?? createNode(job.id);
@@ -1430,6 +1908,7 @@ function renderJobs(jobs) {
     // Hidden rather than removed: removal would fight the reuse-by-id logic
     // below, which treats "not in the list" as "this job is gone".
     n.li.hidden = !jobMatches(job);
+    if (!n.li.hidden) visible++;
     if (ul.children[i] !== n.li) ul.insertBefore(n.li, ul.children[i] ?? null);
   });
   const live = new Set(jobs.map((j) => j.id));
@@ -1443,7 +1922,182 @@ function renderJobs(jobs) {
   // A deleted job cannot stay in the export selection, and the count on the
   // bar would otherwise keep counting cards that no longer exist.
   updateBulkBar();
+  setText(document.getElementById("filter-count"), `${visible} of ${jobs.length} shown`);
+  document.getElementById("jobs-empty").hidden = visible !== 0;
 }
+
+// --- inspector ---------------------------------------------------------------
+//
+// The right-hand pane: whatever the selected asset is, this is what it was made
+// from and what can be done with it. In 2D that is the reference's recipe and
+// its actions; in 3D it is the quality verdict, and the pose, sheet and file
+// blocks below it, which manage their own visibility.
+//
+// Known limitation: candidates from one count>1 submit share no server-side
+// grouping (create_job gives them no parent_id), so what is shown here is
+// lineage -- parent_id and rerun_of -- rather than a strip of siblings.
+
+const inspDetail = document.getElementById("insp-detail");
+const inspEmpty = document.getElementById("insp-empty");
+const inspQuality = document.getElementById("insp-quality");
+
+function inspAction(label, title, onClick, primary = false) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  setText(btn, label);
+  btn.title = title;
+  if (primary) btn.className = "primary";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await onClick();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  return btn;
+}
+
+// Rebuilt only when the job it describes actually changed: showSelected runs on
+// every list refresh, and re-creating the action buttons twice a second would
+// disable one out from under the click that is running it.
+let inspectedFor = null;
+
+function renderInspector(job) {
+  const signature = job
+    ? `${job.id}|${job.status}|${job.files?.join(",")}|${job.params?.composed_prompt ?? ""}|${job.name ?? ""}|${job.tags ?? ""}|${job.favorite ? 1 : 0}`
+    : "";
+  if (signature === inspectedFor) return;
+  inspectedFor = signature;
+
+  const badge = job && job.status === "done" ? qualityBadge(job) : null;
+  inspQuality.className = badge ? badge.cls : "";
+  setText(inspQuality, badge ? badge.text : "");
+  inspQuality.removeAttribute("title");
+
+  const qualityDetails = document.getElementById("insp-quality-details");
+  const qualityReasons = document.getElementById("insp-quality-reasons");
+  qualityReasons.replaceChildren();
+  for (const reason of badge?.reasons ?? []) {
+    const item = document.createElement("li");
+    setText(item, reason);
+    qualityReasons.append(item);
+  }
+  qualityDetails.hidden = !badge?.reasons?.length;
+
+  const params = job?.params ?? {};
+  inspDetail.hidden = !job;
+  inspEmpty.hidden = Boolean(job);
+  document.getElementById("export-section").hidden = !job || !job.files?.includes("model.glb");
+  document.getElementById("insp-reference-detail").hidden = !job || job.stage !== "reference";
+  document.getElementById("insp-model-detail").hidden = !job || job.stage === "reference";
+  if (!job) {
+    document.getElementById("insp-2d").setAttribute("aria-hidden", "true");
+    document.getElementById("insp-3d").setAttribute("aria-hidden", "true");
+    return;
+  }
+  document.getElementById("insp-2d").setAttribute("aria-hidden", String(job.stage !== "reference"));
+  document.getElementById("insp-3d").setAttribute("aria-hidden", String(job.stage === "reference"));
+
+  const nameInput = document.getElementById("insp-name-input");
+  const tagsInput = document.getElementById("insp-tags");
+  const favoriteInput = document.getElementById("insp-favorite");
+  if (![nameInput, tagsInput].includes(document.activeElement)) {
+    nameInput.value = job.name || "";
+    tagsInput.value = job.tags || "";
+  }
+  favoriteInput.checked = Boolean(job.favorite);
+  favoriteInput.setAttribute("aria-label", `${job.favorite ? "Remove" : "Add"} ${assetName(job)} ${job.favorite ? "from" : "to"} favorites`);
+  const status = document.getElementById("insp-status");
+  status.className = `status ${job.status}`;
+  setText(status, `${job.stage === "reference" ? "Reference" : "Model"} · ${job.status}`);
+  const from = job.params?.rerun_of || job.parent_id;
+  setText(document.getElementById("insp-lineage"), from ? `Variant of ${from}` : "Original asset");
+  setText(document.getElementById("insp-meta"), `${job.kind} · ID ${job.id}`);
+
+  const thumb = document.getElementById("insp-thumb");
+  const preferred = job.files?.includes("thumb.png") ? "thumb.png" : "input.png";
+  const hasThumb = job.files?.includes(preferred);
+  const hasPng = job.files?.includes("input.png");
+  if (hasThumb) {
+    const src = `/api/jobs/${job.id}/files/${preferred}`;
+    if (thumb.getAttribute("src") !== src) thumb.src = src;
+  }
+  thumb.hidden = !hasThumb;
+  thumb.alt = hasThumb ? `Preview of ${assetName(job)}` : "";
+
+  setText(
+    document.getElementById("insp-prompt"),
+    params.composed_prompt || job.prompt || "—",
+  );
+  const rows = settingsRows(params);
+  renderSettingsRows(document.getElementById("insp-settings"), rows);
+  document.getElementById("insp-generation").hidden = rows.length === 0;
+
+  const actions = document.getElementById("insp-actions");
+  actions.replaceChildren();
+  if (job.status !== "done") return;
+  if (job.kind === "rig") return;   // a rig has no recipe of its own to re-run
+  if (job.stage === "reference") {
+    if (hasPng) {
+      actions.append(
+        inspAction("Build 3D model", "Open this reference in the Model stage",
+                   () => makeThreeD(job), true),
+      );
+    }
+    actions.append(
+      inspAction("Generate another reference", "Same prompt and settings, new reference seed",
+                 () => rerunJob(job.id, "reroll")),
+    );
+    if (hasPng) {
+      const png = document.createElement("a");
+      setText(png, "Download reference PNG");
+      png.download = "";
+      png.href = `/api/jobs/${job.id}/files/input.png`;
+      actions.append(png);
+    }
+    return;
+  }
+  if (job.files.includes("model.glb")) {
+    const glb = document.createElement("a");
+    glb.className = "primary";
+    setText(glb, "Download model GLB");
+    glb.download = "";
+    glb.href = `/api/jobs/${job.id}/files/model.glb`;
+    actions.append(glb);
+  }
+  actions.append(
+    inspAction("Generate another result", "Same prompt and settings, new seed",
+               () => rerunJob(job.id, "reroll")),
+  );
+  if (hasPng) {
+    actions.append(
+      inspAction("Rebuild 3D mesh", "Reuse this reference image, rerun only the 3D stage",
+                 () => rerunJob(job.id, "remesh")),
+    );
+  }
+}
+
+document.getElementById("insp-save-metadata").addEventListener("click", async () => {
+  const job = jobsById.get(selected);
+  if (!job) return;
+  const button = document.getElementById("insp-save-metadata");
+  button.disabled = true;
+  try {
+    const ok = await patchJob(job.id, {
+      name: document.getElementById("insp-name-input").value,
+      tags: document.getElementById("insp-tags").value,
+      favorite: document.getElementById("insp-favorite").checked,
+    });
+    if (ok) {
+      toast(`Saved metadata for ${assetName(job)}.`, "ok");
+      inspectedFor = null;
+      await poll(true);
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
 
 // --- reference preview -------------------------------------------------------
 // A finished reference-stage job has no mesh, and approving one from the 44px
@@ -1464,7 +2118,7 @@ function showReference(job) {
   dlPng.href = src;
   dlPng.hidden = false;
   document.getElementById("dl-rig").hidden = true;
-  downloads.style.display = "flex";
+  downloads.style.display = "grid";
 }
 
 function hideReference() {
@@ -1479,8 +2133,21 @@ function hideReference() {
 function select(id) {
   const job = jobsById.get(id);
   if (!job) return;
+  if (selected !== id && poseState.editing) {
+    if (!confirmDiscardEdits(`open “${assetName(job)}”`)) return;
+    exitPoseEditing(false);
+  }
+  if (selected !== id && comparing) stopComparing();
   selected = id;
-  for (const [nid, n] of nodes) n.li.classList.toggle("selected", nid === id);
+  // The job decides the mode, not the other way round: opening a reference in
+  // 3D mode would show mesh tools for something that has no mesh.
+  setMode(job.stage === "reference" ? "2d" : "3d");
+  for (const [nid, n] of nodes) {
+    n.li.classList.toggle("selected", nid === id);
+    n.li.setAttribute("aria-selected", String(nid === id));
+  }
+  renderInspector(job);
+  syncStageContext();
   if (job.files.includes("model.glb")) {
     showSelected(job);
   } else {
@@ -1529,6 +2196,7 @@ function showSelected(job) {
   // A mesh is about to occupy the pane; the reference preview must not sit
   // on top of it.
   hideReference();
+  renderInspector(job);
   // The rig can land while the same job stays selected, so the download row
   // is refreshed even on the early-out path that skips reloading the mesh.
   const dlRig = document.getElementById("dl-rig");
@@ -1553,7 +2221,7 @@ function showSelected(job) {
   dlFbx.href = `/api/jobs/${job.id}/files/model.fbx`;
   // Blender does the conversion, so hide it when rigging isn't installed.
   dlFbx.hidden = !rig.available;
-  downloads.style.display = "flex";
+  downloads.style.display = "grid";
 }
 
 // --- pose editor ------------------------------------------------------------
@@ -1586,7 +2254,47 @@ const poseState = {
   mode: "pose",        // "pose" rotates a joint; "joints" moves where it sits
   fitted: [],          // rig.json's bones: the fit this rig was built from
   moved: new Map(),    // bone name -> [dx, dy, dz] in Blender space
+  dirty: false,        // local pose rotations not yet saved
 };
+
+function hasUnsavedEdits() {
+  return Boolean(poseState.editing && (poseState.dirty || poseState.moved.size));
+}
+
+function confirmDiscardEdits(action) {
+  if (!hasUnsavedEdits()) return true;
+  return window.confirm(`Discard unsaved ${poseState.mode === "joints" ? "joint" : "pose"} changes and ${action}?`);
+}
+
+function syncEditModeBanner() {
+  const banner = document.getElementById("edit-mode-banner");
+  const apply = document.getElementById("edit-mode-apply");
+  banner.hidden = !poseState.editing;
+  if (!poseState.editing) return;
+  const joints = poseState.mode === "joints";
+  setText(
+    document.getElementById("edit-mode-label"),
+    `${joints ? "Joint placement" : "Pose editing"}${hasUnsavedEdits() ? " · unsaved changes" : ""}`,
+  );
+  setText(apply, joints ? "Apply joint positions" : "Save pose…");
+  apply.disabled = joints && !poseState.moved.size;
+  setText(document.getElementById("edit-mode-cancel"), joints ? "Revert and cancel" : "Cancel edits");
+}
+
+document.getElementById("edit-mode-apply").addEventListener("click", () => {
+  document.getElementById(poseState.mode === "joints" ? "joint-apply" : "pose-save").click();
+});
+document.getElementById("edit-mode-cancel").addEventListener("click", () => {
+  resetPose({ dirty: false });
+  poseState.moved.clear();
+  exitPoseEditing();
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (!hasUnsavedEdits()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
 
 let markers = null;   // THREE.Group of clickable joint spheres
 let gizmo = null;
@@ -1607,7 +2315,11 @@ function ensureGizmo() {
   gizmo.addEventListener("mouseDown", () => { controls.enabled = false; });
   gizmo.addEventListener("mouseUp", () => {
     controls.enabled = true;
-    recordJointDrag();
+    if (poseState.mode === "joints") recordJointDrag();
+    else {
+      poseState.dirty = true;
+      syncEditModeBanner();
+    }
   });
   scene.add(gizmo.getHelper());
   return gizmo;
@@ -1711,16 +2423,20 @@ function currentPoseBones() {
   return bones;
 }
 
-function applyPose(record) {
+function applyPose(record, { dirty = true } = {}) {
   for (const [name, quat] of Object.entries(record.bones ?? {})) {
     poseState.bones.get(name)?.quaternion.fromArray(quat);
   }
   poseState.current = record.id ?? null;
+  poseState.dirty = dirty;
+  syncEditModeBanner();
 }
 
-function resetPose() {
+function resetPose({ dirty = true } = {}) {
   for (const [name, quat] of poseState.rest) poseState.bones.get(name)?.quaternion.copy(quat);
   poseState.current = null;
+  poseState.dirty = dirty;
+  syncEditModeBanner();
 }
 
 // Called on every selection and every list refresh, so it has to be a no-op
@@ -1831,7 +2547,9 @@ function renderPoses() {
     name.title = "Show this pose";
     name.addEventListener("click", async () => {
       if (!poseState.editing) await enterPoseEditing();
-      applyPose(record);
+      if (hasUnsavedEdits() && !confirmDiscardEdits(`show the saved pose “${record.name}”`)) return;
+      if (poseState.mode === "joints") exitJointsMode();
+      applyPose(record, { dirty: false });
     });
     const glb = document.createElement("a");
     setText(glb, "glb");
@@ -1863,9 +2581,12 @@ async function enterPoseEditing() {
   // pointer while the whole scene rotates out from under it.
   stopSpinning();
   poseState.editing = true;
+  poseState.dirty = false;
   poseToggle.classList.add("active");
-  setText(poseToggle, "done");
+  poseToggle.setAttribute("aria-pressed", "true");
+  setText(poseToggle, "Finish editing");
   poseEditor.hidden = false;
+  syncEditModeBanner();
   // The rig is a different file, so the viewer has to reload; clearing
   // shownModelFor is what lets the poll's showSelected put the plain mesh back
   // when editing ends.
@@ -1884,11 +2605,14 @@ function exitPoseEditing(restore = true) {
   poseState.editing = false;
   poseState.mode = "pose";
   poseState.moved.clear();
+  poseState.dirty = false;
   gizmo?.setMode("rotate");
   syncJointButtons();
   poseToggle.classList.remove("active");
-  setText(poseToggle, "edit");
+  poseToggle.setAttribute("aria-pressed", "false");
+  setText(poseToggle, "Edit pose");
   poseEditor.hidden = true;
+  syncEditModeBanner();
   clearRig();
   shownModelFor = null;
   const job = restore ? jobsById.get(poseState.job) : null;
@@ -1896,16 +2620,23 @@ function exitPoseEditing(restore = true) {
 }
 
 poseToggle.addEventListener("click", () => {
-  if (poseState.editing) exitPoseEditing();
+  if (poseState.editing) {
+    if (!confirmDiscardEdits("finish editing")) return;
+    exitPoseEditing();
+  }
   else enterPoseEditing();
 });
 
 document.getElementById("pose-reset-bone").addEventListener("click", () => {
   const bone = poseState.selected;
-  if (bone) bone.quaternion.copy(poseState.rest.get(bone.name));
+  if (bone) {
+    bone.quaternion.copy(poseState.rest.get(bone.name));
+    poseState.dirty = true;
+    syncEditModeBanner();
+  }
 });
 
-document.getElementById("pose-reset-all").addEventListener("click", resetPose);
+document.getElementById("pose-reset-all").addEventListener("click", () => resetPose());
 
 // --- joint adjustment --------------------------------------------------------
 //
@@ -1940,15 +2671,18 @@ function recordJointDrag() {
   if (delta.lengthSq() === 0) poseState.moved.delete(bone.name);
   else poseState.moved.set(bone.name, gltfDeltaToBlender(delta.toArray()));
   syncJointButtons();
+  syncEditModeBanner();
 }
 
 function syncJointButtons() {
   const on = poseState.mode === "joints";
   const toggle = document.getElementById("joint-toggle");
   toggle.classList.toggle("active", on);
-  setText(toggle, on ? "done adjusting" : "adjust joints");
+  toggle.setAttribute("aria-pressed", String(on));
+  setText(toggle, on ? "Finish joint placement" : "Adjust joints");
   document.getElementById("joint-apply").hidden = !on || !poseState.moved.size;
   document.getElementById("joint-revert").hidden = !on || !poseState.moved.size;
+  syncEditModeBanner();
 }
 
 // The corrected skeleton the API wants: the whole thing, fitted positions with
@@ -1984,7 +2718,7 @@ function enterJointsMode() {
   poseState.moved.clear();
   // A rotation left over from posing would make the markers show joints where
   // the *posed* bones are, and the correction is against the rest skeleton.
-  resetPose();
+  resetPose({ dirty: false });
   scene.updateMatrixWorld();
   for (const marker of markers?.children ?? []) {
     marker.position.setFromMatrixPosition(marker.userData.bone.matrixWorld);
@@ -2005,7 +2739,10 @@ function exitJointsMode() {
 
 document.getElementById("joint-toggle").addEventListener("click", () => {
   if (!poseState.editing || !poseState.fitted.length) return;
-  if (poseState.mode === "joints") exitJointsMode();
+  if (poseState.mode === "joints") {
+    if (!confirmDiscardEdits("return to pose editing")) return;
+    exitJointsMode();
+  }
   else enterJointsMode();
 });
 
@@ -2015,6 +2752,7 @@ document.getElementById("joint-revert").addEventListener("click", () => {
     if (marker.userData.home) marker.position.copy(marker.userData.home);
   }
   syncJointButtons();
+  syncEditModeBanner();
 });
 
 document.getElementById("joint-apply").addEventListener("click", async () => {
@@ -2027,7 +2765,7 @@ document.getElementById("joint-apply").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ bones: correctedBones() }),
     });
-    const body = await r.json();
+    const body = await r.json().catch(() => ({}));
     if (!r.ok) {
       toast(body.detail ?? "could not adjust the joints");
       return;
@@ -2089,12 +2827,14 @@ document.getElementById("pose-save").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const record = await r.json();
+  const record = await r.json().catch(() => ({}));
   if (!r.ok) {
     toast(record.detail ?? "could not save the pose");
     return;
   }
   poseState.current = record.id;
+  poseState.dirty = false;
+  syncEditModeBanner();
   await refreshPoses();
 });
 
@@ -2229,7 +2969,8 @@ function renderSheetPreview() {
   const px = Number(sheetSize.value);
   setText(
     sheetSummary,
-    `${rows} × ${yaws.length} cells · ${px * yaws.length}×${px * rows} px`
+    `${rows} × ${yaws.length} = ${rows * yaws.length} render cells · ` +
+      `${px * yaws.length}×${px * rows} px output`
       + (clipping ? " · animated clip" : ""),
   );
 }
@@ -2296,7 +3037,7 @@ async function refreshSheets() {
     setText(del, "×");
     del.title = "Delete this sheet";
     del.addEventListener("click", async () => {
-      if (!confirm("Delete this sprite sheet?")) return;
+      if (!confirm(`Delete the sprite sheet “${sheet.name || sheet.id}”?`)) return;
       del.disabled = true;
       try {
         await fetch(`/api/jobs/${poseState.job}/sheets/${sheet.id}`, { method: "DELETE" });
@@ -2342,6 +3083,8 @@ function syncClipEnds() {
 sheetToggle.addEventListener("click", () => {
   sheetSetup.hidden = !sheetSetup.hidden;
   sheetToggle.classList.toggle("active", !sheetSetup.hidden);
+  sheetToggle.setAttribute("aria-expanded", String(!sheetSetup.hidden));
+  setText(sheetToggle, sheetSetup.hidden ? "Set up" : "Close setup");
   if (!sheetSetup.hidden) {
     syncSheetRows();
     renderSheetPreview();
@@ -2382,7 +3125,7 @@ document.getElementById("sheet-render").addEventListener("click", async (e) => {
     fd.set("lighting", sheetLighting.value);
     fd.set("yaws", sheetYaws.value);
     const r = await fetch(`/api/jobs/${poseState.job}/sheets`, { method: "POST", body: fd });
-    const body = await r.json();
+    const body = await r.json().catch(() => ({}));
     if (!r.ok) toast(body.detail ?? "could not queue the sheet");
   } finally {
     btn.disabled = false;
@@ -2471,7 +3214,7 @@ document.getElementById("prune").addEventListener("click", async () => {
     const fd = new FormData();
     fd.set("keep", String(keep));
     const r = await fetch("/api/jobs/prune", { method: "POST", body: fd });
-    const body = await r.json();
+    const body = await r.json().catch(() => ({}));
     if (!r.ok) toast(body.detail ?? "prune failed");
   } finally {
     btn.disabled = false;
@@ -2547,6 +3290,7 @@ let listTick = 0;
 async function refreshList() {
   const jobs = await (await fetch("/api/jobs", { signal: abort.signal })).json();
   renderJobs(jobs);
+  syncStageContext();
   notifyTransitions(jobs);
   if (listTick++ % STORAGE_EVERY === 0) refreshStorage();
   // A finished sheet job means a new file in the source job's directory, and
@@ -2562,6 +3306,9 @@ async function refreshList() {
     }
   }
   const current = jobs.find((j) => j.id === selected);
+  // Cheap when nothing changed (see the signature guard), and it is the only
+  // thing that turns a running job's inspector into a finished one's.
+  if (current) renderInspector(current);
   if (current?.files.includes("model.glb")) {
     showSelected(current);
   } else if (current?.status === "error" && selected !== shownModelFor) {
@@ -2593,7 +3340,12 @@ function renderOverlay() {
 
   const indeterminate = live.percent <= 0;
   phBar.classList.toggle("indet", indeterminate);
-  if (!indeterminate) phFill.style.width = `${live.percent}%`;
+  if (!indeterminate) {
+    phFill.style.width = `${live.percent}%`;
+    phBar.setAttribute("aria-valuenow", String(Math.max(0, Math.min(100, live.percent))));
+  } else {
+    phBar.removeAttribute("aria-valuenow");
+  }
 
   const bits = [];
   if (live.error) bits.push(live.error);
@@ -2642,6 +3394,14 @@ async function checkDoctor() {
 checkDoctor();
 loadRig();
 loadSheetOptions();
+const savedWorkspace = localStorage.getItem(WORKSPACE_KEY);
+setWorkspace(new Set(["settings", "preview", "inspector"]).has(savedWorkspace) ? savedWorkspace : "preview", { remember: false });
+if (localStorage.getItem("warlock.inspector.v1") === "open") {
+  document.body.classList.add("inspector-open");
+  inspectorToggle.setAttribute("aria-expanded", "true");
+}
+// Last: setMode re-renders the list, so everything it touches has to exist first.
+setMode(localStorage.getItem(MODE_KEY) === "3d" ? "3d" : "2d", { remember: false });
 
 (function loop() {
   poll().finally(() => setTimeout(loop, liveJobId || pending ? FAST_MS : IDLE_MS));

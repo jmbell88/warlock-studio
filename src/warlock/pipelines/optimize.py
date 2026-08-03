@@ -92,7 +92,10 @@ def run(
         staged_copy(source, dest)
         return {
             "requested": target_triangles,
-            "achieved": _triangles(dest),
+            # A byte-for-byte copy has exactly the source's count; loading the
+            # copy through trimesh just to re-measure it is wasted work on the
+            # hot path of every raw-profile job.
+            "achieved": source_triangles,
             "source_triangles": source_triangles,
             "bytes": dest.stat().st_size,
         }

@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import warlock.config as config_mod
-from warlock import models
+from warlock import guidance, models
 from warlock.app import create_app
 
 
@@ -873,6 +873,86 @@ def test_promote_reuses_the_parents_reference_seed(client, tmp_path):
     # The reference is reused verbatim -- promotion must not redraw it.
     assert child["params"]["reference_seed"] == 11
     assert child["params"]["mesh_seed"] == r.json()["mesh_seed"]
+
+
+def _done_reference(client, **extra):
+    """A finished reference-stage job, standing in for a real pipeline run."""
+    data = {"kind": "text", "prompt": "a barrel", "output": "reference", **extra}
+    ref_id = client.post("/api/jobs", data=data).json()["id"]
+    job_dir = config_mod.get_config().job_dir(ref_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"png")
+    client.app.state.store.set_status(ref_id, "done")
+    return ref_id
+
+
+def test_promote_records_the_mesh_overrides_it_was_given(client):
+    # The 3D pane owns the mesh-side decisions, and the reference was made
+    # without any of them being asked -- so promotion has to be able to say
+    # what they are, not just inherit whatever the reference happened to store.
+    ref_id = _done_reference(client, platform="mobile", size_m=0.4)
+    r = client.post(
+        f"/api/jobs/{ref_id}/model",
+        data={
+            "platform": "hero",
+            "size_m": 2.5,
+            "bg_removal": "threshold",
+            "profile": "raw",
+            "rig": "true",
+            "rig_template": "quadruped",
+        },
+    )
+    assert r.status_code == 200
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["platform"] == "hero"
+    assert params["size_m"] == 2.5
+    assert params["bg_removal"] == "threshold"
+    assert params["profile"] == "raw"
+    assert params["rig"] is True
+    assert params["rig_template"] == "quadruped"
+    # The resolution the worker actually sends trellis follows the new
+    # platform; the reference's stored one must not survive to contradict it.
+    assert params["resolution"] == guidance.PLATFORMS["hero"].resolution
+
+
+def test_promote_without_overrides_inherits_the_reference(client):
+    # The whole point of the params being optional: every existing client
+    # sends none of them and must be entirely unaffected.
+    ref_id = _done_reference(client, platform="mobile", size_m=0.4, bg_removal="birefnet")
+    r = client.post(f"/api/jobs/{ref_id}/model")
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert params["platform"] == "mobile"
+    assert params["size_m"] == 0.4
+    assert params["bg_removal"] == "birefnet"
+
+
+def test_promote_can_clear_an_inherited_rig_request(client):
+    ref_id = _done_reference(client, rig="true")
+    r = client.post(f"/api/jobs/{ref_id}/model", data={"rig": "false"})
+    params = client.get(f"/api/jobs/{r.json()['id']}").json()["params"]
+    assert "rig" not in params
+    assert "rig_template" not in params
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"platform": "playstation-9"},
+        {"size_m": 9999},
+        {"bg_removal": "magic"},
+        {"profile": "not-a-tier"},
+        {"rig": "true", "rig_template": "octopus"},
+    ],
+)
+def test_promote_with_an_unusable_override_is_a_400_and_creates_nothing(client, bad):
+    # Rejected at the door, for the same reason create_job validates up front:
+    # an unusable value should cost the request, not the two minutes of GPU
+    # that would precede the step that finally notices it.
+    ref_id = _done_reference(client)
+    before = len(client.get("/api/jobs").json())
+    r = client.post(f"/api/jobs/{ref_id}/model", data=bad)
+    assert r.status_code == 400
+    assert len(client.get("/api/jobs").json()) == before
 
 
 def test_promote_without_a_reference_is_a_400(client):

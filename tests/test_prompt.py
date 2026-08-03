@@ -49,6 +49,19 @@ def test_a_lone_overlong_phrase_falls_back_to_whitespace_split(tokenizers):
         assert prompt.count(c, tokenizers) <= 12
 
 
+def test_a_single_unsplittable_atom_is_hard_split_not_truncated(tokenizers):
+    # One whitespace-free "word" (a pasted URL, say) that alone exceeds the
+    # limit: chunk() must slice it rather than emit an over-limit chunk the
+    # encoder would silently truncate.
+    atom = "x/" * 40
+    chunks = prompt.chunk(atom, tokenizers, limit=10)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert prompt.count(c, tokenizers) <= 12
+    # No characters were lost in the split.
+    assert "".join(chunks) == atom
+
+
 def test_empty_prompt_yields_one_empty_chunk(tokenizers):
     assert prompt.chunk("", tokenizers) == [""]
 

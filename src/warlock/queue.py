@@ -413,6 +413,11 @@ class Worker:
                 # falling back beats failing a job the user can't fix.
                 log.warning("unknown base_model %r; using %s", base_key, self.config.t2i_model)
                 base_key = self.config.t2i_model
+            if base_key not in models.BASE_MODELS:
+                # WARLOCK_T2I_MODEL itself can name a key that doesn't exist;
+                # the registry default beats a bare KeyError in the worker.
+                log.warning("unknown t2i_model %r; using %s", base_key, models.DEFAULT_BASE_MODEL)
+                base_key = models.DEFAULT_BASE_MODEL
             style_lora = params.get("style_lora") or None
             lora_weight = float(params.get("lora_weight", models.DEFAULT_LORA_WEIGHT))
             # Before trellis restarts in exclusive mode and before SDXL loads:
@@ -533,8 +538,12 @@ class Worker:
             # A cancel that landed after the solve finished must not publish
             # the artifacts of a job about to be recorded as cancelled -- the
             # finally below throws the temps away instead.
-            if self._cancel is None or not self._cancel.event.is_set():
-                await asyncio.to_thread(rigging.finalize_rig, source_dir)
+            if self._cancel is not None and self._cancel.event.is_set():
+                # Nothing was published, so nothing gets recorded either: the
+                # weighting/bone_count of a discarded rig must not end up in
+                # the params of a job recorded as cancelled.
+                return
+            await asyncio.to_thread(rigging.finalize_rig, source_dir)
         finally:
             # No-op on success (finalize renamed them away); on failure or
             # cancel it removes the half-written temps and never touches the

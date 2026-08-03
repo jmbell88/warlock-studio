@@ -84,6 +84,27 @@ def chunk(text: str, tokenizers: list[Any], limit: int = 75) -> list[str]:
     def fits(s: str) -> bool:
         return count(s, tokenizers) <= limit + 2
 
+    def hard_split(piece: str) -> list[str]:
+        """Last resort for a single whitespace-free atom that alone exceeds
+        the limit (a pasted URL, a run of garbage): binary-search the longest
+        character prefix that fits and repeat. Without this the atom would be
+        emitted as an over-limit chunk and silently truncated at encode time.
+        """
+        parts: list[str] = []
+        while piece and not fits(piece):
+            lo, hi, best = 1, len(piece) - 1, 1
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if fits(piece[:mid]):
+                    best, lo = mid, mid + 1
+                else:
+                    hi = mid - 1
+            parts.append(piece[:best])
+            piece = piece[best:]
+        if piece:
+            parts.append(piece)
+        return parts
+
     phrases = [p.strip() for p in text.split(",") if p.strip()]
     if not phrases:
         return [""]
@@ -96,7 +117,12 @@ def chunk(text: str, tokenizers: list[Any], limit: int = 75) -> list[str]:
             atoms.append((phrase, sep))
         else:
             for j, word in enumerate(phrase.split(" ")):
-                atoms.append((word, sep if j == 0 else " "))
+                word_sep = sep if j == 0 else " "
+                if fits(word):
+                    atoms.append((word, word_sep))
+                else:
+                    for k, frag in enumerate(hard_split(word)):
+                        atoms.append((frag, word_sep if k == 0 else ""))
 
     chunks: list[str] = []
     current = ""

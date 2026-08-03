@@ -14,16 +14,19 @@
     --warn: #e5a03d;
   }
   * { box-sizing: border-box; }
+  /* Three panes: settings, viewport, selected-asset tools. The middle one stays
+     mounted in both modes so its canvas is never measured at zero. */
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, "Segoe UI", sans-serif;
-    display: grid; grid-template-columns: 340px 1fr; height: 100vh;
+    display: grid; grid-template-columns: 340px 1fr 320px; height: 100vh;
   }
   aside {
     background: var(--panel); border-right: 1px solid var(--edge);
     padding: 20px; overflow-y: auto;
   }
-  h1 { font-size: 18px; margin: 0 0 16px; letter-spacing: .5px; }
+  #inspector { border-right: 0; border-left: 1px solid var(--edge); padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; letter-spacing: .5px; }
   h1 span { color: var(--accent); }
   fieldset { border: 1px solid var(--edge); border-radius: 8px; margin: 0 0 14px; padding: 12px; }
   legend { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 0 6px; }
@@ -53,6 +56,23 @@
     border-radius: 6px; padding: 8px; cursor: pointer; font: inherit;
   }
   .tabs button.active { color: var(--text); border-color: var(--accent); }
+  /* --- mode switch ------------------------------------------------------ */
+  /* The single control that decides which pipeline stage the whole app is
+     showing: 2D makes reference images, 3D turns one into a mesh. Every pane
+     keys off body.mode-2d / body.mode-3d and nothing else. */
+  #mode-switch { display: flex; gap: 6px; margin: 0 0 14px; }
+  #mode-switch button {
+    flex: 1; background: var(--bg); color: var(--muted); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 6px; cursor: pointer; font: inherit; font-weight: 600;
+  }
+  #mode-switch button.active { color: var(--text); border-color: var(--accent); }
+  body.mode-2d #pane-3d-settings, body.mode-3d #pane-2d-settings { display: none; }
+  body.mode-2d #insp-3d, body.mode-3d #insp-2d { display: none; }
+  /* Hidden, not unmounted: an unmounted canvas measures zero and comes back
+     stretched. visibility keeps the layout box exactly as 3D mode left it. */
+  body.mode-2d #viewer, body.mode-2d #viewer-b, body.mode-2d #viewer-tools {
+    visibility: hidden;
+  }
   #generate {
     width: 100%; padding: 10px; border: 0; border-radius: 8px; cursor: pointer;
     background: var(--accent); color: white; font: inherit; font-weight: 600;
@@ -167,8 +187,22 @@
   /* --- presets ---------------------------------------------------------- */
   #preset-row { display: flex; gap: 6px; margin-bottom: 8px; }
   #preset-row select { font-size: 12px; padding: 5px; }
-  /* A reference can be dropped or pasted anywhere over the fieldset. */
+  /* A reference can be dropped or pasted anywhere over the upload zone. */
   #image-input.drop { border-color: var(--accent); }
+  #image-input { border: 1px dashed var(--edge); border-radius: 6px; padding: 8px; }
+  #image-input[hidden] { display: none; }
+  /* The 2D asset a mesh will be built from. */
+  #source-card { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  #source-card[hidden] { display: none; }
+  #source-thumb {
+    width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: var(--bg);
+  }
+  #source-name { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+  #source-clear {
+    flex: 0 0 auto; background: none; border: 1px solid var(--edge); border-radius: 4px;
+    color: var(--muted); cursor: pointer; font-size: 11px; padding: 2px 6px; width: auto;
+  }
+  #source-clear:hover { color: var(--text); border-color: var(--accent); }
   #placeholder {
     position: absolute; inset: 0; display: grid; place-items: center;
     color: var(--muted); pointer-events: none; text-align: center; padding: 24px;
@@ -218,12 +252,44 @@
     .bar.indet > i { animation: none; width: 100%; opacity: .4; }
     .bar > i { transition: none; }
   }
-  #downloads {
-    position: absolute; top: 16px; right: 16px; display: none; gap: 6px;
+  /* --- inspector -------------------------------------------------------- */
+  .insp-head {
+    color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 1px; margin: 14px 0 6px;
   }
+  .insp-head:first-child { margin-top: 0; }
+  #insp-empty { color: var(--muted); font-size: 13px; }
+  #insp-name { font-size: 14px; margin-bottom: 8px; word-break: break-word; }
+  #insp-thumb {
+    width: 100%; border-radius: 8px; display: block; margin-bottom: 10px;
+    background: repeating-conic-gradient(#26283200 0% 25%, #262832 0% 50%) 50% / 16px 16px;
+  }
+  #insp-thumb[hidden] { display: none; }
+  #insp-prompt {
+    font-size: 12px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--edge); border-radius: 6px; padding: 8px;
+    word-break: break-word;
+  }
+  #insp-settings { font-size: 11px; color: var(--muted); }
+  #insp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  #insp-actions button, #insp-actions a {
+    background: none; border: 1px solid var(--edge); border-radius: 6px;
+    color: var(--muted); cursor: pointer; font: inherit; font-size: 12px;
+    padding: 4px 8px; text-decoration: none;
+  }
+  #insp-actions button:hover, #insp-actions a:hover { color: var(--text); border-color: var(--accent); }
+  #insp-actions button:disabled { opacity: .5; cursor: default; }
+  #insp-actions button.primary { color: var(--text); border-color: var(--accent); }
+  #insp-quality { font-size: 12px; margin-bottom: 6px; }
+  #insp-quality.good { color: var(--ok); }
+  #insp-quality.warn { color: var(--warn); }
+  #insp-quality.bad  { color: var(--err); }
+  /* Downloads used to float over the viewer; they describe the selected asset,
+     so they belong with everything else that does. */
+  #downloads { display: none; flex-wrap: wrap; gap: 6px; }
   #downloads a {
-    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
-    color: var(--text); padding: 8px 14px; text-decoration: none; font-size: 13px;
+    background: var(--bg); border: 1px solid var(--edge); border-radius: 6px;
+    color: var(--text); padding: 5px 10px; text-decoration: none; font-size: 12px;
   }
   #downloads a:hover { border-color: var(--accent); }
   /* OBJ and STL are converted server-side on first request; without this the
@@ -235,11 +301,7 @@
     vertical-align: -1px; animation: a3d-spin .9s linear infinite;
   }
   /* --- pose editor ------------------------------------------------------ */
-  #pose-panel {
-    position: absolute; bottom: 16px; right: 16px; width: 260px;
-    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
-    padding: 10px 12px; font-size: 13px;
-  }
+  #pose-panel { font-size: 13px; }
   #pose-panel[hidden] { display: none; }
   .pose-head { display: flex; align-items: center; gap: 8px; }
   .pose-head[hidden] { display: none; }
@@ -301,181 +363,495 @@
     margin-left: auto; background: none; border: none; color: inherit;
     cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px;
   }
+
+  /* --- accessible workflow refresh ------------------------------------- */
+  [hidden] { display: none !important; }
+  body { grid-template-columns: 320px minmax(0, 1fr) 320px; overflow: hidden; }
+  main, aside { min-width: 0; min-height: 0; }
+  button, summary, input, select, textarea { touch-action: manipulation; }
+  button:focus-visible, summary:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible,
+  a:focus-visible {
+    outline: 3px solid #b5adff; outline-offset: 2px;
+  }
+  .sr-only {
+    position: absolute !important; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0);
+    white-space: nowrap; border: 0;
+  }
+  #workspace-tabs, #inspector-toggle { display: none; }
+  #mode-switch { margin-bottom: 6px; }
+  #mode-switch button { min-height: 48px; padding: 7px 9px; }
+  #mode-switch button span { display: block; font-size: 12px; font-weight: 500; }
+  #mode-switch button[aria-selected="true"] {
+    color: var(--text); border-color: var(--accent); background: #242331;
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .stage-description { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  #advanced-settings {
+    border: 1px solid var(--edge); border-radius: 8px; margin: 0 0 14px;
+    padding: 0 12px;
+  }
+  #advanced-settings > summary {
+    cursor: pointer; min-height: 44px; display: flex; align-items: center;
+    color: var(--text); font-weight: 600;
+  }
+  #advanced-settings fieldset { border: 0; border-top: 1px solid var(--edge); border-radius: 0; }
+  #submit-dock {
+    position: sticky; bottom: -20px; z-index: 8; margin: 6px -20px 0;
+    padding: 12px 20px 20px; background: linear-gradient(180deg, #1d1f27e8, var(--panel) 22%);
+    border-top: 1px solid var(--edge);
+  }
+  #stage-context-kicker {
+    color: #b5adff; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  #stage-context { color: var(--text); font-size: 12px; margin: 2px 0 9px; }
+  #generate { min-height: 44px; font-size: 14px; }
+  .shortcut-hint { display: block; color: var(--muted); font-size: 10px; text-align: center; margin-top: 4px; }
+  .field-error, .validation-summary { color: #ffb4b7; font-size: 12px; }
+  .field-error { margin: 4px 0 0; }
+  .validation-summary {
+    background: #341d22; border: 1px solid #7c3239; border-radius: 6px;
+    padding: 7px 8px; margin: 0 0 8px;
+  }
+  [aria-invalid="true"] { border-color: #ff7277 !important; box-shadow: 0 0 0 1px #ff7277; }
+  .library-head {
+    display: flex; align-items: end; justify-content: space-between; gap: 8px;
+    margin-top: 18px;
+  }
+  .library-head strong { display: block; font-size: 14px; }
+  #filter-count { display: block; color: var(--muted); font-size: 11px; }
+  #clear-filters {
+    background: none; color: var(--muted); border: 0; cursor: pointer;
+    font: inherit; font-size: 12px; min-height: 32px;
+  }
+  #filter-bar { margin-top: 8px; }
+  #jobs li {
+    position: relative; display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
+    gap: 10px; align-items: center; cursor: pointer; min-height: 76px;
+  }
+  #jobs li[aria-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #jobs img { width: 52px; height: 52px; }
+  .job-title { font-size: 13px; font-weight: 600; }
+  .job-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  .job-summary .status, .job-summary .job-stage { display: inline; }
+  .status::before { content: "●"; font-size: 8px; margin-right: 5px; vertical-align: 1px; }
+  .status.done::before { content: "✓"; font-size: 11px; }
+  .status.error::before, .status.cancelled::before { content: "×"; font-size: 13px; }
+  .job-actions { margin: 0; display: grid; grid-template-columns: 32px 32px; gap: 4px; }
+  .job-actions > button.star, .job-actions > input.job-pick {
+    width: 32px; height: 32px; min-height: 32px; margin: 0;
+  }
+  .job-actions > input.job-pick { accent-color: var(--accent); }
+  .job-primary {
+    grid-column: 1 / -1; background: #29273c !important; color: var(--text) !important;
+    border-color: #554b9d !important; min-height: 34px; white-space: nowrap;
+  }
+  .job-menu { grid-column: 1 / -1; position: relative; }
+  .job-menu > summary {
+    list-style: none; cursor: pointer; border: 1px solid var(--edge); border-radius: 5px;
+    color: var(--muted); font-size: 11px; text-align: center; padding: 5px 6px;
+  }
+  .job-menu > summary::-webkit-details-marker { display: none; }
+  .job-menu-panel {
+    position: absolute; z-index: 25; right: 0; top: calc(100% + 4px); width: 170px;
+    display: grid; gap: 3px; background: #24262f; border: 1px solid var(--edge);
+    border-radius: 7px; padding: 6px; box-shadow: 0 12px 32px #0009;
+  }
+  .job-menu-panel button {
+    width: 100%; min-height: 34px; text-align: left; padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+  .job-menu-panel .danger { color: #ffb4b7; border-color: #74343a; min-height: 44px; }
+  .job-settings { grid-column: 1 / -1; }
+  .empty-state {
+    display: grid; gap: 6px; justify-items: start; color: var(--muted);
+    border: 1px dashed var(--edge); border-radius: 8px; padding: 18px; font-size: 12px;
+  }
+  .empty-state strong { color: var(--text); font-size: 14px; }
+  .empty-state button { min-height: 38px; background: none; color: var(--text); border: 1px solid var(--edge); border-radius: 6px; }
+  #bulk-bar {
+    margin-top: 14px; border: 1px solid #554b9d; border-radius: 8px;
+    background: #242331; padding: 10px;
+  }
+  .bulk-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+  #bulk-files { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; margin: 8px 0; padding: 8px; }
+  #bulk-files .check { margin: 0; font-size: 11px; }
+  .bulk-actions { display: flex; gap: 6px; }
+  .bulk-actions button { min-height: 40px; flex: 1; border: 1px solid var(--edge); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+  /* Viewer modes and help remain legible over either canvas. */
+  #viewer-tools { right: 8px; flex-wrap: wrap; }
+  #viewer-tools button { min-height: 34px; }
+  #viewer-help { position: relative; }
+  #viewer-help summary {
+    cursor: pointer; border: 1px solid var(--edge); border-radius: 4px;
+    background: var(--panel); padding: 5px 8px; color: var(--muted);
+  }
+  #viewer-help > div {
+    position: absolute; left: 0; bottom: calc(100% + 6px); width: 250px;
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+    padding: 8px; box-shadow: 0 8px 24px #0008;
+  }
+  kbd { border: 1px solid var(--edge); border-bottom-width: 2px; border-radius: 3px; padding: 0 3px; }
+  .compare-label, #compare-exit, #edit-mode-banner {
+    position: absolute; z-index: 12; top: 10px; background: #1d1f27ed;
+    border: 1px solid var(--edge); border-radius: 6px; color: var(--text);
+    font-size: 12px; padding: 6px 9px;
+  }
+  #compare-label-a { left: 10px; }
+  #compare-label-b { left: calc(50% + 10px); }
+  #compare-exit { left: 50%; transform: translateX(-50%); cursor: pointer; min-height: 38px; }
+  #edit-mode-banner {
+    left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center;
+    border-color: var(--accent); box-shadow: 0 8px 24px #0008;
+  }
+  #edit-mode-banner button { min-height: 34px; border: 1px solid var(--edge); border-radius: 5px; background: var(--bg); color: var(--text); }
+
+  /* Shared inspector identity. */
+  .inspector-title { display: flex; align-items: center; justify-content: space-between; }
+  .inspector-title h2 { font-size: 15px; margin: 0 0 12px; }
+  #inspector-close { display: none; }
+  #insp-header {
+    display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px 10px;
+    padding-bottom: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--edge);
+  }
+  #insp-thumb { grid-row: 1 / span 2; width: 72px; height: 72px; object-fit: cover; margin: 0; }
+  .insp-identity { min-width: 0; align-self: center; }
+  #insp-lineage { display: block; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  #insp-header > label, #insp-header > input, #insp-header > button,
+  #insp-header > #insp-meta, #insp-header > #insp-actions, #insp-header > details {
+    grid-column: 1 / -1;
+  }
+  #insp-header > label { margin-top: 5px; }
+  #insp-header > button { min-height: 40px; background: var(--bg); color: var(--text); border: 1px solid var(--edge); border-radius: 6px; }
+  #insp-meta { color: var(--muted); font-size: 11px; }
+  #insp-generation { margin-top: 6px; }
+  #insp-generation summary { cursor: pointer; color: var(--muted); min-height: 36px; padding-top: 8px; }
+  #insp-actions .primary { min-height: 44px; background: #29273c; color: var(--text); border-color: var(--accent); }
+  #insp-quality-details { margin: 6px 0 12px; color: var(--muted); font-size: 12px; }
+  #insp-quality-details summary { cursor: pointer; color: var(--text); }
+  #insp-quality-reasons { margin: 6px 0; padding-left: 18px; }
+  .sheet-group { border-top: 1px solid var(--edge); padding: 8px 0; }
+  .sheet-group h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #b5adff; margin: 0 0 6px; }
+  .sheet-output #sheet-render { width: 100%; min-height: 44px; color: var(--text); border-color: var(--accent); }
+  #export-section { margin-top: 14px; }
+  #downloads { display: none; grid-template-columns: 1fr 1fr; }
+  #downloads a { min-height: 38px; display: flex; align-items: center; }
+  #pose-panel button { min-height: 34px; }
+  #pose-toggle, #sheet-toggle { min-height: 38px !important; }
+
+  @media (max-width: 1199px) and (min-width: 901px) {
+    body { grid-template-columns: 320px minmax(0, 1fr); }
+    #settings { grid-column: 1; }
+    #preview-pane { grid-column: 2; }
+    #inspector {
+      display: block; position: fixed; z-index: 35; right: 0; top: 0; bottom: 0;
+      width: min(380px, 88vw); transform: translateX(100%); transition: transform .18s ease;
+      box-shadow: -16px 0 40px #0009;
+    }
+    body.inspector-open #inspector { transform: translateX(0); }
+    #inspector-toggle {
+      display: block; position: fixed; z-index: 30; right: 12px; top: 12px;
+      min-height: 40px; border: 1px solid var(--edge); border-radius: 6px;
+      background: var(--panel); color: var(--text); padding: 0 12px;
+    }
+    #inspector-close { display: block; min-width: 40px; min-height: 40px; border: 0; background: none; color: var(--text); font-size: 20px; }
+  }
+
+  @media (max-width: 900px) {
+    body {
+      display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+      height: 100dvh;
+    }
+    #workspace-tabs {
+      grid-row: 1; display: flex; gap: 4px; padding: 6px; background: var(--panel);
+      border-bottom: 1px solid var(--edge); z-index: 40;
+    }
+    #workspace-tabs button {
+      flex: 1; min-height: 44px; border: 1px solid var(--edge); border-radius: 6px;
+      background: var(--bg); color: var(--muted); font: inherit;
+    }
+    #workspace-tabs button[aria-selected="true"] { color: var(--text); border-color: var(--accent); background: #29273c; }
+    #settings, #preview-pane, #inspector {
+      grid-column: 1; grid-row: 2; position: relative; inset: auto; width: auto;
+      height: auto; max-width: none; transform: none; opacity: 0; visibility: hidden;
+      pointer-events: none; z-index: 0;
+    }
+    body.workspace-settings #settings,
+    body.workspace-preview #preview-pane,
+    body.workspace-inspector #inspector {
+      opacity: 1; visibility: visible; pointer-events: auto; z-index: 2;
+    }
+    #settings, #inspector { overflow-y: auto; border: 0; }
+    #preview-pane { min-height: 0; }
+    #inspector-toggle, #inspector-close { display: none; }
+    #submit-dock { bottom: -20px; }
+    #viewer-tools { max-width: calc(100% - 16px); }
+    #tool-stats { width: 100%; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #inspector { transition: none !important; }
+  }
 </style>
 </head>
-<body>
-<div id="banner" hidden>
+<body class="mode-2d workspace-preview">
+<div id="banner" role="alert" hidden>
   <span id="banner-text"></span>
-  <button id="banner-close" type="button" aria-label="dismiss">&times;</button>
+  <button id="banner-close" type="button" aria-label="Dismiss message">&times;</button>
 </div>
-<aside>
+<nav id="workspace-tabs" aria-label="Workspace panes">
+  <button type="button" data-workspace="settings" aria-selected="false">Settings</button>
+  <button type="button" data-workspace="preview" aria-selected="true">Preview</button>
+  <button type="button" data-workspace="inspector" aria-selected="false">Inspector</button>
+</nav>
+<button id="inspector-toggle" type="button" aria-controls="inspector" aria-expanded="false">
+  Inspector
+</button>
+<aside id="settings">
   <h1>Warlock<span> Studio</span></h1>
-  <div class="tabs">
-    <button id="tab-text" class="active" type="button">Text&nbsp;→&nbsp;3D</button>
-    <button id="tab-image" type="button">Image&nbsp;→&nbsp;3D</button>
+  <div id="mode-switch" role="tablist" aria-label="Creation stages">
+    <button type="button" role="tab" id="mode-2d" class="active"
+            aria-selected="true" aria-controls="pane-2d-settings">1 <span>Reference</span></button>
+    <button type="button" role="tab" id="mode-3d" aria-selected="false" tabindex="-1"
+            aria-controls="pane-3d-settings">2 <span>Model</span></button>
   </div>
-  <form id="form">
-    <fieldset id="text-input">
-      <legend>Prompt</legend>
-      <div id="preset-row">
-        <select id="preset"><option value="">preset…</option></select>
-        <select id="history"><option value="">recent…</option></select>
-      </div>
-      <textarea id="prompt" placeholder="a wooden treasure chest with iron bands, fantasy game prop"></textarea>
-      <div id="prompt-preview" class="hint"></div>
-    </fieldset>
-    <fieldset id="image-input" hidden>
-      <legend>Reference image</legend>
-      <input type="file" id="image" accept="image/*">
-      <p class="hint">Or drop an image here, or paste one from the clipboard.</p>
-    </fieldset>
-    <fieldset>
-      <legend>Subject</legend>
-      <div id="g-category-row">
-        <label for="g-category">Asset category</label>
-        <select id="g-category" data-guidance="category"></select>
-      </div>
-      <div id="g-silhouette-row">
-        <label for="g-silhouette">Silhouette</label>
-        <select id="g-silhouette" data-guidance="silhouette"></select>
-      </div>
-      <div id="g-material-row">
-        <label for="g-material">Material</label>
-        <select id="g-material" data-guidance="material"></select>
-      </div>
-      <div id="g-condition-row">
-        <label for="g-condition">Condition</label>
-        <select id="g-condition" data-guidance="condition"></select>
-      </div>
-      <div id="g-rarity-row">
-        <label for="g-rarity">Rarity</label>
-        <select id="g-rarity" data-guidance="rarity"></select>
-      </div>
-      <div id="g-emissive-row">
-        <label for="g-emissive">Emissive detail</label>
-        <select id="g-emissive" data-guidance="emissive"></select>
-      </div>
-    </fieldset>
-    <fieldset>
-      <legend>Style</legend>
-      <div id="g-setting-row">
-        <label for="g-setting">Setting</label>
-        <select id="g-setting" data-guidance="setting"></select>
-      </div>
-      <div id="g-genre-row">
-        <label for="g-genre">Genre</label>
-        <select id="g-genre" data-guidance="genre"></select>
-      </div>
-      <div id="g-mood-row">
-        <label for="g-mood">Mood</label>
-        <select id="g-mood" data-guidance="mood"></select>
-      </div>
-      <div id="g-art_style-row">
-        <label for="g-art_style">Art style</label>
-        <select id="g-art_style" data-guidance="art_style"></select>
-      </div>
-      <div id="g-palette-row">
-        <label for="g-palette">Colour palette</label>
-        <select id="g-palette" data-guidance="palette"></select>
-      </div>
-    </fieldset>
-    <fieldset>
-      <legend>Output</legend>
-      <div id="g-base_model-row">
-        <label for="g-base_model">Image model</label>
-        <select id="g-base_model" data-guidance="base_model"></select>
-        <p class="hint">Draws the reference image the 3D stage works from.</p>
-      </div>
-      <div id="g-style_lora-row">
-        <label for="g-style_lora">Style LoRA</label>
-        <select id="g-style_lora" data-guidance="style_lora"></select>
-        <div class="seed-row">
-          <input type="range" id="g-lora-weight" min="0" max="1.5" step="0.05">
-          <output id="g-lora-weight-out"></output>
+  <p id="stage-description" class="stage-description">
+    Create reference candidates and choose the strongest image before building a mesh.
+  </p>
+  <form id="form" novalidate>
+    <!-- 2D: everything that composes the SDXL prompt. Nothing here reaches
+         trellis, and nothing in the 3D pane below reaches SDXL. -->
+    <div id="pane-2d-settings" role="tabpanel" aria-labelledby="mode-2d">
+      <fieldset id="text-input">
+        <legend>Prompt</legend>
+        <div id="preset-row">
+          <label class="sr-only" for="preset">Prompt preset</label>
+          <select id="preset" aria-label="Prompt preset"><option value="">preset…</option></select>
+          <label class="sr-only" for="history">Recent prompt</label>
+          <select id="history" aria-label="Recent prompt"><option value="">recent…</option></select>
         </div>
-        <p class="hint">Weakest on SDXL-Turbo; strongest on the Hyper-SD model.</p>
-      </div>
-      <div id="g-platform-row">
-        <label for="g-platform">Target platform</label>
-        <select id="g-platform" data-guidance="platform"></select>
-        <p class="hint" id="platform-hint"></p>
-      </div>
-      <div id="g-profile-row">
-        <label for="g-profile">Triangle budget</label>
-        <select id="g-profile">
-          <option value="raw">Raw reconstruction</option>
+        <label for="prompt">Describe the asset</label>
+        <textarea id="prompt" placeholder="a wooden treasure chest with iron bands, fantasy game prop"></textarea>
+        <p class="field-error" data-error-for="prompt" hidden></p>
+        <div id="prompt-preview" class="hint"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Subject</legend>
+        <div id="g-category-row">
+          <label for="g-category">Asset category</label>
+          <select id="g-category" data-guidance="category"></select>
+        </div>
+        <div id="g-silhouette-row">
+          <label for="g-silhouette">Silhouette</label>
+          <select id="g-silhouette" data-guidance="silhouette"></select>
+        </div>
+        <div id="g-material-row">
+          <label for="g-material">Material</label>
+          <select id="g-material" data-guidance="material"></select>
+        </div>
+        <div id="g-condition-row">
+          <label for="g-condition">Condition</label>
+          <select id="g-condition" data-guidance="condition"></select>
+        </div>
+        <div id="g-rarity-row">
+          <label for="g-rarity">Rarity</label>
+          <select id="g-rarity" data-guidance="rarity"></select>
+        </div>
+        <div id="g-emissive-row">
+          <label for="g-emissive">Emissive detail</label>
+          <select id="g-emissive" data-guidance="emissive"></select>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Style</legend>
+        <div id="g-setting-row">
+          <label for="g-setting">Setting</label>
+          <select id="g-setting" data-guidance="setting"></select>
+        </div>
+        <div id="g-genre-row">
+          <label for="g-genre">Genre</label>
+          <select id="g-genre" data-guidance="genre"></select>
+        </div>
+        <div id="g-mood-row">
+          <label for="g-mood">Mood</label>
+          <select id="g-mood" data-guidance="mood"></select>
+        </div>
+        <div id="g-art_style-row">
+          <label for="g-art_style">Art style</label>
+          <select id="g-art_style" data-guidance="art_style"></select>
+        </div>
+        <div id="g-palette-row">
+          <label for="g-palette">Colour palette</label>
+          <select id="g-palette" data-guidance="palette"></select>
+        </div>
+        <!-- The platform field is a prompt fragment here ("low-poly", "hero
+             detail"); the geometry resolution it also implies is the 3D pane's
+             business, and that pane has its own select for it. -->
+        <div id="g-platform-row">
+          <label for="g-platform">Detail level</label>
+          <select id="g-platform" data-guidance="platform"></select>
+          <p class="hint" id="platform-hint"></p>
+        </div>
+      </fieldset>
+      <details id="advanced-settings">
+        <summary>Advanced</summary>
+        <p class="hint">Image model, negative prompt, seed, and candidate controls.</p>
+      <fieldset>
+        <legend>Image model</legend>
+        <div id="g-base_model-row">
+          <label for="g-base_model">Image model</label>
+          <select id="g-base_model" data-guidance="base_model"></select>
+          <p class="hint">Draws the reference image the 3D stage works from.</p>
+        </div>
+        <div id="g-style_lora-row">
+          <label for="g-style_lora">Style LoRA</label>
+          <select id="g-style_lora" data-guidance="style_lora"></select>
+          <div class="seed-row">
+            <label class="sr-only" for="g-lora-weight">Style LoRA strength</label>
+            <input type="range" id="g-lora-weight" min="0" max="1.5" step="0.05">
+            <output id="g-lora-weight-out"></output>
+          </div>
+          <p class="hint">Weakest on SDXL-Turbo; strongest on the Hyper-SD model.</p>
+        </div>
+        <div id="negative-row">
+          <label for="negative-prompt">Negative prompt</label>
+          <textarea id="negative-prompt" rows="2"></textarea>
+          <p class="hint">Only applies to CFG models (Playground); distilled 4-step bases ignore it.</p>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Options</legend>
+        <label for="seed">Seed</label>
+        <div class="seed-row">
+          <input type="number" id="seed" min="0" max="2147483647">
+          <button type="button" id="seed-reroll" aria-label="Choose a new random seed" title="New random seed">↻</button>
+        </div>
+        <p class="field-error" data-error-for="seed" hidden></p>
+        <label class="inline" for="seed-lock">
+          <input type="checkbox" id="seed-lock">
+          Lock seed (reuse it for the next generation)
+        </label>
+        <label for="ref-count">Candidates</label>
+        <select id="ref-count">
+          <option value="1" selected>1</option>
+          <option value="2">2</option>
+          <option value="4">4</option>
+          <option value="8">8</option>
         </select>
-        <p class="hint">
-          Named budgets appear here once gltfpack is vendored and each tier has
-          passed qualification (see docs/NEXT.md &sect;3).
-        </p>
-      </div>
-      <div id="g-size-row">
-        <label for="g-size">Physical size (metres)</label>
-        <input type="number" id="g-size" step="0.01" min="0.01" max="100">
-        <p class="hint">The longest axis of the finished model.</p>
-      </div>
-      <div id="g-bg_removal-row">
-        <label for="g-bg_removal">Background removal</label>
-        <select id="g-bg_removal" data-guidance="bg_removal"></select>
-      </div>
-      <div id="negative-row">
-        <label for="negative-prompt">Negative prompt</label>
-        <textarea id="negative-prompt" rows="2"></textarea>
-        <p class="hint">Only applies to CFG models (Playground); distilled 4-step bases ignore it.</p>
-      </div>
-    </fieldset>
-    <fieldset>
-      <legend>Options</legend>
-      <label for="seed">Seed</label>
-      <div class="seed-row">
-        <input type="number" id="seed" min="0">
-        <button type="button" id="seed-reroll" title="New random seed">↻</button>
-      </div>
-      <label class="inline" for="seed-lock">
-        <input type="checkbox" id="seed-lock">
-        Lock seed (reuse it for the next generation)
-      </label>
-      <label class="inline" for="approve-first">
-        <input type="checkbox" id="approve-first" checked>
-        Approve reference before 3D
-      </label>
-      <label for="ref-count">Candidates</label>
-      <select id="ref-count">
-        <option value="1" selected>1</option>
-        <option value="2">2</option>
-        <option value="4">4</option>
-        <option value="8">8</option>
-      </select>
-    </fieldset>
-    <!-- Hidden wholesale when bpy is not installed: offering a checkbox that
-         can only ever fail is worse than not offering it. -->
-    <fieldset id="rig-options" hidden>
-      <legend>Rigging</legend>
-      <label class="inline" for="rig-enable">
-        <input type="checkbox" id="rig-enable">
-        Fit a skeleton when the mesh is done
-      </label>
-      <label for="rig-template">Skeleton</label>
-      <select id="rig-template"></select>
-      <p class="hint">Queued as a separate job, so you can cancel it on its own.</p>
-    </fieldset>
-    <button id="generate" type="submit">Generate</button>
+      </fieldset>
+      </details>
+    </div>
+    <!-- 3D: starts from a finished 2D asset or an upload. No prompt controls. -->
+    <div id="pane-3d-settings" role="tabpanel" aria-labelledby="mode-3d">
+      <fieldset>
+        <legend>Source</legend>
+        <div id="source-card" hidden>
+          <img id="source-thumb" alt="">
+          <div id="source-name"></div>
+          <button type="button" id="source-clear" title="Use a different source">change</button>
+        </div>
+        <div id="image-input">
+          <label for="image">Upload a source image</label>
+          <input type="file" id="image" accept="image/*">
+          <p class="hint">
+            Pick a finished 2D asset from the list, or choose, drop or paste an
+            image here.
+          </p>
+        </div>
+        <p class="field-error" data-error-for="image" hidden></p>
+      </fieldset>
+      <fieldset>
+        <legend>Mesh</legend>
+        <div id="m-platform-row">
+          <label for="m-platform">Geometry resolution</label>
+          <select id="m-platform"></select>
+          <p class="hint" id="m-platform-hint"></p>
+        </div>
+        <div id="g-profile-row">
+          <label for="g-profile">Triangle budget</label>
+          <select id="g-profile">
+            <option value="raw">Raw reconstruction</option>
+          </select>
+          <p class="hint">
+            Named budgets appear here once gltfpack is vendored and each tier has
+            passed qualification (see docs/NEXT.md &sect;1).
+          </p>
+        </div>
+        <div id="g-size-row">
+          <label for="g-size">Physical size (metres)</label>
+          <input type="number" id="g-size" step="0.01" min="0.01" max="100">
+          <p class="field-error" data-error-for="g-size" hidden></p>
+          <p class="hint">The longest axis of the finished model.</p>
+        </div>
+        <div id="g-bg_removal-row">
+          <label for="g-bg_removal">Background removal</label>
+          <select id="g-bg_removal" data-guidance="bg_removal"></select>
+        </div>
+      </fieldset>
+      <!-- Hidden wholesale when bpy is not installed: offering a checkbox that
+           can only ever fail is worse than not offering it. -->
+      <fieldset id="rig-options" hidden>
+        <legend>Rigging</legend>
+        <label class="inline" for="rig-enable">
+          <input type="checkbox" id="rig-enable">
+          Fit a skeleton when the mesh is done
+        </label>
+        <label for="rig-template">Skeleton</label>
+        <select id="rig-template"></select>
+        <p class="hint">Queued as a separate job, so you can cancel it on its own.</p>
+      </fieldset>
+    </div>
+    <div id="submit-dock">
+      <div id="stage-context-kicker">Stage 1 · Reference</div>
+      <div id="stage-context">Create a reference from your prompt.</div>
+      <div id="form-errors" class="validation-summary" role="alert" tabindex="-1" hidden></div>
+      <button id="generate" type="submit">Generate references</button>
+      <span class="shortcut-hint">Ctrl/⌘ + Enter</span>
+    </div>
   </form>
   <div id="bulk-bar" hidden>
-    <span id="bulk-count"></span>
-    <button type="button" id="bulk-zip">download zip</button>
-    <button type="button" id="bulk-folder" hidden>save to project</button>
+    <div class="bulk-head"><strong id="bulk-count"></strong><span>Export selected assets</span></div>
+    <fieldset id="bulk-files">
+      <legend>Files to include</legend>
+      <label class="check"><input type="checkbox" name="bulk-file" value="model.glb" checked> Model (GLB)</label>
+      <label class="check"><input type="checkbox" name="bulk-file" value="input.png"> Reference (PNG)</label>
+      <label class="check"><input type="checkbox" name="bulk-file" value="rig.glb"> Rigged model (GLB)</label>
+      <label class="check"><input type="checkbox" name="bulk-file" value="model.stl"> STL, if prepared</label>
+      <label class="check"><input type="checkbox" name="bulk-file" value="model_obj.zip"> OBJ, if prepared</label>
+      <label class="check"><input type="checkbox" name="bulk-file" value="textures.zip"> Textures, if prepared</label>
+    </fieldset>
+    <div class="bulk-actions">
+      <button type="button" id="bulk-zip">Download ZIP</button>
+      <button type="button" id="bulk-folder" hidden>Save to project</button>
+    </div>
+  </div>
+  <div class="library-head">
+    <div><strong>Asset library</strong><span id="filter-count" aria-live="polite"></span></div>
+    <button type="button" id="clear-filters">Clear filters</button>
   </div>
   <div id="filter-bar">
-    <input type="search" id="filter-text" placeholder="search name, prompt or tag">
-    <select id="filter-status">
+    <label class="sr-only" for="filter-text">Search assets</label>
+    <input type="search" id="filter-text" placeholder="search name, prompt or tag" aria-label="Search assets">
+    <!-- Preset by the mode switch, not owned by it: 2D lists references, 3D
+         lists meshes, and either can be widened back to "all". -->
+    <label class="sr-only" for="filter-stage">Filter by stage</label>
+    <select id="filter-stage" aria-label="Filter by stage">
+      <option value="">all stages</option>
+      <option value="reference">references</option>
+      <option value="model">models</option>
+    </select>
+    <label class="sr-only" for="filter-status">Filter by status</label>
+    <select id="filter-status" aria-label="Filter by status">
       <option value="">all</option>
       <option value="done">done</option>
       <option value="running">running</option>
       <option value="error">error</option>
     </select>
-    <select id="filter-kind">
+    <label class="sr-only" for="filter-kind">Filter by kind</label>
+    <select id="filter-kind" aria-label="Filter by kind">
       <option value="">any kind</option>
       <option value="text">text</option>
       <option value="image">image</option>
@@ -484,102 +860,185 @@
     </select>
     <label class="inline" for="filter-fav"><input type="checkbox" id="filter-fav"> ★ only</label>
   </div>
-  <ul id="jobs"></ul>
+  <ul id="jobs" role="listbox" aria-label="Assets"></ul>
+  <div id="jobs-empty" class="empty-state" hidden>
+    <strong>No assets match</strong>
+    <span>Try clearing filters or start a new reference above.</span>
+    <button type="button" id="empty-clear-filters">Clear filters</button>
+  </div>
   <p id="storage" hidden>
     <span id="storage-text"></span>
     <button type="button" id="prune">prune</button>
   </p>
 </aside>
-<main>
+<main id="preview-pane">
   <canvas id="viewer"></canvas>
   <canvas id="viewer-b"></canvas>
   <img id="ref-preview" alt="reference image" hidden>
-  <div id="viewer-tools">
-    <button type="button" id="tool-wire" title="Wireframe">wire</button>
-    <button type="button" id="tool-spin" title="Turntable">spin</button>
-    <button type="button" id="tool-frame" title="Reframe (F)">frame</button>
+  <div id="compare-label-a" class="compare-label" hidden>Selected · A</div>
+  <div id="compare-label-b" class="compare-label" hidden>Comparison · B</div>
+  <button type="button" id="compare-exit" hidden>Exit comparison</button>
+  <div id="edit-mode-banner" role="status" hidden>
+    <span id="edit-mode-label">Pose editing</span>
+    <button type="button" id="edit-mode-apply">Save pose…</button>
+    <button type="button" id="edit-mode-cancel">Cancel edits</button>
+  </div>
+  <div id="viewer-tools" aria-label="Viewer tools">
+    <button type="button" id="tool-wire" title="Toggle wireframe (W)" aria-pressed="false">Wireframe: off</button>
+    <button type="button" id="tool-spin" title="Toggle turntable (S)" aria-pressed="false">Turntable: off</button>
+    <button type="button" id="tool-frame" title="Frame model (F)">Frame</button>
     <span id="tool-stats"></span>
+    <details id="viewer-help">
+      <summary>Viewer help</summary>
+      <div>Drag to orbit · scroll to zoom · <kbd>F</kbd> frame · <kbd>W</kbd> wireframe · <kbd>S</kbd> turntable</div>
+    </details>
   </div>
   <div id="placeholder">
-    <div id="ph-idle">Generate a model or select a finished job to preview it here.</div>
-    <div id="ph-progress" hidden aria-live="polite">
+    <div id="ph-idle">Generate a reference or select an asset to preview it here.</div>
+    <div id="ph-progress" hidden aria-live="off">
       <div class="spinner"></div>
-      <div id="ph-label">Starting</div>
-      <div class="bar"><i></i></div>
+      <div id="ph-label" role="status" aria-live="polite" aria-atomic="true">Starting</div>
+      <div class="bar" role="progressbar" aria-label="Generation progress" aria-valuemin="0" aria-valuemax="100"><i></i></div>
       <div id="ph-detail"></div>
       <div id="ph-time"></div>
     </div>
   </div>
-  <div id="downloads">
-    <a id="dl-png" download hidden>PNG</a>
-    <a id="dl-glb" download>GLB</a>
-    <a id="dl-obj" download>OBJ</a>
-    <a id="dl-stl" download>STL</a>
-    <a id="dl-fbx" download>FBX</a>
-    <a id="dl-collision" download>collision</a>
-    <a id="dl-textures" download>textures</a>
-    <a id="dl-rig" download hidden>RIG</a>
-  </div>
-  <!-- Shown only for a job that actually has a rig; the whole pose editor is
-       inert without one. -->
-  <div id="pose-panel" hidden>
-    <div class="pose-head" id="pose-head">
-      <strong>Pose</strong>
-      <button type="button" id="pose-toggle">edit</button>
-    </div>
-    <div id="pose-editor" hidden>
-      <p class="pose-hint" id="pose-selection">Click a joint to rotate it.</p>
-      <div class="pose-row">
-        <button type="button" id="pose-reset-bone">reset joint</button>
-        <button type="button" id="pose-reset-all">reset all</button>
-        <button type="button" id="pose-mirror">mirror L↔R</button>
-        <button type="button" id="pose-save">save pose…</button>
-        <select id="pose-preset"><option value="">preset…</option></select>
-      </div>
-      <div class="pose-row">
-        <button type="button" id="joint-toggle">adjust joints</button>
-        <button type="button" id="joint-apply" hidden>apply joints</button>
-        <button type="button" id="joint-revert" hidden>revert joints</button>
-      </div>
-    </div>
-    <ul id="pose-list"></ul>
-    <div class="pose-head sheet-head">
-      <strong>Sprite sheet</strong>
-      <button type="button" id="sheet-toggle">setup</button>
-    </div>
-    <div id="sheet-setup" hidden>
-      <canvas id="sheet-preview" width="512" height="64"></canvas>
-      <p class="pose-hint" id="sheet-summary"></p>
-      <label for="sheet-rows">Poses (rows)</label>
-      <select id="sheet-rows" multiple size="4"></select>
-      <p class="pose-hint">Nothing selected renders the rest pose alone.</p>
-      <label class="check"><input type="checkbox" id="sheet-clip"> Animated clip</label>
-      <div id="sheet-clip-setup" hidden>
-        <p class="pose-hint">A clip replaces the pose rows: one row per frame.</p>
-        <select id="sheet-clip-from"></select>
-        <select id="sheet-clip-to"></select>
-        <label for="sheet-clip-frames">Frames</label>
-        <input type="number" id="sheet-clip-frames" min="2" max="32" value="8">
-      </div>
-      <label for="sheet-yaws">Directions</label>
-      <select id="sheet-yaws"></select>
-      <label for="sheet-lighting">Look</label>
-      <select id="sheet-lighting"></select>
-      <label for="sheet-size">Frame size</label>
-      <select id="sheet-size"></select>
-      <label for="sheet-elevation">Camera elevation</label>
-      <div class="seed-row">
-        <input type="range" id="sheet-elevation" min="-60" max="80" step="5">
-        <output id="sheet-elevation-out"></output>
-      </div>
-      <div class="pose-row">
-        <button type="button" id="sheet-render">render sheet</button>
-      </div>
-    </div>
-    <ul id="sheet-list"></ul>
-  </div>
 </main>
-<div id="toasts"></div>
+<aside id="inspector" tabindex="-1">
+  <div class="inspector-title">
+    <h2>Inspector</h2>
+    <button type="button" id="inspector-close" aria-label="Close inspector">&times;</button>
+  </div>
+  <div id="insp-empty">Select an asset to inspect its metadata and available actions.</div>
+  <div id="insp-detail" hidden>
+    <header id="insp-header">
+      <img id="insp-thumb" alt="" hidden>
+      <div class="insp-identity">
+        <span id="insp-status" class="status"></span>
+        <span id="insp-lineage"></span>
+      </div>
+      <label for="insp-name-input">Asset name</label>
+      <input id="insp-name-input" maxlength="120">
+      <label for="insp-tags">Tags <span class="hint">comma separated</span></label>
+      <input id="insp-tags" placeholder="prop, fantasy, environment">
+      <label class="check" for="insp-favorite">
+        <input type="checkbox" id="insp-favorite"> Favorite
+      </label>
+      <button type="button" id="insp-save-metadata">Save metadata</button>
+      <div id="insp-meta"></div>
+      <div id="insp-actions"></div>
+      <details id="insp-generation">
+        <summary>Generation metadata</summary>
+        <div id="insp-settings"></div>
+      </details>
+    </header>
+  </div>
+  <!-- The selected asset. Reference and model stages keep their specialist
+       information below the shared identity and metadata header. -->
+  <section id="insp-2d">
+    <div id="insp-reference-detail" hidden>
+      <div class="insp-head">Prompt sent</div>
+      <div id="insp-prompt"></div>
+    </div>
+  </section>
+  <section id="insp-3d">
+    <div id="insp-model-detail" hidden>
+      <div class="insp-head">Mesh quality</div>
+      <div id="insp-quality"></div>
+      <details id="insp-quality-details" hidden>
+        <summary>Why this mesh needs review</summary>
+        <ul id="insp-quality-reasons"></ul>
+      </details>
+    </div>
+    <!-- Shown only for a job that actually has a mesh; the whole block is
+         inert without one. -->
+    <div id="pose-panel" hidden>
+      <div class="pose-head" id="pose-head">
+        <strong>Pose</strong>
+        <button type="button" id="pose-toggle" aria-pressed="false">Edit pose</button>
+      </div>
+      <div id="pose-editor" hidden>
+        <p class="pose-hint" id="pose-selection">Click a joint to rotate it.</p>
+        <div class="pose-row">
+          <button type="button" id="pose-reset-bone">reset joint</button>
+          <button type="button" id="pose-reset-all">reset all</button>
+          <button type="button" id="pose-mirror">mirror L↔R</button>
+          <button type="button" id="pose-save">Save pose…</button>
+          <label class="sr-only" for="pose-preset">Pose preset</label>
+          <select id="pose-preset" aria-label="Pose preset"><option value="">preset…</option></select>
+        </div>
+        <div class="pose-row">
+          <button type="button" id="joint-toggle">adjust joints</button>
+          <button type="button" id="joint-apply" hidden>apply joints</button>
+          <button type="button" id="joint-revert" hidden>revert joints</button>
+        </div>
+      </div>
+      <ul id="pose-list"></ul>
+      <div class="pose-head sheet-head">
+        <strong>Sprite sheet</strong>
+        <button type="button" id="sheet-toggle" aria-expanded="false" aria-controls="sheet-setup">Set up</button>
+      </div>
+      <div id="sheet-setup" hidden>
+        <section class="sheet-group" aria-labelledby="sheet-preview-title">
+          <h3 id="sheet-preview-title">Preview</h3>
+          <canvas id="sheet-preview" width="512" height="64" aria-label="Sprite direction preview"></canvas>
+        </section>
+        <section class="sheet-group" aria-labelledby="sheet-content-title">
+          <h3 id="sheet-content-title">Content</h3>
+          <label for="sheet-rows">Poses (rows)</label>
+          <select id="sheet-rows" multiple size="4"></select>
+          <p class="pose-hint">Nothing selected renders the rest pose alone.</p>
+          <label class="check"><input type="checkbox" id="sheet-clip"> Animated clip</label>
+          <div id="sheet-clip-setup" hidden>
+            <p class="pose-hint">A clip replaces the pose rows: one row per frame.</p>
+            <label for="sheet-clip-from">From pose</label>
+            <select id="sheet-clip-from"></select>
+            <label for="sheet-clip-to">To pose</label>
+            <select id="sheet-clip-to"></select>
+            <label for="sheet-clip-frames">Frames</label>
+            <input type="number" id="sheet-clip-frames" min="2" max="32" value="8">
+          </div>
+        </section>
+        <section class="sheet-group" aria-labelledby="sheet-view-title">
+          <h3 id="sheet-view-title">View</h3>
+          <label for="sheet-yaws">Directions</label>
+          <select id="sheet-yaws"></select>
+          <label for="sheet-lighting">Look</label>
+          <select id="sheet-lighting"></select>
+          <label for="sheet-elevation">Camera elevation</label>
+          <div class="seed-row">
+            <input type="range" id="sheet-elevation" min="-60" max="80" step="5">
+            <output id="sheet-elevation-out"></output>
+          </div>
+        </section>
+        <section class="sheet-group sheet-output" aria-labelledby="sheet-output-title">
+          <h3 id="sheet-output-title">Output</h3>
+          <label for="sheet-size">Frame size</label>
+          <select id="sheet-size"></select>
+          <p class="pose-hint" id="sheet-summary" aria-live="polite"></p>
+          <button type="button" id="sheet-render">Render sprite sheet</button>
+        </section>
+      </div>
+      <ul id="sheet-list"></ul>
+    </div>
+    <section id="export-section" hidden>
+      <div class="insp-head">Export</div>
+      <p class="hint">GLB preserves materials for engines. OBJ/STL are prepared on first download; textures are a separate archive.</p>
+      <div id="downloads">
+        <a id="dl-png" download hidden>Reference PNG</a>
+        <a id="dl-glb" download>Model GLB</a>
+        <a id="dl-obj" download>OBJ package</a>
+        <a id="dl-stl" download>STL mesh</a>
+        <a id="dl-fbx" download>FBX model</a>
+        <a id="dl-collision" download>Collision GLB</a>
+        <a id="dl-textures" download>Texture archive</a>
+        <a id="dl-rig" download hidden>Rigged GLB</a>
+      </div>
+      <p class="hint">Select assets in the library to export the same file types in bulk.</p>
+    </section>
+  </section>
+</aside>
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 <script type="importmap">
 {
   "imports": {

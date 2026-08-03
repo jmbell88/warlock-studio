@@ -463,6 +463,8 @@ def run_worker(
         code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait()
+        result_path.unlink(missing_ok=True)
         raise BlenderError(f"Blender worker timed out after {timeout:.0f}s") from None
     finally:
         if proc.poll() is None:
@@ -470,6 +472,9 @@ def run_worker(
 
     output = "\n".join(tail)[-ERROR_TAIL_CHARS:]
     if code != 0:
+        # A killed-late worker may still have written the handoff file; it
+        # would otherwise sit in the source job's directory until the next run.
+        result_path.unlink(missing_ok=True)
         raise BlenderError(f"Blender worker exited with code {code}:\n{output}")
     if not result_path.exists():
         raise BlenderError(f"Blender worker wrote no result:\n{output}")
@@ -523,9 +528,21 @@ def finalize_rig(job_dir: Path) -> None:
 
     GLB first, json second: rig.json is the completion marker, so at the
     moment it lands the rig.glb beside it is already the matching one.
+
+    The renames retry briefly: on Windows, replacing rig.glb while a
+    FileResponse is mid-stream from it raises PermissionError (files open
+    without FILE_SHARE_DELETE), and failing an otherwise successful re-rig
+    at the last step over a transient reader is the wrong trade.
     """
-    os.replace(job_dir / RIG_GLB_TMP, job_dir / "rig.glb")
-    os.replace(job_dir / RIG_JSON_TMP, job_dir / "rig.json")
+    for src, dest in ((RIG_GLB_TMP, "rig.glb"), (RIG_JSON_TMP, "rig.json")):
+        for attempt in range(10):
+            try:
+                os.replace(job_dir / src, job_dir / dest)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.5)
 
 
 def discard_rig_temps(job_dir: Path) -> None:

@@ -82,6 +82,8 @@ DERIVED_PARAMS = (
     "transform",
     "weighting",
     "bone_count",
+    "sheet_id",
+    "cells",
 )
 
 
@@ -223,7 +225,14 @@ def create_app() -> FastAPI:
             raise HTTPException(400, str(exc)) from exc
 
         style = models.STYLE_LORAS.get(params.get("style_lora") or "")
-        trigger = style.trigger if style else ""
+        # Same gate the real run applies (text2image.generate only prepends a
+        # trigger for an adapter that actually loaded): a LoRA missing on disk
+        # must not show its trigger in the preview and then drop it at run time.
+        trigger = (
+            style.trigger
+            if style and (config.t2i_model_root / "loras" / style.filename).exists()
+            else ""
+        )
         user_prompt = request.query_params.get("prompt") or ""
         if len(user_prompt) > MAX_PROMPT:
             raise HTTPException(400, f"prompt must be at most {MAX_PROMPT} characters")
@@ -499,6 +508,8 @@ def create_app() -> FastAPI:
         if not updated:
             raise HTTPException(404, "no such job")
         job = await asyncio.to_thread(store().get, job_id)
+        if job is None:
+            raise HTTPException(404, "no such job")
         _attach_files(job, config.job_dir(job_id))
         _attach_progress(job, app.state.worker)
         return job
@@ -641,7 +652,15 @@ def create_app() -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/model")
     async def promote_to_model(
-        job_id: str, mesh_seed: Annotated[int | None, Form()] = None
+        job_id: str,
+        mesh_seed: Annotated[int | None, Form()] = None,
+        platform: Annotated[str | None, Form()] = None,
+        size_m: Annotated[float | None, Form()] = None,
+        bg_removal: Annotated[str | None, Form()] = None,
+        profile: Annotated[str | None, Form()] = None,
+        custom_triangles: Annotated[int | None, Form()] = None,
+        rig: Annotated[bool | None, Form()] = None,
+        rig_template: Annotated[str | None, Form()] = None,
     ) -> dict[str, Any]:
         """Run the 3D stage from a reference the user approved.
 
@@ -650,6 +669,13 @@ def create_app() -> FastAPI:
         the progress model and cancellation need no special case. What is new is
         parent_id, which is what lets the history show a reference and its
         attempts as one lineage instead of unrelated rows.
+
+        Everything but mesh_seed is an *override*: omitted means "keep what the
+        reference recorded", which is what every existing client sends. They
+        exist because the 3D pane owns the mesh-side decisions -- the reference
+        was made without any of them being asked -- and they are validated with
+        the same helpers create_job uses, in the same order, so an unusable
+        value costs the request rather than two minutes of GPU.
         """
         _check_job_id(job_id)
         _check_seed("mesh_seed", mesh_seed)
@@ -665,6 +691,45 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "reference has no image")
 
         params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
+
+        overrides = {
+            k: v
+            for k, v in (("platform", platform), ("size_m", size_m), ("bg_removal", bg_removal))
+            if v is not None
+        }
+        if overrides:
+            # Re-normalized as a whole rather than patched in place: platform
+            # implies the resolution the worker sends to trellis, so a stored
+            # resolution from the old platform has to be dropped and re-derived
+            # rather than left to contradict the new one.
+            raw = {**params, **overrides}
+            if "platform" in overrides:
+                raw.pop("resolution", None)
+            try:
+                params.update(guidance.normalize(raw))
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        if profile is not None:
+            from .pipelines import optimize
+
+            try:
+                optimize.resolve(profile, custom_triangles)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            params["profile"] = profile
+            if custom_triangles is not None:
+                params["custom_triangles"] = custom_triangles
+        if rig is not None:
+            # An explicit false has to clear an inherited rig request, or a
+            # reference generated with rigging on would rig every promotion of
+            # it whatever the 3D pane says.
+            if rig:
+                params["rig"] = True
+                params["rig_template"] = _valid_template(rig_template)
+            else:
+                params.pop("rig", None)
+                params.pop("rig_template", None)
+
         params["mesh_seed"] = mesh_seed if mesh_seed is not None else _random_seed()
         params["seed"] = params["mesh_seed"]
 
@@ -826,15 +891,10 @@ def create_app() -> FastAPI:
                 )
             except optimize.OptimizeError as exc:
                 raise HTTPException(500, str(exc)) from exc
-            # The optimizer rewrote the node graph, so the grounding transform
-            # went with it and has to be reapplied.
-            transform = await asyncio.to_thread(
-                postprocess.normalize_glb,
-                job_dir / "model.glb",
-                float(job["params"]["size_m"]) if job["params"].get("size_m") else None,
-            )
-            # Derived artifacts describe the old mesh; drop them so the next
-            # request rebuilds from the new one.
+            # Derived artifacts describe the old mesh; drop them the moment the
+            # new model.glb lands, and under each artifact's own lock so an
+            # in-flight conversion of the old mesh can't rename a stale copy
+            # into place after the unlink.
             for name in (
                 "model.stl",
                 "model_obj.zip",
@@ -842,16 +902,39 @@ def create_app() -> FastAPI:
                 "collision.glb",
                 "textures.zip",
             ):
-                with contextlib.suppress(OSError):
-                    (job_dir / name).unlink()
+                name_lock = _convert_locks.setdefault((job_id, name), asyncio.Lock())
+                async with name_lock:
+                    with contextlib.suppress(OSError):
+                        (job_dir / name).unlink()
+            # The optimizer rewrote the node graph, so the grounding transform
+            # went with it and has to be reapplied. Failure is logged and
+            # swallowed, same rule as the queue path (_apply_scale): the new
+            # GLB is already on disk and serving it unnormalized beats a 500
+            # that leaves the caches and params half-updated.
+            transform = None
+            try:
+                transform = await asyncio.to_thread(
+                    postprocess.normalize_glb,
+                    job_dir / "model.glb",
+                    float(job["params"]["size_m"]) if job["params"].get("size_m") else None,
+                )
+            except Exception:
+                log.exception("normalize failed after optimize for job %s", job_id)
 
         params = dict(job["params"])
         params["profile"] = profile
         if custom_triangles is not None:
             params["custom_triangles"] = custom_triangles
         params["optimize"] = result
-        params["transform"] = transform
-        params["scale_factor"] = transform["scale"]
+        # The old audit/report describe a mesh that no longer exists.
+        params.pop("mesh_audit", None)
+        params.pop("mesh_report", None)
+        if transform is None:
+            params.pop("transform", None)
+            params.pop("scale_factor", None)
+        else:
+            params["transform"] = transform
+            params["scale_factor"] = transform["scale"]
         await asyncio.to_thread(store().set_params, job_id, params)
 
         def _stale_rig_artifacts() -> list[str]:
@@ -914,10 +997,15 @@ def create_app() -> FastAPI:
             _check_pose_id(pose_id)
             if not rigging.pose_path(job_dir, pose_id).exists():
                 raise HTTPException(404, "no such pose")
-        else:
-            existing = await asyncio.to_thread(rigging.list_poses, job_dir)
-            if len(existing) >= rigging.MAX_POSES:
-                raise HTTPException(409, f"a job may hold at most {rigging.MAX_POSES} poses")
+            # Under the pose's bake lock: an in-flight bake of the old
+            # rotations must finish (and be deleted here) before the new
+            # rotations land, or the stale GLB gets cached under this id.
+            lock = _convert_locks.setdefault((job_id, f"pose:{pose_id}"), asyncio.Lock())
+            async with lock:
+                return await asyncio.to_thread(rigging.save_pose, job_dir, pose, pose_id)
+        existing = await asyncio.to_thread(rigging.list_poses, job_dir)
+        if len(existing) >= rigging.MAX_POSES:
+            raise HTTPException(409, f"a job may hold at most {rigging.MAX_POSES} poses")
         return await asyncio.to_thread(rigging.save_pose, job_dir, pose, pose_id)
 
     @app.delete("/api/jobs/{job_id}/poses/{pose_id}")
@@ -943,22 +1031,24 @@ def create_app() -> FastAPI:
         if pose is None:
             raise HTTPException(404, "no such pose")
         path = rigging.pose_glb_path(job_dir, pose_id)
-        if not path.exists():
-            lock = _convert_locks.setdefault((job_id, f"pose:{pose_id}"), asyncio.Lock())
-            async with lock:
-                if not path.exists():
-                    if not (job_dir / "rig.glb").exists():
-                        raise HTTPException(404, "job is not rigged")
-                    spec = rigging.pose_spec(job_dir, pose_id, pose["bones"])
-                    try:
-                        await asyncio.to_thread(
-                            functools.partial(
-                                rigging.run_worker, spec, timeout=config.pose_timeout
-                            )
+        # Existence is only checked under the lock: the bake writes the served
+        # filename in place over seconds, so a lock-free exists() would let a
+        # second tab stream a truncated GLB mid-export.
+        lock = _convert_locks.setdefault((job_id, f"pose:{pose_id}"), asyncio.Lock())
+        async with lock:
+            if not path.exists():
+                if not (job_dir / "rig.glb").exists():
+                    raise HTTPException(404, "job is not rigged")
+                spec = rigging.pose_spec(job_dir, pose_id, pose["bones"])
+                try:
+                    await asyncio.to_thread(
+                        functools.partial(
+                            rigging.run_worker, spec, timeout=config.pose_timeout
                         )
-                    except rigging.BlenderError as exc:
-                        log.error("posing %s/%s failed: %s", job_id, pose_id, exc)
-                        raise HTTPException(500, "could not bake this pose") from exc
+                    )
+                except rigging.BlenderError as exc:
+                    log.error("posing %s/%s failed: %s", job_id, pose_id, exc)
+                    raise HTTPException(500, "could not bake this pose") from exc
         return FileResponse(
             path, media_type="model/gltf-binary", filename=f"{job_id}_{pose_id}.glb"
         )
@@ -1102,8 +1192,11 @@ def create_app() -> FastAPI:
     async def get_sheet_png(job_id: str, sheet_id: str) -> FileResponse:
         _check_job_id(job_id)
         _check_sheet_id(sheet_id)
-        path = rigging.sheet_png_path(config.job_dir(job_id), sheet_id)
-        if not path.exists():
+        job_dir = config.job_dir(job_id)
+        path = rigging.sheet_png_path(job_dir, sheet_id)
+        # The sidecar is the completion marker (the worker writes the PNG
+        # first), so PNG existence alone can serve a partial file mid-save.
+        if not path.exists() or not rigging.sheet_path(job_dir, sheet_id).exists():
             raise HTTPException(404, "no such sheet")
         return FileResponse(path, media_type="image/png", filename=f"{job_id}_{sheet_id}.png")
 
@@ -1160,7 +1253,11 @@ def create_app() -> FastAPI:
         # FBX needs a Blender subprocess rather than a trimesh call, so it does
         # not fit the `derived` dict below -- but it takes the same per-artifact
         # lock, for the same reason.
-        if name == "model.fbx" and not path.exists() and glb.exists():
+        # Existence checked only under the lock: Blender writes the served
+        # filename in place, so a lock-free exists() during the first export
+        # would stream a truncated FBX. The trimesh conversions below don't
+        # need this -- postprocess stages them and renames atomically.
+        if name == "model.fbx" and glb.exists():
             lock = _convert_locks.setdefault((job_id, name), asyncio.Lock())
             async with lock:
                 if not path.exists():
