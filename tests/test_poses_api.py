@@ -251,6 +251,84 @@ def test_re_saving_a_pose_invalidates_its_bake(svc, assets, monkeypatch):
     assert len(calls) == 2
 
 
+def test_a_delete_waits_for_an_in_flight_bake_and_leaves_no_orphan_glb(
+    svc, assets, monkeypatch
+):
+    """delete_pose took no lock, so it could land mid-bake: the .json went and
+    the bake then wrote a .glb nothing could reach or clean up."""
+    import threading
+
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+    in_bake = threading.Event()
+    release = threading.Event()
+
+    def run_worker(spec, **kwargs):
+        in_bake.set()
+        assert release.wait(5)
+        Path(spec["out_glb"]).write_bytes(b"posed-glb")
+        return {"ok": True, "bones": len(spec["bones"]), "unknown": []}
+
+    monkeypatch.setattr(rigging, "run_worker", run_worker)
+
+    baker = threading.Thread(
+        target=lambda: svc_rig.posed_model(svc, job_id, record["id"])
+    )
+    baker.start()
+    assert in_bake.wait(5)
+
+    deleted: list = []
+
+    def delete():
+        deleted.append(svc_rig.delete_pose(svc, job_id, record["id"]))
+
+    deleter = threading.Thread(target=delete)
+    deleter.start()
+    deleter.join(timeout=0.3)
+    assert deleter.is_alive(), "the delete must wait for the bake's lock"
+
+    release.set()
+    baker.join(timeout=5)
+    deleter.join(timeout=5)
+    assert deleted == [{"ok": True}]
+    assert not rigging.pose_glb_path(assets / job_id, record["id"]).exists()
+    assert not rigging.pose_path(assets / job_id, record["id"]).exists()
+
+
+def test_a_bake_of_a_pose_deleted_first_is_not_found(svc, assets, monkeypatch):
+    """The pose is read under the bake lock, so the check and the bake are
+    atomic against a delete."""
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+    calls = _fake_bake(monkeypatch)
+    svc_rig.delete_pose(svc, job_id, record["id"])
+    with pytest.raises(NotFound):
+        svc_rig.posed_model(svc, job_id, record["id"])
+    assert calls == []
+
+
+def test_a_failed_pose_write_leaves_the_previous_pose_intact(svc, assets, monkeypatch):
+    """A pose file is the only record of its rotations; a torn overwrite would
+    lose them."""
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose("idle"))
+    path = rigging.pose_path(assets / job_id, record["id"])
+    before = path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        rigging.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+    )
+    body = _pose("wave", hips=[0.0, 0.0, 0.7071068, 0.7071068])
+    body["id"] = record["id"]
+    with pytest.raises(OSError):
+        svc_rig.save_pose(svc, job_id, body)
+
+    assert path.read_text(encoding="utf-8") == before
+    # And no staging file left lying beside it.
+    leftovers = [p for p in path.parent.iterdir() if p.suffix == ".tmp"]
+    assert leftovers == []
+
+
 # --- shipped preset library -------------------------------------------------
 
 

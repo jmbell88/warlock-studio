@@ -20,6 +20,7 @@ about where a joint goes.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -28,6 +29,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -628,7 +630,20 @@ def save_pose(job_dir: Path, pose: dict[str, Any], pose_id: str | None = None) -
         "bones": pose["bones"],
         "created": time.time(),
     }
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    # Staged beside the destination and renamed, like Settings.flush: an
+    # overwrite that died mid-write used to leave the existing pose truncated,
+    # and a pose file is the only record of the rotations. The GLB is dropped
+    # only after the JSON has landed, so the pair is never inconsistent the
+    # other way round.
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{pose_id}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     pose_glb_path(job_dir, pose_id).unlink(missing_ok=True)
     return record
 

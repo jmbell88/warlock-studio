@@ -145,8 +145,12 @@ def save_pose(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dict
 def delete_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[str, Any]:
     check_job_id(job_id)
     check_pose_id(pose_id)
-    if not rigging.delete_pose(svc.job_dir(job_id), pose_id):
-        raise NotFound("no such pose")
+    # Under the same lock the overwrite and the bake take: deleting while a
+    # bake is in flight let the bake recreate <pose_id>.glb after its .json
+    # was gone, leaving an orphan GLB nothing could ever reach or clean up.
+    with svc.convert_lock(job_id, f"pose:{pose_id}"):
+        if not rigging.delete_pose(svc.job_dir(job_id), pose_id):
+            raise NotFound("no such pose")
     return {"ok": True}
 
 
@@ -160,14 +164,16 @@ def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
     check_job_id(job_id)
     check_pose_id(pose_id)
     job_dir = svc.job_dir(job_id)
-    pose = rigging.read_pose(job_dir, pose_id)
-    if pose is None:
-        raise NotFound("no such pose")
     path = rigging.pose_glb_path(job_dir, pose_id)
     # Existence is only checked under the lock: the bake writes the served
     # filename in place over seconds, so a lock-free exists() would let a
-    # second reader open a truncated GLB mid-export.
+    # second reader open a truncated GLB mid-export. The pose is *read* under
+    # the same lock for the same reason -- a delete landing between the read
+    # and the bake would otherwise recreate the GLB with no .json beside it.
     with svc.convert_lock(job_id, f"pose:{pose_id}"):
+        pose = rigging.read_pose(job_dir, pose_id)
+        if pose is None:
+            raise NotFound("no such pose")
         if not path.exists():
             if not (job_dir / "rig.glb").exists():
                 raise NotFound("job is not rigged")
