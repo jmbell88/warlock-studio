@@ -14,7 +14,7 @@ import pytest
 
 from warlock.service.errors import Invalid
 from warlock.studio.runtime import Runtime
-from warlock.studio.tasks import TaskRunner
+from warlock.studio.tasks import TaskRunner, _threads_queues
 
 
 @pytest.fixture
@@ -216,3 +216,30 @@ def test_busy_keys_can_be_asked_about_by_prefix(tasks):
     assert tasks.any_busy("export:") is False
     gate.set()
     _wait(tasks, "derive:model.stl")
+
+
+def test_a_bounded_shutdown_returns_while_a_task_is_still_parked():
+    """A native save dialog blocks until the user dismisses it, and by shutdown
+    the window it belongs to is already destroyed. An unbounded wait there is a
+    process that never exits."""
+    runner = TaskRunner(workers=2)
+    gate = threading.Event()
+    runner.submit("stuck", gate.wait)
+    try:
+        start = time.monotonic()
+        runner.shutdown(timeout=0.2)
+        elapsed = time.monotonic() - start
+        assert 0.15 < elapsed < 2.0
+        assert runner.busy_keys == set()
+        # And the stuck thread is no longer something interpreter exit joins on.
+        assert not any(t in _threads_queues for t in runner._pool._threads)
+    finally:
+        gate.set()
+
+
+def test_a_bounded_shutdown_of_an_idle_pool_returns_at_once():
+    runner = TaskRunner(workers=2)
+    runner.submit("quick", lambda: 1)
+    start = time.monotonic()
+    runner.shutdown(timeout=5.0)
+    assert time.monotonic() - start < 1.0

@@ -13,10 +13,15 @@ a no-op, which is what stops a double-clicked button starting two exports.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+
+# Private, and stable for years: the registry concurrent.futures' atexit hook
+# joins on. See TaskRunner.shutdown.
+from concurrent.futures.thread import _threads_queues
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,7 +125,33 @@ class TaskRunner:
                 )
         return finished
 
-    def shutdown(self, wait: bool = True) -> None:
-        self._pool.shutdown(wait=wait, cancel_futures=not wait)
+    def shutdown(self, wait: bool = True, timeout: float | None = None) -> None:
+        """Stop the pool, optionally giving running tasks only ``timeout`` s.
+
+        Bounded because a task can be parked on something that never returns:
+        the native file dialogs block until the user dismisses them, and by the
+        time this runs the window they belong to has already been destroyed. An
+        unbounded wait there is a process that never exits.
+        """
+        if timeout is None:
+            self._pool.shutdown(wait=wait, cancel_futures=not wait)
+            with self._lock:
+                self._pending.clear()
+            return
+
+        with self._lock:
+            futures = [p.future for p in self._pending.values()]
+        # ThreadPoolExecutor.shutdown takes no timeout, so the wait happens on
+        # the futures and the pool is then told not to wait at all.
+        concurrent.futures.wait(futures, timeout=timeout)
+        self._pool.shutdown(wait=False, cancel_futures=True)
+        # A task still parked in a never-dismissed dialog keeps its worker
+        # thread alive, and concurrent.futures' atexit hook joins every live
+        # pool thread on the way out -- which would hang the process after the
+        # window is already gone. The threads cannot be daemonized after the
+        # fact (setting .daemon on a started thread raises), so the documented
+        # workaround is to drop them from that registry.
+        for thread in list(self._pool._threads):
+            _threads_queues.pop(thread, None)
         with self._lock:
             self._pending.clear()

@@ -130,7 +130,9 @@ class Runtime:
             self._thread.join(SHUTDOWN_TIMEOUT)
         # After the loop, so a task still calling into the service finds the
         # store open rather than closed underneath it.
-        self.tasks.shutdown()
+        # Bounded: a task parked in a never-dismissed native dialog would
+        # otherwise hold the process open after the window has already gone.
+        self.tasks.shutdown(timeout=SHUTDOWN_TIMEOUT)
         if self.store is not None:
             self.store.close()
         self.worker = self.svc = self.store = None
