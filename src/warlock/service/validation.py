@@ -72,7 +72,14 @@ DERIVED_PARAMS = (
 
 
 def check_seed(name: str, value: int | None) -> None:
-    if value is not None and not 0 <= value <= MAX_SEED:
+    if value is None:
+        return
+    # The type check is the point: `0 <= 1.5 <= MAX_SEED` and `0 <= True` are
+    # both true, so a float or a bool used to reach the pipeline as a seed.
+    # bool is a subclass of int and has to be excluded by hand.
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid(f"{name} must be a whole number", field=name)
+    if not 0 <= value <= MAX_SEED:
         raise Invalid(f"{name} must be between 0 and {MAX_SEED}", field=name)
 
 

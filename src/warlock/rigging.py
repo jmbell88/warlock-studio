@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -256,6 +257,11 @@ def validate_joints(payload: dict[str, Any], template: Template) -> list[dict[st
                 points[end] = [float(v) for v in point]
             except (TypeError, ValueError):
                 raise ValueError(f"bone {name!r} {end} is not numeric") from None
+            # NaN/inf sail through every comparison below -- the zero-length
+            # check at the end is False for NaN, so a NaN joint would be
+            # written into rig.json and only fail inside Blender.
+            if not all(math.isfinite(v) for v in points[end]):
+                raise ValueError(f"bone {name!r} {end} is not numeric")
         by_name[name] = points
 
     expected = [b["name"] for b in template.bones]
@@ -328,6 +334,10 @@ def validate_pose(
             values = [float(v) for v in quat]
         except (TypeError, ValueError):
             raise ValueError(f"bone {bone!r} rotation is not numeric") from None
+        # Before the norm check, which a NaN would pass: abs(nan - 1.0) > eps
+        # is False, so the raw NaN quaternion used to be stored verbatim.
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError(f"bone {bone!r} rotation is not numeric")
         norm = sum(v * v for v in values) ** 0.5
         if abs(norm - 1.0) > QUAT_EPSILON:
             # Renormalize rather than reject: a browser accumulating gizmo
@@ -668,6 +678,9 @@ def delete_pose(job_dir: Path, pose_id: str) -> bool:
 SHEET_DIR_NAME = "sheets"
 
 MAX_SHEETS = 200
+
+# Same cap as MAX_POSE_NAME, for the same reason: a label the UI has to render.
+MAX_SHEET_NAME = 64
 
 
 def sheet_dir(job_dir: Path) -> Path:

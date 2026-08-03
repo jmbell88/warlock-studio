@@ -400,6 +400,14 @@ def test_a_sheet_names_the_poses_it_will_render(svc, assets):
     assert params["lighting"] == "lit"
 
 
+def test_an_overlong_sheet_name_is_rejected(svc, assets):
+    """Capped like a pose name; it is a label the UI has to render."""
+    job_id = _mesh_job(svc, assets)
+    with pytest.raises(Invalid, match="at most"):
+        svc_sheets.create_sheet(svc, job_id, name="x" * (rigging.MAX_SHEET_NAME + 1))
+    assert svc_sheets.create_sheet(svc, job_id, name="x" * rigging.MAX_SHEET_NAME)
+
+
 def test_a_sheet_of_a_deleted_pose_is_not_found(svc, assets):
     job_id = _mesh_job(svc, assets, rigged=True)
     with pytest.raises(NotFound):

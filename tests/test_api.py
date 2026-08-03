@@ -150,6 +150,23 @@ def test_an_out_of_range_seed_is_rejected(svc, bad):
         svc_jobs.create_job(svc, kind="text", prompt="x", seed=bad)
 
 
+@pytest.mark.parametrize("bad", [1.5, True, "7", 3.0])
+def test_a_seed_that_is_not_a_whole_number_is_rejected(svc, bad):
+    """The range check alone let floats and bools through: 0 <= 1.5 <= MAX_SEED
+    and 0 <= True are both true."""
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="x", seed=bad)
+
+
+def test_favorite_must_be_a_real_bool(svc):
+    """bool("false") is True, so the string form favourited what it meant to
+    unfavourite."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.update_job(svc, job_id, {"favorite": "false"})
+    assert svc_jobs.update_job(svc, job_id, {"favorite": True})["favorite"] == 1
+
+
 def test_a_failed_db_insert_leaves_no_orphan_job_dir(svc, assets, monkeypatch):
     """input.png is deliberately written before the row exists (the worker's
     next_queued poll must never claim an image job with no file on disk), so

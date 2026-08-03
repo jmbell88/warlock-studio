@@ -104,6 +104,12 @@ def create_sheet(
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
 
+    sheet_name = (name or "").strip()
+    if len(sheet_name) > rigging.MAX_SHEET_NAME:
+        raise Invalid(
+            f"sheet name must be at most {rigging.MAX_SHEET_NAME} characters", field="name"
+        )
+
     if len(rigging.list_sheets(job_dir)) >= rigging.MAX_SHEETS:
         raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
 
@@ -114,7 +120,7 @@ def create_sheet(
         "elevation": sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
         "frame_size": frame_size or sheetlib.DEFAULT_FRAME_SIZE,
         "lighting": lighting or "flat",
-        "name": (name or "").strip(),
+        "name": sheet_name,
         "yaws": yaws or sheetlib.DEFAULT_YAWS,
         # The two ends, not the expanded frames: the host is the single place a
         # clip is decided, and storing the frames would be a second copy that

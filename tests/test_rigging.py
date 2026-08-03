@@ -228,6 +228,18 @@ def test_validate_joints_rejects_a_zero_length_bone():
         rigging.validate_joints(payload, template)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_validate_joints_rejects_non_finite_coordinates(bad):
+    """NaN makes the zero-length comparison False, so it used to reach rig.json
+    and only fail inside Blender."""
+    template = rigging.get_template("humanoid")
+    fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
+    bones = [{"name": b["name"], "head": b["head"], "tail": b["tail"]} for b in fitted]
+    bones[0] = dict(bones[0], head=[bad, 0.0, 0.0])
+    with pytest.raises(ValueError, match="not numeric"):
+        rigging.validate_joints({"bones": bones}, template)
+
+
 def test_rig_spec_carries_corrected_bones_when_given_them(tmp_path):
     template = rigging.get_template("humanoid")
     fitted = rigging.fit_template(template, [-1, -1, 0], [1, 1, 2])
@@ -315,6 +327,11 @@ def test_validate_pose_renormalizes_drifted_quaternions():
         ({"name": "a", "bones": {"hips": [0, 0, 1]}}, "4-element"),
         ({"name": "a", "bones": {"hips": ["x", 0, 0, 1]}}, "not numeric"),
         ({"name": "a", "bones": {"hips": [0, 0, 0, 0]}}, "degenerate"),
+        # NaN passes the norm check (abs(nan - 1.0) > eps is False) and used to
+        # be stored verbatim; inf normalizes to nan.
+        ({"name": "a", "bones": {"hips": [float("nan"), 0, 0, 1]}}, "not numeric"),
+        ({"name": "a", "bones": {"hips": [float("inf"), 0, 0, 1]}}, "not numeric"),
+        ({"name": "a", "bones": {"hips": [0, 0, 0, float("-inf")]}}, "not numeric"),
     ],
 )
 def test_validate_pose_rejects_bad_payloads(payload, match):

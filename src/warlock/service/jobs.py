@@ -246,7 +246,13 @@ def update_job(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dic
         if len(name) > MAX_JOB_NAME:
             raise Invalid(f"name must be at most {MAX_JOB_NAME} characters", field="name")
     tags = normalize_tags(payload["tags"]) if "tags" in payload else None
-    favorite = bool(payload["favorite"]) if "favorite" in payload else None
+    favorite = None
+    if "favorite" in payload:
+        # Demanded rather than coerced: bool("false") is True, so a caller that
+        # sent the string form used to favourite the job it meant to unfavourite.
+        if not isinstance(payload["favorite"], bool):
+            raise Invalid("favorite must be true or false", field="favorite")
+        favorite = payload["favorite"]
 
     if not svc.store.set_meta(job_id, name=name, tags=tags, favorite=favorite):
         raise NotFound("no such job")
