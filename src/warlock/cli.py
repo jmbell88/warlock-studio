@@ -1,4 +1,4 @@
-"""Entry point: `warlock` starts the local server.
+"""Entry point: `warlock` opens the desktop app.
 
 `warlock doctor` checks dependencies and configuration; `warlock sweep`
 measures mesh quality across trellis-server's --band values.
@@ -15,13 +15,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Warlock Studio — local AI 3D asset generator")
     parser.add_argument(
         "command", nargs="?", choices=["doctor", "sweep"], default=None,
-        help="omit to start the server; 'doctor' checks dependencies and configuration; "
+        help="omit to open the app; 'doctor' checks dependencies and configuration; "
              "'sweep' measures mesh quality across trellis --band values",
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8420)
     # sweep only. Kept as plain options rather than a subparser so the
-    # no-command default (start the server) stays exactly as it was.
+    # no-command default (open the app) stays exactly as it was.
     parser.add_argument(
         "--image", type=Path,
         help="sweep: reference PNG to generate from, e.g. assets/<job-id>/input.png",
@@ -52,11 +50,12 @@ def main() -> None:
         _run_sweep(args)
         return
 
-    import uvicorn
+    # Imported here, not at module scope: doctor and sweep must keep working on
+    # a machine with no display and no GL, and importing the app pulls in
+    # pygame and moderngl.
+    from .studio.main import run
 
-    from .app import create_app
-
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    raise SystemExit(run())
 
 
 def _run_sweep(args: argparse.Namespace) -> None:

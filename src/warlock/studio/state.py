@@ -18,33 +18,43 @@ from typing import Any
 # enough to find yesterday's phrasing, short enough to scan.
 MAX_HISTORY = 20
 
-# What a submit is composed from. Split into the two panes deliberately: a
-# control belongs to exactly one of them, and `platform` is *two* fields
-# because one control cannot be owned by two panes -- g_platform is a prompt
-# fragment, m_platform is the geometry resolution.
-DEFAULT_FORM_2D: dict[str, Any] = {
-    "prompt": "",
-    "negative_prompt": "",
-    "base_model": "",
-    "style_lora": "",
-    "lora_weight": 0.8,
-    "seed": 42,
-    "seed_locked": False,
-    "count": 1,
-    "category": "",
-    "setting": "",
-    "genre": "",
-    "mood": "",
-    "art_style": "",
-    "palette": "",
-    "material": "",
-    "wear": "",
-    "detail": "",
-    "silhouette": "",
-    "lighting": "",
-    "composition": "",
-    "platform": "",
-}
+def guidance_fields() -> tuple[str, ...]:
+    """The taxonomy selects the 2D pane owns.
+
+    Read off ``guidance.form_fields()`` rather than listed here, so a new table
+    in guidance.py appears in the pane without an edit -- the same reason the
+    HTTP layer had one ``_pick_guidance``. The three exceptions are fields the
+    pane renders as something other than a plain combo: the two model pickers
+    sit under Advanced, and ``platform`` is deliberately split in two.
+    """
+    from .. import guidance
+
+    return tuple(
+        f for f in guidance.form_fields() if f not in ("base_model", "style_lora", "platform")
+    )
+
+
+def default_form_2d() -> dict[str, Any]:
+    """What a submit is composed from.
+
+    Split across the two panes deliberately: a control belongs to exactly one
+    of them, and ``platform`` is *two* fields because one control cannot be
+    owned by two panes -- the 2D pane's is a prompt fragment, the 3D pane's is
+    the geometry resolution.
+    """
+    form: dict[str, Any] = {
+        "prompt": "",
+        "negative_prompt": "",
+        "base_model": "",
+        "style_lora": "",
+        "lora_weight": 0.9,
+        "seed": 42,
+        "seed_locked": False,
+        "count": 1,
+        "platform": "",
+    }
+    form.update(dict.fromkeys(guidance_fields(), ""))
+    return form
 
 DEFAULT_FORM_3D: dict[str, Any] = {
     "platform": "",
@@ -120,7 +130,7 @@ class AppState:
     mode: str = "2d"  # drives which settings pane is shown, as body.mode-2d did
     selected: str | None = None
     comparing: str | None = None
-    form_2d: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FORM_2D))
+    form_2d: dict[str, Any] = field(default_factory=default_form_2d)
     form_3d: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FORM_3D))
     filters: Filters = field(default_factory=Filters)
     history: list[str] = field(default_factory=list)
