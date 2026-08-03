@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 import subprocess
 import sys
 import time
@@ -8,17 +9,26 @@ import time
 import httpx
 import pytest
 
+from warlock.glbio import rebuild_glb
 from warlock.pipelines import trellis as trellis_mod
 from warlock.pipelines.trellis import TrellisServer
 
 
-def test_generate_forwards_bg_removal(tmp_path, monkeypatch):
-    """The exe accepts a bg_removal form field; we never used to send it."""
-    sent = {}
+def _valid_glb(meshes: list | None = None) -> bytes:
+    """The smallest thing the server could legitimately return: a GLB whose
+    JSON chunk declares one mesh, plus an empty BIN chunk."""
+    binary = b"\x00" * 4
+    chunk = struct.pack("<II", len(binary), 0x004E4942) + binary
+    header = struct.pack("<III", 0x46546C67, 2, 0)
+    gltf = {"asset": {"version": "2.0"}}
+    gltf["meshes"] = [{"primitives": []}] if meshes is None else meshes
+    return rebuild_glb(header, gltf, chunk)
 
+
+def _run_generate(tmp_path, monkeypatch, body, sent=None):
     class FakeResponse:
         status_code = 200
-        content = b"glb"
+        content = body
         text = ""
 
     class FakeClient:
@@ -32,7 +42,8 @@ def test_generate_forwards_bg_removal(tmp_path, monkeypatch):
             return False
 
         async def post(self, url, files=None, data=None):
-            sent.update(data)
+            if sent is not None:
+                sent.update(data)
             return FakeResponse()
 
     monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", FakeClient)
@@ -40,11 +51,40 @@ def test_generate_forwards_bg_removal(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "ensure_started", _noop_async)
     image = tmp_path / "in.png"
     image.write_bytes(b"png")
-    asyncio.run(
-        server.generate(image, tmp_path / "out.glb", seed=7, bg_removal="birefnet")
-    )
+    out = tmp_path / "out.glb"
+    asyncio.run(server.generate(image, out, seed=7, bg_removal="birefnet"))
+    return out
+
+
+def test_generate_forwards_bg_removal(tmp_path, monkeypatch):
+    """The exe accepts a bg_removal form field; we never used to send it."""
+    sent = {}
+    out = _run_generate(tmp_path, monkeypatch, _valid_glb(), sent)
     assert sent["bg_removal"] == "birefnet"
     assert sent["seed"] == "7"
+    assert out.read_bytes() == _valid_glb()
+
+
+def test_generate_rejects_a_200_that_is_not_a_glb(tmp_path, monkeypatch):
+    """A proxy or an error page arriving with status 200 used to be written
+    onto source.glb and carried all the way to a "done" job."""
+    with pytest.raises(RuntimeError, match="invalid GLB"):
+        _run_generate(tmp_path, monkeypatch, b"<html>500 oops</html>" * 4)
+    assert not (tmp_path / "out.glb").exists()
+    assert list(tmp_path.glob("out.glb*")) == []
+
+
+def test_generate_rejects_a_truncated_body(tmp_path, monkeypatch):
+    """Shorter than a GLB header: struct.error, not ValueError."""
+    with pytest.raises(RuntimeError, match="invalid GLB"):
+        _run_generate(tmp_path, monkeypatch, b"glTF")
+    assert not (tmp_path / "out.glb").exists()
+
+
+def test_generate_rejects_a_glb_with_no_meshes(tmp_path, monkeypatch):
+    with pytest.raises(RuntimeError, match="no meshes"):
+        _run_generate(tmp_path, monkeypatch, _valid_glb(meshes=[]))
+    assert not (tmp_path / "out.glb").exists()
 
 
 async def _noop_async(*_a, **_k):

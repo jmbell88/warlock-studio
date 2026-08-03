@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import struct
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -17,6 +20,7 @@ from pathlib import Path
 
 import httpx
 
+from ..glbio import split_glb
 from ..progress import pump
 
 log = logging.getLogger(__name__)
@@ -233,7 +237,39 @@ class TrellisServer:
         if r.status_code >= 400:
             detail = r.text[:500] if r.text else "(no body; see trellis.log)"
             raise RuntimeError(f"trellis-server {r.status_code}: {detail}")
+        _validate_glb(r.content)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(r.content)
+        _atomic_write(output_path, r.content)
         self.last_used = time.monotonic()
         return output_path
+
+
+def _validate_glb(data: bytes) -> None:
+    """Refuse anything that isn't a GLB carrying at least one mesh.
+
+    A 200 with an HTML error page, or a body truncated by a dying server, is
+    otherwise written straight onto ``source.glb`` -- and because the queue
+    deliberately swallows optimize/normalize/audit failures, the job would go
+    *done* with garbage. Raising here is what turns it into a failed job.
+    """
+    detail = f"{len(data)} bytes, starts with {data[:16]!r}"
+    try:
+        _header, gltf, _rest = split_glb(data)
+    except (ValueError, struct.error, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"trellis-server returned an invalid GLB: {exc} ({detail})") from exc
+    if not gltf.get("meshes"):
+        raise RuntimeError(f"trellis-server returned a GLB with no meshes ({detail})")
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Stage beside the destination and rename, so a failed write never leaves
+    a partial ``source.glb`` behind for the rest of the pipeline to read."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise

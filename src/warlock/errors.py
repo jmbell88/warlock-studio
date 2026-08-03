@@ -19,6 +19,11 @@ def friendly(exc: Exception) -> str:
             "GPU out of memory — try resolution 512, close other GPU apps, "
             "or set WARLOCK_VRAM_EXCLUSIVE=1."
         )
+    if "invalid glb" in text or "glb with no meshes" in text:
+        return (
+            "The 3D engine returned an invalid model — it may have run out of "
+            "memory or crashed mid-reconstruction. See assets/trellis.log."
+        )
     if isinstance(exc, httpx.TransportError):
         return "The 3D engine stopped unexpectedly. See assets/trellis.log."
     return str(exc) or exc.__class__.__name__
