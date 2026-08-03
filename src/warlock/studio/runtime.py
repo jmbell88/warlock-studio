@@ -52,6 +52,19 @@ class Runtime:
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> WarlockService:
+        try:
+            return self._start()
+        except BaseException:
+            # Everything start() opens is opened before it can fail: the store
+            # connection, the loop thread, the worker's GPU-side tasks. Without
+            # this, a doctor check or a worker constructor that raised left all
+            # of them running with nothing holding a reference. shutdown() is
+            # idempotent and null-guarded per resource, so a partial start
+            # unwinds through exactly the same path a full one does.
+            self.shutdown()
+            raise
+
+    def _start(self) -> WarlockService:
         self.store = JobStore(self.config.db_path)
         # A job still 'running' at process start was orphaned by a crash or an
         # unclean shutdown -- surface it instead of silently re-running a

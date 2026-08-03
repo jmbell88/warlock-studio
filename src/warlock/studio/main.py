@@ -144,10 +144,13 @@ class App:
     def run(self) -> int:
         import pygame
 
-        self.setup()
-        self._running = True
-        clock = pygame.time.Clock()
+        # setup() is inside the try: it starts the runtime before it touches
+        # pygame or GL, so a failure past that point used to skip teardown and
+        # leave the store, the loop thread and the worker running.
         try:
+            self.setup()
+            self._running = True
+            clock = pygame.time.Clock()
             while self._running:
                 dt = self._tick()
                 self.frame(dt)

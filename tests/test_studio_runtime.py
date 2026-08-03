@@ -6,6 +6,7 @@ between them, which a mock would define away.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 
@@ -85,6 +86,48 @@ def test_the_runtime_works_as_a_context_manager(runtime):
     with runtime as svc:
         assert svc is not None
     assert runtime.store is None
+
+
+def test_a_failed_start_leaves_nothing_running(runtime):
+    """The store connection and the loop thread are both open before the worker
+    is built, so a constructor that raises used to leak both."""
+    store = {}
+
+    def explode(self):
+        store["conn"] = self.store
+        raise RuntimeError("no GPU today")
+
+    runtime._make_worker = lambda: explode(runtime)
+    with pytest.raises(RuntimeError, match="no GPU today"):
+        runtime.start()
+
+    assert runtime.store is None and runtime.worker is None
+    assert runtime._loop is None and runtime._thread is None
+    # The connection really is closed, not just dropped.
+    with pytest.raises(sqlite3.ProgrammingError):
+        store["conn"]._conn.execute("select 1")
+    assert not any(t.name == "warlock-loop" and t.is_alive() for t in threading.enumerate())
+
+
+def test_run_tears_down_when_setup_fails(runtime, monkeypatch):
+    """setup() starts the runtime before it touches pygame or GL, so a failure
+    past that point must still unwind it."""
+    from warlock.studio.main import App
+
+    app = App.__new__(App)
+    app.runtime = runtime
+    app.window = app.imgui_renderer = app.viewer = app.app_ctx = app.eta = None
+    app._running = False
+    app._last_frame = 0.0
+
+    def setup():
+        runtime.start()
+        raise RuntimeError("no OpenGL 3.3")
+
+    app.setup = setup
+    with pytest.raises(RuntimeError, match="no OpenGL"):
+        app.run()
+    assert runtime.store is None and runtime.worker is None
 
 
 # --- tasks ------------------------------------------------------------------
