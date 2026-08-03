@@ -52,7 +52,11 @@ class Settings:
             log.warning("ignoring an unreadable %s", out.path)
             return out
         if isinstance(raw, dict) and raw.get("version") == VERSION:
-            out.data = raw.get("data", {})
+            # Type-checked, not just present: a "data" that is a list or null
+            # passes the version gate and then takes the first get() down --
+            # before run()'s try/finally exists, so nothing tears down either.
+            data = raw.get("data")
+            out.data = data if isinstance(data, dict) else {}
         return out
 
     # -- access ------------------------------------------------------------

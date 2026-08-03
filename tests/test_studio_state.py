@@ -304,6 +304,17 @@ def test_a_corrupt_settings_file_is_ignored_rather_than_fatal(tmp_path):
     assert settingslib.Settings.load(tmp_path).data == {}
 
 
+@pytest.mark.parametrize("data", [[], None, "x", 3])
+def test_a_settings_file_whose_data_is_not_a_map_is_ignored(tmp_path, data):
+    """The version gate passed and the first get() crashed on a list."""
+    (tmp_path / settingslib.FILENAME).write_text(
+        json.dumps({"version": settingslib.VERSION, "data": data})
+    )
+    s = settingslib.Settings.load(tmp_path)
+    assert s.data == {}
+    assert s.get("mode", "2d") == "2d"
+
+
 def test_a_settings_file_from_another_version_is_ignored(tmp_path):
     (tmp_path / settingslib.FILENAME).write_text(json.dumps({"version": 99, "data": {"x": 1}}))
     assert settingslib.Settings.load(tmp_path).data == {}
