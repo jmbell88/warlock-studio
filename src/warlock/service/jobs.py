@@ -354,6 +354,7 @@ def rerun_job(
     stage = source["stage"] if mode == "reroll" else "model"
 
     new_id = uuid.uuid4().hex[:12]
+    new_dir = None
     if kind == "image":
         # Before the row exists, for the same reason create_job does it:
         # next_queued can otherwise claim the job in the gap and find no
@@ -361,7 +362,14 @@ def rerun_job(
         new_dir = svc.job_dir(new_id)
         new_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src_png, new_dir / "input.png")
-    svc.store.create(kind, source["prompt"], params, new_id, stage=stage)
+    try:
+        svc.store.create(kind, source["prompt"], params, new_id, stage=stage)
+    except Exception:
+        # The other half of writing the dir first: a row that exists owns its
+        # directory, so only an insert that never landed cleans up after itself.
+        if new_dir is not None:
+            shutil.rmtree(new_dir, ignore_errors=True)
+        raise
     svc.wake_worker()
     return {"id": new_id, "seed": params["seed"]}
 
@@ -439,9 +447,15 @@ def promote_to_model(
     new_dir = svc.job_dir(new_id)
     new_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src_png, new_dir / "input.png")
-    svc.store.create(
-        "image", source["prompt"], params, new_id, stage="model", parent_id=job_id
-    )
+    try:
+        svc.store.create(
+            "image", source["prompt"], params, new_id, stage="model", parent_id=job_id
+        )
+    except Exception:
+        # As in create_job: the dir is written first so the worker can never
+        # claim a job with no input.png, so a failed insert has to remove it.
+        shutil.rmtree(new_dir, ignore_errors=True)
+        raise
     svc.wake_worker()
     return {"id": new_id, "parent": job_id, "mesh_seed": params["mesh_seed"]}
 

@@ -528,6 +528,38 @@ def test_reroll_of_an_image_job_carries_the_upload_across(svc, assets):
     assert (assets / new_id / "input.png").exists()
 
 
+def test_a_failed_rerun_insert_leaves_no_orphan_job_dir(svc, assets, monkeypatch):
+    """Same ordering as create_job -- the dir is written first so the worker
+    can never claim a job with no input.png -- so it needs the same cleanup."""
+    src = svc_jobs.create_job(svc, kind="image", image=_png_bytes())["id"]
+    before = {p.name for p in assets.iterdir() if p.is_dir()}
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr(svc.store, "create", explode)
+    with pytest.raises(RuntimeError):
+        svc_jobs.rerun_job(svc, src, mode="reroll")
+    assert {p.name for p in assets.iterdir() if p.is_dir()} == before
+
+
+def test_a_failed_promotion_insert_leaves_no_orphan_job_dir(svc, assets, monkeypatch):
+    src = svc_jobs.create_job(svc, kind="text", prompt="x", output="reference")["id"]
+    src_dir = assets / src
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "input.png").write_bytes(_png_bytes())
+    svc.store.set_status(src, "done")
+    before = {p.name for p in assets.iterdir() if p.is_dir()}
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("db is on fire")
+
+    monkeypatch.setattr(svc.store, "create", explode)
+    with pytest.raises(RuntimeError):
+        svc_jobs.promote_to_model(svc, src)
+    assert {p.name for p in assets.iterdir() if p.is_dir()} == before
+
+
 def test_rerun_rejects_an_unknown_mode(svc):
     src = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
     with pytest.raises(Invalid):
