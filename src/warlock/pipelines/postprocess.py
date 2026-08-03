@@ -9,11 +9,9 @@ size (see guidance.py).
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import os
 import shutil
-import struct
 import tempfile
 import time
 import zipfile
@@ -23,10 +21,15 @@ from typing import Any
 
 import trimesh
 
+from .. import glbio
+
 log = logging.getLogger(__name__)
 
-_GLB_MAGIC = 0x46546C67  # 'glTF'
-_CHUNK_JSON = 0x4E4F534A  # 'JSON'
+# The container format lives in warlock.glbio, shared with the viewer's loader.
+# Kept as module-level aliases because this module's own callers (and its
+# tests) have always spelled them with the leading underscore.
+_split_glb = glbio.split_glb
+_rebuild_glb = glbio.rebuild_glb
 
 
 @contextlib.contextmanager
@@ -258,34 +261,6 @@ def _insert_transform_below(
             child[key] = node.pop(key)
     nodes.append(child)
     node["children"] = [len(nodes) - 1]
-
-
-def _split_glb(data: bytes) -> tuple[bytes, dict, bytes]:
-    """-> (12-byte header, parsed JSON chunk, every following byte verbatim)."""
-    magic, version, _length = struct.unpack_from("<III", data, 0)
-    if magic != _GLB_MAGIC:
-        raise ValueError("not a GLB file")
-    if version != 2:
-        raise ValueError(f"unsupported GLB version {version}")
-    chunk_len, chunk_type = struct.unpack_from("<II", data, 12)
-    if chunk_type != _CHUNK_JSON:
-        raise ValueError("first GLB chunk is not JSON")
-    start = 20
-    return data[:12], json.loads(data[start : start + chunk_len]), data[start + chunk_len :]
-
-
-def _rebuild_glb(header: bytes, gltf: dict, rest: bytes) -> bytes:
-    # The JSON chunk pads with spaces (0x20) per the glTF spec, not zeros.
-    payload = json.dumps(gltf, separators=(",", ":")).encode()
-    payload += b" " * (-len(payload) % 4)
-    total = len(header) + 8 + len(payload) + len(rest)
-    return (
-        header[:8]
-        + struct.pack("<I", total)
-        + struct.pack("<II", len(payload), _CHUNK_JSON)
-        + payload
-        + rest
-    )
 
 
 def _load_merged(glb_path: Path) -> trimesh.Trimesh:
