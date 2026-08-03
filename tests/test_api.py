@@ -957,6 +957,19 @@ def test_prune_refuses_to_delete_a_running_job(svc):
     assert svc.store.get(ids[0]) is not None
 
 
+def test_prune_walks_past_a_single_page(svc, monkeypatch):
+    """A history longer than one page used to be un-prunable past its first
+    MAX_LIST_LIMIT rows -- which is exactly the history that needs pruning."""
+    monkeypatch.setattr(svc_jobs, "MAX_LIST_LIMIT", 10)
+    ids = [svc_jobs.create_job(svc, kind="text", prompt=f"j{i}")["id"] for i in range(25)]
+    svc.store.set_status(ids[0], "running")
+
+    # 25 jobs, keep the newest 3, and the one running job survives too.
+    assert svc_jobs.prune_jobs(svc, keep=3)["deleted"] == 21
+    surviving = {j["id"] for j in svc.store.list(100)}
+    assert surviving == {ids[0], *ids[-3:]}
+
+
 def test_prune_rejects_a_negative_keep(svc):
     with pytest.raises(Invalid):
         svc_jobs.prune_jobs(svc, keep=-1)

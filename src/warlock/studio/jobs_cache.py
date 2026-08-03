@@ -35,6 +35,9 @@ class JobsCache:
         self.jobs: list[dict[str, Any]] = []
         self.by_id: dict[str, dict[str, Any]] = {}
         self.storage: dict[str, Any] = {}
+        # How many jobs exist at all, so the library can say "showing newest N
+        # of M" rather than silently presenting a truncated history as whole.
+        self.total = 0
         self.error: str | None = None
         self._last_status: dict[str, str] = {}
         self._next_refresh = 0.0
@@ -44,6 +47,17 @@ class JobsCache:
         """Refresh on the next tick. Called after anything the UI did that
         changes the list -- a submit, a delete, a rename."""
         self._dirty = True
+
+    def load_more(self) -> None:
+        """Widen the window by one page.
+
+        A bigger single read rather than a merge of pages: tick() is one
+        list_jobs call by design, and the per-row attach_files cost only grows
+        when the user asks to see further back. MAX_LIST_LIMIT is the service's
+        ceiling on a single read and clamps this.
+        """
+        self.limit += LIST_LIMIT
+        self.invalidate()
 
     def tick(self, on_transition: Callable[[dict[str, Any], str | None], None] | None = None):
         """-> whether the list was re-read this frame."""
@@ -60,6 +74,11 @@ class JobsCache:
             return False
         self.error = None
         self.jobs = jobs
+        try:
+            self.total = self.svc.store.count()
+        except Exception:  # a count is not worth failing the refresh over
+            log.exception("could not count the job list")
+            self.total = len(jobs)
         self.by_id = {j["id"]: j for j in jobs}
         if on_transition is not None:
             for job in jobs:

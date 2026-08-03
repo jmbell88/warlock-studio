@@ -166,12 +166,33 @@ class JobStore:
             row = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return self._to_dict(row) if row else None
 
-    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list(
+        self, limit: int = 100, before: tuple[float, str] | None = None
+    ) -> list[dict[str, Any]]:
+        """The newest ``limit`` jobs, or the newest after ``before``.
+
+        ``before`` is a keyset cursor -- the (created_at, id) of the last row of
+        the previous page -- rather than an offset, so rows deleted while
+        paging (which is exactly what prune does) cannot make the walk skip
+        entries. ``id`` is in both the cursor and the ORDER BY because
+        ``time.time()`` genuinely ties across rows created in quick succession,
+        and created_at alone leaves those ties order-undefined.
+        """
+        sql = "SELECT * FROM jobs"
+        args: list[Any] = []
+        if before is not None:
+            sql += " WHERE (created_at < ?) OR (created_at = ? AND id < ?)"
+            args += [before[0], before[0], before[1]]
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        args.append(limit)
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            rows = self._conn.execute(sql, args).fetchall()
         return [self._to_dict(r) for r in rows]
+
+    def count(self) -> int:
+        """How many jobs exist, for the "showing newest N of M" row."""
+        with self._lock:
+            return int(self._conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
 
     def set_status(self, job_id: str, status: str, error: str | None = None) -> None:
         """Update status. ``error`` is only written when explicitly given —

@@ -248,3 +248,52 @@ def test_created_at_is_indexed(store):
     the only thing that stays true on an empty test database."""
     names = {r[1] for r in store._conn.execute("PRAGMA index_list(jobs)")}
     assert "idx_jobs_created" in names
+
+
+# --- keyset pagination -------------------------------------------------------
+
+
+def test_list_pages_through_the_whole_history(store):
+    ids = [store.create("text", f"j{i}", {}) for i in range(25)]
+    seen = []
+    cursor = None
+    while True:
+        page = store.list(10, cursor)
+        if not page:
+            break
+        seen += [j["id"] for j in page]
+        cursor = (page[-1]["created_at"], page[-1]["id"])
+    # Every job exactly once, newest first.
+    assert seen == list(reversed(ids))
+
+
+def test_list_breaks_created_at_ties_by_id(store):
+    """time.time() genuinely ties across rows created in quick succession, so
+    without the id tiebreak a cursor would either skip or repeat rows."""
+    ids = [store.create("text", f"j{i}", {}) for i in range(6)]
+    store._conn.execute("UPDATE jobs SET created_at = 100.0")
+    store._conn.commit()
+
+    seen = []
+    cursor = None
+    while True:
+        page = store.list(2, cursor)
+        if not page:
+            break
+        seen += [j["id"] for j in page]
+        cursor = (page[-1]["created_at"], page[-1]["id"])
+    assert sorted(seen) == sorted(ids)
+    assert len(seen) == len(set(seen)) == 6
+
+
+def test_list_with_a_cursor_past_the_end_is_empty(store):
+    store.create("text", "j", {})
+    assert store.list(10, (0.0, "0" * 12)) == []
+
+
+def test_count_reports_every_job_not_just_a_page(store):
+    assert store.count() == 0
+    for i in range(7):
+        store.create("text", f"j{i}", {})
+    assert store.count() == 7
+    assert len(store.list(3)) == 3

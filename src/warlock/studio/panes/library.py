@@ -38,9 +38,23 @@ def draw(ctx: Any) -> None:
     if imgui.begin_child("library-list", (0, height)):
         for job in jobs:
             _card(ctx, job)
+        _load_more(ctx)
     imgui.end_child()
     _bulk(ctx)
     _storage(ctx)
+
+
+def _load_more(ctx: Any) -> None:
+    """The window is the newest N of M -- and the filters above apply only to
+    that window, so a history longer than it needs to say so rather than let a
+    search quietly miss what it never loaded."""
+    loaded = len(ctx.cache.jobs)
+    total = ctx.cache.total
+    if total <= loaded:
+        return
+    widgets.muted(f"Showing the newest {loaded} of {total}.")
+    if imgui.button("Load older##library-more", (-1, 0)):
+        ctx.cache.load_more()
 
 
 # --- filters ----------------------------------------------------------------

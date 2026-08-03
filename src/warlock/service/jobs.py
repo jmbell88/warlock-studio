@@ -197,9 +197,15 @@ def create_job(
     return {"id": ids[0], "ids": ids}
 
 
-def list_jobs(svc: WarlockService, limit: int = 100) -> list[dict[str, Any]]:
+def list_jobs(
+    svc: WarlockService, limit: int = 100, before: tuple[float, str] | None = None
+) -> list[dict[str, Any]]:
+    """One page of history, newest first. ``before`` is the (created_at, id) of
+    the last row of the previous page; MAX_LIST_LIMIT stays the ceiling on a
+    single read, so a longer history is reached by paging rather than by asking
+    for more at once."""
     limit = max(1, min(limit, MAX_LIST_LIMIT))
-    jobs = svc.store.list(limit)
+    jobs = svc.store.list(limit, before)
     for job in jobs:
         attach_files(job, svc.job_dir(job["id"]))
         svc.attach_progress(job)
@@ -226,14 +232,25 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
     """Delete everything but the newest ``keep`` jobs. Never touches a running one."""
     if keep < 0:
         raise Invalid("keep must be >= 0", field="keep")
-    jobs = svc.store.list(MAX_LIST_LIMIT)
+    # Paged with a keyset cursor rather than one MAX_LIST_LIMIT read: a history
+    # longer than a single page used to be un-prunable past its first 5000
+    # rows, which is exactly the history that needs pruning. Deleting rows the
+    # walk has already passed doesn't disturb the cursor.
     deleted = 0
-    for job in jobs[keep:]:
-        if job["status"] == "running":
-            continue
-        svc.store.delete(job["id"])
-        shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
-        deleted += 1
+    seen = 0
+    cursor: tuple[float, str] | None = None
+    while True:
+        page = svc.store.list(MAX_LIST_LIMIT, cursor)
+        if not page:
+            break
+        cursor = (page[-1]["created_at"], page[-1]["id"])
+        for job in page:
+            seen += 1
+            if seen <= keep or job["status"] == "running":
+                continue
+            svc.store.delete(job["id"])
+            shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
+            deleted += 1
     return {"deleted": deleted}
 
 

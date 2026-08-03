@@ -260,6 +260,24 @@ def test_the_cache_finds_the_job_worth_narrating(svc):
     assert cache.active["id"] == running
 
 
+def test_the_cache_exposes_how_much_history_it_is_not_showing(svc):
+    """The window used to be a hard 200 with no way to know it was a window --
+    filters then silently applied to a truncated set."""
+    from warlock.service import jobs as svc_jobs
+
+    for i in range(5):
+        svc_jobs.create_job(svc, kind="text", prompt=f"j{i}")
+    cache = JobsCache(svc, limit=2)
+    cache.tick()
+    assert len(cache.jobs) == 2
+    assert cache.total == 5
+
+    cache.load_more()
+    cache.tick()
+    assert len(cache.jobs) == 5
+    assert cache.total == 5
+
+
 def test_the_cache_survives_a_read_that_fails(svc):
     cache = JobsCache(svc)
 
