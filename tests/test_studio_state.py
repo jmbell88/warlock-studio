@@ -354,9 +354,11 @@ def test_a_pre_rename_settings_file_migrates_paint_to_inker(tmp_path):
         )
     )
     s = settingslib.Settings.load(tmp_path)
-    assert s.get("mode") == "inker"
     assert s.get("inker") == {"swatches": ["#ff0000"], "recent": ["a.png"]}
     assert "paint" not in s.data
+    # The stored mode is deliberately left alone: nothing reads it any more,
+    # so migrating it would only respell a dead key.
+    assert s.get("mode") == "paint"
 
 
 def test_the_paint_migration_never_overwrites_an_existing_inker_block(tmp_path):
@@ -372,7 +374,8 @@ def test_the_paint_migration_never_overwrites_an_existing_inker_block(tmp_path):
 
 
 def test_ui_scale_round_trips_and_a_junk_value_cannot_brick_the_window(tmp_path):
-    from warlock.studio.main import UI_SCALE_RANGE, _ui_scale
+    from warlock.studio.main import _ui_scale
+    from warlock.studio.tokens import UI_SCALE_RANGE
 
     s = settingslib.Settings.load(tmp_path)
     assert _ui_scale(s) == 1.0  # nothing stored
@@ -384,9 +387,65 @@ def test_ui_scale_round_trips_and_a_junk_value_cannot_brick_the_window(tmp_path)
         assert UI_SCALE_RANGE[0] <= _ui_scale(s) <= UI_SCALE_RANGE[1]
 
 
-def test_only_the_work_modes_are_worth_persisting():
-    """Home, the Manual, Clay and Settings are places you pass through:
-    restoring into one on the next launch would hide the work."""
+def test_the_ui_scale_preference_never_reaches_the_minimum_window_size():
+    """The resize floor is a property of the *screen*, not of a zoom.
+
+    tokens.SCALE carries both, so computing the floor from it made a 2x
+    preference demand a 2200x1400 window: bigger than a 1080p display, snapped
+    back to on every resize, unrecoverable without editing the settings file.
+    """
+    from warlock.studio import tokens
+    from warlock.studio.main import MIN_SIZE, _min_window_size
+
+    before = tokens.SCALE
+    try:
+        for zoom in (0.5, 1.0, 2.0):
+            tokens.set_scale(1.0 * zoom)
+            assert _min_window_size(1.0) == MIN_SIZE
+        tokens.set_scale(1.5 * 2.0)
+        assert _min_window_size(1.5) == (int(MIN_SIZE[0] * 1.5), int(MIN_SIZE[1] * 1.5))
+    finally:
+        tokens.set_scale(before)
+
+
+def test_the_ui_scale_slider_can_only_offer_a_zoom_that_survives_the_clamp():
+    """set_scale clamps the *product*, so an unbounded control lied.
+
+    On a 250 % display a requested 2x came back as 1.6x and the slider snapped
+    back under the cursor. Bounding the control by what the product can hold is
+    what makes what it shows the value that is applied.
+    """
+    from warlock.studio import tokens
+
+    before = tokens.SCALE
+    try:
+        assert tokens.ui_scale_bounds(1.0) == tokens.UI_SCALE_RANGE
+        for monitor in (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 5.0):
+            lo, hi = tokens.ui_scale_bounds(monitor)
+            assert lo <= hi
+            for value in (lo, (lo + hi) / 2, hi):
+                tokens.set_scale(monitor * value)
+                # What the slider offered is what SCALE actually became.
+                assert pytest.approx(monitor * value) == tokens.SCALE
+    finally:
+        tokens.set_scale(before)
+
+
+def test_every_mode_has_exactly_one_place_that_draws_it():
+    """_build_ui's dispatch ends in a bare else, so an unlisted mode would
+    silently draw Inker rather than fail. The partition is the guard."""
+    from warlock.studio import main, modes
+
+    single = set(main._SINGLE_PANE_MODES)
+    assert single | modes.VIEWPORT_MODES == set(modes.KEYS)
+    assert not (single & modes.VIEWPORT_MODES)
+    # The viewport modes are work modes, and Inker is a work mode without one.
+    assert modes.VIEWPORT_MODES < modes.WORK_MODES
+
+
+def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():
+    """Home, the Manual, Clay and Settings are places you pass through: no form
+    to submit and no viewport to frame, so they take no keyboard shortcuts."""
     from warlock.studio import modes
 
     assert modes.WORK_MODES.issubset(modes.KEYS)
@@ -394,6 +453,25 @@ def test_only_the_work_modes_are_worth_persisting():
     assert modes.KEYS[0] == "home"
     assert AppState().mode == "home"
     assert set(modes.KEYS) == {k for k, _l, _i in modes.MODES}
+
+
+def test_no_mode_is_persisted_anywhere():
+    """The app opens on Home every launch, so a stored mode has no reader.
+
+    A write with no reader is how the two halves drift: the next person to add
+    a restore would find a key that four call sites keep half-updated.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src" / "warlock" / "studio"
+    offenders = [
+        f"{path.relative_to(root)}:{n}"
+        for path in root.rglob("*.py")
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"""settings\.set\(\s*["']mode["']""", line)
+    ]
+    assert offenders == []
 
 
 def test_the_seed_never_persists():

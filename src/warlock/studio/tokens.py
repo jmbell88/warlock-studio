@@ -16,10 +16,34 @@ from __future__ import annotations
 # monitor change does not re-sample it (the atlas would need a rebuild).
 SCALE = 1.0
 
+# What SCALE itself is allowed to be, after the monitor and the user's zoom are
+# multiplied together. A sanity clamp on the product, not a preference.
+SCALE_RANGE = (0.5, 4.0)
+
+# What the user's zoom alone is allowed to be, before the monitor's scale.
+UI_SCALE_RANGE = (0.5, 2.0)
+
 
 def set_scale(value: float) -> None:
     global SCALE
-    SCALE = max(0.5, min(float(value), 4.0))
+    SCALE = max(SCALE_RANGE[0], min(float(value), SCALE_RANGE[1]))
+
+
+def ui_scale_bounds(monitor_scale: float) -> tuple[float, float]:
+    """The zoom range actually offerable on a monitor of this scale.
+
+    ``set_scale`` clamps the *product*, so on a 250 % display a requested 2x
+    silently became 1.6x and the slider snapped back under the cursor. Bounding
+    the control by what the product can hold means it can only ask for a value
+    it will get.
+    """
+    base = float(monitor_scale) or 1.0
+    lo = max(UI_SCALE_RANGE[0], SCALE_RANGE[0] / base)
+    hi = min(UI_SCALE_RANGE[1], SCALE_RANGE[1] / base)
+    # A monitor scaled past the product ceiling leaves no room to zoom at all;
+    # a degenerate range would make the slider unusable rather than merely
+    # limited, so it collapses to the one value that is honoured.
+    return (lo, hi) if lo <= hi else (hi, hi)
 
 
 def sp(n: float) -> float:

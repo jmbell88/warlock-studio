@@ -263,6 +263,53 @@ def test_paint_still_sees_both_edges():
     assert "K_SPACE" in inspect.getsource(inker_mode.handle_key)
 
 
+def test_inker_mode_never_leaks_a_key_to_the_viewport(monkeypatch):
+    """Inker returns whether or not ``handle_key`` consumed the key.
+
+    It returns False when no document is open, and the fall-through meant
+    F/W/S framed the model and toggled wireframe and turntable while
+    Ctrl+Enter submitted a mesh job -- all against a viewport Inker has
+    replaced. Reachable the moment you enter Inker from Home with nothing
+    loaded.
+    """
+    from types import SimpleNamespace
+
+    import pygame
+
+    from warlock.studio import main
+    from warlock.studio.panes import settings_2d, settings_3d
+    from warlock.studio.state import AppState
+
+    submitted: list[str] = []
+    monkeypatch.setattr(settings_2d, "generate", lambda *a, **k: submitted.append("2d"))
+    monkeypatch.setattr(settings_3d, "promote", lambda *a, **k: submitted.append("3d"))
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
+
+    viewer_calls: list[str] = []
+    viewer = SimpleNamespace(
+        frame=lambda: viewer_calls.append("frame"),
+        set_wireframe=lambda v: viewer_calls.append("wireframe"),
+        set_turntable=lambda v: viewer_calls.append("turntable"),
+        pose_mode=False,
+        exit_compare=lambda: viewer_calls.append("exit_compare"),
+    )
+    state = AppState()
+    state.mode = "inker"
+    state.inker = None  # entered Inker with nothing open
+    app = SimpleNamespace(
+        app_ctx=SimpleNamespace(state=state, cache=SimpleNamespace(get=lambda _id: None)),
+        viewer=viewer,
+    )
+
+    for key in (pygame.K_f, pygame.K_w, pygame.K_s, pygame.K_RETURN):
+        main.App._shortcut(app, pygame.event.Event(pygame.KEYDOWN, key=key))
+
+    assert viewer_calls == []
+    assert submitted == []
+    assert state.wireframe is False
+    assert state.turntable is False
+
+
 # --- a dead GPU worker -------------------------------------------------------
 
 

@@ -323,6 +323,39 @@ def test_the_settings_pane_builds(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
 
 
+def test_the_settings_pane_help_button_stays_inside_the_pane(app_ctx, imgui_ctx, monkeypatch):
+    """help_button is a same_line, and same_line returns to the *previous* row.
+
+    Drawn as the pane's first widget it landed on the row above -- in the app
+    that is the mode switch, so it overlapped the health dot and, being
+    submitted second, could not be clicked. Every other pane escapes this only
+    because a section heading precedes it, so the guard has to be a measurement
+    rather than a call-order convention.
+    """
+    from imgui_bundle import imgui
+
+    from warlock.studio import widgets
+    from warlock.studio.panes import app_settings
+
+    seen: dict[str, float] = {}
+    real = widgets.icon_button
+
+    def spy(*args, **kwargs):
+        seen.setdefault("help_y", imgui.get_cursor_screen_pos().y)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(widgets, "icon_button", spy)
+
+    def build():
+        imgui.button("stand-in for the mode switch")
+        seen["bar_y"] = imgui.get_item_rect_min().y
+        app_settings.draw(app_ctx)
+
+    _frame(imgui_ctx, build)
+    assert "help_y" in seen, "the pane drew no help button at all"
+    assert seen["help_y"] > seen["bar_y"], seen
+
+
 def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
     from warlock.studio import profiles
     from warlock.studio.panes import profiles_panel

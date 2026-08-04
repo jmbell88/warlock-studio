@@ -122,7 +122,9 @@ job's. They are stored in `studio_settings.json` beside everything else the app 
 of them need a variable set before launch.
 
 **Interface.** *UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
-is, from 0.5× to 2×. It takes effect as you drag it, but the font atlas is baked once at startup, so
+is, from 0.5× to 2×. On a display that is already heavily scaled the slider stops short of 2× and
+says so, because the combined scale is capped — the control only offers zooms it can actually
+apply. It takes effect as you drag it, but the font atlas is baked once at startup, so
 text only becomes properly crisp at the new size after a restart — everything is drawn at the right
 size immediately either way. *Show frame rate* is the same toggle as `F10`.
 

@@ -44,8 +44,10 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
     must not mark the settings dirty -- a launch that changes nothing else
     should not rewrite the file.
     """
-    if data.get("mode") == "paint":
-        data["mode"] = "inker"
+    # The stored "mode" is deliberately not migrated: nothing reads it any
+    # more (the app opens on Home every launch), so rewriting it would only
+    # move a dead key from one spelling to another. Old files keep it; it is
+    # ignored either way.
     if "paint" in data and "inker" not in data:
         data["inker"] = data.pop("paint")
     return data

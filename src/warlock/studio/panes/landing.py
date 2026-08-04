@@ -130,9 +130,12 @@ def start_inker(ctx: Any) -> None:
 
 
 def _leave(ctx: Any) -> None:
-    """Every caller has just set a work mode, so the persist is unconditional."""
+    """The tile has already set the mode; this only resets the sub-view.
+
+    Nothing is persisted: the app opens on Home every launch, so a stored mode
+    would have no reader.
+    """
     ctx.state.landing_view = "choose"
-    ctx.settings.set("mode", ctx.state.mode)
 
 
 def _back(ctx: Any) -> None:

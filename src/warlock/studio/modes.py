@@ -25,10 +25,14 @@ MODES: list[tuple[str, str, str]] = [
     ("settings", "Settings", icons.SETTINGS),
 ]
 
-# The modes that are worth remembering between runs: the ones that own a
-# viewport or a form, and so have work in them. Home, the Manual, Clay and
-# Settings are places you pass through -- restoring into one of them on the
-# next launch would hide whatever was actually being made.
+# The modes that own a viewport or a form, and so have work in them. Home, the
+# Manual, Clay and Settings are places you pass through: they have no form to
+# submit and no viewport to frame, which is why they take no keyboard
+# shortcuts at all.
 WORK_MODES = frozenset({"2d", "3d", "inker"})
+
+# The subset that draws the 3D viewport, and therefore the only modes whose
+# selection is worth loading a mesh for. Inker owns the centre pane instead.
+VIEWPORT_MODES = frozenset({"2d", "3d"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)

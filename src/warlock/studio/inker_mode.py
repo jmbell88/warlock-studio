@@ -174,7 +174,6 @@ def open_job_reference(ctx: Any, job: Any) -> None:
         ctx.state.mode = "inker"
         return
     ctx.state.mode = "inker"
-    ctx.settings.set("mode", "inker")
     ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id)
 
 

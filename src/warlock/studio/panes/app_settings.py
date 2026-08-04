@@ -21,11 +21,8 @@ from .. import icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
-UI_SCALE_MIN, UI_SCALE_MAX = 0.5, 2.0
-
 
 def draw(ctx: Any) -> None:
-    manual_render.help_button(ctx, "app-settings")
     if imgui.begin_child("app-settings", (0, 0)):
         _interface(ctx)
         _layout(ctx)
@@ -39,9 +36,15 @@ def draw(ctx: Any) -> None:
 
 def _interface(ctx: Any) -> None:
     widgets.section("Interface")
+    # After the section heading, never before begin_child: help_button is a
+    # same_line, and same_line returns to the *previous* row unconditionally.
+    # Called first in draw() it landed on the mode switch, on top of the health
+    # dot -- which every other pane avoids only because a header precedes it.
+    manual_render.help_button(ctx, "app-settings")
+    lo, hi = tokens.ui_scale_bounds(_base(ctx))
     stored = _scale_of(ctx)
     imgui.set_next_item_width(sp(260))
-    changed, value = imgui.slider_float("UI scale", stored, UI_SCALE_MIN, UI_SCALE_MAX, "%.2fx")
+    changed, value = imgui.slider_float("UI scale", stored, lo, hi, "%.2fx")
     if changed:
         # Live, so dragging shows what it will look like -- but only committed
         # on release: every intermediate value would otherwise be a settings
@@ -49,6 +52,10 @@ def _interface(ctx: Any) -> None:
         _apply_scale(ctx, value)
     if imgui.is_item_deactivated_after_edit():
         ctx.settings.set("ui_scale", round(float(value), 2))
+    if hi < tokens.UI_SCALE_RANGE[1]:
+        widgets.muted(
+            f"This display already scales by {_base(ctx):.2f}x, which leaves room for {hi:.2f}x."
+        )
     widgets.muted("Text sharpens fully after a restart.")
 
     show_fps = bool(ctx.state.show_fps)
@@ -58,9 +65,15 @@ def _interface(ctx: Any) -> None:
         ctx.settings.set("show_fps", show_fps)
 
 
+def _base(ctx: Any) -> float:
+    """The monitor's own scale, sampled at startup and never folded back in."""
+    return float(getattr(ctx, "dpi_scale", 1.0)) or 1.0
+
+
 def _scale_of(ctx: Any) -> float:
-    base = float(getattr(ctx, "dpi_scale", 1.0)) or 1.0
-    return min(max(tokens.SCALE / base, UI_SCALE_MIN), UI_SCALE_MAX)
+    base = _base(ctx)
+    lo, hi = tokens.ui_scale_bounds(base)
+    return min(max(tokens.SCALE / base, lo), hi)
 
 
 def _apply_scale(ctx: Any, value: float) -> None:
@@ -73,8 +86,9 @@ def _apply_scale(ctx: Any, value: float) -> None:
     """
     from .. import theme as theme_mod
 
-    base = float(getattr(ctx, "dpi_scale", 1.0)) or 1.0
-    tokens.set_scale(base * min(max(float(value), UI_SCALE_MIN), UI_SCALE_MAX))
+    base = _base(ctx)
+    lo, hi = tokens.ui_scale_bounds(base)
+    tokens.set_scale(base * min(max(float(value), lo), hi))
     theme_mod.apply(imgui)
 
 

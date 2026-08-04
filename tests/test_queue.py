@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -480,6 +481,79 @@ async def test_a_job_is_refused_at_dispatch_when_the_card_has_since_filled(
         await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
         assert "GiB of VRAM" in worker.store.get(job_id)["error"]
         await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_a_resident_sdxl_pipe_is_not_charged_twice_at_dispatch(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The steady state coexist is designed for -- the pipe warm between jobs --
+    is exactly when free VRAM is lowest. What the pipe holds is already inside
+    `need`, so it must be credited back rather than demanded a second time."""
+    import warlock.queue as queue_mod
+    from warlock import vram
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
+    monkeypatch.setattr(queue_mod, "vram_gib", lambda: (7.1, 7.52))
+    free = {"gib": 30.0}
+    monkeypatch.setattr(
+        vram, "device_memory", lambda: vram.DeviceMemory(32.0, free["gib"])
+    )
+    worker = _make_worker(tmp_path)
+    try:
+        first = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(first)["status"] == "done")
+        assert worker._text2image.loaded is True
+
+        # The 2026-08-04 session: pipe resident, free down by what it holds.
+        free["gib"] = 22.6
+        second = worker.store.create("text", "a crate", {"seed": 2, "resolution": 512})
+        await _wait_until(lambda: worker.store.get(second)["status"] == "done")
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_an_image_job_gets_no_credit_for_the_resident_pipe(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """An image job's `need` carries no SDXL term, and under coexist the pipe
+    stays resident beside trellis -- crediting it would overstate headroom by
+    the pipe's whole size on exactly the tightest path."""
+    import warlock.queue as queue_mod
+    from warlock import vram
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
+    monkeypatch.setattr(queue_mod, "vram_gib", lambda: (7.1, 7.52))
+    monkeypatch.setattr(vram, "device_memory", lambda: vram.DeviceMemory(32.0, 15.0))
+    worker = _make_worker(tmp_path)
+    try:
+        worker._text2image = SimpleNamespace(loaded=True)
+        job = {"kind": "image", "stage": "model", "params": {"resolution": 1024}}
+        with pytest.raises(RuntimeError, match="GiB of VRAM"):
+            worker._check_resources(job)
+    finally:
+        worker.store.close()
+
+
+async def test_dispatch_still_refuses_past_what_the_resident_models_explain(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    import warlock.queue as queue_mod
+    from warlock import vram
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
+    monkeypatch.setattr(queue_mod, "vram_gib", lambda: (7.1, 7.5))
+    monkeypatch.setattr(vram, "device_memory", lambda: vram.DeviceMemory(32.0, 0.5))
+    worker = _make_worker(tmp_path)
+    try:
+        worker.trellis.running = True
+        worker._text2image = SimpleNamespace(loaded=True)
+        job = {"kind": "text", "stage": "model", "params": {"resolution": 1536}}
+        with pytest.raises(RuntimeError, match="GiB of VRAM"):
+            worker._check_resources(job)
     finally:
         worker.store.close()
 

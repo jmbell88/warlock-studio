@@ -378,16 +378,40 @@ class Worker:
         if device is None:
             return
         # Against *free*, not total: whatever we already hold is part of the
-        # budget this job runs inside. The WDDM caveat in vram.py applies --
-        # this figure is the driver's virtualized view, so it is a secondary
-        # check behind the submit-time one, not a replacement for it.
-        already = self.trellis.running and job["kind"] in ("text", "image")
-        headroom = device.free_gib + (vram.TRELLIS_GIB if already else 0.0)
+        # budget this job runs inside. But `need` prices every model from
+        # zero, and free has already been debited for anything resident -- so
+        # what is resident *and* counted in `need` must be credited back, or
+        # it is charged twice. The double charge is how a warm SDXL pipe made
+        # every follow-up job on a 32 GiB card refuse itself. The WDDM caveat
+        # in vram.py still applies: this is the secondary check behind the
+        # submit-time one, not a replacement for it.
+        headroom = device.free_gib
+        if self.trellis.running:
+            # Counted in `need` for both stages under coexist, and given back
+            # by the handoff's stop() before anything loads under exclusive.
+            # No kind gate needed: need <= 0 already returned for rig jobs.
+            headroom += vram.TRELLIS_GIB
+        if (
+            job["kind"] == "text"
+            and self._text2image is not None
+            and self._text2image.loaded
+        ):
+            # Measured reserved, not SDXL_GIB: reserved is what free was
+            # actually debited by (7.52 GiB for sdxl-base-1.0 against the
+            # flat 7.0 estimate). A base switch unloads the old pipe before
+            # loading the new (_get_text2image), so the credit holds even
+            # when the resident base is not the one this job wants.
+            # Image-kind jobs get no credit: their `need` carries no SDXL
+            # term, and coexist keeps the pipe resident beside trellis.
+            mem = vram_gib()
+            headroom += mem[1] if mem is not None else vram.SDXL_GIB
         if need > headroom:
             raise RuntimeError(
                 f"this job needs about {need:.1f} GiB of VRAM and only "
-                f"{headroom:.1f} GiB is available. Close other GPU applications "
-                "and try again."
+                f"{headroom:.1f} GiB is available to it "
+                f"({device.free_gib:.1f} GiB free plus "
+                f"{headroom - device.free_gib:.1f} GiB in models Warlock "
+                "already holds). Close other GPU applications and try again."
             )
 
     async def _process(self, job: dict[str, Any]) -> None:

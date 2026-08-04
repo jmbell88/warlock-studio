@@ -37,19 +37,34 @@ MIN_SIZE = (1100, 700)
 # draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
 # Modes that fill the host window with one pane instead of the three-column
-# settings / viewport / inspector layout the two generate modes share.
+# settings / viewport / inspector layout the two generate modes share. Together
+# with modes.VIEWPORT_MODES this must cover modes.KEYS exactly -- the dispatch
+# in _build_ui ends in a bare else, so an unlisted mode would silently draw
+# Inker. tests/test_studio_state.py pins the partition.
 _SINGLE_PANE_MODES = ("home", "manual", "clay", "settings", "inker")
-# The user's zoom on top of the monitor's own DPI scale.
-UI_SCALE_RANGE = (0.5, 2.0)
+
+
+def _min_window_size(monitor_scale: float) -> tuple[int, int]:
+    """The resize floor, in physical pixels.
+
+    The *monitor's* scale and nothing else. ``tokens.SCALE`` also carries the
+    user's UI-scale preference, and a zoom says nothing about how many pixels
+    the screen has -- multiplying it in made a 2x preference demand a window
+    larger than a 1080p display and refuse to be shrunk.
+    """
+    return (int(MIN_SIZE[0] * monitor_scale), int(MIN_SIZE[1] * monitor_scale))
 
 
 def _ui_scale(settings: Any) -> float:
     """The stored multiplier, clamped. A junk value must not brick the window."""
+    from . import tokens
+
+    lo, hi = tokens.UI_SCALE_RANGE
     try:
         value = float(settings.get("ui_scale") or 1.0)
     except (TypeError, ValueError):
         return 1.0
-    return min(max(value, UI_SCALE_RANGE[0]), UI_SCALE_RANGE[1])
+    return min(max(value, lo), hi)
 
 
 class App:
@@ -138,10 +153,7 @@ class App:
         # glyphs after a restart.
         monitor_scale = dpi.window_scale(pygame)
         tokens.set_scale(monitor_scale * _ui_scale(settings))
-        self._min_size = (
-            int(MIN_SIZE[0] * tokens.SCALE),
-            int(MIN_SIZE[1] * tokens.SCALE),
-        )
+        self._min_size = _min_window_size(monitor_scale)
 
         self.ctx = moderngl.create_context()
         imgui.create_context()
@@ -154,9 +166,9 @@ class App:
         self.viewer = Viewer(self.ctx)
 
         state = AppState()
-        # No mode restore: the app opens on Home every launch (AppState's
-        # default). The persisted work mode is what Home's tiles and the
-        # switch write, and it is read nowhere else.
+        # No mode restore, and nothing writes one either: the app opens on Home
+        # every launch (AppState's default), so a stored mode would be a key
+        # with no reader that four call sites kept half-updated.
         state.show_fps = bool(settings.get("show_fps"))
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
@@ -515,8 +527,10 @@ class App:
         Driven off the cache rather than off the click so a job that finishes
         while it is selected starts showing its mesh without another click.
         """
+        from . import modes
+
         ctx = self.app_ctx
-        if ctx.state.mode not in ("2d", "3d"):
+        if ctx.state.mode not in modes.VIEWPORT_MODES:
             # Only two modes draw a viewport. Everywhere else there is
             # nothing to sync, and loading a mesh for the selection would
             # be work nothing shows.
@@ -636,21 +650,28 @@ class App:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
             ctx.state.show_fps = not ctx.state.show_fps
             return
-        if ctx.state.mode not in ("2d", "3d", "inker"):
-            # The chooser has no form to submit and no viewport to frame; every
-            # one of these would act on a pane that is not on screen.
+        from . import modes
+
+        if ctx.state.mode not in modes.WORK_MODES:
+            # Home, the Manual, Clay and Settings have no form to submit and no
+            # viewport to frame; every one of these would act on a pane that is
+            # not on screen.
             return
         if ctx.state.mode == "inker":
             from . import inker_mode
 
-            # Consumes every key while a painting is open, so F/W/S/Ctrl+Enter
-            # cannot act on the panes Inker has replaced.
-            if inker_mode.handle_key(ctx, event):
-                return
-        # Both edges are dispatched, because Inker's space-to-pan is a hold and
-        # needs the release. Nothing below is a hold: every one of these is a
-        # toggle or an action, so acting on the release too undoes the toggle
-        # the press just made and submits a second job for one Ctrl+Enter.
+            # Unconditionally, whether or not handle_key consumed it: it
+            # returns False when no document is open, and letting that fall
+            # through meant F/W/S toggled wireframe and turntable and
+            # Ctrl+Enter submitted a mesh job -- all against a viewport Inker
+            # has replaced. Nothing below this line belongs to Inker.
+            inker_mode.handle_key(ctx, event)
+            return
+        # Both edges reach this function, because Inker's space-to-pan is a
+        # hold and needs the release. Nothing below is a hold: every one of
+        # these is a toggle or an action, so acting on the release too undoes
+        # the toggle the press just made and submits a second job for one
+        # Ctrl+Enter.
         if event.type != pygame.KEYDOWN:
             return
         mods = pygame.key.get_mods()
@@ -701,7 +722,6 @@ class App:
         # A drop is a start: it would otherwise land behind the chooser, with
         # nothing on screen saying anything had happened.
         ctx.state.mode = "3d"
-        ctx.settings.set("mode", "3d")
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
@@ -721,6 +741,7 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
+        from . import modes
         from .panes import (
             app_settings,
             clay,
@@ -739,7 +760,7 @@ class App:
         # Arriving in a viewport mode is a change the cache will not announce:
         # the job list has not changed, so nothing else would ask the viewer
         # to show what was just picked.
-        if ctx.state.mode != self._last_mode and ctx.state.mode in ("2d", "3d"):
+        if ctx.state.mode != self._last_mode and ctx.state.mode in modes.VIEWPORT_MODES:
             self._sync_viewer()
         self._last_mode = ctx.state.mode
 
@@ -935,10 +956,6 @@ class App:
         )
         if selected != state.mode:
             state.mode = selected
-            # Only a work mode is worth restoring; Home, the Manual, Clay and
-            # Settings are places you pass through.
-            if selected in modes.WORK_MODES:
-                ctx.settings.set("mode", selected)
             if selected == "home":
                 state.landing_view = "choose"
 
@@ -1170,7 +1187,9 @@ class App:
     def _persist(self, ctx: Any) -> None:
         from .settings import sanitise_form
 
-        ctx.settings.set("mode", ctx.state.mode)
+        # No mode: the app opens on Home every launch, so storing the one it
+        # happened to quit in would have no reader -- and quitting from the
+        # Manual or Settings would store a mode nothing would want restored.
         ctx.settings.set("show_fps", ctx.state.show_fps)
         ctx.settings.set("form_2d", sanitise_form(ctx.state.form_2d))
         ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
