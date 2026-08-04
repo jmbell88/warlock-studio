@@ -470,7 +470,7 @@ def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
-    """Called from App._on_task_done for every ``paint-`` key."""
+    """Called from App._on_task_done for every ``inker-`` key."""
     state = ensure(ctx)
     key, result = done.key, done.result
     name = key.split(":", 1)[0]
@@ -579,9 +579,9 @@ def request_close(ctx: Any, tab: InkerDoc) -> None:
     state = ensure(ctx)
 
     def go() -> None:
-        from .panes import paint_textures
+        from .panes import inker_textures
 
-        paint_textures.release_doc(ctx, tab.uid)
+        inker_textures.release_doc(ctx, tab.uid)
         state.close(tab.uid)
 
     if not tab.dirty:
@@ -845,6 +845,6 @@ def _ctrl_key(
 
 
 def release_all(ctx: Any) -> None:
-    from .panes import paint_textures
+    from .panes import inker_textures
 
-    paint_textures.release_all(ctx)
+    inker_textures.release_all(ctx)

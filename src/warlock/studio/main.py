@@ -801,11 +801,11 @@ class App:
 
         from . import layout as layout_mod
         from .panes import (
-            paint_bridge,
-            paint_canvas,
-            paint_colors,
-            paint_layers,
-            paint_tools,
+            inker_bridge,
+            inker_canvas,
+            inker_colors,
+            inker_layers,
+            inker_tools,
         )
         from .tokens import sp
 
@@ -817,16 +817,16 @@ class App:
         borders = imgui.ChildFlags_.borders.value
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("paint-tools", (sidebar_w, tools_height), borders):
-            paint_tools.draw(ctx)
+        if imgui.begin_child("inker-tools", (sidebar_w, tools_height), borders):
+            inker_tools.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("paint-colors", (sidebar_w, 0), borders):
-            paint_colors.draw(ctx)
+        if imgui.begin_child("inker-colors", (sidebar_w, 0), borders):
+            inker_colors.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("paint-left-split")
+        drag = layout_mod.splitter("inker-left-split")
         if drag:
             lay.sidebar_w = min(
                 max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
@@ -836,12 +836,12 @@ class App:
         reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
         width = max(imgui.get_content_region_avail().x - reserved, sp(300))
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if imgui.begin_child("paint-centre", (width, 0), borders, flags):
-            paint_canvas.draw(ctx)
+        if imgui.begin_child("inker-centre", (width, 0), borders, flags):
+            inker_canvas.draw(ctx)
         imgui.end_child()
 
         imgui.same_line()
-        drag = layout_mod.splitter("paint-right-split")
+        drag = layout_mod.splitter("inker-right-split")
         if drag:
             lay.inspector_w = min(
                 max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
@@ -850,11 +850,11 @@ class App:
         imgui.same_line()
         imgui.begin_group()
         layers_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("paint-layers", (0, layers_height), borders):
-            paint_layers.draw(ctx)
+        if imgui.begin_child("inker-layers", (0, layers_height), borders):
+            inker_layers.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("paint-bridge", (0, 0), borders):
-            paint_bridge.draw(ctx)
+        if imgui.begin_child("inker-bridge", (0, 0), borders):
+            inker_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 

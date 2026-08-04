@@ -25,7 +25,7 @@ from imgui_bundle import imgui
 from .. import icons, inker_mode, inker_state, theme, widgets
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
-from . import paint_textures
+from . import inker_textures
 
 # Marching ants: dash length in screen pixels and how fast the pattern crawls.
 DASH = 6.0
@@ -76,7 +76,7 @@ def _file_row(ctx: Any, state: Any) -> None:
         inker_mode.ask_open(ctx)
     imgui.same_line()
     if imgui.button("Recent"):
-        imgui.open_popup("paint-recent")
+        imgui.open_popup("inker-recent")
     _recent_popup(ctx, state)
     imgui.same_line()
     busy = tab is not None and tab.saving
@@ -156,7 +156,7 @@ def _new_popup(ctx: Any) -> None:
 def _recent_popup(ctx: Any, state: Any) -> None:
     from pathlib import Path
 
-    if not imgui.begin_popup("paint-recent"):
+    if not imgui.begin_popup("inker-recent"):
         return
     if not state.recent:
         widgets.muted("Nothing opened yet.")
@@ -195,7 +195,7 @@ def _empty(ctx: Any, state: Any) -> None:
 
 def _tab_bar(ctx: Any, state: Any) -> None:
     flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
-    if not imgui.begin_tab_bar("paint-tabs", flags):
+    if not imgui.begin_tab_bar("inker-tabs", flags):
         return
     for tab in list(state.docs):
         item_flags = 0
@@ -223,7 +223,7 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
     # child collapses to nothing and the canvas (and its texture uploads)
     # silently stops being drawn.
     height = max(imgui.get_content_region_avail().y - sp(26), sp(16))
-    if imgui.begin_child("paint-canvas", (0, height), imgui.ChildFlags_.borders.value, flags):
+    if imgui.begin_child("inker-canvas", (0, height), imgui.ChildFlags_.borders.value, flags):
         origin = imgui.get_cursor_screen_pos()
         avail = imgui.get_content_region_avail()
         region = (max(avail.x, 16.0), max(avail.y, 16.0))
@@ -233,7 +233,7 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
             view.pending_zoom = None
         elif not view.fitted:
             inker_state.fit(view, tab.doc.size, region)
-        imgui.invisible_button("##paint-surface", region)
+        imgui.invisible_button("##inker-surface", region)
         active = imgui.is_item_active()
         hovered = imgui.is_item_hovered()
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
@@ -570,7 +570,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     bottom_right = inker_state.to_screen(view, origin, width, height)
 
     _checkerboard(ctx, draw_list, view, top_left, bottom_right)
-    texture = paint_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
+    texture = inker_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
     if texture is None:
         return
     draw_list.add_image(widgets.texture_ref(texture), top_left, bottom_right)
@@ -590,7 +590,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
 
 
 def _checkerboard(ctx: Any, draw_list: Any, view: Any, top_left, bottom_right) -> None:
-    texture = paint_textures.checker(ctx)
+    texture = inker_textures.checker(ctx)
     if texture is None:
         return
     # UVs in tile units, so one draw call covers the canvas at any zoom and the
@@ -610,7 +610,7 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     buf = tab.doc.floating
     if buf is None:
         return
-    texture = paint_textures.floating(ctx, tab, nearest=tab.view.zoom >= 1.0)
+    texture = inker_textures.floating(ctx, tab, nearest=tab.view.zoom >= 1.0)
     if texture is None:
         return
     x, y = buf.offset

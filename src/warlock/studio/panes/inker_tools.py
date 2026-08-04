@@ -48,7 +48,7 @@ def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("tools")
-    manual_render.help_button(ctx, "paint-tools")
+    manual_render.help_button(ctx, "inker-tools")
     _grid(state)
     imgui.dummy((0, 6))
     if tab is None:

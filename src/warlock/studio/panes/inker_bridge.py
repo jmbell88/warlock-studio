@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("document")
-    manual_render.help_button(ctx, "paint-bridge")
+    manual_render.help_button(ctx, "inker-bridge")
     if tab is None:
         widgets.muted("Nothing open.")
         return
@@ -85,7 +85,7 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     if imgui.button("Rotate"):
         doc.rotate90()
     if imgui.button("Resize..."):
-        imgui.open_popup("paint-resize")
+        imgui.open_popup("inker-resize")
     imgui.same_line()
     if imgui.button("Fit view"):
         tab.view.fitted = False
@@ -108,9 +108,9 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
 
 
 def _resize_popup(ctx: Any, tab: Any) -> None:
-    if not imgui.begin_popup("paint-resize"):
+    if not imgui.begin_popup("inker-resize"):
         return
-    key = f"paint_resize:{tab.uid}"
+    key = f"inker_resize:{tab.uid}"
     width, height = ctx.state.preview.get(key) or tab.doc.size
     imgui.set_next_item_width(90)
     changed_w, width = imgui.input_int("W", int(width), 0)

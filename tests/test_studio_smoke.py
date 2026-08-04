@@ -352,11 +352,11 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     a PNG, so this seeds a real image -- opening one is a decode."""
     from warlock.studio import inker_mode, inker_state
     from warlock.studio.panes import (
-        paint_bridge,
-        paint_canvas,
-        paint_colors,
-        paint_layers,
-        paint_tools,
+        inker_bridge,
+        inker_canvas,
+        inker_colors,
+        inker_layers,
+        inker_tools,
     )
 
     job_id = _reference_job(app_ctx)
@@ -364,11 +364,11 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     state = inker_mode.ensure(app_ctx)
 
     def build() -> None:
-        paint_tools.draw(app_ctx)
-        paint_colors.draw(app_ctx)
-        paint_canvas.draw(app_ctx)
-        paint_layers.draw(app_ctx)
-        paint_bridge.draw(app_ctx)
+        inker_tools.draw(app_ctx)
+        inker_colors.draw(app_ctx)
+        inker_canvas.draw(app_ctx)
+        inker_layers.draw(app_ctx)
+        inker_bridge.draw(app_ctx)
 
     # Empty first: the "nothing open" branch is what a user sees on arrival.
     _frame(imgui_ctx, build)
@@ -402,8 +402,8 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     inker_mode.end_transform(app_ctx, commit=True)
     assert not state.transforming and tab.doc.floating is None
     _frame(imgui_ctx, build)
-    assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:composite") is not None
-    assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:floating") is not None
+    assert app_ctx.state.preview.get(f"inker_tex:{tab.uid}:composite") is not None
+    assert app_ctx.state.preview.get(f"inker_tex:{tab.uid}:floating") is not None
 
     # Dirty, so closing asks first -- and the question is what stops a stray
     # click on the tab's x from losing an unsaved painting.
@@ -413,7 +413,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     app_ctx.confirms.pending.on_confirm()
     app_ctx.confirms.pending = None
     assert state.active is None
-    assert not [k for k in app_ctx.state.preview if k.startswith(f"paint_tex:{uid}:")]
+    assert not [k for k in app_ctx.state.preview if k.startswith(f"inker_tex:{uid}:")]
     inker_mode.release_all(app_ctx)
 
 

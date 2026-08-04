@@ -305,10 +305,10 @@ def test_set_layer_props_still_ignores_a_change_to_the_same_value():
 
 
 def test_a_right_to_left_marquee_covers_the_same_pixels_as_a_left_to_right_one():
-    from warlock.studio.panes import paint_canvas
+    from warlock.studio.panes import inker_canvas
 
-    forward = paint_canvas.marquee_rect((2.3, 2.3), (10.7, 10.7))
-    backward = paint_canvas.marquee_rect((10.7, 10.7), (2.3, 2.3))
+    forward = inker_canvas.marquee_rect((2.3, 2.3), (10.7, 10.7))
+    backward = inker_canvas.marquee_rect((10.7, 10.7), (2.3, 2.3))
     assert forward == backward
     assert forward == (2, 2, 11, 11)
 

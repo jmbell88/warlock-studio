@@ -14,7 +14,7 @@ from imgui_bundle import imgui
 
 from .. import inker, inker_mode, theme, widgets
 from ..manual import render as manual_render
-from . import paint_textures
+from . import inker_textures
 
 THUMB = 40.0
 
@@ -27,7 +27,7 @@ def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("layers")
-    manual_render.help_button(ctx, "paint-layers")
+    manual_render.help_button(ctx, "inker-layers")
     if tab is None:
         widgets.muted("Nothing open.")
         return
@@ -92,7 +92,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
         doc.set_layer_props(index, visible=visible)
     imgui.same_line()
 
-    texture = paint_textures.layer_thumb(ctx, tab, index)
+    texture = inker_textures.layer_thumb(ctx, tab, index)
     if texture is not None:
         imgui.image(widgets.texture_ref(texture), (THUMB, THUMB))
         imgui.same_line()
@@ -127,11 +127,11 @@ def _reorder(doc: Any, index: int) -> None:
     different layer than the one under the cursor.
     """
     if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
-        imgui.set_drag_drop_payload_py_id("paint-layer", index)
+        imgui.set_drag_drop_payload_py_id("inker-layer", index)
         imgui.text(doc.stack[index].name)
         imgui.end_drag_drop_source()
     if imgui.begin_drag_drop_target():
-        payload = imgui.accept_drag_drop_payload_py_id("paint-layer")
+        payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
         if payload is not None:
             source = int(payload.data_id)
             if 0 <= source < len(doc.stack) and source != index:

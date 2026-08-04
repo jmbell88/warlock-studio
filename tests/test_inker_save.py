@@ -271,9 +271,9 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
     import ast
     import inspect
 
-    from warlock.studio.panes import paint_bridge, paint_tools
+    from warlock.studio.panes import inker_bridge, inker_tools
 
-    for func in (paint_bridge._canvas_ops, paint_bridge._resize_popup, paint_tools._options):
+    for func in (inker_bridge._canvas_ops, inker_bridge._resize_popup, inker_tools._options):
         tree = ast.parse(inspect.getsource(func).lstrip())
         gates = [
             call

@@ -18,14 +18,14 @@ from typing import Any
 
 # The checkerboard behind transparency. One small texture drawn tiled, so the
 # pattern costs a single quad however far the canvas is zoomed out.
-_CHECKER_KEY = "paint_checker"
+_CHECKER_KEY = "inker_checker"
 CHECKER_SQUARE = 8
 CHECKER_LIGHT = (58, 58, 64, 255)
 CHECKER_DARK = (44, 44, 50, 255)
 
 
 def _slot(uid: str, name: str) -> str:
-    return f"paint_tex:{uid}:{name}"
+    return f"inker_tex:{uid}:{name}"
 
 
 def _forget(ctx: Any, texture: Any) -> None:
@@ -143,7 +143,7 @@ def checker(ctx: Any) -> Any:
 
 def release_doc(ctx: Any, uid: str) -> None:
     """Drop every texture belonging to one closed tab."""
-    prefix = f"paint_tex:{uid}:"
+    prefix = f"inker_tex:{uid}:"
     for key in [k for k in list(ctx.state.preview) if k.startswith(prefix)]:
         value = ctx.state.preview.pop(key, None)
         if value is not None and hasattr(value, "release"):
@@ -151,7 +151,7 @@ def release_doc(ctx: Any, uid: str) -> None:
 
 
 def release_all(ctx: Any) -> None:
-    for key in [k for k in list(ctx.state.preview) if k.startswith("paint_tex:")]:
+    for key in [k for k in list(ctx.state.preview) if k.startswith("inker_tex:")]:
         value = ctx.state.preview.pop(key, None)
         if value is not None and hasattr(value, "release"):
             _forget(ctx, value)
