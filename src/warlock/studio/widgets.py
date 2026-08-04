@@ -253,7 +253,9 @@ def header(label: str, default_open: bool = True, persist_key: str | None = None
         imgui.set_next_item_open(True, imgui.Cond_.always.value)
     elif persist_key and persist_key in stored:
         imgui.set_next_item_open(bool(stored[persist_key]), imgui.Cond_.once.value)
-    flags = imgui.TreeNodeFlags_.default_open.value if default_open else 0
+    flags = imgui.TreeNodeFlags_.allow_overlap.value
+    if default_open:
+        flags |= imgui.TreeNodeFlags_.default_open.value
     with fonts.label(imgui):
         opened = imgui.collapsing_header(label, flags)
     if (
