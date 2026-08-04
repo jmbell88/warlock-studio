@@ -48,7 +48,8 @@ def help_button(ctx: Any, pane: str) -> None:
     target = HELP_TARGETS.get(pane)
     if target is None:
         return
-    imgui.same_line(max(imgui.get_content_region_max().x - sp(26), 0.0))
+    offset = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - sp(26)
+    imgui.same_line(max(offset, 0.0))
     if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
         ctx.state.manual.open_at(*target)
 
@@ -102,9 +103,11 @@ def _matches(chapter: loader.Chapter, needle: str) -> bool:
 
 
 def _draw_chapter(ctx: Any, ms: Any) -> None:
+    anchor = ms.pending_anchor
     for index, block in enumerate(_blocks(ms.chapter)):
-        _draw_block(ctx, ms, block, index)
-    ms.pending_anchor = None
+        _draw_block(ctx, ms, block, index, anchor)
+    if ms.pending_anchor == anchor:
+        ms.pending_anchor = None
     imgui.dummy((0, sp(8)))
     imgui.separator()
     toc = _toc()
@@ -118,15 +121,15 @@ def _draw_chapter(ctx: Any, ms: Any) -> None:
             ms.open_at(toc[idx + 1].key)
 
 
-def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int) -> None:
+def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str | None) -> None:
     if isinstance(block, parser.Heading):
         imgui.dummy((0, sp(6)))
         if block.level <= 2:
-            with fonts.push(imgui, fonts.SEMIBOLD, sp(22 if block.level == 1 else 17)):
+            with fonts.push(imgui, fonts.SEMIBOLD, 22 if block.level == 1 else 17):
                 imgui.text_wrapped(block.text)
         else:
             widgets.section(block.text)
-        if ms.pending_anchor == block.anchor:
+        if anchor == block.anchor:
             imgui.set_scroll_here_y(0.1)
         if block.level <= 2:
             imgui.separator()
