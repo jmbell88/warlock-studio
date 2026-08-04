@@ -33,6 +33,11 @@ PROMPT_TEMPLATE = (
     "full object in frame, no cropping, no text, no watermark"
 )
 
+# Bumped whenever PROMPT_TEMPLATE or chunk() changes. Recorded by
+# provenance.versions() so a prompt-compiler edit cannot silently invalidate a
+# benchmark comparison -- no dependency version moves when this file does.
+PROMPT_VERSION = 1
+
 _tokenizer_cache: dict[Path, tuple[Any, Any]] = {}
 
 

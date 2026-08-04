@@ -208,6 +208,7 @@ def test_the_guidance_catalog_is_served():
     body = svc_system.guidance_catalog()
     assert set(body["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
     }
@@ -354,7 +355,14 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     assert body["ok"] is True
     assert body["worker_alive"] is True
     assert body["fatal"] is None
-    assert len(body["checks"]) == 8 + len(models.BASE_MODELS) + len(models.STYLE_LORAS)
+    assert len(body["checks"]) == (
+        8
+        + len(models.BASE_MODELS)
+        + len(models.STYLE_LORAS)
+        + len(models.IP_ADAPTERS)
+        + len(models.CONTROLNETS)
+        + len(models.METRIC_MODELS)
+    )
 
 
 def test_health_does_not_rerun_the_doctor_suite_on_every_call(svc, worker, monkeypatch):

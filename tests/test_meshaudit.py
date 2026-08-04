@@ -71,3 +71,16 @@ def test_reports_face_count_and_both_summary_statistics(sphere_glb):
     result = hole_fraction(sphere_glb, resolution=256)
     assert result["faces"] == 5120  # icosphere(subdivisions=4)
     assert result["mean"] <= result["worst"]
+
+
+def test_chunking_the_rasteriser_is_bit_identical_to_one_pass(sphere_glb, monkeypatch):
+    """The (n, k, k) working set is chunked to bound a commit spike on a
+    500k-triangle mesh. `covered` is written in place, so the chunk size must
+    be invisible in the result -- forcing it down to one triangle per pass is
+    the strongest version of that claim."""
+    import warlock.meshaudit as meshaudit
+
+    unchunked = hole_fraction(sphere_glb, resolution=256)
+    monkeypatch.setattr(meshaudit, "_BATCH_MAX_CELLS", 1)
+    chunked = hole_fraction(sphere_glb, resolution=256)
+    assert chunked == unchunked

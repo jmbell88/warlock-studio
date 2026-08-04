@@ -483,3 +483,133 @@ def test_a_pose_id_is_validated_before_it_names_a_file(svc):
         svc_rig.delete_pose(svc, job_id, "../../etc/passwd")
     with pytest.raises(NotFound):
         svc_rig.posed_model(svc, job_id, "NOTHEX")
+
+
+# --- conditioning references ------------------------------------------------
+
+
+def test_a_reference_is_written_before_the_row(svc):
+    ids = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference",
+        reference=_png_bytes(), guidance_fields={"ip_adapter": "plus"},
+    )["ids"]
+    job_dir = svc.job_dir(ids[0])
+    assert (job_dir / "ref.png").exists()
+    assert svc.store.get(ids[0])["params"]["ip_adapter"] == "plus"
+
+
+def test_each_candidate_gets_its_own_reference(svc):
+    ids = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference", count=3,
+        reference=_png_bytes(), guidance_fields={"ip_adapter": "plus"},
+    )["ids"]
+    assert all((svc.job_dir(i) / "ref.png").exists() for i in ids)
+
+
+def test_a_failed_insert_removes_the_reference_directory(svc, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr(svc.store, "create", boom)
+    with pytest.raises(RuntimeError):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a barrel", output="reference",
+            reference=_png_bytes(),
+        )
+    # The other half of writing the dir before the row: no orphan directory.
+    assert not [p for p in svc.config.data_dir.iterdir() if p.is_dir()]
+
+
+def test_conditioning_without_a_reference_is_refused(svc):
+    with pytest.raises(Invalid, match="reference"):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a barrel", output="reference",
+            guidance_fields={"ip_adapter": "plus"},
+        )
+
+
+def test_only_a_text_job_takes_a_reference(svc):
+    with pytest.raises(Invalid, match="text jobs"):
+        svc_jobs.create_job(
+            svc, kind="image", image=_png_bytes(), reference=_png_bytes()
+        )
+
+
+def test_an_oversized_reference_is_refused_before_decode(svc):
+    with pytest.raises(TooLarge):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a barrel", output="reference",
+            reference=b"\x00" * (20 * 1024 * 1024 + 1),
+        )
+
+
+def test_an_undecodable_reference_is_refused(svc):
+    with pytest.raises(Invalid, match="reference"):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a barrel", output="reference",
+            reference=b"not an image at all",
+        )
+
+
+def test_a_reroll_carries_the_reference_across(svc):
+    """A reroll reruns SDXL, so the image its conditioning needs has to come
+    with it -- the first case where a *text* rerun writes a directory before
+    the row exists."""
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference",
+        reference=_png_bytes(), guidance_fields={"ip_adapter": "plus"},
+    )["id"]
+    svc.store.set_status(src, "done")
+
+    new_id = svc_jobs.rerun_job(svc, src, mode="reroll")["id"]
+    assert (svc.job_dir(new_id) / "ref.png").exists()
+    assert svc.store.get(new_id)["params"]["ip_adapter"] == "plus"
+
+
+def test_a_remesh_drops_the_conditioning_it_cannot_have_run(svc):
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference",
+        reference=_png_bytes(), guidance_fields={"ip_adapter": "plus"},
+    )["id"]
+    (svc.job_dir(src)).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(src) / "input.png").write_bytes(_png_bytes())
+    svc.store.set_status(src, "done")
+
+    new_id = svc_jobs.rerun_job(svc, src, mode="remesh")["id"]
+    params = svc.store.get(new_id)["params"]
+    assert "ip_adapter" not in params
+    assert "ip_scale" not in params
+    assert not (svc.job_dir(new_id) / "ref.png").exists()
+
+
+def test_a_promotion_drops_the_conditioning_and_copies_no_reference(svc):
+    src = svc_jobs.create_job(
+        svc, kind="text", prompt="a barrel", output="reference",
+        reference=_png_bytes(), guidance_fields={"ip_adapter": "plus"},
+    )["id"]
+    (svc.job_dir(src) / "input.png").write_bytes(_png_bytes())
+    svc.store.set_status(src, "done")
+
+    new_id = svc_jobs.promote_to_model(svc, src)["id"]
+    params = svc.store.get(new_id)["params"]
+    assert not any(k in params for k in ("ip_adapter", "ip_scale", "control"))
+    assert not (svc.job_dir(new_id) / "ref.png").exists()
+
+
+def test_a_promotion_refuses_a_reference_that_cannot_reconstruct(svc):
+    """The mesh stage is where the GPU minutes are, so the check happens here
+    rather than after."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="reference")["id"]
+    (svc.job_dir(job_id)).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(job_id) / "input.png").write_bytes(_png_bytes())
+    svc.store.merge_params(
+        job_id,
+        {"reference_report": {"ok": False, "reasons": ["There is more than one object."]}},
+    )
+    svc.store.set_status(job_id, "done")
+
+    with pytest.raises(Invalid, match="more than one object"):
+        svc_jobs.promote_to_model(svc, job_id)
+
+    # Heuristics about composition, not facts -- so it is bypassable.
+    assert svc_jobs.promote_to_model(svc, job_id, force=True)["parent"] == job_id

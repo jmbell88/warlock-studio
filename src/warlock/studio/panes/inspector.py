@@ -19,6 +19,10 @@ from .. import theme, widgets
 from ..state import format_duration
 from . import pose_panel, sheet_panel
 
+# Matches the library card's thumbnail, so the two read as the same kind of
+# object rather than as two different image widgets.
+THUMB_SIZE = 96
+
 
 def draw(ctx: Any) -> None:
     job = ctx.job()
@@ -31,6 +35,7 @@ def draw(ctx: Any) -> None:
     if job.get("status") == "error":
         _error(ctx, job)
     _settings(ctx, job)
+    _reference(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)
         pose_panel.draw(ctx, job)
@@ -86,7 +91,9 @@ def _error(ctx: Any, job: Any) -> None:
         ctx.submit(key, svc_system.trellis_log, ctx.svc)
     log_text = ctx.state.preview.get("trellis_log") if ctx.state.preview else None
     if log_text:
-        imgui.input_text_multiline("##log", log_text[-4000:], (-1, 160))
+        imgui.input_text_multiline(
+            "##log", log_text[-4000:], (-1, 160), imgui.InputTextFlags_.word_wrap.value
+        )
     if "error.log" in (job.get("files") or []) and imgui.button("Save error.log..."):
         ctx.save_artifact(job["id"], "error.log")
     imgui.tree_pop()
@@ -107,6 +114,10 @@ def _settings(ctx: Any, job: Any) -> None:
         ("size (m)", params.get("size_m")),
         ("model", params.get("base_model")),
         ("style LoRA", params.get("style_lora")),
+        ("appearance ref", params.get("ip_adapter")),
+        ("appearance strength", params.get("ip_scale")),
+        ("structure", params.get("control")),
+        ("structure strength", params.get("control_scale")),
         ("background", params.get("bg_removal")),
         ("profile", params.get("profile")),
     ]
@@ -118,6 +129,54 @@ def _settings(ctx: Any, job: Any) -> None:
     if composed and imgui.tree_node("Prompt sent"):
         imgui.text_wrapped(str(composed))
         imgui.tree_pop()
+
+
+def _reference(ctx: Any, job: Any) -> None:
+    """What the mesh engine was actually handed, and what it made of it.
+
+    The three images answer the question a bad mesh always raises -- was it
+    the reconstruction, or was it what we sent? -- which nothing in the UI
+    could answer before: trellis was streamed input.png verbatim and no
+    measurement of it was kept.
+    """
+    params = job.get("params") or {}
+    report = params.get("reference_report")
+    files = set(job.get("files") or [])
+    shown = [n for n in ("input.png", "ref.png", "reference.png", "control.png") if n in files]
+    if not isinstance(report, dict) and len(shown) <= 1:
+        return
+    if not widgets.header("Reference", default_open=False):
+        return
+
+    if isinstance(report, dict):
+        for reason in report.get("reasons") or []:
+            widgets.text_colored(theme.ERR, reason)
+        for warning in report.get("warnings") or []:
+            widgets.text_colored(theme.WARN, warning)
+        if report.get("occupancy"):
+            widgets.muted(f"the subject fills {float(report['occupancy']) * 100:.0f}% of the frame")
+        if report.get("measured") is False:
+            widgets.muted("not measured")
+        elif report.get("normalised"):
+            widgets.muted("recentred and rescaled before upload")
+
+    hint = params.get("control_hint")
+    if isinstance(hint, dict) and hint.get("edge_fraction") is not None:
+        # The number that answers "my silhouette lock did nothing": near zero
+        # means the detector found no structure, not that it was ignored.
+        widgets.muted(f"{hint['kind']} hint: {float(hint['edge_fraction']) * 100:.1f}% edges")
+
+    if ctx.textures is None:
+        return
+    for name in shown:
+        # Keyed by job *and* file: the cache keys on (id, mtime), so sharing
+        # the bare job id across four images would show whichever one was
+        # decoded first for all of them.
+        texture = ctx.textures.get(f"{job['id']}:{name}", ctx.job_dir(job["id"]) / name)
+        if texture is None:
+            continue
+        widgets.muted(name)
+        imgui.image(widgets.texture_ref(texture), (THUMB_SIZE, THUMB_SIZE))
 
 
 def _quality(ctx: Any, job: Any) -> None:

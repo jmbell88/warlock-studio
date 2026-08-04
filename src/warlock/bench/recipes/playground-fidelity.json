@@ -1,0 +1,10 @@
+{
+  "key": "playground-fidelity",
+  "label": "Playground v2.5, 25 steps with CFG",
+  "notes": "The slow, high-fidelity end. Also the first recipe whose negative prompt actually bites.",
+  "guidance": {
+    "base_model": "playground",
+    "platform": "hero"
+  },
+  "profile": "raw"
+}

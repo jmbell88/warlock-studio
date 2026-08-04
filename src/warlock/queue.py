@@ -30,9 +30,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, guidance, models, rigging
+from . import errors, guidance, memlog, models, provenance, rigging
 from .config import Config
 from .db import JobStore
+from .pipelines import control, reference
 from .pipelines.trellis import TrellisServer
 from .progress import ProgressBus, TrellisProgressParser
 
@@ -44,8 +45,22 @@ SHUTDOWN_TIMEOUT = 20.0
 # Labels for the text-to-image phases, which have no trace of their own.
 T2I_PHASES = {
     "load": ("t2i_load", "Loading image model"),
+    # Attaching a ControlNet/IP-Adapter is a few seconds of loading, so it maps
+    # onto the existing load phase rather than adding one -- the progress model
+    # and its ETA need no change.
+    "condition": ("t2i_load", "Loading conditioning"),
     "sample": ("t2i_sample", "Drawing reference image"),
 }
+
+# Whether reference.prepare recentres and rescales the subject, or merely
+# measures it. False on purpose: upstream TRELLIS crops and pads in its own
+# preprocessing and the vendored exe very likely does too, in which case
+# normalising host-side over-zooms. This phase ships the report, the rejection
+# rules and reference.png as an audit artifact *before* it ships the
+# transform. Flip the default only after a sweep over 3 occupancy values x 3
+# subjects scored with meshaudit.hole_fraction -- the same way
+# Config.trellis_band was settled.
+DEFAULT_REFERENCE_PREP = False
 
 
 @dataclass
@@ -76,17 +91,25 @@ def vram_gib() -> tuple[float, float] | None:
     return (torch.cuda.memory_allocated() / gib, torch.cuda.memory_reserved() / gib)
 
 
-def _log_vram(when: str) -> None:
-    """Log VRAM at a handoff boundary.
+def _log_mem(when: str) -> None:
+    """Log VRAM *and* host memory at a stage boundary.
 
     The VRAM invariant (stop-before-load, unload-before-next-start) has one
     failure mode: an OOM that only reproduces under load. Nothing used to
     record whether the memory actually came back, so a regression was
     invisible until a user hit it. These lines are the record.
+
+    The host half was added after the 2026-08-03 crash, which was commit
+    exhaustion with the GPU nearly empty -- a failure the VRAM line alone
+    could not have shown. Paired at the same boundaries, the two answer the
+    question that matters: does memory come back after a job, or only grow.
     """
     mem = vram_gib()
     if mem is not None:
         log.info("vram %s: %.2f GiB allocated, %.2f GiB reserved", when, *mem)
+    host = memlog.summary()
+    if host is not None:
+        log.info("host %s: %s", when, host)
 
 
 class Worker:
@@ -136,7 +159,13 @@ class Worker:
             return
         exc = task.exception()
         if exc is not None:
-            self.fatal = exc
+            # Log with the traceback, store without it. A stored exception
+            # keeps its __traceback__, which keeps every frame of the dying
+            # call stack alive -- and those frames hold the pipeline and its
+            # tensors. self.fatal is never cleared, so that retention lasts for
+            # process life. Only the exception itself is ever read (main.py
+            # renders str(fatal)); the traceback is already in the log.
+            self.fatal = exc.with_traceback(None)
             log.critical("gpu worker task died", exc_info=exc)
 
     def wake(self) -> None:
@@ -205,6 +234,12 @@ class Worker:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._task
         await asyncio.to_thread(self.trellis.stop)
+        # Shutdown used to stop trellis and leave SDXL loaded. Harmless when
+        # the process exits immediately after -- but shutdown() is also reached
+        # on paths that keep the interpreter alive, and the pipeline's several
+        # GB of host-pinned staging memory has no other release point.
+        if self._text2image is not None and self._text2image.loaded:
+            await asyncio.to_thread(self._text2image.unload)
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -402,13 +437,81 @@ class Worker:
             # see, source.glb is what it was derived from. Leaving the source
             # behind would let a cancelled job be re-optimized back into
             # existence.
+            job_dir = self.config.job_dir(job["id"])
             paths = [
-                self.config.job_dir(job["id"]) / "model.glb",
-                self.config.job_dir(job["id"]) / "source.glb",
+                job_dir / "model.glb",
+                job_dir / "source.glb",
+                # Both derived from ref.png/input.png by this run. ref.png
+                # itself stays: it is a user-supplied input, and keeping it is
+                # what makes "cancel, tweak, resubmit" work.
+                job_dir / "reference.png",
+                job_dir / "control.png",
             ]
         for path in paths:
             with contextlib.suppress(OSError):
                 path.unlink()
+
+    async def _conditioning(self, job_dir: Path, params: dict[str, Any], spec):
+        """Resolve a job's conditioning selection into a Conditioning, or None.
+
+        Returns None whenever there is nothing to attach, which is what keeps
+        the unconditioned path bit-identical: the pipeline is handed None, not
+        an empty object it would have to interpret.
+
+        An unknown registry key is dropped with a warning rather than failing
+        the job -- the same tolerance base_model and the style LoRAs already
+        get, for the same reason: params can predate a rename and the user
+        cannot fix a row that already exists.
+        """
+        from .pipelines.conditioning import Conditioning
+
+        ref = job_dir / "ref.png"
+        if not ref.exists():
+            return None
+
+        ip_key = params.get("ip_adapter") or None
+        if ip_key is not None and ip_key not in models.IP_ADAPTERS:
+            log.warning("unknown ip_adapter %r; generating without it", ip_key)
+            ip_key = None
+
+        control_key = params.get("control") or None
+        if control_key is not None and control_key not in models.CONTROLNETS:
+            log.warning("unknown control %r; generating without it", control_key)
+            control_key = None
+        if control_key is not None and not spec.controlnet:
+            # Reachable when a stored base_model fell back to the registry
+            # default above, or when a base loses its controlnet flag.
+            log.warning(
+                "base model %s cannot run a ControlNet; generating without it", spec.key
+            )
+            control_key = None
+
+        if ip_key is None and control_key is None:
+            return None
+
+        control_image = None
+        if control_key is not None:
+            cn = models.CONTROLNETS[control_key]
+            control_image = job_dir / "control.png"
+            params["control_hint"] = await asyncio.to_thread(
+                functools.partial(
+                    control.write_hint,
+                    ref,
+                    control_image,
+                    kind=cn.preprocessor,
+                    size=spec.image_size,
+                )
+            )
+
+        return Conditioning(
+            ip_adapter=ip_key,
+            ip_image=ref if ip_key else None,
+            ip_scale=float(params.get("ip_scale", models.DEFAULT_IP_SCALE)),
+            control=control_key,
+            control_image=control_image,
+            control_scale=float(params.get("control_scale", models.DEFAULT_CONTROL_SCALE)),
+            control_end=float(params.get("control_end", models.DEFAULT_CONTROL_END)),
+        )
 
     async def _generate(self, job: dict[str, Any]) -> None:
         if job["kind"] == "rig":
@@ -431,13 +534,6 @@ class Worker:
         job_id = job["id"]
         assert self._cancel is not None
         if job["kind"] == "text":
-            if self.config.vram_exclusive:
-                # Sequential handoff: both models can't fit -- free the VRAM
-                # held by the 3D server before the image model loads. Threaded
-                # because stop() can block for up to ~20 s, and this fires at
-                # the exact moment the user starts watching the progress bar.
-                await asyncio.to_thread(self.trellis.stop)
-                _log_vram("after trellis stop")
             base_key = str(params.get("base_model") or self.config.t2i_model)
             if base_key not in models.BASE_MODELS:
                 # Params can predate a registry entry being renamed or removed;
@@ -451,6 +547,30 @@ class Worker:
                 base_key = models.DEFAULT_BASE_MODEL
             style_lora = params.get("style_lora") or None
             lora_weight = float(params.get("lora_weight", models.DEFAULT_LORA_WEIGHT))
+            spec = models.BASE_MODELS[base_key]
+            cond = await self._conditioning(job_dir, params, spec)
+            # A fully conditioned CFG job wants ~6 GB over the unconditioned
+            # budget (a ControlNet plus the CLIP-ViT-H encoder), which does not
+            # fit beside a resident trellis on a 32 GB card. A reference-stage
+            # job -- where the UI actually offers conditioning -- is unaffected,
+            # because trellis is not involved in it at all.
+            # The old form of this test exempted stage == "reference", on the
+            # reasoning that trellis is not involved in a reference job. But
+            # trellis stays *resident* for trellis_idle_timeout (600 s) after
+            # the previous model job, and the reference stage is the only path
+            # the UI offers conditioning from (studio/panes/settings_2d.py) --
+            # so the exemption fired on exactly the jobs it was meant to
+            # protect. Ask whether trellis is actually holding VRAM instead.
+            handoff = self.config.vram_exclusive or (
+                cond is not None and self.trellis.running
+            )
+            if handoff:
+                # Sequential handoff: both models can't fit -- free the VRAM
+                # held by the 3D server before the image model loads. Threaded
+                # because stop() can block for up to ~20 s, and this fires at
+                # the exact moment the user starts watching the progress bar.
+                await asyncio.to_thread(self.trellis.stop)
+                _log_mem("after trellis stop")
             # Before trellis restarts in exclusive mode and before SDXL loads:
             # a base switch frees the previous 7 GB pipe, and doing it here
             # keeps the stop-before-load ordering intact either way.
@@ -469,22 +589,41 @@ class Worker:
                         lora=style_lora,
                         lora_weight=lora_weight,
                         negative_prompt=str(params.get("negative_prompt") or ""),
+                        conditioning=cond,
                         on_state=lambda s: self._t2i_state(job_id, s),
                         on_step=lambda i, n: self._t2i_step(job_id, i, n),
                         cancel_event=self._cancel.event,
                     )
                 )
                 params["composed_prompt"] = t2i.last_prompt or composed
+                if job.get("stage") == "reference":
+                    # Measure only, and never a rejection: the user is judging
+                    # the image, and the mesh stage is where the cost is. This
+                    # is what promote_to_model's soft check reads.
+                    params["reference_report"] = (
+                        await asyncio.to_thread(reference.measure_file, image_path)
+                    ).as_dict()
+                if t2i.last_recipe:
+                    params.setdefault("recipe", {})["reference"] = t2i.last_recipe
                 await asyncio.to_thread(self.store.set_params, job_id, params)
             finally:
-                if self.config.vram_exclusive:
+                if handoff:
                     await asyncio.to_thread(t2i.unload)
+                else:
+                    # Coexist mode keeps the pipeline resident by design, which
+                    # is why nothing here used to run at all -- the teardown is
+                    # a no-op closure. But "stays loaded" was silently also
+                    # meaning "never returns its caching allocator pool", and
+                    # under WDDM those device blocks are charged against system
+                    # commit. trim() gives the pool back without unloading
+                    # anything, so the VRAM-modes invariant is untouched.
+                    await asyncio.to_thread(t2i.trim)
 
             if job.get("stage") == "reference":
                 # The whole point of the split: the user judges the image before
                 # anything pays for a trellis run. The job is finished here --
                 # promotion creates a separate child job (app.promote_to_model).
-                _log_vram("after reference-only job")
+                _log_mem("after reference-only job")
                 return
         elif not image_path.exists():
             raise RuntimeError("image job has no uploaded input.png")
@@ -507,9 +646,30 @@ class Worker:
         # another trellis run.
         source_glb = job_dir / "source.glb"
         glb_path = job_dir / "model.glb"
-        _log_vram("before trellis generate")
+
+        # What trellis actually sees, measured and recorded before it is
+        # uploaded. The rejection happens *here*, not after: a reference that
+        # cannot reconstruct should cost the request, not two minutes of GPU.
+        trellis_input = job_dir / "reference.png"
+        report = await asyncio.to_thread(
+            functools.partial(
+                reference.prepare,
+                image_path,
+                trellis_input,
+                enabled=bool(params.get("reference_prep", DEFAULT_REFERENCE_PREP)),
+            )
+        )
+        params["reference_report"] = report.as_dict()
+        params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
+            self.config, params, mesh_seed=mesh_seed
+        )
+        await asyncio.to_thread(self.store.set_params, job_id, params)
+        if not report.ok:
+            raise RuntimeError("; ".join(report.reasons))
+
+        _log_mem("before trellis generate")
         await self.trellis.generate(
-            image_path,
+            trellis_input,
             source_glb,
             seed=mesh_seed,
             resolution=resolution,

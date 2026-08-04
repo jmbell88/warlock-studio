@@ -14,6 +14,11 @@ dependencies = [
     # hull and trimesh delegates the hull itself to scipy.spatial -- without
     # this it raises ModuleNotFoundError at call time rather than at import.
     "scipy>=1.11",
+    # Flood fill, connected components and Canny. Core rather than part of the
+    # text2image extra because pipelines/reference.py measures every job's
+    # reference before the trellis upload, and that path never touches torch.
+    # The headless build on purpose: the GUI one drags in Qt.
+    "opencv-python-headless>=4.10",
 ]
 
 [project.optional-dependencies]

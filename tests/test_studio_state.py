@@ -12,6 +12,7 @@ import json
 import pytest
 
 from warlock.studio import settings as settingslib
+from warlock.studio import state as statelib
 from warlock.studio.jobs_cache import JobsCache, transition_message
 from warlock.studio.state import (
     AppState,
@@ -360,3 +361,134 @@ def test_a_settings_write_is_atomic(tmp_path):
     s.flush()
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".settings.")]
     assert leftovers == []
+
+
+# --- profiles ---------------------------------------------------------------
+
+
+def test_a_fresh_form_rolls_its_own_seed():
+    """The seed is not persisted, so a constant default meant every launch
+    opened on the same one and a first Generate reproduced last week's image."""
+    seeds = {statelib.default_form_2d()["seed"] for _ in range(8)}
+    assert len(seeds) > 1
+    assert all(0 <= s <= 2**31 - 1 for s in seeds)
+
+
+def test_a_profile_captures_style_and_not_the_generation():
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form.update(prompt="a barrel", genre="fantasy", base_model="turbo", count=4)
+    captured = profiles.capture(form)
+    assert captured["genre"] == "fantasy"
+    assert captured["base_model"] == "turbo"
+    for volatile in ("prompt", "seed", "seed_locked", "count"):
+        assert volatile not in captured
+
+
+def test_a_profile_carries_the_look_fields_and_not_the_per_asset_ones():
+    """A profile is a house style. Dragging 'category' or 'mood' along with it
+    would make switching profiles quietly rewrite what the asset *is*."""
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form.update(
+        genre="fantasy",
+        art_style="painterly",
+        setting="dungeon",
+        palette="muted",
+        category="weapon",
+        material="wood",
+        condition="worn",
+        emissive="none",
+        rarity="common",
+        silhouette="tall",
+        mood="grim",
+    )
+    captured = profiles.capture(form)
+    assert set(profiles.TAXONOMY) <= set(captured)
+    for per_asset in (
+        "category", "material", "condition", "emissive", "rarity", "silhouette", "mood",
+    ):
+        assert per_asset not in captured
+
+
+def test_a_profile_saved_with_per_asset_fields_is_inert_when_applied():
+    """Old profiles on disk keep their extra keys; apply() must ignore them
+    rather than needing a migration."""
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form["mood"] = "cheerful"
+    profiles.apply(form, {"genre": "fantasy", "mood": "grim", "category": "weapon"})
+    assert form["genre"] == "fantasy"
+    assert form["mood"] == "cheerful"
+    assert form["category"] == statelib.default_form_2d()["category"]
+
+
+def test_applying_a_profile_leaves_the_generation_fields_alone():
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form.update(prompt="a barrel", seed=7, count=4)
+    profiles.apply(form, {"genre": "fantasy", "prompt": "hijacked", "bogus": 1})
+    assert form["genre"] == "fantasy"
+    assert (form["prompt"], form["seed"], form["count"]) == ("a barrel", 7, 4)
+    assert "bogus" not in form
+
+
+def test_profiles_round_trip_through_settings(tmp_path):
+    from warlock.studio import profiles
+
+    s = settingslib.Settings.load(tmp_path)
+    profiles.save_profile(s, "props", {"genre": "fantasy"})
+    profiles.set_active(s, "props")
+    assert profiles.active_fields(s) == {"genre": "fantasy"}
+    s.flush()
+
+    reloaded = settingslib.Settings.load(tmp_path)
+    assert profiles.list_profiles(reloaded) == {"props": {"genre": "fantasy"}}
+
+    profiles.delete_profile(reloaded, "props")
+    assert profiles.list_profiles(reloaded) == {}
+    # Deleting the active one clears the pointer: a stale name would make the
+    # next New 2D Image apply nothing while claiming a profile was on.
+    assert profiles.get_active(reloaded) is None
+
+
+# --- conditioning -----------------------------------------------------------
+
+
+def test_a_conditioning_scale_survives_a_restart_as_a_float():
+    """restore_form gates on `type(value) is type(default)`, so every scale in
+    the default form has to be a float literal -- an int default would make a
+    persisted 0.6 fail to restore, silently reverting the slider."""
+    defaults = statelib.default_form_2d()
+    for key in ("ip_scale", "control_scale", "control_end"):
+        assert isinstance(defaults[key], float)
+    restored = settingslib.restore_form(defaults, {"ip_scale": 0.95})
+    assert restored["ip_scale"] == 0.95
+
+
+def test_an_int_over_a_float_scale_is_dropped():
+    defaults = statelib.default_form_2d()
+    assert settingslib.restore_form(defaults, {"ip_scale": 1})["ip_scale"] == defaults["ip_scale"]
+
+
+def test_the_reference_path_never_persists():
+    """A remembered path to a file that has since moved would silently
+    condition next week's generation on nothing."""
+    form = dict(statelib.default_form_2d(), ref_path="D:/pictures/knight.png")
+    assert "ref_path" not in settingslib.sanitise_form(form)
+    restored = settingslib.restore_form(
+        statelib.default_form_2d(), {"ref_path": "D:/pictures/knight.png"}
+    )
+    assert restored["ref_path"] == ""
+
+
+def test_the_conditioning_pickers_are_not_plain_guidance_combos():
+    """They live in the Reference section and are hidden until there is an
+    image to condition on, so the generic loop must not draw them too."""
+    fields = statelib.guidance_fields()
+    assert "ip_adapter" not in fields
+    assert "control" not in fields

@@ -44,6 +44,16 @@ DEFAULT_VIEWS: tuple[tuple[float, float, float], ...] = (
 # joining a vectorised batch, to keep the (n, k, k) working set bounded.
 _BATCH_MAX_SPAN = 16
 
+# Cap on the (n, k, k) working set of one vectorised pass, in cells. k is
+# bounded by _BATCH_MAX_SPAN but n is not: a 500k-triangle trellis mesh can put
+# hundreds of thousands of triangles in a single k-group, and each pass holds
+# about a dozen float64 arrays of that shape at once. Unbounded, that is a
+# multi-gigabyte commit spike inside a mesh audit -- which is precisely the
+# kind of transient the 2026-08-03 exhaustion crash was made of. 4M cells is
+# ~32 MB per temporary, so a few hundred MB for the pass, and the chunk loop
+# costs nothing when n is small (the common case is one chunk).
+_BATCH_MAX_CELLS = 4_000_000
+
 # What the worker measures every finished mesh at. Half the diagnostic default:
 # the cost of both fixpoint loops scales with resolution^3, so 512 is ~8x
 # cheaper than 1024 -- seconds rather than tens of seconds on a job that
@@ -194,7 +204,18 @@ def _rasterise_batch(
     y0: np.ndarray,
     k: int,
 ) -> None:
-    """Pixel-centre barycentric fill for triangles sharing a k x k window size."""
+    """Pixel-centre barycentric fill for triangles sharing a k x k window size.
+
+    Chunked over the triangle axis so the working set stays bounded regardless
+    of how many triangles share a window size; `covered` is written in place,
+    so chunking is exactly equivalent to one pass.
+    """
+    chunk = max(1, _BATCH_MAX_CELLS // (k * k))
+    if len(a) > chunk:
+        for s in range(0, len(a), chunk):
+            e = s + chunk
+            _rasterise_batch(covered, a[s:e], b[s:e], c[s:e], area2[s:e], x0[s:e], y0[s:e], k)
+        return
     resolution = covered.shape[0]
     offs = np.arange(k)
     gx = (x0[:, None, None] + offs[None, None, :]).astype(np.float64) + 0.5

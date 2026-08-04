@@ -1,0 +1,12 @@
+{
+  "key": "sdxl-hyper-render3d",
+  "label": "SDXL 1.0 + Hyper-SD, 3D-render LoRA",
+  "notes": "The backend where the style LoRAs behave as trained -- see models.py.",
+  "guidance": {
+    "base_model": "sdxl",
+    "style_lora": "render3d",
+    "platform": "desktop"
+  },
+  "lora_weight": 0.9,
+  "profile": "raw"
+}

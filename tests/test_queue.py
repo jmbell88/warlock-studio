@@ -793,3 +793,185 @@ async def test_a_wake_during_the_queue_read_is_not_swallowed(worker):
     started = time.monotonic()
     await asyncio.wait_for(worker._wait_for_work(), timeout=POLL_INTERVAL)
     assert time.monotonic() - started < POLL_INTERVAL
+
+
+# --- conditioning -----------------------------------------------------------
+
+
+def _ref_png(path, size=(64, 64), box=(16, 16, 47, 47)):
+    from PIL import Image, ImageDraw
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    im = Image.new("RGB", size, (200, 200, 200))
+    ImageDraw.Draw(im).rectangle(list(box), fill=(40, 90, 160))
+    im.save(path)
+    return path
+
+
+async def test_an_unconditioned_job_hands_the_pipeline_none(worker):
+    """The bit-identity contract, asserted at the boundary that decides it: a
+    job with no reference must pass conditioning=None, not an empty object the
+    pipeline would have to interpret."""
+    job_id = worker.store.create("text", "a barrel", {"seed": 1}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.conditionings == [None]
+
+
+async def test_a_conditioned_job_reaches_the_pipeline_with_its_scales(worker):
+    params = {
+        "seed": 1, "base_model": "sdxl_cfg",
+        "ip_adapter": "plus", "ip_scale": 0.9,
+        "control": "canny", "control_scale": 0.4, "control_end": 0.5,
+    }
+    job_id = worker.store.create("text", "a barrel", params, stage="reference")
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    cond = worker._text2image.conditionings[-1]
+    assert cond is not None
+    assert cond.ip_adapter == "plus" and cond.ip_scale == 0.9
+    assert cond.control == "canny" and cond.control_scale == 0.4
+    assert cond.control_end == 0.5
+    assert cond.ip_image == worker.config.job_dir(job_id) / "ref.png"
+    assert cond.control_image.exists(), "the hint has to be written before the call"
+    assert worker.store.get(job_id)["params"]["control_hint"]["kind"] == "canny"
+
+
+async def test_an_unknown_conditioning_key_is_dropped_rather_than_failing(worker):
+    """Params can predate a registry rename, and the user cannot fix a row that
+    already exists -- the same tolerance base_model already gets."""
+    params = {"seed": 1, "base_model": "sdxl_cfg", "ip_adapter": "gone", "control": "gone"}
+    job_id = worker.store.create("text", "a barrel", params, stage="reference")
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+    assert worker._text2image.conditionings[-1] is None
+
+
+async def test_a_control_on_a_distilled_base_is_dropped_not_run(worker):
+    params = {"seed": 1, "base_model": "turbo", "control": "canny"}
+    job_id = worker.store.create("text", "a barrel", params, stage="reference")
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.conditionings[-1] is None
+    assert not (worker.config.job_dir(job_id) / "control.png").exists()
+
+
+async def test_a_conditioned_model_stage_job_stops_trellis_before_loading(worker):
+    """A ControlNet plus the CLIP-ViT-H encoder is ~6 GB over the unconditioned
+    budget, which does not fit beside a resident trellis on a 32 GB card."""
+    params = {"seed": 1, "base_model": "sdxl_cfg", "ip_adapter": "plus"}
+    job_id = worker.store.create("text", "a barrel", params)
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.stop_calls >= 1
+    assert worker._text2image.unload_calls >= 1
+
+
+async def test_a_conditioned_reference_job_leaves_trellis_alone(worker):
+    """The stage the UI actually offers conditioning on never involves trellis,
+    so it must not pay for a restart."""
+    params = {"seed": 1, "base_model": "sdxl_cfg", "ip_adapter": "plus"}
+    job_id = worker.store.create("text", "a barrel", params, stage="reference")
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    # Read before shutdown, which stops trellis for its own reasons.
+    stops = worker.trellis.stop_calls
+    await worker.shutdown()
+
+    assert stops == 0
+
+
+# --- the reference trellis actually sees ------------------------------------
+
+
+async def test_trellis_receives_reference_png_not_input_png(worker):
+    job_id = _make_image_job(worker)
+    _ref_png(worker.config.job_dir(job_id) / "input.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    call = worker.trellis.generate_calls[-1]
+    assert call["image_path"].name == "reference.png"
+    assert call["image_path"].exists()
+    assert worker.store.get(job_id)["params"]["reference_report"]["ok"] is True
+
+
+async def test_a_rejected_reference_fails_before_trellis_runs(worker):
+    """The rejection has to cost the request, not two minutes of GPU."""
+    from PIL import Image
+
+    job_id = _make_image_job(worker)
+    # An empty frame: no subject at all.
+    path = worker.config.job_dir(job_id) / "input.png"
+    Image.new("RGB", (64, 64), (200, 200, 200)).save(path)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls == []
+    assert worker.store.get(job_id)["params"]["reference_report"]["ok"] is False
+
+
+async def test_an_unreadable_reference_is_passed_on_rather_than_rejected(worker):
+    """The rules are about composition, and none of them can be evaluated on
+    bytes that will not decode -- trellis is the authority on that."""
+    job_id = _make_image_job(worker)  # input.png is b"fake-png"
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls
+    report = worker.store.get(job_id)["params"]["reference_report"]
+    assert report["ok"] is True
+    assert report["measured"] is False
+
+
+async def test_a_finished_job_records_its_trellis_recipe(worker):
+    job_id = _make_image_job(worker)
+    _ref_png(worker.config.job_dir(job_id) / "input.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    recipe = worker.store.get(job_id)["params"]["recipe"]["trellis"]
+    assert recipe["seed"] == 1
+    assert "versions" in recipe
+
+
+async def test_a_cancelled_job_keeps_the_users_reference(worker):
+    """ref.png is a user-supplied input; keeping it is what makes "cancel,
+    tweak, resubmit" work. The two images this run derived from it go."""
+    job_id = _make_image_job(worker)
+    job_dir = worker.config.job_dir(job_id)
+    _ref_png(job_dir / "input.png")
+    _ref_png(job_dir / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.trellis.running)
+    # Written by _conditioning on a text job; placed here because this one is
+    # an image job, and what is under test is which paths a cancel removes.
+    _ref_png(job_dir / "control.png")
+
+    await worker.request_cancel(job_id)
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "cancelled")
+    await worker.shutdown()
+
+    assert (job_dir / "ref.png").exists()
+    assert not (job_dir / "reference.png").exists()
+    assert not (job_dir / "control.png").exists()

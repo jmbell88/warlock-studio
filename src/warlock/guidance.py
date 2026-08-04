@@ -231,6 +231,12 @@ _TABLES: dict[str, dict[str, Any]] = {
     **_OPTION_TABLES,
     "base_model": models.BASE_MODELS,
     "style_lora": models.STYLE_LORAS,
+    # Conditioning selections. Same reasoning as base_model/style_lora: they
+    # are validated here so the 400 comes from one place, and are absent from
+    # _PROMPT_FIELDS because they are not prompt fragments -- compose_prompt's
+    # output is byte-identical with and without any of them.
+    "ip_adapter": models.IP_ADAPTERS,
+    "control": models.CONTROLNETS,
 }
 
 # Order matters: this is the order fragments appear in the composed prompt, so
@@ -257,6 +263,21 @@ def _lookup(field: str, value: Any) -> Any | None:
     if option is None:
         raise ValueError(f"unknown {field} {value!r}; expected one of {sorted(table)}")
     return option
+
+
+def _number(raw: dict[str, Any], field: str, *, default: float, low: float, high: float) -> float:
+    """A bounded float field, with the same missing-or-empty-means-default rule
+    lora_weight has had since it was the only one."""
+    value = raw.get(field)
+    if value in (None, ""):
+        return float(default)
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number, got {value!r}") from exc
+    if not low <= value <= high:
+        raise ValueError(f"{field} must be between {low} and {high}")
+    return value
 
 
 def normalize(raw: dict[str, Any]) -> dict[str, Any]:
@@ -303,6 +324,32 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
                 f"and {models.LORA_WEIGHT_MAX}"
             )
 
+    ip_adapter = chosen["ip_adapter"]
+    control = chosen["control"]
+    if control is not None and not base_model.controlnet:
+        raise ValueError(
+            f"base_model {base_model.key!r} cannot run a ControlNet; "
+            f"pick one of {models.controlnet_bases()}"
+        )
+
+    # The selection's own tuned default, so picking an adapter is one click --
+    # the same rule lora_weight follows.
+    ip_scale = _number(
+        raw, "ip_scale",
+        default=ip_adapter.default_scale if ip_adapter else models.DEFAULT_IP_SCALE,
+        low=models.IP_SCALE_MIN, high=models.IP_SCALE_MAX,
+    )
+    control_scale = _number(
+        raw, "control_scale",
+        default=control.default_scale if control else models.DEFAULT_CONTROL_SCALE,
+        low=models.CONTROL_SCALE_MIN, high=models.CONTROL_SCALE_MAX,
+    )
+    control_end = _number(
+        raw, "control_end",
+        default=control.default_end if control else models.DEFAULT_CONTROL_END,
+        low=models.CONTROL_END_MIN, high=models.CONTROL_END_MAX,
+    )
+
     bg_removal = raw.get("bg_removal")
     if bg_removal in (None, ""):
         bg_removal = DEFAULT_BG_REMOVAL
@@ -334,6 +381,15 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     if style_lora is not None:
         out["style_lora"] = style_lora.key
         out["lora_weight"] = lora_weight
+    # Same rule again for both conditioning halves: a scale with nothing to
+    # scale reads as a live setting on rerun.
+    if ip_adapter is not None:
+        out["ip_adapter"] = ip_adapter.key
+        out["ip_scale"] = ip_scale
+    if control is not None:
+        out["control"] = control.key
+        out["control_scale"] = control_scale
+        out["control_end"] = control_end
     # Every optional taxonomy field except platform, which is always written
     # explicitly above. Derived from _OPTION_TABLES rather than a hand-picked
     # tuple so a new table can never be silently dropped from params again.
@@ -453,6 +509,9 @@ def catalog() -> dict[str, Any]:
         }
         | models.catalog(),
         "bg_removal": list(BG_REMOVAL),
+        # Not a select, so not under "fields": what the UI checks the chosen
+        # base against before it draws the Structure group at all.
+        "controlnet_bases": models.controlnet_bases(),
         # Copied, not handed out: the UI reads these and a shared dict would let
         # a caller mutate the shipped table.
         "presets": [dict(p) for p in PRESETS],
@@ -466,4 +525,7 @@ def catalog() -> dict[str, Any]:
         },
         "size_range_m": [SIZE_MIN_M, SIZE_MAX_M],
         "lora_weight_range": [models.LORA_WEIGHT_MIN, models.LORA_WEIGHT_MAX],
+        "ip_scale_range": [models.IP_SCALE_MIN, models.IP_SCALE_MAX],
+        "control_scale_range": [models.CONTROL_SCALE_MIN, models.CONTROL_SCALE_MAX],
+        "control_end_range": [models.CONTROL_END_MIN, models.CONTROL_END_MAX],
     }

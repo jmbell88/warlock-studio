@@ -14,6 +14,7 @@ from .errors import Conflict, Failed, Invalid, NotFound, TooLarge
 from .files import ImageTooLarge, attach_files, measure_storage, to_png
 from .validation import (
     ALLOWED_RESOLUTIONS,
+    CONDITIONING_PARAMS,
     DERIVED_PARAMS,
     MAX_JOB_NAME,
     MAX_LIST_LIMIT,
@@ -65,13 +66,18 @@ def create_job(
     resolution: int | None = None,
     size_m: float | None = None,
     lora_weight: float | None = None,
+    ip_scale: float | None = None,
+    control_scale: float | None = None,
+    control_end: float | None = None,
     bg_removal: str | None = None,
     negative_prompt: str | None = None,
     rig: bool = False,
     rig_template: str | None = None,
+    reference_prep: bool | None = None,
     profile: str | None = None,
     custom_triangles: int | None = None,
     image: bytes | None = None,
+    reference: bytes | None = None,
     output: str = "model",
     count: int = 1,
     guidance_fields: dict[str, Any] | None = None,
@@ -107,6 +113,10 @@ def create_job(
         raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
     if kind == "image" and image is None:
         raise Invalid("image jobs require an image upload", field="image")
+    if reference is not None and kind != "text":
+        # An image job never touches SDXL, so there is nothing for a
+        # conditioning reference to condition.
+        raise Invalid("only text jobs take a conditioning reference", field="reference")
     for name, value in (
         ("seed", seed),
         ("reference_seed", reference_seed),
@@ -121,10 +131,20 @@ def create_job(
             "size_m": size_m,
             "resolution": resolution,
             "lora_weight": lora_weight,
+            "ip_scale": ip_scale,
+            "control_scale": control_scale,
+            "control_end": control_end,
             "bg_removal": bg_removal,
             "negative_prompt": negative_prompt,
         }
     )
+    # Checked after normalize so an unknown adapter key still fails first, and
+    # before anything is written: a conditioning selection with no image to
+    # condition on would otherwise reach the worker and be silently dropped.
+    if reference is None and (params.get("ip_adapter") or params.get("control")):
+        raise Invalid(
+            "conditioning needs a reference image", field="reference"
+        )
     # One seed used to drive both stages, so "keep this reference, try another
     # mesh" was impossible without also redrawing the image. seed remains the
     # fallback for both so old rows are unchanged.
@@ -132,6 +152,11 @@ def create_job(
     params["reference_seed"] = seed if reference_seed is None else reference_seed
     params["mesh_seed"] = seed if mesh_seed is None else mesh_seed
     _resolve_profile(params, profile, custom_triangles)
+    if reference_prep is not None:
+        # Written only when asked for, so an un-set job keeps following
+        # queue.DEFAULT_REFERENCE_PREP rather than being pinned to whatever
+        # today's default happens to be.
+        params["reference_prep"] = bool(reference_prep)
     if rig:
         # Validated now rather than 90 seconds later: an unusable template
         # should cost the request, not the whole generation that precedes the
@@ -139,16 +164,19 @@ def create_job(
         params["rig"] = True
         params["rig_template"] = valid_template(rig_template, config.rig_template)
 
-    normalized: bytes | None = None
-    if image is not None:
-        if len(image) > MAX_UPLOAD_BYTES:
-            raise TooLarge("image upload is over 20 MB")
+    def _decode(raw: bytes, field: str) -> bytes:
+        if len(raw) > MAX_UPLOAD_BYTES:
+            raise TooLarge(f"{field} upload is over 20 MB")
         try:
-            normalized = to_png(image)
+            return to_png(raw)
         except ImageTooLarge as exc:
-            raise Invalid(str(exc), field="image") from exc
+            raise Invalid(str(exc), field=field) from exc
         except Exception as exc:
-            raise Invalid("could not decode uploaded image", field="image") from exc
+            raise Invalid(f"could not decode uploaded {field}", field=field) from exc
+
+    normalized = _decode(image, "image") if image is not None else None
+    # Same caps, same order, same pre-write window as input.png.
+    normalized_ref = _decode(reference, "reference") if reference is not None else None
 
     # Write the file before the row exists: the worker's next_queued() poll can
     # otherwise claim an image job in the gap and find no input.png on disk yet.
@@ -180,10 +208,15 @@ def create_job(
                 candidate["seed"] = candidate["reference_seed"]
                 candidate["mesh_seed"] = candidate["reference_seed"]
             job_id = uuid.uuid4().hex[:12]
-            if normalized is not None:
+            if normalized is not None or normalized_ref is not None:
                 job_dir = config.job_dir(job_id)
                 job_dir.mkdir(parents=True, exist_ok=True)
-                (job_dir / "input.png").write_bytes(normalized)
+                if normalized is not None:
+                    (job_dir / "input.png").write_bytes(normalized)
+                if normalized_ref is not None:
+                    # Every candidate gets its own copy: they are independent
+                    # rows, and prune deletes one dir without touching another.
+                    (job_dir / "ref.png").write_bytes(normalized_ref)
                 made_dirs.append(job_dir)
             svc.store.create(kind, prompt, candidate, job_id, stage=output)
             ids.append(job_id)
@@ -352,6 +385,11 @@ def rerun_job(
     # would make the new job claim a composed prompt it never used and a
     # quality score for a mesh that doesn't exist yet.
     params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
+    if mode == "remesh":
+        # A remesh is an image job: SDXL never runs, so a carried-over
+        # conditioning selection would describe a run that cannot happen.
+        for key in CONDITIONING_PARAMS:
+            params.pop(key, None)
     fresh = seed if seed is not None else random_seed()
     params["seed"] = fresh
     if mode == "remesh":
@@ -372,13 +410,21 @@ def rerun_job(
 
     new_id = uuid.uuid4().hex[:12]
     new_dir = None
-    if kind == "image":
+    # A reroll reruns SDXL, so its conditioning reference has to come with it
+    # -- the first time a *text* rerun needs a directory before the row, which
+    # is why the except below now covers a case it never did.
+    src_ref = svc.job_dir(job_id) / "ref.png"
+    carry_ref = mode == "reroll" and src_ref.exists()
+    if kind == "image" or carry_ref:
         # Before the row exists, for the same reason create_job does it:
         # next_queued can otherwise claim the job in the gap and find no
         # input.png on disk.
         new_dir = svc.job_dir(new_id)
         new_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src_png, new_dir / "input.png")
+        if kind == "image":
+            shutil.copyfile(src_png, new_dir / "input.png")
+        if carry_ref:
+            shutil.copyfile(src_ref, new_dir / "ref.png")
     try:
         svc.store.create(kind, source["prompt"], params, new_id, stage=stage)
     except Exception:
@@ -403,6 +449,8 @@ def promote_to_model(
     custom_triangles: int | None = None,
     rig: bool | None = None,
     rig_template: str | None = None,
+    reference_prep: bool | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Run the 3D stage from a reference the user approved.
 
@@ -428,8 +476,24 @@ def promote_to_model(
     src_png = svc.job_dir(job_id) / "input.png"
     if not src_png.exists():
         raise Invalid("reference has no image")
+    # A soft check, and only against what the reference stage already
+    # measured: the mesh stage is where the two minutes of GPU are, so a
+    # reference that cannot reconstruct should be refused before it is spent.
+    # Bypassable because the rules are heuristics about composition, not
+    # facts -- the 3D pane sends force behind a confirm.
+    report = source["params"].get("reference_report") or {}
+    if not force and report.get("ok") is False:
+        raise Invalid(
+            " ".join(report.get("reasons") or ["this reference cannot reconstruct"])
+        )
 
-    params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
+    params = {
+        k: v
+        for k, v in source["params"].items()
+        if k not in DERIVED_PARAMS and k not in CONDITIONING_PARAMS
+    }
+    # No ref.png is copied either: the promotion is an image job, and the
+    # conditioning already did its work in the reference this promotes.
 
     overrides = {
         k: v
@@ -446,6 +510,8 @@ def promote_to_model(
             raw.pop("resolution", None)
         params.update(_normalize_guidance(raw))
     _resolve_profile(params, profile, custom_triangles)
+    if reference_prep is not None:
+        params["reference_prep"] = bool(reference_prep)
     if rig is not None:
         # An explicit false has to clear an inherited rig request, or a
         # reference generated with rigging on would rig every promotion of it

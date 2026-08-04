@@ -21,10 +21,19 @@ from ..state import format_duration
 
 def toolbar(ctx: Any) -> None:
     """The viewer's own controls, along the top of the viewport."""
+    from . import editor_2d
+
     state = ctx.state
     viewer = ctx.viewer
     if viewer is None:
         return
+    job = ctx.job()
+    if editor_2d.can_edit(ctx, job):
+        # First, and only in 2D: the reference is the thing on screen, and the
+        # camera controls beside it do not apply to it at all.
+        if imgui.button("Edit image"):
+            editor_2d.open(ctx, job)
+        imgui.same_line()
     if imgui.button("Frame"):
         viewer.frame()
     imgui.same_line()
@@ -38,6 +47,15 @@ def toolbar(ctx: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Screenshot...", viewer.has_model):
         _screenshot(ctx)
+    if viewer.has_model:
+        # The wheel already dollies; these exist so the control is findable at
+        # all. "Frame" beside them is the reset.
+        imgui.same_line()
+        if imgui.button("Zoom +"):
+            viewer.camera.dolly(1)
+        imgui.same_line()
+        if imgui.button("Zoom -"):
+            viewer.camera.dolly(-1)
     if state.comparing:
         imgui.same_line()
         if imgui.button("Exit comparison"):

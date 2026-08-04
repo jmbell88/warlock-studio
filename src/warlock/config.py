@@ -74,6 +74,12 @@ class Config:
     mesh_profile: str = field(
         default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "raw")
     )
+    # Where `python -m warlock.bench` writes its runs. Outside data_dir on
+    # purpose: a benchmark run copies its artifacts rather than referencing
+    # them, precisely so it survives prune_jobs.
+    bench_dir: Path = field(
+        default_factory=lambda: _env_path("WARLOCK_BENCH_DIR", PROJECT_ROOT / "bench")
+    )
     trellis_models_dir: Path = field(
         default_factory=lambda: _env_path(
             "WARLOCK_TRELLIS_MODELS", PROJECT_ROOT / "models" / "trellis2-gguf"

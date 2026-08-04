@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import socket
 import struct
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import httpx
 
+from .. import winjob
 from ..glbio import split_glb
 from ..progress import pump
 
@@ -28,6 +30,22 @@ log = logging.getLogger(__name__)
 STARTUP_TIMEOUT = 300.0  # health endpoint answers in ~1 s; weights load on first generate
 GENERATE_TIMEOUT = 1800.0
 LOG_MAX_BYTES = 5 * 1024 * 1024  # the log used to grow forever; roll it instead
+
+
+def _port_in_use(port: int) -> bool:
+    """True if something already listens on 127.0.0.1:`port`.
+
+    Deliberately a bind attempt and not a connect: SO_REUSEADDR is not set, so
+    this asks the exact question the child is about to ask -- "can a listener
+    be created here" -- rather than "does something answer", which an orphan in
+    a wedged state might not.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return True
+    return False
 
 
 class TrellisServer:
@@ -63,6 +81,9 @@ class TrellisServer:
         self.on_line: Callable[[str], None] | None = None
         self._reader: threading.Thread | None = None
         self._logfh = None
+        # When the live child was spawned, so its lifetime can be logged at
+        # reap time. A short lifetime is the signature of a bind failure.
+        self._spawned_at: float | None = None
 
     @property
     def base_url(self) -> str:
@@ -92,8 +113,16 @@ class TrellisServer:
         """A self-crashed server otherwise leaks the old log handle and
         reader thread the next time _proc/_reader/_logfh are overwritten."""
         if self._proc is not None and self._proc.poll() is not None:
+            lifetime = (
+                time.monotonic() - self._spawned_at
+                if self._spawned_at is not None
+                else float("nan")
+            )
             log.warning(
-                "trellis-server exited with code %s; reaping", self._proc.returncode
+                "trellis-server pid %s exited with code %s after %.1f s; reaping",
+                self._proc.pid,
+                self._proc.returncode,
+                lifetime,
             )
             self.stop()
 
@@ -106,6 +135,17 @@ class TrellisServer:
                 raise RuntimeError(f"trellis-server not found at {self._exe}")
             if not self._models_dir.exists():
                 raise RuntimeError(f"TRELLIS GGUF models not found at {self._models_dir}")
+            # Bind-precheck. /health returns a bare ok with no identity field,
+            # so a stale orphan holding the port answers the poll below exactly
+            # like a healthy fresh server would -- while the server we are
+            # about to spawn dies on bind. Every generate then goes to the
+            # orphan. Fail loudly here instead.
+            if _port_in_use(self._port):
+                raise RuntimeError(
+                    f"port {self._port} is already in use, probably by an orphaned "
+                    "trellis-server.exe left behind by a previous crash. Run "
+                    "`Get-Process trellis-server` and stop it before retrying."
+                )
             log.info("starting trellis-server on port %d", self._port)
             self._open_log()
             # stdout is piped rather than redirected so we can parse the stage
@@ -120,6 +160,12 @@ class TrellisServer:
                 bufsize=0,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            # Kill-on-close job object, assigned as early as possible: the
+            # window between Popen and this call is the only one in which a
+            # parent crash can still orphan the child.
+            winjob.assign(self._proc.pid)
+            self._spawned_at = time.monotonic()
+            log.info("trellis-server spawned as pid %d", self._proc.pid)
             self._reader = threading.Thread(
                 target=self._pump, name="trellis-stdout", daemon=True
             )
@@ -186,7 +232,7 @@ class TrellisServer:
             # sequence operating on one object rather than re-reading a field.
             proc = self._proc
             if proc is not None and proc.poll() is None:
-                log.info("stopping trellis-server")
+                log.info("stopping trellis-server pid %d", proc.pid)
                 proc.terminate()
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=15)
@@ -204,6 +250,7 @@ class TrellisServer:
                     self._logfh.close()
                 self._logfh = None
             self._proc = None
+            self._spawned_at = None
 
     async def generate(
         self,

@@ -66,3 +66,66 @@ def test_catalog_is_json_safe_and_covers_both_tables():
     assert {o["key"] for o in catalog["base_model"]} == set(models.BASE_MODELS)
     assert {o["key"] for o in catalog["style_lora"]} == set(models.STYLE_LORAS)
     json.dumps(catalog)
+
+
+def test_sdxl_cfg_reuses_sdxl_weights_without_the_distillation_lora():
+    """It exists for a sampler contract, not for new weights: full CFG so the
+    negative prompt is encoded at all, and no Hyper-SD because a 4-step
+    distilled base gives a ControlNet nothing to steer."""
+    cfg, hyper = models.BASE_MODELS["sdxl_cfg"], models.BASE_MODELS["sdxl"]
+    assert cfg.dir_name == hyper.dir_name
+    assert cfg.base_lora is None
+    assert cfg.scheduler is None
+    assert cfg.guidance_scale > 1.0
+    assert cfg.steps >= 20
+
+
+@pytest.mark.parametrize("key", sorted(models.BASE_MODELS))
+def test_a_controlnet_capable_base_runs_with_real_guidance(key):
+    spec = models.BASE_MODELS[key]
+    if spec.controlnet:
+        assert spec.guidance_scale > 1.0
+
+
+@pytest.mark.parametrize("key", sorted(models.IP_ADAPTERS))
+def test_ip_adapter_is_downloadable(key):
+    spec = models.IP_ADAPTERS[key]
+    assert "hf download" in spec.download
+    assert spec.dir_name in spec.download
+    assert spec.weight_name in spec.download
+    # Weights without the vision encoder load fine and then fail at the first
+    # call, so the command has to fetch both.
+    assert spec.image_encoder_dir in spec.download
+    assert spec.download.count("hf download") == 2
+
+
+@pytest.mark.parametrize("key", sorted(models.CONTROLNETS))
+def test_controlnet_is_downloadable_and_names_a_real_preprocessor(key):
+    from warlock.pipelines import control
+
+    spec = models.CONTROLNETS[key]
+    assert "hf download" in spec.download
+    assert spec.dir_name in spec.download
+    assert spec.preprocessor in control.PREPROCESSORS or spec.preprocessor == "depth"
+
+
+def test_encoder_folder_is_posix_even_on_windows():
+    for spec in models.IP_ADAPTERS.values():
+        assert "\\" not in spec.encoder_folder
+
+
+def test_conditioning_keys_do_not_collide_with_the_other_tables():
+    assert not set(models.IP_ADAPTERS) & set(models.STYLE_LORAS)
+    assert not set(models.CONTROLNETS) & set(models.BASE_MODELS)
+
+
+def test_controlnet_bases_is_non_empty_and_real():
+    bases = models.controlnet_bases()
+    assert bases
+    assert all(b in models.BASE_MODELS for b in bases)
+
+
+def test_catalog_stays_json_safe():
+    import json
+
+    json.dumps(models.catalog())

@@ -1,0 +1,601 @@
+{
+  "key": "core-v1",
+  "label": "Core benchmark v1",
+  "seeds": [
+    42,
+    1337,
+    20240701,
+    987654321
+  ],
+  "notes": "Never edited in place. Changing a prompt means core-v2.json: old manifests reference this file's fingerprint, and an in-place edit would silently invalidate every comparison made against them.",
+  "items": [
+    {
+      "id": "prop-01",
+      "category": "prop",
+      "prompt": "a weathered wooden crate bound with iron",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "material": "wood",
+        "condition": "worn"
+      },
+      "tags": [
+        "boxy",
+        "hard-surface"
+      ],
+      "notes": "the canonical easy case: one convex blob, clear silhouette"
+    },
+    {
+      "id": "prop-02",
+      "category": "prop",
+      "prompt": "a hanging brass lantern with a glass pane",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "material": "glass",
+        "emissive": "runes"
+      },
+      "tags": [
+        "thin",
+        "transparent"
+      ],
+      "notes": "glass and a handle: two things TRELLIS routinely fills in"
+    },
+    {
+      "id": "prop-03",
+      "category": "prop",
+      "prompt": "a stack of leather-bound books",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "material": "leather"
+      },
+      "tags": [
+        "stacked"
+      ],
+      "notes": "repeated parallel slabs; tests whether the gaps survive"
+    },
+    {
+      "id": "prop-04",
+      "category": "prop",
+      "prompt": "a ceramic vase with a narrow neck",
+      "guidance": {
+        "category": "prop",
+        "material": "ceramic",
+        "silhouette": "rounded"
+      },
+      "tags": [
+        "rotational"
+      ],
+      "notes": "rotationally symmetric, so the hallucinated back should be nearly free"
+    },
+    {
+      "id": "prop-05",
+      "category": "prop",
+      "prompt": "an anvil on a wooden block",
+      "guidance": {
+        "category": "prop",
+        "material": "iron",
+        "silhouette": "bulky"
+      },
+      "tags": [
+        "two-part"
+      ],
+      "notes": "two materials meeting at a hard edge"
+    },
+    {
+      "id": "prop-06",
+      "category": "prop",
+      "prompt": "a coiled rope with a rusted hook",
+      "guidance": {
+        "category": "prop",
+        "material": "iron",
+        "condition": "rusted"
+      },
+      "tags": [
+        "thin",
+        "self-occluding"
+      ],
+      "notes": "the hardest prop: thin, coiled, heavily self-occluding"
+    },
+    {
+      "id": "prop-07",
+      "category": "prop",
+      "prompt": "a wooden barrel with iron hoops",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "material": "wood"
+      },
+      "tags": [
+        "rotational"
+      ],
+      "notes": "near-duplicate of the crate on purpose: a seed-stability control"
+    },
+    {
+      "id": "prop-08",
+      "category": "prop",
+      "prompt": "a treasure chest with a domed lid",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "material": "wood",
+        "rarity": "rare"
+      },
+      "tags": [
+        "boxy"
+      ],
+      "notes": "the mesh_profile qualification subject named in docs/NEXT.md"
+    },
+    {
+      "id": "weapon-01",
+      "category": "weapon",
+      "prompt": "a straight longsword with a crossguard",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "steel"
+      },
+      "tags": [
+        "thin",
+        "flat"
+      ],
+      "notes": "the second qualification subject; a flat blade is where thin geometry fails"
+    },
+    {
+      "id": "weapon-02",
+      "category": "weapon",
+      "prompt": "a battle axe with a wide curved head",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "iron",
+        "silhouette": "bulky"
+      },
+      "tags": [
+        "asymmetric"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "weapon-03",
+      "category": "weapon",
+      "prompt": "a compact energy rifle with glowing vents",
+      "guidance": {
+        "category": "weapon",
+        "genre": "scifi",
+        "material": "steel",
+        "emissive": "neon"
+      },
+      "tags": [
+        "hard-surface"
+      ],
+      "notes": "panel seams and emissive: tests whether detail survives the budget"
+    },
+    {
+      "id": "weapon-04",
+      "category": "weapon",
+      "prompt": "a wooden bow with a taut string",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "wood"
+      },
+      "tags": [
+        "thin",
+        "string"
+      ],
+      "notes": "the string is sub-voxel; expected to vanish, and that is the measurement"
+    },
+    {
+      "id": "weapon-05",
+      "category": "weapon",
+      "prompt": "a spiked war hammer with a long haft",
+      "guidance": {
+        "category": "weapon",
+        "material": "iron",
+        "condition": "damaged"
+      },
+      "tags": [
+        "thin",
+        "spikes"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "weapon-06",
+      "category": "weapon",
+      "prompt": "a curved dagger with a jewelled pommel",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "gold",
+        "rarity": "epic"
+      },
+      "tags": [
+        "small"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "weapon-07",
+      "category": "weapon",
+      "prompt": "a riot shield with a reinforced rim",
+      "guidance": {
+        "category": "weapon",
+        "genre": "modern",
+        "material": "steel"
+      },
+      "tags": [
+        "flat"
+      ],
+      "notes": "a flat plate: the degenerate case for a volumetric reconstruction"
+    },
+    {
+      "id": "weapon-08",
+      "category": "weapon",
+      "prompt": "a gnarled wooden staff topped with a crystal",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "crystal",
+        "emissive": "arcane"
+      },
+      "tags": [
+        "thin",
+        "elongated"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "character-01",
+      "category": "character",
+      "prompt": "a hooded adventurer standing in a neutral pose",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "stylized"
+      },
+      "tags": [
+        "humanoid",
+        "rig"
+      ],
+      "notes": "the rig template's target shape"
+    },
+    {
+      "id": "character-02",
+      "category": "character",
+      "prompt": "a plate-armoured knight standing at attention",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "material": "steel"
+      },
+      "tags": [
+        "humanoid",
+        "rig"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "character-03",
+      "category": "character",
+      "prompt": "a robed wizard holding a staff",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "emissive": "arcane"
+      },
+      "tags": [
+        "humanoid",
+        "prop-in-hand"
+      ],
+      "notes": "a held prop: tests whether the arm and staff fuse"
+    },
+    {
+      "id": "character-04",
+      "category": "character",
+      "prompt": "a squat armoured goblin with a club",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "silhouette": "compact"
+      },
+      "tags": [
+        "humanoid",
+        "nonstandard-proportions"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "character-05",
+      "category": "character",
+      "prompt": "a slender android in a jumpsuit",
+      "guidance": {
+        "category": "character",
+        "genre": "scifi",
+        "art_style": "realistic"
+      },
+      "tags": [
+        "humanoid",
+        "rig"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "character-06",
+      "category": "character",
+      "prompt": "a four-legged wolf standing alert",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy"
+      },
+      "tags": [
+        "quadruped"
+      ],
+      "notes": "no humanoid template fits; the quadruped skeleton's subject"
+    },
+    {
+      "id": "character-07",
+      "category": "character",
+      "prompt": "a cartoon mushroom creature with stubby arms",
+      "guidance": {
+        "category": "character",
+        "genre": "cartoon",
+        "art_style": "toon"
+      },
+      "tags": [
+        "humanoid",
+        "stylised"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "character-08",
+      "category": "character",
+      "prompt": "a skeleton warrior holding a rusted sword",
+      "guidance": {
+        "category": "character",
+        "genre": "horror",
+        "condition": "ancient"
+      },
+      "tags": [
+        "humanoid",
+        "thin",
+        "holes"
+      ],
+      "notes": "genuinely holed geometry: the meshaudit stress case"
+    },
+    {
+      "id": "vehicle-01",
+      "category": "vehicle",
+      "prompt": "a wooden handcart with two spoked wheels",
+      "guidance": {
+        "category": "vehicle",
+        "genre": "fantasy",
+        "material": "wood"
+      },
+      "tags": [
+        "wheels",
+        "thin"
+      ],
+      "notes": "spokes are the thin-geometry case at vehicle scale"
+    },
+    {
+      "id": "vehicle-02",
+      "category": "vehicle",
+      "prompt": "a boxy armoured personnel carrier",
+      "guidance": {
+        "category": "vehicle",
+        "genre": "scifi",
+        "silhouette": "bulky"
+      },
+      "tags": [
+        "hard-surface"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "vehicle-03",
+      "category": "vehicle",
+      "prompt": "a single-seat racing hovercraft",
+      "guidance": {
+        "category": "vehicle",
+        "genre": "scifi",
+        "emissive": "neon"
+      },
+      "tags": [
+        "smooth"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "vehicle-04",
+      "category": "vehicle",
+      "prompt": "a rusted pickup truck with a flat tyre",
+      "guidance": {
+        "category": "vehicle",
+        "genre": "postapoc",
+        "condition": "rusted"
+      },
+      "tags": [
+        "hard-surface"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "vehicle-05",
+      "category": "vehicle",
+      "prompt": "a small wooden rowboat with oars",
+      "guidance": {
+        "category": "vehicle",
+        "material": "wood"
+      },
+      "tags": [
+        "concave"
+      ],
+      "notes": "an open concave hull: the classic reconstruction failure"
+    },
+    {
+      "id": "vehicle-06",
+      "category": "vehicle",
+      "prompt": "a steampunk airship gondola with brass fittings",
+      "guidance": {
+        "category": "vehicle",
+        "setting": "steampunk",
+        "material": "bronze"
+      },
+      "tags": [
+        "ornate"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "vehicle-07",
+      "category": "vehicle",
+      "prompt": "a military motorcycle with saddlebags",
+      "guidance": {
+        "category": "vehicle",
+        "genre": "modern",
+        "setting": "military"
+      },
+      "tags": [
+        "thin",
+        "wheels"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "vehicle-08",
+      "category": "vehicle",
+      "prompt": "a cargo sled on iron runners",
+      "guidance": {
+        "category": "vehicle",
+        "material": "iron",
+        "silhouette": "elongated"
+      },
+      "tags": [
+        "simple"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "environment-01",
+      "category": "environment",
+      "prompt": "a modular stone wall section with a doorway",
+      "guidance": {
+        "category": "environment",
+        "material": "stone",
+        "setting": "medieval"
+      },
+      "tags": [
+        "modular",
+        "concave"
+      ],
+      "notes": "a doorway is a hole a silhouette check should find"
+    },
+    {
+      "id": "environment-02",
+      "category": "environment",
+      "prompt": "a weathered stone well with a wooden roof",
+      "guidance": {
+        "category": "environment",
+        "material": "stone",
+        "condition": "worn"
+      },
+      "tags": [
+        "two-part"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "environment-03",
+      "category": "environment",
+      "prompt": "a gnarled dead tree with bare branches",
+      "guidance": {
+        "category": "environment",
+        "genre": "horror",
+        "condition": "ancient"
+      },
+      "tags": [
+        "thin",
+        "branching"
+      ],
+      "notes": "the worst case for a narrow-band remesh"
+    },
+    {
+      "id": "environment-04",
+      "category": "environment",
+      "prompt": "a market stall with a striped awning",
+      "guidance": {
+        "category": "environment",
+        "material": "fabric",
+        "setting": "medieval"
+      },
+      "tags": [
+        "thin",
+        "cloth"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "environment-05",
+      "category": "environment",
+      "prompt": "a mossy stone staircase",
+      "guidance": {
+        "category": "environment",
+        "material": "stone",
+        "condition": "overgrown"
+      },
+      "tags": [
+        "stepped"
+      ],
+      "notes": "repeated hard edges: where decimation shows first"
+    },
+    {
+      "id": "environment-06",
+      "category": "environment",
+      "prompt": "a sci-fi corridor segment with panel lighting",
+      "guidance": {
+        "category": "environment",
+        "genre": "scifi",
+        "emissive": "neon"
+      },
+      "tags": [
+        "modular",
+        "concave"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "environment-07",
+      "category": "environment",
+      "prompt": "a wooden watchtower on stilts",
+      "guidance": {
+        "category": "environment",
+        "material": "wood",
+        "silhouette": "elongated"
+      },
+      "tags": [
+        "thin",
+        "tall"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "environment-08",
+      "category": "environment",
+      "prompt": "a large mossy boulder",
+      "guidance": {
+        "category": "environment",
+        "material": "stone",
+        "condition": "overgrown"
+      },
+      "tags": [
+        "convex",
+        "simple"
+      ],
+      "notes": "the third mesh_profile qualification subject, and the easiest item here"
+    }
+  ]
+}

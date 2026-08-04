@@ -27,6 +27,22 @@ LORA_WEIGHT_MIN = 0.0
 LORA_WEIGHT_MAX = 1.5
 DEFAULT_LORA_WEIGHT = 0.9
 
+# Conditioning strengths, bounded the same way LoRA weight is: the API's
+# 400-on-out-of-range comes from one place, and the UI's sliders read their
+# ends from here rather than repeating numbers.
+IP_SCALE_MIN = 0.0
+IP_SCALE_MAX = 1.5
+DEFAULT_IP_SCALE = 0.6
+CONTROL_SCALE_MIN = 0.0
+CONTROL_SCALE_MAX = 2.0
+DEFAULT_CONTROL_SCALE = 0.65
+# How far into the denoise the ControlNet keeps acting. Ending early lets the
+# last steps add detail the hint image never had; 1.0 holds the structure to
+# the final step and tends to look traced.
+CONTROL_END_MIN = 0.0
+CONTROL_END_MAX = 1.0
+DEFAULT_CONTROL_END = 0.8
+
 
 @dataclass(frozen=True, slots=True)
 class BaseModel:
@@ -56,6 +72,12 @@ class BaseModel:
     scheduler: str | None = None
     # A step-distillation LoRA fused on at load, never user-facing.
     base_lora: str | None = None
+    # Whether a ControlNet may be attached to this checkpoint. Explicit rather
+    # than derived from guidance_scale: a ControlNet at guidance 0 on a 4-step
+    # distilled base fights the structure hint instead of honouring it, and a
+    # future base at CFG 1.5 must not silently become "controllable" because it
+    # cleared a threshold nobody qualified it against.
+    controlnet: bool = False
     download: str = ""
 
 
@@ -69,6 +91,50 @@ class StyleLora:
     # scaffolding, not creative direction, so they don't belong in guidance.py.
     trigger: str = ""
     default_weight: float = DEFAULT_LORA_WEIGHT
+    download: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class IPAdapter:
+    """An appearance/identity adapter plus the CLIP vision encoder it needs.
+
+    The encoder is a separate download from the weights and loading one
+    without the other succeeds and then fails at the first call, which is not
+    a failure a user can read -- hence two download lines and a doctor row
+    that checks both.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    subfolder: str
+    weight_name: str
+    # Where the CLIP vision encoder sits *relative to dir_name*, matching the
+    # layout the download command produces.
+    image_encoder_dir: str
+    default_scale: float = 0.6
+    download: str = ""
+
+    @property
+    def encoder_folder(self) -> str:
+        """What diffusers' image_encoder_folder wants: a path *relative to the
+        adapter root*, POSIX-separated. Built here so a Windows backslash can
+        never reach load_ip_adapter.
+        """
+        return self.image_encoder_dir.replace("\\", "/")
+
+
+@dataclass(frozen=True, slots=True)
+class ControlNet:
+    key: str
+    label: str
+    dir_name: str
+    # Which preprocessor turns the reference into a hint image. "canny" is
+    # pipelines/control; "depth" is pipelines/depth, which needs torch.
+    preprocessor: str
+    variant: str | None = "fp16"
+    default_scale: float = 0.65
+    default_end: float = 0.8
     download: str = ""
 
 
@@ -122,10 +188,31 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         image_size=1024,
         steps=25,
         guidance_scale=3.0,
+        controlnet=True,
         download=(
             "uvx hf download playgroundai/playground-v2.5-1024px-aesthetic "
             '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
             "--local-dir models/playground-v2.5"
+        ),
+    ),
+    BaseModel(
+        # The same weights as "sdxl", run the way the checkpoint was trained:
+        # 30 steps with real classifier-free guidance and no Hyper-SD. This is
+        # the only reason it exists as a separate entry -- a distilled 4-step
+        # base at guidance 0 discards the negative prompt entirely
+        # (text2image encodes it only when guidance_scale > 1.0) and gives a
+        # ControlNet nothing to steer. No new weights: same dir_name.
+        "sdxl_cfg",
+        "SDXL 1.0 (full CFG, structural control)",
+        "sdxl-base-1.0",
+        image_size=1024,
+        steps=30,
+        guidance_scale=7.0,
+        controlnet=True,
+        download=(
+            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
+            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
+            "--local-dir models/sdxl-base-1.0"
         ),
     ),
 )
@@ -166,6 +253,77 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
 )
 
 
+IP_ADAPTERS: dict[str, IPAdapter] = _table(
+    IPAdapter(
+        # "plus" rather than the base adapter: it conditions on 16 patch
+        # tokens instead of one pooled embedding, which is the difference
+        # between "same kind of object" and "this object".
+        "plus",
+        "Appearance reference (IP-Adapter Plus)",
+        "ip-adapter",
+        subfolder="sdxl_models",
+        weight_name="ip-adapter-plus_sdxl_vit-h.safetensors",
+        image_encoder_dir="models/image_encoder",
+        download=(
+            "uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors "
+            "--local-dir models/ip-adapter\n"
+            '  uvx hf download h94/IP-Adapter --include "models/image_encoder/*" '
+            "--local-dir models/ip-adapter"
+        ),
+    ),
+)
+
+CONTROLNETS: dict[str, ControlNet] = _table(
+    ControlNet(
+        "canny",
+        "Edge / silhouette lock (Canny)",
+        "controlnet-canny-sdxl",
+        preprocessor="canny",
+        download=(
+            "uvx hf download diffusers/controlnet-canny-sdxl-1.0 "
+            '--include "*.json" --include "*fp16.safetensors" '
+            "--local-dir models/controlnet-canny-sdxl"
+        ),
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MetricModel:
+    """A model used to *measure* an asset rather than make one.
+
+    Same registry shape as the rest so doctor reports it the same way, but
+    nothing in the app's generation path touches these -- only the benchmark
+    does, and a missing one costs a metric, not a job.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    download: str = ""
+
+
+METRIC_MODELS: dict[str, MetricModel] = _table(
+    MetricModel(
+        "dinov2",
+        "DINOv2 base (identity metric)",
+        "dinov2-base",
+        download=(
+            "uvx hf download facebook/dinov2-base "
+            '--include "*.json" --include "*.safetensors" '
+            "--local-dir models/dinov2-base"
+        ),
+    ),
+)
+
+
+def controlnet_bases() -> list[str]:
+    """Base models a ControlNet may be attached to -- the UI hides the whole
+    Structure group when the chosen base is not one of these, rather than
+    offering a control that cannot do anything."""
+    return [m.key for m in BASE_MODELS.values() if m.controlnet]
+
+
 def catalog() -> dict[str, Any]:
     """The two tables in guidance.catalog()'s field shape, for the same selects."""
     return {
@@ -175,5 +333,19 @@ def catalog() -> dict[str, Any]:
         "style_lora": [
             {"key": lora.key, "label": lora.label, "default_weight": lora.default_weight}
             for lora in STYLE_LORAS.values()
+        ],
+        "ip_adapter": [
+            {"key": a.key, "label": a.label, "default_scale": a.default_scale}
+            for a in IP_ADAPTERS.values()
+        ],
+        "control": [
+            {
+                "key": c.key,
+                "label": c.label,
+                "preprocessor": c.preprocessor,
+                "default_scale": c.default_scale,
+                "default_end": c.default_end,
+            }
+            for c in CONTROLNETS.values()
         ],
     }

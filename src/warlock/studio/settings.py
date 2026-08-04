@@ -27,7 +27,12 @@ DEBOUNCE = 1.0
 VERSION = 1
 
 # Fields that must never survive a restart, whatever the form dict holds.
-VOLATILE = ("seed", "mesh_seed")
+#
+# ref_path for a different reason than the seeds: a remembered path to a file
+# that has since moved or been deleted would silently condition next week's
+# generation on nothing, and the failure is invisible -- the image simply
+# comes out unconditioned.
+VOLATILE = ("seed", "mesh_seed", "ref_path")
 
 
 class Settings:

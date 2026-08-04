@@ -133,7 +133,7 @@ def spinner(radius: float = 7.0, thickness: float = 2.5) -> None:
         draw.path_line_to(
             (centre[0] + math.cos(angle) * radius, centre[1] + math.sin(angle) * radius)
         )
-    draw.path_stroke(imgui.get_color_u32(theme.rgba(theme.ACCENT)), 0, thickness)
+    draw.path_stroke(imgui.get_color_u32(theme.rgba(theme.ACCENT)), thickness=thickness)
 
 
 def combo(label: str, value: str, options: list[tuple[str, str]], width: float = -1.0):
@@ -167,8 +167,28 @@ def input_text(label: str, value: str, *, max_length: int = 1000, hint: str = ""
 
 
 def multiline(label: str, value: str, height: float, max_length: int) -> str:
-    changed, out = imgui.input_text_multiline(label, value, (-1, height))
+    """A wrapping text area.
+
+    Wrapping is not imgui's default: without the flag a long prompt scrolls off
+    to the right in a box three lines tall, which hides most of what was typed
+    behind a horizontal scrollbar.
+    """
+    changed, out = imgui.input_text_multiline(
+        label, value, (-1, height), imgui.InputTextFlags_.word_wrap.value
+    )
     return out[:max_length] if changed else value
+
+
+def field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
+    """(key, label) pairs for one taxonomy field, with a blank first entry.
+
+    Blank because every guidance field is optional: an empty select means "say
+    nothing about this", which is a different prompt from any of the choices.
+    """
+    entries = (ctx.guidance.get("fields") or {}).get(field) or []
+    return [("", f"{field.replace('_', ' ')}...")] + [
+        (e["key"], e["label"]) for e in entries
+    ]
 
 
 # Set only by the pane smoke test, which needs every section's contents built

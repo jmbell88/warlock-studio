@@ -58,6 +58,15 @@ def draw(ctx: Any) -> None:
     if imgui.button("Reroll##mesh"):
         form["mesh_seed"] = random_seed()
 
+    changed, prep = imgui.checkbox("Normalise the reference", bool(form["reference_prep"]))
+    if changed:
+        form["reference_prep"] = prep
+    widgets.help_marker(
+        "Recentre the subject and scale it to fill the frame before the mesh "
+        "engine sees it. Off by default: the engine does its own cropping, and "
+        "whether doing it twice helps has not been measured."
+    )
+
     _rig(ctx, form)
     _submit(ctx, form)
 
@@ -160,15 +169,40 @@ def promote_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     out["rig"] = bool(form["rig"])
     if form["rig"] and form["rig_template"]:
         out["rig_template"] = form["rig_template"]
+    # Explicit like rig, and for the same reason: an omission would let the
+    # promotion inherit whatever the reference recorded, and this checkbox is
+    # the 3D pane's decision, not the reference's.
+    out["reference_prep"] = bool(form["reference_prep"])
     return out
 
 
 def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> None:
     if validate(source):
         return
-    ctx.submit(
-        "submit", svc_jobs.promote_to_model, ctx.svc, source["id"], **promote_kwargs(form)
-    )
+    kwargs = promote_kwargs(form)
+
+    def go(force: bool = False) -> None:
+        ctx.submit(
+            "submit", svc_jobs.promote_to_model, ctx.svc, source["id"], force=force, **kwargs
+        )
+
+    report = (source.get("params") or {}).get("reference_report") or {}
+    if report.get("ok") is False:
+        # A confirm rather than a refusal: the rules are heuristics about
+        # composition, and the user can see the image the pane is arguing
+        # about. What they must not do is spend two minutes of GPU by
+        # accident.
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="This reference may not reconstruct",
+                message=" ".join(report.get("reasons") or []) + "\n\nBuild it anyway?",
+                confirm_label="Build anyway",
+                cancel_label="Cancel",
+                on_confirm=lambda: go(force=True),
+            )
+        )
+        return
+    go()
 
 
 def upload(ctx: Any, path: Path) -> None:
@@ -185,6 +219,7 @@ def upload(ctx: Any, path: Path) -> None:
         kwargs["profile"] = form["profile"]
     if int(form["mesh_seed"]) > 0:
         kwargs["mesh_seed"] = int(form["mesh_seed"])
+    kwargs["reference_prep"] = bool(form["reference_prep"])
     if form["rig"]:
         kwargs["rig"] = True
         if form["rig_template"]:

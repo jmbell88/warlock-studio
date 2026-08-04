@@ -136,6 +136,7 @@ class FakeText2Image:
         self.loaded = False
         self.last_used = 0.0
         self.unload_calls = 0
+        self.trim_calls = 0
         self.unload_threads: list[int] = []
         self.steps = 3
         self.sleep_per_step = 0.02
@@ -143,7 +144,12 @@ class FakeText2Image:
         self.lora_calls: list[tuple] = []
         self.negatives: list[str | None] = []
         self.seeds: list[int] = []
+        # Recorded per call, including the Nones: the bit-identity contract is
+        # asserted at this boundary -- an unconditioned job must hand the
+        # pipeline conditioning=None, not an empty Conditioning.
+        self.conditionings: list = []
         self.last_prompt = ""
+        self.last_recipe: dict = {}
 
     def generate(
         self,
@@ -154,6 +160,7 @@ class FakeText2Image:
         lora=None,
         lora_weight=DEFAULT_LORA_WEIGHT,
         negative_prompt=None,
+        conditioning=None,
         on_state=None,
         on_step=None,
         cancel_event=None,
@@ -162,6 +169,7 @@ class FakeText2Image:
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
+        self.conditionings.append(conditioning)
         self.seeds.append(seed)
         if on_state is not None:
             on_state("load")
@@ -180,6 +188,11 @@ class FakeText2Image:
         output_path.write_bytes(b"fake-png")
         self.last_used = time.monotonic()
         return output_path
+
+    def trim(self) -> None:
+        # Releases cached VRAM without unloading: the pipe stays resident, so
+        # `loaded` deliberately does not change here.
+        self.trim_calls += 1
 
     def unload(self) -> None:
         self.unload_calls += 1

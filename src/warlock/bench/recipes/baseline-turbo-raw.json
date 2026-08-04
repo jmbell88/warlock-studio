@@ -1,0 +1,10 @@
+{
+  "key": "baseline-turbo-raw",
+  "label": "SDXL-Turbo, no style, raw mesh",
+  "notes": "The control. Every other recipe is read as a difference from this one.",
+  "guidance": {
+    "base_model": "turbo",
+    "platform": "desktop"
+  },
+  "profile": "raw"
+}

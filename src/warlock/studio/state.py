@@ -23,14 +23,18 @@ def guidance_fields() -> tuple[str, ...]:
 
     Read off ``guidance.form_fields()`` rather than listed here, so a new table
     in guidance.py appears in the pane without an edit -- the same reason the
-    HTTP layer had one ``_pick_guidance``. The three exceptions are fields the
-    pane renders as something other than a plain combo: the two model pickers
-    sit under Advanced, and ``platform`` is deliberately split in two.
+    HTTP layer had one ``_pick_guidance``. The exceptions are fields the pane
+    renders as something other than a plain combo: the two model pickers sit
+    under Advanced, the two conditioning pickers live in the Reference section
+    and are hidden until there is an image to condition on, and ``platform``
+    is deliberately split in two.
     """
     from .. import guidance
 
     return tuple(
-        f for f in guidance.form_fields() if f not in ("base_model", "style_lora", "platform")
+        f
+        for f in guidance.form_fields()
+        if f not in ("base_model", "style_lora", "platform", "ip_adapter", "control")
     )
 
 
@@ -41,17 +45,32 @@ def default_form_2d() -> dict[str, Any]:
     of them, and ``platform`` is *two* fields because one control cannot be
     owned by two panes -- the 2D pane's is a prompt fragment, the 3D pane's is
     the geometry resolution.
+
+    The seed is rolled here rather than being a constant: it is deliberately
+    not persisted (settings.VOLATILE), so a literal default meant every launch
+    opened on the same seed and a first Generate reproduced last week's image.
     """
+    from ..service.validation import random_seed
+
     form: dict[str, Any] = {
         "prompt": "",
         "negative_prompt": "",
         "base_model": "",
         "style_lora": "",
         "lora_weight": 0.9,
-        "seed": 42,
+        "seed": random_seed(),
         "seed_locked": False,
         "count": 1,
         "platform": "",
+        # Conditioning. Every number is a float literal on purpose:
+        # restore_form gates on `type(value) is type(default)`, so an int here
+        # would make a persisted 0.6 fail to restore.
+        "ref_path": "",
+        "ip_adapter": "",
+        "ip_scale": 0.6,
+        "control": "",
+        "control_scale": 0.65,
+        "control_end": 0.8,
     }
     form.update(dict.fromkeys(guidance_fields(), ""))
     return form
@@ -66,6 +85,12 @@ DEFAULT_FORM_3D: dict[str, Any] = {
     "mesh_seed_locked": False,
     "rig": False,
     "rig_template": "",
+    # Whether the host recentres and rescales the subject before the trellis
+    # upload. False, matching queue.DEFAULT_REFERENCE_PREP: whether
+    # normalising here helps or fights the exe's own preprocessing is
+    # unmeasured, so the pane offers the switch rather than turning it on for
+    # everyone. Flip both together once the occupancy sweep says which way.
+    "reference_prep": False,
 }
 
 
@@ -144,6 +169,19 @@ class AppState:
     show_advanced: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
     last_error: str | None = None
+    # The landing chooser. None of these are persisted, which is the point: a
+    # fresh AppState() means every launch opens on the chooser rather than in
+    # whatever pane last session happened to end in.
+    landing: bool = True
+    landing_view: str = "choose"  # choose | open | profiles
+    profile_draft: dict[str, Any] | None = None
+    profile_draft_name: str = ""
+    # The name the draft was opened under, so renaming one in the editor moves
+    # it rather than leaving the old name behind as a duplicate.
+    profile_draft_origin: str = ""
+    # The 2D art editor's session, when it has taken over the centre pane.
+    # Typed Any so state.py keeps no import of the editor or of Pillow.
+    editor: Any = None
 
     # -- toasts ------------------------------------------------------------
 

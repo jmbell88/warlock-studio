@@ -312,7 +312,10 @@ def _world(bpy: Any, strength: float) -> None:
     scene = bpy.context.scene
     if scene.world is None:
         scene.world = bpy.data.worlds.new("sheet_world")
-    if not scene.world.use_nodes:
+    # Blender 5.0 deprecates World.use_nodes (worlds always have a node
+    # tree there); only reach for it on older versions where a fresh world
+    # has no tree until the flag is set.
+    if scene.world.node_tree is None:
         scene.world.use_nodes = True
     background = scene.world.node_tree.nodes.get("Background")
     if background is not None:
@@ -335,11 +338,14 @@ def _make_flat(bpy: Any) -> None:
     for obj in bpy.context.scene.objects:
         if obj.type == "MESH" and not obj.data.materials:
             fallback = bpy.data.materials.new("flat_fallback")
-            fallback.use_nodes = True
+            # Material.use_nodes is deprecated in Blender 5.0, where a new
+            # material always carries a node tree already.
+            if fallback.node_tree is None:
+                fallback.use_nodes = True
             obj.data.materials.append(fallback)
 
     for material in bpy.data.materials:
-        if not material.use_nodes:
+        if material.node_tree is None:
             continue
         nodes = material.node_tree.nodes
         links = material.node_tree.links

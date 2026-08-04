@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import winjob
+
 log = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -432,6 +434,9 @@ def run_worker(
         bufsize=1,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    # Same kill-on-close job as trellis-server: a bpy solve holds multiple GB,
+    # and a parent that dies mid-rig used to leave it running indefinitely.
+    winjob.assign(proc.pid)
     tail: list[str] = []
     if on_start is not None:
         on_start(proc)

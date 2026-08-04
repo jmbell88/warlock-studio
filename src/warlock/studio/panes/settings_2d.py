@@ -12,29 +12,26 @@ loads CLIP's tokenizers to count tokens, which is far too slow for a keystroke.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
 
 from ... import guidance as guidancelib
+from ... import models as modelslib
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from ...service.validation import MAX_PROMPT, MAX_REFERENCE_COUNT, random_seed
-from .. import theme, widgets
+from ...service.errors import Invalid
+from ...service.validation import (
+    MAX_PROMPT,
+    MAX_REFERENCE_COUNT,
+    MAX_UPLOAD_BYTES,
+    random_seed,
+)
+from .. import dialogs, profiles, theme, widgets
+from ..widgets import field_options as _options
 
 PREVIEW_DEBOUNCE = 0.3
-
-
-def _options(ctx: Any, field: str) -> list[tuple[str, str]]:
-    """(key, label) pairs for one taxonomy field, with a blank first entry.
-
-    Blank because every guidance field is optional: an empty select means "say
-    nothing about this", which is a different prompt from any of the choices.
-    """
-    entries = (ctx.guidance.get("fields") or {}).get(field) or []
-    return [("", f"{field.replace('_', ' ')}...")] + [
-        (e["key"], e["label"]) for e in entries
-    ]
 
 
 def draw(ctx: Any) -> None:
@@ -42,6 +39,7 @@ def draw(ctx: Any) -> None:
     form = state.form_2d
 
     _presets(ctx, form)
+    _profiles(ctx, form)
     widgets.section("Prompt")
     _prompt(ctx, form)
     _history(ctx, form)
@@ -63,6 +61,7 @@ def draw(ctx: Any) -> None:
         "the 3D pane's own platform control."
     )
 
+    _reference(ctx, form)
     _advanced(ctx, form)
     _submit(ctx, form)
 
@@ -88,6 +87,40 @@ def _presets(ctx: Any, form: dict[str, Any]) -> None:
     if preset.get("prompt"):
         form["prompt"] = preset["prompt"]
     ctx.state.preview_dirty_at = time.monotonic()
+
+
+def _profiles(ctx: Any, form: dict[str, Any]) -> None:
+    """The saved-style picker, next to the shipped presets.
+
+    Same "fills the fields, stays editable" contract a preset has -- the
+    difference is only who wrote it. Saving goes through the ordinary Prompt
+    modal rather than an inline text field so the name is asked for once,
+    rather than every frame the section is open.
+    """
+    saved = profiles.list_profiles(ctx.settings)
+    if saved:
+        options = [("", "profile...")] + [(name, name) for name in sorted(saved)]
+        chosen = widgets.combo("##profile", "", options, width=-84)
+        if chosen and chosen in saved:
+            profiles.apply(form, saved[chosen])
+            profiles.set_active(ctx.settings, chosen)
+            ctx.state.preview_dirty_at = time.monotonic()
+        imgui.same_line()
+    if imgui.button("Save as..."):
+        ctx.prompts.ask(
+            dialogs.Prompt(
+                title="Save profile",
+                label="Name",
+                value=profiles.get_active(ctx.settings) or "",
+                on_accept=lambda name: _save_profile(ctx, form, name),
+            )
+        )
+
+
+def _save_profile(ctx: Any, form: dict[str, Any], name: str) -> None:
+    profiles.save_profile(ctx.settings, name, profiles.capture(form))
+    profiles.set_active(ctx.settings, name)
+    ctx.toast(f"Saved the profile {name}.")
 
 
 def _prompt(ctx: Any, form: dict[str, Any]) -> None:
@@ -142,6 +175,86 @@ def _preview(ctx: Any) -> None:
             # costs attention rather than being cut off.
             widgets.muted(f"{tokens} tokens - {chunks} chunk(s)")
         imgui.tree_pop()
+
+
+def _reference(ctx: Any, form: dict[str, Any]) -> None:
+    """Conditioning: an image to steer appearance and/or structure.
+
+    Every control below the picker is hidden until there is a reference, and
+    the Structure group is hidden again unless the chosen base can run a
+    ControlNet. That is this pane's existing rule -- the same one that hides
+    the LoRA strength slider without a LoRA: a control with nothing to act on
+    is a control that cannot do anything.
+    """
+    if not widgets.header("Reference", default_open=False):
+        return
+
+    path = form["ref_path"]
+    if path:
+        imgui.text_wrapped(Path(path).name)
+        if imgui.button("Clear##ref"):
+            form["ref_path"] = ""
+            # The selections go with it: they cannot be submitted without an
+            # image, and leaving them set would disable Generate with a
+            # message about a picker the user just emptied.
+            form["ip_adapter"] = ""
+            form["control"] = ""
+            return
+        imgui.same_line()
+    busy = ctx.busy("ref-upload")
+    if widgets.disabled_button("Choose an image..." if not path else "Replace...", not busy):
+        ctx.submit(
+            "ref-upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER
+        )
+    if not path:
+        widgets.muted("...or drop an image on the window.")
+        return
+
+    widgets.section("Appearance")
+    form["ip_adapter"] = widgets.combo(
+        "##ip_adapter", form["ip_adapter"], _options(ctx, "ip_adapter")
+    )
+    if form["ip_adapter"]:
+        changed, value = imgui.slider_float(
+            "Strength##ip", float(form["ip_scale"]), *_range(ctx, "ip_scale_range", 0.0, 1.5)
+        )
+        if changed:
+            form["ip_scale"] = value
+
+    widgets.section("Structure")
+    if form["base_model"] not in (ctx.guidance.get("controlnet_bases") or []):
+        widgets.muted(
+            "Structure control needs a full-CFG model -- pick one under Advanced."
+        )
+        return
+    form["control"] = widgets.combo("##control", form["control"], _options(ctx, "control"))
+    if form["control"]:
+        changed, value = imgui.slider_float(
+            "Strength##cn",
+            float(form["control_scale"]),
+            *_range(ctx, "control_scale_range", 0.0, 2.0),
+        )
+        if changed:
+            form["control_scale"] = value
+        changed, value = imgui.slider_float(
+            "Until##cn", float(form["control_end"]), *_range(ctx, "control_end_range", 0.0, 1.0)
+        )
+        if changed:
+            form["control_end"] = value
+        widgets.help_marker(
+            "How far into the drawing the structure keeps acting. Ending early "
+            "lets the last steps add detail the reference never had; 1.0 holds "
+            "the shape to the end and tends to look traced."
+        )
+
+
+def _range(ctx: Any, key: str, low: float, high: float) -> tuple[float, float]:
+    """The bounds the service will actually enforce, so a slider can never
+    produce a value the submit rejects."""
+    bounds = ctx.guidance.get(key)
+    if isinstance(bounds, list) and len(bounds) == 2:
+        return (float(bounds[0]), float(bounds[1]))
+    return (low, high)
 
 
 def _advanced(ctx: Any, form: dict[str, Any]) -> None:
@@ -213,6 +326,15 @@ def validate(form: dict[str, Any]) -> list[str]:
         problems.append(f"The prompt is over {MAX_PROMPT} characters.")
     if not 1 <= int(form["count"]) <= MAX_REFERENCE_COUNT:
         problems.append(f"References must be between 1 and {MAX_REFERENCE_COUNT}.")
+    # Both reachable from a restored form rather than from this frame's
+    # controls, which is why they are checked here and not only where the
+    # widgets are drawn: a persisted selection outlives the ref_path that
+    # justified it (ref_path is VOLATILE), and the base model can be changed
+    # under Advanced after a control was picked.
+    if not form.get("ref_path") and (form.get("ip_adapter") or form.get("control")):
+        problems.append("Conditioning needs a reference image.")
+    if form.get("control") and form["base_model"] not in modelslib.controlnet_bases():
+        problems.append("Structure control needs a full-CFG model.")
     return problems
 
 
@@ -233,6 +355,11 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "seed": int(form["seed"]),
         "negative_prompt": form["negative_prompt"] or None,
         "lora_weight": float(form["lora_weight"]) if form.get("style_lora") else None,
+        # Mirroring lora_weight: sent only alongside the selection it scales,
+        # so an unused slider never reaches params as a live setting.
+        "ip_scale": float(form["ip_scale"]) if form.get("ip_adapter") else None,
+        "control_scale": float(form["control_scale"]) if form.get("control") else None,
+        "control_end": float(form["control_end"]) if form.get("control") else None,
         "guidance_fields": fields,
     }
 
@@ -245,4 +372,20 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # otherwise produce the identical image twice and read as a no-op.
         form["seed"] = random_seed()
     ctx.state.remember_prompt(form["prompt"])
-    ctx.submit("submit", svc_jobs.create_job, ctx.svc, **submit_kwargs(form))
+    kwargs = submit_kwargs(form)
+    ref_path = form.get("ref_path") or ""
+
+    # The form values are read here, on the frame thread, because they are UI
+    # state; the *file* is read in the task, because a large one would freeze
+    # the window for as long as the disk took. Copied from settings_3d.upload,
+    # including the MAX_UPLOAD_BYTES + 1 read that is create_job's contract.
+    def run():
+        if ref_path:
+            try:
+                with Path(ref_path).open("rb") as fh:
+                    kwargs["reference"] = fh.read(MAX_UPLOAD_BYTES + 1)
+            except OSError as exc:
+                raise Invalid(f"could not read {Path(ref_path).name}: {exc}") from exc
+        return svc_jobs.create_job(ctx.svc, **kwargs)
+
+    ctx.submit("submit", run)

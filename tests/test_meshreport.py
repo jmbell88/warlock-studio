@@ -48,3 +48,24 @@ def test_an_unparseable_file_is_invalid(tmp_path):
     report = meshreport.build(path)
     assert report["status"] == "invalid"
     assert report["reasons"]
+
+
+def test_component_count_sees_separate_shells_and_lone_faces(tmp_path):
+    """The count is taken off the face-adjacency graph rather than mesh.split()
+    -- building a full Trimesh per shell to compute one integer is a large
+    transient on a 500k-triangle reconstruction. The graph omits faces with no
+    neighbour, so a floating triangle is the case that pins the `nodes` arg."""
+    import numpy as np
+    import trimesh
+
+    sphere = trimesh.creation.icosphere(subdivisions=2, radius=0.4)
+    box = trimesh.creation.box(extents=(0.3, 0.3, 0.3))
+    box.apply_translation([2.0, 0.0, 0.0])
+    lone = trimesh.Trimesh(
+        vertices=np.array([[5.0, 0.0, 0.0], [5.5, 0.0, 0.0], [5.0, 0.5, 0.0]]),
+        faces=np.array([[0, 1, 2]]),
+    )
+    path = tmp_path / "shells.glb"
+    trimesh.util.concatenate([sphere, box, lone]).export(path)
+
+    assert meshreport.build(path)["components"] == 3

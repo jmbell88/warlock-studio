@@ -84,3 +84,31 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
         ),
     )
     assert vram_gib() == (7.0, 8.0)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "warlock.pipelines.conditioning",
+        "warlock.pipelines.control",
+        "warlock.pipelines.reference",
+        "warlock.provenance",
+    ],
+)
+def test_the_pure_modules_stay_torch_free(module):
+    """Same rule pipelines/prompt.py and pipelines/sheet.py follow: everything
+    decidable is importable and testable without the text2image extra. A
+    top-level torch import here would cost seconds on every mesh-only job and
+    make these modules untestable on a machine without CUDA."""
+    import subprocess
+    import sys
+
+    code = (
+        f"import {module}, sys; "
+        "bad = [m for m in ('torch', 'diffusers', 'transformers') if m in sys.modules]; "
+        "print(','.join(bad))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == ""

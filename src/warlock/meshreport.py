@@ -67,7 +67,20 @@ def build(
     # Topology. trimesh's own predicates, not a reimplementation: they are what
     # every other consumer of this format uses to decide the same questions.
     watertight = bool(mesh.is_watertight)
-    components = int(len(mesh.split(only_watertight=False)))
+    # Only the *count* is wanted, so the face-adjacency graph is walked
+    # directly rather than through mesh.split(), which builds a full Trimesh --
+    # vertices, faces, visual and all -- for every shell it finds. On a
+    # 500k-triangle trellis reconstruction with a few hundred stray shells that
+    # is a large transient allocation to compute one integer.
+    components = int(
+        len(
+            # `nodes` is not optional here: face_adjacency omits any face with
+            # no neighbour, and a lone floating triangle is a component.
+            trimesh.graph.connected_components(
+                mesh.face_adjacency, nodes=np.arange(len(mesh.faces))
+            )
+        )
+    )
     # An edge with exactly one adjacent face is a boundary edge; more than two
     # is non-manifold. Both fall out of counting how many times each unique
     # edge is referenced, which is one bincount rather than two traversals.

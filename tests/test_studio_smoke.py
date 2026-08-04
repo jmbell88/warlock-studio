@@ -251,3 +251,126 @@ def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
 
     _frame(imgui_ctx, build)
     del renderer
+
+
+def test_the_landing_screen_builds_in_each_of_its_views(app_ctx, imgui_ctx):
+    from warlock.studio.panes import landing
+
+    _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+    app_ctx.state.landing_view = "open"
+    _seeded(app_ctx)
+    _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+    app_ctx.state.landing_view = "profiles"
+    _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+
+
+def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
+    from warlock.studio import profiles
+    from warlock.studio.panes import profiles_panel
+
+    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))  # nothing saved yet
+    profiles.save_profile(app_ctx.settings, "props", {"base_model": "turbo", "genre": "fantasy"})
+    profiles.set_active(app_ctx.settings, "props")
+    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
+    app_ctx.state.profile_draft = profiles.capture(app_ctx.state.form_2d)
+    app_ctx.state.profile_draft["style_lora"] = "render3d"
+    app_ctx.state.profile_draft_name = "props"
+    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
+
+
+def test_the_2d_pane_builds_with_a_reference_chosen(app_ctx, imgui_ctx):
+    """The conditioning group is hidden until ref_path is set, so the empty-form
+    smoke test never reaches it."""
+    from warlock.studio.panes import settings_2d
+
+    form = app_ctx.state.form_2d
+    form["prompt"] = "a barrel"
+    form["ref_path"] = "D:/pictures/knight.png"
+    form["ip_adapter"] = "plus"
+    # A CFG base, so the Structure group draws rather than its muted note.
+    form["base_model"] = "sdxl_cfg"
+    form["control"] = "canny"
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+    # And again on a base that cannot run a ControlNet: the other branch.
+    form["base_model"] = "turbo"
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
+def test_the_inspector_builds_with_a_reference_report(app_ctx, imgui_ctx):
+    from warlock.studio.panes import inspector
+
+    _seeded(app_ctx)
+    job_id = app_ctx.state.selected
+    app_ctx.svc.store.merge_params(
+        job_id,
+        {
+            "reference_report": {
+                "ok": False,
+                "reasons": ["There is more than one object in the reference."],
+                "warnings": ["The subject touches the edge of the frame."],
+                "occupancy": 0.62,
+            },
+            "control_hint": {"kind": "canny", "edge_fraction": 0.031},
+            "ip_adapter": "plus",
+            "ip_scale": 0.6,
+        },
+    )
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
+
+
+def test_the_2d_editor_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
+    """The one pane that owns GL objects of its own. _seeded writes a byte, not
+    a PNG, so this seeds a real image -- opening is a decode."""
+    import io
+
+    from PIL import Image
+
+    from warlock.studio.panes import editor_2d
+
+    job_id = svc_jobs.create_job(
+        app_ctx.svc, kind="text", prompt="a barrel", output="reference"
+    )["id"]
+    job_dir = app_ctx.svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    Image.new("RGBA", (8, 8), (40, 80, 160, 255)).save(buf, "PNG")
+    (job_dir / "input.png").write_bytes(buf.getvalue())
+    app_ctx.svc.store.set_status(job_id, "done")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.select(job_id)
+    app_ctx.state.mode = "2d"
+
+    job = app_ctx.cache.get(job_id)
+    assert editor_2d.can_edit(app_ctx, job)
+    editor_2d.open(app_ctx, job)
+    session = app_ctx.state.editor
+    assert session is not None and session.job_id == job_id
+
+    _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
+    # Every tool drawn once: each has its own toolbar branch.
+    for tool, _label in editor_2d.TOOLS:
+        session.tool = tool
+        _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
+    # And once with a floating selection, which is the second texture.
+    session.doc.lift_selection((1, 1, 5, 5))
+    _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
+    assert app_ctx.state.preview.get("editor_texture") is not None
+
+    editor_2d.close(app_ctx)
+    assert app_ctx.state.editor is None
+    for key in ("editor_texture", "editor_sel_texture"):
+        assert key not in app_ctx.state.preview
+
+
+def test_a_finished_mesh_is_not_offered_the_2d_editor(app_ctx, imgui_ctx):
+    """It edits the *generated reference*, and a mesh job's input.png is
+    whatever it was reconstructed from."""
+    from warlock.studio.panes import editor_2d
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "2d"
+    assert not editor_2d.can_edit(app_ctx, app_ctx.cache.get(job_id))

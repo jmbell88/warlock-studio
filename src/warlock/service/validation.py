@@ -68,6 +68,21 @@ DERIVED_PARAMS = (
     "bone_count",
     "sheet_id",
     "cells",
+    "reference_report",
+    "control_hint",
+    "recipe",
+)
+
+# The conditioning selection itself, which is an *input* rather than a derived
+# value -- so it survives a reroll, unlike DERIVED_PARAMS. It does not survive
+# a promotion or a remesh: those are `image` jobs that never touch SDXL, and a
+# row claiming an IP-Adapter that cannot have run is a lie about provenance.
+CONDITIONING_PARAMS = (
+    "ip_adapter",
+    "ip_scale",
+    "control",
+    "control_scale",
+    "control_end",
 )
 
 

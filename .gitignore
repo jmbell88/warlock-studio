@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 assets/
+# Benchmark runs: generated artifacts, copied rather than referenced, and
+# reclaimed with `python -m warlock.bench prune`. The suites and recipes that
+# define a run live in src/ and are tracked.
+/bench/
 models/
 /vendor/
 scratch/

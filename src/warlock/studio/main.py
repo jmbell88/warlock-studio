@@ -19,9 +19,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import memlog
+
 log = logging.getLogger(__name__)
 
 WINDOW_TITLE = "Warlock Studio"
+# How often the frame loop samples host memory. Long enough to be free, short
+# enough that a 30-minute idle session yields 60 points to fit a slope through.
+MEMORY_TICK_SECONDS = 30.0
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
 SIDEBAR_WIDTH = 340.0
@@ -44,6 +49,15 @@ class App:
         self.eta = None
         self._running = False
         self._last_frame = time.perf_counter()
+        # Seeded to 0.0, not to now: the first tick fires immediately and puts
+        # a startup baseline in the log to measure every later sample against.
+        self._last_memory_log = 0.0
+        self._was_landing = True
+        # Set by _draw_viewport_image, read one frame later by _events. The
+        # host window is fullscreen, so io.want_capture_mouse is always true
+        # and cannot be the gate; imgui's own hover test on the viewport image
+        # is, and it correctly goes false under popups and active widgets.
+        self._viewport_hovered = False
 
     # -- setup -------------------------------------------------------------
 
@@ -135,7 +149,17 @@ class App:
         ctx.rig_templates = list(templates.get("templates") or [])
         ctx.rig_default = templates.get("default") or ""
         ctx.export_dir = str(self.runtime.config.export_dir or "") or None
-        failed = [c for c in self.runtime.checks if not c.ok and c.fatal]
+        # The trellis port check is non-fatal -- the app is perfectly usable
+        # without ever running trellis -- but a port already held at startup
+        # means an orphaned server from a previous crash, and every 3D job will
+        # fail (or, worse, be served by the orphan) until it is stopped. That
+        # is worth the same banner a fatal check gets, so it joins them here
+        # rather than being promoted to fatal in doctor.
+        failed = [
+            c
+            for c in self.runtime.checks
+            if not c.ok and (c.fatal or c.name == "trellis port")
+        ]
         if failed:
             ctx.state.last_error = "; ".join(f"{c.name}: {c.detail}" for c in failed)
 
@@ -164,7 +188,26 @@ class App:
         now = time.perf_counter()
         dt = min(now - self._last_frame, 0.25)
         self._last_frame = now
+        self._memory_ticker(now)
         return dt
+
+    def _memory_ticker(self, now: float) -> None:
+        """Log host memory every MEMORY_TICK_SECONDS.
+
+        The single line that discriminates the two candidate causes of the
+        2026-08-03 commit exhaustion. Stage-boundary logging (queue._log_mem)
+        only fires when a job runs, so it cannot distinguish "each job leaks a
+        little" from "the process grows while sitting idle". This samples
+        regardless, so the shape of the curve is in the log either way.
+
+        Cheap enough for the frame loop: two ctypes calls once per 30 s.
+        """
+        if now - self._last_memory_log < MEMORY_TICK_SECONDS:
+            return
+        self._last_memory_log = now
+        summary = memlog.summary()
+        if summary is not None:
+            log.info("host idle-tick: %s", summary)
 
     def frame(self, dt: float) -> None:
         from imgui_bundle import imgui
@@ -226,6 +269,17 @@ class App:
             from .panes import settings_3d
 
             settings_3d.upload(ctx, Path(done.result))
+            return
+        if key == "ref-upload" and done.result is not None:
+            # Only the path is kept here; the bytes are read in the submit
+            # task, so picking a 20 MB image never touches the frame thread.
+            ctx.state.form_2d["ref_path"] = str(done.result)
+            return
+        if key.startswith(("editor-save:", "editor-revert:")):
+            from .panes import editor_2d
+
+            name, _, job_id = key.partition(":")
+            editor_2d.on_saved(ctx, job_id, reverted=name == "editor-revert")
             return
         if key == "submit":
             ctx.cache.invalidate()
@@ -366,17 +420,10 @@ class App:
                 if not io.want_text_input:
                     self._shortcut(event)
                 continue
-            # The viewer only sees the mouse when imgui does not want it, and a
-            # drag already in progress keeps it whatever imgui says.
-            if not io.want_capture_mouse or self.viewer._grab is not None:
-                self.viewer.handle_event(event, hovered=self._over_viewport())
-
-    def _over_viewport(self) -> bool:
-        import pygame
-
-        x, y = pygame.mouse.get_pos()
-        rx, ry, rw, rh = self.viewer._rect
-        return rx <= x < rx + rw and ry <= y < ry + rh
+            # The viewer sees the mouse when it is over the viewport image, and
+            # a drag already in progress keeps it wherever the cursor goes.
+            if self._viewport_hovered or self.viewer._grab is not None:
+                self.viewer.handle_event(event, hovered=self._viewport_hovered)
 
     def _shortcut(self, event: Any) -> None:
         import pygame
@@ -384,6 +431,17 @@ class App:
         if event.type != pygame.KEYDOWN:
             return
         ctx = self.app_ctx
+        if ctx.state.landing:
+            # The chooser has no form to submit and no viewport to frame; every
+            # one of these would act on a pane that is not on screen.
+            return
+        if ctx.state.editor is not None:
+            from .panes import editor_2d
+
+            # Consumes every key while the editor is up, so F/W/S/Ctrl+Enter
+            # cannot act on the panes it has replaced.
+            if editor_2d.handle_key(ctx, event):
+                return
         mods = pygame.key.get_mods()
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
             from .panes import settings_2d, settings_3d
@@ -416,13 +474,28 @@ class App:
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
             return
+        if ctx.state.mode == "2d":
+            # In the 2D pane a dropped image is a *conditioning reference*, not
+            # a mesh to build -- forcing the mode switch here would throw away
+            # the prompt the user is composing. One branch, and it is what
+            # makes the feature discoverable at all.
+            ctx.state.landing = False
+            ctx.state.form_2d["ref_path"] = str(path)
+            ctx.toast(f"Using {path.name} as the reference.")
+            return
         ctx.state.mode = "3d"
+        # A drop is a start: it would otherwise land behind the chooser, with
+        # nothing on screen saying anything had happened.
+        ctx.state.landing = False
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
-        from .panes import pose_panel
+        from .panes import editor_2d, pose_panel
 
-        pose_panel.guard(self.app_ctx, "quit", self._quit)
+        ctx = self.app_ctx
+        editor_2d.guard(
+            ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
+        )
 
     def _quit(self) -> None:
         self._running = False
@@ -432,9 +505,20 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
-        from .panes import inspector, library, settings_2d, settings_3d
+        from .panes import inspector, landing, library, settings_2d, settings_3d
 
         ctx = self.app_ctx
+        # Recomputed every frame by whoever draws the viewport image. Landing,
+        # 2D mode and the editor all return without drawing it, so it stays
+        # false there and the viewer gets no events at all.
+        self._viewport_hovered = False
+        # Leaving the chooser is a mode change the cache will not announce: the
+        # job list has not changed, so nothing else would ask the viewer to
+        # show what was just picked.
+        if self._was_landing and not ctx.state.landing:
+            self._sync_viewer()
+        self._was_landing = ctx.state.landing
+
         viewport = imgui.get_main_viewport()
         imgui.set_next_window_pos(viewport.work_pos)
         imgui.set_next_window_size(viewport.work_size)
@@ -445,6 +529,11 @@ class App:
             | imgui.WindowFlags_.no_saved_settings.value
         )
         imgui.begin("##host", None, flags)
+        if ctx.state.landing:
+            landing.draw(ctx)
+            imgui.end()
+            self._overlays(viewport)
+            return
         self._mode_switch()
 
         # The sidebar is two scrollers, not one: sharing a single scroll region
@@ -472,23 +561,50 @@ class App:
             inspector.draw(ctx)
         imgui.end_child()
         imgui.end()
+        self._overlays(viewport)
 
-        overlay_size = (viewport.work_size.x, viewport.work_size.y)
+    def _overlays(self, viewport: Any) -> None:
+        """Toasts and modals, drawn over whichever layout ran.
+
+        Outside the host window and after it ends, because a modal is its own
+        window: the landing screen needs them as much as the workspace does,
+        which is why this is not inline in either.
+        """
         from . import widgets
 
-        widgets.toasts(ctx.state, overlay_size)
+        ctx = self.app_ctx
+        widgets.toasts(ctx.state, (viewport.work_size.x, viewport.work_size.y))
         ctx.confirms.draw()
         ctx.prompts.draw()
 
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
 
-        state = self.app_ctx.state
+        from .panes import editor_2d
+
+        ctx = self.app_ctx
+        state = ctx.state
+        if imgui.button("Home"):
+
+            def go_home() -> None:
+                editor_2d.close(ctx)
+                state.landing = True
+                state.landing_view = "choose"
+
+            editor_2d.guard(ctx, "go back", go_home)
+        imgui.same_line()
         for mode, label in (("2d", "2D reference"), ("3d", "3D asset")):
             if imgui.radio_button(label, state.mode == mode):
-                state.mode = mode
-                self.app_ctx.settings.set("mode", mode)
-                self._sync_viewer()
+
+                def switch(mode: str = mode) -> None:
+                    # The editor is a 2D thing; leaving it open in 3D mode
+                    # would hide the viewport it is not editing.
+                    editor_2d.close(ctx)
+                    state.mode = mode
+                    ctx.settings.set("mode", mode)
+                    self._sync_viewer()
+
+                editor_2d.guard(ctx, "switch modes", switch)
             imgui.same_line()
         imgui.new_line()
 
@@ -499,7 +615,22 @@ class App:
 
         ctx = self.app_ctx
         width = imgui.get_content_region_avail().x - SIDEBAR_WIDTH - 16
-        if imgui.begin_child("viewport", (width, 0), imgui.ChildFlags_.borders.value):
+        # no_scroll_with_mouse: over the viewport the wheel can only mean dolly.
+        if imgui.begin_child(
+            "viewport",
+            (width, 0),
+            imgui.ChildFlags_.borders.value,
+            imgui.WindowFlags_.no_scroll_with_mouse.value,
+        ):
+            if ctx.state.editor is not None:
+                from .panes import editor_2d
+
+                # A takeover, not an overlay: the editor owns the whole centre
+                # pane, and the viewer's toolbar and progress card would both
+                # be acting on something that is not on screen.
+                editor_2d.draw(ctx)
+                imgui.end_child()
+                return
             overlay.doctor_banner(ctx)
             overlay.toolbar(ctx)
             image_pos = imgui.get_cursor_screen_pos()
@@ -525,12 +656,14 @@ class App:
         texture = self.viewer.render((pos.x, pos.y, cell, height), imgui.get_io().delta_time)
         # UV flipped: GL's origin is bottom-left and imgui's is top-left.
         imgui.image(widgets.texture_ref(texture), (cell, height), (0, 1), (1, 0))
+        self._viewport_hovered |= imgui.is_item_hovered()
         if halves == 2 and self.viewer.compare_viewport is not None:
             imgui.same_line()
             imgui.image(
                 widgets.texture_ref(self.viewer.compare_viewport.texture),
                 (cell, height), (0, 1), (1, 0),
             )
+            self._viewport_hovered |= imgui.is_item_hovered()
 
     def _draw_reference(self, width: float, height: float) -> None:
         from imgui_bundle import imgui
@@ -575,14 +708,62 @@ def _background() -> tuple[float, float, float, float]:
     return rgba(BG)
 
 
-def run() -> int:
-    """The ``warlock`` entry point."""
-    from .runtime import Runtime
+def _setup_logging() -> None:
+    """Console logging plus a rotating file log and a native crash log.
+
+    Until this existed the app wrote no log file at all: basicConfig had only
+    the default stream handler, so the VRAM instrumentation in queue.py went to
+    a console nobody was watching. The 2026-08-03 memory-exhaustion crash left
+    no in-app record whatsoever and had to be reconstructed from Windows event
+    logs. Both files below exist so the next occurrence is attributable.
+
+    faulthandler covers what logging cannot: a hard crash in native code
+    (torch, CUDA, or the allocator giving up under commit exhaustion) never
+    unwinds to a Python `except`, but faulthandler's signal handlers still get
+    a traceback out to the fd.
+    """
+    import faulthandler
+    from logging.handlers import RotatingFileHandler
+
+    from ..config import get_config
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        data_dir = get_config().data_dir
+        handlers.append(
+            RotatingFileHandler(
+                data_dir / "warlock.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+        )
+        # Held open for process life on purpose -- faulthandler writes to this
+        # fd from a signal handler at crash time, so it must not be a file
+        # object that could be closed or garbage-collected first.
+        global _crash_log
+        _crash_log = (data_dir / "crash.log").open("a", encoding="utf-8")
+        faulthandler.enable(file=_crash_log)
+    except OSError:
+        # A read-only or missing data_dir is not a reason to refuse to start;
+        # console logging alone is what we had before.
+        logging.getLogger(__name__).warning("file logging unavailable", exc_info=True)
 
     logging.basicConfig(
         level=os.environ.get("WARLOCK_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
     )
+
+
+_crash_log: Any = None
+
+
+def run() -> int:
+    """The ``warlock`` entry point."""
+    from .runtime import Runtime
+
+    _setup_logging()
     try:
         return App(Runtime()).run()
     except Exception:

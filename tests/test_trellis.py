@@ -165,6 +165,9 @@ class _FakeProc:
     def __init__(self) -> None:
         self.stdout = None
         self.returncode = None
+        # winjob.assign reads .pid right after Popen; 0 is never a real pid, so
+        # OpenProcess fails and assign logs and returns False, as designed.
+        self.pid = 0
 
     def poll(self):
         return None
@@ -201,6 +204,10 @@ async def test_ensure_started_raises_cleanly_if_proc_cleared_mid_poll(tmp_path, 
 
     monkeypatch.setattr(trellis_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
     monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    # The bind-precheck runs before the poll loop this test is about, and the
+    # port is a real one -- an orphan (or anything else) holding it would fail
+    # the run for an unrelated reason.
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: False)
 
     real_sleep = asyncio.sleep
     calls = {"n": 0}
@@ -216,6 +223,42 @@ async def test_ensure_started_raises_cleanly_if_proc_cleared_mid_poll(tmp_path, 
 
     with pytest.raises(RuntimeError, match="stopped during startup"):
         await srv.ensure_started()
+
+
+@pytest.mark.asyncio
+async def test_ensure_started_refuses_a_port_an_orphan_already_holds(tmp_path, monkeypatch):
+    """/health carries no identity field, so an orphaned server left by a crash
+    answers the readiness poll exactly like the one we are about to spawn --
+    which dies on bind. Every generate would then silently go to the orphan."""
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971)
+
+    spawned = []
+    monkeypatch.setattr(
+        trellis_mod.subprocess, "Popen", lambda *a, **k: spawned.append(a) or _FakeProc()
+    )
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: True)
+
+    with pytest.raises(RuntimeError, match="already in use"):
+        await srv.ensure_started()
+    assert spawned == []
+
+
+def test_port_in_use_sees_a_bound_socket():
+    import socket
+
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        port = sock.getsockname()[1]
+        assert trellis_mod._port_in_use(port) is True
+    finally:
+        sock.close()
+    assert trellis_mod._port_in_use(port) is False
 
 
 # --- stop() concurrency -----------------------------------------------------

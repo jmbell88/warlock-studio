@@ -76,7 +76,14 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 def test_run_checks_returns_every_check(tmp_path):
     # Eight fixed checks plus one row per registry entry -- derived rather than
     # hardcoded so adding a model doesn't fail an unrelated assertion.
-    expected = 8 + len(model_registry.BASE_MODELS) + len(model_registry.STYLE_LORAS)
+    expected = (
+        8
+        + len(model_registry.BASE_MODELS)
+        + len(model_registry.STYLE_LORAS)
+        + len(model_registry.IP_ADAPTERS)
+        + len(model_registry.CONTROLNETS)
+        + len(model_registry.METRIC_MODELS)
+    )
     assert len(run_checks(_config(tmp_path))) == expected
 
 
@@ -147,3 +154,38 @@ def test_gltfpack_check_is_non_fatal_when_missing(tmp_path, monkeypatch):
     check = doctor._gltfpack_check(Config())
     assert check.ok is False
     assert check.fatal is False
+
+
+def test_ip_adapter_row_checks_the_vision_encoder_too(tmp_path):
+    """Weights without the encoder load fine and fail at the first call, which
+    is not a failure a user can read back to a missing download."""
+    # An explicit model root: the developer machine running these tests may
+    # well have the real weights downloaded already.
+    config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
+    adapter = model_registry.IP_ADAPTERS["plus"]
+    root = config.t2i_model_root / adapter.dir_name
+    weights = root / adapter.subfolder / adapter.weight_name
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.write_bytes(b"x")
+
+    checks = {c.name: c for c in run_checks(config)}
+    row = checks[f"IP-Adapter: {adapter.label}"]
+    assert row.ok is False
+    assert row.fatal is False
+    assert "encoder" in row.detail
+    assert "hf download" in row.detail
+
+    (root / adapter.image_encoder_dir).mkdir(parents=True, exist_ok=True)
+    (root / adapter.image_encoder_dir / "config.json").write_text("{}")
+    checks = {c.name: c for c in run_checks(config)}
+    assert checks[f"IP-Adapter: {adapter.label}"].ok is True
+
+
+def test_controlnet_rows_are_non_fatal_and_name_their_download(tmp_path):
+    config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
+    checks = {c.name: c for c in run_checks(config)}
+    for cn in model_registry.CONTROLNETS.values():
+        row = checks[f"ControlNet: {cn.label}"]
+        assert row.ok is False
+        assert row.fatal is False
+        assert "hf download" in row.detail

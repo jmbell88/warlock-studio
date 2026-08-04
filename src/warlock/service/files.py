@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
-from .errors import Invalid, NotFound, TooLarge
-from .validation import MAX_IMAGE_PIXELS, MAX_THUMB_BYTES, check_job_id
+from .errors import Conflict, Invalid, NotFound, TooLarge
+from .validation import (
+    MAX_IMAGE_PIXELS,
+    MAX_THUMB_BYTES,
+    MAX_UPLOAD_BYTES,
+    check_job_id,
+)
 
 # The complete artifact allowlist. It is also the export allowlist: the point
 # is that a caller-supplied name never becomes a path component without
@@ -18,6 +25,12 @@ MEDIA = {
     # user can take the full-density reconstruction if they want it.
     "source.glb": "model/gltf-binary",
     "input.png": "image/png",
+    # The three conditioning images, which together answer "why does the mesh
+    # look like that": what the user supplied, what trellis was actually
+    # handed, and what the ControlNet actually saw.
+    "ref.png": "image/png",
+    "reference.png": "image/png",
+    "control.png": "image/png",
     "model.stl": "model/stl",
     "model_obj.zip": "application/zip",
     "collision.glb": "model/gltf-binary",
@@ -89,6 +102,124 @@ def save_thumbnail(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     return {"ok": True}
 
 
+# The untouched generated image, kept the first time a hand edit overwrites
+# input.png. Deliberately absent from MEDIA and LISTED: it is an internal
+# backup, never listed and never downloadable, and it goes away with the job
+# directory for free.
+ORIGINAL = "input.orig.png"
+
+
+def _editable_reference(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:
+    """The gates the 2D editor and promote_to_model agree on."""
+    check_job_id(job_id)
+    job = svc.store.get(job_id)
+    if job is None:
+        raise NotFound("no such job")
+    if job["stage"] != "reference":
+        raise Invalid("this job is not a reference")
+    if job["status"] != "done":
+        raise Invalid(f"reference is {job['status']}")
+    src = svc.job_dir(job_id) / "input.png"
+    if not src.exists():
+        raise Invalid("reference has no image")
+    return job, src
+
+
+def _remeasure(svc: Any, job_id: str, src: Path, *, hand_edited: bool) -> None:
+    """Re-run the reference measurement over the pixels that are now on disk.
+
+    promote_to_model refuses a reference whose stored report says it cannot
+    reconstruct, and that report was measured from the *generated* pixels. An
+    edit -- or a revert -- makes it a verdict about an image that no longer
+    exists, so it is recomputed here. ``hand_edited`` rides along because
+    ``params["recipe"]`` claims a seed and a model produced this image, which
+    after an edit is no longer the whole truth.
+    """
+    from ..pipelines import reference
+
+    changes: dict[str, Any] = {"reference_report": reference.measure_file(src).as_dict()}
+    remove: tuple[str, ...] = ()
+    if hand_edited:
+        changes["hand_edited"] = True
+    else:
+        remove = ("hand_edited",)
+    # merge_params, not set_params: this runs off the frame thread while the
+    # worker may be writing other keys on the same row.
+    svc.store.merge_params(job_id, changes, remove=remove)
+
+
+def reference_edit_status(svc: Any, job_id: str) -> dict[str, Any]:
+    """Whether this job can be opened in the 2D editor, and whether it has a
+    backup to revert to. Two stats; safe from the frame thread."""
+    check_job_id(job_id)
+    job = svc.store.get(job_id)
+    job_dir = svc.job_dir(job_id)
+    editable = (
+        job is not None
+        and job["stage"] == "reference"
+        and job["status"] == "done"
+        and (job_dir / "input.png").exists()
+    )
+    return {"editable": bool(editable), "has_original": (job_dir / ORIGINAL).exists()}
+
+
+def save_edited_image(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+    """Overwrite a reference's input.png with a hand-edited version.
+
+    In place rather than beside, because every consumer of a reference --
+    promote, remesh, export, the thumbnail -- reads that one name; a second
+    "edited.png" would mean teaching all of them which to prefer. The original
+    is preserved once, on the first save, so the edit is still undoable after
+    the session that made it is gone.
+    """
+    _, dest = _editable_reference(svc, job_id)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise TooLarge("image too large")
+    if not data.startswith(PNG_MAGIC):
+        raise Invalid("the edited image must be a PNG")
+    _check_pixels(data)
+
+    original = dest.parent / ORIGINAL
+    if not original.exists():
+        # Once, and never clobbered: a second save must not make the *first*
+        # edit the thing "Revert to original" restores.
+        shutil.copyfile(dest, original)
+    # Staged: promote_to_model and remesh copy input.png with a bare copyfile,
+    # so a direct write_bytes onto a served name is a torn read waiting to
+    # happen.
+    tmp = dest.with_suffix(".png.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    _remeasure(svc, job_id, dest, hand_edited=True)
+    return {"ok": True}
+
+
+def revert_reference(svc: Any, job_id: str) -> dict[str, Any]:
+    """Put the untouched generated image back, consuming the backup."""
+    _, dest = _editable_reference(svc, job_id)
+    original = dest.parent / ORIGINAL
+    if not original.exists():
+        raise Conflict("this reference has no unedited original")
+    os.replace(original, dest)
+    _remeasure(svc, job_id, dest, hand_edited=False)
+    return {"ok": True}
+
+
+def _check_pixels(data: bytes) -> None:
+    """The header pixel cap, without decoding. Same guard to_png applies."""
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            width, height = im.width, im.height
+    except Exception as exc:
+        raise Invalid("that is not a readable image") from exc
+    if width * height > MAX_IMAGE_PIXELS:
+        raise TooLarge(f"image is {width}x{height}; the limit is {MAX_IMAGE_PIXELS:,} pixels")
+
+
 def measure_storage(data_dir: Path) -> dict[str, Any]:
     """Total bytes and directory count under data_dir. Blocking; call off the
     frame thread."""
@@ -115,7 +246,17 @@ DERIVED = ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model
 # The order attach_files lists them in. Derived artifacts are deliberately
 # absent: they are produced on request, so listing them would claim a file that
 # usually isn't on disk.
-LISTED = ("input.png", "model.glb", "source.glb", "rig.glb", "thumb.png", "error.log")
+LISTED = (
+    "input.png",
+    "ref.png",
+    "reference.png",
+    "control.png",
+    "model.glb",
+    "source.glb",
+    "rig.glb",
+    "thumb.png",
+    "error.log",
+)
 
 
 def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
@@ -143,7 +284,8 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
     if name in DERIVED:
         # Derivable, not present: the caller still has to produce it.
         return ready(job, job_dir, "model.glb")
-    # input.png, thumb.png and error.log are each written in one call and are
+    # input.png, ref/reference/control.png, thumb.png and error.log are each
+    # written in one call (the last three through a temp-and-rename) and are
     # complete the moment they exist -- error.log before the row is even marked
     # failed, thumb.png by the viewer long after the job finished.
     return path.exists()

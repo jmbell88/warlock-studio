@@ -90,6 +90,7 @@ def test_catalog_covers_every_field_and_is_json_safe():
     catalog = guidance.catalog()
     assert set(catalog["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
     }
@@ -246,6 +247,74 @@ def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
 def test_form_fields_covers_every_table():
     assert set(guidance.form_fields()) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
     }
+
+
+def test_an_unknown_conditioning_selection_is_rejected():
+    with pytest.raises(ValueError, match="ip_adapter"):
+        guidance.normalize({"ip_adapter": "nope"})
+    with pytest.raises(ValueError, match="control"):
+        guidance.normalize({"control": "nope"})
+
+
+def test_a_conditioning_scale_is_absent_without_its_selection():
+    """Same rule as style_lora/lora_weight: a scale with nothing to scale
+    reads as a live setting when the params are rerun."""
+    params = guidance.normalize({"ip_scale": 0.9, "control_scale": 1.0})
+    assert "ip_scale" not in params
+    assert "control_scale" not in params
+    assert "control_end" not in params
+
+
+def test_a_conditioning_scale_is_carried_with_its_selection():
+    params = guidance.normalize(
+        {"ip_adapter": "plus", "ip_scale": 0.9, "base_model": "sdxl_cfg",
+         "control": "canny", "control_scale": 1.0, "control_end": 0.5}
+    )
+    assert params["ip_scale"] == 0.9
+    assert params["control_scale"] == 1.0
+    assert params["control_end"] == 0.5
+
+
+def test_conditioning_scales_default_from_their_registry_entry():
+    params = guidance.normalize({"ip_adapter": "plus", "base_model": "sdxl_cfg",
+                                 "control": "canny"})
+    assert params["ip_scale"] == models.IP_ADAPTERS["plus"].default_scale
+    assert params["control_scale"] == models.CONTROLNETS["canny"].default_scale
+    assert params["control_end"] == models.CONTROLNETS["canny"].default_end
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("ip_scale", 99), ("control_scale", -1), ("control_end", 2.5)],
+)
+def test_an_out_of_range_conditioning_scale_is_rejected(field, value):
+    with pytest.raises(ValueError, match=field):
+        guidance.normalize(
+            {"ip_adapter": "plus", "control": "canny", "base_model": "sdxl_cfg",
+             field: value}
+        )
+
+
+def test_a_control_on_a_distilled_base_is_refused_by_name():
+    """A ControlNet at guidance 0 on a 4-step base fights the hint instead of
+    honouring it, so this is an error rather than a silent no-op -- and the
+    message has to say which bases do work."""
+    with pytest.raises(ValueError, match="sdxl_cfg"):
+        guidance.normalize({"control": "canny", "base_model": "turbo"})
+
+
+def test_the_composed_prompt_never_sees_a_conditioning_field():
+    """The bit-identity rule at the prompt layer: conditioning changes what
+    the pipeline is handed, never a single character of the text."""
+    plain = guidance.normalize({"category": "prop", "base_model": "sdxl_cfg"})
+    conditioned = guidance.normalize(
+        {"category": "prop", "base_model": "sdxl_cfg", "ip_adapter": "plus",
+         "ip_scale": 1.1, "control": "canny", "control_scale": 0.4, "control_end": 0.9}
+    )
+    assert guidance.compose_prompt("a crate", plain) == guidance.compose_prompt(
+        "a crate", conditioned
+    )

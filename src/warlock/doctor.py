@@ -195,4 +195,55 @@ def _t2i_checks(config: Config) -> list[Check]:
             else f"not found at {path} -- style unavailable; download with:\n  {lora.download}"
         )
         checks.append(Check(f"style LoRA: {lora.label}", ok, detail, fatal=False))
+    for adapter in models.IP_ADAPTERS.values():
+        root = config.t2i_model_root / adapter.dir_name
+        weights = root / adapter.subfolder / adapter.weight_name
+        # Both halves, deliberately: weights without the CLIP vision encoder
+        # load fine and then fail at the first call, which is not a failure a
+        # user can read back to a missing download.
+        encoder = root / adapter.image_encoder_dir / "config.json"
+        ok = weights.exists() and encoder.exists()
+        if ok:
+            detail = str(root)
+        else:
+            missing = "weights" if not weights.exists() else "CLIP vision encoder"
+            detail = (
+                f"{missing} not found under {root} -- conditioning unavailable; "
+                f"download with:\n  {adapter.download}"
+            )
+        checks.append(Check(f"IP-Adapter: {adapter.label}", ok, detail, fatal=False))
+    for cn in models.CONTROLNETS.values():
+        path = config.t2i_model_root / cn.dir_name
+        variant = f".{cn.variant}" if cn.variant else ""
+        ok = (path / "config.json").exists() and (
+            path / f"diffusion_pytorch_model{variant}.safetensors"
+        ).exists()
+        detail = (
+            str(path)
+            if ok
+            else f"not found at {path} -- control unavailable; download with:\n  {cn.download}"
+        )
+        checks.append(Check(f"ControlNet: {cn.label}", ok, detail, fatal=False))
+    checks.extend(_metric_checks(config))
+    return checks
+
+
+def _metric_checks(config: Config) -> list[Check]:
+    """One row per measurement model, all non-fatal.
+
+    These are only ever used by `python -m warlock.bench`; a missing one costs
+    a metric, not a job, which is why they are reported here rather than
+    failing anything.
+    """
+    checks: list[Check] = []
+    for spec in models.METRIC_MODELS.values():
+        path = config.t2i_model_root / spec.dir_name
+        ok = (path / "config.json").exists()
+        detail = (
+            str(path)
+            if ok
+            else f"not found at {path} -- benchmark metric unavailable; download with:\n"
+            f"  {spec.download}"
+        )
+        checks.append(Check(f"metric model: {spec.label}", ok, detail, fatal=False))
     return checks
