@@ -32,7 +32,8 @@ static poses in would leave an importer no way to tell which rows loop.
 The line under the controls states the grid you will actually get — how many render cells, and the
 output image's pixel dimensions.
 
-A sheet is a queued job, rendered in Blender's EEVEE with a transparent film. A rigged mesh is
+A sheet is a queued job, started with the **Render sheet** button and rendered in Blender's EEVEE
+with a transparent film. A rigged mesh is
 required for posed rows and for clips; a plain mesh can still be rendered, as described under
 [Unrigged props](#unrigged-props).
 

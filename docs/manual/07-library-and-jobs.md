@@ -142,7 +142,8 @@ name and captures the current form's profile fields.
 
 From **Home**, the landing screen's profiles view is the full manager. **New profile** starts from
 whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and how many
-style fields it sets, with four actions: **Set active**, **Edit**, **Apply to form** and **Delete**.
+style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form** and
+**Delete** — the active profile hides **Set active**.
 
 The editor works on a *draft*, not on the live form, so editing a profile never changes what your
 next Generate would send. Renaming a profile in the editor moves it rather than forking it — a typo

@@ -108,9 +108,9 @@ place a rerun or a promotion consults when deciding what to strip.
 
 The rule is short. Anything the worker records about a *finished* job's artifacts — the composed
 prompt, the applied transform, the scale factor, the mesh audit, the mesh report, the optimiser
-result, the weighting method, the bone count, the sheet id and its cells, the reference report —
-belongs on that list. If it is not there, a rerolled job inherits it, and you get a fresh mesh
-wearing a quality verdict about a mesh that no longer exists.
+result, the weighting method, the bone count, the sheet id and its cells, the reference report, the
+control hint and the recipe — belongs on that list. If it is not there, a rerolled job inherits it,
+and you get a fresh mesh wearing a quality verdict about a mesh that no longer exists.
 
 There is a deliberate counterpart. The conditioning selection — the IP-Adapter, the ControlNet and
 their strengths — is an *input*, so it survives a reroll. It does not survive a promotion or a
@@ -119,7 +119,7 @@ adapter that cannot have run is a lie about provenance.
 
 Inputs are bounded at the door rather than deep in the pipeline: an upload is size-checked before it
 is decoded and pixel-checked from its header before pixels are allocated, prompts are length-capped,
-and every route that accepts a seed range-checks it. See
+and every service entry point that accepts a seed range-checks it. See
 [Rerun and promotion](07-library-and-jobs.md#rerun-and-promotion).
 
 ## Pure-module boundaries

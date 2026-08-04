@@ -15,7 +15,8 @@ The prompt is capped at 1000 characters and a counter under the box shows how mu
 The counter turns amber inside the last hundred characters.
 
 Beside the box, a **Recent** button opens your last twenty prompts, most recent first and
-deduplicated. Picking one replaces what is in the box. The history is per session and per prompt
+deduplicated — it appears once you have generated at least one reference, so there is history to
+show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
 menu instead, which is described in [Rerun and promotion](07-library-and-jobs.md#rerun-and-promotion).
 

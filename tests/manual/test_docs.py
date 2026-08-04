@@ -6,6 +6,7 @@ rendering wrong in the app or on GitHub.
 """
 
 import re
+from pathlib import Path
 
 from warlock.studio.manual import loader, parser
 
@@ -89,3 +90,23 @@ def test_help_targets_resolve():
         assert chapter in anchors, f"{pane}: unknown chapter {chapter}"
         if anchor is not None:
             assert anchor in anchors[chapter], f"{pane}: missing anchor {chapter}#{anchor}"
+
+
+def test_help_button_call_sites_match_help_targets():
+    """Guards the HELP_TARGETS <-> pane call-site seam.
+
+    render.help_button silently no-ops on an unknown key, so a typo'd key in a
+    pane would drop its (?) button with no test failure anywhere else. Scan
+    every pane source file for the literal keys passed to help_button and
+    check the set against HELP_TARGETS exactly, in both directions: a pane key
+    with no HELP_TARGETS entry is a dead button, and a HELP_TARGETS entry with
+    no call site is dead data.
+    """
+    from warlock.studio.manual.targets import HELP_TARGETS
+
+    panes_dir = Path(__file__).resolve().parents[2] / "src/warlock/studio/panes"
+    pattern = re.compile(r'help_button\(\s*ctx\s*,\s*"([^"]+)"\s*\)')
+    found: set[str] = set()
+    for path in panes_dir.glob("*.py"):
+        found.update(pattern.findall(path.read_text(encoding="utf-8")))
+    assert found == HELP_TARGETS.keys()

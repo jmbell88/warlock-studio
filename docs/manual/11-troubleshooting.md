@@ -19,8 +19,9 @@ raises the other side.
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
 job and buys back roughly 7 GB of headroom. See [VRAM modes](10-configuration.md#vram-modes).
 
-If it still fails, drop the geometry resolution: **Detail** in the 3D pane at 1024 or 512 rather
-than 1536.
+If it still fails, drop the geometry resolution: **Detail** in the 3D pane, choosing "Indie desktop"
+or "Mobile / VR" rather than "Hero asset" — see
+[the mapping](03-generating-meshes.md#mesh-parameters).
 
 **Afterwards.** A hard crash inside CUDA or the allocator never reaches a Python handler, so it will
 not be in `warlock.log`. Look in `crash.log` instead — see
@@ -49,7 +50,9 @@ knew at startup.
 ## Rigging is unavailable
 
 **What you see.** The rig controls are simply not there: no rig checkbox on the generate form, no
-**Rig & Pose** work to do, no sprite sheets. Diagnostics shows "Blender (rigging)" failed.
+sprite sheets, and the FBX export button explains itself with "needs Blender". The **Pose** panel
+is not hidden, though — it says "Posing needs Blender, which is not installed." Diagnostics shows
+"Blender (rigging)" failed.
 
 **Why.** Almost always the Python version. `bpy` ships CPython 3.13 wheels only, so on Python 3.12
 `uv sync --extra rig` installs nothing at all and the probe finds no `bpy`. The other cause is a

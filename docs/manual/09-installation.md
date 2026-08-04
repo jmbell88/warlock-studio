@@ -37,7 +37,8 @@ to run on a machine with no display — the command line only imports the window
 opens one.
 
 `rig` carries one constraint worth knowing before you install it. `bpy` ships **CPython 3.13 wheels
-only**, so the requirement is marked `python_version >= '3.13'`. On Python 3.12 the extra installs
+only**, so the requirement is marked `python_version >= '3.13' and python_version < '3.14'`. On
+Python 3.12 the extra installs
 nothing at all: `warlock doctor` reports rigging as unavailable, the app hides the rig controls, and
 everything else works unchanged. The marker is not decoration — without it, `bpy`'s own
 `Requires-Python` would make the whole project unresolvable on 3.12 rather than merely leaving
@@ -65,7 +66,8 @@ Two downloads are enough to make the app work end to end. Both are one-time.
 uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir models/trellis2-gguf
 
-# SDXL-Turbo weights (fp16 variant, ~7 GB) -> models/sdxl-turbo/  (text-to-3D only)
+# SDXL-Turbo weights (fp16 variant, ~7 GB) -> models/sdxl-turbo/  (text-to-3D only,
+# needs `uv sync --extra dev --extra studio --extra text2image` to pull torch cu128)
 uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
   --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
 ```
