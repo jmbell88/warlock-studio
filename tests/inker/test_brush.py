@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.paint import brush
+from warlock.studio.inker import brush
 
 RED = (255, 0, 0, 255)
 
@@ -194,7 +194,7 @@ def test_symmetry_applies_to_erasing_too_because_it_mirrors_positions():
 
 
 def test_a_selection_clips_the_brush_with_the_same_multiply_it_clips_a_fill():
-    from warlock.studio.paint.selection import SelectionMask
+    from warlock.studio.inker.selection import SelectionMask
 
     pixels = _layer((32, 32))
     clip = SelectionMask.from_rect((32, 32), (0, 0, 16, 32))
@@ -205,7 +205,7 @@ def test_a_selection_clips_the_brush_with_the_same_multiply_it_clips_a_fill():
 
 
 def test_a_feathered_clip_softens_the_brush_rather_than_cutting_it():
-    from warlock.studio.paint.selection import SelectionMask
+    from warlock.studio.inker.selection import SelectionMask
 
     pixels = _layer((64, 64), (255, 255, 255, 255))
     clip = SelectionMask.from_rect((64, 64), (0, 0, 32, 64)).feathered(4.0)

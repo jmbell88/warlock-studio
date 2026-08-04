@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.paint import gradient as grad
-from warlock.studio.paint import transform as tf
+from warlock.studio.inker import gradient as grad
+from warlock.studio.inker import transform as tf
 
 RED = (255, 0, 0, 255)
 

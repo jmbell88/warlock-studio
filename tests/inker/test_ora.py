@@ -15,14 +15,14 @@ from xml.etree import ElementTree
 import numpy as np
 from PIL import Image
 
-from warlock.studio import paint
+from warlock.studio import inker
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
 
 
 def _doc(size=(8, 8)):
-    doc = paint.Document.blank(*size)
+    doc = inker.Document.blank(*size)
     doc.stack[0].pixels[:, :] = RED
     doc.stack[0].name = "Background"
     layer = doc.add_layer("Top")
@@ -35,7 +35,7 @@ def _doc(size=(8, 8)):
 
 def _saved(tmp_path: Path) -> Path:
     path = tmp_path / "doc.ora"
-    paint.write_ora(_doc(), path)
+    inker.write_ora(_doc(), path)
     return path
 
 
@@ -45,15 +45,15 @@ def _saved(tmp_path: Path) -> Path:
 def test_every_layer_comes_back_byte_for_byte(tmp_path: Path):
     original = _doc()
     path = tmp_path / "doc.ora"
-    paint.write_ora(original, path)
-    reopened = paint.Document.load(path)
+    inker.write_ora(original, path)
+    reopened = inker.Document.load(path)
     assert len(reopened.stack) == len(original.stack)
     for before, after in zip(original.stack, reopened.stack, strict=True):
         assert np.array_equal(before.pixels, after.pixels)
 
 
 def test_layer_names_opacity_visibility_and_blend_all_survive(tmp_path: Path):
-    reopened = paint.Document.load(_saved(tmp_path))
+    reopened = inker.Document.load(_saved(tmp_path))
     names = [layer.name for layer in reopened.stack]
     assert names == ["Background", "Top"]
     assert reopened.stack[1].opacity == 0.5
@@ -65,25 +65,25 @@ def test_a_hidden_layer_stays_hidden(tmp_path: Path):
     doc = _doc()
     doc.stack[1].visible = False
     path = tmp_path / "doc.ora"
-    paint.write_ora(doc, path)
-    assert paint.Document.load(path).stack[1].visible is False
+    inker.write_ora(doc, path)
+    assert inker.Document.load(path).stack[1].visible is False
 
 
 def test_the_reopened_composite_is_the_one_that_was_saved(tmp_path: Path):
     original = _doc()
     path = tmp_path / "doc.ora"
-    paint.write_ora(original, path)
-    assert np.array_equal(paint.Document.load(path).composite, original.composite)
+    inker.write_ora(original, path)
+    assert np.array_equal(inker.Document.load(path).composite, original.composite)
 
 
 def test_a_reopened_document_knows_it_is_an_ora(tmp_path: Path):
-    doc = paint.Document.load(_saved(tmp_path))
+    doc = inker.Document.load(_saved(tmp_path))
     assert doc.file_format == "ora"
     assert doc.path is not None and doc.path.suffix == ".ora"
 
 
 def test_ora_bytes_is_the_same_file_without_a_path(tmp_path: Path):
-    data = paint.ora_bytes(_doc())
+    data = inker.ora_bytes(_doc())
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert "stack.xml" in zf.namelist()
 
@@ -155,13 +155,13 @@ def test_a_composite_op_we_cannot_reproduce_becomes_normal(tmp_path: Path):
     """A file that opens slightly wrong is a file the user still has."""
     path = tmp_path / "foreign.ora"
     _foreign(path, '<layer name="L" src="data/a.png" composite-op="svg:color-dodge"/>')
-    assert paint.Document.load(path).stack[0].blend == "normal"
+    assert inker.Document.load(path).stack[0].blend == "normal"
 
 
 def test_a_layer_offset_is_pasted_rather_than_refused(tmp_path: Path):
     path = tmp_path / "offset.ora"
     _foreign(path, '<layer name="L" src="data/a.png" x="2" y="2"/>', w=16, h=16)
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert doc.size == (16, 16)
     assert doc.stack[0].size == (16, 16)
     assert tuple(doc.stack[0].pixels[3, 3]) == RED
@@ -177,7 +177,7 @@ def test_a_nested_stack_is_flattened_into_the_layer_list(tmp_path: Path):
         '<stack name="G"><layer name="inner" src="data/a.png"/></stack>'
         '<layer name="outer" src="data/a.png"/>',
     )
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert sorted(layer.name for layer in doc.stack) == ["inner", "outer"]
 
 
@@ -187,19 +187,19 @@ def test_a_layer_whose_file_is_missing_is_skipped_not_fatal(tmp_path: Path):
         path,
         '<layer name="gone" src="data/missing.png"/><layer name="here" src="data/a.png"/>',
     )
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert [layer.name for layer in doc.stack] == ["here"]
 
 
 def test_an_ora_with_no_layers_at_all_still_opens(tmp_path: Path):
     path = tmp_path / "empty.ora"
     _foreign(path, "")
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert len(doc.stack) == 1
     assert doc.size == (8, 8)
 
 
 def test_the_topmost_layer_is_the_active_one_when_a_document_opens(tmp_path: Path):
-    doc = paint.Document.load(_saved(tmp_path))
+    doc = inker.Document.load(_saved(tmp_path))
     assert doc.stack.active_index == len(doc.stack) - 1
     assert doc.stack.active.name == "Top"

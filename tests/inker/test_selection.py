@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.paint import selection as sel
+from warlock.studio.inker import selection as sel
 
 
 def _rgba(plane: np.ndarray) -> np.ndarray:

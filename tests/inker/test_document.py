@@ -19,17 +19,17 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from warlock.studio import paint
+from warlock.studio import inker
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
 WHITE = (255, 255, 255, 255)
 
 
-def _doc(size=(32, 32), colour=WHITE, budget=paint.UNDO_BYTES):
+def _doc(size=(32, 32), colour=WHITE, budget=inker.UNDO_BYTES):
     pixels = np.zeros((size[1], size[0], 4), dtype=np.uint8)
     pixels[:, :] = colour
-    return paint.Document.from_pixels(pixels, budget=budget)
+    return inker.Document.from_pixels(pixels, budget=budget)
 
 
 def _at(doc, x, y):
@@ -46,7 +46,7 @@ def _count(doc, colour):
 def test_a_document_loads_as_rgba_whatever_the_file_was(tmp_path: Path):
     path = tmp_path / "input.png"
     Image.new("RGB", (8, 8), (10, 20, 30)).save(path)
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert doc.size == (8, 8)
     assert doc.composite.dtype == np.uint8
     assert _at(doc, 0, 0) == (10, 20, 30, 255)
@@ -55,7 +55,7 @@ def test_a_document_loads_as_rgba_whatever_the_file_was(tmp_path: Path):
 def test_a_flat_png_opens_as_one_layer_not_as_a_blank_document(tmp_path: Path):
     path = tmp_path / "input.png"
     Image.new("RGB", (8, 8), (10, 20, 30)).save(path)
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     assert len(doc.stack) == 1
     assert doc.stack[0].name == "Background"
 
@@ -65,9 +65,9 @@ def test_an_opaque_image_mattes_to_white_and_a_transparent_one_to_nothing():
     still a photo when it is saved; a sprite keeps the transparency trellis's
     background detection depends on."""
     opaque = np.full((4, 4, 4), 255, dtype=np.uint8)
-    assert paint.matte_for(opaque) == paint.OPAQUE_WHITE
+    assert inker.matte_for(opaque) == inker.OPAQUE_WHITE
     matted = np.zeros((4, 4, 4), dtype=np.uint8)
-    assert paint.matte_for(matted) is None
+    assert inker.matte_for(matted) is None
 
 
 def test_png_bytes_round_trips_the_pixels():
@@ -79,7 +79,7 @@ def test_png_bytes_round_trips_the_pixels():
 
 
 def test_a_blank_document_starts_transparent_with_one_layer():
-    doc = paint.Document.blank(8, 8)
+    doc = inker.Document.blank(8, 8)
     assert len(doc.stack) == 1
     assert doc.composite.max() == 0
 
@@ -170,8 +170,8 @@ def test_symmetry_mirrors_the_stroke_across_the_canvas():
 
 
 def test_the_brush_size_is_clamped_at_both_ends():
-    assert paint.clamp_brush(0) == paint.MIN_BRUSH
-    assert paint.clamp_brush(9999) == paint.MAX_BRUSH
+    assert inker.clamp_brush(0) == inker.MIN_BRUSH
+    assert inker.clamp_brush(9999) == inker.MAX_BRUSH
 
 
 # --- fill -------------------------------------------------------------------
@@ -204,7 +204,7 @@ def test_a_fill_outside_the_canvas_does_nothing_at_all():
 
 def test_a_fill_stops_at_the_selection():
     doc = _doc((16, 16), WHITE)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 8, 16)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 8, 16)))
     doc.fill((0, 0), RED)
     assert _at(doc, 2, 2) == RED
     assert _at(doc, 12, 2) == WHITE
@@ -214,8 +214,8 @@ def test_the_fill_and_the_wand_agree_about_what_similar_means():
     """One predicate, deliberately: a wand that selects more than the fill
     fills is a bug the user reads as randomness."""
     rng = np.random.default_rng(1)
-    doc = paint.Document.from_pixels(rng.integers(0, 256, (24, 24, 4), dtype=np.uint8))
-    region = paint.magic_wand(doc.composite, (5, 5), tolerance=90)
+    doc = inker.Document.from_pixels(rng.integers(0, 256, (24, 24, 4), dtype=np.uint8))
+    region = inker.magic_wand(doc.composite, (5, 5), tolerance=90)
     before = doc.composite.copy()
     doc.fill((5, 5), RED, thresh=90)
     changed = (doc.composite != before).any(axis=2)
@@ -225,7 +225,7 @@ def test_the_fill_and_the_wand_agree_about_what_similar_means():
 # --- shapes -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", paint.SHAPES)
+@pytest.mark.parametrize("kind", inker.SHAPES)
 def test_a_shape_touches_only_its_own_bounding_box(kind: str):
     doc = _doc()
     assert doc.shape(kind, (8, 8), (20, 20), RED, 1)
@@ -270,7 +270,7 @@ def test_the_eyedropper_off_canvas_returns_nothing_rather_than_black():
 
 def test_a_lift_cuts_the_hole_it_floats_over():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
     assert doc.lift()
     assert doc.floating.size == (4, 4)
     assert _at(doc, 5, 5)[3] == 0
@@ -285,7 +285,7 @@ def test_a_lift_with_nothing_selected_is_refused():
 
 def test_lift_move_commit_puts_the_pixels_where_they_were_dragged():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     doc.lift()
     doc.move_floating(8, 8)
     assert doc.commit_floating()
@@ -297,7 +297,7 @@ def test_lift_move_commit_puts_the_pixels_where_they_were_dragged():
 def test_cancelling_a_float_restores_the_canvas_exactly():
     doc = _doc((16, 16), RED)
     before = doc.composite.copy()
-    doc.select(paint.SelectionMask.from_rect((16, 16), (2, 2, 10, 10)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (2, 2, 10, 10)))
     doc.lift()
     doc.move_floating(3, 3)
     assert doc.cancel_floating()
@@ -307,7 +307,7 @@ def test_cancelling_a_float_restores_the_canvas_exactly():
 
 def test_deleting_a_float_leaves_the_hole_behind():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (2, 2, 6, 6)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (2, 2, 6, 6)))
     doc.lift()
     assert doc.delete_floating()
     assert _at(doc, 3, 3)[3] == 0
@@ -316,7 +316,7 @@ def test_deleting_a_float_leaves_the_hole_behind():
 
 def test_deleting_a_selection_cuts_it_and_is_its_own_undo_step():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
     assert doc.delete_selection()
     assert _at(doc, 5, 5)[3] == 0
     assert _at(doc, 12, 12) == RED
@@ -326,17 +326,17 @@ def test_deleting_a_selection_cuts_it_and_is_its_own_undo_step():
 
 def test_a_second_lift_commits_the_first_rather_than_dropping_it():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     doc.lift()
     doc.move_floating(8, 0)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 8, 4, 12)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 8, 4, 12)))
     doc.lift()
     assert _at(doc, 9, 1) == RED
 
 
 def test_a_feathered_lift_floats_a_feathered_chunk():
     doc = _doc((32, 32), RED)
-    doc.select(paint.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
+    doc.select(inker.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
     doc.feather_selection(3.0)
     doc.lift()
     edge = doc.floating.pixels[..., 3]
@@ -366,7 +366,7 @@ def test_inverting_an_empty_selection_selects_everything():
 
 def test_copy_and_paste_bring_the_pixels_back_as_a_floating_buffer():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     assert doc.copy()
     assert doc.paste((8, 8))
     assert doc.floating.offset == (8, 8)
@@ -376,7 +376,7 @@ def test_copy_and_paste_bring_the_pixels_back_as_a_floating_buffer():
 
 def test_a_cut_copies_before_it_deletes():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     assert doc.cut()
     assert _at(doc, 1, 1)[3] == 0
     assert doc.paste((8, 8))
@@ -500,7 +500,7 @@ def test_cropping_to_the_selection_keeps_what_was_inside_it():
     doc = _doc((16, 16), WHITE)
     doc.stack[0].pixels[4:8, 4:8] = RED
     doc.invalidate_all()
-    doc.select(paint.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (4, 4, 8, 8)))
     assert doc.crop_to_selection()
     assert doc.size == (4, 4)
     assert _at(doc, 0, 0) == RED
@@ -522,14 +522,14 @@ def test_the_cached_composite_matches_a_composite_from_scratch():
     one image and save another, and no test of either alone would catch it."""
     rng = np.random.default_rng(11)
     layers = [
-        paint.Layer(
+        inker.Layer(
             pixels=rng.integers(0, 256, (16, 16, 4), dtype=np.uint8),
             opacity=0.4 + 0.2 * i,
-            blend=paint.BLEND_MODES[i % len(paint.BLEND_MODES)],
+            blend=inker.BLEND_MODES[i % len(inker.BLEND_MODES)],
         )
         for i in range(3)
     ]
-    doc = paint.Document(stack=paint.LayerStack(layers, 1))
+    doc = inker.Document(stack=inker.LayerStack(layers, 1))
     doc.begin_stroke((4, 4), RED, size=6)
     doc.stroke_to((12, 12))
     doc.end_stroke()
@@ -609,7 +609,7 @@ def test_checkpoint_is_a_no_op_kept_for_the_old_pane():
 
 
 def test_a_linear_gradient_runs_from_one_colour_to_the_other():
-    doc = paint.Document.blank(16, 4)
+    doc = inker.Document.blank(16, 4)
     doc.gradient((0, 0), (15, 0), (0, 0, 0, 255), WHITE)
     assert _at(doc, 0, 0)[0] < 20
     assert _at(doc, 15, 0)[0] > 235
@@ -617,7 +617,7 @@ def test_a_linear_gradient_runs_from_one_colour_to_the_other():
 
 
 def test_a_gradient_to_transparent_fades_out_rather_than_to_black():
-    doc = paint.Document.blank(16, 4)
+    doc = inker.Document.blank(16, 4)
     doc.gradient((0, 0), (15, 0), RED, (255, 0, 0, 0))
     near = _at(doc, 15, 0)
     assert near[3] < 20
@@ -625,14 +625,14 @@ def test_a_gradient_to_transparent_fades_out_rather_than_to_black():
 
 
 def test_a_radial_gradient_is_brightest_at_its_centre():
-    doc = paint.Document.blank(32, 32)
+    doc = inker.Document.blank(32, 32)
     doc.gradient((16, 16), (16, 0), WHITE, (0, 0, 0, 255))
     assert _at(doc, 16, 16)[0] > _at(doc, 16, 4)[0]
 
 
 def test_a_gradient_fills_only_the_selection():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 8, 16)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 8, 16)))
     doc.gradient((0, 0), (15, 0), BLUE, BLUE)
     assert _at(doc, 1, 1) == BLUE
     assert _at(doc, 12, 1) == RED
@@ -652,7 +652,7 @@ def test_a_transform_with_no_selection_lifts_the_whole_layer():
 
 def test_a_transform_lifts_only_the_selection_when_there_is_one():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (4, 4, 12, 12)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (4, 4, 12, 12)))
     doc.begin_transform()
     assert doc.floating.size == (8, 8)
 
@@ -661,7 +661,7 @@ def test_scaling_a_floating_buffer_keeps_its_centre_where_it_was():
     """Scaling about the corner sends the subject off across the canvas, which
     is not what grabbing a handle means."""
     doc = _doc((64, 64), RED)
-    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 32, 32)))
+    doc.select(inker.SelectionMask.from_rect((64, 64), (16, 16, 32, 32)))
     doc.begin_transform()
     before = doc.floating.centre
     doc.transform_floating(scale=(2.0, 2.0))
@@ -671,7 +671,7 @@ def test_scaling_a_floating_buffer_keeps_its_centre_where_it_was():
 
 def test_rotating_a_floating_buffer_grows_it_and_keeps_its_centre():
     doc = _doc((64, 64), RED)
-    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
+    doc.select(inker.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
     doc.begin_transform()
     before = doc.floating.centre
     doc.rotate_floating(45.0)
@@ -683,7 +683,7 @@ def test_repeated_adjustments_re_render_from_the_lift_rather_than_compounding():
     """A chain of resamples turns a handle-drag into mush; each adjustment has
     to start again from the pixels that were lifted."""
     doc = _doc((64, 64), RED)
-    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
+    doc.select(inker.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
     doc.begin_transform()
     for scale in (2.0, 0.5, 3.0, 1.0):
         doc.transform_floating(scale=(scale, scale))
@@ -704,7 +704,7 @@ def test_a_transform_bumps_the_buffers_revision_because_the_pixels_changed():
 
 def test_flipping_a_floating_buffer_survives_a_later_rotation():
     """The flip is applied to the source, so re-rendering cannot undo it."""
-    doc = paint.Document.blank(32, 32)
+    doc = inker.Document.blank(32, 32)
     doc.stack[0].pixels[:, :16] = RED
     doc.invalidate_all()
     doc.begin_transform()
@@ -717,7 +717,7 @@ def test_flipping_a_floating_buffer_survives_a_later_rotation():
 
 def test_a_transform_commits_as_one_undo_step():
     doc = _doc((32, 32), RED)
-    doc.select(paint.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
+    doc.select(inker.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
     doc.begin_transform()
     steps = len(doc.history)
     doc.transform_floating(scale=(0.5, 0.5))
@@ -746,7 +746,7 @@ def test_transforming_nothing_reports_that_it_did_nothing():
 
 def test_pasting_as_a_layer_lands_immediately_rather_than_floating():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     doc.copy()
     assert doc.paste_as_layer()
     assert doc.floating is None
@@ -765,7 +765,7 @@ def test_a_pasted_layer_is_undone_by_removing_it():
 
 def test_a_pasted_layer_keeps_only_what_was_selected():
     doc = _doc((16, 16), RED)
-    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
     doc.copy()
     doc.paste_as_layer()
     assert _at(doc, 1, 1) == RED

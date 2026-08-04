@@ -71,10 +71,10 @@ def active(ctx: Any) -> PaintDoc | None:
 
 
 def new_document(ctx: Any, width: int, height: int) -> PaintDoc:
-    from . import paint
+    from . import inker
 
     state = ensure(ctx)
-    doc = paint.Document.blank(int(width), int(height))
+    doc = inker.Document.blank(int(width), int(height))
     return _adopt(ctx, state, doc, path=None, title="Untitled", file_format="ora")
 
 
@@ -134,10 +134,10 @@ def open_path(ctx: Any, path: Path) -> None:
 
 def _load(path: Path) -> dict[str, Any]:
     """Blocking; task thread only."""
-    from . import paint
+    from . import inker
 
     path = Path(path)
-    doc = paint.Document.load(path)
+    doc = inker.Document.load(path)
     return {"doc": doc, "path": path, "format": doc.file_format}
 
 
@@ -181,12 +181,12 @@ def open_job_reference(ctx: Any, job: Any) -> None:
 def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
     """Blocking; task thread only."""
     from ..service import files as svc_files
-    from . import paint
+    from . import inker
 
     flat = svc.job_dir(job_id) / "input.png"
     working = svc_files.paint_working_path(svc, job_id)
     status = svc_files.paint_working_status(svc, job_id)
-    doc = paint.Document.load(working if status["fresh"] else flat)
+    doc = inker.Document.load(working if status["fresh"] else flat)
     # The document is *about* input.png whichever file it was decoded from:
     # the title, the dedupe and the save all key on the reference.
     doc.path = flat
@@ -223,7 +223,9 @@ def save_as(ctx: Any, tab: PaintDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
-    doc, rev = tab.doc, tab.doc.history.head
+    doc = tab.doc
+    doc.commit_floating()  # before the head is read; see _save_linked
+    rev = doc.history.head
     suggested = tab.path.stem if tab.path else "untitled"
 
     def run() -> dict[str, Any] | None:
@@ -245,6 +247,10 @@ def export_png(ctx: Any, tab: PaintDoc | None = None) -> None:
     if tab is None or tab.saving:
         return
     doc = tab.doc
+    # Not a save, but the same rule about what is on the canvas: the composite
+    # a floating buffer draws into is the pane's, not the document's, so an
+    # export would otherwise be missing pixels the user is looking at.
+    doc.commit_floating()
     suggested = tab.path.stem if tab.path else "untitled"
 
     def run() -> dict[str, Any] | None:
@@ -260,7 +266,13 @@ def export_png(ctx: Any, tab: PaintDoc | None = None) -> None:
 
 
 def _submit_write(ctx: Any, tab: PaintDoc, key: str, path: Path, file_format: str) -> None:
-    doc, rev = tab.doc, tab.doc.history.head
+    doc = tab.doc
+    # A floating buffer lives in no layer, and the encoders walk the layer
+    # stack -- so without this the file omits the pasted pixels while the
+    # canvas still shows them, and ``mark_saved`` then calls the document
+    # clean. Closing the tab discarded the paste with no prompt.
+    doc.commit_floating()
+    rev = doc.history.head
 
     def run() -> dict[str, Any]:
         _write(doc, path, file_format)
@@ -278,10 +290,10 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
     was mid-flight, which is precisely why the revision is captured before the
     submit rather than after the write.
     """
-    from . import paint
+    from . import inker
 
     if file_format == "ora":
-        paint.write_ora(doc, path)
+        inker.write_ora(doc, path)
     else:
         path.write_bytes(doc.png_bytes())
 
@@ -293,25 +305,37 @@ def _start(ctx: Any, tab: PaintDoc, key: str, run: Any) -> None:
 
 
 def _save_linked(ctx: Any, tab: PaintDoc) -> None:
-    """Write both halves of a reference edit: the layers, then the flat PNG.
+    """Write both halves of a reference edit: the flat PNG, then the layers.
 
     The flat write goes through the untouched ``save_edited_image``, so the
     original backup, the ``hand_edited`` param, the reference re-measure and
     the staged replace all still happen exactly as they did for the old inline
-    editor. The layered file is a sidecar and is written first, so a crash
-    between the two leaves working state that is merely *stale* rather than
-    layers that describe pixels nobody has.
+    editor.
+
+    The order is the whole correctness argument, and it is the opposite of what
+    it looks like. Freshness is ``paint.ora`` being *newer* than ``input.png``,
+    so writing the layers first guarantees the reference is newer than them the
+    moment the save completes -- every save would mark its own layers stale and
+    the next open would flatten them away. Writing the flat half first leaves
+    the sidecar newer on success, and on a crash between the two leaves the
+    layers older than the reference, which is exactly the stale verdict a
+    half-finished save deserves.
     """
     from ..service import files as svc_files
 
-    doc, rev, job_id = tab.doc, tab.doc.history.head, tab.job_id
+    doc, job_id = tab.doc, tab.job_id
+    # Committed *before* the head is read: the commit pushes a step of its own,
+    # so recording the head first saves a document against a head one behind
+    # it -- and dirty, being a comparison against that head, then stays true
+    # forever however many times the user saves.
     doc.commit_floating()
+    rev = doc.history.head
 
     def run() -> dict[str, Any]:
-        from . import paint
+        from . import inker
 
-        svc_files.save_paint_working(ctx.svc, job_id, paint.ora_bytes(doc))
         svc_files.save_edited_image(ctx.svc, job_id, doc.png_bytes())
+        svc_files.save_paint_working(ctx.svc, job_id, inker.ora_bytes(doc))
         return {"rev": rev, "job_id": job_id, "linked": True}
 
     _start(ctx, tab, f"paint-save:{tab.uid}", run)
@@ -327,17 +351,18 @@ def save_as_reference(ctx: Any, tab: PaintDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving or tab.linked:
         return
-    doc, rev, title = tab.doc, tab.doc.history.head, tab.title
-    doc.commit_floating()
+    doc, title = tab.doc, tab.title
+    doc.commit_floating()  # before the head is read; see _save_linked
+    rev = doc.history.head
 
     def run() -> dict[str, Any]:
         result = svc_jobs.import_reference(ctx.svc, doc.png_bytes(), name=title)
         job_id = result["id"]
-        from . import paint
+        from . import inker
 
         # Linked immediately, so the next Ctrl+S saves in place rather than
         # minting a second job from the same pixels.
-        svc_files_save(ctx, job_id, paint.ora_bytes(doc))
+        svc_files_save(ctx, job_id, inker.ora_bytes(doc))
         return {"rev": rev, "job_id": job_id, "link": True}
 
     _start(ctx, tab, f"paint-save:{tab.uid}", run)
@@ -520,12 +545,12 @@ def on_task_failed(ctx: Any, done: Any) -> None:
 
 def _reload_linked(ctx: Any, tab: PaintDoc) -> None:
     """Re-decode a linked document after a revert replaced its file."""
-    from . import paint
+    from . import inker
 
     if tab.path is None:
         return
     try:
-        tab.doc = paint.Document.load(tab.path)
+        tab.doc = inker.Document.load(tab.path)
     except Exception as exc:
         ctx.toast(f"Reverted, but the image could not be reopened ({exc}).", "error")
         return
@@ -743,22 +768,37 @@ def handle_key(ctx: Any, event: Any) -> bool:
         else:
             state.brush_size = paint_state.step_size(state.brush_size, +1)
     elif event.key == pygame.K_DELETE:
-        doc.delete_selection()
+        if not tab.saving:
+            doc.delete_selection()
     elif event.key == pygame.K_ESCAPE:
         # Never leaves the mode: Esc means "drop what I am doing", and losing a
         # workspace full of tabs to a stray keypress is not that.
-        if doc.floating is not None:
-            doc.cancel_floating()
-        elif doc.mask is not None:
-            doc.deselect()
+        if not tab.saving:
+            if doc.floating is not None:
+                doc.cancel_floating()
+            elif doc.mask is not None:
+                doc.deselect()
+        # Always: abandoning a half-finished drag is safe mid-save, because it
+        # touches the pane's own state and never the document.
         state.clear_drag()
     return True
+
+
+# Ctrl-shortcuts that change the document. A save encodes the *live* document
+# on a task thread; that is safe only for a stroke landing mid-write, because
+# pixels are written in place. Everything here restructures the layer stack or
+# moves the history head the save captured, so it waits for the save the same
+# way a brush stroke on the canvas already does.
+_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t"})
 
 
 def _ctrl_key(
     ctx: Any, state: PaintState, tab: PaintDoc, doc: Any, name: str, event, *, shift: bool
 ):
     import pygame
+
+    if tab.saving and name in _MUTATING_CTRL:
+        return True
 
     if name == "z":
         doc.redo() if shift else doc.undo()

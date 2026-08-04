@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from warlock.studio import paint, paint_state
+from warlock.studio import inker, paint_state
 from warlock.studio.paint_state import PaintDoc, PaintState, PaintView
 
 
 def _tab(name="a.png", path=None, size=(16, 16)):
-    doc = paint.Document.blank(*size)
+    doc = inker.Document.blank(*size)
     return PaintDoc(doc=doc, title=name, path=path, saved_head=doc.history.head)
 
 
@@ -215,8 +215,8 @@ def test_the_view_belongs_to_the_document_not_to_the_app():
 def test_brush_stepping_accelerates_and_stays_in_range():
     assert paint_state.step_size(8, 1) > 8
     assert paint_state.step_size(200, 1) - 200 > paint_state.step_size(8, 1) - 8
-    assert paint_state.step_size(paint.MIN_BRUSH, -1) == paint.MIN_BRUSH
-    assert paint_state.step_size(paint.MAX_BRUSH, 1) == paint.MAX_BRUSH
+    assert paint_state.step_size(inker.MIN_BRUSH, -1) == inker.MIN_BRUSH
+    assert paint_state.step_size(inker.MAX_BRUSH, 1) == inker.MAX_BRUSH
 
 
 def test_swapping_colours_is_its_own_inverse():
@@ -256,7 +256,7 @@ def test_every_tool_has_a_shortcut_and_a_label():
 
 def test_every_painting_tool_maps_to_a_brush_mode_the_engine_knows():
     for tool in paint_state.PAINT_TOOLS:
-        assert paint_state.BRUSH_MODES[tool] in paint.MODES
+        assert paint_state.BRUSH_MODES[tool] in inker.MODES
 
 
 def test_the_tool_groups_do_not_overlap():

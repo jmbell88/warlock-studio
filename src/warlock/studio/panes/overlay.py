@@ -80,6 +80,52 @@ def _screenshot(ctx: Any) -> None:
     ctx.submit("screenshot", run)
 
 
+def fps_meter(ctx: Any, meter: Any) -> None:
+    """The frame rate, bottom-left, when F10 has asked for it.
+
+    Bottom-left rather than bottom-right because the toasts stack up that
+    corner, and a fixed width rather than auto-resize because Inter is
+    proportional -- an auto-sized box breathes with every digit that changes.
+    """
+    from ..tokens import sp
+
+    if not ctx.state.show_fps:
+        return
+    fps = meter.fps
+    if fps >= 58.0:
+        colour = theme.OK
+    elif fps >= 30.0:
+        colour = theme.WARN
+    else:
+        colour = theme.ERR
+
+    viewport = imgui.get_main_viewport()
+    imgui.set_next_window_pos(
+        (
+            viewport.work_pos.x + sp(16),
+            viewport.work_pos.y + viewport.work_size.y - sp(16),
+        ),
+        imgui.Cond_.always.value,
+        (0.0, 1.0),
+    )
+    imgui.set_next_window_size((sp(210), 0))
+    imgui.set_next_window_bg_alpha(0.85)
+    imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    flags = (
+        imgui.WindowFlags_.no_decoration.value
+        | imgui.WindowFlags_.no_saved_settings.value
+        | imgui.WindowFlags_.no_focus_on_appearing.value
+        # Never takes input: it is a readout, and it sits over the library
+        # list, whose cards must stay clickable through it.
+        | imgui.WindowFlags_.no_inputs.value
+    )
+    if imgui.begin("##fps-meter", None, flags)[0]:
+        with fonts.small(imgui):
+            imgui.text_colored(imgui.ImVec4(*theme.rgba(colour)), meter.label())
+    imgui.end()
+    imgui.pop_style_color()
+
+
 def progress_card(ctx: Any, eta: Any) -> None:
     """The running job's narration, floating bottom-centre, or nothing.
 

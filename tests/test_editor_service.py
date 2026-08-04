@@ -199,13 +199,13 @@ def test_a_save_leaves_no_temp_file_behind(svc):
 
 
 def _ora(size=(64, 64), layers=2) -> bytes:
-    from warlock.studio import paint
+    from warlock.studio import inker
 
-    doc = paint.Document.blank(*size)
+    doc = inker.Document.blank(*size)
     doc.stack[0].pixels[:, :] = (200, 30, 30, 255)
     for _ in range(layers - 1):
         doc.add_layer()
-    return paint.ora_bytes(doc)
+    return inker.ora_bytes(doc)
 
 
 def test_the_layered_source_saves_beside_the_reference_it_flattens_to(svc):

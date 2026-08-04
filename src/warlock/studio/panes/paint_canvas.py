@@ -514,7 +514,7 @@ def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
 
 
 def _release(ctx: Any, state: Any, tab: Any, point) -> None:
-    from ..paint import SelectionMask
+    from ..inker import SelectionMask
 
     doc = tab.doc
     anchor = state.drag_anchor or point

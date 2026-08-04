@@ -68,6 +68,14 @@ def _pipeline(ctx: Any, tab: Any) -> None:
 def _canvas_ops(ctx: Any, tab: Any) -> None:
     doc = tab.doc
     widgets.section("canvas")
+    # Every control below either rebinds a layer's pixels (the geometry ops,
+    # via _map_planes) or rebinds the stack wholesale (undo, via
+    # restore_snapshot). ``write_ora`` flattens, writes stack.xml and then
+    # walks the stack writing one PNG per layer, so either one landing
+    # mid-save produces an archive whose parts disagree about the canvas size.
+    # The canvas, the layers panel and the keyboard path all gate on this
+    # flag; this panel was the hole.
+    imgui.begin_disabled(tab.saving)
     if imgui.button("Flip H"):
         doc.flip("horizontal")
     imgui.same_line()
@@ -81,7 +89,6 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     if imgui.button("Fit view"):
         tab.view.fitted = False
-    _resize_popup(ctx, tab)
 
     imgui.dummy((0, 6))
     if widgets.disabled_button("Undo", doc.history.can_undo):
@@ -91,6 +98,13 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
         doc.redo()
     imgui.same_line()
     widgets.muted(f"{len(doc.history)} step(s)")
+    imgui.end_disabled()
+
+    # Outside the disabled scope: a popup is its own window, and imgui's
+    # disabled state is not meant to span a Begin/End pair. It carries the
+    # same gate on the two buttons that actually resample the document -- a
+    # popup already open when a save starts would otherwise still fire them.
+    _resize_popup(ctx, tab)
 
 
 def _resize_popup(ctx: Any, tab: Any) -> None:
@@ -106,6 +120,7 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
     imgui.dummy((0, 4))
+    imgui.begin_disabled(tab.saving)
     if imgui.button("Scale image", (180, 0)):
         tab.doc.scale((max(1, width), max(1, height)))
         tab.view.fitted = False
@@ -116,4 +131,5 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         tab.doc.resize_canvas((max(1, width), max(1, height)))
         tab.view.fitted = False
         imgui.close_current_popup()
+    imgui.end_disabled()
     imgui.end_popup()

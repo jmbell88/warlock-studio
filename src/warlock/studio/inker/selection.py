@@ -305,6 +305,17 @@ class FloatingBuffer:
     layer_uid: int
     rev: int = 0
 
+    # The history entry cancelling this buffer has to reverse, or None. A lift
+    # cut a hole and pushed one; a paste took pixels from the clipboard and
+    # touched no layer, so there is nothing of its own to undo -- and undoing
+    # anyway reverses whatever the user did *before* the paste.
+    #
+    # The entry itself rather than a flag, because a buffer floats across an
+    # unbounded number of frames and selection ops push steps of their own
+    # meanwhile: "the newest step" stops being this one, and reversing the
+    # newest then destroys both the lifted pixels and an unrelated edit.
+    lift_edit: Any = None
+
     # What a transform re-renders *from*. Kept so that dragging a scale handle
     # back and forth is not a chain of resamples: every adjustment starts again
     # from the pixels that were lifted, so only the final one is ever applied.
@@ -312,6 +323,11 @@ class FloatingBuffer:
     source_mask: np.ndarray | None = None
     angle: float = 0.0
     scale: tuple[float, float] = (1.0, 1.0)
+
+    @property
+    def lifted(self) -> bool:
+        """Whether these pixels came off a layer rather than off the clipboard."""
+        return self.lift_edit is not None
 
     @property
     def size(self) -> tuple[int, int]:

@@ -378,7 +378,7 @@ def step_size(size: int, delta: int) -> int:
     size keeps every press feel proportional, which is what every paint program
     does.
     """
-    from .paint import clamp_brush
+    from .inker import clamp_brush
 
     step = max(1, int(abs(size) * 0.12))
     return clamp_brush(size + (step if delta > 0 else -step))

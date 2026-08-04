@@ -23,6 +23,16 @@ from . import composite as cp
 _uids = itertools.count(1)
 
 
+def new_uid() -> int:
+    """Mint a layer uid without building a layer.
+
+    A replayed operation that *creates* a layer needs the same uid every time
+    it runs, or a redo strands every patch recorded above it. The op takes its
+    uid from here once and closes over it.
+    """
+    return next(_uids)
+
+
 @dataclass
 class Layer:
     pixels: np.ndarray
@@ -46,15 +56,22 @@ class Layer:
     def empty(cls, width: int, height: int, name: str = "Layer") -> Layer:
         return cls(pixels=cp.empty(width, height), name=name)
 
-    def copy(self, *, name: str | None = None) -> Layer:
+    def copy(self, *, name: str | None = None, uid: int | None = None) -> Layer:
         """A duplicate with its *own* uid -- a copy is a different layer, and
-        sharing the uid would let one layer's undo patch rewrite the other."""
+        sharing the uid would let one layer's undo patch rewrite the other.
+
+        ``uid`` overrides that for the one caller who needs the opposite: a
+        history snapshot is not a new layer, it is the *same* layer's pixels
+        held aside, and restoring it has to give back the identity every patch
+        recorded before it is addressed to.
+        """
         return Layer(
             pixels=self.pixels.copy(),
             name=self.name if name is None else name,
             opacity=self.opacity,
             visible=self.visible,
             blend=self.blend,
+            **({} if uid is None else {"uid": uid}),
         )
 
 
@@ -160,6 +177,15 @@ class LayerStack:
         """Full-canvas composite of the layers under the active one."""
         width, height = self.size
         return cp.stack_region(self._entries(0, self.active_index), (0, 0, width, height))
+
+    def composite_below_region(self, rect: tuple[int, int, int, int]) -> np.ndarray:
+        """One rectangle of that composite, for repairing the cache in place.
+
+        A write to a layer *under* the active one invalidates the cached base
+        but not the whole document, so the base is patched over the same
+        rectangle rather than rebuilt at full canvas size.
+        """
+        return cp.stack_region(self._entries(0, self.active_index), rect)
 
     def flatten(self) -> np.ndarray:
         width, height = self.size

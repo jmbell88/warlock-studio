@@ -70,13 +70,22 @@ class PatchEdit(Edit):
     after: np.ndarray
 
     def __post_init__(self) -> None:
+        # Own the pixels rather than viewing someone else's. A slice of a
+        # full-canvas array reports only its own ``nbytes`` while keeping the
+        # whole base alive, so a stroke that costs four kilobytes by the
+        # budget's reckoning can pin sixteen megabytes -- invisibly, because
+        # eviction is driven by exactly that number.
+        if self.before.base is not None:
+            self.before = self.before.copy()
+        if self.after.base is not None:
+            self.after = self.after.copy()
         self.cost = int(self.before.nbytes + self.after.nbytes)
 
     def _put(self, doc: Any, pixels: np.ndarray) -> None:
         x0, y0, x1, y1 = self.rect
         layer = doc.stack.by_uid(self.layer_uid)
         layer.pixels[y0:y1, x0:x1] = pixels
-        doc.invalidate(self.rect)
+        doc.invalidate(self.rect, layer_uid=self.layer_uid)
 
     def undo(self, doc: Any) -> None:
         self._put(doc, self.before)
@@ -288,13 +297,59 @@ class UndoStack:
         while len(self._done) > UNDO_MIN_DEPTH and self.bytes > self.budget:
             self._done.pop(0)
 
-    def undo(self, doc: Any) -> bool:
+    def undo(self, doc: Any, *, redoable: bool = True) -> bool:
+        """Reverse the newest step.
+
+        ``redoable=False`` reverses it and forgets it. That is what cancelling
+        a lift needs: the lift's own step is how the pixels get put back
+        exactly, but the user asked for the lift to *not have happened*, and
+        leaving it on the redo stack lets Ctrl+Y replay the alpha-cut with no
+        floating buffer left to restore -- which erases the region outright.
+        """
         if not self._done:
             return False
         edit = self._done.pop()
         edit.undo(doc)
-        self._undone.append(edit)
+        if redoable:
+            self._undone.append(edit)
         return True
+
+    def revoke(self, doc: Any, edit: Edit) -> bool:
+        """Reverse and forget one *named* step, wherever it sits in the stack.
+
+        ``undo(redoable=False)`` reverses whichever step is newest, which is
+        only the same thing when nothing has been pushed since. Cancelling a
+        lift cannot assume that: the buffer floats across an unbounded number
+        of frames and every selection op pushes a step of its own, so the lift
+        was routinely no longer on top -- and reversing the top instead dropped
+        the lifted pixels and left the alpha-cut, unrecoverably.
+
+        Reversing out of order is sound here because the only steps that can be
+        pushed over a floating buffer are selection and layer-property edits:
+        everything that writes pixels calls ``commit_floating`` first, so
+        nothing above this edit describes the region it restores.
+
+        Returns False when the edit has already been evicted or undone, in
+        which case there is nothing to put back and nothing to corrupt.
+        """
+        # By identity, not by ``list.remove``: edits are dataclasses, so ``==``
+        # compares fields, and a PatchEdit's fields are numpy arrays whose
+        # comparison is an array rather than a bool.
+        for i, candidate in enumerate(self._done):
+            if candidate is edit:
+                del self._done[i]
+                edit.undo(doc)
+                return True
+        return False
+
+    def forget_redo(self) -> None:
+        """Drop the redo branch without recording a step.
+
+        For an action that changes what the user sees but has no undo entry of
+        its own -- a paste, which only floats pixels -- and so cannot rely on
+        ``push`` to clear the branch it just diverged from.
+        """
+        self._undone.clear()
 
     def redo(self, doc: Any) -> bool:
         if not self._undone:

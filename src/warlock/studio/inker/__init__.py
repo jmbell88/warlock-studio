@@ -1,4 +1,4 @@
-"""The paint engine: layered raster documents, without a window.
+"""The Inker engine: layered raster documents, without a window.
 
 Pure Python -- Pillow for codecs and rasterising, numpy for arithmetic, and
 nothing else. Nothing under this package imports imgui, moderngl, pygame or the
@@ -17,8 +17,8 @@ The modules, bottom up:
 ``ora``        OpenRaster read and write
 ``document``   the one type that knows about all of the above
 
-Everything a caller needs is re-exported here, so ``from .. import paint`` and
-``paint.Document`` keep working exactly as they did when this was one file.
+Everything a caller needs is re-exported here, so ``from .. import inker`` and
+``inker.Document`` keep working exactly as they did when this was one file.
 """
 
 from __future__ import annotations

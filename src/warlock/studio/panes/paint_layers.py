@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint, paint_mode, theme, widgets
+from .. import inker, paint_mode, theme, widgets
 from ..manual import render as manual_render
 from . import paint_textures
 
@@ -77,7 +77,7 @@ def _actions(ctx: Any, doc: Any) -> None:
         was = _opacity_drag.pop(layer.uid, None)
         if was is not None:
             doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
-    blend = widgets.combo("Blend", layer.blend, [(m, m) for m in paint.BLEND_MODES])
+    blend = widgets.combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)
 

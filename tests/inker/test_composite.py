@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.paint import composite as cp
+from warlock.studio.inker import composite as cp
 
 
 def _px(r, g, b, a=1.0):

@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.paint import undo as U
-from warlock.studio.paint.layers import Layer, LayerStack
+from warlock.studio.inker import undo as U
+from warlock.studio.inker.layers import Layer, LayerStack
 
 
 class FakeDoc:
@@ -21,7 +21,7 @@ class FakeDoc:
         self.selection = None
         self.dirty: list = []
 
-    def invalidate(self, rect):
+    def invalidate(self, rect, *, layer_uid=None):
         self.dirty.append(rect)
 
     def invalidate_all(self):

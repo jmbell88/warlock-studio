@@ -24,7 +24,7 @@ from . import composite as cp
 from . import gradient as grad
 from . import transform as tf
 from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
-from .layers import Layer, LayerStack
+from .layers import Layer, LayerStack, new_uid
 from .selection import Clipboard, FloatingBuffer, SelectionMask, magic_wand
 from .undo import (
     UNDO_BYTES,
@@ -172,8 +172,18 @@ class Document:
 
     # -- the composite cache -----------------------------------------------
 
-    def invalidate(self, rect: tuple[int, int, int, int] | None = None) -> None:
-        """Recomposite a rectangle (or everything) and record it as dirty."""
+    def invalidate(
+        self, rect: tuple[int, int, int, int] | None = None, *, layer_uid: int | None = None
+    ) -> None:
+        """Recomposite a rectangle (or everything) and record it as dirty.
+
+        ``layer_uid`` names the layer that was written. It matters only when
+        that layer sits *below* the active one: ``_below`` is the cached
+        composite of exactly those layers, so reusing it would recomposite the
+        rectangle on top of pixels that no longer exist. Undo is how this
+        happens in practice -- a patch is addressed by uid and can land
+        anywhere in the stack, however the active layer has moved since.
+        """
         if rect is None:
             self.invalidate_all()
             return
@@ -183,6 +193,9 @@ class Document:
             return
         if self._below is None:
             self._below = self.stack.composite_below()
+        elif layer_uid is not None and self.stack.index_of(layer_uid) < self.stack.active_index:
+            bx0, by0, bx1, by1 = box
+            self._below[by0:by1, bx0:bx1] = self.stack.composite_below_region(box)
         x0, y0, x1, y1 = box
         region = self.stack.composite_region(box, below=self._below)
         self._composite[y0:y1, x0:x1] = cp.to_uint8(region)
@@ -267,7 +280,7 @@ class Document:
         if np.array_equal(before, after):
             return
         self.history.push(PatchEdit(layer.uid, rect, before, after))
-        self.invalidate(rect)
+        self.invalidate(rect, layer_uid=layer.uid)
 
     def _weights(self, rect: tuple[int, int, int, int], weight: np.ndarray) -> np.ndarray:
         """Clip a write to the selection. The same multiply as a brush stamp --
@@ -473,7 +486,14 @@ class Document:
         """
 
     def undo(self) -> bool:
-        self.cancel_floating()
+        """One Ctrl+Z is one step -- and cancelling a float *is* that step.
+
+        Cancelling a lift reverses the lift's own history entry, so falling
+        through to ``history.undo`` afterwards would spend a second step on a
+        single keypress.
+        """
+        if self.cancel_floating():
+            return True
         return self.history.undo(self)
 
     def redo(self) -> bool:
@@ -483,8 +503,14 @@ class Document:
     def restore_snapshot(
         self, layers: list[Layer], size: tuple[int, int], active: int
     ) -> None:
-        """Undo hook for a whole-canvas operation."""
-        self.stack = LayerStack([layer.copy() for layer in layers], active)
+        """Undo hook for a whole-canvas operation.
+
+        The layers are copied (the snapshot is held for as long as the edit is,
+        and a later stroke must not write into it) but they keep their uids: an
+        undo restores the document's *state*, not a set of new layers, and
+        every patch recorded before this one addresses those uids.
+        """
+        self.stack = LayerStack([layer.copy(uid=layer.uid) for layer in layers], active)
         width, height = size
         self._composite = np.zeros((height, width, 4), dtype=np.uint8)
         self.invalidate_all()
@@ -500,13 +526,26 @@ class Document:
         before = None if self.mask is None else self.mask.mask
         if mask is None:
             self.mask = None
-        elif self.mask is None or op == "replace":
+        elif op == "replace" or (self.mask is None and op == "add"):
             self.mask = mask.copy()
+        elif self.mask is None:
+            # Subtracting from nothing, or intersecting with it, is nothing.
+            # Adopting the new mask instead would make a subtract-drag on an
+            # empty canvas *create* the selection it was meant to cut away.
+            self.mask = None
         else:
             self.mask = self.mask.combined(mask, op)
         if self.mask is not None and self.mask.is_empty:
             self.mask = None
-        self.history.push(SelectionEdit(before, None if self.mask is None else self.mask.mask))
+        after = None if self.mask is None else self.mask.mask
+        if before is None and after is None:
+            # Nothing changed, so nothing to undo. Pushing anyway -- which
+            # subtracting from an empty selection did -- moved the head, and
+            # dirty is a comparison against the head: an Alt-drag on a canvas
+            # with no selection made a saved document ask to be saved again,
+            # and spent a Ctrl+Z doing nothing.
+            return
+        self.history.push(SelectionEdit(before, after))
         self.rev += 1
 
     def select_all(self) -> None:
@@ -562,11 +601,13 @@ class Document:
         layer.pixels[y0:y1, x0:x1] = cut
 
         after = layer.pixels[y0:y1, x0:x1].copy()
+        edit = PatchEdit(layer.uid, box, before, after)
         self.floating = FloatingBuffer(
-            pixels=pixels, mask=crop.copy(), offset=(x0, y0), layer_uid=layer.uid
+            pixels=pixels, mask=crop.copy(), offset=(x0, y0), layer_uid=layer.uid,
+            lift_edit=edit,
         )
-        self.history.push(PatchEdit(layer.uid, box, before, after))
-        self.invalidate(box)
+        self.history.push(edit)
+        self.invalidate(box, layer_uid=layer.uid)
         return True
 
     def move_floating(self, dx: int, dy: int) -> None:
@@ -598,12 +639,28 @@ class Document:
         """Put the pixels back where they were lifted from, exactly.
 
         Exact because it is the lift's own undo step rather than a re-paste --
-        a feathered lift cannot be re-pasted without rounding.
+        a feathered lift cannot be re-pasted without rounding. That step is
+        reversed *and forgotten*: the user asked for the lift not to have
+        happened, so leaving it redoable would let Ctrl+Y replay the alpha-cut
+        with no buffer left to put back.
+
+        The lift's *own* step, named on the buffer, and not simply the newest
+        one. A buffer floats for as long as the user leaves it floating, and
+        every selection op pushes a step meanwhile -- so "the newest step" is
+        routinely something else, and reversing that instead dropped the
+        lifted pixels, kept the alpha-cut and destroyed an unrelated edit, all
+        three unrecoverably.
+
+        A pasted buffer owns no step, and reversing one anyway would undo
+        whatever the user did before pasting.
         """
-        if self.floating is None:
+        floating, self.floating = self.floating, None
+        if floating is None:
             return False
-        self.floating = None
-        self.history.undo(self)
+        if not floating.lifted or not self.history.revoke(self, floating.lift_edit):
+            # Nothing to reverse: a paste, or a lift whose step has since been
+            # undone or evicted by the byte budget.
+            self.rev += 1
         return True
 
     def delete_floating(self) -> bool:
@@ -709,6 +766,9 @@ class Document:
             pixels=pixels, mask=mask, offset=(int(at[0]), int(at[1])),
             layer_uid=self.stack.active.uid,
         )
+        # A paste is a new branch of history even though it pushes no step of
+        # its own; without this, Ctrl+V then Ctrl+Y redoes an unrelated edit.
+        self.history.forget_redo()
         self.rev += 1
         return True
 
@@ -795,10 +855,22 @@ class Document:
         self.stack.active_index = max(0, min(int(index), len(self.stack) - 1))
         self.invalidate_all()
 
-    def set_layer_props(self, index: int | None = None, **props: Any) -> bool:
+    def set_layer_props(
+        self, index: int | None = None, *, was: dict | None = None, **props: Any
+    ) -> bool:
+        """Record a property change as one undo step.
+
+        ``was`` is for a control that mutates the layer live so the canvas
+        follows the drag, and only asks for the step once the drag is released.
+        By then the layer already holds the new value, so reading "before" off
+        it compares a value against itself: nothing is ever pushed, the change
+        is not undoable, and the history head does not move -- which is what
+        the tab compares against to decide whether the document is dirty.
+        """
         index = self.stack.active_index if index is None else index
         layer = self.stack[index]
-        before = {key: getattr(layer, key) for key in props}
+        source = {} if was is None else was
+        before = {key: source.get(key, getattr(layer, key)) for key in props}
         if before == props:
             return False
         for key, value in props.items():
@@ -853,11 +925,16 @@ class Document:
         """Collapse the stack to one layer. Undoable as a canvas-level op."""
         if len(self.stack) == 1:
             return
-        self._replay(self._do_flatten)
+        # Replay must be a pure function of the document, and minting a uid is
+        # the one part of this op that is not: a redo would produce a layer
+        # with a new identity, stranding every patch recorded above it. The uid
+        # is drawn once and closed over, so every replay lands on the same one.
+        uid = new_uid()
+        self._replay(lambda: self._do_flatten(uid))
 
-    def _do_flatten(self) -> None:
+    def _do_flatten(self, uid: int) -> None:
         flat = self.stack.flatten()
-        self.stack = LayerStack([Layer(pixels=flat, name="Flattened")], 0)
+        self.stack = LayerStack([Layer(pixels=flat, name="Flattened", uid=uid)], 0)
 
     # -- whole-canvas geometry ---------------------------------------------
 
@@ -874,7 +951,7 @@ class Document:
         else -- flips, rotations and rescales are pure functions of the
         document, with nothing accumulated and nothing random.
         """
-        snapshot = [layer.copy() for layer in self.stack]
+        snapshot = [layer.copy(uid=layer.uid) for layer in self.stack]
         size = self.size
         active = self.stack.active_index
         mask = None if self.mask is None else self.mask.mask.copy()

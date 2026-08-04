@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, paint, paint_mode, paint_state, theme, widgets
+from .. import icons, inker, paint_mode, paint_state, theme, widgets
 from ..manual import render as manual_render
 from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 
@@ -41,7 +41,7 @@ TOOL_ICONS = {
 }
 
 SYMMETRY_LABELS = (("none", "off"), ("x", "left / right"), ("y", "top / bottom"), ("xy", "both"))
-BLEND_LABELS = tuple((mode, mode) for mode in paint.BLEND_MODES)
+BLEND_LABELS = tuple((mode, mode) for mode in inker.BLEND_MODES)
 
 
 def draw(ctx: Any) -> None:
@@ -86,9 +86,9 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     if tool in PAINT_TOOLS or tool in SHAPE_TOOLS:
         widgets.section("brush")
         imgui.set_next_item_width(-1)
-        changed, size = imgui.slider_int("Size", state.brush_size, paint.MIN_BRUSH, paint.MAX_BRUSH)
+        changed, size = imgui.slider_int("Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH)
         if changed:
-            state.brush_size = paint.clamp_brush(size)
+            state.brush_size = inker.clamp_brush(size)
     if tool in PAINT_TOOLS:
         imgui.set_next_item_width(-1)
         changed, value = imgui.slider_float("Hardness", state.hardness, 0.0, 1.0)
@@ -130,15 +130,22 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         state.gradient_kind = widgets.combo(
             "Shape",
             state.gradient_kind,
-            [(k, k) for k in paint.GRADIENT_KINDS],
+            [(k, k) for k in inker.GRADIENT_KINDS],
         )
         changed, value = imgui.checkbox("To transparent", state.gradient_to_transparent)
         if changed:
             state.gradient_to_transparent = value
 
+    # Everything above this line adjusts the *tool*, which a save does not
+    # read. Everything below changes the document -- the selection ops each
+    # push a history step and Crop rebinds every layer's pixels -- so it waits
+    # for the save the same way the canvas, the layers panel and the keyboard
+    # shortcuts already do.
+    imgui.begin_disabled(tab.saving)
     if tool in SELECT_TOOLS or doc.mask is not None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
+    imgui.end_disabled()
 
 
 def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
