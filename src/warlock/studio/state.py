@@ -75,9 +75,46 @@ def default_form_2d() -> dict[str, Any]:
     form.update(dict.fromkeys(guidance_fields(), ""))
     return form
 
+def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
+    """A 2D form filled from a finished job's params -- "another like this".
+
+    Only keys the form already has, which is what keeps a derived value the
+    worker recorded (``composed_prompt``, ``reference_report``, a mesh verdict)
+    from ever becoming a submitted field: the form is the allowlist.
+
+    Numbers are coerced rather than type-matched. Params arrive from JSON,
+    where a strength saved as 0.6 can come back as an int 0 or 1, and the
+    persisted-settings merge's ``type(value) is type(default)`` rule would
+    silently drop exactly those fields.
+    """
+    form = default_form_2d()
+    for key, default in list(form.items()):
+        value = params.get(key)
+        if value is None:
+            continue
+        try:
+            if isinstance(default, bool):
+                form[key] = bool(value)
+            elif isinstance(default, float):
+                form[key] = float(value)
+            elif isinstance(default, int):
+                form[key] = int(value)
+            elif isinstance(default, str):
+                form[key] = str(value)
+        except (TypeError, ValueError):
+            continue
+    return form
+
+
 DEFAULT_FORM_3D: dict[str, Any] = {
     "platform": "",
     "profile": "raw",
+    # Deliberately without a widget. A triangle budget only means anything for
+    # profile "custom", and every decimating tier needs vendor/gltfpack, which
+    # is not present -- so a control here would offer a number that "raw"
+    # ignores. The plumbing through _payload is kept because it is correct the
+    # moment a tier is qualified and exposed; the retarget control on a
+    # finished mesh is where a budget is actually chosen today.
     "custom_triangles": 0,
     "size_m": 0.0,
     "bg_removal": "",
@@ -149,6 +186,24 @@ class Toast:
 
 
 @dataclass
+class ManualState:
+    """The Manual window: what it shows and whether it is on screen."""
+
+    open: bool = False
+    chapter: str = "00-index"
+    # Set alongside a navigation, consumed by the renderer on the frame the
+    # heading is drawn -- scrolling needs a cursor position that only exists
+    # mid-draw.
+    pending_anchor: str | None = None
+    search: str = ""
+
+    def open_at(self, chapter: str, anchor: str | None = None) -> None:
+        self.open = True
+        self.chapter = chapter
+        self.pending_anchor = anchor
+
+
+@dataclass
 class AppState:
     """The whole UI's mutable state."""
 
@@ -184,6 +239,7 @@ class AppState:
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never paints pays nothing for it.
     paint: Any = None
+    manual: ManualState = field(default_factory=ManualState)
 
     # -- toasts ------------------------------------------------------------
 
