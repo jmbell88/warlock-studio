@@ -568,6 +568,9 @@ class App:
         import pygame
 
         ctx = self.app_ctx
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
+            ctx.state.manual.open = True
+            return
         if ctx.state.landing:
             # The chooser has no form to submit and no viewport to frame; every
             # one of these would act on a pane that is not on screen.
@@ -830,6 +833,9 @@ class App:
         ctx = self.app_ctx
         if not ctx.state.landing:
             overlay.progress_card(ctx, self.eta)
+        from .manual import render as manual_render
+
+        manual_render.draw_window(ctx)
         widgets.toasts(ctx.state, (viewport.work_size.x, viewport.work_size.y))
         ctx.confirms.draw()
         ctx.prompts.draw()
@@ -875,7 +881,10 @@ class App:
             colour = theme.OK
         from . import widgets
 
-        imgui.same_line(max(imgui.get_window_width() - sp(70), 0))
+        imgui.same_line(max(imgui.get_window_width() - sp(100), 0))
+        if widgets.icon_button(icons.INFO, "Manual (F1)"):
+            ctx.state.manual.open = True
+        imgui.same_line()
         if widgets.icon_button("?", "Keyboard shortcuts"):
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
@@ -917,6 +926,7 @@ class App:
         table(
             "Everywhere",
             [
+                ("F1", "Open the manual"),
                 ("Ctrl+Enter", "Generate / Make 3D"),
                 ("F", "Frame the model"),
                 ("W", "Toggle wireframe"),
