@@ -71,8 +71,9 @@ See [Models and style LoRAs](02-generating-references.md#models-and-style-loras)
 A skeleton is a JSON file in `src/warlock/templates/`, and adding one is the entire procedure — no
 bone list in `blender_worker.py`, no branch anywhere that names a template.
 
-Each file declares a key, a label, a root bone and a list of bones, each with a name, a parent and a
-head and tail position. The positions are normalised landmarks in a unit bounding box, expressed in
+Each file declares a key, a label, a root bone, a list of bones — each with a name, a parent and a
+head and tail position — and a list of `mirror_pairs`. The positions are normalised landmarks in a
+unit bounding box, expressed in
 Blender's axes: `+X` is the subject's left, `-Y` is forward, `+Z` is up. The `x` and `y` components
 span `-0.5` to `0.5` about the box centre, and `z` spans `0` at the floor to `1` at the top.
 
@@ -82,9 +83,20 @@ proportions say it should, not where anatomy says it should. That is why the fit
 written into `rig.json`: a later adjustment pass can correct a joint without re-solving the rig, and
 the record of where each joint actually ended up is the input it needs.
 
+Mirroring is not inferred from the geometry. `mirror_pairs` is an explicit array of two-element
+`[left, right]` name pairs, and it is the only thing that makes the pose editor's Mirror control do
+anything: `rigging.mirror_pose` copies each posed bone onto its named partner reflected, and a bone
+that appears in no pair is left exactly as it is, on the assumption that it sits on the mirror plane.
+The list is carried into `rig.json`, which is where the viewer reads it from, and the Mirror button
+is hidden entirely when it is empty — so a template that omits the field loads and rigs perfectly
+well and simply cannot be mirrored. The field is optional in the parser and defaults to empty, which
+means forgetting it costs you a feature rather than an error. Omit it deliberately, as `serpent.json`
+does, or list every symmetric limb, as `humanoid.json` does.
+
 Two conventions are worth honouring for consistency with the templates already there. Forward is
-`-Y`, which is what makes column zero of a sprite sheet the front view. And symmetric limbs should be
-mirror-symmetric about `X`, because mirroring a pose reflects across that plane and assumes it.
+`-Y`, which is what makes column zero of a sprite sheet the front view. And limbs you intend to pair
+should be placed mirror-symmetrically about `X`, because the reflection `mirror_pose` applies assumes
+that plane.
 
 See [Templates](04-rigging-and-posing.md#templates).
 
