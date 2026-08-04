@@ -17,11 +17,10 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import profiles, theme, widgets
+from .. import fonts, icons, profiles, theme, widgets
 from ..state import DEFAULT_FORM_3D, default_form_2d
+from ..tokens import sp
 from . import library, profiles_panel
-
-BUTTON = (300.0, 64.0)
 
 
 def draw(ctx: Any) -> None:
@@ -37,41 +36,71 @@ def draw(ctx: Any) -> None:
 # --- the four choices -------------------------------------------------------
 
 
+def _tile(ctx: Any, key: str, icon: str, name: str, caption: str) -> bool:
+    """A centred, clickable card: icon left, name and caption right."""
+    width, height = sp(380), sp(64)
+    imgui.set_cursor_pos_x(max((imgui.get_window_width() - width) * 0.5, 0))
+    clicked = False
+    with widgets.card(f"landing/{key}", (width, height)):
+        imgui.dummy((0, sp(4)))
+        with fonts.title(imgui):
+            widgets.text_colored(theme.ACCENT, icon)
+        imgui.same_line(sp(48))
+        imgui.begin_group()
+        with fonts.label(imgui):
+            imgui.text(name)
+        with fonts.small(imgui):
+            widgets.muted(caption)
+        imgui.end_group()
+    if imgui.is_item_clicked():
+        clicked = True
+    if imgui.is_item_hovered():
+        imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
+    return clicked
+
+
 def _choose(ctx: Any) -> None:
-    imgui.dummy((0, 24))
-    imgui.text("Warlock Studio")
-    widgets.muted("A prompt becomes a reference image; a reference becomes a mesh.")
-    imgui.dummy((0, 16))
+    avail = imgui.get_content_region_avail()
+    # Five tiles plus the title block; centre the stack in the upper half.
+    stack = sp(64 + 8) * 5 + sp(110)
+    imgui.dummy((0, max((avail.y - stack) * 0.4, sp(24))))
 
-    if imgui.button("New 2D image", BUTTON):
+    def centred(text: str, colour: int | None = None) -> None:
+        width = imgui.calc_text_size(text).x
+        imgui.set_cursor_pos_x(max((imgui.get_window_width() - width) * 0.5, 0))
+        if colour is None:
+            imgui.text(text)
+        else:
+            widgets.text_colored(colour, text)
+
+    with fonts.title(imgui):
+        centred("Warlock Studio")
+    with fonts.small(imgui):
+        centred("A prompt becomes a reference image; a reference becomes a mesh.", theme.MUTED)
+    imgui.dummy((0, sp(20)))
+
+    if _tile(ctx, "2d", icons.IMAGE, "New 2D image", "Compose a prompt and generate a reference."):
         start_2d(ctx)
-    widgets.muted("Compose a prompt and generate a reference.")
-    imgui.dummy((0, 8))
-
-    if imgui.button("New 3D model", BUTTON):
+    imgui.dummy((0, sp(8)))
+    if _tile(
+        ctx, "3d", icons.BOX, "New 3D model", "Start from a finished reference, or drop an image."
+    ):
         start_3d(ctx)
-    widgets.muted("Start from a finished reference, or an image you drop in.")
-    imgui.dummy((0, 8))
-
-    if imgui.button("Paint", BUTTON):
+    imgui.dummy((0, sp(8)))
+    if _tile(ctx, "paint", icons.BRUSH, "Paint", "A canvas, or an image you already have."):
         start_paint(ctx)
-    widgets.muted("A canvas, or an image you already have.")
-    imgui.dummy((0, 8))
-
-    if imgui.button("Open existing", BUTTON):
+    imgui.dummy((0, sp(8)))
+    if _tile(ctx, "open", icons.FOLDER_OPEN, "Open existing", "Everything already generated."):
         ctx.state.landing_view = "open"
-    widgets.muted("Everything already generated.")
-    imgui.dummy((0, 8))
-
-    if imgui.button("Profiles", BUTTON):
-        ctx.state.landing_view = "profiles"
+    imgui.dummy((0, sp(8)))
     active = profiles.get_active(ctx.settings)
-    widgets.muted(
-        f"Saved style settings. Active: {active}." if active else "Saved style settings."
-    )
+    caption = f"Saved style settings. Active: {active}." if active else "Saved style settings."
+    if _tile(ctx, "profiles", icons.SLIDERS, "Profiles", caption):
+        ctx.state.landing_view = "profiles"
+
     if ctx.state.last_error:
-        imgui.dummy((0, 16))
-        widgets.text_colored(theme.ERR, ctx.state.last_error)
+        imgui.dummy((0, sp(16)))
+        centred(ctx.state.last_error, theme.ERR)
 
 
 def start_2d(ctx: Any) -> None:

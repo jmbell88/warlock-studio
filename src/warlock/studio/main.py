@@ -29,11 +29,8 @@ WINDOW_TITLE = "Warlock Studio"
 MEMORY_TICK_SECONDS = 30.0
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
-SIDEBAR_WIDTH = 340.0
-# How much of the sidebar the settings form gets before the library starts.
-# The library is the thing a user scrolls, so it keeps the larger share of a
-# short window rather than the form.
-SETTINGS_SHARE = 0.55
+# Pane widths and the sidebar split now live in layout.Layout, persisted and
+# draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
 
 
@@ -70,9 +67,10 @@ class App:
         import pygame
         from imgui_bundle import imgui
 
-        from . import dpi, fonts, imgui_backend, textures, theme, tokens
+        from . import dpi, fonts, imgui_backend, textures, theme, tokens, widgets
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
+        from .layout import Layout
         from .settings import Settings, restore_form
         from .state import DEFAULT_FORM_3D, AppState, Eta, Filters, default_form_2d
         from .viewer_embed import Viewer
@@ -119,6 +117,8 @@ class App:
         imgui.get_io().set_ini_filename("")  # imgui's own layout file is not ours to keep
         fonts.load(imgui)
         theme.apply(imgui)
+        self.layout = Layout(settings)
+        widgets.attach_settings(settings)
         self.imgui_renderer = imgui_backend.ImguiRenderer(self.ctx)
         self.viewer = Viewer(self.ctx)
 
@@ -679,77 +679,123 @@ class App:
         # The sidebar is two scrollers, not one: sharing a single scroll region
         # meant the settings form pushed the library off the bottom of a
         # 950-pixel window, which made the whole asset list unreachable.
+        from . import layout as layout_mod
+        from . import tokens
+        from .tokens import sp
+
+        lay = self.layout
+        sidebar_w = sp(lay.sidebar_w)
         imgui.begin_group()
-        form_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
+        avail_y = imgui.get_content_region_avail().y
+        form_height = avail_y * lay.settings_share
         borders = imgui.ChildFlags_.borders.value
-        if imgui.begin_child("settings", (SIDEBAR_WIDTH, form_height), borders):
+        if imgui.begin_child("settings", (sidebar_w, form_height), borders):
             if ctx.state.mode == "2d":
                 settings_2d.draw(ctx)
             else:
                 settings_3d.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("library", (SIDEBAR_WIDTH, 0), borders):
+        drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
+        if drag and avail_y > 0:
+            lay.settings_share = min(
+                max(lay.settings_share + drag * tokens.SCALE / avail_y, layout_mod.SHARE_MIN),
+                layout_mod.SHARE_MAX,
+            )
+            lay.save()
+        if imgui.begin_child("library", (sidebar_w, 0), borders):
             library.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
+        drag = layout_mod.splitter("left-split")
+        if drag:
+            lay.sidebar_w = min(
+                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
         self._viewport_pane()
         imgui.same_line()
+        drag = layout_mod.splitter("right-split")
+        if drag:
+            lay.inspector_w = min(
+                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
 
-        if imgui.begin_child("inspector", (SIDEBAR_WIDTH, 0), borders):
+        if imgui.begin_child("inspector", (0, 0), borders):
             inspector.draw(ctx)
         imgui.end_child()
         imgui.end()
         self._overlays(viewport)
 
     def _paint_workspace(self) -> None:
-        """The same 340 / centre / 340 skeleton the other two modes use.
+        """The same sidebar / centre / sidebar skeleton the other modes use.
 
         Deliberately not a takeover of the whole window: the progress card
-        stays on screen, so a trellis run started before switching here is
-        still visible while painting.
+        floats over every mode, so a trellis run started before switching here
+        is still visible while painting.
         """
         from imgui_bundle import imgui
 
+        from . import layout as layout_mod
         from .panes import (
-            overlay,
             paint_bridge,
             paint_canvas,
             paint_colors,
             paint_layers,
             paint_tools,
         )
+        from .tokens import sp
 
         ctx = self.app_ctx
+        lay = self.layout
+        sidebar_w = sp(lay.sidebar_w)
+        inspector_w = sp(lay.inspector_w)
+        style = imgui.get_style()
         borders = imgui.ChildFlags_.borders.value
         imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
-        if imgui.begin_child("paint-tools", (SIDEBAR_WIDTH, tools_height), borders):
+        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        if imgui.begin_child("paint-tools", (sidebar_w, tools_height), borders):
             paint_tools.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("paint-colors", (SIDEBAR_WIDTH, 0), borders):
+        if imgui.begin_child("paint-colors", (sidebar_w, 0), borders):
             paint_colors.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        width = imgui.get_content_region_avail().x - SIDEBAR_WIDTH - 16
+        drag = layout_mod.splitter("paint-left-split")
+        if drag:
+            lay.sidebar_w = min(
+                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
+        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
+        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         if imgui.begin_child("paint-centre", (width, 0), borders, flags):
             paint_canvas.draw(ctx)
         imgui.end_child()
 
         imgui.same_line()
+        drag = layout_mod.splitter("paint-right-split")
+        if drag:
+            lay.inspector_w = min(
+                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
         imgui.begin_group()
-        layers_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
-        if imgui.begin_child("paint-layers", (SIDEBAR_WIDTH, layers_height), borders):
+        layers_height = imgui.get_content_region_avail().y * lay.settings_share
+        if imgui.begin_child("paint-layers", (0, layers_height), borders):
             paint_layers.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("paint-bridge", (SIDEBAR_WIDTH, 0), borders):
+        if imgui.begin_child("paint-bridge", (0, 0), borders):
             paint_bridge.draw(ctx)
-            imgui.dummy((0, 8))
-            overlay.progress_card(ctx, self.eta)
         imgui.end_child()
         imgui.end_group()
 
@@ -761,8 +807,11 @@ class App:
         which is why this is not inline in either.
         """
         from . import widgets
+        from .panes import overlay
 
         ctx = self.app_ctx
+        if not ctx.state.landing:
+            overlay.progress_card(ctx, self.eta)
         widgets.toasts(ctx.state, (viewport.work_size.x, viewport.work_size.y))
         ctx.confirms.draw()
         ctx.prompts.draw()
@@ -792,13 +841,39 @@ class App:
             ctx.settings.set("mode", selected)
             self._sync_viewer()
 
+        # Right-aligned worker-health dot; the seed of the diagnostics surface.
+        from . import theme
+        from .tokens import sp
+
+        imgui.same_line(max(imgui.get_window_width() - sp(34), 0))
+        pos = imgui.get_cursor_screen_pos()
+        healthy = state.last_error is None
+        centre_y = pos.y + imgui.get_frame_height() * 0.5
+        imgui.get_window_draw_list().add_circle_filled(
+            (pos.x + sp(8), centre_y),
+            sp(4.5),
+            imgui.get_color_u32(theme.rgba(theme.OK if healthy else theme.ERR)),
+            16,
+        )
+        imgui.invisible_button("##health", (sp(16), imgui.get_frame_height()))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "All systems go." if healthy else str(state.last_error)
+            )
+
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
 
+        from . import layout as layout_mod
         from .panes import overlay
+        from .tokens import sp
 
         ctx = self.app_ctx
-        width = imgui.get_content_region_avail().x - SIDEBAR_WIDTH - 16
+        style = imgui.get_style()
+        # Leave room for the right splitter and the inspector; the progress
+        # card floats over the image now, so the full height is the image's.
+        reserved = sp(self.layout.inspector_w) + sp(layout_mod.GRIP) + style.item_spacing.x * 2
+        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
         # no_scroll_with_mouse: over the viewport the wheel can only mean dolly.
         if imgui.begin_child(
             "viewport",
@@ -810,14 +885,13 @@ class App:
             overlay.toolbar(ctx)
             image_pos = imgui.get_cursor_screen_pos()
             avail = imgui.get_content_region_avail()
-            height = max(avail.y - 100, 64)
+            height = max(avail.y, 64)
             if ctx.state.mode == "3d" and self.viewer.has_model:
                 self._draw_viewport_image(image_pos, width, height)
             elif self.viewer.reference is not None:
                 self._draw_reference(width, height)
             else:
                 overlay.placeholder(ctx)
-            overlay.progress_card(ctx, self.eta)
         imgui.end_child()
 
     def _draw_viewport_image(self, pos: Any, width: float, height: float) -> None:

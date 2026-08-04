@@ -225,18 +225,45 @@ def field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
 # of header() can know.
 FORCE_SECTIONS_OPEN = False
 
+# The Settings the persisted headers write through; injected at setup because
+# widgets stay stateless functions and a pane never carries the settings just
+# to draw a heading. None (tests, early frames) means default_open decides.
+_SETTINGS: Any = None
 
-def header(label: str, default_open: bool = True) -> bool:
+
+def attach_settings(settings: Any) -> None:
+    global _SETTINGS
+    _SETTINGS = settings
+
+
+def header(label: str, default_open: bool = True, persist_key: str | None = None) -> bool:
     """A collapsing section. Open by default, because these *are* the panel.
 
     The inspector's sections are its content, not extras: an asset opened with
     every section collapsed shows a column of headings and nothing to act on.
+    With ``persist_key``, the open state survives a restart -- imgui's own ini
+    is disabled, so this rides the app's Settings instead. FORCE_SECTIONS_OPEN
+    still wins: the smoke test needs every section built regardless of what
+    last session left closed.
     """
+    stored: dict[str, Any] = {}
+    if persist_key and _SETTINGS is not None:
+        stored = _SETTINGS.get("panels_open") or {}
     if FORCE_SECTIONS_OPEN:
         imgui.set_next_item_open(True, imgui.Cond_.always.value)
+    elif persist_key and persist_key in stored:
+        imgui.set_next_item_open(bool(stored[persist_key]), imgui.Cond_.once.value)
     flags = imgui.TreeNodeFlags_.default_open.value if default_open else 0
     with fonts.label(imgui):
-        return imgui.collapsing_header(label, flags)
+        opened = imgui.collapsing_header(label, flags)
+    if (
+        persist_key
+        and _SETTINGS is not None
+        and not FORCE_SECTIONS_OPEN
+        and stored.get(persist_key) != opened
+    ):
+        _SETTINGS.set("panels_open", {**stored, persist_key: opened})
+    return opened
 
 
 def disabled_button(label: str, enabled: bool, size: tuple[float, float] = (0, 0)) -> bool:

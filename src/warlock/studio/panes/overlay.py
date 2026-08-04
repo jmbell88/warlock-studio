@@ -81,7 +81,15 @@ def _screenshot(ctx: Any) -> None:
 
 
 def progress_card(ctx: Any, eta: Any) -> None:
-    """The running job's narration, or nothing."""
+    """The running job's narration, floating bottom-centre, or nothing.
+
+    A window rather than a child so it overlays whichever mode is on screen --
+    the viewport keeps its full height, and a trellis run stays visible from
+    Paint. Drawn after the host window, so its Cancel wins hit-testing over the
+    image beneath it.
+    """
+    from ..tokens import sp
+
     job_id = ctx.runtime.current_job_id
     snapshot = ctx.runtime.progress()
     if snapshot is None or job_id is None:
@@ -91,9 +99,25 @@ def progress_card(ctx: Any, eta: Any) -> None:
     elapsed = max(time.time() - float(started), 0.0) if started else 0.0
     cold = bool(snapshot.get("cold"))
 
+    viewport = imgui.get_main_viewport()
+    imgui.set_next_window_pos(
+        (
+            viewport.work_pos.x + viewport.work_size.x * 0.5,
+            viewport.work_pos.y + viewport.work_size.y - sp(18),
+        ),
+        imgui.Cond_.always.value,
+        (0.5, 1.0),
+    )
+    imgui.set_next_window_size((sp(430), 0))
     imgui.set_next_window_bg_alpha(0.94)
-    imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.PANEL)))
-    if imgui.begin_child("progress-card", (-1, 92), imgui.ChildFlags_.borders.value):
+    imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    flags = (
+        imgui.WindowFlags_.no_decoration.value
+        | imgui.WindowFlags_.no_saved_settings.value
+        | imgui.WindowFlags_.always_auto_resize.value
+        | imgui.WindowFlags_.no_focus_on_appearing.value
+    )
+    if imgui.begin("##progress-card", None, flags)[0]:
         widgets.spinner()
         imgui.same_line()
         with fonts.label(imgui):
@@ -117,7 +141,7 @@ def progress_card(ctx: Any, eta: Any) -> None:
             # the thing it acts on, and a blocking dialog would freeze the very
             # bar behind it.
             ctx.submit(f"cancel:{job_id}", svc_jobs.cancel_job, ctx.svc, job_id)
-    imgui.end_child()
+    imgui.end()
     imgui.pop_style_color()
 
 
