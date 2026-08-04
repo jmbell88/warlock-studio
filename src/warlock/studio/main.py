@@ -48,10 +48,14 @@ class App:
         self.app_ctx = None
         self.eta = None
         self._running = False
+        self._min_size = MIN_SIZE
         self._last_frame = time.perf_counter()
         # Seeded to 0.0, not to now: the first tick fires immediately and puts
         # a startup baseline in the log to measure every later sample against.
         self._last_memory_log = 0.0
+        # A dead worker is reported once. The banner is dismissible, and
+        # re-raising it every frame would make it impossible to dismiss.
+        self._fatal_reported = False
         self._was_landing = True
         # Set by _draw_viewport_image, read one frame later by _events. The
         # host window is fullscreen, so io.want_capture_mouse is always true
@@ -66,7 +70,7 @@ class App:
         import pygame
         from imgui_bundle import imgui
 
-        from . import imgui_backend, textures, theme
+        from . import dpi, fonts, imgui_backend, textures, theme, tokens
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
         from .settings import Settings, restore_form
@@ -76,6 +80,9 @@ class App:
         self.svc = self.runtime.start()
         settings = Settings.load(self.runtime.config.data_dir)
 
+        # Before the window exists: awareness is frozen at window creation.
+        dpi.make_process_dpi_aware()
+
         pygame.init()
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
         pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
@@ -84,7 +91,14 @@ class App:
         )
         pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
         pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-        size = tuple(settings.get("window_size") or DEFAULT_SIZE)
+        # The window is in physical pixels (Per-Monitor-V2): a persisted size
+        # is already physical, and the first-run default scales by the primary
+        # monitor so 1600x950 means the same amount of screen everywhere.
+        first_run_scale = dpi.system_scale()
+        size = tuple(
+            settings.get("window_size")
+            or (int(DEFAULT_SIZE[0] * first_run_scale), int(DEFAULT_SIZE[1] * first_run_scale))
+        )
         self.window = pygame.display.set_mode(
             size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
         )
@@ -92,9 +106,18 @@ class App:
         # Dropped files are how a reference image gets in without a dialog.
         pygame.event.set_allowed(None)
 
+        # The scale everything is drawn at: sampled from the monitor the
+        # window actually opened on, before any font or style is built.
+        tokens.set_scale(dpi.window_scale(pygame))
+        self._min_size = (
+            int(MIN_SIZE[0] * tokens.SCALE),
+            int(MIN_SIZE[1] * tokens.SCALE),
+        )
+
         self.ctx = moderngl.create_context()
         imgui.create_context()
         imgui.get_io().set_ini_filename("")  # imgui's own layout file is not ours to keep
+        fonts.load(imgui)
         theme.apply(imgui)
         self.imgui_renderer = imgui_backend.ImguiRenderer(self.ctx)
         self.viewer = Viewer(self.ctx)
@@ -212,6 +235,7 @@ class App:
     def frame(self, dt: float) -> None:
         from imgui_bundle import imgui
 
+        self.app_ctx.textures.begin_frame()
         self._collect_tasks()
         self._refresh()
         self._events()
@@ -295,15 +319,60 @@ class App:
             if done.result is not None:
                 ctx.toast(f"Saved to {done.result}")
             return
+        if key == "trellis-log":
+            # The one diagnostic for "the 3D engine stopped unexpectedly". The
+            # button submitted this and nothing ever stored the answer, so the
+            # box under it stayed empty forever.
+            if isinstance(done.result, dict):
+                ctx.state.preview["trellis_log"] = done.result.get("text") or ""
+            return
+        if key.startswith("export-"):
+            # A bulk export finishing with no visible outcome reads as a
+            # failure; single-artifact saves have always toasted.
+            if done.result is not None:
+                ctx.toast(f"Exported to {done.result}")
+            return
+        if key == "storage":
+            if done.result is not None:
+                ctx.cache.storage = done.result
+            return
         if key.startswith(("delete:", "prune", "rename:", "name:", "tags:", "fav:")):
             ctx.cache.invalidate()
             if key.startswith(("delete:", "prune")):
-                ctx.cache.refresh_storage()
+                self._request_storage()
+            return
+        if key.startswith("retarget:"):
+            # model.glb was rewritten under the viewer, and the params it is
+            # described by changed with it: drop the mesh verdicts on screen and
+            # reload what is now on disk.
+            ctx.cache.invalidate()
+            self._reload_viewer()
+            stale = (done.result or {}).get("stale") or []
+            ctx.toast(
+                f"Mesh rebuilt. {len(stale)} rig artifact(s) now describe the old mesh."
+                if stale
+                else "Mesh rebuilt."
+            )
+            return
+        if key.startswith("sheet-del:"):
+            # Not covered by the "sheet:" prefix below, and _sync_viewer's
+            # early-return means nothing else refetches the list: a deleted
+            # sheet stayed on screen with live-looking buttons.
+            self._refresh_rig_side_data()
             return
         if key.startswith(("cancel:", "rerun:", "remesh:", "retry:", "rig:", "joints:", "sheet:")):
             ctx.cache.invalidate()
+            if key.startswith("sheet:"):
+                # A rendered sheet is side data, not a job-row change, so the
+                # cache invalidation above does not bring it back.
+                self._refresh_rig_side_data()
             return
         if key.startswith("pose-"):
+            if key.startswith("pose-save:") and self.viewer.pose_mode:
+                # Only now is the pose actually on disk. A failed save leaves
+                # the flag set, so the guard still stops the user walking away
+                # from work that was never written.
+                self.viewer.editor.dirty = False
             self._refresh_rig_side_data()
             ctx.cache.invalidate()
 
@@ -317,10 +386,55 @@ class App:
             if message is not None:
                 ctx.toast(*message)
             if job["status"] == "done":
-                ctx.cache.refresh_storage()
+                self._request_storage()
 
         if ctx.cache.tick(announce):
             self._sync_viewer()
+        self._check_worker()
+
+    def _check_worker(self) -> None:
+        """Say so, once, when the GPU worker dies.
+
+        Two plain attribute reads, so this is frame-loop safe. It used to be
+        reported only through ``/api/health``, which the browser build polled;
+        with the HTTP layer gone a mid-session worker crash became invisible
+        outside the log file, and every job queued afterwards simply sat there.
+        """
+        if self._fatal_reported:
+            return
+        ctx = self.app_ctx
+        fatal = self.runtime.fatal
+        if fatal is not None:
+            self._fatal_reported = True
+            ctx.state.last_error = f"The GPU worker stopped: {fatal}. Restart Warlock."
+            ctx.toast("The GPU worker stopped. Nothing new will run.", "error")
+        elif not self.runtime.alive:
+            self._fatal_reported = True
+            ctx.state.last_error = "The GPU worker is not running. Restart Warlock."
+            ctx.toast("The GPU worker is not running.", "error")
+
+    def _request_storage(self) -> None:
+        """Re-measure the data directory off the frame thread.
+
+        A recursive stat walk of every job directory is not something to do
+        between ``new_frame`` and ``render`` -- and the moment it was being
+        asked for is the worst one: the frame that should be showing a job
+        finishing. ``submit`` refuses a duplicate key, so a burst of jobs
+        completing coalesces into one walk rather than queuing several.
+        """
+        ctx = self.app_ctx
+        ctx.submit("storage", ctx.cache.measure)
+
+    def _reload_viewer(self) -> None:
+        """Re-read whatever the viewport is showing, in place.
+
+        ``_sync_viewer`` short-circuits when the path it wants is the path
+        already loaded, which is right for a selection change and wrong after a
+        retarget: model.glb was rewritten under the same name, so the file to
+        reload is the one it is convinced is current.
+        """
+        self.viewer.path = None
+        self._sync_viewer()
 
     def _sync_viewer(self) -> None:
         """Show whatever the selection implies, when it changes.
@@ -417,7 +531,7 @@ class App:
                 continue
             if event.type == pygame.VIDEORESIZE:
                 pygame.display.set_mode(
-                    (max(event.w, MIN_SIZE[0]), max(event.h, MIN_SIZE[1])),
+                    (max(event.w, self._min_size[0]), max(event.h, self._min_size[1])),
                     pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE,
                 )
                 ctx.settings.set("window_size", [event.w, event.h])
@@ -450,6 +564,12 @@ class App:
             # cannot act on the panes Paint has replaced.
             if paint_mode.handle_key(ctx, event):
                 return
+        # Both edges are dispatched, because paint's space-to-pan is a hold and
+        # needs the release. Nothing below is a hold: every one of these is a
+        # toggle or an action, so acting on the release too undoes the toggle
+        # the press just made and submits a second job for one Ctrl+Enter.
+        if event.type != pygame.KEYDOWN:
+            return
         mods = pygame.key.get_mods()
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
             from .panes import settings_2d, settings_3d

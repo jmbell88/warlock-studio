@@ -115,7 +115,12 @@ def test_the_background_is_the_literal_hex_and_not_tone_mapped(
     """three sets the clear colour straight back to sRGB; running it through
     ACES would make the panel and the viewport two different greys."""
     pixels, _gpu, _camera = _shown(gl, renderer, viewport, box_glb)
-    assert list(pixels[0, 0, :3]) == [0x14, 0x15, 0x1A]
+    expected = [
+        (envlib.BACKGROUND_HEX >> 16) & 0xFF,
+        (envlib.BACKGROUND_HEX >> 8) & 0xFF,
+        envlib.BACKGROUND_HEX & 0xFF,
+    ]
+    assert list(pixels[0, 0, :3]) == expected
 
 
 # --- environment ------------------------------------------------------------

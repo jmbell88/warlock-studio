@@ -54,7 +54,10 @@ KEY_INTENSITY = 1.5
 # value straight back to sRGB -- so what reaches the framebuffer is the literal
 # hex. Running it through ACES here would make the panel and the viewport two
 # different greys.
-BACKGROUND_HEX = 0x14151A
+# Matches tokens.BG so the viewport and the panels around it read as one
+# surface; kept literal here (not imported) because the viewer package stays
+# free of studio-UI imports.
+BACKGROUND_HEX = 0x0F1014
 
 
 def srgb_to_linear(c: float) -> float:
