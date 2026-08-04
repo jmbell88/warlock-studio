@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
-from .. import theme, widgets
+from .. import fonts, icons, theme, widgets
 from ..state import format_duration
 
 
@@ -31,34 +31,34 @@ def toolbar(ctx: Any) -> None:
     if ctx.state.mode == "2d" and paint_mode.can_edit_job(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
-        if imgui.button("Open in Paint"):
+        if imgui.button(f"{icons.BRUSH} Open in Paint"):
             paint_mode.open_job_reference(ctx, job)
         imgui.same_line()
-    if imgui.button("Frame"):
+    if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):
         viewer.frame()
     imgui.same_line()
-    if imgui.button(f"Wireframe: {'on' if state.wireframe else 'off'}"):
-        state.wireframe = not state.wireframe
+    changed, state.wireframe = widgets.toggle("Wireframe", state.wireframe, tag="wireframe")
+    if changed:
         viewer.set_wireframe(state.wireframe)
     imgui.same_line()
-    if imgui.button(f"Turntable: {'on' if state.turntable else 'off'}"):
-        state.turntable = not state.turntable
+    changed, state.turntable = widgets.toggle("Turntable", state.turntable, tag="turntable")
+    if changed:
         viewer.set_turntable(state.turntable)
     imgui.same_line()
-    if widgets.disabled_button("Screenshot...", viewer.has_model):
+    if widgets.icon_button(icons.CAMERA, "Screenshot...", enabled=viewer.has_model):
         _screenshot(ctx)
     if viewer.has_model:
         # The wheel already dollies; these exist so the control is findable at
         # all. "Frame" beside them is the reset.
         imgui.same_line()
-        if imgui.button("Zoom +"):
+        if widgets.icon_button(icons.ZOOM_IN, "Zoom in (wheel also dollies)"):
             viewer.camera.dolly(1)
         imgui.same_line()
-        if imgui.button("Zoom -"):
+        if widgets.icon_button(icons.ZOOM_OUT, "Zoom out"):
             viewer.camera.dolly(-1)
     if state.comparing:
         imgui.same_line()
-        if imgui.button("Exit comparison"):
+        if imgui.button(f"{icons.X} Exit comparison"):
             state.comparing = None
             viewer.exit_compare()
 
@@ -96,7 +96,8 @@ def progress_card(ctx: Any, eta: Any) -> None:
     if imgui.begin_child("progress-card", (-1, 92), imgui.ChildFlags_.borders.value):
         widgets.spinner()
         imgui.same_line()
-        imgui.text(str(snapshot.get("label") or "Working..."))
+        with fonts.label(imgui):
+            imgui.text(str(snapshot.get("label") or "Working..."))
         widgets.progress_bar(percent)
 
         detail = str(snapshot.get("detail") or "")

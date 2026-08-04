@@ -169,6 +169,32 @@ def test_the_inspector_builds_for_every_status(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
 
 
+def test_the_retarget_panel_builds_with_and_without_a_reconstruction(
+    app_ctx, imgui_ctx, monkeypatch
+):
+    from warlock.studio.panes import retarget_panel
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "3d"
+    job = app_ctx.cache.get(job_id)
+    # No source.glb: there is nothing to rebuild from and the section hides.
+    _frame(imgui_ctx, lambda: retarget_panel.draw(app_ctx, job))
+
+    (app_ctx.svc.job_dir(job_id) / "source.glb").write_bytes(b"x")
+    (app_ctx.svc.job_dir(job_id) / "rig.glb").write_bytes(b"x")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    rigged = app_ctx.cache.get(job_id)
+    _frame(imgui_ctx, lambda: retarget_panel.draw(app_ctx, rigged))
+
+    # And, with the binary present, the full tier list plus the custom budget's
+    # number input. Without it the pane pins itself to "raw", so this path is
+    # otherwise unreachable in a checkout that has no vendored gltfpack.
+    monkeypatch.setattr(retarget_panel, "_gltfpack_available", lambda ctx: True)
+    retarget_panel._form(app_ctx, job_id)["profile"] = "custom"
+    _frame(imgui_ctx, lambda: retarget_panel.draw(app_ctx, rigged))
+
+
 def test_the_pose_panel_builds_rigged_and_unrigged(app_ctx, imgui_ctx):
     from warlock.studio.panes import pose_panel
 
@@ -426,3 +452,33 @@ def _reference_job(app_ctx) -> str:
     app_ctx.cache.tick()
     app_ctx.state.select(job_id)
     return job_id
+
+
+def test_the_widget_kit_builds_every_new_widget(app_ctx, imgui_ctx):
+    """The Phase-2 widgets (segmented control, toggle, pill, card, buttons,
+    empty state, animated toasts) all draw through the real backend."""
+    from warlock.studio import icons, widgets
+
+    imgui, renderer = imgui_ctx
+    state = app_ctx.state
+    state.toast("hello")
+    state.toast("bad thing", level="error")
+
+    def build():
+        widgets.segmented_control("seg", [("a", "Alpha"), ("b", "Beta")], "a")
+        widgets.toggle("Wireframe", True, tag="wf")
+        widgets.icon_button(icons.CAMERA, "Screenshot", enabled=False)
+        widgets.icon_button(icons.TRASH, "Delete", danger=True)
+        widgets.status_pill("running")
+        widgets.primary_button("Generate", (-1, 34))
+        widgets.destructive_button("Delete", (150, 0))
+        widgets.labeled_combo("Art style", "", [("", "art style..."), ("x", "X")])
+        with widgets.card("c1", (300, 90)):
+            imgui.text("card body")
+        widgets.empty_state(icons.BOX, "Nothing here", "Do a thing.")
+        widgets.toasts(state, (1600, 950))
+
+    # Twice: the motion dict has state after the first frame, so the second
+    # exercises the animated paths rather than the first-sighting snap.
+    for _ in range(2):
+        _frame(imgui_ctx, build)

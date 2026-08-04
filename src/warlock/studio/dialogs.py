@@ -20,6 +20,8 @@ from typing import Any
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
+from . import widgets
+
 log = logging.getLogger(__name__)
 
 # Filters, as portable-file-dialogs wants them: name, then patterns.
@@ -27,8 +29,10 @@ GLB_FILTER = ["glTF binary (*.glb)", "*.glb"]
 IMAGE_FILTER = ["Images", "*.png *.jpg *.jpeg *.webp *.bmp"]
 ZIP_FILTER = ["Zip archive (*.zip)", "*.zip"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
+JSON_FILTER = ["JSON (*.json)", "*.json"]
 
 ARTIFACT_FILTERS = {
+    ".json": JSON_FILTER,
     ".glb": GLB_FILTER,
     ".stl": ["Stereolithography (*.stl)", "*.stl"],
     ".zip": ZIP_FILTER,
@@ -108,7 +112,9 @@ class ConfirmQueue:
             return
         imgui.text_wrapped(confirm.message)
         imgui.dummy((0, 6))
-        if imgui.button(confirm.confirm_label, (150, 0)):
+        # The action is red, the escape is neutral: two identical buttons make
+        # a destructive question a coin toss.
+        if widgets.destructive_button(confirm.confirm_label, (150, 0)):
             imgui.close_current_popup()
             self.pending = None
             if confirm.on_confirm is not None:

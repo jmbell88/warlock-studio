@@ -770,23 +770,27 @@ class App:
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
 
+        from . import icons, widgets
+
         ctx = self.app_ctx
         state = ctx.state
         # Neither Home nor a mode switch is destructive: Paint's documents are
         # still open when you come back, because it is a mode rather than a
         # takeover. Only quitting and closing a tab can lose pixels, and both
         # ask.
-        if imgui.button("Home"):
+        if imgui.button(f"{icons.HOUSE} Home"):
             state.landing = True
             state.landing_view = "choose"
         imgui.same_line()
-        for mode, label in (("2d", "2D reference"), ("3d", "3D asset"), ("paint", "Paint")):
-            if imgui.radio_button(label, state.mode == mode):
-                state.mode = mode
-                ctx.settings.set("mode", mode)
-                self._sync_viewer()
-            imgui.same_line()
-        imgui.new_line()
+        selected = widgets.segmented_control(
+            "mode-seg",
+            [("2d", "2D reference"), ("3d", "3D asset"), ("paint", "Paint")],
+            state.mode,
+        )
+        if selected != state.mode:
+            state.mode = selected
+            ctx.settings.set("mode", selected)
+            self._sync_viewer()
 
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
