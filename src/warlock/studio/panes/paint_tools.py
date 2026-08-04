@@ -12,11 +12,32 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint, paint_mode, paint_state, theme, widgets
+from .. import icons, paint, paint_mode, paint_state, theme, widgets
 from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 
-# Three across, so the grid stays inside the 340-pixel sidebar.
-COLUMNS = 3
+# Icon-only, five across: what every paint program's toolbox looks like. The
+# name and shortcut live in the tooltip -- three columns of bare labels
+# truncated ("Ellipse select" in a 104px button) and anything wider is taller,
+# which the canvas pays for.
+COLUMNS = 5
+
+TOOL_ICONS = {
+    "brush": icons.BRUSH,
+    "eraser": icons.ERASER,
+    "fill": icons.PAINT_BUCKET,
+    "gradient": icons.BLEND,
+    "blur": icons.SPRAY_CAN,
+    "smudge": icons.HAND,
+    "line": icons.SLASH,
+    "rect": icons.SQUARE,
+    "ellipse": icons.CIRCLE,
+    "select": icons.SQUARE_DASHED,
+    "select_ellipse": icons.EGG,
+    "lasso": icons.LASSO_SELECT,
+    "wand": icons.WAND,
+    "move": icons.MOVE,
+    "eyedropper": icons.PIPETTE,
+}
 
 SYMMETRY_LABELS = (("none", "off"), ("x", "left / right"), ("y", "top / bottom"), ("xy", "both"))
 BLEND_LABELS = tuple((mode, mode) for mode in paint.BLEND_MODES)
@@ -44,7 +65,8 @@ def _grid(state: Any) -> None:
             imgui.push_style_color(
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
-        if imgui.button(f"{label}##tool{key}", (width, 26)):
+        icon = TOOL_ICONS.get(key) or label[:1]
+        if imgui.button(f"{icon}##tool{key}", (width, 30)):
             state.tool = key
         if selected:
             imgui.pop_style_color()

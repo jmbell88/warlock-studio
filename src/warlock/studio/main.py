@@ -159,7 +159,19 @@ class App:
         ctx = self.app_ctx
         ctx.guidance = svc_system.guidance_catalog()
         ctx.sheet_options = svc_sheets.sheet_options()
-        ctx.base_models = [(k, spec.label) for k, spec in models.BASE_MODELS.items()]
+        # Marked rather than hidden when weights are absent: the combo listing
+        # every registered model regardless meant picking one whose weights
+        # were never downloaded and learning at job-failure time, despite
+        # doctor knowing at startup.
+        missing = {
+            check.name.removeprefix("image model: ")
+            for check in (self.runtime.checks or [])
+            if check.name.startswith("image model: ") and not check.ok
+        }
+        ctx.base_models = [
+            (k, f"{spec.label} - weights missing" if spec.label in missing else spec.label)
+            for k, spec in models.BASE_MODELS.items()
+        ]
         ctx.style_loras = [("", "no style LoRA")] + [
             (k, spec.label) for k, spec in models.STYLE_LORAS.items()
         ]
@@ -313,7 +325,10 @@ class App:
             return
         if key == "submit":
             ctx.cache.invalidate()
-            ctx.toast("Queued.")
+            # Say where in line it landed: five rapid submits used to produce
+            # five identical "Queued." toasts and no sense of depth.
+            waiting = sum(1 for j in ctx.cache.jobs if j.get("status") == "queued")
+            ctx.toast("Queued." if waiting <= 1 else f"Queued - {waiting} jobs in line.")
             return
         if key.startswith("save:") or key.startswith("bake:") or key.startswith("sheet-save:"):
             if done.result is not None:
@@ -670,6 +685,9 @@ class App:
             self._overlays(viewport)
             return
         self._mode_switch()
+        from .panes import overlay
+
+        overlay.doctor_banner(ctx)
         if ctx.state.mode == "paint":
             self._paint_workspace()
             imgui.end()
@@ -841,25 +859,134 @@ class App:
             ctx.settings.set("mode", selected)
             self._sync_viewer()
 
-        # Right-aligned worker-health dot; the seed of the diagnostics surface.
+        # Right-aligned health dot: green when everything passed, amber when a
+        # non-fatal check failed, red for a fatal one or a dead worker. Click
+        # for the full diagnostics list -- the non-fatal checks (missing
+        # weights, gltfpack, CUDA) used to be visible only in the log file.
         from . import theme
         from .tokens import sp
 
-        imgui.same_line(max(imgui.get_window_width() - sp(34), 0))
+        checks = list(getattr(ctx.runtime, "checks", []) or [])
+        if state.last_error is not None or any(c.fatal and not c.ok for c in checks):
+            colour = theme.ERR
+        elif any(not c.ok for c in checks):
+            colour = theme.WARN
+        else:
+            colour = theme.OK
+        from . import widgets
+
+        imgui.same_line(max(imgui.get_window_width() - sp(70), 0))
+        if widgets.icon_button("?", "Keyboard shortcuts"):
+            imgui.open_popup("shortcuts")
+        self._shortcuts_popup()
+        imgui.same_line()
         pos = imgui.get_cursor_screen_pos()
-        healthy = state.last_error is None
         centre_y = pos.y + imgui.get_frame_height() * 0.5
         imgui.get_window_draw_list().add_circle_filled(
-            (pos.x + sp(8), centre_y),
-            sp(4.5),
-            imgui.get_color_u32(theme.rgba(theme.OK if healthy else theme.ERR)),
-            16,
+            (pos.x + sp(8), centre_y), sp(4.5), imgui.get_color_u32(theme.rgba(colour)), 16
         )
-        imgui.invisible_button("##health", (sp(16), imgui.get_frame_height()))
+        if imgui.invisible_button("##health", (sp(16), imgui.get_frame_height())):
+            imgui.open_popup("diagnostics")
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "All systems go." if healthy else str(state.last_error)
+            imgui.set_tooltip("System status - click for details")
+        self._diagnostics_popup(checks)
+
+    # Every binding the app answers to, in one place the user can find. The
+    # tuples are (keys, what), grouped; paint's letters come from TOOL_KEYS so
+    # this list cannot drift from the handler.
+    def _shortcuts_popup(self) -> None:
+        from imgui_bundle import imgui
+
+        from . import widgets
+        from .tokens import sp
+
+        if not imgui.begin_popup("shortcuts"):
+            return
+
+        def table(title: str, rows: list[tuple[str, str]]) -> None:
+            widgets.section(title)
+            if imgui.begin_table(f"keys/{title}", 2):
+                for keys, what in rows:
+                    imgui.table_next_column()
+                    widgets.muted(keys)
+                    imgui.table_next_column()
+                    imgui.text(what)
+                imgui.end_table()
+
+        imgui.dummy((sp(420), 0))
+        table(
+            "Everywhere",
+            [
+                ("Ctrl+Enter", "Generate / Make 3D"),
+                ("F", "Frame the model"),
+                ("W", "Toggle wireframe"),
+                ("S", "Toggle turntable"),
+                ("Esc", "Exit comparison / pose edit"),
+            ],
+        )
+        from .paint_mode import TOOL_KEYS
+
+        tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
+        table(
+            "Paint",
+            [
+                (tools, "Pick a tool (hover a tool for its letter)"),
+                ("X", "Swap colours"),
+                ("[ / ]", "Brush size (Shift: hardness)"),
+                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+                ("Ctrl+Shift+E", "Export PNG"),
+                ("Ctrl+N / O / W", "New / open / close"),
+                ("Ctrl+A / D", "Select all / deselect"),
+                ("Ctrl+C / X / V", "Copy / cut / paste"),
+                ("Ctrl+Shift+V", "Paste as a layer"),
+                ("Ctrl+Shift+I", "Invert the selection"),
+                ("Ctrl+T", "Free transform"),
+                ("Ctrl+Tab", "Next tab"),
+                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+                ("Space / middle drag", "Pan (wheel zooms)"),
+            ],
+        )
+        imgui.end_popup()
+
+    def _diagnostics_popup(self, checks: list[Any]) -> None:
+        from imgui_bundle import imgui
+
+        from . import theme, widgets
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        imgui.set_next_window_size((sp(460), 0))
+        if not imgui.begin_popup("diagnostics"):
+            return
+        widgets.section("Diagnostics")
+        for check in checks:
+            colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
+            widgets.text_colored(colour, "o" if check.ok else "x")
+            imgui.same_line()
+            imgui.text(check.name)
+            imgui.same_line()
+            widgets.muted("-")
+            imgui.same_line()
+            imgui.push_style_color(
+                imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED))
             )
+            imgui.text_wrapped(str(check.detail))
+            imgui.pop_style_color()
+        if not checks:
+            widgets.muted("No checks ran.")
+        imgui.separator()
+        if imgui.button("Copy details"):
+            imgui.set_clipboard_text(
+                "\n".join(
+                    f"{'ok' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in checks
+                )
+            )
+        imgui.same_line()
+        log_path = Path(ctx.runtime.config.data_dir) / "warlock.log"
+        if widgets.disabled_button("Open the log", log_path.exists()):
+            ctx.submit("open-log", os.startfile, str(log_path))
+        imgui.end_popup()
 
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
@@ -881,7 +1008,6 @@ class App:
             imgui.ChildFlags_.borders.value,
             imgui.WindowFlags_.no_scroll_with_mouse.value,
         ):
-            overlay.doctor_banner(ctx)
             overlay.toolbar(ctx)
             image_pos = imgui.get_cursor_screen_pos()
             avail = imgui.get_content_region_avail()

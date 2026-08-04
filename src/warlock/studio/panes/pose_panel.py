@@ -25,7 +25,18 @@ def draw(ctx: Any, job: Any) -> None:
     if not widgets.header("Pose"):
         return
     if not rigged:
-        widgets.muted("Rig this mesh first.")
+        # Every other rig control hides itself when Blender is missing, so
+        # "rig this mesh first" was instructing the user to press a button that
+        # is not on screen and cannot be.
+        if not ctx.rigging_available:
+            widgets.muted("Posing needs Blender, which is not installed.")
+            return
+        widgets.muted("Posing needs a rig.")
+        rig_key = f"rig:{job['id']}"
+        if widgets.disabled_button("Rig this mesh", not ctx.busy(rig_key)):
+            ctx.submit(
+                rig_key, svc_rig.create_rig, ctx.svc, job["id"], template=ctx.rig_default or None
+            )
         return
 
     viewer = ctx.viewer
@@ -154,8 +165,10 @@ def _save(ctx: Any, job: Any, viewer: Any) -> None:
             # Saving under the same pose replaces it, rather than leaving two
             # called "idle" that differ by one shoulder.
             payload["id"] = existing
+        # Dirty is cleared when the save *lands*, not here: clearing it at
+        # submit time means a failed write leaves the editor claiming the pose
+        # is safe, and the next Escape or selection change discards it silently.
         ctx.submit(f"pose-save:{job_id}", svc_rig.save_pose, ctx.svc, job_id, payload)
-        viewer.editor.dirty = False
 
     ctx.prompts.ask(dialogs.Prompt(title="Name this pose", label="Name", on_accept=accept))
 

@@ -146,15 +146,25 @@ def progress_card(ctx: Any, eta: Any) -> None:
 
 
 def doctor_banner(ctx: Any) -> None:
-    """Only the checks that failed, and only until they are dismissed."""
+    """Only the checks that failed, and only until they are dismissed.
+
+    Drawn from the top strip so it is visible in every mode -- it used to live
+    inside the viewport child, which made a dead worker invisible from Paint.
+    The text wraps: multiple failures are a paragraph, not one clipped line.
+    """
     if ctx.state.last_error is None:
         return
     imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.25)))
-    if imgui.begin_child("doctor", (-1, 40), imgui.ChildFlags_.borders.value):
+    flags = imgui.ChildFlags_.borders.value | imgui.ChildFlags_.auto_resize_y.value
+    if imgui.begin_child("doctor", (-1, 0), flags):
         if imgui.small_button("Dismiss"):
             ctx.state.last_error = None
         imgui.same_line()
-        widgets.text_colored(theme.ERR, ctx.state.last_error)
+        if imgui.small_button("Copy details"):
+            imgui.set_clipboard_text(str(ctx.state.last_error))
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+        imgui.text_wrapped(str(ctx.state.last_error))
+        imgui.pop_style_color()
     imgui.end_child()
     imgui.pop_style_color()
 

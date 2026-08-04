@@ -266,6 +266,30 @@ def header(label: str, default_open: bool = True, persist_key: str | None = None
     return opened
 
 
+def tab_bar(bar_id: str, tabs: list[tuple[str, Any]]) -> None:
+    """Labelled tabs over draw callables.
+
+    Under FORCE_SECTIONS_OPEN every tab's content is drawn sequentially, each
+    inside its own ``push_id`` -- the smoke test exists to build every section,
+    and a tab bar that only builds the selected tab would quietly exempt the
+    other two from it.
+    """
+    if FORCE_SECTIONS_OPEN:
+        for label, draw_fn in tabs:
+            imgui.push_id(f"{bar_id}/{label}")
+            draw_fn()
+            imgui.pop_id()
+        return
+    if not imgui.begin_tab_bar(bar_id):
+        return
+    for label, draw_fn in tabs:
+        opened, _ = imgui.begin_tab_item(label, None, 0)
+        if opened:
+            draw_fn()
+            imgui.end_tab_item()
+    imgui.end_tab_bar()
+
+
 def disabled_button(label: str, enabled: bool, size: tuple[float, float] = (0, 0)) -> bool:
     """A button that is visibly unavailable rather than absent.
 

@@ -17,7 +17,7 @@ from ...service import jobs as svc_jobs
 from ...service import system as svc_system
 from .. import theme, widgets
 from ..state import format_duration
-from . import pose_panel, sheet_panel
+from . import pose_panel, retarget_panel, sheet_panel
 
 # Matches the library card's thumbnail, so the two read as the same kind of
 # object rather than as two different image widgets.
@@ -25,22 +25,52 @@ THUMB_SIZE = 96
 
 
 def draw(ctx: Any) -> None:
+    from .. import icons
+
     job = ctx.job()
     if job is None:
-        widgets.muted("Select an asset.")
+        widgets.empty_state(icons.BOX, "Select an asset.", "Its details and exports live here.")
         return
 
+    # Identity stays above the tabs: whatever tab is open, the header answers
+    # "what am I looking at". Everything below it moved from one nine-header
+    # scroll column into three tabs, because reaching the sprite sheet on a
+    # rigged mesh meant scrolling past the whole pose editor.
     _header(ctx, job)
     _meta(ctx, job)
     if job.get("status") == "error":
         _error(ctx, job)
+
+    if ctx.state.mode == "3d":
+        widgets.tab_bar(
+            "inspector-tabs",
+            [
+                ("Details", lambda: _details_tab(ctx, job)),
+                ("Rig && Pose", lambda: _rig_tab(ctx, job)),
+                ("Export", lambda: _downloads(ctx, job)),
+            ],
+        )
+    else:
+        widgets.tab_bar(
+            "inspector-tabs",
+            [
+                ("Details", lambda: _details_tab(ctx, job)),
+                ("Export", lambda: _downloads(ctx, job)),
+            ],
+        )
+
+
+def _details_tab(ctx: Any, job: Any) -> None:
     _settings(ctx, job)
     _reference(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)
-        pose_panel.draw(ctx, job)
-        sheet_panel.draw(ctx, job)
-    _downloads(ctx, job)
+
+
+def _rig_tab(ctx: Any, job: Any) -> None:
+    retarget_panel.draw(ctx, job)
+    pose_panel.draw(ctx, job)
+    sheet_panel.draw(ctx, job)
 
 
 # --- pieces -----------------------------------------------------------------
@@ -206,11 +236,20 @@ def _quality(ctx: Any, job: Any) -> None:
 
 
 def _downloads(ctx: Any, job: Any) -> None:
-    if not widgets.header("Downloads"):
-        return
+    """The Export tab: a two-column grid of artifacts.
+
+    A blocked artifact keeps its button and explains itself in a tooltip --
+    the old layout wrote the reason as an indented line under each of eight
+    disabled buttons, which for a plain reference job was a column of noise.
+    """
+    from .. import icons
+
+    widgets.section("Downloads")
     job_id = job["id"]
     files = set(job.get("files") or [])
     has_mesh = "model.glb" in files
+    if not imgui.begin_table("downloads", 2):
+        return
     for name, label in widgets.ARTIFACTS:
         # job["files"] is the sanctioned answer; a raw exists() check here used
         # to re-enable buttons the service would then refuse.
@@ -219,13 +258,17 @@ def _downloads(ctx: Any, job: Any) -> None:
         blocked = _why_blocked(ctx, name, ready, derivable)
         key = f"save:{job_id}:{name}"
         busy = ctx.busy(key)
+        imgui.table_next_column()
         if busy:
             widgets.spinner()
             imgui.same_line()
-        if widgets.disabled_button(f"{label}##{name}", not blocked and not busy, (-1, 0)):
+        if widgets.disabled_button(
+            f"{icons.DOWNLOAD} {label}##{name}", not blocked and not busy, (-1, 0)
+        ):
             ctx.save_artifact(job_id, name)
-        if blocked:
-            widgets.muted(f"   {blocked}")
+        if blocked and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+            imgui.set_tooltip(blocked)
+    imgui.end_table()
 
 
 def _why_blocked(ctx: Any, name: str, ready: bool, derivable: bool) -> str | None:

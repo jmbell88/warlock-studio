@@ -16,8 +16,9 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, theme, widgets
+from .. import dialogs, icons, theme, widgets
 from ..state import ACTIONS, primary_action
+from ..tokens import sp
 
 CARD_HEIGHT = 92.0
 THUMB_SIZE = 72.0
@@ -29,13 +30,19 @@ def draw(ctx: Any) -> None:
     jobs = ctx.cache.visible(ctx.state.filters)
     if ctx.cache.error:
         widgets.text_colored(theme.ERR, "Could not read the job list.")
-    if not jobs:
-        widgets.muted("Nothing here yet." if not ctx.cache.jobs else "Nothing matches.")
     # Leave room for the footer below: the bulk bar only exists when something
     # is checked, so the reservation has to change with it or the list either
     # overlaps the footer or floats above a gap.
-    height = -96 if ctx.state.checked else -34
+    height = -sp(96) if ctx.state.checked else -sp(34)
     if imgui.begin_child("library-list", (0, height)):
+        if not jobs:
+            widgets.empty_state(
+                icons.IMAGE,
+                "Nothing here yet." if not ctx.cache.jobs else "Nothing matches.",
+                "Generated references and meshes appear here."
+                if not ctx.cache.jobs
+                else "Loosen the filters above.",
+            )
         for job in jobs:
             _card(ctx, job)
         _load_more(ctx)
@@ -89,10 +96,15 @@ def _filters(ctx: Any) -> None:
         width=110,
     )
     imgui.same_line()
-    changed, favourites = imgui.checkbox("*", filters.favorites_only)
-    if changed:
-        filters.favorites_only = favourites
-    widgets.help_marker("Favourites only")
+    # A star that lights up, not a checkbox labelled "*".
+    lit = filters.favorites_only
+    if lit:
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
+        imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.WARN, 0.2)))
+    if widgets.icon_button(icons.STAR, "Favourites only"):
+        filters.favorites_only = not filters.favorites_only
+    if lit:
+        imgui.pop_style_color(2)
 
 
 # --- cards ------------------------------------------------------------------
@@ -104,12 +116,21 @@ def _card(ctx: Any, job: Any) -> None:
     selected = state.selected == job_id
     imgui.push_id(job_id)
     if selected:
-        imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.EDGE)))
-    if imgui.begin_child("card", (0, CARD_HEIGHT), imgui.ChildFlags_.borders.value):
+        imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    origin = imgui.get_cursor_screen_pos()
+    if imgui.begin_child("card", (0, sp(CARD_HEIGHT)), imgui.ChildFlags_.borders.value):
         _card_body(ctx, job)
     imgui.end_child()
     if selected:
         imgui.pop_style_color()
+        # The accent edge is the selection mark; a raised fill alone reads as
+        # hover, not choice.
+        imgui.get_window_draw_list().add_rect_filled(
+            origin,
+            (origin.x + sp(3), origin.y + sp(CARD_HEIGHT)),
+            imgui.get_color_u32(theme.rgba(theme.ACCENT)),
+            sp(2),
+        )
     # The whole card selects, not just a title: the card *is* the affordance.
     if imgui.is_item_clicked():
         select(ctx, job_id)
@@ -122,9 +143,9 @@ def _card_body(ctx: Any, job: Any) -> None:
     if ctx.textures is not None and "thumb.png" in (job.get("files") or []):
         texture = ctx.textures.get(job_id, ctx.job_dir(job_id) / "thumb.png")
     if texture is not None:
-        imgui.image(widgets.texture_ref(texture), (THUMB_SIZE, THUMB_SIZE))
+        imgui.image(widgets.texture_ref(texture), (sp(THUMB_SIZE), sp(THUMB_SIZE)))
     else:
-        imgui.dummy((THUMB_SIZE, THUMB_SIZE))
+        imgui.dummy((sp(THUMB_SIZE), sp(THUMB_SIZE)))
     imgui.same_line()
 
     # begin_group returns nothing -- the pair is unconditional, and wrapping it
@@ -135,6 +156,12 @@ def _card_body(ctx: Any, job: Any) -> None:
     widgets.status_pill(job["status"])
     imgui.same_line()
     widgets.quality_badge(job)
+    if job["status"] == "queued":
+        # Where in line it is: the queue used to be invisible past the pill.
+        waiting = [j["id"] for j in reversed(ctx.cache.jobs) if j.get("status") == "queued"]
+        if job_id in waiting:
+            imgui.same_line()
+            widgets.muted(f"#{waiting.index(job_id) + 1} in queue")
     if job.get("parent_id"):
         imgui.same_line()
         widgets.muted("| from a reference")
@@ -153,22 +180,33 @@ def _card_actions(ctx: Any, job: Any) -> None:
     if action is not None and imgui.small_button(ACTIONS[action]):
         run_action(ctx, job, action)
     imgui.same_line()
-    if imgui.small_button("..."):
+    if imgui.small_button(icons.ELLIPSIS):
         imgui.open_popup("more")
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("More actions")
     imgui.same_line()
     checked = job["id"] in ctx.state.checked
     changed, value = imgui.checkbox("##pick", checked)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Select for bulk actions")
     if changed and value != checked:
         ctx.state.toggle_check(job["id"])
     imgui.same_line()
-    if imgui.small_button("*" if job.get("favorite") else "-"):
+    favourite = bool(job.get("favorite"))
+    if favourite:
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
+    if imgui.small_button(icons.STAR):
         ctx.submit(
             f"fav:{job['id']}",
             svc_jobs.update_job,
             ctx.svc,
             job["id"],
-            {"favorite": not job.get("favorite")},
+            {"favorite": not favourite},
         )
+    if favourite:
+        imgui.pop_style_color()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Unfavourite" if favourite else "Favourite")
     _overflow(ctx, job)
 
 
@@ -188,8 +226,14 @@ def _overflow(ctx: Any, job: Any) -> None:
                 ),
             )
         )
+    if job.get("params") and imgui.menu_item("Copy settings to form", "", False)[0]:
+        _copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
-        if imgui.menu_item("Reroll", "", False)[0]:
+        # A hand-made reference has no generator behind it, so there is nothing
+        # a new seed could change; the service refuses it, and offering the
+        # menu item anyway only buys the user an error toast.
+        rerollable = not (job["kind"] == "image" and job.get("stage") == "reference")
+        if rerollable and imgui.menu_item("Reroll", "", False)[0]:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
         if "input.png" in files and imgui.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
@@ -197,7 +241,13 @@ def _overflow(ctx: Any, job: Any) -> None:
         if imgui.menu_item("Compare with selected", "", False)[0]:
             compare(ctx, job_id)
         if ctx.rigging_available and imgui.menu_item("Rig", "", False)[0]:
-            ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id)
+            ctx.submit(
+                f"rig:{job_id}",
+                svc_rig.create_rig,
+                ctx.svc,
+                job_id,
+                template=_skeleton(ctx),
+            )
     imgui.separator()
     if imgui.menu_item("Delete", "", False)[0]:
         ctx.confirms.ask(
@@ -227,6 +277,32 @@ def select(ctx: Any, job_id: str) -> None:
         ctx.state.source_job = job_id
 
 
+def _copy_settings(ctx: Any, job: Any) -> None:
+    """Load a job's recipe back into the 2D form, so it can be varied.
+
+    Reroll re-runs a job as it was; this is the other half -- start from what
+    it used and change one thing. Prompt history only ever restored the prompt
+    text, which left every guidance field, the model, the LoRA and the
+    conditioning strengths behind.
+    """
+    from ..state import form_from_params
+
+    ctx.state.form_2d = form_from_params(job.get("params") or {})
+    ctx.state.mode = "2d"
+    ctx.toast("Settings copied to the form.")
+
+
+def _skeleton(ctx: Any) -> str | None:
+    """The skeleton the 3D pane's combo is showing.
+
+    Rigging an existing mesh used to pass nothing, so the combo applied only
+    when a rig was requested as part of generating -- picking "quadruped" and
+    then rigging a finished mesh silently used the config default. None means
+    "no explicit choice", which is what the service already resolves.
+    """
+    return (ctx.state.form_3d or {}).get("rig_template") or None
+
+
 def run_action(ctx: Any, job: Any, action: str) -> None:
     job_id = job["id"]
     if action == "cancel":
@@ -238,7 +314,7 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         ctx.state.source_job = job_id
         ctx.state.mode = "3d"
     elif action == "rig":
-        ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id)
+        ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id, template=_skeleton(ctx))
     elif action == "open":
         select(ctx, job_id)
         ctx.state.mode = "3d"

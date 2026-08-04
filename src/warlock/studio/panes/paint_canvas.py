@@ -22,8 +22,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint_mode, paint_state, theme, widgets
+from .. import icons, paint_mode, paint_state, theme, widgets
 from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..tokens import sp
 from . import paint_textures
 
 # Marching ants: dash length in screen pixels and how fast the pattern crawls.
@@ -54,6 +55,19 @@ def draw(ctx: Any) -> None:
 
 def _file_row(ctx: Any, state: Any) -> None:
     tab = state.active
+    # Undo and redo live beside the canvas they act on; the bridge panel's
+    # pair was three panels away from the stroke it reversed.
+    doc = tab.doc if tab is not None else None
+    if widgets.icon_button(
+        icons.UNDO, "Undo (Ctrl+Z)", enabled=doc is not None and doc.history.can_undo
+    ):
+        doc.undo()
+    imgui.same_line()
+    if widgets.icon_button(
+        icons.REDO, "Redo (Ctrl+Y)", enabled=doc is not None and doc.history.can_redo
+    ):
+        doc.redo()
+    imgui.same_line()
     if imgui.button("New"):
         imgui.open_popup("new-canvas")
     _new_popup(ctx)
@@ -203,7 +217,13 @@ def _tab_bar(ctx: Any, state: Any) -> None:
 
 def _canvas(ctx: Any, state: Any, tab: Any) -> None:
     flags = imgui.WindowFlags_.no_scroll_with_mouse.value | imgui.WindowFlags_.no_scrollbar.value
-    if imgui.begin_child("paint-canvas", (0, 0), imgui.ChildFlags_.borders.value, flags):
+    hovered = False
+    origin = None
+    # A positive height, never a bottom offset: with little room left a "-26"
+    # child collapses to nothing and the canvas (and its texture uploads)
+    # silently stops being drawn.
+    height = max(imgui.get_content_region_avail().y - sp(26), sp(16))
+    if imgui.begin_child("paint-canvas", (0, height), imgui.ChildFlags_.borders.value, flags):
         origin = imgui.get_cursor_screen_pos()
         avail = imgui.get_content_region_avail()
         region = (max(avail.x, 16.0), max(avail.y, 16.0))
@@ -219,6 +239,23 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
         _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
     imgui.end_child()
+    _status_bar(state, tab, origin, hovered)
+
+
+def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
+    """Zoom, cursor position, active tool, document size -- the numbers a
+    paint program keeps under the canvas, which used to live in the far-right
+    bridge panel or nowhere."""
+    view = tab.view
+    parts = [f"{view.zoom * 100:.0f}%"]
+    if hovered and origin is not None:
+        mouse = imgui.get_mouse_pos()
+        px, py = paint_state.to_image(view, (origin.x, origin.y), mouse.x, mouse.y)
+        parts.append(f"{int(px)}, {int(py)}")
+    tool = next((label for key, label, _ in paint_state.TOOLS if key == state.tool), state.tool)
+    parts.append(tool)
+    parts.append(f"{tab.doc.size[0]} x {tab.doc.size[1]}")
+    widgets.muted("   ".join(parts))
 
 
 # --- input ------------------------------------------------------------------
@@ -457,8 +494,27 @@ def _drag(state: Any, tab: Any, point) -> None:
     state.last_point = point
 
 
+def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
+    """The pixel rectangle a marquee drag covers, whichever way it was drawn.
+
+    Ordering the corners has to come *before* rounding them. Flooring the
+    anchor and ceiling the release point rounds outward only while the drag
+    runs down and to the right; reverse the drag and the same two rules round
+    inward on both corners, so an identical gesture selects a smaller rectangle
+    depending on the direction it was made in.
+    """
+    x0, x1 = sorted((float(anchor[0]), float(point[0])))
+    y0, y1 = sorted((float(anchor[1]), float(point[1])))
+    return (
+        int(math.floor(x0)),
+        int(math.floor(y0)),
+        int(math.ceil(x1)),
+        int(math.ceil(y1)),
+    )
+
+
 def _release(ctx: Any, state: Any, tab: Any, point) -> None:
-    from ..paint import SelectionMask, normalise_rect
+    from ..paint import SelectionMask
 
     doc = tab.doc
     anchor = state.drag_anchor or point
@@ -476,10 +532,7 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             filled=state.shape_filled,
         )
     elif kind == "marquee":
-        rect = normalise_rect(
-            (int(math.floor(anchor[0])), int(math.floor(anchor[1]))),
-            (int(math.ceil(point[0])), int(math.ceil(point[1]))),
-        )
+        rect = marquee_rect(anchor, point)
         if rect[2] > rect[0] and rect[3] > rect[1]:
             build = (
                 SelectionMask.from_ellipse

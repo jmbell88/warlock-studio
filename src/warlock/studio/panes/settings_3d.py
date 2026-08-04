@@ -126,11 +126,15 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     source = ctx.cache.get(state.source_job)
     problems = validate(source)
     for problem in problems:
-        widgets.text_colored(theme.ERR, problem)
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+        imgui.text_wrapped(problem)
+        imgui.pop_style_color()
     widgets.muted("Roughly two minutes of GPU.")
     busy = ctx.busy("submit")
-    if widgets.disabled_button("Make 3D", not problems and not busy, (-1, 34)):
+    if widgets.primary_button("Make 3D", (-1, 34), enabled=not problems and not busy):
         promote(ctx, source, form)
+    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+        imgui.set_tooltip("Ctrl+Enter")
 
 
 def validate(source: dict[str, Any] | None) -> list[str]:

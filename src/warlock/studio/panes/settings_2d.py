@@ -45,14 +45,38 @@ def draw(ctx: Any) -> None:
     _history(ctx, form)
     _preview(ctx)
 
-    widgets.section("Guidance")
-    for field in ("category", "genre", "setting", "art_style"):
-        form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field))
-    for field in ("material", "condition", "palette", "mood", "silhouette", "emissive", "rarity"):
-        form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field))
+    _guidance(ctx, form)
+    _reference(ctx, form)
+    _advanced(ctx, form)
+    _run_controls(ctx, form)
+    _submit(ctx, form)
+
+
+# The eleven optional taxonomies, grouped by what they describe. Grouping and
+# per-field labels are the fix for the old column of identical unlabelled
+# combos, where a chosen value ("worn", "brass") no longer said which question
+# it answered.
+GUIDANCE_GROUPS = (
+    ("Subject", ("category", "genre", "setting", "silhouette")),
+    ("Style", ("art_style", "palette", "mood", "rarity")),
+    ("Surface", ("material", "condition", "emissive")),
+)
+
+
+def _guidance(ctx: Any, form: dict[str, Any]) -> None:
+    for title, fields in GUIDANCE_GROUPS:
+        widgets.section(title)
+        if imgui.begin_table(f"guidance/{title}", 2):
+            for field in fields:
+                imgui.table_next_column()
+                widgets.field_label(field.replace("_", " "))
+                imgui.set_next_item_width(-1)
+                form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field), 0)
+            imgui.end_table()
     # Narrowed to leave room for the marker: a full-width combo pushes it off
     # the panel, and the note is the whole reason this control is not the 3D
     # pane's platform.
+    widgets.field_label("platform detail")
     form["platform"] = widgets.combo(
         "##g_platform", form["platform"], _options(ctx, "platform"), width=-30
     )
@@ -61,21 +85,29 @@ def draw(ctx: Any) -> None:
         "the 3D pane's own platform control."
     )
 
-    _reference(ctx, form)
-    _advanced(ctx, form)
-    _submit(ctx, form)
-
 
 # --- pieces -----------------------------------------------------------------
+
+
+def _preset_matches(form: dict[str, Any], preset: dict[str, Any]) -> bool:
+    fields = {k: v for k, v in (preset.get("fields") or {}).items() if k in form}
+    if any(form.get(k) != v for k, v in fields.items()):
+        return False
+    return not preset.get("prompt") or form.get("prompt") == preset["prompt"]
 
 
 def _presets(ctx: Any, form: dict[str, Any]) -> None:
     presets = ctx.guidance.get("presets") or []
     if not presets:
         return
-    options = [("", "preset...")] + [(p["key"], p["label"]) for p in presets]
-    chosen = widgets.combo("##preset", "", options)
-    if not chosen:
+    # The combo *shows* the preset the form currently equals, or "Custom": the
+    # old write-only picker showed "preset..." forever, so applying one left no
+    # trace of which one the form was wearing.
+    current = next((p["key"] for p in presets if _preset_matches(form, p)), "")
+    options = [("", "Custom")] + [(p["key"], p["label"]) for p in presets]
+    widgets.field_label("preset")
+    chosen = widgets.combo("##preset", current, options)
+    if not chosen or chosen == current:
         return
     preset = next((p for p in presets if p["key"] == chosen), None)
     if preset is None:
@@ -99,9 +131,18 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
     """
     saved = profiles.list_profiles(ctx.settings)
     if saved:
-        options = [("", "profile...")] + [(name, name) for name in sorted(saved)]
-        chosen = widgets.combo("##profile", "", options, width=-84)
-        if chosen and chosen in saved:
+        # Shows the active profile while the form still matches it, and
+        # "Custom" once it has been edited past it.
+        active = profiles.get_active(ctx.settings)
+        current = (
+            active
+            if active in saved and all(form.get(k) == v for k, v in saved[active].items())
+            else ""
+        )
+        options = [("", "Custom")] + [(name, name) for name in sorted(saved)]
+        widgets.field_label("profile")
+        chosen = widgets.combo("##profile", current, options, width=-84)
+        if chosen and chosen != current and chosen in saved:
             profiles.apply(form, saved[chosen])
             profiles.set_active(ctx.settings, chosen)
             ctx.state.preview_dirty_at = time.monotonic()
@@ -154,15 +195,20 @@ def _preview(ctx: Any) -> None:
     """The composed prompt, recomputed off-thread after a typing pause."""
     state = ctx.state
     if state.preview_dirty_at and time.monotonic() - state.preview_dirty_at > PREVIEW_DEBOUNCE:
-        state.preview_dirty_at = 0.0
         raw = {k: v for k, v in state.form_2d.items() if v not in ("", None)}
-        ctx.submit(
+        # Only stop asking once the request was actually taken. ``submit``
+        # refuses a key that is already in flight, and the first preview runs a
+        # CLIP tokenizer -- so clearing the flag unconditionally dropped the
+        # edit that arrived during that first run, and the composition on
+        # screen stayed stale until the user typed again.
+        if ctx.submit(
             "preview",
             svc_system.prompt_preview,
             ctx.svc,
             {**raw, "prompt": None},
             state.form_2d["prompt"],
-        )
+        ):
+            state.preview_dirty_at = 0.0
     preview = state.preview
     if not preview:
         return
@@ -186,7 +232,7 @@ def _reference(ctx: Any, form: dict[str, Any]) -> None:
     the LoRA strength slider without a LoRA: a control with nothing to act on
     is a control that cannot do anything.
     """
-    if not widgets.header("Reference", default_open=False):
+    if not widgets.header("Reference", default_open=False, persist_key="2d/reference"):
         return
 
     path = form["ref_path"]
@@ -258,7 +304,7 @@ def _range(ctx: Any, key: str, low: float, high: float) -> tuple[float, float]:
 
 
 def _advanced(ctx: Any, form: dict[str, Any]) -> None:
-    if not widgets.header("Advanced", default_open=False):
+    if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
         return
     form["base_model"] = widgets.combo("Model", form["base_model"], ctx.base_models)
     form["style_lora"] = widgets.combo("Style LoRA", form["style_lora"], ctx.style_loras)
@@ -272,6 +318,21 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     form["negative_prompt"] = widgets.multiline("Negative", before, 54, MAX_PROMPT)
     if form["negative_prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
+
+
+def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
+    """Count and seed, beside the button that uses them.
+
+    These lived under Advanced, which meant "roll again" and "how many"
+    required re-expanding a collapsed section every session while the submit
+    footer talked about the count as if it were visible.
+    """
+    widgets.section("Run")
+    imgui.text("References")
+    for count in (1, 2, 4, 8):
+        imgui.same_line()
+        if imgui.radio_button(f"{count}##count", form["count"] == count):
+            form["count"] = count
 
     imgui.set_next_item_width(120)
     changed, seed = imgui.input_int("Seed", int(form["seed"]), 0, 0)
@@ -289,19 +350,15 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         "exactly. Unlocked, every submit rerolls it."
     )
 
-    imgui.text("References")
-    for count in (1, 2, 4, 8):
-        imgui.same_line()
-        if imgui.radio_button(f"{count}##count", form["count"] == count):
-            form["count"] = count
-
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:
     imgui.dummy((0, 8))
     imgui.separator()
     problems = validate(form)
     for problem in problems:
-        widgets.text_colored(theme.ERR, problem)
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+        imgui.text_wrapped(problem)
+        imgui.pop_style_color()
     count = int(form["count"])
     widgets.muted(
         f"{count} reference{'s' if count > 1 else ''} - a few seconds each"
@@ -309,8 +366,10 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         else "One reference - a few seconds"
     )
     busy = ctx.busy("submit")
-    if widgets.disabled_button("Generate", not problems and not busy, (-1, 34)):
+    if widgets.primary_button("Generate", (-1, 34), enabled=not problems and not busy):
         generate(ctx, form)
+    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+        imgui.set_tooltip("Ctrl+Enter")
 
 
 def validate(form: dict[str, Any]) -> list[str]:
