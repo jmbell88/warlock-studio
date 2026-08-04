@@ -44,26 +44,24 @@ def _blocks(key: str) -> list[parser.Block]:
 
 
 def help_button(ctx: Any, pane: str) -> None:
-    """The (?) a pane shows; opens the manual at that pane's chapter."""
+    """The (?) a pane shows; switches to the manual at that pane's chapter."""
     target = HELP_TARGETS.get(pane)
     if target is None:
         return
     offset = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - sp(26)
     imgui.same_line(max(offset, 0.0))
     if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
+        ctx.state.mode = "manual"
         ctx.state.manual.open_at(*target)
 
 
-def draw_window(ctx: Any) -> None:
+def draw_body(ctx: Any) -> None:
+    """The manual as a mode: two children filling whatever host is current.
+
+    No window of its own, and no visibility flag -- the mode switch decides
+    whether this runs at all, which is the same rule every other pane follows.
+    """
     ms = ctx.state.manual
-    if not ms.open:
-        return
-    imgui.set_next_window_size((sp(940), sp(640)), imgui.Cond_.first_use_ever.value)
-    expanded, still_open = imgui.begin("Manual###manual", True)
-    ms.open = bool(still_open)
-    if not expanded or not ms.open:
-        imgui.end()
-        return
     if imgui.begin_child("manual-toc", (sp(240), 0), imgui.ChildFlags_.borders.value):
         _draw_toc(ms)
     imgui.end_child()
@@ -71,7 +69,6 @@ def draw_window(ctx: Any) -> None:
     if imgui.begin_child("manual-page", (0, 0)):
         _draw_chapter(ctx, ms)
     imgui.end_child()
-    imgui.end()
 
 
 def _draw_toc(ms: Any) -> None:

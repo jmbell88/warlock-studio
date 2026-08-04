@@ -1,14 +1,14 @@
-"""The landing chooser: what the app opens on.
+"""The Home screen: what the app opens on.
 
 The workspace assumes you already know which of two pipelines you are in and
 what you are looking at; the first thing after a launch is neither. So the
 frame starts here instead -- start a 2D reference, start a 3D asset, open
 something already made, or manage the style profiles the 2D pane draws from --
-and the Home button in the top bar comes back to it, so it is a chooser rather
-than a splash screen.
+and the Home entry in the mode switch comes back to it, so it is a chooser
+rather than a splash screen.
 
-Nothing here is persisted: ``AppState.landing`` defaults True, which is what
-makes this appear on every launch rather than only the first ever.
+Nothing here is persisted: ``AppState.mode`` defaults to ``"home"``, which is
+what makes this appear on every launch rather than only the first ever.
 """
 
 from __future__ import annotations
@@ -123,14 +123,14 @@ def start_3d(ctx: Any) -> None:
 
 
 def start_inker(ctx: Any) -> None:
-    """Paint keeps whatever was open: unlike the two generate panes, there is
+    """Inker keeps whatever was open: unlike the two generate panes, there is
     no "fresh form" here -- the documents *are* the work."""
     ctx.state.mode = "inker"
     _leave(ctx)
 
 
 def _leave(ctx: Any) -> None:
-    ctx.state.landing = False
+    """Every caller has just set a work mode, so the persist is unconditional."""
     ctx.state.landing_view = "choose"
     ctx.settings.set("mode", ctx.state.mode)
 

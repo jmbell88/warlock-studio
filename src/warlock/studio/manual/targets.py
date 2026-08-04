@@ -18,4 +18,5 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "inker-layers": ("06-inker", "layers"),
     "inker-bridge": ("06-inker", "pipeline-bridges"),
     "profiles": ("07-library-and-jobs", "profiles"),
+    "app-settings": ("10-configuration", "in-app-settings"),
 }

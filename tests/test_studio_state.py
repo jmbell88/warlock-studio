@@ -371,6 +371,31 @@ def test_the_paint_migration_never_overwrites_an_existing_inker_block(tmp_path):
     assert settingslib.Settings.load(tmp_path).get("inker") == {"swatches": ["#new"]}
 
 
+def test_ui_scale_round_trips_and_a_junk_value_cannot_brick_the_window(tmp_path):
+    from warlock.studio.main import UI_SCALE_RANGE, _ui_scale
+
+    s = settingslib.Settings.load(tmp_path)
+    assert _ui_scale(s) == 1.0  # nothing stored
+    s.set("ui_scale", 1.25)
+    s.flush()
+    assert _ui_scale(settingslib.Settings.load(tmp_path)) == 1.25
+    for junk in ("wide", None, 99.0, -3.0):
+        s.set("ui_scale", junk)
+        assert UI_SCALE_RANGE[0] <= _ui_scale(s) <= UI_SCALE_RANGE[1]
+
+
+def test_only_the_work_modes_are_worth_persisting():
+    """Home, the Manual, Clay and Settings are places you pass through:
+    restoring into one on the next launch would hide the work."""
+    from warlock.studio import modes
+
+    assert modes.WORK_MODES.issubset(modes.KEYS)
+    assert set(modes.KEYS) - modes.WORK_MODES
+    assert modes.KEYS[0] == "home"
+    assert AppState().mode == "home"
+    assert set(modes.KEYS) == {k for k, _l, _i in modes.MODES}
+
+
 def test_the_seed_never_persists():
     """Remembering last session's seed silently reproduces last session's
     output, which reads as 'generate is broken'."""

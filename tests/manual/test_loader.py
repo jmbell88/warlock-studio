@@ -49,9 +49,11 @@ def test_dev_checkout_fallback_finds_repo_docs():
 
 
 def test_manual_state_open_at():
+    """Navigation only. Whether the manual is on screen is ``state.mode``, so
+    open_at deliberately does not carry a second visibility flag."""
     state = AppState()
     assert isinstance(state.manual, ManualState)
     state.manual.open_at("03-generating-meshes", "exports")
-    assert state.manual.open is True
+    assert not hasattr(state.manual, "open")
     assert state.manual.chapter == "03-generating-meshes"
     assert state.manual.pending_anchor == "exports"

@@ -12,7 +12,7 @@ viewport that is not on screen.
 
 | Keys | Action |
 | --- | --- |
-| F1 | Open the manual |
+| F1 | Switch to the Manual |
 | F10 | Toggle the frame-rate readout |
 | Ctrl+Enter | Generate / Make 3D |
 | F | Frame the model |

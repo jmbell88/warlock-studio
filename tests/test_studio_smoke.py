@@ -290,6 +290,39 @@ def test_the_landing_screen_builds_in_each_of_its_views(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
 
 
+def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
+    """As a mode, not a window: no begin/end of its own to get wrong.
+
+    The loader falls back to the repo's docs/manual in this checkout, so this
+    parses and draws the real chapters.
+    """
+    from warlock.studio.manual import render
+
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+    app_ctx.state.manual.open_at("08-shortcuts", None)
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+
+def test_the_clay_placeholder_builds(app_ctx, imgui_ctx):
+    from warlock.studio.panes import clay
+
+    _frame(imgui_ctx, lambda: clay.draw(app_ctx))
+
+
+def test_the_settings_pane_builds(app_ctx, imgui_ctx):
+    """Twice: once bare, once after the model lists are populated, because the
+    pane reads them off the Ctx with getattr and both shapes must build."""
+    from warlock.studio.panes import app_settings
+
+    app_ctx.base_models = []
+    app_ctx.style_loras = []
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    app_ctx.base_models = [("turbo", "SDXL-Turbo"), ("x", "X - weights missing")]
+    app_ctx.style_loras = [("", "no style LoRA"), ("ink", "Ink")]
+    app_ctx.rigging_available = True
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+
+
 def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
     from warlock.studio import profiles
     from warlock.studio.panes import profiles_panel

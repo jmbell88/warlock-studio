@@ -40,10 +40,15 @@ image nobody has looked at.
 If you already have a picture, you can skip the first stage entirely and upload it — see
 [Starting from an upload](03-generating-meshes.md#starting-from-an-upload).
 
-## The three modes
+## The modes
 
-A switch at the top of the window chooses between three modes, and that switch is the single thing
-that decides what the panes show.
+A switch at the top of the window chooses between seven modes, and that switch is the single thing
+that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
+
+- **Home.** The chooser the app opens on: start a 2D reference, start a 3D asset, open something
+  already made, or manage profiles. Returning here is never destructive.
+- **Manual.** This documentation, embedded in the window rather than floating over it. `F1` and
+  every pane's (?) button come here.
 
 - **2D reference.** Owns the prompt and every control that composes it: the guidance selects, the
   negative prompt, the image model and style LoRA, the seed and the candidate count. Covered in
@@ -53,20 +58,25 @@ that decides what the panes show.
   Covered in [Generating meshes](03-generating-meshes.md).
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
   [Inker](06-inker.md).
+- **Clay.** A placeholder. Sculpting is coming in a future update.
+- **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and a
+  read-only list of the models it loaded. See
+  [In-app settings](10-configuration.md#in-app-settings).
 
-Each control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
+Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
 into the prompt ("how much fine detail should be drawn"), and in the 3D pane it is the geometry
 resolution sent to the reconstruction engine. One control cannot be owned by two panes, so there
 are two.
 
 Switching modes is never destructive. Inker keeps its open documents when you leave it, a queued
-job keeps running whichever mode you are in, and the progress card floats over all three.
+job keeps running whichever mode you are in, and the progress card floats over every mode but Home.
 
 ## The window
 
-The app opens on a landing chooser. **Home**, at the top left, returns to it at any time. To its
-right is the mode switch described above.
+The app opens on Home, every launch: only the three working modes are remembered between runs, and
+none of them is what you want to be dropped into before you have said what you are doing. **Home**
+is the first entry in the mode switch described above, and returns there at any time.
 
 Once you are in the workspace, the window is three columns:
 

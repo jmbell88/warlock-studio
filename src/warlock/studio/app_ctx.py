@@ -44,6 +44,12 @@ class Ctx:
     refresh_rig_data: Any = lambda: None
     guidance: dict[str, Any] = field(default_factory=dict)
     sheet_options: dict[str, Any] = field(default_factory=dict)
+    # The monitor scale sampled at startup, kept apart from tokens.SCALE so the
+    # settings pane can multiply a user preference onto it without compounding
+    # its own previous answer.
+    dpi_scale: float = 1.0
+    # The App's Layout, so the settings pane can reset pane sizes.
+    layout: Any = None
     base_models: list[tuple[str, str]] = field(default_factory=list)
     style_loras: list[tuple[str, str]] = field(default_factory=list)
     quit_requested: bool = False

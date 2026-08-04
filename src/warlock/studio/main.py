@@ -36,6 +36,20 @@ MIN_SIZE = (1100, 700)
 # Pane widths and the sidebar split now live in layout.Layout, persisted and
 # draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
+# Modes that fill the host window with one pane instead of the three-column
+# settings / viewport / inspector layout the two generate modes share.
+_SINGLE_PANE_MODES = ("home", "manual", "clay", "settings", "inker")
+# The user's zoom on top of the monitor's own DPI scale.
+UI_SCALE_RANGE = (0.5, 2.0)
+
+
+def _ui_scale(settings: Any) -> float:
+    """The stored multiplier, clamped. A junk value must not brick the window."""
+    try:
+        value = float(settings.get("ui_scale") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return min(max(value, UI_SCALE_RANGE[0]), UI_SCALE_RANGE[1])
 
 
 class App:
@@ -58,7 +72,10 @@ class App:
         # A dead worker is reported once. The banner is dismissible, and
         # re-raising it every frame would make it impossible to dismiss.
         self._fatal_reported = False
-        self._was_landing = True
+        # The mode the last frame was built in, so a change into a viewport
+        # mode can resync the viewer -- a mode change is not something the
+        # job cache announces.
+        self._last_mode: str | None = None
         # Measured every frame, drawn only when state.show_fps is on (F10), and
         # logged once at teardown regardless -- the overlay answers "is it
         # smooth now", the log line is the evidence for "it ran at 60".
@@ -113,9 +130,14 @@ class App:
         # Dropped files are how a reference image gets in without a dialog.
         pygame.event.set_allowed(None)
 
-        # The scale everything is drawn at: sampled from the monitor the
-        # window actually opened on, before any font or style is built.
-        tokens.set_scale(dpi.window_scale(pygame))
+        # The scale everything is drawn at, before any font or style is built:
+        # the monitor's own scale, and the user's multiplier on top of it. The
+        # multiplier is folded in *here* rather than applied later so the font
+        # atlas is baked at the size it will be drawn at; changing it in the
+        # settings pane rescales everything immediately but only sharpens the
+        # glyphs after a restart.
+        monitor_scale = dpi.window_scale(pygame)
+        tokens.set_scale(monitor_scale * _ui_scale(settings))
         self._min_size = (
             int(MIN_SIZE[0] * tokens.SCALE),
             int(MIN_SIZE[1] * tokens.SCALE),
@@ -132,8 +154,9 @@ class App:
         self.viewer = Viewer(self.ctx)
 
         state = AppState()
-        stored_mode = settings.get("mode")
-        state.mode = stored_mode if stored_mode in ("2d", "3d", "inker") else "2d"
+        # No mode restore: the app opens on Home every launch (AppState's
+        # default). The persisted work mode is what Home's tiles and the
+        # switch write, and it is read nowhere else.
         state.show_fps = bool(settings.get("show_fps"))
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
@@ -153,6 +176,8 @@ class App:
             viewer=self.viewer,
             textures=textures.ThumbnailCache(self.ctx),
         )
+        self.app_ctx.dpi_scale = monitor_scale
+        self.app_ctx.layout = self.layout
         self.app_ctx.load_presets = self.load_presets
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
@@ -491,9 +516,10 @@ class App:
         while it is selected starts showing its mesh without another click.
         """
         ctx = self.app_ctx
-        if ctx.state.mode == "inker":
-            # Paint owns the centre pane; there is no viewport to sync, and
-            # loading a mesh for the selection would be work nothing shows.
+        if ctx.state.mode not in ("2d", "3d"):
+            # Only two modes draw a viewport. Everywhere else there is
+            # nothing to sync, and loading a mesh for the selection would
+            # be work nothing shows.
             return
         job = ctx.job()
         if job is None:
@@ -602,7 +628,7 @@ class App:
 
         ctx = self.app_ctx
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
-            ctx.state.manual.open = True
+            ctx.state.mode = "manual"
             return
         # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
@@ -610,7 +636,7 @@ class App:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
             ctx.state.show_fps = not ctx.state.show_fps
             return
-        if ctx.state.landing:
+        if ctx.state.mode not in ("2d", "3d", "inker"):
             # The chooser has no form to submit and no viewport to frame; every
             # one of these would act on a pane that is not on screen.
             return
@@ -618,7 +644,7 @@ class App:
             from . import inker_mode
 
             # Consumes every key while a painting is open, so F/W/S/Ctrl+Enter
-            # cannot act on the panes Paint has replaced.
+            # cannot act on the panes Inker has replaced.
             if inker_mode.handle_key(ctx, event):
                 return
         # Both edges are dispatched, because Inker's space-to-pan is a hold and
@@ -659,7 +685,6 @@ class App:
         if ctx.state.mode == "inker":
             from . import inker_mode
 
-            ctx.state.landing = False
             inker_mode.open_path(ctx, path)
             return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
@@ -670,14 +695,13 @@ class App:
             # a mesh to build -- forcing the mode switch here would throw away
             # the prompt the user is composing. One branch, and it is what
             # makes the feature discoverable at all.
-            ctx.state.landing = False
             ctx.state.form_2d["ref_path"] = str(path)
             ctx.toast(f"Using {path.name} as the reference.")
             return
-        ctx.state.mode = "3d"
         # A drop is a start: it would otherwise land behind the chooser, with
         # nothing on screen saying anything had happened.
-        ctx.state.landing = False
+        ctx.state.mode = "3d"
+        ctx.settings.set("mode", "3d")
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
@@ -697,19 +721,27 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
-        from .panes import inspector, landing, library, settings_2d, settings_3d
+        from .panes import (
+            app_settings,
+            clay,
+            inspector,
+            landing,
+            library,
+            settings_2d,
+            settings_3d,
+        )
 
         ctx = self.app_ctx
-        # Recomputed every frame by whoever draws the viewport image. Landing,
-        # 2D mode and the editor all return without drawing it, so it stays
-        # false there and the viewer gets no events at all.
+        # Recomputed every frame by whoever draws the viewport image. Every
+        # mode but 3D returns without drawing it, so it stays false there and
+        # the viewer gets no events at all.
         self._viewport_hovered = False
-        # Leaving the chooser is a mode change the cache will not announce: the
-        # job list has not changed, so nothing else would ask the viewer to
-        # show what was just picked.
-        if self._was_landing and not ctx.state.landing:
+        # Arriving in a viewport mode is a change the cache will not announce:
+        # the job list has not changed, so nothing else would ask the viewer
+        # to show what was just picked.
+        if ctx.state.mode != self._last_mode and ctx.state.mode in ("2d", "3d"):
             self._sync_viewer()
-        self._was_landing = ctx.state.landing
+        self._last_mode = ctx.state.mode
 
         viewport = imgui.get_main_viewport()
         imgui.set_next_window_pos(viewport.work_pos)
@@ -721,17 +753,26 @@ class App:
             | imgui.WindowFlags_.no_saved_settings.value
         )
         imgui.begin("##host", None, flags)
-        if ctx.state.landing:
-            landing.draw(ctx)
-            imgui.end()
-            self._overlays(viewport)
-            return
+        # The switch is drawn in every mode, Home included: it is how you
+        # leave wherever you are, so a mode that hides it is a dead end.
         self._mode_switch()
         from .panes import overlay
 
         overlay.doctor_banner(ctx)
-        if ctx.state.mode == "inker":
-            self._paint_workspace()
+        mode = ctx.state.mode
+        if mode in _SINGLE_PANE_MODES:
+            if mode == "home":
+                landing.draw(ctx)
+            elif mode == "manual":
+                from .manual import render as manual_render
+
+                manual_render.draw_body(ctx)
+            elif mode == "clay":
+                clay.draw(ctx)
+            elif mode == "settings":
+                app_settings.draw(ctx)
+            else:
+                self._inker_workspace()
             imgui.end()
             self._overlays(viewport)
             return
@@ -791,7 +832,7 @@ class App:
         imgui.end()
         self._overlays(viewport)
 
-    def _paint_workspace(self) -> None:
+    def _inker_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton the other modes use.
 
         Deliberately not a takeover of the whole window: the progress card
@@ -871,11 +912,8 @@ class App:
 
         ctx = self.app_ctx
         overlay.fps_meter(ctx, self.fps)
-        if not ctx.state.landing:
+        if ctx.state.mode != "home":
             overlay.progress_card(ctx, self.eta)
-        from .manual import render as manual_render
-
-        manual_render.draw_window(ctx)
         widgets.toasts(ctx.state, (viewport.work_size.x, viewport.work_size.y))
         ctx.confirms.draw()
         ctx.prompts.draw()
@@ -883,27 +921,26 @@ class App:
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
 
-        from . import icons, widgets
+        from . import modes, widgets
 
         ctx = self.app_ctx
         state = ctx.state
-        # Neither Home nor a mode switch is destructive: Paint's documents are
-        # still open when you come back, because it is a mode rather than a
-        # takeover. Only quitting and closing a tab can lose pixels, and both
-        # ask.
-        if imgui.button(f"{icons.HOUSE} Home"):
-            state.landing = True
-            state.landing_view = "choose"
-        imgui.same_line()
+        # No mode switch is destructive: Inker's documents are still open when
+        # you come back, because it is a mode rather than a takeover. Only
+        # quitting and closing a tab can lose pixels, and both ask.
         selected = widgets.segmented_control(
             "mode-seg",
-            [("2d", "2D reference"), ("3d", "3D asset"), ("inker", "Inker")],
+            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
             state.mode,
         )
         if selected != state.mode:
             state.mode = selected
-            ctx.settings.set("mode", selected)
-            self._sync_viewer()
+            # Only a work mode is worth restoring; Home, the Manual, Clay and
+            # Settings are places you pass through.
+            if selected in modes.WORK_MODES:
+                ctx.settings.set("mode", selected)
+            if selected == "home":
+                state.landing_view = "choose"
 
         # Right-aligned health dot: green when everything passed, amber when a
         # non-fatal check failed, red for a fatal one or a dead worker. Click
@@ -921,10 +958,7 @@ class App:
             colour = theme.OK
         from . import widgets
 
-        imgui.same_line(max(imgui.get_window_width() - sp(100), 0))
-        if widgets.icon_button(icons.INFO, "Manual (F1)"):
-            ctx.state.manual.open = True
-        imgui.same_line()
+        imgui.same_line(max(imgui.get_window_width() - sp(64), 0))
         if widgets.icon_button("?", "Keyboard shortcuts"):
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
@@ -966,7 +1000,7 @@ class App:
         table(
             "Everywhere",
             [
-                ("F1", "Open the manual"),
+                ("F1", "Switch to the Manual"),
                 ("F10", "Toggle the frame-rate readout"),
                 ("Ctrl+Enter", "Generate / Make 3D"),
                 ("F", "Frame the model"),

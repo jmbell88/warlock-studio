@@ -17,6 +17,7 @@ ACTIVITY = "\uE038"  # activity
 ARROW_LEFT = "\uE04C"  # arrow-left
 BLEND = "\uE5A1"  # blend
 BONE = "\uE35C"  # bone
+BOOK_OPEN = "\uE063"  # book-open
 BOX = "\uE065"  # box
 BRUSH = "\uE1D3"  # brush
 CAMERA = "\uE068"  # camera

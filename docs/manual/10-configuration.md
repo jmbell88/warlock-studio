@@ -114,3 +114,24 @@ procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
 entry declares.
+
+## In-app settings
+
+**Settings** in the mode switch holds the handful of preferences that are the app's rather than a
+job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
+of them need a variable set before launch.
+
+**Interface.** *UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
+is, from 0.5× to 2×. It takes effect as you drag it, but the font atlas is baked once at startup, so
+text only becomes properly crisp at the new size after a restart — everything is drawn at the right
+size immediately either way. *Show frame rate* is the same toggle as `F10`.
+
+**Layout.** *Reset pane sizes* puts the sidebar, the inspector and the split between the form and
+the library back to their defaults, undoing any dragging of the pane dividers. *Reset collapsed
+sections* re-opens every section that has been collapsed anywhere in the app.
+
+**Models.** A read-only list of the image models and style LoRAs the app knows about, marking any
+whose weights are missing, plus whether rigging is available. It is the same information the startup
+diagnostics report, in a place you can look at without opening the log. Weights are one-time manual
+downloads by design — see [Adding an image model](14-extending.md#adding-an-image-model) — so
+there is nothing to install from here. Model management is coming in a future update.

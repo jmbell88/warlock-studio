@@ -187,9 +187,13 @@ class Toast:
 
 @dataclass
 class ManualState:
-    """The Manual window: what it shows and whether it is on screen."""
+    """The Manual mode: which chapter it shows and where in it.
 
-    open: bool = False
+    Whether it is on screen is ``AppState.mode == "manual"`` and nothing else --
+    the Manual is a mode like any other, so a second "am I visible" flag here
+    would be a way for the two to disagree.
+    """
+
     chapter: str = "00-index"
     # Set alongside a navigation, consumed by the renderer on the frame the
     # heading is drawn -- scrolling needs a cursor position that only exists
@@ -198,7 +202,6 @@ class ManualState:
     search: str = ""
 
     def open_at(self, chapter: str, anchor: str | None = None) -> None:
-        self.open = True
         self.chapter = chapter
         self.pending_anchor = anchor
 
@@ -207,8 +210,11 @@ class ManualState:
 class AppState:
     """The whole UI's mutable state."""
 
-    # The one thing that decides what a pane shows: 2d | 3d | inker.
-    mode: str = "2d"
+    # The one thing that decides what a pane shows, one of ``modes.KEYS``:
+    # home | manual | 2d | 3d | inker | clay | settings. It defaults to the
+    # Home screen, which is what makes the chooser appear on every launch
+    # rather than only the first ever; only the work modes are persisted.
+    mode: str = "home"
     selected: str | None = None
     comparing: str | None = None
     form_2d: dict[str, Any] = field(default_factory=default_form_2d)
@@ -228,19 +234,17 @@ class AppState:
     show_advanced: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
     last_error: str | None = None
-    # The landing chooser. None of these are persisted, which is the point: a
-    # fresh AppState() means every launch opens on the chooser rather than in
-    # whatever pane last session happened to end in.
-    landing: bool = True
+    # The Home screen's sub-view. Not persisted: Home always opens on the
+    # chooser rather than on whichever list was last being browsed.
     landing_view: str = "choose"  # choose | open | profiles
     profile_draft: dict[str, Any] | None = None
     profile_draft_name: str = ""
     # The name the draft was opened under, so renaming one in the editor moves
     # it rather than leaving the old name behind as a duplicate.
     profile_draft_origin: str = ""
-    # Paint mode's open documents and tool settings, built on first use.
+    # Inker mode's open documents and tool settings, built on first use.
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
-    # lazy so a session that never paints pays nothing for it.
+    # lazy so a session that never draws pays nothing for it.
     inker: Any = None
     manual: ManualState = field(default_factory=ManualState)
 
