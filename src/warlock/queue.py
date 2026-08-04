@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, guidance, memlog, models, provenance, rigging
+from . import errors, guidance, memlog, models, provenance, rigging, vram
 from .config import Config
 from .db import JobStore
 from .pipelines import control, reference
@@ -110,6 +110,30 @@ def _log_mem(when: str) -> None:
     host = memlog.summary()
     if host is not None:
         log.info("host %s: %s", when, host)
+    pressure = commit_fraction()
+    if pressure is not None and pressure >= COMMIT_CEILING:
+        log.critical(
+            "host commit at %.0f%% %s -- at or past the ceiling the "
+            "2026-08-03 crash hit; further jobs will be refused",
+            pressure * 100,
+            when,
+        )
+
+
+COMMIT_CEILING = 0.90
+"""System commit fraction past which the worker stops taking jobs.
+
+Windows kills the process (Resource-Exhaustion event 2004) rather than raising
+something a job can fail on, so the only useful place to stand is *before* the
+next allocation. It needs no watchdog thread: the stage boundaries _log_mem
+already runs at are exactly the moments the number can be acted on.
+"""
+
+
+def commit_fraction() -> float | None:
+    """System commit charge as a fraction of the limit, or None off Windows."""
+    sysmem = memlog.system_memory()
+    return None if sysmem is None else sysmem.commit_fraction
 
 
 class Worker:
@@ -164,9 +188,14 @@ class Worker:
             # call stack alive -- and those frames hold the pipeline and its
             # tensors. self.fatal is never cleared, so that retention lasts for
             # process life. Only the exception itself is ever read (main.py
-            # renders str(fatal)); the traceback is already in the log.
-            self.fatal = exc.with_traceback(None)
+            # renders str(fatal)); the traceback belongs in the log.
+            #
+            # The order is load-bearing and used to be inverted.
+            # ``with_traceback`` mutates in place and returns *self*, so
+            # stripping first left ``exc_info=exc`` with nothing to format --
+            # the single log line for a dead GPU worker carried no stack at all.
             log.critical("gpu worker task died", exc_info=exc)
+            self.fatal = exc.with_traceback(None)
 
     def wake(self) -> None:
         """Tell an idle dispatch loop there is work now.
@@ -326,6 +355,41 @@ class Worker:
             step_total=total,
         )
 
+    def _check_resources(self, job: dict[str, Any]) -> None:
+        """The dispatch-time half of admission control.
+
+        service.validation.check_vram refuses a job the *card* cannot hold at
+        submit time. This catches what has changed since: another application
+        that took VRAM in the meantime, or a host whose commit charge has
+        climbed to the wall while the job sat in the queue. Failing here costs
+        a job; not failing here has cost the machine.
+        """
+        pressure = commit_fraction()
+        if pressure is not None and pressure >= COMMIT_CEILING:
+            raise RuntimeError(
+                f"host memory is {pressure * 100:.0f}% committed, at or past the "
+                f"{COMMIT_CEILING * 100:.0f}% ceiling. Close other applications "
+                "or restart Warlock before running this job."
+            )
+        need = vram.estimate_job(job, exclusive=bool(self.config.vram_exclusive))
+        if need <= 0:
+            return
+        device = vram.device_memory()
+        if device is None:
+            return
+        # Against *free*, not total: whatever we already hold is part of the
+        # budget this job runs inside. The WDDM caveat in vram.py applies --
+        # this figure is the driver's virtualized view, so it is a secondary
+        # check behind the submit-time one, not a replacement for it.
+        already = self.trellis.running and job["kind"] in ("text", "image")
+        headroom = device.free_gib + (vram.TRELLIS_GIB if already else 0.0)
+        if need > headroom:
+            raise RuntimeError(
+                f"this job needs about {need:.1f} GiB of VRAM and only "
+                f"{headroom:.1f} GiB is available. Close other GPU applications "
+                "and try again."
+            )
+
     async def _process(self, job: dict[str, Any]) -> None:
         job_id = job["id"]
         claimed = await asyncio.to_thread(self.store.claim, job_id)
@@ -345,32 +409,51 @@ class Worker:
         self.progress.begin(job_id, job["kind"], cold=cold)
         error: str | None = None
         try:
+            self._check_resources(job)
             await self._generate(job)
         except Exception as exc:
             if not self._cancel.event.is_set():
                 log.exception("job %s failed", job_id)
-                errors.write_error_log(self.config.job_dir(job_id), exc)
+                # The verdict first, the log file second. Writing the log can
+                # itself raise -- a full or read-only disk is one of the ways
+                # a job fails in the first place -- and doing it first left
+                # `error` None, so the finally below recorded the job as
+                # *done*: a successful-looking job with no model.glb and no
+                # message anywhere.
                 error = errors.friendly(exc)
+                with contextlib.suppress(OSError):
+                    errors.write_error_log(self.config.job_dir(job_id), exc)
         finally:
-            if self._cancel.event.is_set():
-                await asyncio.to_thread(self.store.set_status, job_id, "cancelled")
-                self._discard_artifacts(job)
-            else:
-                status = "error" if error is not None else "done"
-                finished = await asyncio.to_thread(self.store.finish, job_id, status, error)
-                if not finished:
-                    # A cancel landed between claim() succeeding and this
-                    # write (before self._cancel existed to observe it, or
-                    # the API route's atomic cancel() won the DB race) --
-                    # the DB already says cancelled; don't overwrite it and
-                    # don't leave a viewable artifact behind.
+            try:
+                if self._cancel.event.is_set():
+                    await asyncio.to_thread(self.store.set_status, job_id, "cancelled")
                     self._discard_artifacts(job)
-                elif status == "done":
-                    await self._maybe_queue_rig(job)
-            self.current_job_id = None
-            self._cancel = None
-            self._blender = None
-            self.progress.end(job_id)
+                else:
+                    status = "error" if error is not None else "done"
+                    finished = await asyncio.to_thread(
+                        self.store.finish, job_id, status, error
+                    )
+                    if not finished:
+                        # A cancel landed between claim() succeeding and this
+                        # write (before self._cancel existed to observe it, or
+                        # the API route's atomic cancel() won the DB race) --
+                        # the DB already says cancelled; don't overwrite it and
+                        # don't leave a viewable artifact behind.
+                        self._discard_artifacts(job)
+                    elif status == "done":
+                        await self._maybe_queue_rig(job)
+            finally:
+                # Unconditionally, and in a nest of its own: the terminal write
+                # can raise (`database is locked`, a full disk) and these four
+                # lines are how the worker lets go of the job. Skipping them
+                # left current_job_id naming a job that was no longer running,
+                # a stale _Cancel event, and a ProgressBus entry that never
+                # ended -- so every later job's trellis output was reported
+                # against the dead one, and prune/delete refused to touch it.
+                self.current_job_id = None
+                self._cancel = None
+                self._blender = None
+                self.progress.end(job_id)
 
     async def _maybe_queue_rig(self, job: dict[str, Any]) -> None:
         """Honour the generate form's "rig this" checkbox, once the mesh exists.
@@ -414,10 +497,15 @@ class Worker:
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
             # could have written, so there is nothing to undo.
-            source = params.get("source_job")
-            if not source:
+            # Validated, not merely non-empty: this string becomes a path, and
+            # the sibling sheet branch below has always checked its own id the
+            # same way. An empty or malformed source_job makes job_dir() return
+            # the assets root, so the cleanup would go looking for temps in the
+            # directory that holds every job.
+            source = str(params.get("source_job") or "")
+            if not rigging.is_valid_id(source):
                 return
-            job_dir = self.config.job_dir(str(source))
+            job_dir = self.config.job_dir(source)
             if job["kind"] == "rig":
                 # Only the temps: the worker writes those, and finalize_rig
                 # only renames them into rig.glb/rig.json on success. The
@@ -628,6 +716,16 @@ class Worker:
         elif not image_path.exists():
             raise RuntimeError("image job has no uploaded input.png")
 
+        if job.get("stage") == "reference":
+            # The text branch returns here itself, having just generated the
+            # image. This catches the other kind: a reference whose pixels came
+            # from an upload or the paint editor. Its stage says the job stops
+            # before the mesh, and honouring that is a property of the *stage*,
+            # not of how the image was made -- reading it off the kind is how a
+            # painted reference used to buy an unasked-for trellis run.
+            _log_mem("after reference-only job")
+            return
+
         if self._cancel.event.is_set():
             return
 
@@ -695,6 +793,13 @@ class Worker:
         job_id = job["id"]
         params = job["params"]
         source_id = str(params.get("source_job") or "")
+        # Validated before it becomes a path, the same way sheet_id already is.
+        # This is the directory the Blender worker is pointed at and writes its
+        # temps into, and job_dir("") is the assets root -- the whole reason
+        # check_job_id and pose_path exist is to keep params off the filesystem
+        # unchecked.
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
         source_dir = self.config.job_dir(source_id)
         template = str(params.get("template") or self.config.rig_template)
 
@@ -769,6 +874,13 @@ class Worker:
         job_id = job["id"]
         params = job["params"]
         source_id = str(params.get("source_job") or "")
+        # Validated before it becomes a path, the same way sheet_id already is.
+        # This is the directory the Blender worker is pointed at and writes its
+        # temps into, and job_dir("") is the assets root -- the whole reason
+        # check_job_id and pose_path exist is to keep params off the filesystem
+        # unchecked.
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
         source_dir = self.config.job_dir(source_id)
         sheet_id = str(params.get("sheet_id") or rigging.new_id())
 

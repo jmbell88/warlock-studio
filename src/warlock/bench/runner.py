@@ -51,6 +51,7 @@ ITEMS_FILE = "items.jsonl"
 # absent: it is the largest artifact by far and nothing measures it, so it
 # rides behind --keep-source.
 ARTIFACTS = ("input.png", "reference.png", "control.png", "model.glb")
+SOURCE_ARTIFACT = "source.glb"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,31 +118,79 @@ def plan_run(
     return directory, todo, doc
 
 
-def completed(run_dir: Path) -> set[str]:
-    """The unit keys already recorded, so ``--resume`` creates zero jobs for
-    them. Read from items.jsonl rather than from the directory listing: a
-    half-copied item directory exists but was never recorded."""
+def read_items(run_dir: Path) -> list[dict[str, Any]]:
+    """Every recorded unit, oldest first, torn lines skipped.
+
+    A unit re-run by a later resume appends a second record under the same key;
+    callers that want one row per unit take the last, which is the one that
+    describes the artifacts currently on disk.
+    """
     path = run_dir / ITEMS_FILE
     if not path.exists():
-        return set()
-    done: set[str] = set()
+        return []
+    out: list[dict[str, Any]] = []
     for line in path.read_text("utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            done.add(json.loads(line)["key"])
-        except (ValueError, KeyError):
-            # A torn last line is what a Ctrl-C mid-write leaves; the unit is
-            # simply re-run.
+            record = json.loads(line)
+        except ValueError:
+            # A torn last line is what a Ctrl-C mid-write leaves.
             continue
-    return done
+        if isinstance(record, dict) and "key" in record:
+            out.append(record)
+    return out
+
+
+def latest_items(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """One record per unit key -- the newest, so a retry supersedes its
+    failure rather than sitting beside it."""
+    return {record["key"]: record for record in read_items(run_dir)}
+
+
+def completed(run_dir: Path) -> set[str]:
+    """The unit keys ``--resume`` should *not* re-run.
+
+    Only the ones that finished. A unit that errored or was cancelled by the
+    Ctrl-C path recorded a terminal row like any other, and keying on mere
+    presence marked it permanently done -- so the one thing a resume is for,
+    picking up after a failure, was the one thing it could not do.
+    """
+    return {
+        key
+        for key, record in latest_items(run_dir).items()
+        if record.get("status") == "done"
+    }
+
+
+def retryable(run_dir: Path) -> set[str]:
+    """Units that were recorded but did not finish."""
+    return {
+        key
+        for key, record in latest_items(run_dir).items()
+        if record.get("status") != "done"
+    }
 
 
 def append_item(run_dir: Path, record: dict[str, Any]) -> None:
     with (run_dir / ITEMS_FILE).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
         fh.flush()
+
+
+def _resolve_vram(config: Any) -> None:
+    """Write the auto-selected VRAM mode onto the config, as Runtime would."""
+    from .. import vram
+
+    plan = vram.plan(
+        exclusive=config.vram_exclusive,
+        budget_gib=config.vram_budget_gib,
+        total_gib=config.vram_total_gib,
+        device=vram.probe(),
+    )
+    config.vram_exclusive = plan.exclusive
+    config.vram_budget_gib = plan.budget_gib
 
 
 def run(
@@ -156,6 +205,7 @@ def run(
     limit: int = 0,
     seeds: tuple[int, ...] = (),
     render: bool = False,
+    keep_source: bool = False,
     resume: Path | None = None,
     on_event: Callable[[str], None] | None = None,
 ) -> Path:
@@ -163,23 +213,52 @@ def run(
     from ..studio.runtime import Runtime
 
     say = on_event or (lambda msg: log.info("%s", msg))
+    # Before the manifest is built, not when Runtime starts: vram_exclusive is
+    # a recorded field, and a run whose manifest says "auto" cannot be compared
+    # with -- or resumed by -- one that says which mode auto actually chose.
+    _resolve_vram(config)
     suite = suite_mod.load(suite_key)
     recipe = recipe_mod.load(recipe_key)
 
-    run_dir, todo, doc = plan_run(
-        config, suite, recipe,
-        stage=stage, started=started, categories=categories, ids=ids,
-        limit=limit, seeds=seeds, run_dir=resume,
-    )
-
     already: set[str] = set()
     if resume is not None:
+        try:
+            stored = manifest_mod.read_manifest(resume)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"{resume}: not a bench run directory "
+                f"({manifest_mod.FILENAME} is unreadable: {exc})"
+            ) from None
+        # The selection is the *stored* run's, read back from its manifest.
+        # Re-planning from this invocation's flags meant resuming a
+        # ``--limit 5`` run without repeating the flag silently expanded it to
+        # the whole suite -- hours of GPU nobody asked for, announced as
+        # "5 of 160 already done". assert_resumable cannot catch it either: it
+        # deliberately excludes the item and seed lists, because a resume
+        # legitimately covers a subset.
+        if categories or ids or limit or seeds:
+            say("resume: ignoring the selection flags; using the run's own")
+        run_dir, todo, doc = plan_run(
+            config, suite, recipe,
+            stage=stage, started=started,
+            ids=tuple(stored.get("items") or ()),
+            seeds=tuple(stored.get("seeds") or ()),
+            run_dir=resume,
+        )
         # Refuse before a single job is submitted: a run half-measured against
         # two checkpoints is worse than no run.
-        manifest_mod.assert_resumable(manifest_mod.read_manifest(resume), doc)
+        manifest_mod.assert_resumable(stored, doc)
         already = completed(resume)
+        again = retryable(resume)
         say(f"resuming {resume.name}: {len(already)} of {len(todo)} already done")
+        if again:
+            say(f"retrying {len(again)} unit(s) that did not finish")
     else:
+        run_dir, todo, doc = plan_run(
+            config, suite, recipe,
+            stage=stage, started=started, categories=categories, ids=ids,
+            limit=limit, seeds=seeds, run_dir=None,
+        )
         manifest_mod.write_manifest(run_dir, doc)
 
     pending = [u for u in todo if u.key not in already]
@@ -191,7 +270,10 @@ def run(
         for n, unit in enumerate(pending, 1):
             say(f"[{n}/{len(pending)}] {unit.key}")
             try:
-                record = _run_unit(svc, config, run_dir, recipe, unit, stage=stage, render=render)
+                record = _run_unit(
+                    svc, config, run_dir, recipe, unit,
+                    stage=stage, render=render, keep_source=keep_source,
+                )
             except KeyboardInterrupt:
                 say("interrupted; the in-flight job has been cancelled")
                 raise
@@ -200,7 +282,15 @@ def run(
 
 
 def _run_unit(
-    svc: Any, config: Any, run_dir: Path, recipe: Any, unit: Unit, *, stage: str, render: bool
+    svc: Any,
+    config: Any,
+    run_dir: Path,
+    recipe: Any,
+    unit: Unit,
+    *,
+    stage: str,
+    render: bool,
+    keep_source: bool = False,
 ) -> dict[str, Any]:
     from ..service import jobs as svc_jobs
 
@@ -220,7 +310,7 @@ def _run_unit(
         raise
 
     elapsed = time.monotonic() - started
-    _copy_artifacts(config.job_dir(job_id), item_dir)
+    _copy_artifacts(config.job_dir(job_id), item_dir, keep_source=keep_source)
     (item_dir / "job.json").write_text(json.dumps(job, indent=2, default=str), encoding="utf-8")
 
     record = {
@@ -249,9 +339,10 @@ def _render_views(item_dir: Path) -> bool:
         return False
 
 
-def _copy_artifacts(job_dir: Path, item_dir: Path) -> None:
+def _copy_artifacts(job_dir: Path, item_dir: Path, *, keep_source: bool = False) -> None:
     """Copied, never referenced: a run has to survive ``prune_jobs``."""
-    for name in ARTIFACTS:
+    names = (*ARTIFACTS, SOURCE_ARTIFACT) if keep_source else ARTIFACTS
+    for name in names:
         src = job_dir / name
         if src.exists():
             shutil.copyfile(src, item_dir / name)

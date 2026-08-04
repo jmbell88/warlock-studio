@@ -94,6 +94,12 @@ def render_views(
     from .. import rigging
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Cleared, not merged into. A resumed unit renders into a directory that
+    # already holds the previous mesh's frames, and a render that fails part
+    # way through would otherwise leave a set that is half one reconstruction
+    # and half another -- scored, silently, as if it were one.
+    for stale in out_dir.glob("*.png"):
+        stale.unlink(missing_ok=True)
     plan = view_plan(frame_size=frame_size, elevation=elevation)
     cells = worker_cells(plan, yaw_offset)
     spec = rigging.sheet_spec(

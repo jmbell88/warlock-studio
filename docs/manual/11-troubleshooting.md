@@ -93,8 +93,33 @@ the one non-fatal check that gets a fatal check's banner.
 `17971`. The app is perfectly usable without ever running a mesh job, which is why the check is not
 fatal — but every 3D job will fail until the port is free, or worse, be served by the orphan.
 
-**Fix.** End the stray `trellis-server.exe` process, then restart Warlock. If something else on the
-machine legitimately owns that port, move Warlock instead by setting `WARLOCK_TRELLIS_PORT`.
+**Fix.** Usually nothing. The first 3D job after the banner looks at who holds the port: if it is a
+`trellis-server.exe` started from this Warlock's own vendored copy — the only case where the answer
+is certain — it is an orphan, and it is ended and replaced automatically, with a warning line in
+`warlock.log` saying so. Anything else is left strictly alone and the job fails naming the process
+and its path; end that program, or move Warlock by setting `WARLOCK_TRELLIS_PORT`.
+
+**If the engine keeps failing to start.** Repeated failures are spaced out rather than retried at
+once — each attempt waits longer than the last, up to five minutes, and the job that triggered it
+still fails immediately with the reason. That is deliberate: a burst of identical restarts buries
+the first failure, which is the only one that says what actually went wrong. `trellis.log` has it.
+
+## Warlock says the previous session did not shut down cleanly
+
+**What you see.** A warning in `warlock.log` at startup naming the previous run's process id and
+start time.
+
+**Why.** Every session writes a marker file when it starts and removes it on the way out. A marker
+still present at the next launch means the last run never reached its shutdown — a crash, a forced
+kill, or a power loss.
+
+**Fix.** Nothing to repair; the message is evidence, not a fault. It is worth acting on only in that
+it says where to look: `crash.log` for a native traceback with a matching session line, and
+`warlock.log` for the run's final entries. A run that ended normally logs `teardown complete`, so
+the absence of that line is the sharpest confirmation of a hard death.
+
+A variant of the same warning says another Warlock **appears to be running**. Two instances share
+one job database and one engine port, and the second will lose fights over both.
 
 ## Holes or artifacts in a mesh
 
@@ -133,13 +158,34 @@ matting falls back to a threshold cutout that clips soft edges.
 normal — see
 [Mesh audit and mesh report](03-generating-meshes.md#mesh-audit-and-mesh-report).
 
+## The window feels sluggish
+
+**What you see.** Panels lag behind the pointer, or the turntable stutters, and it is not obvious
+whether the app is slow or the machine is busy.
+
+**Why.** The frame loop is capped at 60 frames per second, so a healthy session sits at 60 and never
+above it. Anything lower is the loop failing to keep up — usually a GPU job running alongside the
+window, a very large paint document, or a mesh being drawn at full reconstruction density.
+
+**Fix.** Press **F10** for the frame-rate readout, bottom-left. It shows the rate over the last two
+seconds, the mean frame time and the slowest single frame in that window — the last of those is the
+one that catches a stutter, since one 100 ms stall barely moves an average. Green is at target, amber
+is degraded, red is badly behind. Press F10 again to hide it; the choice is remembered.
+
+**Afterwards.** The rate is also written to `warlock.log` every 30 seconds beside the memory sample,
+and once more when the app closes, so a session that felt slow can be checked after the fact — see
+[Where everything lives](#where-everything-lives).
+
 ## Where everything lives
 
 When something needs investigating, these are the four places to look:
 
 - `assets/warlock.log` — the rotating application log, 5 MB with three backups.
 - `assets/crash.log` — native crash tracebacks, appended, for the failures Python logging cannot
-  catch.
+  catch. Each run writes a `=== session … ===` line on startup, so a traceback can be tied to the
+  run that produced it.
+- `assets/session.marker` — present only while the app is running; left behind by a crash, which is
+  what produces the unclean-shutdown warning above.
 - `assets/jobs.sqlite` — the job store: every job row, its parameters and its status.
 - `assets/` plus the job id — the job's own directory, with its images, meshes, rigs, poses and
   sheets.

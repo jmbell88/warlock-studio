@@ -21,18 +21,18 @@ from ..state import format_duration
 
 def toolbar(ctx: Any) -> None:
     """The viewer's own controls, along the top of the viewport."""
-    from .. import paint_mode
+    from .. import inker_mode
 
     state = ctx.state
     viewer = ctx.viewer
     if viewer is None:
         return
     job = ctx.job()
-    if ctx.state.mode == "2d" and paint_mode.can_edit_job(ctx, job):
+    if ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
         if imgui.button(f"{icons.BRUSH} Open in Paint"):
-            paint_mode.open_job_reference(ctx, job)
+            inker_mode.open_job_reference(ctx, job)
         imgui.same_line()
     if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):
         viewer.frame()

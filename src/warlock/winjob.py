@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import subprocess
 import sys
 from ctypes import wintypes
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -138,3 +140,153 @@ def assign(pid: int) -> bool:
         return ok
     finally:
         kernel32.CloseHandle(handle)
+
+
+def armed() -> bool:
+    """True if the kill-on-close job exists and children are being assigned.
+
+    ``_ensure_job`` failing was previously visible only as a log line, which
+    makes a host where the guarantee quietly did not take indistinguishable
+    from one where it did. This is what the doctor row calls.
+    """
+    return _ensure_job() is not None
+
+
+def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    """``subprocess.run``, but the child is in the kill-on-close job.
+
+    ``subprocess.run`` spawns and waits in one call, which leaves no moment to
+    assign the pid -- so a short-lived child (the bpy probe, gltfpack) outlived
+    a hard kill of the parent exactly as the long-lived ones used to. This is
+    the same three steps `run` performs, with the assignment in the gap.
+
+    ``capture_output``/``text``/``timeout`` behave as they do on
+    ``subprocess.run``; on a timeout the child is killed and
+    ``TimeoutExpired`` is raised, matching it.
+    """
+    timeout = kwargs.pop("timeout", None)
+    if kwargs.pop("capture_output", False):
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+    kwargs.setdefault("creationflags", getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    with subprocess.Popen(argv, **kwargs) as proc:
+        assign(proc.pid)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+# --- identifying (and reclaiming) whatever holds a port ----------------------
+#
+# The job object makes an orphan impossible going forward, but it cannot undo
+# one: a trellis-server stranded by a crash that predates the fix still holds
+# 17971, and the only thing the app could say about it was "run Get-Process
+# yourself". These three answer "who is that, and is it ours" -- the same
+# ctypes / no-op-off-Windows / swallow-failures contract as everything above,
+# and psutil is not a dependency.
+
+_TCP_TABLE_OWNER_PID_ALL = 5
+_AF_INET = 2
+_MIB_TCP_STATE_LISTEN = 2
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_INSUFFICIENT_BUFFER = 122
+
+
+if sys.platform == "win32":
+
+    class _MIB_TCPROW_OWNER_PID(ctypes.Structure):
+        _fields_ = [
+            ("dwState", wintypes.DWORD),
+            ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+
+def listener_pid(port: int) -> int | None:
+    """The pid listening on 127.0.0.1:`port`, or None if it cannot be found."""
+    if sys.platform != "win32":
+        return None
+    try:
+        iphlpapi = ctypes.windll.iphlpapi
+        size = wintypes.DWORD(0)
+        # First call sizes the buffer; it is expected to fail.
+        iphlpapi.GetExtendedTcpTable(
+            None, ctypes.byref(size), False, _AF_INET, _TCP_TABLE_OWNER_PID_ALL, 0
+        )
+        buf = ctypes.create_string_buffer(size.value)
+        rc = iphlpapi.GetExtendedTcpTable(
+            buf, ctypes.byref(size), False, _AF_INET, _TCP_TABLE_OWNER_PID_ALL, 0
+        )
+        if rc != 0:
+            log.debug("GetExtendedTcpTable failed (%d)", rc)
+            return None
+        count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD)).contents.value
+        rows = ctypes.cast(
+            ctypes.byref(buf, ctypes.sizeof(wintypes.DWORD)),
+            ctypes.POINTER(_MIB_TCPROW_OWNER_PID),
+        )
+        for i in range(count):
+            row = rows[i]
+            # dwLocalPort is in network byte order in the low 16 bits.
+            local = ((row.dwLocalPort & 0xFF) << 8) | ((row.dwLocalPort >> 8) & 0xFF)
+            if row.dwState == _MIB_TCP_STATE_LISTEN and local == port:
+                return int(row.dwOwningPid)
+    except (OSError, AttributeError, ValueError):
+        log.debug("could not read the TCP table", exc_info=True)
+    return None
+
+
+def image_path(pid: int) -> str | None:
+    """The full path of `pid`'s executable, or None.
+
+    The only thing that can distinguish an orphan we may kill from a stranger's
+    process that happens to hold the port.
+    """
+    if sys.platform != "win32" or pid <= 0:
+        return None
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(32768)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if not kernel32.QueryFullProcessImageNameW(
+                handle, 0, buf, ctypes.byref(size)
+            ):
+                return None
+            return buf.value or None
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        log.debug("could not read the image path of pid %d", pid, exc_info=True)
+        return None
+
+
+def terminate(pid: int) -> bool:
+    """Kill `pid`. True if the call succeeded."""
+    if sys.platform != "win32" or pid <= 0:
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+        if not handle:
+            log.warning("could not open pid %d to terminate it", pid)
+            return False
+        try:
+            return bool(kernel32.TerminateProcess(handle, 1))
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        log.warning("could not terminate pid %d", pid, exc_info=True)
+        return False

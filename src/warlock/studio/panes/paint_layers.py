@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker, paint_mode, theme, widgets
+from .. import inker, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from . import paint_textures
 
@@ -24,7 +24,7 @@ _opacity_drag: dict[int, float] = {}
 
 
 def draw(ctx: Any) -> None:
-    state = paint_mode.ensure(ctx)
+    state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("layers")
     manual_render.help_button(ctx, "paint-layers")

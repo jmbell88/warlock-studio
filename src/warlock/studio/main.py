@@ -12,14 +12,18 @@ those six may block.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .. import memlog
+from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +51,7 @@ class App:
         self._running = False
         self._min_size = MIN_SIZE
         self._last_frame = time.perf_counter()
+        self._started_at = self._last_frame
         # Seeded to 0.0, not to now: the first tick fires immediately and puts
         # a startup baseline in the log to measure every later sample against.
         self._last_memory_log = 0.0
@@ -54,6 +59,10 @@ class App:
         # re-raising it every frame would make it impossible to dismiss.
         self._fatal_reported = False
         self._was_landing = True
+        # Measured every frame, drawn only when state.show_fps is on (F10), and
+        # logged once at teardown regardless -- the overlay answers "is it
+        # smooth now", the log line is the evidence for "it ran at 60".
+        self.fps = fps_mod.FpsMeter()
         # Set by _draw_viewport_image, read one frame later by _events. The
         # host window is fullscreen, so io.want_capture_mouse is always true
         # and cannot be the gate; imgui's own hover test on the viewport image
@@ -124,6 +133,7 @@ class App:
 
         state = AppState()
         state.mode = settings.get("mode") or "2d"
+        state.show_fps = bool(settings.get("show_fps"))
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
         state.history = list(settings.get("history") or [])
@@ -206,8 +216,16 @@ class App:
         # setup() is inside the try: it starts the runtime before it touches
         # pygame or GL, so a failure past that point used to skip teardown and
         # leave the store, the loop thread and the worker running.
+        #
+        # The two phases are reported differently on purpose. A window that
+        # never appeared and a window that vanished after twenty minutes are
+        # different bugs, and the log line was the only thing that could tell
+        # them apart -- when there was one at all.
+        in_setup = True
+        rc = 0
         try:
             self.setup()
+            in_setup = False
             self._running = True
             clock = pygame.time.Clock()
             while self._running:
@@ -215,14 +233,24 @@ class App:
                 self.frame(dt)
                 pygame.display.flip()
                 clock.tick(TARGET_FPS)
+        except Exception:
+            rc = 1
+            if in_setup:
+                log.exception("Warlock Studio could not start")
+            else:
+                log.exception(
+                    "the frame loop crashed mid-session after %d frames (%.1f s up)",
+                    self.fps.frames, time.perf_counter() - self._started_at,
+                )
         finally:
             self.teardown()
-        return 0
+        return rc
 
     def _tick(self) -> float:
         now = time.perf_counter()
         dt = min(now - self._last_frame, 0.25)
         self._last_frame = now
+        self.fps.record(dt)
         self._memory_ticker(now)
         return dt
 
@@ -242,7 +270,11 @@ class App:
         self._last_memory_log = now
         summary = memlog.summary()
         if summary is not None:
-            log.info("host idle-tick: %s", summary)
+            # The frame rate rides along on the same line: a session that dies
+            # without unwinding leaves no teardown summary, and memory and
+            # smoothness are the two things worth reading against each other.
+            rate = f" | {self.fps.fps:.1f} fps" if self.fps.frames else ""
+            log.info("host idle-tick: %s%s", summary, rate)
 
     def frame(self, dt: float) -> None:
         from imgui_bundle import imgui
@@ -277,13 +309,13 @@ class App:
         for done in ctx.tasks.poll():
             if not done.ok:
                 ctx.toast(done.message or "That did not work.", "error")
-                if done.key.startswith("paint-"):
-                    from . import paint_mode
+                if done.key.startswith("inker-"):
+                    from . import inker_mode
 
                     # A failed save must not leave the document locked: saving
                     # disables every editing control, so without this one bad
                     # write makes the tab read-only until it is closed.
-                    paint_mode.on_task_failed(ctx, done)
+                    inker_mode.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -318,10 +350,10 @@ class App:
             # task, so picking a 20 MB image never touches the frame thread.
             ctx.state.form_2d["ref_path"] = str(done.result)
             return
-        if key.startswith("paint-"):
-            from . import paint_mode
+        if key.startswith("inker-"):
+            from . import inker_mode
 
-            paint_mode.on_task_done(ctx, done)
+            inker_mode.on_task_done(ctx, done)
             return
         if key == "submit":
             ctx.cache.invalidate()
@@ -571,16 +603,22 @@ class App:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
             ctx.state.manual.open = True
             return
+        # Above the landing and paint returns below: the frame rate is a
+        # property of the loop, not of whichever pane happens to be on screen,
+        # and the chooser is exactly where a slow startup would show.
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
+            ctx.state.show_fps = not ctx.state.show_fps
+            return
         if ctx.state.landing:
             # The chooser has no form to submit and no viewport to frame; every
             # one of these would act on a pane that is not on screen.
             return
         if ctx.state.mode == "paint":
-            from . import paint_mode
+            from . import inker_mode
 
             # Consumes every key while a painting is open, so F/W/S/Ctrl+Enter
             # cannot act on the panes Paint has replaced.
-            if paint_mode.handle_key(ctx, event):
+            if inker_mode.handle_key(ctx, event):
                 return
         # Both edges are dispatched, because paint's space-to-pan is a hold and
         # needs the release. Nothing below is a hold: every one of these is a
@@ -618,10 +656,10 @@ class App:
 
         ctx = self.app_ctx
         if ctx.state.mode == "paint":
-            from . import paint_mode
+            from . import inker_mode
 
             ctx.state.landing = False
-            paint_mode.open_path(ctx, path)
+            inker_mode.open_path(ctx, path)
             return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
@@ -642,11 +680,11 @@ class App:
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
-        from . import paint_mode
+        from . import inker_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
-        paint_mode.guard(
+        inker_mode.guard(
             ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
         )
 
@@ -831,6 +869,7 @@ class App:
         from .panes import overlay
 
         ctx = self.app_ctx
+        overlay.fps_meter(ctx, self.fps)
         if not ctx.state.landing:
             overlay.progress_card(ctx, self.eta)
         from .manual import render as manual_render
@@ -927,6 +966,7 @@ class App:
             "Everywhere",
             [
                 ("F1", "Open the manual"),
+                ("F10", "Toggle the frame-rate readout"),
                 ("Ctrl+Enter", "Generate / Make 3D"),
                 ("F", "Frame the model"),
                 ("W", "Toggle wireframe"),
@@ -934,7 +974,7 @@ class App:
                 ("Esc", "Exit comparison / pose edit"),
             ],
         )
-        from .paint_mode import TOOL_KEYS
+        from .inker_mode import TOOL_KEYS
 
         tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
         table(
@@ -1065,30 +1105,57 @@ class App:
     # -- teardown ----------------------------------------------------------
 
     def teardown(self) -> None:
+        """Unwind everything, and let no step stop a later one.
+
+        Each stage is independent, and the last of them -- runtime.shutdown --
+        is the one that stops the worker loop and the trellis child. A GL
+        release raising on a lost context used to skip it, which is a stranded
+        trellis-server and a process that will not exit.
+        """
         import pygame
 
+        if self.fps.frames:
+            log.info("frame loop: %s", self.fps.summary())
         ctx = self.app_ctx
         if ctx is not None:
-            from .settings import sanitise_form
-
-            ctx.settings.set("mode", ctx.state.mode)
-            ctx.settings.set("form_2d", sanitise_form(ctx.state.form_2d))
-            ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
-            ctx.settings.set("history", ctx.state.history)
-            ctx.settings.set("filters", vars(ctx.state.filters))
-            ctx.settings.flush()
-            from . import paint_mode
-
-            paint_mode.persist(ctx)
-            ctx.settings.flush()
+            _step("persist settings", lambda: self._persist(ctx))
+            _step("persist paint", lambda: self._persist_paint(ctx))
             if ctx.textures is not None:
-                ctx.textures.release()
+                _step("release textures", ctx.textures.release)
         if self.viewer is not None:
-            self.viewer.release()
+            _step("release viewer", self.viewer.release)
         if self.imgui_renderer is not None:
-            self.imgui_renderer.shutdown()
-        pygame.quit()
-        self.runtime.shutdown()
+            _step("shutdown imgui", self.imgui_renderer.shutdown)
+        _step("pygame.quit", pygame.quit)
+        _step("runtime shutdown", self.runtime.shutdown)
+        # The line whose *absence* is evidence: a session that ends without it
+        # died somewhere no `except` could see.
+        log.info("teardown complete")
+
+    def _persist(self, ctx: Any) -> None:
+        from .settings import sanitise_form
+
+        ctx.settings.set("mode", ctx.state.mode)
+        ctx.settings.set("show_fps", ctx.state.show_fps)
+        ctx.settings.set("form_2d", sanitise_form(ctx.state.form_2d))
+        ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
+        ctx.settings.set("history", ctx.state.history)
+        ctx.settings.set("filters", vars(ctx.state.filters))
+        ctx.settings.flush()
+
+    def _persist_paint(self, ctx: Any) -> None:
+        from . import inker_mode
+
+        inker_mode.persist(ctx)
+        ctx.settings.flush()
+
+
+def _step(label: str, fn: Any) -> None:
+    """Run one teardown stage; a failure is logged and the unwind continues."""
+    try:
+        fn()
+    except Exception:
+        log.exception("teardown: %s failed; continuing", label)
 
 
 def _background() -> tuple[float, float, float, float]:
@@ -1132,20 +1199,180 @@ def _setup_logging() -> None:
         # object that could be closed or garbage-collected first.
         global _crash_log
         _crash_log = (data_dir / "crash.log").open("a", encoding="utf-8")
+        # Written before faulthandler is armed, so any dump below it is
+        # attributable: crash.log is appended to across runs, and a bare
+        # traceback with no session line above it belongs to nobody.
+        _crash_log.write(
+            f"=== session {_utc_now()} pid={os.getpid()} warlock={_version()} ===\n"
+        )
+        _crash_log.flush()
         faulthandler.enable(file=_crash_log)
     except OSError:
         # A read-only or missing data_dir is not a reason to refuse to start;
         # console logging alone is what we had before.
         logging.getLogger(__name__).warning("file logging unavailable", exc_info=True)
 
+    # force=True is load-bearing, not defensive: cli.main() used to call
+    # basicConfig() before dispatching here, which left the root logger with a
+    # handler and made this call a silent no-op -- warlock.log was created on
+    # every launch and never written to on the one path anybody actually uses.
     logging.basicConfig(
         level=os.environ.get("WARLOCK_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=handlers,
+        force=True,
     )
 
 
 _crash_log: Any = None
+
+SESSION_MARKER = "session.marker"
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _version() -> str:
+    """The installed version, falling back to the packaged constant."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("warlock")
+    except PackageNotFoundError:
+        from .. import __version__
+
+        return __version__
+
+
+def _install_excepthooks() -> None:
+    """Route every uncaught exception through logging before the default hook.
+
+    The app path only. An exception escaping the frame loop went to stderr and
+    nowhere else, which is precisely why the 2026-08-04 crash left an empty
+    warlock.log; a daemon thread dying (``warlock-loop``, trellis' stdout
+    reader) was even quieter, since nothing prints for those at all.
+    """
+
+    def _hook(exc_type, exc, tb):  # type: ignore[no-untyped-def]
+        log.critical("uncaught exception", exc_info=(exc_type, exc, tb))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    def _thread_hook(args):  # type: ignore[no-untyped-def]
+        if issubclass(args.exc_type, SystemExit):
+            return
+        log.critical(
+            "uncaught exception on thread %s",
+            getattr(args.thread, "name", "?"),
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    def _unraisable(args):  # type: ignore[no-untyped-def]
+        log.critical(
+            "unraisable exception in %r",
+            args.object,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _hook
+    threading.excepthook = _thread_hook
+    sys.unraisablehook = _unraisable
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether `pid` names a live process.
+
+    Never ``os.kill(pid, 0)``: on Windows that signature terminates the target
+    rather than probing it.
+    """
+    if pid <= 0:
+        return False
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    _QUERY_LIMITED_INFORMATION = 0x1000
+    _STILL_ACTIVE = 259
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == _STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        return False
+
+
+def _marker_path() -> Path:
+    from ..config import get_config
+
+    return get_config().data_dir / SESSION_MARKER
+
+
+def _note_previous_session() -> None:
+    """Say so in the log when the last session did not reach teardown.
+
+    A crash that kills the process outright leaves no record of itself; it
+    leaves this file behind instead. Never raises -- an unreadable data_dir is
+    already handled by _setup_logging and must not block startup either.
+    """
+    try:
+        raw = _marker_path().read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return
+    try:
+        data = json.loads(raw)
+        pid = int(data.get("pid", 0))
+    except (ValueError, TypeError, AttributeError):
+        log.warning("previous session marker is unreadable: %r", raw[:200])
+        return
+    if _pid_alive(pid) and pid != os.getpid():
+        log.warning(
+            "another Warlock instance (pid %d, started %s) appears to be running; "
+            "they share the job database and the trellis port",
+            pid, data.get("started_at", "?"),
+        )
+        return
+    log.warning(
+        "the previous session (pid %d, started %s, warlock %s) did not shut down "
+        "cleanly -- check crash.log and Windows event 2004",
+        pid, data.get("started_at", "?"), data.get("version", "?"),
+    )
+
+
+def _write_session_marker() -> None:
+    try:
+        _marker_path().write_text(
+            json.dumps({
+                "pid": os.getpid(),
+                "started_at": _utc_now(),
+                "version": _version(),
+            }),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning("could not write the session marker", exc_info=True)
+
+
+def _clear_session_marker() -> None:
+    try:
+        _marker_path().unlink(missing_ok=True)
+    except OSError:
+        log.warning("could not clear the session marker", exc_info=True)
 
 
 def run() -> int:
@@ -1153,11 +1380,22 @@ def run() -> int:
     from .runtime import Runtime
 
     _setup_logging()
+    _install_excepthooks()
+    log.info(
+        "Warlock Studio %s starting: pid=%d python=%s argv=%s",
+        _version(), os.getpid(), sys.version.split()[0], sys.argv[1:],
+    )
+    _note_previous_session()
+    _write_session_marker()
     try:
         return App(Runtime()).run()
     except Exception:
+        # App.run reports and swallows its own failures, so anything arriving
+        # here happened before the loop existed -- constructing the Runtime.
         log.exception("Warlock Studio could not start")
         return 1
+    finally:
+        _clear_session_marker()
 
 
 if __name__ == "__main__":

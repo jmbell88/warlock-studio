@@ -6,6 +6,7 @@ between them, which a mock would define away.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import time
@@ -13,6 +14,7 @@ import time
 import pytest
 
 from warlock.service.errors import Invalid
+from warlock.studio.fps import FpsMeter
 from warlock.studio.runtime import Runtime
 from warlock.studio.tasks import TaskRunner, _threads_queues
 
@@ -41,6 +43,25 @@ def test_starting_gives_a_service_with_a_live_worker(runtime):
     assert runtime.fatal is None
 
 
+def test_the_vram_mode_is_resolved_before_the_worker_exists(runtime, monkeypatch):
+    """queue.py reads a plain bool once, at startup. Resolving it any later --
+    or leaving the tri-state None on the config -- breaks that contract."""
+    seen: list[object] = []
+    original = runtime._make_worker
+
+    async def spy():
+        seen.append(runtime.config.vram_exclusive)
+        return await original()
+
+    monkeypatch.setattr(runtime, "_make_worker", spy)
+    monkeypatch.setattr(runtime.config, "vram_exclusive", None)
+    monkeypatch.setattr(runtime.config, "vram_total_gib", 8.0)
+    svc = runtime.start()
+    assert seen == [True]  # 8 GiB cannot coexist, so auto picks exclusive
+    assert runtime.vram_plan is not None
+    assert svc.vram_plan is runtime.vram_plan
+
+
 def test_the_worker_runs_on_its_own_thread(runtime):
     runtime.start()
     assert threading.current_thread().name != "warlock-loop"
@@ -67,6 +88,18 @@ def test_a_job_still_running_at_startup_is_reconciled(runtime, tmp_path):
     # Surfaced, not silently re-run: a crash mid-render should not cost two
     # minutes of GPU on every subsequent launch.
     assert svc.store.get(job_id)["status"] != "running"
+
+
+def test_an_error_on_the_worker_loop_is_logged_not_printed(runtime, caplog):
+    """asyncio's default handler writes to a stderr nobody keeps."""
+    from warlock.studio.runtime import _loop_error
+
+    runtime.start()
+    assert runtime._loop.get_exception_handler() is _loop_error
+    with caplog.at_level(logging.CRITICAL):
+        _loop_error(runtime._loop, {"message": "Task exception was never retrieved",
+                                    "exception": RuntimeError("boom")})
+    assert any("worker loop" in r.message for r in caplog.records)
 
 
 def test_shutdown_is_idempotent(runtime):
@@ -118,15 +151,17 @@ def test_run_tears_down_when_setup_fails(runtime, monkeypatch):
     app.runtime = runtime
     app.window = app.imgui_renderer = app.viewer = app.app_ctx = app.eta = None
     app._running = False
-    app._last_frame = 0.0
+    app._last_frame = app._started_at = 0.0
+    app.fps = FpsMeter()
 
     def setup():
         runtime.start()
         raise RuntimeError("no OpenGL 3.3")
 
     app.setup = setup
-    with pytest.raises(RuntimeError, match="no OpenGL"):
-        app.run()
+    # Reported, not re-raised: the traceback goes to warlock.log, and the exit
+    # code is what the caller acts on.
+    assert app.run() == 1
     assert runtime.store is None and runtime.worker is None
 
 

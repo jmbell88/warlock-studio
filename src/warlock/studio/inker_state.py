@@ -163,7 +163,7 @@ def zoom_about(
 
 
 @dataclass
-class PaintDoc:
+class InkerDoc:
     """One tab.
 
     ``uid`` is stable and never reused, because imgui identifies a tab by its
@@ -222,8 +222,8 @@ def title_for(path: Path | None) -> str:
 
 
 @dataclass
-class PaintState:
-    docs: list[PaintDoc] = field(default_factory=list)
+class InkerState:
+    docs: list[InkerDoc] = field(default_factory=list)
     active_uid: str = ""
     recent: list[str] = field(default_factory=list)
 
@@ -269,7 +269,7 @@ class PaintState:
     # -- documents ---------------------------------------------------------
 
     @property
-    def active(self) -> PaintDoc | None:
+    def active(self) -> InkerDoc | None:
         for doc in self.docs:
             if doc.uid == self.active_uid:
                 return doc
@@ -279,13 +279,13 @@ class PaintState:
     def any_dirty(self) -> bool:
         return any(doc.dirty for doc in self.docs)
 
-    def add(self, doc: PaintDoc) -> PaintDoc:
+    def add(self, doc: InkerDoc) -> InkerDoc:
         self.docs.append(doc)
         self.active_uid = doc.uid
         self.clear_drag()
         return doc
 
-    def get(self, uid: str) -> PaintDoc | None:
+    def get(self, uid: str) -> InkerDoc | None:
         for doc in self.docs:
             if doc.uid == uid:
                 return doc
@@ -316,7 +316,7 @@ class PaintState:
         index = self.docs.index(current) if current in self.docs else 0
         self.activate(self.docs[(index + step) % len(self.docs)].uid)
 
-    def find_path(self, path: Path) -> PaintDoc | None:
+    def find_path(self, path: Path) -> InkerDoc | None:
         """An already-open tab for this file, so opening twice focuses rather
         than forking -- two tabs over one path would race on save."""
         for doc in self.docs:
@@ -324,7 +324,7 @@ class PaintState:
                 return doc
         return None
 
-    def find_job(self, job_id: str) -> PaintDoc | None:
+    def find_job(self, job_id: str) -> InkerDoc | None:
         for doc in self.docs:
             if doc.job_id == job_id:
                 return doc

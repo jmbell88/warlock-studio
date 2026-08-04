@@ -162,10 +162,49 @@ def test_a_torn_last_line_is_simply_re_run(config):
     run_dir = config.bench_dir / "runs" / "x"
     run_dir.mkdir(parents=True)
     (run_dir / runner_mod.ITEMS_FILE).write_text(
-        json.dumps({"key": "prop-01--s42"}) + '\n{"key": "prop-0',
+        json.dumps({"key": "prop-01--s42", "status": "done"}) + '\n{"key": "prop-0',
         encoding="utf-8",
     )
     assert runner_mod.completed(run_dir) == {"prop-01--s42"}
+
+
+def test_a_unit_that_did_not_finish_is_retried_by_a_resume(config):
+    """A failed unit records a terminal row like any other. Keying on mere
+    presence marked it permanently done, so the one thing a resume is for --
+    picking up after a failure -- was the one thing it could not do."""
+    run_dir = config.bench_dir / "runs" / "y"
+    run_dir.mkdir(parents=True)
+    (run_dir / runner_mod.ITEMS_FILE).write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                {"key": "a--s1", "status": "done"},
+                {"key": "b--s1", "status": "error", "error": "boom"},
+                {"key": "c--s1", "status": "cancelled"},
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert runner_mod.completed(run_dir) == {"a--s1"}
+    assert runner_mod.retryable(run_dir) == {"b--s1", "c--s1"}
+
+
+def test_a_retry_supersedes_the_failure_it_replaces(config):
+    run_dir = config.bench_dir / "runs" / "z"
+    run_dir.mkdir(parents=True)
+    (run_dir / runner_mod.ITEMS_FILE).write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                {"key": "a--s1", "status": "error"},
+                {"key": "a--s1", "status": "done", "seconds": 2},
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert runner_mod.completed(run_dir) == {"a--s1"}
+    assert runner_mod.retryable(run_dir) == set()
+    assert runner_mod.latest_items(run_dir)["a--s1"]["seconds"] == 2
 
 
 def test_prune_keeps_the_newest_runs(config):

@@ -16,12 +16,12 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint_mode, theme, widgets
+from .. import inker_mode, theme, widgets
 from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:
-    state = paint_mode.ensure(ctx)
+    state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("document")
     manual_render.help_button(ctx, "paint-bridge")
@@ -51,18 +51,18 @@ def _pipeline(ctx: Any, tab: Any) -> None:
     busy = tab.saving
     if not tab.linked:
         if widgets.disabled_button("Save as reference", not busy, (-1, 0)):
-            paint_mode.save_as_reference(ctx, tab)
+            inker_mode.save_as_reference(ctx, tab)
         widgets.help_marker(
             "Adds this image to the library as a finished reference, so it can be"
             " meshed, promoted and rerun like a generated one."
         )
     if widgets.disabled_button("Send to 3D", not busy, (-1, 0)):
-        paint_mode.send_to_3d(ctx, tab)
+        inker_mode.send_to_3d(ctx, tab)
     widgets.help_marker("Queues the mesh stage from the flattened image.")
     if tab.linked and widgets.disabled_button(
         "Revert to original", tab.has_original and not busy, (-1, 0)
     ):
-        paint_mode.revert(ctx, tab)
+        inker_mode.revert(ctx, tab)
 
 
 def _canvas_ops(ctx: Any, tab: Any) -> None:

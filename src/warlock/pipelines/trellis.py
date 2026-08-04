@@ -30,6 +30,13 @@ log = logging.getLogger(__name__)
 STARTUP_TIMEOUT = 300.0  # health endpoint answers in ~1 s; weights load on first generate
 GENERATE_TIMEOUT = 1800.0
 LOG_MAX_BYTES = 5 * 1024 * 1024  # the log used to grow forever; roll it instead
+# Respawn backoff: 5 s doubling to a 5-minute ceiling, and one give-up line
+# after five consecutive failures. Jobs still fail fast with the reason -- the
+# backoff stops the respawn storm, not the error reaching the inspector.
+BACKOFF_BASE = 5.0
+BACKOFF_MAX = 300.0
+BACKOFF_GIVE_UP = 5
+RECLAIM_TIMEOUT = 5.0  # how long to wait for a killed orphan to release the port
 
 
 def _port_in_use(port: int) -> bool:
@@ -84,6 +91,10 @@ class TrellisServer:
         # When the live child was spawned, so its lifetime can be logged at
         # reap time. A short lifetime is the signature of a bind failure.
         self._spawned_at: float | None = None
+        # Consecutive startup failures, and the monotonic time before which
+        # ensure_started refuses to spawn again. Both reset on "ready".
+        self._start_failures = 0
+        self._backoff_until = 0.0
 
     @property
     def base_url(self) -> str:
@@ -131,6 +142,7 @@ class TrellisServer:
             self._reap_if_dead()
             if self.running:
                 return
+            self._check_backoff()
             if not self._exe.exists():
                 raise RuntimeError(f"trellis-server not found at {self._exe}")
             if not self._models_dir.exists():
@@ -141,11 +153,7 @@ class TrellisServer:
             # about to spawn dies on bind. Every generate then goes to the
             # orphan. Fail loudly here instead.
             if _port_in_use(self._port):
-                raise RuntimeError(
-                    f"port {self._port} is already in use, probably by an orphaned "
-                    "trellis-server.exe left behind by a previous crash. Run "
-                    "`Get-Process trellis-server` and stop it before retrying."
-                )
+                await self._reclaim_port()
             log.info("starting trellis-server on port %d", self._port)
             self._open_log()
             # stdout is piped rather than redirected so we can parse the stage
@@ -177,6 +185,7 @@ class TrellisServer:
                     if proc is None:
                         raise RuntimeError("trellis-server was stopped during startup")
                     if proc.poll() is not None:
+                        self._note_start_failure()
                         raise RuntimeError(
                             f"trellis-server exited during startup (code {proc.returncode})"
                         )
@@ -184,10 +193,93 @@ class TrellisServer:
                         r = await client.get(f"{self.base_url}/health", timeout=2.0)
                         if r.status_code == 200:
                             log.info("trellis-server ready")
+                            self._start_failures = 0
+                            self._backoff_until = 0.0
                             return
                     await asyncio.sleep(1.0)
             self.stop()
+            self._note_start_failure()
             raise RuntimeError("trellis-server did not become healthy in time")
+
+    # --- respawn control ---
+
+    def _check_backoff(self) -> None:
+        """Refuse to respawn inside the backoff window.
+
+        The 2026-08-03 trellis.log holds five startup banners in one minute,
+        each dying on bind: every generate() called ensure_started, and nothing
+        between them ever paused. A storm like that buries the first failure --
+        the only one that says what went wrong -- under identical repeats.
+        """
+        remaining = self._backoff_until - time.monotonic()
+        if remaining > 0:
+            raise RuntimeError(
+                f"trellis-server failed to start {self._start_failures} time(s); "
+                f"refusing to respawn for another {remaining:.0f} s -- see trellis.log"
+            )
+
+    def _note_start_failure(self) -> None:
+        """Count a *startup* failure and widen the window.
+
+        Only failures a retry could plausibly fix. A missing exe or missing
+        weights is a configuration error: it raises before this, because
+        backing off from it would delay the fix rather than the retry.
+        """
+        self._start_failures += 1
+        delay = min(BACKOFF_BASE * 2 ** (self._start_failures - 1), BACKOFF_MAX)
+        self._backoff_until = time.monotonic() + delay
+        if self._start_failures >= BACKOFF_GIVE_UP:
+            log.critical(
+                "trellis-server has failed to start %d times in a row; 3D jobs will "
+                "keep failing until it is fixed -- see trellis.log",
+                self._start_failures,
+            )
+        else:
+            log.warning(
+                "trellis-server start failed (%d in a row); next attempt in %.0f s",
+                self._start_failures, delay,
+            )
+
+    async def _reclaim_port(self) -> None:
+        """Kill a provably-ours orphan holding the port, or refuse to guess.
+
+        "Provably ours" is the whole safety argument: only a process whose
+        image is the very exe this instance is configured to spawn gets killed.
+        Anything else -- another app, or a path we cannot read -- is named in
+        the error and left alone.
+        """
+        pid = winjob.listener_pid(self._port)
+        if pid is None:
+            raise RuntimeError(
+                f"port {self._port} is already in use, probably by an orphaned "
+                "trellis-server.exe left behind by a previous crash. Run "
+                "`Get-Process trellis-server` and stop it before retrying."
+            )
+        path = winjob.image_path(pid)
+        ours = self._exe.resolve()
+        if path is None or os.path.normcase(path) != os.path.normcase(str(ours)):
+            raise RuntimeError(
+                f"port {self._port} is held by pid {pid} ({path or 'unknown program'}), "
+                f"which is not this Warlock's trellis-server ({ours}). Stop it or "
+                "change WARLOCK_TRELLIS_PORT before retrying."
+            )
+        log.warning(
+            "port %d is held by an orphaned trellis-server (pid %d) from a previous "
+            "crash; terminating it", self._port, pid,
+        )
+        winjob.terminate(pid)
+        # Polled, not slept through: the port is released when the kernel tears
+        # the socket down, which is after TerminateProcess returns. asyncio.sleep
+        # because this runs on the worker loop, inside self._lock.
+        deadline = time.monotonic() + RECLAIM_TIMEOUT
+        while time.monotonic() < deadline:
+            if not _port_in_use(self._port):
+                return
+            await asyncio.sleep(0.25)
+        self._note_start_failure()
+        raise RuntimeError(
+            f"port {self._port} is still held after terminating pid {pid}"
+        )
 
     # --- stdout plumbing ---
 

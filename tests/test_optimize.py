@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from warlock import winjob
 from warlock.pipelines import optimize
 
 
@@ -18,7 +19,7 @@ def test_raw_profile_copies_without_invoking_the_exe(tmp_path, monkeypatch):
     def explode(*a, **k):
         raise AssertionError("gltfpack must not run for the raw profile")
 
-    monkeypatch.setattr(subprocess, "run", explode)
+    monkeypatch.setattr(winjob, "run", explode)
 
     def no_counting(path):
         raise AssertionError("the raw profile must not load the mesh to count it")
@@ -48,7 +49,7 @@ def test_command_uses_the_documented_flags(tmp_path, monkeypatch):
         Path(argv[argv.index("-o") + 1]).write_bytes(b"optimised")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(winjob, "run", fake_run)
     monkeypatch.setattr(
         optimize, "_triangles", lambda p: 100_000 if p.name == "source.glb" else 50_000
     )
@@ -69,7 +70,7 @@ def test_command_uses_the_documented_flags(tmp_path, monkeypatch):
 
 def test_a_failing_exe_raises_rather_than_leaving_a_stub(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        subprocess,
+        winjob,
         "run",
         lambda argv, **k: subprocess.CompletedProcess(argv, 1, "", "boom"),
     )

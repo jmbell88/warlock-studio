@@ -24,7 +24,7 @@ import logging
 import threading
 from typing import Any
 
-from .. import doctor
+from .. import doctor, vram
 from ..config import Config, get_config
 from ..db import JobStore
 from ..service import WarlockService
@@ -33,6 +33,21 @@ from .tasks import TaskRunner
 log = logging.getLogger(__name__)
 
 SHUTDOWN_TIMEOUT = 30.0
+
+
+def _loop_error(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+    """Log what asyncio would otherwise print to stderr and forget.
+
+    The default handler writes to stderr, which on the console-script launch
+    path goes to a window that closes with the process. A task on warlock-loop
+    dying is the worker dying, and it must leave a record in warlock.log.
+    """
+    exc = context.get("exception")
+    log.critical(
+        "unhandled error on the worker loop: %s",
+        context.get("message", ""),
+        exc_info=exc if exc is not None else False,
+    )
 
 
 class Runtime:
@@ -45,6 +60,7 @@ class Runtime:
         self.svc: WarlockService | None = None
         self.tasks = TaskRunner()
         self.checks: list[doctor.Check] = []
+        self.vram_plan: vram.Plan | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -75,6 +91,11 @@ class Runtime:
             if not check.ok:
                 level = log.critical if check.fatal else log.warning
                 level("doctor: %s -- %s", check.name, check.detail)
+        # Before the Worker exists, and after run_checks (which has already
+        # paid for the torch import). This is what preserves the documented
+        # "read once at startup" invariant: queue.py goes on reading a plain
+        # bool off the config and never learns that it was resolved.
+        self.vram_plan = self._resolve_vram()
 
         self._thread = threading.Thread(target=self._run_loop, name="warlock-loop", daemon=True)
         self._thread.start()
@@ -86,7 +107,21 @@ class Runtime:
         # has to be created from the thread that will run it.
         self.worker = self._submit(self._make_worker()).result(10.0)
         self.svc = WarlockService(self.config, self.store, self.worker, self._loop)
+        self.svc.vram_plan = self.vram_plan
         return self.svc
+
+    def _resolve_vram(self) -> vram.Plan:
+        """Measure the card, choose the mode, write the decision back."""
+        plan = vram.plan(
+            exclusive=self.config.vram_exclusive,
+            budget_gib=self.config.vram_budget_gib,
+            total_gib=self.config.vram_total_gib,
+            device=vram.probe(),
+        )
+        self.config.vram_exclusive = plan.exclusive
+        self.config.vram_budget_gib = plan.budget_gib
+        log.info("vram: %s", plan.reason)
+        return plan
 
     async def _make_worker(self) -> Any:
         from ..queue import Worker
@@ -98,6 +133,7 @@ class Runtime:
     def _run_loop(self) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        loop.set_exception_handler(_loop_error)
         self._loop = loop
         self._ready.set()
         try:

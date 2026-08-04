@@ -6,8 +6,8 @@ one checkpoint and half against another is worse than no run at all, because
 nothing in the numbers says which half is which. ``assert_resumable`` is the
 only thing standing between that and a plausible-looking scores.json.
 
-Pure and torch-free: provenance.versions() reads sys.modules and never
-imports.
+Pure and torch-free: ``provenance.versions()`` reads sys.modules and
+distribution metadata, never the libraries themselves.
 """
 
 from __future__ import annotations

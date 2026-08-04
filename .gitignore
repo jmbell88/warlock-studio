@@ -15,3 +15,9 @@ sweep/
 .pytest_cache/
 .ruff_cache/
 dist/
+*.egg-info/
+.claude/
+# imgui's window layout, rewritten every time the app is closed. Tracking it
+# meant every run produced a diff and every branch produced a conflict, over a
+# file that is per-machine by definition.
+imgui.ini

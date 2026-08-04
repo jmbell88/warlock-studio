@@ -12,9 +12,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker, paint_mode, paint_state, theme, widgets
+from .. import icons, inker, inker_mode, inker_state, theme, widgets
 from ..manual import render as manual_render
-from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 
 # Icon-only, five across: what every paint program's toolbox looks like. The
 # name and shortcut live in the tooltip -- three columns of bare labels
@@ -45,7 +45,7 @@ BLEND_LABELS = tuple((mode, mode) for mode in inker.BLEND_MODES)
 
 
 def draw(ctx: Any) -> None:
-    state = paint_mode.ensure(ctx)
+    state = inker_mode.ensure(ctx)
     tab = state.active
     widgets.section("tools")
     manual_render.help_button(ctx, "paint-tools")
@@ -61,7 +61,7 @@ def draw(ctx: Any) -> None:
 
 def _grid(state: Any) -> None:
     width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
-    for index, (key, label, shortcut) in enumerate(paint_state.TOOLS):
+    for index, (key, label, shortcut) in enumerate(inker_state.TOOLS):
         selected = state.tool == key
         if selected:
             imgui.push_style_color(
@@ -156,7 +156,7 @@ def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
         widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
         return
     if imgui.button("Free transform (Ctrl+T)", (-1, 0)):
-        paint_mode.begin_transform(ctx)
+        inker_mode.begin_transform(ctx)
     widgets.muted("Rotates and scales the selection, or the whole layer.")
 
 

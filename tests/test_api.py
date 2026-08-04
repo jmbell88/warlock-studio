@@ -356,7 +356,7 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     assert body["worker_alive"] is True
     assert body["fatal"] is None
     assert len(body["checks"]) == (
-        8
+        10
         + len(models.BASE_MODELS)
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)

@@ -220,6 +220,9 @@ class AppState:
     # The composed-prompt preview, refreshed off-thread as the prompt is typed.
     preview: dict[str, Any] = field(default_factory=dict)
     preview_dirty_at: float = 0.0
+    # The frame-rate overlay (F10). Persisted, because someone watching for a
+    # stall wants it to survive the restart they are about to do.
+    show_fps: bool = False
     wireframe: bool = False
     turntable: bool = False
     show_advanced: bool = False

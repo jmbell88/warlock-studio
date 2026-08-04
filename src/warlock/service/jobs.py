@@ -23,6 +23,7 @@ from .validation import (
     MAX_UPLOAD_BYTES,
     check_job_id,
     check_seed,
+    check_vram,
     normalize_tags,
     random_seed,
     valid_template,
@@ -163,6 +164,11 @@ def create_job(
         # rig. The worker queues the follow-up job when the mesh lands.
         params["rig"] = True
         params["rig_template"] = valid_template(rig_template, config.rig_template)
+
+    # Last of the door checks and still before any write, so a refused job
+    # leaves no input.png: the projected peak is a function of the normalized
+    # params (conditioning, resolution), which is why it cannot run any earlier.
+    check_vram(svc, kind, "reference" if output == "reference" else "model", params)
 
     def _decode(raw: bytes, field: str) -> bytes:
         if len(raw) > MAX_UPLOAD_BYTES:
@@ -441,11 +447,29 @@ def rerun_job(
     src_png = svc.job_dir(job_id) / "input.png"
     if kind == "image" and not src_png.exists():
         raise Invalid("source job has no reference image to reuse")
+    if mode == "reroll" and kind == "image" and source["stage"] == "reference":
+        # A hand-drawn or imported reference: there is no generator behind it,
+        # so a new seed changes nothing about the pixels, and the row this
+        # would mint (kind=image, stage=reference) is the one combination
+        # create_job itself refuses. The worker's reference-stage early-return
+        # lives inside its text branch, so such a row used to fall straight
+        # through and pay two minutes of trellis for "give me another image".
+        raise Invalid(
+            "this reference was made by hand, so there is nothing to reroll; "
+            "remesh it to build a mesh from it"
+        )
 
     # Derived values describe the *source* run, not this one: keeping them
     # would make the new job claim a composed prompt it never used and a
     # quality score for a mesh that doesn't exist yet.
     params = {k: v for k, v in source["params"].items() if k not in DERIVED_PARAMS}
+    if kind == "text":
+        # hand_edited is a statement about input.png, not about the run, which
+        # is why it is not in DERIVED_PARAMS: a remesh and a promotion *copy*
+        # that file, so the flag is still true for them. A text reroll
+        # regenerates it from the prompt, so carrying it would claim a hand
+        # edit of pixels nobody has touched.
+        params.pop("hand_edited", None)
     if mode == "remesh":
         # A remesh is an image job: SDXL never runs, so a carried-over
         # conditioning selection would describe a run that cannot happen.
@@ -586,6 +610,10 @@ def promote_to_model(
 
     params["mesh_seed"] = mesh_seed if mesh_seed is not None else random_seed()
     params["seed"] = params["mesh_seed"]
+
+    # The other door onto a mesh job, and the expensive one -- a promotion is
+    # the two-minute reconstruction with nothing cheap in front of it.
+    check_vram(svc, "image", "model", params)
 
     new_id = uuid.uuid4().hex[:12]
     new_dir = svc.job_dir(new_id)

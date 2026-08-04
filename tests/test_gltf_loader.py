@@ -8,7 +8,6 @@ loader that is self-consistently wrong.
 
 from __future__ import annotations
 
-import json
 import struct
 from pathlib import Path
 
@@ -340,6 +339,178 @@ def test_json_only_glbs_are_still_valid(tmp_path):
     doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": []}]}
     path = tmp_path / "empty.glb"
     path.write_bytes(rebuild_glb(struct.pack("<III", 0x46546C67, 2, 0), doc, b""))
+    # The fixture really is JSON-only: no BIN chunk came back out of it.
+    from warlock.glbio import read_glb
+
+    assert read_glb(path)[1] == b""
+
     model = gltf.load(path)
     assert model.nodes == []
-    assert json.loads("{}") == {}  # the doc really was JSON-only
+    assert model.meshes == []
+
+
+# --- hand-supplied GLBs: the cases an exporter never writes -------------------
+#
+# Everything below is about assets this pipeline does not produce. They matter
+# because the loader is also how a user's own GLB gets opened, and each of
+# these failed in a way that produced a *plausible* result rather than an
+# error -- geometry read from the wrong place, a hierarchy flattened, a texture
+# silently dropped with a message that named the wrong reason.
+
+
+def _minimal(accessors, buffer_views, binary, **extra):
+    doc = {
+        "asset": {"version": "2.0"},
+        "accessors": accessors,
+        "bufferViews": buffer_views,
+        "buffers": [{"byteLength": len(binary)}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+        "nodes": [{"mesh": 0}],
+        "scenes": [{"nodes": [0]}],
+        **extra,
+    }
+    return _glb(doc, binary)
+
+
+def test_an_interleaved_accessor_at_the_tail_of_the_buffer_loads():
+    """glTF requires only the elements to be present: the padding after the
+    last one need not exist. Demanding stride*count bytes made this raise
+    "buffer is smaller than requested size" and the model simply failed."""
+    positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype="<f4")
+    stride = 16  # 12 bytes of position plus 4 of something else
+    binary = b"".join(p.tobytes() + b"\x00\x00\x00\x00" for p in positions)
+    # Drop the final element's padding, which is exactly what an exporter
+    # packing tightly to the end of the chunk produces.
+    binary = binary[: stride * (len(positions) - 1) + 12]
+
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary), "byteStride": stride}],
+        binary,
+    )
+    model = gltf.load(data)
+    assert np.allclose(model.meshes[0][0].positions, positions)
+
+
+def test_an_interleaved_accessor_reads_the_right_rows():
+    positions = np.array([[1, 2, 3], [4, 5, 6]], dtype="<f4")
+    binary = b"".join(p.tobytes() + b"\xff\xff\xff\xff" for p in positions)
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 2, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary), "byteStride": 16}],
+        binary,
+    )
+    assert np.allclose(gltf.load(data).meshes[0][0].positions, positions)
+
+
+def test_a_view_naming_a_second_buffer_is_refused_rather_than_misread():
+    """read_glb returns the BIN chunk, which is buffer 0. A view naming buffer
+    1 was read at the same offsets into buffer 0 -- silently wrong geometry."""
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 1, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        buffers=[{"byteLength": len(binary)}, {"byteLength": 999, "uri": "extra.bin"}],
+    )
+    with pytest.raises(ValueError, match="binary chunk"):
+        gltf.load(data)
+
+
+def test_an_accessor_reading_past_the_chunk_is_refused():
+    binary = np.zeros((1, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 99, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+    )
+    with pytest.raises(ValueError, match="past the end"):
+        gltf.load(data)
+
+
+def test_a_glb_with_no_scenes_keeps_its_hierarchy():
+    """Taking every node as a root made update_world visit each child twice --
+    once under its parent, then again as a root with an identity parent, which
+    overwrote the matrix it had just computed. Everything ended up at its local
+    transform, so anything parented rendered in the wrong place."""
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    doc = {
+        "asset": {"version": "2.0"},
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        "buffers": [{"byteLength": len(binary)}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+        "nodes": [
+            {"translation": [10.0, 0.0, 0.0], "children": [1]},
+            {"translation": [0.0, 5.0, 0.0], "mesh": 0},
+        ],
+    }
+    model = gltf.load(_glb(doc, binary))
+
+    assert model.roots == [0]
+    child = model.nodes[1]
+    assert np.allclose(child.world[:3, 3], [10.0, 5.0, 0.0])
+
+
+def test_a_scene_without_a_node_list_falls_back_to_the_unparented_nodes():
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    doc = {
+        "asset": {"version": "2.0"},
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        "buffers": [{"byteLength": len(binary)}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+        "nodes": [{"children": [1]}, {"mesh": 0}],
+        "scenes": [{}],
+    }
+    assert gltf.load(_glb(doc, binary)).roots == [0]
+
+
+def test_a_texture_in_a_data_uri_is_read_rather_than_dropped():
+    """A data URI is inside the file -- it just is not in the binary chunk.
+    Dropping it lost a texture the asset carried, and said it was "stored
+    outside the GLB", which was false."""
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGBA", (2, 2), (10, 20, 30, 255)).save(buf, "PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        images=[{"uri": uri}],
+        textures=[{"source": 0}],
+        materials=[{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        meshes=[
+            {"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}
+        ],
+    )
+    model = gltf.load(data)
+    base_color = model.meshes[0][0].material.base_color
+    assert base_color is not None
+    assert base_color[:2] == (2, 2)
+
+
+def test_a_texture_in_a_separate_file_is_skipped_with_an_honest_message(caplog):
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        images=[{"uri": "colour.png"}],
+        textures=[{"source": 0}],
+        materials=[{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        meshes=[
+            {"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}
+        ],
+    )
+    with caplog.at_level("WARNING"):
+        model = gltf.load(data)
+    assert model.meshes[0][0].material.base_color is None
+    assert "separate file" in caplog.text

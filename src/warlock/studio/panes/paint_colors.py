@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint_mode, widgets
+from .. import inker_mode, widgets
 
 SWATCH = (20.0, 20.0)
 FLAGS = imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value
@@ -33,7 +33,7 @@ def _vec(colour: tuple[int, int, int, int]) -> Any:
 
 
 def draw(ctx: Any) -> None:
-    state = paint_mode.ensure(ctx)
+    state = inker_mode.ensure(ctx)
     widgets.section("colour")
 
     changed, value = imgui.color_edit4("Foreground", _vec(state.fg), FLAGS)
@@ -48,7 +48,7 @@ def draw(ctx: Any) -> None:
     imgui.same_line()
     if imgui.button("+ swatch"):
         state.add_swatch(state.fg)
-        paint_mode.persist(ctx)
+        inker_mode.persist(ctx)
 
     imgui.dummy((0, 4))
     _swatches(ctx, state)
@@ -65,7 +65,7 @@ def _swatches(ctx: Any, state: Any) -> None:
         # with mistakes and stops being useful within a session.
         if imgui.is_item_clicked(1):
             state.swatches.remove(colour)
-            paint_mode.persist(ctx)
+            inker_mode.persist(ctx)
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"{colour}  -  right-click to remove")
         imgui.pop_id()

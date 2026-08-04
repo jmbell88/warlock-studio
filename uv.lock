@@ -1555,7 +1555,7 @@ wheels = [
 
 [[package]]
 name = "warlock"
-version = "0.0.5"
+version = "0.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1567,11 +1567,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
 rig = [
     { name = "bpy", marker = "python_full_version == '3.13.*'" },
 ]
@@ -1590,6 +1585,13 @@ text2image = [
     { name = "transformers" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'text2image'", specifier = ">=0.34" },
@@ -1604,16 +1606,20 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0" },
     { name = "protobuf", marker = "extra == 'text2image'", specifier = ">=4.0" },
     { name = "pygame-ce", marker = "extra == 'studio'", specifier = ">=2.5" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scipy", specifier = ">=1.11" },
     { name = "sentencepiece", marker = "extra == 'text2image'", specifier = ">=0.2" },
     { name = "torch", marker = "extra == 'text2image'", specifier = ">=2.7", index = "https://download.pytorch.org/whl/cu128" },
     { name = "transformers", marker = "extra == 'text2image'", specifier = ">=4.44" },
     { name = "trimesh", specifier = ">=4.4" },
 ]
-provides-extras = ["dev", "text2image", "studio", "rig"]
+provides-extras = ["text2image", "studio", "rig"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.6" },
+]
 
 [[package]]
 name = "zipp"

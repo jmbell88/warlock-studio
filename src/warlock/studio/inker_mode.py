@@ -8,7 +8,7 @@ The one rule that shapes the whole file: **no file dialog and no encode ever
 runs on the frame thread.** A native picker is modal to the OS and blocks until
 dismissed, and a 4096-square ORA is a second of zlib. Both go through
 ``ctx.submit`` and come back through ``on_task_done``, which is why saving is a
-state (``PaintDoc.saving``) rather than a function call that returns.
+state (``InkerDoc.saving``) rather than a function call that returns.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, paint_state
-from .paint_state import PaintDoc, PaintState
+from . import dialogs, inker_state
+from .inker_state import InkerDoc, InkerState
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ OPENABLE = (".ora", ".png", ".jpg", ".jpeg", ".webp", ".bmp")
 NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 
 
-def ensure(ctx: Any) -> PaintState:
+def ensure(ctx: Any) -> InkerState:
     """The mode's state, built on first use.
 
     Lazy because a session that never opens Paint should not pay for its
@@ -39,7 +39,7 @@ def ensure(ctx: Any) -> PaintState:
     """
     state = ctx.state.paint
     if state is None:
-        state = PaintState()
+        state = InkerState()
         stored = ctx.settings.get("paint") or {}
         state.recent = [p for p in (stored.get("recent") or []) if isinstance(p, str)]
         swatches = stored.get("swatches")
@@ -48,7 +48,7 @@ def ensure(ctx: Any) -> PaintState:
                 tuple(int(c) for c in s)  # type: ignore[misc]
                 for s in swatches
                 if isinstance(s, list | tuple) and len(s) == 4
-            ] or list(paint_state.DEFAULT_SWATCHES)
+            ] or list(inker_state.DEFAULT_SWATCHES)
         ctx.state.paint = state
     return state
 
@@ -62,7 +62,7 @@ def persist(ctx: Any) -> None:
         )
 
 
-def active(ctx: Any) -> PaintDoc | None:
+def active(ctx: Any) -> InkerDoc | None:
     state = ctx.state.paint
     return state.active if state is not None else None
 
@@ -70,7 +70,7 @@ def active(ctx: Any) -> PaintDoc | None:
 # --- opening ----------------------------------------------------------------
 
 
-def new_document(ctx: Any, width: int, height: int) -> PaintDoc:
+def new_document(ctx: Any, width: int, height: int) -> InkerDoc:
     from . import inker
 
     state = ensure(ctx)
@@ -80,7 +80,7 @@ def new_document(ctx: Any, width: int, height: int) -> PaintDoc:
 
 def _adopt(
     ctx: Any,
-    state: PaintState,
+    state: InkerState,
     doc: Any,
     *,
     path: Path | None,
@@ -89,10 +89,10 @@ def _adopt(
     job_id: str = "",
     link_kind: str = "",
     has_original: bool = False,
-) -> PaintDoc:
-    tab = PaintDoc(
+) -> InkerDoc:
+    tab = InkerDoc(
         doc=doc,
-        title=title or paint_state.title_for(path),
+        title=title or inker_state.title_for(path),
         path=path,
         file_format=file_format,
         saved_head=doc.history.head,
@@ -114,7 +114,7 @@ def ask_open(ctx: Any) -> None:
         path = dialogs.open_file("Open image", OPEN_FILTER)
         return None if path is None else _load(path)
 
-    ctx.submit("paint-open", run)
+    ctx.submit("inker-open", run)
 
 
 def open_path(ctx: Any, path: Path) -> None:
@@ -129,7 +129,7 @@ def open_path(ctx: Any, path: Path) -> None:
     if path.suffix.lower() not in OPENABLE:
         ctx.toast("Paint opens images and .ora files.", "error")
         return
-    ctx.submit(f"paint-open:{abs(hash(str(path)))}", _load, path)
+    ctx.submit(f"inker-open:{abs(hash(str(path)))}", _load, path)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -175,7 +175,7 @@ def open_job_reference(ctx: Any, job: Any) -> None:
         return
     ctx.state.mode = "paint"
     ctx.settings.set("mode", "paint")
-    ctx.submit(f"paint-open:{job_id}", _load_job, ctx.svc, job_id)
+    ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id)
 
 
 def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
@@ -205,7 +205,7 @@ def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
 # --- saving -----------------------------------------------------------------
 
 
-def save(ctx: Any, tab: PaintDoc | None = None) -> None:
+def save(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Ctrl+S. Save As when the document has never been written anywhere."""
     tab = tab or active(ctx)
     if tab is None or tab.saving:
@@ -216,10 +216,10 @@ def save(ctx: Any, tab: PaintDoc | None = None) -> None:
     if tab.path is None:
         save_as(ctx, tab)
         return
-    _submit_write(ctx, tab, f"paint-save:{tab.uid}", tab.path, tab.file_format)
+    _submit_write(ctx, tab, f"inker-save:{tab.uid}", tab.path, tab.file_format)
 
 
-def save_as(ctx: Any, tab: PaintDoc | None = None) -> None:
+def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
@@ -237,10 +237,10 @@ def save_as(ctx: Any, tab: PaintDoc | None = None) -> None:
         _write(doc, dest, "ora")
         return {"path": dest, "rev": rev, "format": "ora", "retitle": True}
 
-    _start(ctx, tab, f"paint-saveas:{tab.uid}", run)
+    _start(ctx, tab, f"inker-saveas:{tab.uid}", run)
 
 
-def export_png(ctx: Any, tab: PaintDoc | None = None) -> None:
+def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     """A flattened PNG. Not a save: it does not change what the tab points at,
     so the document stays dirty against its own file."""
     tab = tab or active(ctx)
@@ -262,10 +262,10 @@ def export_png(ctx: Any, tab: PaintDoc | None = None) -> None:
         dest.write_bytes(doc.png_bytes())
         return {"exported": dest}
 
-    _start(ctx, tab, f"paint-export:{tab.uid}", run)
+    _start(ctx, tab, f"inker-export:{tab.uid}", run)
 
 
-def _submit_write(ctx: Any, tab: PaintDoc, key: str, path: Path, file_format: str) -> None:
+def _submit_write(ctx: Any, tab: InkerDoc, key: str, path: Path, file_format: str) -> None:
     doc = tab.doc
     # A floating buffer lives in no layer, and the encoders walk the layer
     # stack -- so without this the file omits the pasted pixels while the
@@ -298,13 +298,13 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
         path.write_bytes(doc.png_bytes())
 
 
-def _start(ctx: Any, tab: PaintDoc, key: str, run: Any) -> None:
+def _start(ctx: Any, tab: InkerDoc, key: str, run: Any) -> None:
     tab.saving = True
     if not ctx.submit(key, run):
         tab.saving = False
 
 
-def _save_linked(ctx: Any, tab: PaintDoc) -> None:
+def _save_linked(ctx: Any, tab: InkerDoc) -> None:
     """Write both halves of a reference edit: the flat PNG, then the layers.
 
     The flat write goes through the untouched ``save_edited_image``, so the
@@ -338,13 +338,13 @@ def _save_linked(ctx: Any, tab: PaintDoc) -> None:
         svc_files.save_paint_working(ctx.svc, job_id, inker.ora_bytes(doc))
         return {"rev": rev, "job_id": job_id, "linked": True}
 
-    _start(ctx, tab, f"paint-save:{tab.uid}", run)
+    _start(ctx, tab, f"inker-save:{tab.uid}", run)
 
 
 # --- the other direction: paint -> the pipeline ------------------------------
 
 
-def save_as_reference(ctx: Any, tab: PaintDoc | None = None) -> None:
+def save_as_reference(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Mint a new reference job from what is on the canvas, and link to it."""
     from ..service import jobs as svc_jobs
 
@@ -365,7 +365,7 @@ def save_as_reference(ctx: Any, tab: PaintDoc | None = None) -> None:
         svc_files_save(ctx, job_id, inker.ora_bytes(doc))
         return {"rev": rev, "job_id": job_id, "link": True}
 
-    _start(ctx, tab, f"paint-save:{tab.uid}", run)
+    _start(ctx, tab, f"inker-save:{tab.uid}", run)
 
 
 def svc_files_save(ctx: Any, job_id: str, data: bytes) -> None:
@@ -374,7 +374,7 @@ def svc_files_save(ctx: Any, job_id: str, data: bytes) -> None:
     svc_files.save_paint_working(ctx.svc, job_id, data)
 
 
-def send_to_3d(ctx: Any, tab: PaintDoc | None = None) -> None:
+def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Take the flattened canvas into the mesh stage.
 
     A linked document promotes the reference it already is; an unlinked one
@@ -400,7 +400,7 @@ def send_to_3d(ctx: Any, tab: PaintDoc | None = None) -> None:
             ctx.svc, kind="image", output="model", image=doc.png_bytes()
         )
 
-    if ctx.submit("paint-send", run):
+    if ctx.submit("inker-send", run):
         ctx.toast("Queued a mesh from the painted image.")
 
 
@@ -412,7 +412,7 @@ def _promote(ctx: Any, job_id: str) -> None:
         return svc_jobs.promote_to_model(ctx.svc, job_id, force=force)
 
     def go(force: bool) -> None:
-        if ctx.submit(f"paint-promote:{job_id}", run, force):
+        if ctx.submit(f"inker-promote:{job_id}", run, force):
             ctx.toast("Queued a mesh from this reference.")
 
     # The quality gate is a heuristic about composition, not a fact, so it is
@@ -437,7 +437,7 @@ def _promote(ctx: Any, job_id: str) -> None:
     go(False)
 
 
-def revert(ctx: Any, tab: PaintDoc | None = None) -> None:
+def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Put the generated image back, and drop the layers that described the
     edit -- they are about pixels that will no longer exist."""
     from ..service import files as svc_files
@@ -453,7 +453,7 @@ def revert(ctx: Any, tab: PaintDoc | None = None) -> None:
         return {"reverted": True, "job_id": job_id}
 
     def go() -> None:
-        _start(ctx, tab, f"paint-revert:{tab.uid}", run)
+        _start(ctx, tab, f"inker-revert:{tab.uid}", run)
 
     ctx.confirms.ask(
         dialogs.Confirm(
@@ -475,7 +475,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
     key, result = done.key, done.result
     name = key.split(":", 1)[0]
 
-    if name in ("paint-open",):
+    if name in ("inker-open",):
         if isinstance(result, dict):
             _adopt(
                 ctx,
@@ -491,7 +491,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
             ctx.state.mode = "paint"
         return
 
-    if name in ("paint-send", "paint-promote"):
+    if name in ("inker-send", "inker-promote"):
         ctx.cache.invalidate()
         return
 
@@ -513,7 +513,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
     tab.mark_saved(result.get("rev"))
     if result.get("retitle") and result.get("path"):
         tab.path = Path(result["path"])
-        tab.title = paint_state.title_for(tab.path)
+        tab.title = inker_state.title_for(tab.path)
         tab.file_format = result.get("format", "ora")
         state.remember(tab.path)
         persist(ctx)
@@ -543,7 +543,7 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         tab.saving = False
 
 
-def _reload_linked(ctx: Any, tab: PaintDoc) -> None:
+def _reload_linked(ctx: Any, tab: InkerDoc) -> None:
     """Re-decode a linked document after a revert replaced its file."""
     from . import inker
 
@@ -562,7 +562,7 @@ def _reload_linked(ctx: Any, tab: PaintDoc) -> None:
     _nudge_viewer(ctx, tab)
 
 
-def _nudge_viewer(ctx: Any, tab: PaintDoc) -> None:
+def _nudge_viewer(ctx: Any, tab: InkerDoc) -> None:
     """``_sync_viewer`` short-circuits when the path has not changed, so an
     in-place rewrite of input.png would otherwise leave 2D mode showing the
     texture from before the edit."""
@@ -575,7 +575,7 @@ def _nudge_viewer(ctx: Any, tab: PaintDoc) -> None:
 # --- closing and guarding ---------------------------------------------------
 
 
-def request_close(ctx: Any, tab: PaintDoc) -> None:
+def request_close(ctx: Any, tab: InkerDoc) -> None:
     state = ensure(ctx)
 
     def go() -> None:
@@ -627,7 +627,7 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
 # --- free transform ---------------------------------------------------------
 
 
-def begin_transform(ctx: Any, tab: PaintDoc | None = None) -> None:
+def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Ctrl+T. Lifts the selection (or the whole layer) and goes modal."""
     state = ensure(ctx)
     tab = tab or state.active
@@ -654,7 +654,7 @@ def end_transform(ctx: Any, *, commit: bool) -> None:
 # --- the OS clipboard -------------------------------------------------------
 
 
-def paste_from_os(ctx: Any, tab: PaintDoc | None = None) -> bool:
+def paste_from_os(ctx: Any, tab: InkerDoc | None = None) -> bool:
     """Try the system clipboard, then fall back to our own.
 
     Ours carries a mask and the OS's cannot, which is why the two are separate
@@ -761,12 +761,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
         if shift:
             state.hardness = max(0.0, state.hardness - 0.05)
         else:
-            state.brush_size = paint_state.step_size(state.brush_size, -1)
+            state.brush_size = inker_state.step_size(state.brush_size, -1)
     elif event.key == pygame.K_RIGHTBRACKET:
         if shift:
             state.hardness = min(1.0, state.hardness + 0.05)
         else:
-            state.brush_size = paint_state.step_size(state.brush_size, +1)
+            state.brush_size = inker_state.step_size(state.brush_size, +1)
     elif event.key == pygame.K_DELETE:
         if not tab.saving:
             doc.delete_selection()
@@ -793,7 +793,7 @@ _MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t"})
 
 
 def _ctrl_key(
-    ctx: Any, state: PaintState, tab: PaintDoc, doc: Any, name: str, event, *, shift: bool
+    ctx: Any, state: InkerState, tab: InkerDoc, doc: Any, name: str, event, *, shift: bool
 ):
     import pygame
 

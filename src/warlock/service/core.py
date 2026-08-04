@@ -55,6 +55,11 @@ class WarlockService:
         # service.system's doctor-check cache. Here rather than in that module
         # so it dies with the process's config, not with the interpreter.
         self.health_cache: dict[str, Any] = {}
+        # The resolved VRAM policy (vram.Plan), written by studio.runtime at
+        # startup. None means nobody measured -- a test, or a headless tool --
+        # and validation.check_vram then falls back to the config, which is
+        # what keeps admission control testable without a Runtime.
+        self.vram_plan: Any = None
 
     # -- paths -------------------------------------------------------------
 

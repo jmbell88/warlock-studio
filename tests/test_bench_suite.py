@@ -72,14 +72,43 @@ def test_a_duplicate_item_id_is_refused(tmp_path):
 
 
 def test_an_unknown_guidance_field_is_refused(tmp_path):
-    raw = {"seeds": [1], "items": [{"id": "a", "prompt": "x", "guidance": {"bogus": "y"}}]}
+    raw = {
+        "seeds": [1],
+        "items": [
+            {"id": "a", "prompt": "x", "category": "prop", "guidance": {"bogus": "y"}}
+        ],
+    }
     with pytest.raises(ValueError, match="bogus"):
+        suite_mod.parse(raw, tmp_path / "s.json")
+
+
+def test_an_unknown_guidance_value_is_refused(tmp_path):
+    """Checking only the keys is what the docstring's promise could not keep:
+    a value typo names a real field, loads clean, and fails at submit -- one
+    item at a time, two hours into a run."""
+    raw = {
+        "seeds": [1],
+        "items": [
+            {"id": "a", "prompt": "x", "category": "prop", "guidance": {"material": "stonee"}}
+        ],
+    }
+    with pytest.raises(ValueError, match="material"):
+        suite_mod.parse(raw, tmp_path / "s.json")
+
+
+def test_an_unknown_category_is_refused(tmp_path):
+    """--filter matches on this string, so a typo selects zero items and
+    reports nothing wrong -- a run that silently does nothing."""
+    raw = {"seeds": [1], "items": [{"id": "a", "prompt": "x", "category": "propp"}]}
+    with pytest.raises(ValueError, match="propp"):
         suite_mod.parse(raw, tmp_path / "s.json")
 
 
 def test_a_suite_needs_seeds_and_items(tmp_path):
     with pytest.raises(ValueError, match="seed"):
-        suite_mod.parse({"items": [{"id": "a", "prompt": "x"}]}, tmp_path / "s.json")
+        suite_mod.parse(
+            {"items": [{"id": "a", "prompt": "x", "category": "prop"}]}, tmp_path / "s.json"
+        )
     with pytest.raises(ValueError, match="item"):
         suite_mod.parse({"seeds": [1]}, tmp_path / "s.json")
 

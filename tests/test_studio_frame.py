@@ -31,19 +31,65 @@ def test_measuring_storage_is_reachable_without_touching_the_cache(svc):
     assert cache.storage is before  # unchanged: measuring does not publish
 
 
-def test_a_finished_job_asks_for_storage_off_the_frame_thread():
+def test_a_finished_job_asks_for_storage_off_the_frame_thread(svc):
     """The regression: ``_refresh`` called the blocking walk inline, freezing
     the frame that should have shown the job finishing."""
-    import inspect
+    from types import SimpleNamespace
 
     from warlock.studio import main
+    from warlock.studio.jobs_cache import JobsCache
 
-    source = inspect.getsource(main.App._refresh)
-    assert "_request_storage" in source
-    assert "cache.refresh_storage" not in source
+    cache = JobsCache(svc)
+    measured: list[str] = []
+    cache.refresh_storage = lambda: measured.append("blocking walk")  # type: ignore[method-assign]
 
-    submitted = inspect.getsource(main.App._request_storage)
-    assert "ctx.submit" in submitted
+    class FakeApp:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.app_ctx = SimpleNamespace(cache=cache, toast=lambda *a, **k: None)
+
+        def _request_storage(self) -> None:
+            self.calls.append("_request_storage")
+
+        def _sync_viewer(self) -> None:
+            pass
+
+        def _check_worker(self) -> None:
+            pass
+
+    app = FakeApp()
+    # tick() drives the announce callback; a job reaching "done" is the moment
+    # the old code did the walk inline.
+    cache.tick = lambda announce: bool(  # type: ignore[method-assign]
+        announce({"id": "a" * 12, "status": "done"}, "running")
+    )
+
+    main.App._refresh(app)
+
+    assert app.calls == ["_request_storage"]
+    assert measured == [], "the blocking walk must not run on the frame thread"
+
+
+def test_requesting_storage_submits_the_non_publishing_measurement(svc):
+    from types import SimpleNamespace
+
+    from warlock.studio import main
+    from warlock.studio.jobs_cache import JobsCache
+
+    cache = JobsCache(svc)
+    submitted: list[tuple[str, object]] = []
+    app = SimpleNamespace(
+        app_ctx=SimpleNamespace(
+            cache=cache,
+            submit=lambda key, run: submitted.append((key, run)) or True,
+        )
+    )
+
+    main.App._request_storage(app)
+
+    # The same key every time, so a burst of jobs finishing coalesces into one
+    # walk -- submit refuses a key already in flight.
+    assert submitted == [("storage", cache.measure)]
 
 
 def test_the_blocking_measurement_says_so():
@@ -198,7 +244,7 @@ def test_shortcuts_act_on_the_press_and_not_on_the_release():
     from warlock.studio import main
 
     source = inspect.getsource(main.App._shortcut)
-    body = source.split("paint_mode.handle_key", 1)[1]
+    body = source.split("inker_mode.handle_key", 1)[1]
     guard = body.split("K_RETURN", 1)[0]
     assert "event.type != pygame.KEYDOWN" in guard
 
@@ -208,13 +254,13 @@ def test_paint_still_sees_both_edges():
     latches on and never releases."""
     import inspect
 
-    from warlock.studio import main, paint_mode
+    from warlock.studio import main, inker_mode
 
     source = inspect.getsource(main.App._shortcut)
-    assert source.index("paint_mode.handle_key") < source.index(
+    assert source.index("inker_mode.handle_key") < source.index(
         "event.type != pygame.KEYDOWN"
     )
-    assert "K_SPACE" in inspect.getsource(paint_mode.handle_key)
+    assert "K_SPACE" in inspect.getsource(inker_mode.handle_key)
 
 
 # --- a dead GPU worker -------------------------------------------------------

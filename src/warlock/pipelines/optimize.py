@@ -30,6 +30,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .. import winjob
+
 log = logging.getLogger(__name__)
 
 # Named budgets. None means "ship the reconstruction untouched".
@@ -128,12 +130,14 @@ def run(
         "-km",
     ]
     try:
-        proc = subprocess.run(
+        # winjob.run rather than subprocess.run, for the same reason every
+        # other child is in the job object: a hard kill of the app must not
+        # leave a gltfpack behind holding a half-written .glb.opt.tmp.
+        proc = winjob.run(
             argv,
             capture_output=True,
             text=True,
             timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as exc:
         tmp.unlink(missing_ok=True)

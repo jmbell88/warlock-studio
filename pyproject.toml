@@ -22,11 +22,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "ruff>=0.6",
-]
 # Text-to-image stage (SDXL-class checkpoints). Heavy: torch cu128 + diffusers.
 text2image = [
     "torch>=2.7",
@@ -60,6 +55,18 @@ rig = [
     # Requires-Python >=3.13,<3.14, so an unmarked requirement makes the whole
     # project unresolvable on 3.12 rather than just leaving rigging out of it.
     "bpy>=5.2; python_version >= '3.13' and python_version < '3.14'",
+]
+
+# A dependency group rather than an extra, because `uv sync` installs the
+# default groups and *not* extras: as an extra, `uv run pytest` on a fresh
+# clone failed with "No module named pytest" until someone knew to add
+# `--extra dev`. `dev` is uv's default group, so a plain `uv sync` now brings
+# the test tooling with it.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
 ]
 
 [project.scripts]

@@ -41,14 +41,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-
     if args.command == "doctor":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         _run_doctor()
         return
     if args.command == "sweep":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         _run_sweep(args)
         return
+
+    # No basicConfig on the app path: studio.main._setup_logging owns the root
+    # logger there, and configuring it first is what silently cost us the file
+    # log (basicConfig is a no-op once the root has handlers).
 
     # Imported here, not at module scope: doctor and sweep must keep working on
     # a machine with no display and no GL, and importing the app pulls in

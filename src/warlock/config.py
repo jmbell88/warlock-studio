@@ -31,6 +31,31 @@ def _env_opt_int(name: str, default: int | None) -> int | None:
     return None if raw in ("", "auto") else int(raw)
 
 
+def _env_opt_bool(name: str) -> bool | None:
+    """A tri-state flag: unset (None) is distinguishable from an explicit off.
+
+    Auto-detection has to be able to tell "the user chose coexist" from "the
+    user chose nothing", and a bool with a default cannot.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    raw = raw.strip().lower()
+    if raw == "":
+        return None
+    return raw in ("1", "true", "on", "yes")
+
+
+def _env_opt_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 @dataclass(slots=True)
 class Config:
     data_dir: Path = field(
@@ -156,14 +181,30 @@ class Config:
     trellis_band: int | None = field(
         default_factory=lambda: _env_opt_int("WARLOCK_TRELLIS_BAND", DEFAULT_TRELLIS_BAND)
     )
-    # Default: SDXL-Turbo (~7 GB) and trellis-server (~16 GB) stay resident
-    # together on a 32 GB card. Set to 1/true/on to restore the old
-    # stop-trellis -> run-SDXL -> unload -> restart handoff for OOM situations
-    # (resolution 1536, smaller GPUs, a resident Flux). Read once at startup;
-    # changing the env var mid-run has no effect until restart.
-    vram_exclusive: bool = field(
-        default_factory=lambda: os.environ.get("WARLOCK_VRAM_EXCLUSIVE", "off").lower()
-        in ("1", "true", "on")
+    # Tri-state, and the None is the point. Unset means "decide from the card":
+    # studio.runtime resolves it through vram.plan() at startup and writes a
+    # plain bool back here before the Worker exists, so queue.py keeps reading
+    # a bool and the "read once at startup" contract is unchanged. Set
+    # explicitly (1/true/on or 0/false/off) it is honoured verbatim and
+    # auto-detection never overrides it.
+    #
+    # False (coexist) keeps SDXL-Turbo (~7 GB) and trellis-server (~16 GB)
+    # resident together, which is right on a 32 GB card and is what a 32 GB
+    # card still auto-selects. True restores the stop-trellis -> run-SDXL ->
+    # unload -> restart handoff for OOM situations (resolution 1536, smaller
+    # GPUs, a resident Flux).
+    vram_exclusive: bool | None = field(
+        default_factory=lambda: _env_opt_bool("WARLOCK_VRAM_EXCLUSIVE")
+    )
+    # What one job may ask the card for, in GiB. None = device total minus
+    # vram.HEADROOM_GIB, which is what you want unless the driver misreports.
+    vram_budget_gib: float | None = field(
+        default_factory=lambda: _env_opt_float("WARLOCK_VRAM_BUDGET")
+    )
+    # Pretend the card is this large. The escape hatch for a torch-less install
+    # -- and what makes the whole admission gate testable without a GPU.
+    vram_total_gib: float | None = field(
+        default_factory=lambda: _env_opt_float("WARLOCK_VRAM_TOTAL")
     )
     # Skeleton template a rig request falls back to when it doesn't name one.
     # Validated against rigging.templates() at request time, not here -- config

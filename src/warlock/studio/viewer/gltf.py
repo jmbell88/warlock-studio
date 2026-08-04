@@ -252,9 +252,25 @@ def load(path: Path | bytes) -> Model:
     ]
     skins = [reader.skin(s) for s in gltf.get("skins", [])]
     nodes = [reader.node(n) for n in gltf.get("nodes", [])]
-    scene = gltf.get("scenes", [{}])[gltf.get("scene", 0)]
-    roots = list(scene.get("nodes", range(len(nodes))))
-    return Model(nodes, roots, meshes, skins)
+    return Model(nodes, _roots(gltf, nodes), meshes, skins)
+
+
+def _roots(gltf: dict, nodes: list[Node]) -> list[int]:
+    """The scene's root nodes, or the ones nobody parents.
+
+    The fallback matters more than it looks. Taking *every* node as a root
+    makes ``update_world`` visit each child twice: once correctly under its
+    parent, and again later as a root with an identity parent, which overwrites
+    the world matrix it just computed. Every node ends up with world == local,
+    so anything parented renders in the wrong place and ``joint_palette``
+    inverts a matrix that was never right.
+    """
+    scenes = gltf.get("scenes") or []
+    index = gltf.get("scene", 0)
+    if scenes and 0 <= index < len(scenes) and "nodes" in scenes[index]:
+        return list(scenes[index]["nodes"])
+    parented = {child for node in nodes for child in node.children}
+    return [i for i in range(len(nodes)) if i not in parented]
 
 
 class _Reader:
@@ -277,17 +293,44 @@ class _Reader:
             # Legal glTF: an accessor with no view reads as zeros.
             return np.zeros((count, ncomp), dtype=dtype)
         view = self.gltf["bufferViews"][acc["bufferView"]]
+        self._check_buffer(view)
         start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
         item = np.dtype(dtype).itemsize * ncomp
         stride = view.get("byteStride") or item
         if stride == item:
+            self._check_span(start, count * item)
             flat = np.frombuffer(self.buffer, dtype=dtype, count=count * ncomp, offset=start)
             return flat.reshape(count, ncomp)
-        # Interleaved: take the raw bytes and slice the rows out. Nothing this
+        # Interleaved: take the raw bytes and gather the rows out. Nothing this
         # pipeline writes is interleaved, but a hand-supplied GLB may be.
-        raw = np.frombuffer(self.buffer, dtype=np.uint8, count=stride * count, offset=start)
-        rows = raw.reshape(count, stride)[:, :item]
+        #
+        # The span is stride*(count-1) + item, not stride*count: the spec only
+        # requires the *elements* to be present, so the padding after the last
+        # one need not exist. Demanding it made an accessor sitting at the tail
+        # of the BIN chunk raise "buffer is smaller than requested size" -- the
+        # model simply failed to load.
+        span = stride * (count - 1) + item if count else 0
+        self._check_span(start, span)
+        raw = np.frombuffer(self.buffer, dtype=np.uint8, count=span, offset=start)
+        rows = raw[np.arange(count)[:, None] * stride + np.arange(item)[None, :]]
         return np.ascontiguousarray(rows).view(dtype).reshape(count, ncomp)
+
+    def _check_buffer(self, view: dict) -> None:
+        """Refuse a view that points at a buffer we do not have.
+
+        ``read_glb`` returns the GLB's single BIN chunk, which is buffer 0. A
+        view naming buffer 1 (a data URI, or an external .bin) was read at the
+        same offsets *into buffer 0* -- silently wrong geometry rather than an
+        error, which is the worst way for this to fail.
+        """
+        if view.get("buffer", 0) != 0:
+            raise ValueError(
+                "this GLB stores geometry outside its binary chunk, which is not supported"
+            )
+
+    def _check_span(self, start: int, span: int) -> None:
+        if start < 0 or start + span > len(self.buffer):
+            raise ValueError("an accessor reads past the end of the binary chunk")
 
     # -- pieces ------------------------------------------------------------
 
@@ -343,6 +386,45 @@ class _Reader:
         out.occlusion = self.texture(mat.get("occlusionTexture"))
         return out
 
+    def _image_bytes(self, image: dict) -> bytes | None:
+        """The encoded pixels for one glTF image, or None if unreachable.
+
+        Three cases, and the old code collapsed them into one warning that was
+        false for two of them. A bufferView is the normal path. A ``data:`` URI
+        is equally self-contained -- it is *inside* the file, it just is not in
+        the binary chunk -- and dropping it lost a texture the asset carried
+        while reporting it as "stored outside the GLB". Only a genuine external
+        URI is a runtime file read of a path from inside the asset, which is
+        the thing actually worth refusing.
+
+        Every unreachable case *returns* here rather than raising, unlike the
+        geometry path. A mesh read from the wrong buffer is a plausible-looking
+        wrong answer and worth failing the load over; a texture that cannot be
+        found is a cosmetic loss, and raising turned any third-party GLB whose
+        images sit in a second buffer into "this file will not open".
+        """
+        if "bufferView" in image:
+            view = self.gltf["bufferViews"][image["bufferView"]]
+            try:
+                self._check_buffer(view)
+            except Exception as exc:
+                log.warning("skipping a texture in an unreachable buffer: %s", exc)
+                return None
+            start = view.get("byteOffset", 0)
+            return self.buffer[start : start + view["byteLength"]]
+        uri = str(image.get("uri") or "")
+        if uri.startswith("data:"):
+            import base64
+
+            _, _, payload = uri.partition(",")
+            try:
+                return base64.b64decode(payload)
+            except Exception:
+                log.warning("a texture's embedded data URI could not be decoded")
+                return None
+        log.warning("skipping a texture stored in a separate file (%s)", uri or "no uri")
+        return None
+
     def texture(self, ref: dict | None) -> tuple[int, int, bytes] | None:
         if not ref:
             return None
@@ -350,14 +432,9 @@ class _Reader:
 
         tex = self.gltf.get("textures", [])[ref["index"]]
         image = self.gltf.get("images", [])[tex["source"]]
-        if "bufferView" not in image:
-            # An external URI would be a runtime file read of a path from
-            # inside the asset; every GLB this app produces is self-contained.
-            log.warning("skipping a texture stored outside the GLB")
+        data = self._image_bytes(image)
+        if data is None:
             return None
-        view = self.gltf["bufferViews"][image["bufferView"]]
-        start = view.get("byteOffset", 0)
-        data = self.buffer[start : start + view["byteLength"]]
         with Image.open(io.BytesIO(data)) as im:
             rgba = im.convert("RGBA")
             return rgba.width, rgba.height, rgba.tobytes()

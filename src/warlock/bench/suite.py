@@ -17,6 +17,10 @@ from typing import Any
 SUITE_DIR = Path(__file__).resolve().parent / "suites"
 DEFAULT_SUITE = "core-v1"
 
+# The categories a suite may use. Enforced at load: ``--filter`` matches on
+# this string, so a typo'd category in a suite file selects zero items and
+# reports nothing wrong -- a run that silently does nothing, which is the one
+# failure mode worse than a crash.
 CATEGORIES = ("prop", "weapon", "character", "vehicle", "environment")
 
 
@@ -88,14 +92,28 @@ def parse(raw: dict[str, Any], path: Path) -> Suite:
         seen.add(item_id)
         if not str(entry.get("prompt") or "").strip():
             raise ValueError(f"{path.name}: item {item_id} has no prompt")
+        category = str(entry.get("category") or "")
+        if category not in CATEGORIES:
+            raise ValueError(
+                f"{path.name}: item {item_id} has category {category!r}; "
+                f"expected one of {list(CATEGORIES)}"
+            )
         fields = dict(entry.get("guidance") or {})
         unknown = sorted(set(fields) - known)
         if unknown:
             raise ValueError(f"{path.name}: item {item_id} names unknown guidance {unknown}")
+        # And the *values*, the same way recipe.parse does. Checking only the
+        # keys is what this docstring's promise could not keep: "material":
+        # "stonee" names a real field, loads without complaint, and fails at
+        # submit -- one item at a time, two hours into a run.
+        try:
+            guidance.normalize(fields)
+        except ValueError as exc:
+            raise ValueError(f"{path.name}: item {item_id}: {exc}") from exc
         items.append(
             Item(
                 id=item_id,
-                category=str(entry.get("category") or ""),
+                category=category,
                 prompt=str(entry["prompt"]),
                 guidance=fields,
                 tags=tuple(str(t) for t in entry.get("tags") or ()),

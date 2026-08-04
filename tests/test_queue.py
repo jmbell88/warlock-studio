@@ -329,6 +329,83 @@ async def test_exception_in_generate_marks_error_and_worker_survives(worker):
     assert worker.store.get(good_id)["status"] == "done"
 
 
+async def test_an_image_reference_job_never_reaches_trellis(worker):
+    """The service refuses to *mint* this combination now, but the worker's own
+    guard is what stopped a painted reference -- kind=image, stage=reference --
+    from falling past the text branch's early return into a full two-minute
+    trellis run. The existing coverage only ever drove kind=text, which takes
+    the other return.
+    """
+    job_id = worker.store.create(
+        "image", None, {"seed": 1, "resolution": 512}, stage="reference"
+    )
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls == []
+    assert not (job_dir / "model.glb").exists()
+
+
+async def test_a_failed_error_log_still_records_the_job_as_errored(worker, monkeypatch):
+    """``write_error_log`` ran *before* ``error`` was computed, so an OSError
+    from it -- a full or read-only disk, which is also how a job fails in the
+    first place -- left ``error`` None and the finally recorded the job as
+    **done**: a successful-looking job with no model.glb and no message."""
+    from warlock import errors as errors_mod
+
+    def cannot_write(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(errors_mod, "write_error_log", cannot_write)
+
+    job_id = _make_image_job(worker)
+    worker.trellis.should_raise = RuntimeError("boom")
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "error"
+    assert job["error"] == "boom"
+
+
+async def test_a_failed_terminal_write_does_not_wedge_the_worker(worker, monkeypatch):
+    """The four resets sat *after* ``store.finish`` in the same finally, so a
+    raise from it skipped them: current_job_id kept pointing at a dead job, the
+    stale _Cancel stayed, the ProgressBus entry never ended, and every later
+    job's trellis output was attributed to the job that was already gone."""
+    real_finish = worker.store.finish
+    calls = {"n": 0}
+
+    def finish_once_badly(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database is locked")
+        return real_finish(*args, **kwargs)
+
+    monkeypatch.setattr(worker.store, "finish", finish_once_badly)
+
+    doomed = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: calls["n"] >= 1)
+
+    # The worker must let go of the job whose terminal write blew up...
+    await _wait_until(lambda: worker.current_job_id != doomed)
+    assert worker._cancel is None
+    assert worker.progress.snapshot(doomed) is None
+
+    # ...and still run the next one to completion.
+    good = _make_image_job(worker)
+    await _wait_until(lambda: worker.store.get(good)["status"] == "done")
+    await worker.shutdown()
+
+
 def _make_worker(tmp_path, **config_overrides) -> Worker:
     """Like the worker fixture, but with Config overrides (vram_exclusive etc.)."""
     config = Config(
@@ -365,6 +442,44 @@ async def test_exclusive_text_job_restores_handoff(tmp_path, fake_pipelines):
         assert worker.trellis.stop_calls >= 1
         assert worker._text2image.unload_calls == 1
         assert worker._text2image.loaded is False
+    finally:
+        worker.store.close()
+
+
+async def test_a_job_is_refused_at_dispatch_when_the_host_is_out_of_commit(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The submit-time gate cannot see a host that filled up while the job
+    waited, and Windows does not raise on commit exhaustion -- it kills us."""
+    import warlock.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.97)
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+        assert "97% committed" in worker.store.get(job_id)["error"]
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_a_job_is_refused_at_dispatch_when_the_card_has_since_filled(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    import warlock.queue as queue_mod
+    from warlock import vram
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
+    monkeypatch.setattr(vram, "device_memory", lambda: vram.DeviceMemory(32.0, 1.0))
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+        assert "GiB of VRAM" in worker.store.get(job_id)["error"]
+        await worker.shutdown()
     finally:
         worker.store.close()
 

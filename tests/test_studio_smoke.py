@@ -350,7 +350,7 @@ def test_the_inspector_builds_with_a_reference_report(app_ctx, imgui_ctx):
 def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     """The panes that own GL objects of their own. _seeded writes a byte, not
     a PNG, so this seeds a real image -- opening one is a decode."""
-    from warlock.studio import paint_mode, paint_state
+    from warlock.studio import inker_mode, inker_state
     from warlock.studio.panes import (
         paint_bridge,
         paint_canvas,
@@ -361,7 +361,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
 
     job_id = _reference_job(app_ctx)
     app_ctx.state.mode = "paint"
-    state = paint_mode.ensure(app_ctx)
+    state = inker_mode.ensure(app_ctx)
 
     def build() -> None:
         paint_tools.draw(app_ctx)
@@ -373,14 +373,14 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     # Empty first: the "nothing open" branch is what a user sees on arrival.
     _frame(imgui_ctx, build)
 
-    loaded = paint_mode._load_job(app_ctx.svc, job_id)
-    paint_mode.on_task_done(app_ctx, _done(f"paint-open:{job_id}", loaded))
+    loaded = inker_mode._load_job(app_ctx.svc, job_id)
+    inker_mode.on_task_done(app_ctx, _done(f"inker-open:{job_id}", loaded))
     tab = state.active
     assert tab is not None and tab.job_id == job_id
     _frame(imgui_ctx, build)
 
     # Every tool once: each has its own options branch.
-    for tool, _label, _key in paint_state.TOOLS:
+    for tool, _label, _key in inker_state.TOOLS:
         state.tool = tool
         _frame(imgui_ctx, build)
 
@@ -393,13 +393,13 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     # Free transform takes the canvas over, so it is its own set of branches:
     # the handle overlay, the numeric row, and every panel while modal.
     tab.doc.commit_floating()
-    paint_mode.begin_transform(app_ctx, tab)
+    inker_mode.begin_transform(app_ctx, tab)
     assert state.transforming and tab.doc.floating is not None
     _frame(imgui_ctx, build)
     tab.doc.rotate_floating(30.0)
     tab.doc.transform_floating(scale=(1.5, 1.5))
     _frame(imgui_ctx, build)
-    paint_mode.end_transform(app_ctx, commit=True)
+    inker_mode.end_transform(app_ctx, commit=True)
     assert not state.transforming and tab.doc.floating is None
     _frame(imgui_ctx, build)
     assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:composite") is not None
@@ -408,23 +408,23 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     # Dirty, so closing asks first -- and the question is what stops a stray
     # click on the tab's x from losing an unsaved painting.
     uid = tab.uid
-    paint_mode.request_close(app_ctx, tab)
+    inker_mode.request_close(app_ctx, tab)
     assert app_ctx.confirms.pending is not None
     app_ctx.confirms.pending.on_confirm()
     app_ctx.confirms.pending = None
     assert state.active is None
     assert not [k for k in app_ctx.state.preview if k.startswith(f"paint_tex:{uid}:")]
-    paint_mode.release_all(app_ctx)
+    inker_mode.release_all(app_ctx)
 
 
 def test_a_finished_mesh_is_not_offered_paint(app_ctx, imgui_ctx):
     """Paint edits the *generated reference*, and a mesh job's input.png is
     whatever it was reconstructed from."""
-    from warlock.studio import paint_mode
+    from warlock.studio import inker_mode
 
     job_id = _seeded(app_ctx)
     app_ctx.state.mode = "2d"
-    assert not paint_mode.can_edit_job(app_ctx, app_ctx.cache.get(job_id))
+    assert not inker_mode.can_edit_job(app_ctx, app_ctx.cache.get(job_id))
 
 
 def _done(key, result):

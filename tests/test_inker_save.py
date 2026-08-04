@@ -16,8 +16,8 @@ from PIL import Image
 
 from warlock.service import files as svc_files
 from warlock.service import jobs as svc_jobs
-from warlock.studio import inker, paint_mode
-from warlock.studio.paint_state import PaintDoc
+from warlock.studio import inker, inker_mode
+from warlock.studio.inker_state import InkerDoc
 
 
 def _png(size=(32, 32), colour=(200, 30, 30, 255)) -> bytes:
@@ -48,11 +48,11 @@ class FakeCtx:
         return True
 
 
-def _tab(job_id: str) -> PaintDoc:
+def _tab(job_id: str) -> InkerDoc:
     doc = inker.Document.blank(32, 32)
     doc.stack.active.pixels[..., :] = 128
     doc.add_layer()
-    return PaintDoc(
+    return InkerDoc(
         doc=doc,
         title="ref",
         job_id=job_id,
@@ -91,7 +91,7 @@ def test_a_linked_save_writes_the_flat_half_first(monkeypatch, svc):
     monkeypatch.setattr(svc_files, "save_edited_image", flat)
     monkeypatch.setattr(svc_files, "save_paint_working", layers)
 
-    paint_mode._save_linked(FakeCtx(svc), _tab(job_id))
+    inker_mode._save_linked(FakeCtx(svc), _tab(job_id))
 
     assert order == ["input.png", "paint.ora"]
 
@@ -106,7 +106,7 @@ def test_a_linked_save_leaves_its_layers_fresh(svc):
     job_id = _reference(svc)
     ctx = FakeCtx(svc)
 
-    paint_mode._save_linked(ctx, _tab(job_id))
+    inker_mode._save_linked(ctx, _tab(job_id))
 
     status = svc_files.paint_working_status(svc, job_id)
     assert status == {"exists": True, "fresh": True}
@@ -117,7 +117,7 @@ def test_a_linked_save_writes_both_halves(svc):
     ctx = FakeCtx(svc)
     tab = _tab(job_id)
 
-    paint_mode._save_linked(ctx, tab)
+    inker_mode._save_linked(ctx, tab)
 
     job_dir = svc.job_dir(job_id)
     assert (job_dir / "paint.ora").exists()
@@ -128,7 +128,7 @@ def test_a_linked_save_writes_both_halves(svc):
 
 def test_a_linked_save_still_records_the_hand_edit(svc):
     job_id = _reference(svc)
-    paint_mode._save_linked(FakeCtx(svc), _tab(job_id))
+    inker_mode._save_linked(FakeCtx(svc), _tab(job_id))
     assert svc.store.get(job_id)["params"]["hand_edited"] is True
 
 
@@ -136,7 +136,7 @@ def test_the_layers_survive_a_round_trip_through_a_save(svc):
     """The property the ordering exists for, stated end to end."""
     job_id = _reference(svc)
     tab = _tab(job_id)
-    paint_mode._save_linked(FakeCtx(svc), tab)
+    inker_mode._save_linked(FakeCtx(svc), tab)
 
     status = svc_files.paint_working_status(svc, job_id)
     reopened = inker.Document.load(svc_files.paint_working_path(svc, job_id))
@@ -151,7 +151,7 @@ def test_a_reference_rewritten_after_a_save_makes_the_layers_stale_again(svc):
     import time
 
     job_id = _reference(svc)
-    paint_mode._save_linked(FakeCtx(svc), _tab(job_id))
+    inker_mode._save_linked(FakeCtx(svc), _tab(job_id))
 
     later = time.time() + 10
     os.utime(svc.job_dir(job_id) / "input.png", (later, later))
@@ -161,7 +161,7 @@ def test_a_reference_rewritten_after_a_save_makes_the_layers_stale_again(svc):
 # --- the floating buffer, which lives in no layer -----------------------------
 
 
-def _floating(tab: PaintDoc) -> None:
+def _floating(tab: InkerDoc) -> None:
     """Put pixels on the canvas that a layer encode would not see."""
     import numpy as np
 
@@ -179,23 +179,23 @@ def test_a_linked_save_is_not_dirty_the_instant_it_finishes(svc):
     send_to_3d refused with "Save first" no matter how often it was saved."""
     from types import SimpleNamespace
 
-    from warlock.studio.paint_state import PaintState
+    from warlock.studio.inker_state import InkerState
 
     job_id = _reference(svc)
     tab = _tab(job_id)
     _floating(tab)
 
     ctx = FakeCtx(svc)
-    state = PaintState()
+    state = InkerState()
     state.add(tab)
     ctx.state = SimpleNamespace(paint=state, mode="paint")
     ctx.cache = SimpleNamespace(invalidate=lambda: None)
     ctx.toast = lambda *a, **k: None
     ctx.viewer = SimpleNamespace(path=None)
 
-    paint_mode._save_linked(ctx, tab)
-    paint_mode.on_task_done(
-        ctx, SimpleNamespace(key=f"paint-save:{tab.uid}", result=ctx.result)
+    inker_mode._save_linked(ctx, tab)
+    inker_mode.on_task_done(
+        ctx, SimpleNamespace(key=f"inker-save:{tab.uid}", result=ctx.result)
     )
 
     assert tab.dirty is False
@@ -213,7 +213,7 @@ def test_an_unlinked_save_writes_the_floating_pixels(svc, tmp_path):
     tab.file_format = "ora"
     _floating(tab)
 
-    paint_mode.save(FakeCtx(svc), tab)
+    inker_mode.save(FakeCtx(svc), tab)
 
     reopened = inker.Document.load(tab.path)
     assert tab.doc.floating is None, "the buffer must have landed on a layer"
@@ -233,28 +233,28 @@ def test_the_mutating_shortcuts_do_nothing_while_a_save_is_running():
     """
     from types import SimpleNamespace
 
-    from warlock.studio.paint_state import PaintState
+    from warlock.studio.inker_state import InkerState
 
     tab = _tab("")
     doc = tab.doc
     doc.select_all()  # something for undo to have to reverse
     before_head, before_layers = doc.history.head, len(doc.stack)
 
-    state = PaintState()
+    state = InkerState()
     state.add(tab)
     ctx = SimpleNamespace(state=SimpleNamespace(paint=state), svc=None)
     event = SimpleNamespace(key=0, unicode="")
 
     tab.saving = True
-    for name in sorted(paint_mode._MUTATING_CTRL):
-        paint_mode._ctrl_key(ctx, state, tab, doc, name, event, shift=False)
+    for name in sorted(inker_mode._MUTATING_CTRL):
+        inker_mode._ctrl_key(ctx, state, tab, doc, name, event, shift=False)
 
     assert (doc.history.head, len(doc.stack)) == (before_head, before_layers)
 
     # ...and the same keys do land once the save is over, so the gate is a gate
     # and not a permanently dead branch.
     tab.saving = False
-    paint_mode._ctrl_key(ctx, state, tab, doc, "z", event, shift=False)
+    inker_mode._ctrl_key(ctx, state, tab, doc, "z", event, shift=False)
     assert doc.history.head == before_head - 1
 
 
@@ -295,13 +295,13 @@ def test_a_failed_save_clears_the_saving_flag():
     this flag, so a stuck one disables the whole editor."""
     from types import SimpleNamespace
 
-    from warlock.studio.paint_state import PaintState
+    from warlock.studio.inker_state import InkerState
 
     tab = _tab("")
     tab.saving = True
-    state = PaintState()
+    state = InkerState()
     state.add(tab)
     ctx = SimpleNamespace(state=SimpleNamespace(paint=state))
 
-    paint_mode.on_task_failed(ctx, SimpleNamespace(key=f"paint-save:{tab.uid}"))
+    inker_mode.on_task_failed(ctx, SimpleNamespace(key=f"inker-save:{tab.uid}"))
     assert not tab.saving

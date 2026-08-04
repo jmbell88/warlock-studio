@@ -12,7 +12,7 @@ import re
 import secrets
 from typing import Any
 
-from .. import rigging
+from .. import rigging, vram
 from .errors import Invalid, NotFound
 
 ALLOWED_RESOLUTIONS = {512, 1024, 1536}
@@ -96,6 +96,37 @@ def check_seed(name: str, value: int | None) -> None:
         raise Invalid(f"{name} must be a whole number", field=name)
     if not 0 <= value <= MAX_SEED:
         raise Invalid(f"{name} must be between 0 and {MAX_SEED}", field=name)
+
+
+def vram_plan(svc: Any) -> vram.Plan:
+    """The resolved plan, or one derived from the config for a Runtime-less caller."""
+    plan = getattr(svc, "vram_plan", None)
+    if plan is not None:
+        return plan
+    return vram.plan(
+        exclusive=svc.config.vram_exclusive,
+        budget_gib=svc.config.vram_budget_gib,
+        total_gib=svc.config.vram_total_gib,
+        device=vram.device_memory(),
+    )
+
+
+def check_vram(svc: Any, kind: str, stage: str, params: dict[str, Any]) -> None:
+    """Refuse a job the card cannot hold, before anything is written.
+
+    Here rather than in the worker because the worker is two minutes too late
+    and, on Windows, does not reliably fail at all: overcommitted VRAM spills
+    into shared system memory and becomes host commit, so the symptom is the
+    machine dying rather than the job erroring. The remedy has to name a thing
+    the user can change, which is why the message is built from the job's own
+    parameters.
+    """
+    plan = vram_plan(svc)
+    if not plan.enforced:
+        return
+    need = vram.estimate(kind, stage, params, exclusive=plan.exclusive)
+    if not plan.fits(need):
+        raise Invalid(vram.shortfall_message(need, plan, params))
 
 
 def random_seed() -> int:

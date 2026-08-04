@@ -69,6 +69,61 @@ def test_a_reference_seed_defaults_to_the_legacy_single_seed(svc):
     assert params["reference_seed"] == params["mesh_seed"] == 7
 
 
+# --- VRAM admission ---------------------------------------------------------
+
+
+def _small_card(svc, total=8.0):
+    from warlock import vram
+
+    svc.vram_plan = vram.plan(exclusive=None, total_gib=total)
+    return svc
+
+
+def test_a_job_the_card_cannot_hold_is_refused_at_the_door(svc):
+    _small_card(svc)
+    with pytest.raises(Invalid) as exc:
+        svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="model")
+    assert "GiB of VRAM" in str(exc.value)
+    # No row, and -- the ordering that matters -- nothing on disk either.
+    assert svc.store.list(limit=10) == []
+    assert [p for p in svc.config.data_dir.iterdir() if p.is_dir()] == []
+
+
+def test_a_refused_upload_leaves_no_input_png(svc):
+    _small_card(svc)
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="image", image=_png_bytes(), output="model")
+    assert not list(svc.config.data_dir.glob("*/input.png"))
+
+
+def test_a_reference_still_fits_a_card_a_reconstruction_does_not(svc):
+    """The gate is per stage, not per app: the cheap half must stay usable."""
+    # 12 GiB: the 7 GiB pipe fits, the 16 GiB reconstruction never will.
+    _small_card(svc, total=12.0)
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="reference")["id"]
+    assert svc.store.get(job_id) is not None
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="model")
+
+
+def test_a_promotion_is_gated_too(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="reference")["id"]
+    svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(job_id) / "input.png").write_bytes(_png_bytes())
+    svc.store.claim(job_id)
+    svc.store.finish(job_id, "done", None)
+    _small_card(svc)
+    with pytest.raises(Invalid) as exc:
+        svc_jobs.promote_to_model(svc, job_id)
+    assert "GiB of VRAM" in str(exc.value)
+
+
+def test_an_unmeasured_host_enforces_nothing(svc):
+    """No plan and no torch: the gate is off, not accidentally strict."""
+    assert svc.vram_plan is None
+    assert svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="model")["id"]
+
+
 # --- batching ---------------------------------------------------------------
 
 

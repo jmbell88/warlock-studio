@@ -456,10 +456,27 @@ def run_worker(
     assert proc.stdin is not None and proc.stdout is not None
     reader = threading.Thread(target=_pump, args=(proc.stdout,), daemon=True)
     reader.start()
+
+    # The spec goes out on a thread of its own for the same reason stdout is
+    # drained on one: it has to be inside the deadline. A sheet spec carries
+    # every cell's bones inline, and a 200-cell clip is far larger than the OS
+    # pipe buffer -- so a worker that dies before draining stdin (a failed
+    # `import bpy`, a driver that will not load) made this write block
+    # indefinitely, wedging the serial GPU queue well past `timeout`. The
+    # BrokenPipeError the other outcome raises is swallowed here too: the exit
+    # code and the captured tail below say far more about what went wrong.
+    def _send() -> None:
+        try:
+            proc.stdin.write(json.dumps(spec))
+            proc.stdin.close()
+        except OSError:
+            pass
+
+    writer = threading.Thread(target=_send, daemon=True)
+    writer.start()
+
     deadline = time.monotonic() + timeout
     try:
-        proc.stdin.write(json.dumps(spec))
-        proc.stdin.close()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -486,6 +503,11 @@ def run_worker(
     finally:
         if proc.poll() is None:
             proc.kill()
+            # Reaped, like the timeout branch above does: a kill without a
+            # wait leaves the child unreaped and the pump thread blocked on a
+            # pipe that never closes.
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=10.0)
 
     output = "\n".join(tail)[-ERROR_TAIL_CHARS:]
     if code != 0:

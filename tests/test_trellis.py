@@ -5,6 +5,7 @@ import struct
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -162,15 +163,42 @@ class _FakeProc:
     """Never exits on its own; stdout is None so the reader thread returns
     immediately instead of blocking on a real pipe."""
 
-    def __init__(self) -> None:
+    def __init__(self, returncode: int | None = None) -> None:
         self.stdout = None
-        self.returncode = None
+        # A code makes it a process that died on its own -- a bind failure, in
+        # every case that matters here.
+        self.returncode = returncode
         # winjob.assign reads .pid right after Popen; 0 is never a real pid, so
         # OpenProcess fails and assign logs and returns False, as designed.
         self.pid = 0
 
     def poll(self):
-        return None
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -1
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -1
+
+
+class _FakeHealthyClient:
+    """A server that answers /health at once."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def get(self, *_args, **_kwargs):
+        return SimpleNamespace(status_code=200)
 
 
 class _FakeAsyncClient:
@@ -241,10 +269,117 @@ async def test_ensure_started_refuses_a_port_an_orphan_already_holds(tmp_path, m
         trellis_mod.subprocess, "Popen", lambda *a, **k: spawned.append(a) or _FakeProc()
     )
     monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: True)
+    # Nothing owns the port as far as the TCP table is concerned (off Windows,
+    # always) -- the holder cannot be identified, so it cannot be reclaimed.
+    monkeypatch.setattr(trellis_mod.winjob, "listener_pid", lambda _port: None)
 
     with pytest.raises(RuntimeError, match="already in use"):
         await srv.ensure_started()
     assert spawned == []
+
+
+@pytest.mark.asyncio
+async def test_an_orphan_of_our_own_exe_is_reclaimed(tmp_path, monkeypatch):
+    """The job object stops new orphans; it cannot clear one a pre-fix crash
+    already stranded. Killing it is safe only because the holder's image is the
+    very exe this instance is configured to spawn."""
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971)
+
+    spawned: list = []
+    killed: list[int] = []
+    held = {"port": True}
+
+    monkeypatch.setattr(
+        trellis_mod.subprocess, "Popen", lambda *a, **k: spawned.append(a) or _FakeProc()
+    )
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: held["port"])
+    monkeypatch.setattr(trellis_mod.winjob, "listener_pid", lambda _port: 4321)
+    monkeypatch.setattr(trellis_mod.winjob, "image_path", lambda _pid: str(exe.resolve()))
+    monkeypatch.setattr(trellis_mod.winjob, "assign", lambda _pid: True)
+
+    def _kill(pid):
+        killed.append(pid)
+        held["port"] = False
+        return True
+
+    monkeypatch.setattr(trellis_mod.winjob, "terminate", _kill)
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    # The health poll never succeeds against the fake client, so the run ends
+    # at the startup timeout -- what is under test is that it got as far as
+    # spawning at all, having killed the orphan first.
+    monkeypatch.setattr(trellis_mod, "STARTUP_TIMEOUT", 0.0)
+    with pytest.raises(RuntimeError, match="healthy"):
+        await srv.ensure_started()
+
+    assert killed == [4321]
+    assert len(spawned) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_port_held_by_a_stranger_is_never_killed(tmp_path, monkeypatch):
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971)
+
+    spawned: list = []
+    killed: list[int] = []
+    monkeypatch.setattr(
+        trellis_mod.subprocess, "Popen", lambda *a, **k: spawned.append(a) or _FakeProc()
+    )
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: True)
+    monkeypatch.setattr(trellis_mod.winjob, "listener_pid", lambda _port: 4321)
+    monkeypatch.setattr(
+        trellis_mod.winjob, "image_path", lambda _pid: r"C:\Program Files\Somebody\server.exe"
+    )
+    monkeypatch.setattr(trellis_mod.winjob, "terminate", lambda pid: killed.append(pid) or True)
+
+    with pytest.raises(RuntimeError, match="not this Warlock's trellis-server"):
+        await srv.ensure_started()
+    assert killed == [] and spawned == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_start_is_not_retried_immediately(tmp_path, monkeypatch):
+    """Five startup banners in one minute, each dying on bind, is what the
+    2026-08-03 log actually contains: every generate() respawned at once and
+    buried the first failure under identical repeats."""
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971)
+
+    spawned: list = []
+    monkeypatch.setattr(
+        trellis_mod.subprocess, "Popen", lambda *a, **k: spawned.append(a) or _FakeProc(1)
+    )
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: False)
+    monkeypatch.setattr(trellis_mod.winjob, "assign", lambda _pid: True)
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(RuntimeError, match="exited during startup"):
+        await srv.ensure_started()
+    assert len(spawned) == 1
+
+    # Immediately again: refused without touching Popen.
+    with pytest.raises(RuntimeError, match="refusing to respawn"):
+        await srv.ensure_started()
+    assert len(spawned) == 1
+
+    # Once the window has passed it tries again, and a healthy server resets
+    # the counters so the next failure starts from the shortest delay.
+    srv._backoff_until = 0.0
+    monkeypatch.setattr(trellis_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", _FakeHealthyClient)
+    await srv.ensure_started()
+    assert srv._start_failures == 0 and srv._backoff_until == 0.0
 
 
 def test_port_in_use_sees_a_bound_socket():

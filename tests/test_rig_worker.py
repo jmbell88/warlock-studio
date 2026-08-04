@@ -19,7 +19,10 @@ from warlock.config import Config
 from warlock.db import JobStore
 from warlock.queue import Worker
 
-pytestmark = pytest.mark.asyncio
+# No module-level asyncio mark: pyproject sets asyncio_mode = "auto", which
+# already collects every async test here. Applying it to the module as well
+# also applied it to this file's one *synchronous* test, which pytest-asyncio
+# reports as a mistake -- and it is one.
 
 
 @pytest.fixture

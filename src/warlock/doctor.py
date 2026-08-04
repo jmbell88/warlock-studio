@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import models, rigging
+from . import models, rigging, vram, winjob
 from .config import Config
 
 MIN_FREE_DISK_GB = 5.0
@@ -40,6 +40,8 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _birefnet_check(config),
         _gltfpack_check(config),
         _cuda_check(),
+        _vram_check(config),
+        _job_object_check(),
         _disk_check(config),
         _port_check(config, trellis_running),
         *_t2i_checks(config),
@@ -75,10 +77,12 @@ def _probe_blender() -> Check:
             fatal=False,
         )
     try:
-        proc = subprocess.run(
+        # winjob.run, not subprocess.run: this fires during Runtime._start and
+        # `import bpy` takes seconds, so killing Warlock while it starts used
+        # to strand a python.exe mid-import.
+        proc = winjob.run(
             [sys.executable, "-c", "import bpy; print(bpy.app.version_string)"],
             capture_output=True, text=True, timeout=BPY_PROBE_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return Check("Blender (rigging)", False, f"bpy probe failed: {exc}", fatal=False)
@@ -135,6 +139,51 @@ def _cuda_check() -> Check:
     ok = torch.cuda.is_available()
     detail = "available" if ok else "torch.cuda.is_available() is False"
     return Check("CUDA", ok, detail, fatal=False)
+
+
+def _vram_check(config: Config) -> Check:
+    """How large the card is, which mode that chose, and what a job may ask for.
+
+    Fatal only when the budget cannot hold even a lone trellis run: every 3D
+    job on such a host fails anyway, and it is better to say so at startup than
+    two minutes into the first reconstruction.
+    """
+    device = vram.probe()
+    resolved = vram.plan(
+        exclusive=config.vram_exclusive,
+        budget_gib=config.vram_budget_gib,
+        total_gib=config.vram_total_gib,
+        device=device,
+    )
+    if not resolved.enforced:
+        return Check("VRAM budget", True, resolved.reason, fatal=False)
+    # Only when the plan is actually about this device: with WARLOCK_VRAM_TOTAL
+    # standing in for a card, the real card's free figure describes something
+    # else entirely and reads as a contradiction.
+    measured = device is not None and resolved.total_gib == device.total_gib
+    free = f", {device.free_gib:.1f} GiB free now" if measured else ""  # type: ignore[union-attr]
+    ok = resolved.budget_gib is not None and resolved.budget_gib >= vram.TRELLIS_GIB
+    detail = resolved.reason + free
+    if not ok:
+        detail += f" -- below the {vram.TRELLIS_GIB:.0f} GiB a reconstruction needs"
+    return Check("VRAM budget", ok, detail, fatal=not ok)
+
+
+def _job_object_check() -> Check:
+    """Is kill-on-close actually armed?
+
+    Non-fatal -- a host without job objects is the status quo ante -- but it
+    must be *visible*: the whole point of the guarantee is that GPU children
+    die with the app, and silently not having it looks identical to having it
+    right up until a crash strands trellis-server on port 17971.
+    """
+    ok = winjob.armed()
+    detail = (
+        "child processes die with Warlock (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)"
+        if ok
+        else "unavailable -- trellis-server/Blender can outlive a crash of this process"
+    )
+    return Check("subprocess cleanup", ok, detail, fatal=False)
 
 
 def _disk_check(config: Config) -> Check:

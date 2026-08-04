@@ -39,8 +39,12 @@ def test_missing_weights_raise_actionable_error(tmp_path):
 def test_vram_exclusive_flag_parses_from_env(monkeypatch):
     monkeypatch.setenv("WARLOCK_VRAM_EXCLUSIVE", "1")
     assert Config().vram_exclusive is True
-    monkeypatch.delenv("WARLOCK_VRAM_EXCLUSIVE")
+    monkeypatch.setenv("WARLOCK_VRAM_EXCLUSIVE", "off")
     assert Config().vram_exclusive is False
+    # Tri-state: unset is neither, so vram.plan() can decide from the card
+    # without overruling a user who explicitly chose coexist.
+    monkeypatch.delenv("WARLOCK_VRAM_EXCLUSIVE")
+    assert Config().vram_exclusive is None
 
 
 def test_vram_logging_never_imports_torch_itself(monkeypatch):

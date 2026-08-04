@@ -89,10 +89,23 @@ class JobsCache:
         return True
 
     def refresh_storage(self) -> None:
+        """Measure the data directory now. **Blocking** -- startup only.
+
+        ``svc_jobs.storage`` walks and stats every file under every job
+        directory, which is tens of milliseconds on a workshop with a few
+        hundred assets and grows from there. During the run it is dispatched to
+        a task thread instead (``App._request_storage``); this stays for the
+        one call made before the frame loop exists.
+        """
+        self.storage = self.measure()
+
+    def measure(self) -> Any:
+        """The measurement itself, safe to call from a task thread."""
         try:
-            self.storage = svc_jobs.storage(self.svc)
+            return svc_jobs.storage(self.svc)
         except Exception:
             log.exception("could not measure storage")
+            return self.storage
 
     # -- queries -----------------------------------------------------------
 

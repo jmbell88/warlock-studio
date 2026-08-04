@@ -7,10 +7,15 @@ the app the same way a user does, through ``service.jobs.create_job`` on a
 real ``studio.runtime.Runtime``.
 
 The split mirrors pipelines/sheet.py: everything decidable (the suite, the
-recipes, the manifest, the grid, the scoring) is pure and torch-free, and only
-the two stages that genuinely need a GPU (running jobs, rendering views) touch
-one. That is what lets a metric change be re-applied to every past run without
-regenerating anything.
+recipes, the manifest, the grid, the aggregation in ``score.py``) is pure and
+torch-free, and only the three stages that genuinely need a GPU -- running
+jobs, rendering views, and the metrics themselves, which import torch inside
+their own functions -- touch one. That is what lets a metric change be
+re-applied to every past run without regenerating anything: ``bench score``
+reads the views off disk.
+
+The full A/B is therefore three commands: ``run --stage model --render`` twice
+under two recipes, then ``score <b> --against <a>``.
 
 Entry point: ``python -m warlock.bench <subcommand>``. Deliberately not
 ``warlock``'s own CLI -- that is the user-facing binary, and its flat

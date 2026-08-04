@@ -22,8 +22,8 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, paint_mode, paint_state, theme, widgets
-from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from .. import icons, inker_mode, inker_state, theme, widgets
+from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import paint_textures
 
@@ -39,7 +39,7 @@ def _u32(colour: int, alpha: float = 1.0) -> int:
 
 
 def draw(ctx: Any) -> None:
-    state = paint_mode.ensure(ctx)
+    state = inker_mode.ensure(ctx)
     _file_row(ctx, state)
     if not state.docs:
         _empty(ctx, state)
@@ -73,7 +73,7 @@ def _file_row(ctx: Any, state: Any) -> None:
     _new_popup(ctx)
     imgui.same_line()
     if imgui.button("Open"):
-        paint_mode.ask_open(ctx)
+        inker_mode.ask_open(ctx)
     imgui.same_line()
     if imgui.button("Recent"):
         imgui.open_popup("paint-recent")
@@ -81,13 +81,13 @@ def _file_row(ctx: Any, state: Any) -> None:
     imgui.same_line()
     busy = tab is not None and tab.saving
     if widgets.disabled_button("Save", tab is not None and not busy):
-        paint_mode.save(ctx, tab)
+        inker_mode.save(ctx, tab)
     imgui.same_line()
     if widgets.disabled_button("Save as", tab is not None and not busy):
-        paint_mode.save_as(ctx, tab)
+        inker_mode.save_as(ctx, tab)
     imgui.same_line()
     if widgets.disabled_button("Export PNG", tab is not None and not busy):
-        paint_mode.export_png(ctx, tab)
+        inker_mode.export_png(ctx, tab)
     if tab is not None:
         imgui.same_line()
         if tab.saving:
@@ -122,10 +122,10 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
         doc.rotate_floating(90.0)
     imgui.same_line()
     if imgui.button("Apply"):
-        paint_mode.end_transform(ctx, commit=True)
+        inker_mode.end_transform(ctx, commit=True)
     imgui.same_line()
     if imgui.button("Cancel"):
-        paint_mode.end_transform(ctx, commit=False)
+        inker_mode.end_transform(ctx, commit=False)
 
     buf = doc.floating
     if buf is None:
@@ -146,9 +146,9 @@ def _new_popup(ctx: Any) -> None:
     if not imgui.begin_popup("new-canvas"):
         return
     imgui.text("New canvas")
-    for width, height in paint_mode.NEW_PRESETS:
+    for width, height in inker_mode.NEW_PRESETS:
         if imgui.button(f"{width} x {height}", (160, 0)):
-            paint_mode.new_document(ctx, width, height)
+            inker_mode.new_document(ctx, width, height)
             imgui.close_current_popup()
     imgui.end_popup()
 
@@ -162,7 +162,7 @@ def _recent_popup(ctx: Any, state: Any) -> None:
         widgets.muted("Nothing opened yet.")
     for path in list(state.recent):
         if imgui.selectable(Path(path).name, False)[0]:
-            paint_mode.open_path(ctx, Path(path))
+            inker_mode.open_path(ctx, Path(path))
             imgui.close_current_popup()
         if imgui.is_item_hovered():
             imgui.set_tooltip(path)
@@ -176,18 +176,18 @@ def _empty(ctx: Any, state: Any) -> None:
     imgui.text("Nothing open")
     widgets.muted("Start a canvas, open an image, or send one here from the library.")
     imgui.dummy((0, 16))
-    for width, height in paint_mode.NEW_PRESETS:
+    for width, height in inker_mode.NEW_PRESETS:
         if imgui.button(f"New {width} x {height}", (240, 0)):
-            paint_mode.new_document(ctx, width, height)
+            inker_mode.new_document(ctx, width, height)
     imgui.dummy((0, 8))
     if imgui.button("Open a file...", (240, 0)):
-        paint_mode.ask_open(ctx)
+        inker_mode.ask_open(ctx)
     if state.recent:
         imgui.dummy((0, 16))
         widgets.section("recent")
         for path in list(state.recent)[:6]:
             if imgui.selectable(Path(path).name, False)[0]:
-                paint_mode.open_path(ctx, Path(path))
+                inker_mode.open_path(ctx, Path(path))
 
 
 # --- tabs -------------------------------------------------------------------
@@ -208,7 +208,7 @@ def _tab_bar(ctx: Any, state: Any) -> None:
             state.activate(tab.uid)
             imgui.end_tab_item()
         if not keep:
-            paint_mode.request_close(ctx, tab)
+            inker_mode.request_close(ctx, tab)
     imgui.end_tab_bar()
 
 
@@ -229,10 +229,10 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         region = (max(avail.x, 16.0), max(avail.y, 16.0))
         view = tab.view
         if view.pending_zoom is not None:
-            paint_state.centre(view, tab.doc.size, region, view.pending_zoom)
+            inker_state.centre(view, tab.doc.size, region, view.pending_zoom)
             view.pending_zoom = None
         elif not view.fitted:
-            paint_state.fit(view, tab.doc.size, region)
+            inker_state.fit(view, tab.doc.size, region)
         imgui.invisible_button("##paint-surface", region)
         active = imgui.is_item_active()
         hovered = imgui.is_item_hovered()
@@ -250,9 +250,9 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
     parts = [f"{view.zoom * 100:.0f}%"]
     if hovered and origin is not None:
         mouse = imgui.get_mouse_pos()
-        px, py = paint_state.to_image(view, (origin.x, origin.y), mouse.x, mouse.y)
+        px, py = inker_state.to_image(view, (origin.x, origin.y), mouse.x, mouse.y)
         parts.append(f"{int(px)}, {int(py)}")
-    tool = next((label for key, label, _ in paint_state.TOOLS if key == state.tool), state.tool)
+    tool = next((label for key, label, _ in inker_state.TOOLS if key == state.tool), state.tool)
     parts.append(tool)
     parts.append(f"{tab.doc.size[0]} x {tab.doc.size[1]}")
     widgets.muted("   ".join(parts))
@@ -264,10 +264,10 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
 def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: bool) -> None:
     io = imgui.get_io()
     mouse = imgui.get_mouse_pos()
-    point = paint_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
 
     if hovered and io.mouse_wheel:
-        paint_state.zoom_about(tab.view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+        inker_state.zoom_about(tab.view, origin, (mouse.x, mouse.y), io.mouse_wheel)
 
     # Middle-drag always pans; space-drag pans with the left button, which is
     # what every paint program does and what makes a tablet usable.
@@ -315,8 +315,8 @@ def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
         "sw": (x, y + height),
         "se": (x + width, y + height),
     }
-    out = {k: paint_state.to_screen(view, origin, *p) for k, p in corners.items()}
-    top = paint_state.to_screen(view, origin, x + width / 2.0, y)
+    out = {k: inker_state.to_screen(view, origin, *p) for k, p in corners.items()}
+    top = inker_state.to_screen(view, origin, x + width / 2.0, y)
     out["rotate"] = (top[0], top[1] - ROTATE_ARM)
     return out
 
@@ -332,7 +332,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
     doc = tab.doc
     buf = doc.floating
     mouse = imgui.get_mouse_pos()
-    centre = paint_state.to_screen(tab.view, origin, *buf.centre)
+    centre = inker_state.to_screen(tab.view, origin, *buf.centre)
 
     if active and imgui.is_mouse_clicked(0):
         handles = _handles(tab, origin)
@@ -386,7 +386,7 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
     handles = _handles(tab, origin)
     colour = _u32(theme.ACCENT)
     draw_list.add_rect(handles["nw"], handles["se"], colour)
-    top = paint_state.to_screen(
+    top = inker_state.to_screen(
         tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1]
     )
     draw_list.add_line(top, handles["rotate"], colour)
@@ -471,7 +471,7 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
             hardness=state.hardness,
             opacity=state.opacity,
             spacing=state.spacing,
-            mode=paint_state.BRUSH_MODES[tool],
+            mode=inker_state.BRUSH_MODES[tool],
             strength=state.strength,
             symmetry=state.symmetry,
         )
@@ -566,8 +566,8 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     view = tab.view
     draw_list = imgui.get_window_draw_list()
     width, height = doc.size
-    top_left = paint_state.to_screen(view, origin, 0, 0)
-    bottom_right = paint_state.to_screen(view, origin, width, height)
+    top_left = inker_state.to_screen(view, origin, 0, 0)
+    bottom_right = inker_state.to_screen(view, origin, width, height)
 
     _checkerboard(ctx, draw_list, view, top_left, bottom_right)
     texture = paint_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
@@ -615,8 +615,8 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
         return
     x, y = buf.offset
     fw, fh = buf.size
-    a = paint_state.to_screen(tab.view, origin, x, y)
-    b = paint_state.to_screen(tab.view, origin, x + fw, y + fh)
+    a = inker_state.to_screen(tab.view, origin, x, y)
+    b = inker_state.to_screen(tab.view, origin, x + fw, y + fh)
     draw_list.add_image(widgets.texture_ref(texture), a, b)
     draw_list.add_rect(a, b, _u32(theme.ACCENT))
 
@@ -632,11 +632,11 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
         return
     width, height = size
     for x in range(0, width + 1, step):
-        sx = paint_state.to_screen(view, origin, x, 0)[0]
+        sx = inker_state.to_screen(view, origin, x, 0)[0]
         if top_left[0] <= sx <= bottom_right[0]:
             draw_list.add_line((sx, top_left[1]), (sx, bottom_right[1]), colour)
     for y in range(0, height + 1, step):
-        sy = paint_state.to_screen(view, origin, 0, y)[1]
+        sy = inker_state.to_screen(view, origin, 0, y)[1]
         if top_left[1] <= sy <= bottom_right[1]:
             draw_list.add_line((top_left[0], sy), (bottom_right[0], sy), colour)
 
@@ -645,14 +645,14 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
     width, height = size
     colour = _u32(theme.ACCENT, 0.6)
     if state.symmetry in ("x", "xy"):
-        x = paint_state.to_screen(view, origin, width / 2, 0)[0]
-        top = paint_state.to_screen(view, origin, 0, 0)[1]
-        bottom = paint_state.to_screen(view, origin, 0, height)[1]
+        x = inker_state.to_screen(view, origin, width / 2, 0)[0]
+        top = inker_state.to_screen(view, origin, 0, 0)[1]
+        bottom = inker_state.to_screen(view, origin, 0, height)[1]
         draw_list.add_line((x, top), (x, bottom), colour)
     if state.symmetry in ("y", "xy"):
-        y = paint_state.to_screen(view, origin, 0, height / 2)[1]
-        left = paint_state.to_screen(view, origin, 0, 0)[0]
-        right = paint_state.to_screen(view, origin, width, 0)[0]
+        y = inker_state.to_screen(view, origin, 0, height / 2)[1]
+        left = inker_state.to_screen(view, origin, 0, 0)[0]
+        right = inker_state.to_screen(view, origin, width, 0)[0]
         draw_list.add_line((left, y), (right, y), colour)
 
 
@@ -682,7 +682,7 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     phase = (time.monotonic() * ANT_SPEED) % (DASH * 2)
     light, dark = _u32(theme.TEXT), _u32(theme.BG)
     for loop in loops:
-        points = [paint_state.to_screen(view, origin, x, y) for x, y in loop]
+        points = [inker_state.to_screen(view, origin, x, y) for x, y in loop]
         points.append(points[0])
         walked = -phase
         for a, b in zip(points, points[1:], strict=False):
@@ -709,12 +709,12 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
         return
     view = tab.view
     mouse = imgui.get_mouse_pos()
-    anchor = paint_state.to_screen(view, origin, *state.drag_anchor)
+    anchor = inker_state.to_screen(view, origin, *state.drag_anchor)
     colour = _u32(theme.ACCENT)
     kind, tool = state.drag_kind, state.tool
 
     if kind == "lasso" and len(state.lasso) > 1:
-        points = [paint_state.to_screen(view, origin, x, y) for x, y in state.lasso]
+        points = [inker_state.to_screen(view, origin, x, y) for x, y in state.lasso]
         for a, b in zip(points, points[1:], strict=False):
             draw_list.add_line(a, b, colour)
         draw_list.add_line(points[-1], (mouse.x, mouse.y), colour)
