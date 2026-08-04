@@ -1,0 +1,30 @@
+# Warlock Studio Manual
+
+Warlock Studio is a local, fully offline desktop application that turns a text prompt or a
+reference image into a game-ready, textured 3D asset on your own GPU. This manual is written for
+three kinds of reader at once: the person making assets, the person installing and configuring the
+app, and the person changing its code. Part I is the tour of the app itself, Part II covers getting
+it running and keeping it running, and Part III explains how it is built.
+
+## Using Warlock Studio
+
+- [Overview](01-overview.md) — what the app is, the two-stage pipeline, and what each part of the window does.
+- [Generating references](02-generating-references.md) — the prompt, the guidance selects, models, seeds and image conditioning.
+- [Generating meshes](03-generating-meshes.md) — promoting a reference, mesh settings, triangle budgets, quality reports and exports.
+- [Rigging and posing](04-rigging-and-posing.md) — fitting a skeleton, posing it with gizmos, and saving poses.
+- [Sprite sheets](05-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
+- [Paint](06-paint.md) — the layered raster editor and the two directions it connects to the pipeline.
+- [The library and jobs](07-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
+- [Keyboard shortcuts](08-shortcuts.md) — every binding the app answers to.
+
+## Setup & operations
+
+- [Installation](09-installation.md) — requirements, dependencies and the one-time model downloads.
+- [Configuration](10-configuration.md) — environment variables, data locations and VRAM modes.
+- [Troubleshooting](11-troubleshooting.md) — what the diagnostics say and what to do about it.
+
+## Architecture
+
+- [Architecture](12-architecture.md) — the process, the threads, the job store and the service layer.
+- [Pipelines](13-pipelines.md) — how a job travels from prompt to GLB.
+- [Extending](14-extending.md) — adding a model, a skeleton or a guidance field.
