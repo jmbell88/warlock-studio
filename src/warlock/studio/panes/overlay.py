@@ -21,18 +21,18 @@ from ..state import format_duration
 
 def toolbar(ctx: Any) -> None:
     """The viewer's own controls, along the top of the viewport."""
-    from . import editor_2d
+    from .. import paint_mode
 
     state = ctx.state
     viewer = ctx.viewer
     if viewer is None:
         return
     job = ctx.job()
-    if editor_2d.can_edit(ctx, job):
+    if ctx.state.mode == "2d" and paint_mode.can_edit_job(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
-        if imgui.button("Edit image"):
-            editor_2d.open(ctx, job)
+        if imgui.button("Open in Paint"):
+            paint_mode.open_job_reference(ctx, job)
         imgui.same_line()
     if imgui.button("Frame"):
         viewer.frame()

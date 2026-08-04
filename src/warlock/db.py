@@ -134,13 +134,37 @@ class JobStore:
         *,
         stage: str = "model",
         parent_id: str | None = None,
+        status: str = "queued",
     ) -> str:
+        """Insert a job row. ``status`` is queued for everything the worker
+        runs.
+
+        The one caller that passes anything else is an *import*: pixels the
+        user painted are already the artifact, so the row is born ``done``
+        rather than being created queued and immediately finished. Written in
+        one statement deliberately -- a create-then-claim pair leaves a window
+        in which the worker's poll can pick the job up and try to run it.
+        """
         job_id = job_id or uuid.uuid4().hex[:12]
+        now = time.time()
+        finished = now if status in ("done", "error", "cancelled") else None
         with self._lock:
             self._conn.execute(
                 "INSERT INTO jobs (id, kind, status, prompt, params, created_at,"
-                " stage, parent_id) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)",
-                (job_id, kind, prompt, json.dumps(params), time.time(), stage, parent_id),
+                " stage, parent_id, started_at, finished_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    kind,
+                    status,
+                    prompt,
+                    json.dumps(params),
+                    now,
+                    stage,
+                    parent_id,
+                    finished,
+                    finished,
+                ),
             )
             self._conn.commit()
         return job_id

@@ -188,3 +188,144 @@ def test_a_save_leaves_no_temp_file_behind(svc):
     svc_files.save_edited_image(svc, job_id, _png(colour=(0, 255, 0, 255)))
     names = {p.name for p in svc.job_dir(job_id).iterdir()}
     assert not [n for n in names if n.endswith(".tmp")]
+
+
+# --- the layered working file -----------------------------------------------
+#
+# paint.ora sits beside input.png so that reopening an edited reference brings
+# its layers back rather than a flattened image. It is internal working state,
+# never served, and it is *stale* rather than authoritative the moment anything
+# else rewrites the reference.
+
+
+def _ora(size=(64, 64), layers=2) -> bytes:
+    from warlock.studio import paint
+
+    doc = paint.Document.blank(*size)
+    doc.stack[0].pixels[:, :] = (200, 30, 30, 255)
+    for _ in range(layers - 1):
+        doc.add_layer()
+    return paint.ora_bytes(doc)
+
+
+def test_the_layered_source_saves_beside_the_reference_it_flattens_to(svc):
+    job_id = _reference(svc)
+    svc_files.save_paint_working(svc, job_id, _ora())
+    assert svc_files.paint_working_path(svc, job_id).exists()
+    # Internal: never listed, never downloadable.
+    assert svc_files.PAINT_WORKING not in svc_files.LISTED
+    assert svc_files.PAINT_WORKING not in svc_files.MEDIA
+
+
+def test_a_layered_source_must_actually_be_one(svc):
+    job_id = _reference(svc)
+    with pytest.raises(Invalid):
+        svc_files.save_paint_working(svc, job_id, _png())
+
+
+def test_a_layered_source_is_bounded(svc):
+    job_id = _reference(svc)
+    with pytest.raises(TooLarge):
+        svc_files.save_paint_working(svc, job_id, b"PK\x03\x04" + b"0" * svc_files.MAX_PAINT_BYTES)
+
+
+def test_only_a_finished_reference_gets_a_layered_source(svc):
+    job_id = _reference(svc)
+    svc.store.set_status(job_id, "running")
+    with pytest.raises(Invalid):
+        svc_files.save_paint_working(svc, job_id, _ora())
+
+
+def test_a_working_file_older_than_the_reference_is_treated_as_stale(svc):
+    """A revert or a regenerate rewrites input.png without touching the
+    layers, which would otherwise resurrect an edit of an image that is gone."""
+    import os
+    import time
+
+    job_id = _reference(svc)
+    svc_files.save_paint_working(svc, job_id, _ora())
+    assert svc_files.paint_working_status(svc, job_id) == {"exists": True, "fresh": True}
+
+    later = time.time() + 10
+    os.utime(svc.job_dir(job_id) / "input.png", (later, later))
+    status = svc_files.paint_working_status(svc, job_id)
+    assert status["exists"] and not status["fresh"]
+
+
+def test_no_working_file_is_neither_present_nor_fresh(svc):
+    assert svc_files.paint_working_status(svc, _reference(svc)) == {
+        "exists": False,
+        "fresh": False,
+    }
+
+
+def test_discarding_the_working_file_is_forgiving_of_its_absence(svc):
+    job_id = _reference(svc)
+    svc_files.discard_paint_working(svc, job_id)
+    svc_files.save_paint_working(svc, job_id, _ora())
+    svc_files.discard_paint_working(svc, job_id)
+    assert not svc_files.paint_working_path(svc, job_id).exists()
+
+
+def test_a_working_save_leaves_no_temp_file_behind(svc):
+    job_id = _reference(svc)
+    svc_files.save_paint_working(svc, job_id, _ora())
+    names = {p.name for p in svc.job_dir(job_id).iterdir()}
+    assert not [n for n in names if n.endswith(".tmp")]
+
+
+# --- importing painted pixels -----------------------------------------------
+
+
+def test_an_imported_reference_is_finished_the_moment_it_exists(svc):
+    """No worker run: the image already exists, so queueing one would spend two
+    minutes of GPU reproducing what the user just drew."""
+    job_id = svc_jobs.import_reference(svc, _png())["id"]
+    job = svc.store.get(job_id)
+    assert job["status"] == "done"
+    assert job["stage"] == "reference"
+    assert (svc.job_dir(job_id) / "input.png").exists()
+
+
+def test_an_imported_reference_is_measured_so_the_quality_gate_has_data(svc):
+    job_id = svc_jobs.import_reference(svc, _png())["id"]
+    params = svc.store.get(job_id)["params"]
+    assert "reference_report" in params
+    assert params["hand_edited"] is True
+    assert params["imported"] is True
+
+
+def test_an_imported_reference_can_be_promoted_like_a_generated_one(svc):
+    job_id = svc_jobs.import_reference(svc, _png())["id"]
+    out = svc_jobs.promote_to_model(svc, job_id, force=True)
+    assert out["parent"] == job_id
+    assert (svc.job_dir(out["id"]) / "input.png").exists()
+
+
+def test_an_import_carries_a_name_when_one_is_given(svc):
+    job_id = svc_jobs.import_reference(svc, _png(), name="barrel")["id"]
+    assert svc.store.get(job_id)["name"] == "barrel"
+
+
+def test_an_import_re_encodes_whatever_it_was_given(svc):
+    """to_png, same as an upload: trellis.cpp only decodes PNG and JPEG."""
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 32), (10, 20, 30)).save(buf, "BMP")
+    job_id = svc_jobs.import_reference(svc, buf.getvalue())["id"]
+    assert (svc.job_dir(job_id) / "input.png").read_bytes().startswith(svc_files.PNG_MAGIC)
+
+
+def test_an_oversized_import_is_refused_and_leaves_nothing_behind(svc):
+    def listing() -> set[str]:
+        root = svc.config.data_dir
+        return {p.name for p in root.iterdir()} if root.exists() else set()
+
+    before = listing()
+    with pytest.raises(TooLarge):
+        svc_jobs.import_reference(svc, b"0" * (svc_files.MAX_UPLOAD_BYTES + 1))
+    assert listing() == before
+
+
+def test_an_undecodable_import_is_refused(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.import_reference(svc, b"not an image")

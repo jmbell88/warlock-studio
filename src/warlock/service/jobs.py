@@ -230,6 +230,67 @@ def create_job(
     return {"id": ids[0], "ids": ids}
 
 
+def import_reference(
+    svc: WarlockService,
+    image: bytes,
+    *,
+    prompt: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Mint a finished reference row from pixels that were painted, not generated.
+
+    No worker run: the image already exists, so queueing one would spend two
+    minutes of GPU reproducing what the user just drew. The row is created
+    ``done`` at stage ``reference``, which is exactly what promote_to_model
+    consumes -- so "paint something, make a mesh of it" needs no new path
+    through the queue.
+
+    ``hand_edited`` is set for the same reason save_edited_image sets it:
+    ``params["recipe"]`` normally claims a seed and a model produced this
+    image, and here nothing did. The reference report *is* measured, because
+    promote_to_model's quality gate reads it and a missing report would let a
+    reference through that cannot reconstruct.
+    """
+    from ..pipelines import reference
+
+    if len(image) > MAX_UPLOAD_BYTES:
+        raise TooLarge("image upload is over 20 MB")
+    try:
+        normalized = to_png(image)
+    except ImageTooLarge as exc:
+        raise Invalid(str(exc), field="image") from exc
+    except Exception as exc:
+        raise Invalid("could not decode the painted image", field="image") from exc
+    if prompt is not None and len(prompt) > MAX_PROMPT:
+        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+
+    params: dict[str, Any] = {
+        "seed": 0,
+        "reference_seed": 0,
+        "mesh_seed": random_seed(),
+        "hand_edited": True,
+        "imported": True,
+    }
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = svc.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    dest = job_dir / "input.png"
+    # Written before the row, and cleaned up if the insert fails: the same
+    # ordering create_job uses, for the same reason.
+    dest.write_bytes(normalized)
+    try:
+        params["reference_report"] = reference.measure_file(dest).as_dict()
+        svc.store.create(
+            "image", prompt or "", params, job_id, stage="reference", status="done"
+        )
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+    if name:
+        svc.store.set_meta(job_id, name=name[:MAX_JOB_NAME])
+    return {"id": job_id}
+
+
 def list_jobs(
     svc: WarlockService, limit: int = 100, before: tuple[float, str] | None = None
 ) -> list[dict[str, Any]]:

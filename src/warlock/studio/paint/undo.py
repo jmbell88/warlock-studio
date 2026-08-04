@@ -19,6 +19,7 @@ after a reorder still lands on the layer the edit was made to.
 
 from __future__ import annotations
 
+import itertools
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -35,10 +36,18 @@ UNDO_MAX_DEPTH = 64
 UNDO_MIN_DEPTH = 8
 
 
+# Serial numbers handed out at push time. They exist so a caller can ask "is
+# the document where it was when I saved it" -- ``rev`` cannot answer that,
+# because it counts *changes* and an undo is a change, so undoing back to the
+# saved pixels would still read as unsaved.
+_serials = itertools.count(1)
+
+
 class Edit:
     """One reversible step. ``cost`` is what the budget is spent on."""
 
     cost: int = 0
+    serial: int = 0
 
     def undo(self, doc: Any) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -253,7 +262,20 @@ class UndoStack:
     def bytes(self) -> int:
         return sum(e.cost for e in self._done) + sum(e.cost for e in self._undone)
 
+    @property
+    def head(self) -> int:
+        """Identifies the current position in history.
+
+        A save records this and compares against it later, which is what makes
+        "dirty" a comparison rather than a latching flag: undo back to the
+        saved step and the head is that step's serial again. Serials are
+        per-edit, so a *new* branch of the same length is a different head --
+        which a plain depth count would miss.
+        """
+        return self._done[-1].serial if self._done else 0
+
     def push(self, edit: Edit) -> None:
+        edit.serial = next(_serials)
         self._done.append(edit)
         # No history tree: a redo onto a branch the user did not take is worse
         # than no redo at all.

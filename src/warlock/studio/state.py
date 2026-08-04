@@ -152,7 +152,8 @@ class Toast:
 class AppState:
     """The whole UI's mutable state."""
 
-    mode: str = "2d"  # drives which settings pane is shown, as body.mode-2d did
+    # The one thing that decides what a pane shows: 2d | 3d | paint.
+    mode: str = "2d"
     selected: str | None = None
     comparing: str | None = None
     form_2d: dict[str, Any] = field(default_factory=default_form_2d)
@@ -179,9 +180,10 @@ class AppState:
     # The name the draft was opened under, so renaming one in the editor moves
     # it rather than leaving the old name behind as a duplicate.
     profile_draft_origin: str = ""
-    # The 2D art editor's session, when it has taken over the centre pane.
-    # Typed Any so state.py keeps no import of the editor or of Pillow.
-    editor: Any = None
+    # Paint mode's open documents and tool settings, built on first use.
+    # Typed Any so state.py keeps no import of the editor or of Pillow, and
+    # lazy so a session that never paints pays nothing for it.
+    paint: Any = None
 
     # -- toasts ------------------------------------------------------------
 

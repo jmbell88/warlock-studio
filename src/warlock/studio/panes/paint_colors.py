@@ -1,0 +1,74 @@
+"""Foreground, background and the swatch row.
+
+Two colours rather than one because the gradient tool needs both ends and X
+swapping them is universal muscle memory. The swatches are persisted (unlike
+the old editor's fixed palette) because a project has a palette and retyping it
+every session is the kind of small friction that makes a tool feel unfinished.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from imgui_bundle import imgui
+
+from .. import paint_mode, widgets
+
+SWATCH = (20.0, 20.0)
+FLAGS = imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value
+
+
+def _to_rgba(value: Any) -> tuple[int, int, int, int]:
+    """imgui's float colour -> the 8-bit tuple the engine writes with."""
+    return (
+        int(round(value.x * 255)),
+        int(round(value.y * 255)),
+        int(round(value.z * 255)),
+        int(round(value.w * 255)),
+    )
+
+
+def _vec(colour: tuple[int, int, int, int]) -> Any:
+    return imgui.ImVec4(*[c / 255.0 for c in colour])
+
+
+def draw(ctx: Any) -> None:
+    state = paint_mode.ensure(ctx)
+    widgets.section("colour")
+
+    changed, value = imgui.color_edit4("Foreground", _vec(state.fg), FLAGS)
+    if changed:
+        state.fg = _to_rgba(value)
+    changed, value = imgui.color_edit4("Background", _vec(state.bg), FLAGS)
+    if changed:
+        state.bg = _to_rgba(value)
+
+    if imgui.button("Swap (X)"):
+        state.swap_colours()
+    imgui.same_line()
+    if imgui.button("+ swatch"):
+        state.add_swatch(state.fg)
+        paint_mode.persist(ctx)
+
+    imgui.dummy((0, 4))
+    _swatches(ctx, state)
+
+
+def _swatches(ctx: Any, state: Any) -> None:
+    avail = imgui.get_content_region_avail().x
+    per_row = max(1, int(avail // (SWATCH[0] + 6)))
+    for index, colour in enumerate(list(state.swatches)):
+        imgui.push_id(f"swatch{index}")
+        if imgui.color_button("##swatch", _vec(colour), 0, SWATCH):
+            state.fg = colour
+        # Right-click removes: a swatch row with no way to prune it fills up
+        # with mistakes and stops being useful within a session.
+        if imgui.is_item_clicked(1):
+            state.swatches.remove(colour)
+            paint_mode.persist(ctx)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(f"{colour}  -  right-click to remove")
+        imgui.pop_id()
+        if index % per_row != per_row - 1:
+            imgui.same_line()
+    imgui.new_line()

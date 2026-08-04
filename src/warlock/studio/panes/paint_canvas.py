@@ -1,0 +1,541 @@
+"""Paint mode's centre pane: the file row, the tab bar and the canvas itself.
+
+Descended from the inline editor's canvas, which is why the view maths, the
+press/drag/release split and the texture gating look familiar -- those were the
+parts that worked. What is new is that the pane is now driving a document with
+selections and layers, so the drawing order matters: checkerboard, composite,
+floating pixels, grid, symmetry axes, marching ants, then whatever the current
+drag is previewing, then the brush cursor. Everything after the composite is an
+overlay and none of it touches pixels.
+
+The one non-obvious rule is that a *drag* never commits anything. A press
+decides what the drag means, the drag updates a preview or walks the brush, and
+the release is the only thing that writes an undoable step -- which is what
+makes every gesture exactly one Ctrl+Z.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from typing import Any
+
+from imgui_bundle import imgui
+
+from .. import paint_mode, paint_state, theme, widgets
+from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from . import paint_textures
+
+# Marching ants: dash length in screen pixels and how fast the pattern crawls.
+DASH = 6.0
+ANT_SPEED = 12.0
+# Below this zoom a pixel grid is denser than the pixels it describes.
+GRID_MIN_ZOOM = 4.0
+
+
+def _u32(colour: int, alpha: float = 1.0) -> int:
+    return imgui.get_color_u32(imgui.ImVec4(*theme.rgba(colour, alpha)))
+
+
+def draw(ctx: Any) -> None:
+    state = paint_mode.ensure(ctx)
+    _file_row(ctx, state)
+    if not state.docs:
+        _empty(ctx, state)
+        return
+    _tab_bar(ctx, state)
+    tab = state.active
+    if tab is not None:
+        _canvas(ctx, state, tab)
+
+
+# --- the file row -----------------------------------------------------------
+
+
+def _file_row(ctx: Any, state: Any) -> None:
+    tab = state.active
+    if imgui.button("New"):
+        imgui.open_popup("new-canvas")
+    _new_popup(ctx)
+    imgui.same_line()
+    if imgui.button("Open"):
+        paint_mode.ask_open(ctx)
+    imgui.same_line()
+    if imgui.button("Recent"):
+        imgui.open_popup("paint-recent")
+    _recent_popup(ctx, state)
+    imgui.same_line()
+    busy = tab is not None and tab.saving
+    if widgets.disabled_button("Save", tab is not None and not busy):
+        paint_mode.save(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button("Save as", tab is not None and not busy):
+        paint_mode.save_as(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button("Export PNG", tab is not None and not busy):
+        paint_mode.export_png(ctx, tab)
+    if tab is not None:
+        imgui.same_line()
+        if tab.saving:
+            widgets.muted("saving...")
+        elif tab.dirty:
+            widgets.text_colored(theme.WARN, "unsaved")
+    imgui.separator()
+
+
+def _new_popup(ctx: Any) -> None:
+    if not imgui.begin_popup("new-canvas"):
+        return
+    imgui.text("New canvas")
+    for width, height in paint_mode.NEW_PRESETS:
+        if imgui.button(f"{width} x {height}", (160, 0)):
+            paint_mode.new_document(ctx, width, height)
+            imgui.close_current_popup()
+    imgui.end_popup()
+
+
+def _recent_popup(ctx: Any, state: Any) -> None:
+    from pathlib import Path
+
+    if not imgui.begin_popup("paint-recent"):
+        return
+    if not state.recent:
+        widgets.muted("Nothing opened yet.")
+    for path in list(state.recent):
+        if imgui.selectable(Path(path).name, False)[0]:
+            paint_mode.open_path(ctx, Path(path))
+            imgui.close_current_popup()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(path)
+    imgui.end_popup()
+
+
+def _empty(ctx: Any, state: Any) -> None:
+    from pathlib import Path
+
+    imgui.dummy((0, 40))
+    imgui.text("Nothing open")
+    widgets.muted("Start a canvas, open an image, or send one here from the library.")
+    imgui.dummy((0, 16))
+    for width, height in paint_mode.NEW_PRESETS:
+        if imgui.button(f"New {width} x {height}", (240, 0)):
+            paint_mode.new_document(ctx, width, height)
+    imgui.dummy((0, 8))
+    if imgui.button("Open a file...", (240, 0)):
+        paint_mode.ask_open(ctx)
+    if state.recent:
+        imgui.dummy((0, 16))
+        widgets.section("recent")
+        for path in list(state.recent)[:6]:
+            if imgui.selectable(Path(path).name, False)[0]:
+                paint_mode.open_path(ctx, Path(path))
+
+
+# --- tabs -------------------------------------------------------------------
+
+
+def _tab_bar(ctx: Any, state: Any) -> None:
+    flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
+    if not imgui.begin_tab_bar("paint-tabs", flags):
+        return
+    for tab in list(state.docs):
+        item_flags = 0
+        if tab.dirty:
+            # imgui's own dot, rather than a " *" in the title: the title is
+            # also the tab's identity, and decorating it would move the tab.
+            item_flags |= imgui.TabItemFlags_.unsaved_document.value
+        opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
+        if opened:
+            state.activate(tab.uid)
+            imgui.end_tab_item()
+        if not keep:
+            paint_mode.request_close(ctx, tab)
+    imgui.end_tab_bar()
+
+
+# --- the canvas -------------------------------------------------------------
+
+
+def _canvas(ctx: Any, state: Any, tab: Any) -> None:
+    flags = imgui.WindowFlags_.no_scroll_with_mouse.value | imgui.WindowFlags_.no_scrollbar.value
+    if imgui.begin_child("paint-canvas", (0, 0), imgui.ChildFlags_.borders.value, flags):
+        origin = imgui.get_cursor_screen_pos()
+        avail = imgui.get_content_region_avail()
+        region = (max(avail.x, 16.0), max(avail.y, 16.0))
+        view = tab.view
+        if view.pending_zoom is not None:
+            paint_state.centre(view, tab.doc.size, region, view.pending_zoom)
+            view.pending_zoom = None
+        elif not view.fitted:
+            paint_state.fit(view, tab.doc.size, region)
+        imgui.invisible_button("##paint-surface", region)
+        active = imgui.is_item_active()
+        hovered = imgui.is_item_hovered()
+        _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
+        _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
+    imgui.end_child()
+
+
+# --- input ------------------------------------------------------------------
+
+
+def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: bool) -> None:
+    io = imgui.get_io()
+    mouse = imgui.get_mouse_pos()
+    point = paint_state.to_image(tab.view, origin, mouse.x, mouse.y)
+
+    if hovered and io.mouse_wheel:
+        paint_state.zoom_about(tab.view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+
+    # Middle-drag always pans; space-drag pans with the left button, which is
+    # what every paint program does and what makes a tablet usable.
+    panning = imgui.is_mouse_dragging(2) or (state.space_held and imgui.is_mouse_dragging(0))
+    if (hovered or state.drag_kind == "pan") and panning:
+        button = 2 if imgui.is_mouse_dragging(2) else 0
+        delta = imgui.get_mouse_drag_delta(button)
+        imgui.reset_mouse_drag_delta(button)
+        state.drag_kind = "pan"
+        tab.view.pan = (tab.view.pan[0] + delta.x, tab.view.pan[1] + delta.y)
+        return
+    if state.drag_kind == "pan" and not (imgui.is_mouse_down(2) or imgui.is_mouse_down(0)):
+        state.drag_kind = ""
+
+    if tab.saving:
+        # A save is encoding the live document; letting a stroke land in the
+        # middle of it would put half a stroke in the file.
+        return
+    if active and imgui.is_mouse_clicked(0) and not state.space_held:
+        _press(ctx, state, tab, point)
+    elif state.drag_kind and imgui.is_mouse_down(0):
+        _drag(state, tab, point)
+    elif state.drag_kind and not imgui.is_mouse_down(0):
+        _release(ctx, state, tab, point)
+
+
+def _combine_op() -> str:
+    """Shift adds to the selection, Alt subtracts -- the universal convention."""
+    io = imgui.get_io()
+    if io.key_shift:
+        return "add"
+    if io.key_alt:
+        return "subtract"
+    return "replace"
+
+
+def _press(ctx: Any, state: Any, tab: Any, point) -> None:
+    doc = tab.doc
+    tool = state.tool
+    state.drag_anchor = point
+    state.last_point = point
+    state.combine = _combine_op()
+    ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
+
+    if tool == "eyedropper":
+        picked = doc.eyedrop(ipoint)
+        if picked is not None:
+            state.fg = picked
+        state.drag_kind = ""
+        return
+    if tool == "fill":
+        doc.commit_floating()
+        doc.fill(ipoint, state.fg, thresh=state.wand_tolerance)
+        state.drag_kind = ""
+        return
+    if tool == "wand":
+        doc.commit_floating()
+        doc.select_wand(
+            ipoint,
+            tolerance=state.wand_tolerance,
+            op=state.combine,
+            contiguous=state.wand_contiguous,
+        )
+        state.drag_kind = ""
+        return
+    if tool == "move":
+        if doc.floating is not None and doc.floating.contains(ipoint):
+            state.drag_kind = "move"
+        elif doc.mask is not None and doc.mask.contains(ipoint):
+            doc.lift()
+            state.drag_kind = "move"
+        else:
+            state.drag_kind = ""
+        return
+    if tool in SELECT_TOOLS:
+        doc.commit_floating()
+        state.drag_kind = "lasso" if tool == "lasso" else "marquee"
+        state.lasso = [point]
+        return
+    if tool in SHAPE_TOOLS:
+        doc.commit_floating()
+        state.drag_kind = "shape"
+        return
+    if tool == "gradient":
+        doc.commit_floating()
+        state.drag_kind = "gradient"
+        return
+    if tool in PAINT_TOOLS:
+        doc.commit_floating()
+        doc.begin_stroke(
+            point,
+            state.fg,
+            size=state.brush_size,
+            hardness=state.hardness,
+            opacity=state.opacity,
+            spacing=state.spacing,
+            mode=paint_state.BRUSH_MODES[tool],
+            strength=state.strength,
+            symmetry=state.symmetry,
+        )
+        state.drag_kind = "paint"
+
+
+def _drag(state: Any, tab: Any, point) -> None:
+    doc = tab.doc
+    if state.drag_kind == "paint":
+        doc.stroke_to(point)
+    elif state.drag_kind == "move" and doc.floating is not None:
+        last = state.last_point or point
+        doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
+    elif state.drag_kind == "lasso" and (
+        not state.lasso or math.dist(state.lasso[-1], point) >= 2.0
+    ):
+        # Sampled rather than every pixel: a lasso is a polygon, and a vertex
+        # per mouse-move makes a thousand-point one out of a slow drag.
+        state.lasso.append(point)
+    state.last_point = point
+
+
+def _release(ctx: Any, state: Any, tab: Any, point) -> None:
+    from ..paint import SelectionMask, normalise_rect
+
+    doc = tab.doc
+    anchor = state.drag_anchor or point
+    kind = state.drag_kind
+
+    if kind == "paint":
+        doc.end_stroke()
+    elif kind == "shape":
+        doc.shape(
+            state.tool,
+            (int(anchor[0]), int(anchor[1])),
+            (int(point[0]), int(point[1])),
+            state.fg,
+            state.brush_size,
+            filled=state.shape_filled,
+        )
+    elif kind == "marquee":
+        rect = normalise_rect(
+            (int(math.floor(anchor[0])), int(math.floor(anchor[1]))),
+            (int(math.ceil(point[0])), int(math.ceil(point[1]))),
+        )
+        if rect[2] > rect[0] and rect[3] > rect[1]:
+            build = (
+                SelectionMask.from_ellipse
+                if state.tool == "select_ellipse"
+                else SelectionMask.from_rect
+            )
+            doc.select(build(doc.size, rect), state.combine)
+        else:
+            # A click with no drag inside a select tool means "deselect", which
+            # is what every other editor does and what stops a stray click
+            # leaving a one-pixel selection nothing can be painted outside.
+            doc.deselect()
+    elif kind == "lasso":
+        if len(state.lasso) >= 3:
+            doc.select(SelectionMask.from_polygon(doc.size, state.lasso), state.combine)
+        else:
+            doc.deselect()
+    elif kind == "gradient":
+        end = (0, 0, 0, 0) if state.gradient_to_transparent else state.bg
+        if state.gradient_to_transparent:
+            end = (*state.fg[:3], 0)
+        doc.gradient(anchor, point, state.fg, end, kind=state.gradient_kind)
+    state.clear_drag()
+
+
+# --- drawing ----------------------------------------------------------------
+
+
+def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
+    doc = tab.doc
+    view = tab.view
+    draw_list = imgui.get_window_draw_list()
+    width, height = doc.size
+    top_left = paint_state.to_screen(view, origin, 0, 0)
+    bottom_right = paint_state.to_screen(view, origin, width, height)
+
+    _checkerboard(ctx, draw_list, view, top_left, bottom_right)
+    texture = paint_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
+    if texture is None:
+        return
+    draw_list.add_image(widgets.texture_ref(texture), top_left, bottom_right)
+    _floating(ctx, tab, draw_list, origin)
+    draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
+
+    if state.grid:
+        _grid(state, draw_list, view, origin, doc.size, top_left, bottom_right)
+    if state.symmetry != "none":
+        _symmetry(state, draw_list, view, origin, doc.size)
+    _ants(ctx, tab, draw_list, origin)
+    _preview(state, tab, draw_list, origin)
+    if hovered and state.tool in PAINT_TOOLS:
+        _cursor(state, draw_list, view)
+
+
+def _checkerboard(ctx: Any, draw_list: Any, view: Any, top_left, bottom_right) -> None:
+    texture = paint_textures.checker(ctx)
+    if texture is None:
+        return
+    # UVs in tile units, so one draw call covers the canvas at any zoom and the
+    # squares stay a constant size on *screen* rather than in image space.
+    span = (bottom_right[0] - top_left[0], bottom_right[1] - top_left[1])
+    tile = texture.size[0]
+    draw_list.add_image(
+        widgets.texture_ref(texture),
+        top_left,
+        bottom_right,
+        (0, 0),
+        (span[0] / tile, span[1] / tile),
+    )
+
+
+def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
+    buf = tab.doc.floating
+    if buf is None:
+        return
+    texture = paint_textures.floating(ctx, tab, nearest=tab.view.zoom >= 1.0)
+    if texture is None:
+        return
+    x, y = buf.offset
+    fw, fh = buf.size
+    a = paint_state.to_screen(tab.view, origin, x, y)
+    b = paint_state.to_screen(tab.view, origin, x + fw, y + fh)
+    draw_list.add_image(widgets.texture_ref(texture), a, b)
+    draw_list.add_rect(a, b, _u32(theme.ACCENT))
+
+
+def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_right) -> None:
+    """Clipped to the visible rectangle: a 16-pixel grid over a 4096 canvas is
+    a quarter of a million lines if it is drawn in full."""
+    colour = _u32(theme.EDGE, 0.55)
+    step = max(1, int(state.grid_size))
+    if view.zoom >= GRID_MIN_ZOOM:
+        step = min(step, max(1, int(step)))
+    if step * view.zoom < 6.0:
+        return
+    width, height = size
+    for x in range(0, width + 1, step):
+        sx = paint_state.to_screen(view, origin, x, 0)[0]
+        if top_left[0] <= sx <= bottom_right[0]:
+            draw_list.add_line((sx, top_left[1]), (sx, bottom_right[1]), colour)
+    for y in range(0, height + 1, step):
+        sy = paint_state.to_screen(view, origin, 0, y)[1]
+        if top_left[1] <= sy <= bottom_right[1]:
+            draw_list.add_line((top_left[0], sy), (bottom_right[0], sy), colour)
+
+
+def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
+    width, height = size
+    colour = _u32(theme.ACCENT, 0.6)
+    if state.symmetry in ("x", "xy"):
+        x = paint_state.to_screen(view, origin, width / 2, 0)[0]
+        top = paint_state.to_screen(view, origin, 0, 0)[1]
+        bottom = paint_state.to_screen(view, origin, 0, height)[1]
+        draw_list.add_line((x, top), (x, bottom), colour)
+    if state.symmetry in ("y", "xy"):
+        y = paint_state.to_screen(view, origin, 0, height / 2)[1]
+        left = paint_state.to_screen(view, origin, 0, 0)[0]
+        right = paint_state.to_screen(view, origin, width, 0)[0]
+        draw_list.add_line((left, y), (right, y), colour)
+
+
+def _contours(ctx: Any, tab: Any):
+    """The selection outline, recomputed only when the mask object changes.
+
+    ``select()`` always builds a new mask, so identity is a sound cache key --
+    and it has to be one, because the document's revision ticks on every dab
+    and tracing the boundary per stroke frame would be the most expensive thing
+    on screen.
+    """
+    key = f"paint_ants:{tab.uid}"
+    cached = ctx.state.preview.get(key)
+    mask = tab.doc.mask
+    if cached is not None and cached[0] is mask:
+        return cached[1]
+    loops = mask.contours() if mask is not None else []
+    ctx.state.preview[key] = (mask, loops)
+    return loops
+
+
+def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
+    loops = _contours(ctx, tab)
+    if not loops:
+        return
+    view = tab.view
+    phase = (time.monotonic() * ANT_SPEED) % (DASH * 2)
+    light, dark = _u32(theme.TEXT), _u32(theme.BG)
+    for loop in loops:
+        points = [paint_state.to_screen(view, origin, x, y) for x, y in loop]
+        points.append(points[0])
+        walked = -phase
+        for a, b in zip(points, points[1:], strict=False):
+            length = math.dist(a, b)
+            if length <= 0:
+                continue
+            travelled = 0.0
+            while travelled < length:
+                end = min(travelled + DASH, length)
+                on = int((walked + travelled) // DASH) % 2 == 0
+                t0, t1 = travelled / length, end / length
+                draw_list.add_line(
+                    (a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0),
+                    (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1),
+                    light if on else dark,
+                )
+                travelled = end
+            walked += length
+
+
+def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """What the current drag would produce, before it produces it."""
+    if state.drag_anchor is None or not state.drag_kind:
+        return
+    view = tab.view
+    mouse = imgui.get_mouse_pos()
+    anchor = paint_state.to_screen(view, origin, *state.drag_anchor)
+    colour = _u32(theme.ACCENT)
+    kind, tool = state.drag_kind, state.tool
+
+    if kind == "lasso" and len(state.lasso) > 1:
+        points = [paint_state.to_screen(view, origin, x, y) for x, y in state.lasso]
+        for a, b in zip(points, points[1:], strict=False):
+            draw_list.add_line(a, b, colour)
+        draw_list.add_line(points[-1], (mouse.x, mouse.y), colour)
+    elif kind == "gradient":
+        draw_list.add_line(anchor, (mouse.x, mouse.y), colour, 2.0)
+    elif kind == "marquee" and tool == "select_ellipse":
+        _ellipse(draw_list, anchor, (mouse.x, mouse.y), colour)
+    elif kind == "marquee" or (kind == "shape" and tool == "rect"):
+        draw_list.add_rect(anchor, (mouse.x, mouse.y), colour)
+    elif kind == "shape" and tool == "line":
+        draw_list.add_line(anchor, (mouse.x, mouse.y), colour)
+    elif kind == "shape" and tool == "ellipse":
+        _ellipse(draw_list, anchor, (mouse.x, mouse.y), colour)
+
+
+def _ellipse(draw_list: Any, a, b, colour: int) -> None:
+    centre = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)
+    radii = (abs(b[0] - a[0]) * 0.5, abs(b[1] - a[1]) * 0.5)
+    if radii[0] > 0.5 and radii[1] > 0.5:
+        draw_list.add_ellipse(centre, radii, colour)
+
+
+def _cursor(state: Any, draw_list: Any, view: Any) -> None:
+    """A circle the size of the brush. The one piece of feedback that makes a
+    variable-size brush usable at all."""
+    mouse = imgui.get_mouse_pos()
+    radius = max(2.0, state.brush_size * 0.5 * view.zoom)
+    draw_list.add_circle((mouse.x, mouse.y), radius, _u32(theme.TEXT, 0.7))
+    if state.hardness < 0.99:
+        inner = radius * max(state.hardness, 0.05)
+        draw_list.add_circle((mouse.x, mouse.y), inner, _u32(theme.TEXT, 0.25))

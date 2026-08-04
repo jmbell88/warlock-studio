@@ -321,14 +321,84 @@ def test_the_inspector_builds_with_a_reference_report(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
 
 
-def test_the_2d_editor_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
-    """The one pane that owns GL objects of its own. _seeded writes a byte, not
-    a PNG, so this seeds a real image -- opening is a decode."""
+def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
+    """The panes that own GL objects of their own. _seeded writes a byte, not
+    a PNG, so this seeds a real image -- opening one is a decode."""
+    from warlock.studio import paint_mode, paint_state
+    from warlock.studio.panes import (
+        paint_bridge,
+        paint_canvas,
+        paint_colors,
+        paint_layers,
+        paint_tools,
+    )
+
+    job_id = _reference_job(app_ctx)
+    app_ctx.state.mode = "paint"
+    state = paint_mode.ensure(app_ctx)
+
+    def build() -> None:
+        paint_tools.draw(app_ctx)
+        paint_colors.draw(app_ctx)
+        paint_canvas.draw(app_ctx)
+        paint_layers.draw(app_ctx)
+        paint_bridge.draw(app_ctx)
+
+    # Empty first: the "nothing open" branch is what a user sees on arrival.
+    _frame(imgui_ctx, build)
+
+    loaded = paint_mode._load_job(app_ctx.svc, job_id)
+    paint_mode.on_task_done(app_ctx, _done(f"paint-open:{job_id}", loaded))
+    tab = state.active
+    assert tab is not None and tab.job_id == job_id
+    _frame(imgui_ctx, build)
+
+    # Every tool once: each has its own options branch.
+    for tool, _label, _key in paint_state.TOOLS:
+        state.tool = tool
+        _frame(imgui_ctx, build)
+
+    # A second layer, a selection and a floating buffer: the other textures.
+    tab.doc.add_layer()
+    tab.doc.select_all()
+    tab.doc.lift()
+    _frame(imgui_ctx, build)
+    assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:composite") is not None
+    assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:floating") is not None
+
+    # Dirty, so closing asks first -- and the question is what stops a stray
+    # click on the tab's x from losing an unsaved painting.
+    uid = tab.uid
+    paint_mode.request_close(app_ctx, tab)
+    assert app_ctx.confirms.pending is not None
+    app_ctx.confirms.pending.on_confirm()
+    app_ctx.confirms.pending = None
+    assert state.active is None
+    assert not [k for k in app_ctx.state.preview if k.startswith(f"paint_tex:{uid}:")]
+    paint_mode.release_all(app_ctx)
+
+
+def test_a_finished_mesh_is_not_offered_paint(app_ctx, imgui_ctx):
+    """Paint edits the *generated reference*, and a mesh job's input.png is
+    whatever it was reconstructed from."""
+    from warlock.studio import paint_mode
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "2d"
+    assert not paint_mode.can_edit_job(app_ctx, app_ctx.cache.get(job_id))
+
+
+def _done(key, result):
+    from warlock.studio.tasks import Done
+
+    return Done(key=key, result=result)
+
+
+def _reference_job(app_ctx) -> str:
+    """A finished reference with a real PNG on disk."""
     import io
 
     from PIL import Image
-
-    from warlock.studio.panes import editor_2d
 
     job_id = svc_jobs.create_job(
         app_ctx.svc, kind="text", prompt="a barrel", output="reference"
@@ -342,35 +412,4 @@ def test_the_2d_editor_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     app_ctx.cache.invalidate()
     app_ctx.cache.tick()
     app_ctx.state.select(job_id)
-    app_ctx.state.mode = "2d"
-
-    job = app_ctx.cache.get(job_id)
-    assert editor_2d.can_edit(app_ctx, job)
-    editor_2d.open(app_ctx, job)
-    session = app_ctx.state.editor
-    assert session is not None and session.job_id == job_id
-
-    _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
-    # Every tool drawn once: each has its own toolbar branch.
-    for tool, _label in editor_2d.TOOLS:
-        session.tool = tool
-        _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
-    # And once with a floating selection, which is the second texture.
-    session.doc.lift_selection((1, 1, 5, 5))
-    _frame(imgui_ctx, lambda: editor_2d.draw(app_ctx))
-    assert app_ctx.state.preview.get("editor_texture") is not None
-
-    editor_2d.close(app_ctx)
-    assert app_ctx.state.editor is None
-    for key in ("editor_texture", "editor_sel_texture"):
-        assert key not in app_ctx.state.preview
-
-
-def test_a_finished_mesh_is_not_offered_the_2d_editor(app_ctx, imgui_ctx):
-    """It edits the *generated reference*, and a mesh job's input.png is
-    whatever it was reconstructed from."""
-    from warlock.studio.panes import editor_2d
-
-    job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "2d"
-    assert not editor_2d.can_edit(app_ctx, app_ctx.cache.get(job_id))
+    return job_id

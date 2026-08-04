@@ -53,6 +53,11 @@ def _choose(ctx: Any) -> None:
     widgets.muted("Start from a finished reference, or an image you drop in.")
     imgui.dummy((0, 8))
 
+    if imgui.button("Paint", BUTTON):
+        start_paint(ctx)
+    widgets.muted("A canvas, or an image you already have.")
+    imgui.dummy((0, 8))
+
     if imgui.button("Open existing", BUTTON):
         ctx.state.landing_view = "open"
     widgets.muted("Everything already generated.")
@@ -85,6 +90,13 @@ def start_3d(ctx: Any) -> None:
     ctx.state.form_3d = dict(DEFAULT_FORM_3D)
     ctx.state.select(None)
     ctx.state.mode = "3d"
+    _leave(ctx)
+
+
+def start_paint(ctx: Any) -> None:
+    """Paint keeps whatever was open: unlike the two generate panes, there is
+    no "fresh form" here -- the documents *are* the work."""
+    ctx.state.mode = "paint"
     _leave(ctx)
 
 

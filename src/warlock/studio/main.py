@@ -241,6 +241,13 @@ class App:
         for done in ctx.tasks.poll():
             if not done.ok:
                 ctx.toast(done.message or "That did not work.", "error")
+                if done.key.startswith("paint-"):
+                    from . import paint_mode
+
+                    # A failed save must not leave the document locked: saving
+                    # disables every editing control, so without this one bad
+                    # write makes the tab read-only until it is closed.
+                    paint_mode.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -275,11 +282,10 @@ class App:
             # task, so picking a 20 MB image never touches the frame thread.
             ctx.state.form_2d["ref_path"] = str(done.result)
             return
-        if key.startswith(("editor-save:", "editor-revert:")):
-            from .panes import editor_2d
+        if key.startswith("paint-"):
+            from . import paint_mode
 
-            name, _, job_id = key.partition(":")
-            editor_2d.on_saved(ctx, job_id, reverted=name == "editor-revert")
+            paint_mode.on_task_done(ctx, done)
             return
         if key == "submit":
             ctx.cache.invalidate()
@@ -323,6 +329,10 @@ class App:
         while it is selected starts showing its mesh without another click.
         """
         ctx = self.app_ctx
+        if ctx.state.mode == "paint":
+            # Paint owns the centre pane; there is no viewport to sync, and
+            # loading a mesh for the selection would be work nothing shows.
+            return
         job = ctx.job()
         if job is None:
             return
@@ -428,19 +438,17 @@ class App:
     def _shortcut(self, event: Any) -> None:
         import pygame
 
-        if event.type != pygame.KEYDOWN:
-            return
         ctx = self.app_ctx
         if ctx.state.landing:
             # The chooser has no form to submit and no viewport to frame; every
             # one of these would act on a pane that is not on screen.
             return
-        if ctx.state.editor is not None:
-            from .panes import editor_2d
+        if ctx.state.mode == "paint":
+            from . import paint_mode
 
-            # Consumes every key while the editor is up, so F/W/S/Ctrl+Enter
-            # cannot act on the panes it has replaced.
-            if editor_2d.handle_key(ctx, event):
+            # Consumes every key while a painting is open, so F/W/S/Ctrl+Enter
+            # cannot act on the panes Paint has replaced.
+            if paint_mode.handle_key(ctx, event):
                 return
         mods = pygame.key.get_mods()
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
@@ -471,6 +479,12 @@ class App:
         from .panes import settings_3d
 
         ctx = self.app_ctx
+        if ctx.state.mode == "paint":
+            from . import paint_mode
+
+            ctx.state.landing = False
+            paint_mode.open_path(ctx, path)
+            return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
             return
@@ -490,10 +504,11 @@ class App:
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
-        from .panes import editor_2d, pose_panel
+        from . import paint_mode
+        from .panes import pose_panel
 
         ctx = self.app_ctx
-        editor_2d.guard(
+        paint_mode.guard(
             ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
         )
 
@@ -535,6 +550,11 @@ class App:
             self._overlays(viewport)
             return
         self._mode_switch()
+        if ctx.state.mode == "paint":
+            self._paint_workspace()
+            imgui.end()
+            self._overlays(viewport)
+            return
 
         # The sidebar is two scrollers, not one: sharing a single scroll region
         # meant the settings form pushed the library off the bottom of a
@@ -563,6 +583,56 @@ class App:
         imgui.end()
         self._overlays(viewport)
 
+    def _paint_workspace(self) -> None:
+        """The same 340 / centre / 340 skeleton the other two modes use.
+
+        Deliberately not a takeover of the whole window: the progress card
+        stays on screen, so a trellis run started before switching here is
+        still visible while painting.
+        """
+        from imgui_bundle import imgui
+
+        from .panes import (
+            overlay,
+            paint_bridge,
+            paint_canvas,
+            paint_colors,
+            paint_layers,
+            paint_tools,
+        )
+
+        ctx = self.app_ctx
+        borders = imgui.ChildFlags_.borders.value
+        imgui.begin_group()
+        tools_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
+        if imgui.begin_child("paint-tools", (SIDEBAR_WIDTH, tools_height), borders):
+            paint_tools.draw(ctx)
+        imgui.end_child()
+        if imgui.begin_child("paint-colors", (SIDEBAR_WIDTH, 0), borders):
+            paint_colors.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+        imgui.same_line()
+        width = imgui.get_content_region_avail().x - SIDEBAR_WIDTH - 16
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if imgui.begin_child("paint-centre", (width, 0), borders, flags):
+            paint_canvas.draw(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        imgui.begin_group()
+        layers_height = imgui.get_content_region_avail().y * SETTINGS_SHARE
+        if imgui.begin_child("paint-layers", (SIDEBAR_WIDTH, layers_height), borders):
+            paint_layers.draw(ctx)
+        imgui.end_child()
+        if imgui.begin_child("paint-bridge", (SIDEBAR_WIDTH, 0), borders):
+            paint_bridge.draw(ctx)
+            imgui.dummy((0, 8))
+            overlay.progress_card(ctx, self.eta)
+        imgui.end_child()
+        imgui.end_group()
+
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.
 
@@ -580,31 +650,21 @@ class App:
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
 
-        from .panes import editor_2d
-
         ctx = self.app_ctx
         state = ctx.state
+        # Neither Home nor a mode switch is destructive: Paint's documents are
+        # still open when you come back, because it is a mode rather than a
+        # takeover. Only quitting and closing a tab can lose pixels, and both
+        # ask.
         if imgui.button("Home"):
-
-            def go_home() -> None:
-                editor_2d.close(ctx)
-                state.landing = True
-                state.landing_view = "choose"
-
-            editor_2d.guard(ctx, "go back", go_home)
+            state.landing = True
+            state.landing_view = "choose"
         imgui.same_line()
-        for mode, label in (("2d", "2D reference"), ("3d", "3D asset")):
+        for mode, label in (("2d", "2D reference"), ("3d", "3D asset"), ("paint", "Paint")):
             if imgui.radio_button(label, state.mode == mode):
-
-                def switch(mode: str = mode) -> None:
-                    # The editor is a 2D thing; leaving it open in 3D mode
-                    # would hide the viewport it is not editing.
-                    editor_2d.close(ctx)
-                    state.mode = mode
-                    ctx.settings.set("mode", mode)
-                    self._sync_viewer()
-
-                editor_2d.guard(ctx, "switch modes", switch)
+                state.mode = mode
+                ctx.settings.set("mode", mode)
+                self._sync_viewer()
             imgui.same_line()
         imgui.new_line()
 
@@ -622,15 +682,6 @@ class App:
             imgui.ChildFlags_.borders.value,
             imgui.WindowFlags_.no_scroll_with_mouse.value,
         ):
-            if ctx.state.editor is not None:
-                from .panes import editor_2d
-
-                # A takeover, not an overlay: the editor owns the whole centre
-                # pane, and the viewer's toolbar and progress card would both
-                # be acting on something that is not on screen.
-                editor_2d.draw(ctx)
-                imgui.end_child()
-                return
             overlay.doctor_banner(ctx)
             overlay.toolbar(ctx)
             image_pos = imgui.get_cursor_screen_pos()
@@ -691,6 +742,10 @@ class App:
             ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
             ctx.settings.set("history", ctx.state.history)
             ctx.settings.set("filters", vars(ctx.state.filters))
+            ctx.settings.flush()
+            from . import paint_mode
+
+            paint_mode.persist(ctx)
             ctx.settings.flush()
             if ctx.textures is not None:
                 ctx.textures.release()
