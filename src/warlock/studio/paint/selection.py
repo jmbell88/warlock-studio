@@ -305,9 +305,73 @@ class FloatingBuffer:
     layer_uid: int
     rev: int = 0
 
+    # What a transform re-renders *from*. Kept so that dragging a scale handle
+    # back and forth is not a chain of resamples: every adjustment starts again
+    # from the pixels that were lifted, so only the final one is ever applied.
+    source: np.ndarray | None = None
+    source_mask: np.ndarray | None = None
+    angle: float = 0.0
+    scale: tuple[float, float] = (1.0, 1.0)
+
     @property
     def size(self) -> tuple[int, int]:
         return (self.pixels.shape[1], self.pixels.shape[0])
+
+    @property
+    def centre(self) -> tuple[float, float]:
+        width, height = self.size
+        return (self.offset[0] + width / 2.0, self.offset[1] + height / 2.0)
+
+    @property
+    def transformed(self) -> bool:
+        return abs(self.angle) > 1e-6 or self.scale != (1.0, 1.0)
+
+    def transform(self, *, angle: float | None = None, scale: tuple[float, float] | None = None):
+        """Re-render from the lifted pixels at a new angle and scale.
+
+        The centre is held fixed rather than the top-left: rotating about a
+        corner sends the subject off across the canvas, which is not what
+        grabbing a rotate handle means.
+        """
+        from . import transform as tf
+
+        if self.source is None:
+            self.source = self.pixels.copy()
+            self.source_mask = self.mask.copy()
+        if angle is not None:
+            self.angle = float(angle)
+        if scale is not None:
+            self.scale = (max(0.01, float(scale[0])), max(0.01, float(scale[1])))
+
+        cx, cy = self.centre
+        pixels, mask = self.source, self.source_mask
+        height, width = pixels.shape[:2]
+        target = (max(1, round(width * self.scale[0])), max(1, round(height * self.scale[1])))
+        if target != (width, height):
+            pixels = tf.scale(pixels, target)
+            mask = tf.scale(mask, target)
+        if abs(self.angle) > 1e-6:
+            pixels = tf.rotate(pixels, self.angle, expand=True)
+            mask = tf.rotate(mask, self.angle, expand=True)
+
+        self.pixels, self.mask = pixels, mask
+        new_h, new_w = pixels.shape[:2]
+        self.offset = (round(cx - new_w / 2.0), round(cy - new_h / 2.0))
+        # The pixels genuinely changed, so the texture has to be re-uploaded --
+        # unlike a move, which changes only where they are drawn.
+        self.rev += 1
+
+    def flip(self, axis: str) -> None:
+        """Flip in place. Applied to the *source* as well, so a later rotate
+        does not undo it by re-rendering from the unflipped pixels."""
+        from . import transform as tf
+
+        if self.source is None:
+            self.source = self.pixels.copy()
+            self.source_mask = self.mask.copy()
+        self.source = tf.flip(self.source, axis)
+        self.source_mask = tf.flip(self.source_mask, axis)
+        self.transform()
 
     def moved(self, dx: int, dy: int) -> None:
         self.offset = (self.offset[0] + int(dx), self.offset[1] + int(dy))

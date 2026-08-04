@@ -81,6 +81,51 @@ def _file_row(ctx: Any, state: Any) -> None:
         elif tab.dirty:
             widgets.text_colored(theme.WARN, "unsaved")
     imgui.separator()
+    if tab is not None and state.transforming:
+        _transform_row(ctx, state, tab)
+
+
+def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
+    """Numeric handles for the same operations the drag handles do.
+
+    A drag cannot express "exactly 90 degrees", and a rotation that is nearly
+    square is worse than either -- so the buttons are not a convenience, they
+    are the only way to get an exact one.
+    """
+    doc = tab.doc
+    widgets.text_colored(theme.ACCENT, "Transform")
+    imgui.same_line()
+    if imgui.button("Flip H"):
+        doc.flip_floating("horizontal")
+    imgui.same_line()
+    if imgui.button("Flip V"):
+        doc.flip_floating("vertical")
+    imgui.same_line()
+    if imgui.button("-90"):
+        doc.rotate_floating(-90.0)
+    imgui.same_line()
+    if imgui.button("+90"):
+        doc.rotate_floating(90.0)
+    imgui.same_line()
+    if imgui.button("Apply"):
+        paint_mode.end_transform(ctx, commit=True)
+    imgui.same_line()
+    if imgui.button("Cancel"):
+        paint_mode.end_transform(ctx, commit=False)
+
+    buf = doc.floating
+    if buf is None:
+        return
+    imgui.set_next_item_width(160)
+    changed, angle = imgui.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
+    if changed:
+        doc.transform_floating(angle=angle)
+    imgui.same_line()
+    imgui.set_next_item_width(160)
+    changed, factor = imgui.slider_float("Scale", buf.scale[0], 0.05, 8.0)
+    if changed:
+        doc.transform_floating(scale=(factor, factor))
+    imgui.separator()
 
 
 def _new_popup(ctx: Any) -> None:
@@ -204,12 +249,119 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         # A save is encoding the live document; letting a stroke land in the
         # middle of it would put half a stroke in the file.
         return
+    if state.transforming and tab.doc.floating is not None:
+        _transform_input(state, tab, origin, point, active=active)
+        return
     if active and imgui.is_mouse_clicked(0) and not state.space_held:
         _press(ctx, state, tab, point)
     elif state.drag_kind and imgui.is_mouse_down(0):
         _drag(state, tab, point)
     elif state.drag_kind and not imgui.is_mouse_down(0):
         _release(ctx, state, tab, point)
+
+
+# Corner handles, in screen pixels.
+HANDLE = 5.0
+# How far above the box the rotate handle floats.
+ROTATE_ARM = 28.0
+
+
+def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
+    """Where the transform box's grab points are, in screen space."""
+    buf = tab.doc.floating
+    x, y = buf.offset
+    width, height = buf.size
+    view = tab.view
+    corners = {
+        "nw": (x, y),
+        "ne": (x + width, y),
+        "sw": (x, y + height),
+        "se": (x + width, y + height),
+    }
+    out = {k: paint_state.to_screen(view, origin, *p) for k, p in corners.items()}
+    top = paint_state.to_screen(view, origin, x + width / 2.0, y)
+    out["rotate"] = (top[0], top[1] - ROTATE_ARM)
+    return out
+
+
+def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> None:
+    """Drag a handle to scale, the arm to rotate, the middle to move.
+
+    Every drag is measured against what was true at the *press*, not against
+    the previous frame: accumulating per-frame deltas makes a slow drag and a
+    fast one produce different results, and a scale that compounds frame by
+    frame runs away.
+    """
+    doc = tab.doc
+    buf = doc.floating
+    mouse = imgui.get_mouse_pos()
+    centre = paint_state.to_screen(tab.view, origin, *buf.centre)
+
+    if active and imgui.is_mouse_clicked(0):
+        handles = _handles(tab, origin)
+        grab = min(handles, key=lambda k: math.dist(handles[k], (mouse.x, mouse.y)))
+        near = math.dist(handles[grab], (mouse.x, mouse.y)) <= HANDLE * 2.5
+        state.drag_anchor = point
+        state.transform_ref = (
+            buf.scale[0],
+            buf.angle,
+            max(1.0, math.dist(centre, (mouse.x, mouse.y))),
+            math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0])),
+        )
+        if near and grab == "rotate":
+            state.drag_kind = "rotate"
+        elif near:
+            state.drag_kind = "scale"
+        elif buf.contains((int(point[0]), int(point[1]))):
+            state.drag_kind = "move"
+        else:
+            state.drag_kind = ""
+        state.last_point = point
+        return
+
+    if not state.drag_kind or state.transform_ref is None:
+        return
+    if not imgui.is_mouse_down(0):
+        state.drag_kind = ""
+        state.transform_ref = None
+        return
+
+    scale0, angle0, dist0, bearing0 = state.transform_ref
+    if state.drag_kind == "scale":
+        ratio = math.dist(centre, (mouse.x, mouse.y)) / dist0
+        doc.transform_floating(scale=(scale0 * ratio, scale0 * ratio))
+    elif state.drag_kind == "rotate":
+        bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))
+        step = bearing0 - bearing  # screen y grows downward; the engine's does not
+        if imgui.get_io().key_shift:
+            step = round(step / 15.0) * 15.0
+        doc.transform_floating(angle=angle0 + step)
+    elif state.drag_kind == "move":
+        last = state.last_point or point
+        doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
+        state.last_point = point
+
+
+def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    buf = tab.doc.floating
+    if buf is None:
+        return
+    handles = _handles(tab, origin)
+    colour = _u32(theme.ACCENT)
+    draw_list.add_rect(handles["nw"], handles["se"], colour)
+    top = paint_state.to_screen(
+        tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1]
+    )
+    draw_list.add_line(top, handles["rotate"], colour)
+    for name, point in handles.items():
+        if name == "rotate":
+            draw_list.add_circle_filled(point, HANDLE, colour)
+        else:
+            draw_list.add_rect_filled(
+                (point[0] - HANDLE, point[1] - HANDLE),
+                (point[0] + HANDLE, point[1] + HANDLE),
+                colour,
+            )
 
 
 def _combine_op() -> str:
@@ -377,6 +529,8 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     if state.symmetry != "none":
         _symmetry(state, draw_list, view, origin, doc.size)
     _ants(ctx, tab, draw_list, origin)
+    if state.transforming:
+        _transform_box(state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
     if hovered and state.tool in PAINT_TOOLS:
         _cursor(state, draw_list, view)

@@ -103,6 +103,29 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 uv run warlock sweep --image assets/<job-id>/input.png --bands auto,4,8 --seed 42
 ```
 
+### Paint
+
+The third top-level mode is a layered raster editor -- soft brushes, layers with
+blend modes, a full selection suite (rectangle, ellipse, lasso, magic wand, with
+Shift to add and Alt to subtract), free transform, gradients, blur and smudge,
+symmetry and a grid. It opens any image, keeps several documents in tabs, and
+saves natively as [OpenRaster](https://www.openraster.org/) (`.ora`) -- a zip of
+layer PNGs that Krita and GIMP both read and write -- or exports a flattened PNG.
+
+It is wired into the pipeline in both directions. **Open in Paint** on a finished
+reference edits it in place: saving writes `input.png` through the same path the
+old inline editor used (the untouched original is kept once, as `input.orig.png`,
+so *Revert to original* always works) and keeps the layers beside it in
+`paint.ora`, which is internal working state and never served. Going the other
+way, **Save as reference** adds what you painted to the library as a finished
+reference -- measured, so the quality gate has real data -- and **Send to 3D**
+queues the mesh stage from the flattened image.
+
+Keys follow Aseprite where it has one: `B`/`E`/`G`/`M`/`L`/`W`/`V`/`I` pick tools,
+`X` swaps the two colours, `[` and `]` size the brush (with Shift, its hardness),
+space-drag or middle-drag pans, `Ctrl+T` transforms, `Ctrl+0` fits and `Ctrl+1` is
+100%.
+
 The trellis server subprocess starts on the first 3D job and by default stays resident in VRAM alongside SDXL-Turbo (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle (configurable). Set `WARLOCK_VRAM_EXCLUSIVE=1` to restore sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident Flux.
 
 Everything is env-overridable: `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLIS_EXE`, `WARLOCK_TRELLIS_MODELS`, `WARLOCK_TRELLIS_PORT`, `WARLOCK_TRELLIS_IDLE`, `WARLOCK_T2I_ROOT` (where image models and `loras/` live), `WARLOCK_T2I_MODEL` (default base model key), `WARLOCK_T2I_DIR` (redirects the `turbo` entry only), `WARLOCK_VRAM_EXCLUSIVE`, `WARLOCK_RIG_TEMPLATE`, `WARLOCK_RIG_TIMEOUT`, `WARLOCK_POSE_TIMEOUT`, `WARLOCK_SHEET_TIMEOUT`, `WARLOCK_TRELLIS_WEBP` (WebP rather than PNG for trellis textures), `WARLOCK_TRELLIS_TEX_RES` (texture resolution), `WARLOCK_TRELLIS_BAND` (mesh extraction band; unset by default, and measurement says leave it that way).

@@ -83,8 +83,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     label = layer.name if layer.visible else f"{layer.name} (hidden)"
     if imgui.selectable(f"{label}##pick", active, 0, (0, THUMB * 0.5))[0]:
         doc.set_active_layer(index)
-    if not layer.visible:
-        pass
+    _reorder(doc, index)
     imgui.text_colored(
         imgui.ImVec4(*theme.rgba(theme.MUTED)),
         f"{layer.blend}  {layer.opacity * 100:.0f}%",
@@ -100,6 +99,26 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
             doc.move_layer(index, index - 1)
         imgui.end_popup()
     imgui.pop_id()
+
+
+def _reorder(doc: Any, index: int) -> None:
+    """Drag a layer's name onto another row to move it there.
+
+    imgui's drag-and-drop payload carries the *index*, and the drop reads the
+    stack again -- so a reorder mid-drag cannot make the drop land on a
+    different layer than the one under the cursor.
+    """
+    if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
+        imgui.set_drag_drop_payload_py_id("paint-layer", index)
+        imgui.text(doc.stack[index].name)
+        imgui.end_drag_drop_source()
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id("paint-layer")
+        if payload is not None:
+            source = int(payload.data_id)
+            if 0 <= source < len(doc.stack) and source != index:
+                doc.move_layer(source, index)
+        imgui.end_drag_drop_target()
 
 
 def _ask_rename(ctx: Any, doc: Any, index: int) -> None:

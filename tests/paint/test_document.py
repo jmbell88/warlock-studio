@@ -636,3 +636,159 @@ def test_a_gradient_fills_only_the_selection():
     doc.gradient((0, 0), (15, 0), BLUE, BLUE)
     assert _at(doc, 1, 1) == BLUE
     assert _at(doc, 12, 1) == RED
+
+
+# --- free transform ---------------------------------------------------------
+
+
+def test_a_transform_with_no_selection_lifts_the_whole_layer():
+    """"Rotate this layer" is the common case; requiring a select-all first
+    would be busywork."""
+    doc = _doc((16, 16), RED)
+    assert doc.begin_transform()
+    assert doc.floating is not None
+    assert doc.floating.size == (16, 16)
+
+
+def test_a_transform_lifts_only_the_selection_when_there_is_one():
+    doc = _doc((16, 16), RED)
+    doc.select(paint.SelectionMask.from_rect((16, 16), (4, 4, 12, 12)))
+    doc.begin_transform()
+    assert doc.floating.size == (8, 8)
+
+
+def test_scaling_a_floating_buffer_keeps_its_centre_where_it_was():
+    """Scaling about the corner sends the subject off across the canvas, which
+    is not what grabbing a handle means."""
+    doc = _doc((64, 64), RED)
+    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 32, 32)))
+    doc.begin_transform()
+    before = doc.floating.centre
+    doc.transform_floating(scale=(2.0, 2.0))
+    assert doc.floating.size == (32, 32)
+    assert doc.floating.centre == pytest.approx(before, abs=1.0)
+
+
+def test_rotating_a_floating_buffer_grows_it_and_keeps_its_centre():
+    doc = _doc((64, 64), RED)
+    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
+    doc.begin_transform()
+    before = doc.floating.centre
+    doc.rotate_floating(45.0)
+    assert doc.floating.size[0] > 32
+    assert doc.floating.centre == pytest.approx(before, abs=1.5)
+
+
+def test_repeated_adjustments_re_render_from_the_lift_rather_than_compounding():
+    """A chain of resamples turns a handle-drag into mush; each adjustment has
+    to start again from the pixels that were lifted."""
+    doc = _doc((64, 64), RED)
+    doc.select(paint.SelectionMask.from_rect((64, 64), (16, 16, 48, 48)))
+    doc.begin_transform()
+    for scale in (2.0, 0.5, 3.0, 1.0):
+        doc.transform_floating(scale=(scale, scale))
+    assert doc.floating.size == (32, 32)
+    assert np.array_equal(doc.floating.pixels, doc.floating.source)
+
+
+def test_a_transform_bumps_the_buffers_revision_because_the_pixels_changed():
+    """Unlike a move, which changes only where they are drawn."""
+    doc = _doc((32, 32), RED)
+    doc.begin_transform()
+    rev = doc.floating.rev
+    doc.move_floating(3, 3)
+    assert doc.floating.rev == rev
+    doc.transform_floating(scale=(1.5, 1.5))
+    assert doc.floating.rev > rev
+
+
+def test_flipping_a_floating_buffer_survives_a_later_rotation():
+    """The flip is applied to the source, so re-rendering cannot undo it."""
+    doc = paint.Document.blank(32, 32)
+    doc.stack[0].pixels[:, :16] = RED
+    doc.invalidate_all()
+    doc.begin_transform()
+    doc.flip_floating("horizontal")
+    assert tuple(doc.floating.pixels[16, 24]) == RED
+    doc.rotate_floating(90.0)
+    doc.transform_floating(angle=0.0)
+    assert tuple(doc.floating.pixels[16, 24]) == RED
+
+
+def test_a_transform_commits_as_one_undo_step():
+    doc = _doc((32, 32), RED)
+    doc.select(paint.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
+    doc.begin_transform()
+    steps = len(doc.history)
+    doc.transform_floating(scale=(0.5, 0.5))
+    doc.commit_floating()
+    assert len(doc.history) == steps + 1
+
+
+def test_cancelling_a_transform_puts_the_pixels_back():
+    doc = _doc((32, 32), RED)
+    before = doc.composite.copy()
+    doc.begin_transform()
+    doc.rotate_floating(30.0)
+    doc.cancel_floating()
+    assert np.array_equal(doc.composite, before)
+
+
+def test_transforming_nothing_reports_that_it_did_nothing():
+    doc = _doc()
+    assert not doc.transform_floating(angle=10.0)
+    assert not doc.rotate_floating(10.0)
+    assert not doc.flip_floating("horizontal")
+
+
+# --- pasting ----------------------------------------------------------------
+
+
+def test_pasting_as_a_layer_lands_immediately_rather_than_floating():
+    doc = _doc((16, 16), RED)
+    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.copy()
+    assert doc.paste_as_layer()
+    assert doc.floating is None
+    assert len(doc.stack) == 2
+    assert _at(doc, 1, 1) == RED
+
+
+def test_a_pasted_layer_is_undone_by_removing_it():
+    doc = _doc((16, 16), RED)
+    doc.select_all()
+    doc.copy()
+    doc.paste_as_layer()
+    assert doc.undo()
+    assert len(doc.stack) == 1
+
+
+def test_a_pasted_layer_keeps_only_what_was_selected():
+    doc = _doc((16, 16), RED)
+    doc.select(paint.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.copy()
+    doc.paste_as_layer()
+    assert _at(doc, 1, 1) == RED
+    assert int(doc.stack[1].pixels[8, 8][3]) == 0
+
+
+def test_an_image_from_outside_can_be_put_on_the_clipboard():
+    """Everything pasted carries a mask; an image from elsewhere is fully
+    selected by definition."""
+    doc = _doc((16, 16), RED)
+    incoming = np.zeros((4, 4, 4), dtype=np.uint8)
+    incoming[:, :] = BLUE
+    doc.put_clipboard(incoming)
+    assert doc.paste_as_layer()
+    assert _at(doc, 1, 1) == BLUE
+
+
+def test_pasting_a_layer_from_an_empty_clipboard_does_nothing():
+    assert not _doc().paste_as_layer()
+
+
+def test_a_paste_bigger_than_the_canvas_is_cropped_rather_than_refused():
+    doc = _doc((8, 8), RED)
+    doc.put_clipboard(np.full((32, 32, 4), 255, dtype=np.uint8))
+    assert doc.paste_as_layer()
+    assert doc.stack[1].size == (8, 8)

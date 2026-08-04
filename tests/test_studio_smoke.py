@@ -363,6 +363,19 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     tab.doc.select_all()
     tab.doc.lift()
     _frame(imgui_ctx, build)
+
+    # Free transform takes the canvas over, so it is its own set of branches:
+    # the handle overlay, the numeric row, and every panel while modal.
+    tab.doc.commit_floating()
+    paint_mode.begin_transform(app_ctx, tab)
+    assert state.transforming and tab.doc.floating is not None
+    _frame(imgui_ctx, build)
+    tab.doc.rotate_floating(30.0)
+    tab.doc.transform_floating(scale=(1.5, 1.5))
+    _frame(imgui_ctx, build)
+    paint_mode.end_transform(app_ctx, commit=True)
+    assert not state.transforming and tab.doc.floating is None
+    _frame(imgui_ctx, build)
     assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:composite") is not None
     assert app_ctx.state.preview.get(f"paint_tex:{tab.uid}:floating") is not None
 

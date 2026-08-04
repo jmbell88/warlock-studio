@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import paint, paint_mode, paint_state, widgets
+from .. import paint, paint_mode, paint_state, theme, widgets
 from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 
 # Three across, so the grid stays inside the 340-pixel sidebar.
@@ -114,6 +114,19 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if tool in SELECT_TOOLS or doc.mask is not None:
         _selection_actions(state, doc)
+    _transform_entry(ctx, state, doc)
+
+
+def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
+    """Free transform is a state rather than a tool, so it gets a button rather
+    than a slot in the grid -- it takes the canvas over until it is applied."""
+    widgets.section("transform")
+    if state.transforming:
+        widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
+        return
+    if imgui.button("Free transform (Ctrl+T)", (-1, 0)):
+        paint_mode.begin_transform(ctx)
+    widgets.muted("Rotates and scales the selection, or the whole layer.")
 
 
 def _selection_actions(state: Any, doc: Any) -> None:

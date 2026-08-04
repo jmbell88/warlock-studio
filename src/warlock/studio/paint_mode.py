@@ -599,6 +599,69 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     return False
 
 
+# --- free transform ---------------------------------------------------------
+
+
+def begin_transform(ctx: Any, tab: PaintDoc | None = None) -> None:
+    """Ctrl+T. Lifts the selection (or the whole layer) and goes modal."""
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None or tab.saving or state.transforming:
+        return
+    if tab.doc.begin_transform():
+        state.transforming = True
+        state.clear_drag()
+
+
+def end_transform(ctx: Any, *, commit: bool) -> None:
+    state = ensure(ctx)
+    tab = state.active
+    state.transforming = False
+    state.clear_drag()
+    if tab is None:
+        return
+    if commit:
+        tab.doc.commit_floating()
+    else:
+        tab.doc.cancel_floating()
+
+
+# --- the OS clipboard -------------------------------------------------------
+
+
+def paste_from_os(ctx: Any, tab: PaintDoc | None = None) -> bool:
+    """Try the system clipboard, then fall back to our own.
+
+    Ours carries a mask and the OS's cannot, which is why the two are separate
+    and why this only *seeds* ours: everything downstream of a paste expects to
+    know which pixels were selected.
+
+    ``grabclipboard`` is a few milliseconds for a screenshot-sized image and is
+    only reached on an explicit Ctrl+V, so it stays on the frame thread rather
+    than earning a task key it would spend most of its life idle in.
+    """
+    tab = tab or active(ctx)
+    if tab is None:
+        return False
+    try:
+        import numpy as np
+        from PIL import ImageGrab
+
+        grabbed = ImageGrab.grabclipboard()
+    except Exception:
+        # Unsupported platform, no display, or a clipboard holding something
+        # that is not an image. None of those is an error worth a toast.
+        log.debug("no image on the system clipboard", exc_info=True)
+        return False
+    if grabbed is None or isinstance(grabbed, list):
+        # A list is a *file* copy rather than an image; opening one would be a
+        # silent second way to open files, with none of the checks open_path
+        # does.
+        return False
+    tab.doc.put_clipboard(np.asarray(grabbed.convert("RGBA"), dtype=np.uint8).copy())
+    return True
+
+
 # --- keys -------------------------------------------------------------------
 
 # Aseprite's letters where they exist, because that is the muscle memory a user
@@ -650,6 +713,17 @@ def handle_key(ctx: Any, event: Any) -> bool:
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key)
+
+    if state.transforming:
+        # Modal: Enter applies, Escape cancels, and nothing else may change the
+        # tool out from under a half-finished transform.
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            end_transform(ctx, commit=True)
+        elif event.key == pygame.K_ESCAPE or (ctrl and name == "z"):
+            # Ctrl+Z during a transform means "undo the transform", which is
+            # cancelling it -- not stepping back through the history behind it.
+            end_transform(ctx, commit=False)
+        return True
 
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, event, shift=shift)
@@ -709,10 +783,16 @@ def _ctrl_key(
     elif name == "x":
         doc.cut()
     elif name == "v":
-        doc.paste()
-        state.tool = "move"
+        paste_from_os(ctx, tab)
+        if shift:
+            doc.paste_as_layer()
+        else:
+            doc.paste()
+            state.tool = "move"
     elif name == "i" and shift:
         doc.invert_selection()
+    elif name == "t":
+        begin_transform(ctx, tab)
     elif event.key == pygame.K_TAB:
         state.cycle(-1 if shift else 1)
     elif name == "0":

@@ -656,6 +656,45 @@ class Document:
     def cut(self) -> bool:
         return self.copy() and self.delete_selection()
 
+    # -- free transform -----------------------------------------------------
+
+    def begin_transform(self) -> bool:
+        """Lift whatever is being transformed, so it can be moved freely.
+
+        A transform acts on floating pixels and nothing else: it needs to
+        rotate a chunk out of alignment with the pixel grid, which cannot be
+        expressed as a write back into the layer until it is committed. With no
+        selection, the whole layer is lifted -- "rotate this layer" is the
+        common case and requiring a select-all first would be busywork.
+        """
+        if self.floating is not None:
+            return True
+        if self.mask is None:
+            width, height = self.size
+            self.select(SelectionMask.full(width, height))
+        return self.lift()
+
+    def transform_floating(
+        self, *, angle: float | None = None, scale: tuple[float, float] | None = None
+    ) -> bool:
+        if self.floating is None:
+            return False
+        self.floating.transform(angle=angle, scale=scale)
+        self.rev += 1
+        return True
+
+    def flip_floating(self, axis: str) -> bool:
+        if self.floating is None:
+            return False
+        self.floating.flip(axis)
+        self.rev += 1
+        return True
+
+    def rotate_floating(self, degrees: float) -> bool:
+        if self.floating is None:
+            return False
+        return self.transform_floating(angle=self.floating.angle + degrees)
+
     def paste(self, at: tuple[int, int] | None = None) -> bool:
         """Paste as a floating buffer, so it can be positioned before it lands."""
         taken = self.clipboard.take()
@@ -672,6 +711,41 @@ class Document:
         )
         self.rev += 1
         return True
+
+    def paste_as_layer(self, pixels: np.ndarray | None = None) -> bool:
+        """Paste onto a layer of its own, placed at the top-left.
+
+        A separate entry point rather than a flag on ``paste``: this one lands
+        immediately and is undone by removing the layer, where an ordinary
+        paste floats until it is put down.
+        """
+        if pixels is None:
+            taken = self.clipboard.take()
+            if taken is None:
+                return False
+            pixels, mask = taken
+            pixels = pixels.copy()
+            pixels[..., 3] = (
+                pixels[..., 3].astype(np.float32) * mask / 255.0
+            ).astype(np.uint8)
+        self.commit_floating()
+        width, height = self.size
+        placed = tf.resize_canvas(pixels, (width, height))
+        layer = Layer(pixels=placed, name=f"Pasted {len(self.stack) + 1}")
+        index = self.stack.insert(self.stack.active_index + 1, layer)
+        self.history.push(LayerAddEdit(index, layer))
+        self.invalidate_all()
+        return True
+
+    def put_clipboard(self, pixels: np.ndarray) -> None:
+        """Load the app clipboard from outside -- an OS clipboard image.
+
+        Everything pasted carries a mask, because a paste has to know which of
+        its pixels are part of the selection; an image from elsewhere is fully
+        selected by definition.
+        """
+        mask = np.full(pixels.shape[:2], 255, dtype=np.uint8)
+        self.clipboard.put(pixels, mask)
 
     # -- layers -------------------------------------------------------------
 

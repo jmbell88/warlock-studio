@@ -257,6 +257,15 @@ class PaintState:
     combine: str = "replace"
     space_held: bool = False
 
+    # Free transform is a *state*, not a tool: it takes over the canvas until
+    # it is committed or cancelled, and every other tool is unavailable while
+    # it is on -- which is exactly what "modal" means and why it cannot live in
+    # the tool list beside brush and fill.
+    transforming: bool = False
+    # What the handle was grabbed at, so a drag is measured against the press
+    # rather than against the previous frame.
+    transform_ref: tuple[float, float, float, float] | None = None
+
     # -- documents ---------------------------------------------------------
 
     @property
@@ -328,6 +337,7 @@ class PaintState:
         self.drag_anchor = None
         self.last_point = None
         self.lasso = []
+        self.transform_ref = None
 
     # -- colours ------------------------------------------------------------
 
