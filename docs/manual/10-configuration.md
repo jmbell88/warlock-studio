@@ -109,7 +109,8 @@ So the variable is the right tool for exactly one case: swapping in another dist
 that wants the same sampler settings. A model that needs different settings wants a registry entry
 in `models.py` instead, which carries its own image size, step count, guidance scale, variant,
 scheduler and always-on step-distillation LoRA — because those are properties of the checkpoint, not
-of the user's preference. The Extending chapter covers adding one.
+of the user's preference. [Adding an image model](14-extending.md#adding-an-image-model) is the
+procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
 entry declares.
