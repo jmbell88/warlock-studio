@@ -357,7 +357,6 @@ def _press(session: paint.EditorSession, point: tuple[int, int]) -> None:
         session.drag_kind = ""
         return
     if tool == "fill":
-        doc.checkpoint()
         doc.fill(point, session.color)
         session.dirty = True
         session.drag_kind = ""
@@ -375,7 +374,6 @@ def _press(session: paint.EditorSession, point: tuple[int, int]) -> None:
     # brush / eraser: paint immediately, so a click is a dot rather than
     # nothing at all.
     doc.commit_selection()
-    doc.checkpoint()
     doc.stroke(point, point, session.color, session.brush_size, erase=tool == "eraser")
     session.dirty = True
     session.drag_kind = "paint"
@@ -399,7 +397,6 @@ def _release(session: paint.EditorSession, point: tuple[int, int]) -> None:
     doc = session.doc
     anchor = session.drag_anchor or point
     if session.drag_kind == "shape":
-        doc.checkpoint()
         doc.shape(
             session.tool,
             anchor,
@@ -413,6 +410,10 @@ def _release(session: paint.EditorSession, point: tuple[int, int]) -> None:
         rect = paint.normalise_rect(anchor, point)
         if doc.lift_selection((rect[0], rect[1], rect[2] + 1, rect[3] + 1)):
             session.dirty = True
+    elif session.drag_kind == "paint":
+        # History is per-operation now: the stroke became one undo step the
+        # moment it was closed, which is here rather than at the next press.
+        doc.end_stroke()
     session.drag_kind = ""
     session.drag_anchor = None
     session.last_point = None
@@ -476,14 +477,24 @@ def _draw_preview(session: paint.EditorSession, draw_list: Any, origin) -> None:
 
 
 def _document_texture(ctx: Any, session: paint.EditorSession) -> Any:
-    return _sync_texture(
+    """The composite, uploaded by dirty rectangle rather than whole.
+
+    A stroke touches a few hundred pixels; re-uploading a megapixel to show
+    them is 4 MB of PCIe traffic per frame of a drag. ``take_dirty`` returns
+    None after a structural change, which is the case that still needs the
+    whole image.
+    """
+    doc = session.doc
+    texture = _sync_texture(
         ctx,
         _TEXTURE_KEY,
         _TEXTURE_REV,
-        session.doc.image,
-        session.doc.rev,
+        doc.image,
+        doc.rev,
         nearest=session.zoom >= 1.0,
+        region=doc.take_dirty(),
     )
+    return texture
 
 
 def _selection_texture(ctx: Any, session: paint.EditorSession) -> Any:
@@ -510,11 +521,13 @@ def _sync_texture(
     *,
     nearest: bool,
     force: bool = False,
+    region: tuple[int, int, int, int] | None = None,
 ) -> Any:
     """One reusable texture per slot, uploaded only when the pixels changed.
 
     The rev gate is the whole point: uploading a 1024x1024 RGBA image every
     frame is 4 MB of PCIe traffic to show something that did not move.
+    ``region`` narrows that further to the rectangle that actually changed.
     """
     if ctx.viewer is None:
         return None
@@ -529,7 +542,13 @@ def _sync_texture(
         ctx.state.preview[key] = cached
         ctx.state.preview[rev_key] = rev
     elif force or ctx.state.preview.get(rev_key) != rev:
-        cached.write(image.tobytes())
+        if region is not None:
+            x0, y0, x1, y1 = region
+            cached.write(
+                image.crop(region).tobytes(), viewport=(x0, y0, x1 - x0, y1 - y0)
+            )
+        else:
+            cached.write(image.tobytes())
         ctx.state.preview[rev_key] = rev
     mode = gl.NEAREST if nearest else gl.LINEAR
     cached.filter = (mode, mode)
