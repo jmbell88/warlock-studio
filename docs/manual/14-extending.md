@@ -128,9 +128,9 @@ Several parts of the app are pure by rule, and the rule is always the same: noth
 imports imgui, moderngl, pygame or the service layer. Three places do this, for three versions of
 the same reason.
 
-**The paint engine.** `studio/paint/` holds blend arithmetic, layers with stable uids, typed undo
+**The Inker engine.** `studio/inker/` holds blend arithmetic, layers with stable uids, typed undo
 edits, selection masks, brush stamps, gradients and OpenRaster I/O, and none of it knows a window
-exists. `studio/paint_mode.py` is the only layer that knows about jobs and task threads. That is
+exists. `studio/inker_mode.py` is the only layer that knows about jobs and task threads. That is
 what makes every rule about pixels assertable headlessly — and there are a lot of such rules, since
 undo is addressed by layer uid rather than index precisely so that an undo issued after a reorder
 still lands on the layer the edit was made to.

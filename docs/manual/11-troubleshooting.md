@@ -165,7 +165,7 @@ whether the app is slow or the machine is busy.
 
 **Why.** The frame loop is capped at 60 frames per second, so a healthy session sits at 60 and never
 above it. Anything lower is the loop failing to keep up — usually a GPU job running alongside the
-window, a very large paint document, or a mesh being drawn at full reconstruction density.
+window, a very large Inker document, or a mesh being drawn at full reconstruction density.
 
 **Fix.** Press **F10** for the frame-rate readout, bottom-left. It shows the rate over the last two
 seconds, the mean frame time and the slowest single frame in that window — the last of those is the

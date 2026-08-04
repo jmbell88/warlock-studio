@@ -103,7 +103,7 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 uv run warlock sweep --image assets/<job-id>/input.png --bands auto,4,8 --seed 42
 ```
 
-### Paint
+### Inker
 
 The third top-level mode is a layered raster editor -- soft brushes, layers with
 blend modes, a full selection suite (rectangle, ellipse, lasso, magic wand, with
@@ -112,7 +112,7 @@ symmetry and a grid. It opens any image, keeps several documents in tabs, and
 saves natively as [OpenRaster](https://www.openraster.org/) (`.ora`) -- a zip of
 layer PNGs that Krita and GIMP both read and write -- or exports a flattened PNG.
 
-It is wired into the pipeline in both directions. **Open in Paint** on a finished
+It is wired into the pipeline in both directions. **Open in Inker** on a finished
 reference edits it in place: saving writes `input.png` through the same path the
 old inline editor used (the untouched original is kept once, as `input.orig.png`,
 so *Revert to original* always works) and keeps the layers beside it in

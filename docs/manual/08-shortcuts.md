@@ -3,8 +3,8 @@
 A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
 is a condensed subset — the tables below are the full list.
 
-One rule explains an apparent overlap between the two tables below. While a Paint document is open,
-Paint takes every key — so `W` picks the wand rather than toggling wireframe, and `S` picks the
+One rule explains an apparent overlap between the two tables below. While an Inker document is open,
+Inker takes every key — so `W` picks the wand rather than toggling wireframe, and `S` picks the
 ellipse-select tool rather than the turntable. Those viewport bindings would otherwise act on a
 viewport that is not on screen.
 
@@ -20,7 +20,7 @@ viewport that is not on screen.
 | S | Toggle turntable |
 | Esc | Exit comparison / pose edit |
 
-## Paint
+## Inker
 
 | Keys | Action |
 | --- | --- |
@@ -60,4 +60,4 @@ viewport that is not on screen.
 
 Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
 to the current one, and **Alt** subtracts. Both are described in
-[Selections and transform](06-paint.md#selections-and-transform).
+[Selections and transform](06-inker.md#selections-and-transform).

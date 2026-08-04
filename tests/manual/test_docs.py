@@ -17,7 +17,7 @@ EXPECTED_KEYS = [
     "03-generating-meshes",
     "04-rigging-and-posing",
     "05-sprite-sheets",
-    "06-paint",
+    "06-inker",
     "07-library-and-jobs",
     "08-shortcuts",
     "09-installation",

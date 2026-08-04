@@ -180,9 +180,9 @@ inspector's **Reference** section, and promoting it asks you to confirm rather t
 outright. The rules are heuristics about composition, and you can see the picture they are arguing
 about.
 
-If the image is nearly right, you can fix it by hand: **Open in Paint** on the viewport toolbar
+If the image is nearly right, you can fix it by hand: **Open in Inker** on the viewport toolbar
 opens the reference as a layered document, and saving writes it back in place. See
-[Pipeline bridges](06-paint.md#pipeline-bridges).
+[Pipeline bridges](06-inker.md#pipeline-bridges).
 
 When you are happy, press **Make 3D** on the card (or select the reference and switch to 3D mode).
 That carries the reference and everything it recorded into the mesh stage, where you can override

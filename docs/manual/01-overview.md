@@ -51,8 +51,8 @@ that decides what the panes show.
 - **3D asset.** Owns no prompt controls at all. A 3D job starts either from a finished 2D asset or
   from an uploaded image, and this pane holds only the mesh, rig, pose and sprite-sheet decisions.
   Covered in [Generating meshes](03-generating-meshes.md).
-- **Paint.** A layered raster editor, wired into the pipeline in both directions. Covered in
-  [Paint](06-paint.md).
+- **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
+  [Inker](06-inker.md).
 
 Each control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
@@ -60,13 +60,13 @@ into the prompt ("how much fine detail should be drawn"), and in the 3D pane it 
 resolution sent to the reconstruction engine. One control cannot be owned by two panes, so there
 are two.
 
-Switching modes is never destructive. Paint keeps its open documents when you leave it, a queued
+Switching modes is never destructive. Inker keeps its open documents when you leave it, a queued
 job keeps running whichever mode you are in, and the progress card floats over all three.
 
 ## The window
 
 The app opens on a landing chooser. **Home**, at the top left, returns to it at any time. To its
-right is the 2D / 3D / Paint mode switch described above.
+right is the mode switch described above.
 
 Once you are in the workspace, the window is three columns:
 
@@ -75,8 +75,8 @@ Once you are in the workspace, the window is three columns:
   ever run, with its filters. The divider between them can be dragged, as can the divider between
   the sidebar and the middle column.
 - **The middle column** is the viewport: the interactive 3D preview, or the reference image in 2D
-  mode, or the canvas in Paint mode. A small toolbar sits over it with the framing, wireframe and
-  turntable toggles, and — on a finished reference in 2D mode — the **Open in Paint** button.
+  mode, or the canvas in Inker mode. A small toolbar sits over it with the framing, wireframe and
+  turntable toggles, and — on a finished reference in 2D mode — the **Open in Inker** button.
 - **The right column** is the inspector: everything about the selected asset. In 3D mode it is
   three tabs, **Details**, **Rig & Pose** and **Export**; in 2D mode, **Details** and **Export**.
 

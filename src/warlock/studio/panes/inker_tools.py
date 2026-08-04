@@ -13,8 +13,8 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
-from ..manual import render as manual_render
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..manual import render as manual_render
 
 # Icon-only, five across: what every paint program's toolbox looks like. The
 # name and shortcut live in the tooltip -- three columns of bare labels

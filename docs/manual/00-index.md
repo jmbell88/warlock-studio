@@ -13,7 +13,7 @@ it running and keeping it running, and Part III explains how it is built.
 - [Generating meshes](03-generating-meshes.md) — promoting a reference, mesh settings, triangle budgets, quality reports and exports.
 - [Rigging and posing](04-rigging-and-posing.md) — fitting a skeleton, posing it with gizmos, and saving poses.
 - [Sprite sheets](05-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
-- [Paint](06-paint.md) — the layered raster editor and the two directions it connects to the pipeline.
+- [Inker](06-inker.md) — the layered raster editor and the two directions it connects to the pipeline.
 - [The library and jobs](07-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
 - [Keyboard shortcuts](08-shortcuts.md) — every binding the app answers to.
 

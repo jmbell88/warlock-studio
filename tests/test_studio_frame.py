@@ -254,7 +254,7 @@ def test_paint_still_sees_both_edges():
     latches on and never releases."""
     import inspect
 
-    from warlock.studio import main, inker_mode
+    from warlock.studio import inker_mode, main
 
     source = inspect.getsource(main.App._shortcut)
     assert source.index("inker_mode.handle_key") < source.index(

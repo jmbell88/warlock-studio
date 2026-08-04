@@ -22,7 +22,7 @@ Jobs run **one at a time**. The GPU is a serial resource, so the queue is genuin
 queued card shows its position in it ("#3 in queue") rather than leaving you guessing.
 
 While a job runs, its card shows a progress bar and a label for the current stage, and a floating
-**progress card** narrates the same thing over every mode — including Paint, so a reconstruction
+**progress card** narrates the same thing over every mode — including Inker, so a reconstruction
 started before you switched is still visible. An estimated time remaining appears once the job is
 warm and meaningfully underway; it is deliberately suppressed before that, because an estimate taken
 from 3% of a cold start is a guess about weights loading rather than about your mesh.

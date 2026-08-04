@@ -1,6 +1,6 @@
-# Paint
+# Inker
 
-Paint is the third top-level mode: a layered raster editor, built into the app rather than bolted
+Inker is the top-level drawing mode: a layered raster editor, built into the app rather than bolted
 onto it. It exists because the reference image is the biggest lever on mesh quality, and the fastest
 way to fix a nearly-right reference is usually to paint over it.
 
@@ -94,7 +94,7 @@ and **Esc** cancels, and nothing else can change the tool out from under a half-
 
 ## Saving
 
-Paint saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that both Krita and GIMP read
+Inker saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that both Krita and GIMP read
 and write. That is the format that keeps your layers, their blend modes and their opacities.
 
 - `Ctrl+S` saves. A document that has never been written anywhere asks where to put it first.
@@ -107,15 +107,15 @@ structural shortcuts are disabled, because a save is encoding the layer stack on
 restructuring it underneath would corrupt the file. Brush strokes are still allowed, since they
 write pixels in place. If a save fails, the tab is released again and a toast says so.
 
-Closing a tab or quitting with unsaved changes asks first. Every dialog in Paint runs off the frame
+Closing a tab or quitting with unsaved changes asks first. Every dialog in Inker runs off the frame
 thread, so the window never freezes behind one.
 
 ## Pipeline bridges
 
-Paint is wired into the pipeline in both directions. The **document** panel on the right states
+Inker is wired into the pipeline in both directions. The **document** panel on the right states
 which direction you are in: a document is either **linked to a job** or **not part of a job**.
 
-**Into Paint.** With a finished reference selected in 2D mode, **Open in Paint** appears on the
+**Into Inker.** With a finished reference selected in 2D mode, **Open in Inker** appears on the
 viewport toolbar. It opens that reference as a linked document. If a layered working file already
 exists for the job and is current, you get your layers back; otherwise you get the flat image.
 
@@ -133,7 +133,7 @@ losing them.
 `input.orig.png`, the first time you edit a reference — so revert always works — and reverting also
 discards the layered file, because it describes an edit that no longer exists.
 
-**Out of Paint.** Two buttons in the **pipeline** section:
+**Out of Inker.** Two buttons in the **pipeline** section:
 
 - **Save as reference** (on an unlinked document) adds what you painted to the library as a
   finished reference. It is measured on the way in, so the quality gate has real data, and it can
