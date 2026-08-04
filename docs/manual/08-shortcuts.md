@@ -1,7 +1,7 @@
 # Keyboard shortcuts
 
-The same list is available in the app at any time: press the **?** button at the top right of the
-window.
+A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
+is a condensed subset — the tables below are the full list.
 
 One rule explains an apparent overlap between the two tables below. While a Paint document is open,
 Paint takes every key — so `W` picks the wand rather than toggling wireframe, and `S` picks the
