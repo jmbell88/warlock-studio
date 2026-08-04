@@ -207,7 +207,7 @@ class ManualState:
 class AppState:
     """The whole UI's mutable state."""
 
-    # The one thing that decides what a pane shows: 2d | 3d | paint.
+    # The one thing that decides what a pane shows: 2d | 3d | inker.
     mode: str = "2d"
     selected: str | None = None
     comparing: str | None = None
@@ -241,7 +241,7 @@ class AppState:
     # Paint mode's open documents and tool settings, built on first use.
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never paints pays nothing for it.
-    paint: Any = None
+    inker: Any = None
     manual: ManualState = field(default_factory=ManualState)
 
     # -- toasts ------------------------------------------------------------

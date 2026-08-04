@@ -360,7 +360,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     )
 
     job_id = _reference_job(app_ctx)
-    app_ctx.state.mode = "paint"
+    app_ctx.state.mode = "inker"
     state = inker_mode.ensure(app_ctx)
 
     def build() -> None:

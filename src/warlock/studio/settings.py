@@ -35,6 +35,22 @@ VERSION = 1
 VOLATILE = ("seed", "mesh_seed", "ref_path")
 
 
+def _migrate(data: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite keys a previous version of the app wrote, in place.
+
+    Deliberately *not* a VERSION bump: ``load`` discards the whole file on a
+    version mismatch, so bumping to rename one key would wipe every setting the
+    user has. Migrations here run under version 1 and must be idempotent, and
+    must not mark the settings dirty -- a launch that changes nothing else
+    should not rewrite the file.
+    """
+    if data.get("mode") == "paint":
+        data["mode"] = "inker"
+    if "paint" in data and "inker" not in data:
+        data["inker"] = data.pop("paint")
+    return data
+
+
 class Settings:
     """A small persistent dict, saved lazily."""
 
@@ -61,7 +77,7 @@ class Settings:
             # passes the version gate and then takes the first get() down --
             # before run()'s try/finally exists, so nothing tears down either.
             data = raw.get("data")
-            out.data = data if isinstance(data, dict) else {}
+            out.data = _migrate(data) if isinstance(data, dict) else {}
         return out
 
     # -- access ------------------------------------------------------------

@@ -339,6 +339,38 @@ def test_a_settings_file_from_another_version_is_ignored(tmp_path):
     assert settingslib.Settings.load(tmp_path).data == {}
 
 
+def test_a_pre_rename_settings_file_migrates_paint_to_inker(tmp_path):
+    """Renaming the mode must not cost the user their swatches.
+
+    The rename happens under version 1 rather than as a version bump: ``load``
+    discards the whole file on a mismatch, so a bump would wipe every setting.
+    """
+    (tmp_path / settingslib.FILENAME).write_text(
+        json.dumps(
+            {
+                "version": settingslib.VERSION,
+                "data": {"mode": "paint", "paint": {"swatches": ["#ff0000"], "recent": ["a.png"]}},
+            }
+        )
+    )
+    s = settingslib.Settings.load(tmp_path)
+    assert s.get("mode") == "inker"
+    assert s.get("inker") == {"swatches": ["#ff0000"], "recent": ["a.png"]}
+    assert "paint" not in s.data
+
+
+def test_the_paint_migration_never_overwrites_an_existing_inker_block(tmp_path):
+    (tmp_path / settingslib.FILENAME).write_text(
+        json.dumps(
+            {
+                "version": settingslib.VERSION,
+                "data": {"paint": {"swatches": ["#old"]}, "inker": {"swatches": ["#new"]}},
+            }
+        )
+    )
+    assert settingslib.Settings.load(tmp_path).get("inker") == {"swatches": ["#new"]}
+
+
 def test_the_seed_never_persists():
     """Remembering last session's seed silently reproduces last session's
     output, which reads as 'generate is broken'."""

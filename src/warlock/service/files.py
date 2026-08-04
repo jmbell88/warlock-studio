@@ -52,7 +52,7 @@ ORA_MAGIC = b"PK\x03\x04"
 # A layered document is legitimately several times the flat image it exports:
 # ten layers of a 20 MB reference is not a mistake. Still bounded, because this
 # is the one path that writes an arbitrary-sized blob into a job directory.
-MAX_PAINT_BYTES = 20 * MAX_UPLOAD_BYTES
+MAX_INKER_BYTES = 20 * MAX_UPLOAD_BYTES
 
 
 class ImageTooLarge(ValueError):
@@ -122,15 +122,19 @@ ORIGINAL = "input.orig.png"
 # free. input.png stays the one name every consumer reads -- this only exists so
 # that reopening an edited reference brings its layers back instead of a
 # flattened image.
-PAINT_WORKING = "paint.ora"
+#
+# The filename keeps its pre-rename spelling on purpose: it is a compatibility
+# contract with every asset directory already on disk, and the mtime-staleness
+# rule below only works while there is exactly one name to compare against.
+INKER_WORKING = "paint.ora"
 
 
-def paint_working_path(svc: Any, job_id: str) -> Path:
+def inker_working_path(svc: Any, job_id: str) -> Path:
     check_job_id(job_id)
-    return svc.job_dir(job_id) / PAINT_WORKING
+    return svc.job_dir(job_id) / INKER_WORKING
 
 
-def paint_working_status(svc: Any, job_id: str) -> dict[str, Any]:
+def inker_working_status(svc: Any, job_id: str) -> dict[str, Any]:
     """Whether a layered working file exists and is newer than input.png.
 
     The mtime comparison is the whole rule. A revert, a regenerate or a remesh
@@ -140,7 +144,7 @@ def paint_working_status(svc: Any, job_id: str) -> dict[str, Any]:
     """
     check_job_id(job_id)
     job_dir = svc.job_dir(job_id)
-    working = job_dir / PAINT_WORKING
+    working = job_dir / INKER_WORKING
     flat = job_dir / "input.png"
     if not working.exists():
         return {"exists": False, "fresh": False}
@@ -151,26 +155,26 @@ def paint_working_status(svc: Any, job_id: str) -> dict[str, Any]:
     return {"exists": True, "fresh": bool(fresh)}
 
 
-def save_paint_working(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+def save_inker_working(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     """Store the layered source beside the reference it flattens to."""
     _editable_reference(svc, job_id)
-    if len(data) > MAX_PAINT_BYTES:
+    if len(data) > MAX_INKER_BYTES:
         raise TooLarge("layered document too large")
     if not data.startswith(ORA_MAGIC):
         raise Invalid("the layered source must be an OpenRaster file")
-    dest = svc.job_dir(job_id) / PAINT_WORKING
+    dest = svc.job_dir(job_id) / INKER_WORKING
     tmp = dest.with_suffix(".ora.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, dest)
     return {"ok": True}
 
 
-def discard_paint_working(svc: Any, job_id: str) -> None:
+def discard_inker_working(svc: Any, job_id: str) -> None:
     """Drop the layers. Called when a revert makes them describe pixels that
     are no longer the reference."""
     check_job_id(job_id)
     with contextlib.suppress(OSError):
-        (svc.job_dir(job_id) / PAINT_WORKING).unlink(missing_ok=True)
+        (svc.job_dir(job_id) / INKER_WORKING).unlink(missing_ok=True)
 
 
 def _editable_reference(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:

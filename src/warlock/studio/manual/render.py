@@ -1,7 +1,7 @@
 """The imgui half of the manual: the window, the TOC, and drawn blocks.
 
 Everything above this module (parser, loader, targets) is pure; this file is
-the only one allowed to touch imgui, mirroring the paint engine / inker_mode
+the only one allowed to touch imgui, mirroring the Inker engine / inker_mode
 split. Blocks are cached parsed per chapter -- the files cannot change while
 the app runs.
 """

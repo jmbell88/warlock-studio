@@ -71,14 +71,14 @@ def test_a_linked_save_writes_the_flat_half_first(monkeypatch, svc):
 
     Asserted as call *order* rather than as the resulting mtimes, because two
     consecutive small writes land on the same ``st_mtime`` most of the time on
-    a typical filesystem -- and ``paint_working_status`` compares with ``>=``,
+    a typical filesystem -- and ``inker_working_status`` compares with ``>=``,
     so an mtime assertion passes under the bug roughly two runs in three.
     """
     job_id = _reference(svc)
     order: list[str] = []
 
     real_flat = svc_files.save_edited_image
-    real_layers = svc_files.save_paint_working
+    real_layers = svc_files.save_inker_working
 
     def flat(*args, **kwargs):
         order.append("input.png")
@@ -89,7 +89,7 @@ def test_a_linked_save_writes_the_flat_half_first(monkeypatch, svc):
         return real_layers(*args, **kwargs)
 
     monkeypatch.setattr(svc_files, "save_edited_image", flat)
-    monkeypatch.setattr(svc_files, "save_paint_working", layers)
+    monkeypatch.setattr(svc_files, "save_inker_working", layers)
 
     inker_mode._save_linked(FakeCtx(svc), _tab(job_id))
 
@@ -108,7 +108,7 @@ def test_a_linked_save_leaves_its_layers_fresh(svc):
 
     inker_mode._save_linked(ctx, _tab(job_id))
 
-    status = svc_files.paint_working_status(svc, job_id)
+    status = svc_files.inker_working_status(svc, job_id)
     assert status == {"exists": True, "fresh": True}
 
 
@@ -138,8 +138,8 @@ def test_the_layers_survive_a_round_trip_through_a_save(svc):
     tab = _tab(job_id)
     inker_mode._save_linked(FakeCtx(svc), tab)
 
-    status = svc_files.paint_working_status(svc, job_id)
-    reopened = inker.Document.load(svc_files.paint_working_path(svc, job_id))
+    status = svc_files.inker_working_status(svc, job_id)
+    reopened = inker.Document.load(svc_files.inker_working_path(svc, job_id))
     assert status["fresh"]
     assert len(reopened.stack) == len(tab.doc.stack) == 2
 
@@ -155,7 +155,7 @@ def test_a_reference_rewritten_after_a_save_makes_the_layers_stale_again(svc):
 
     later = time.time() + 10
     os.utime(svc.job_dir(job_id) / "input.png", (later, later))
-    assert not svc_files.paint_working_status(svc, job_id)["fresh"]
+    assert not svc_files.inker_working_status(svc, job_id)["fresh"]
 
 
 # --- the floating buffer, which lives in no layer -----------------------------
@@ -188,7 +188,7 @@ def test_a_linked_save_is_not_dirty_the_instant_it_finishes(svc):
     ctx = FakeCtx(svc)
     state = InkerState()
     state.add(tab)
-    ctx.state = SimpleNamespace(paint=state, mode="paint")
+    ctx.state = SimpleNamespace(inker=state, mode="inker")
     ctx.cache = SimpleNamespace(invalidate=lambda: None)
     ctx.toast = lambda *a, **k: None
     ctx.viewer = SimpleNamespace(path=None)
@@ -242,7 +242,7 @@ def test_the_mutating_shortcuts_do_nothing_while_a_save_is_running():
 
     state = InkerState()
     state.add(tab)
-    ctx = SimpleNamespace(state=SimpleNamespace(paint=state), svc=None)
+    ctx = SimpleNamespace(state=SimpleNamespace(inker=state), svc=None)
     event = SimpleNamespace(key=0, unicode="")
 
     tab.saving = True
@@ -301,7 +301,7 @@ def test_a_failed_save_clears_the_saving_flag():
     tab.saving = True
     state = InkerState()
     state.add(tab)
-    ctx = SimpleNamespace(state=SimpleNamespace(paint=state))
+    ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
 
     inker_mode.on_task_failed(ctx, SimpleNamespace(key=f"inker-save:{tab.uid}"))
     assert not tab.saving

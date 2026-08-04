@@ -1,7 +1,7 @@
-"""Paint mode's controller: opening, saving, guarding, keys, and the bridge.
+"""Inker mode's controller: opening, saving, guarding, keys, and the bridge.
 
 Everything here is *about* documents rather than pixels -- the engine under
-``paint/`` has no idea a job or a task thread exists, and this is the layer that
+``inker/`` has no idea a job or a task thread exists, and this is the layer that
 knows about both. The panes draw; this decides.
 
 The one rule that shapes the whole file: **no file dialog and no encode ever
@@ -37,10 +37,10 @@ def ensure(ctx: Any) -> InkerState:
     Lazy because a session that never opens Paint should not pay for its
     swatches, and because ``AppState`` deliberately knows nothing about it.
     """
-    state = ctx.state.paint
+    state = ctx.state.inker
     if state is None:
         state = InkerState()
-        stored = ctx.settings.get("paint") or {}
+        stored = ctx.settings.get("inker") or {}
         state.recent = [p for p in (stored.get("recent") or []) if isinstance(p, str)]
         swatches = stored.get("swatches")
         if isinstance(swatches, list) and swatches:
@@ -49,21 +49,21 @@ def ensure(ctx: Any) -> InkerState:
                 for s in swatches
                 if isinstance(s, list | tuple) and len(s) == 4
             ] or list(inker_state.DEFAULT_SWATCHES)
-        ctx.state.paint = state
+        ctx.state.inker = state
     return state
 
 
 def persist(ctx: Any) -> None:
-    state = ctx.state.paint
+    state = ctx.state.inker
     if state is not None:
         ctx.settings.set(
-            "paint",
+            "inker",
             {"recent": state.recent, "swatches": [list(s) for s in state.swatches]},
         )
 
 
 def active(ctx: Any) -> InkerDoc | None:
-    state = ctx.state.paint
+    state = ctx.state.inker
     return state.active if state is not None else None
 
 
@@ -127,7 +127,7 @@ def open_path(ctx: Any, path: Path) -> None:
         state.activate(existing.uid)
         return
     if path.suffix.lower() not in OPENABLE:
-        ctx.toast("Paint opens images and .ora files.", "error")
+        ctx.toast("Inker opens images and .ora files.", "error")
         return
     ctx.submit(f"inker-open:{abs(hash(str(path)))}", _load, path)
 
@@ -145,7 +145,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def can_edit_job(ctx: Any, job: Any) -> bool:
-    """Whether the "Open in Paint" button belongs on this job's toolbar.
+    """Whether the "Open in Inker" button belongs on this job's toolbar.
 
     From the cached row alone -- no filesystem calls, because the toolbar asks
     this every frame.
@@ -171,10 +171,10 @@ def open_job_reference(ctx: Any, job: Any) -> None:
     existing = state.find_job(job_id)
     if existing is not None:
         state.activate(existing.uid)
-        ctx.state.mode = "paint"
+        ctx.state.mode = "inker"
         return
-    ctx.state.mode = "paint"
-    ctx.settings.set("mode", "paint")
+    ctx.state.mode = "inker"
+    ctx.settings.set("mode", "inker")
     ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id)
 
 
@@ -184,8 +184,8 @@ def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
     from . import inker
 
     flat = svc.job_dir(job_id) / "input.png"
-    working = svc_files.paint_working_path(svc, job_id)
-    status = svc_files.paint_working_status(svc, job_id)
+    working = svc_files.inker_working_path(svc, job_id)
+    status = svc_files.inker_working_status(svc, job_id)
     doc = inker.Document.load(working if status["fresh"] else flat)
     # The document is *about* input.png whichever file it was decoded from:
     # the title, the dedupe and the save all key on the reference.
@@ -335,13 +335,13 @@ def _save_linked(ctx: Any, tab: InkerDoc) -> None:
         from . import inker
 
         svc_files.save_edited_image(ctx.svc, job_id, doc.png_bytes())
-        svc_files.save_paint_working(ctx.svc, job_id, inker.ora_bytes(doc))
+        svc_files.save_inker_working(ctx.svc, job_id, inker.ora_bytes(doc))
         return {"rev": rev, "job_id": job_id, "linked": True}
 
     _start(ctx, tab, f"inker-save:{tab.uid}", run)
 
 
-# --- the other direction: paint -> the pipeline ------------------------------
+# --- the other direction: Inker -> the pipeline ------------------------------
 
 
 def save_as_reference(ctx: Any, tab: InkerDoc | None = None) -> None:
@@ -371,7 +371,7 @@ def save_as_reference(ctx: Any, tab: InkerDoc | None = None) -> None:
 def svc_files_save(ctx: Any, job_id: str, data: bytes) -> None:
     from ..service import files as svc_files
 
-    svc_files.save_paint_working(ctx.svc, job_id, data)
+    svc_files.save_inker_working(ctx.svc, job_id, data)
 
 
 def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
@@ -401,7 +401,7 @@ def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
         )
 
     if ctx.submit("inker-send", run):
-        ctx.toast("Queued a mesh from the painted image.")
+        ctx.toast("Queued a mesh from the drawn image.")
 
 
 def _promote(ctx: Any, job_id: str) -> None:
@@ -429,7 +429,7 @@ def _promote(ctx: Any, job_id: str) -> None:
                 title="Make a mesh anyway?",
                 message=reasons,
                 confirm_label="Make it anyway",
-                cancel_label="Keep painting",
+                cancel_label="Keep drawing",
                 on_confirm=lambda: go(True),
             )
         )
@@ -449,7 +449,7 @@ def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
 
     def run() -> dict[str, Any]:
         svc_files.revert_reference(ctx.svc, job_id)
-        svc_files.discard_paint_working(ctx.svc, job_id)
+        svc_files.discard_inker_working(ctx.svc, job_id)
         return {"reverted": True, "job_id": job_id}
 
     def go() -> None:
@@ -488,7 +488,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 link_kind=result.get("link_kind", ""),
                 has_original=bool(result.get("has_original")),
             )
-            ctx.state.mode = "paint"
+            ctx.state.mode = "inker"
         return
 
     if name in ("inker-send", "inker-promote"):
@@ -535,7 +535,7 @@ def on_task_failed(ctx: Any, done: Any) -> None:
     write makes the tab permanently read-only with no way back short of
     closing it.
     """
-    state = ctx.state.paint
+    state = ctx.state.inker
     if state is None or ":" not in done.key:
         return
     tab = state.get(done.key.split(":", 1)[1])
@@ -607,15 +607,15 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     and going Home are not, because Paint is a mode rather than a takeover and
     its tabs are still there when you come back.
     """
-    state = ctx.state.paint
+    state = ctx.state.inker
     if state is None or not state.any_dirty:
         proceed()
         return True
     count = sum(1 for doc in state.docs if doc.dirty)
-    what = "one painting has" if count == 1 else f"{count} paintings have"
+    what = "one drawing has" if count == 1 else f"{count} drawings have"
     ctx.confirms.ask(
         dialogs.Confirm(
-            title="Discard unsaved paintings?",
+            title="Discard unsaved work?",
             message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
             f" if you {verb}.",
             on_confirm=proceed,
@@ -711,7 +711,7 @@ TOOL_KEYS = {
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
-    """Paint's shortcuts. -> whether the key was consumed.
+    """Inker's shortcuts. -> whether the key was consumed.
 
     Consumed unconditionally while a document is open, exactly as the old
     inline editor did: F, W and S would otherwise frame and wireframe a
@@ -719,7 +719,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     """
     import pygame
 
-    state = ctx.state.paint
+    state = ctx.state.inker
     if state is None or not state.docs:
         return False
     tab = state.active

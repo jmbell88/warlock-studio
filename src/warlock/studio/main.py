@@ -132,7 +132,8 @@ class App:
         self.viewer = Viewer(self.ctx)
 
         state = AppState()
-        state.mode = settings.get("mode") or "2d"
+        stored_mode = settings.get("mode")
+        state.mode = stored_mode if stored_mode in ("2d", "3d", "inker") else "2d"
         state.show_fps = bool(settings.get("show_fps"))
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
@@ -490,7 +491,7 @@ class App:
         while it is selected starts showing its mesh without another click.
         """
         ctx = self.app_ctx
-        if ctx.state.mode == "paint":
+        if ctx.state.mode == "inker":
             # Paint owns the centre pane; there is no viewport to sync, and
             # loading a mesh for the selection would be work nothing shows.
             return
@@ -603,7 +604,7 @@ class App:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
             ctx.state.manual.open = True
             return
-        # Above the landing and paint returns below: the frame rate is a
+        # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
         # and the chooser is exactly where a slow startup would show.
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
@@ -613,14 +614,14 @@ class App:
             # The chooser has no form to submit and no viewport to frame; every
             # one of these would act on a pane that is not on screen.
             return
-        if ctx.state.mode == "paint":
+        if ctx.state.mode == "inker":
             from . import inker_mode
 
             # Consumes every key while a painting is open, so F/W/S/Ctrl+Enter
             # cannot act on the panes Paint has replaced.
             if inker_mode.handle_key(ctx, event):
                 return
-        # Both edges are dispatched, because paint's space-to-pan is a hold and
+        # Both edges are dispatched, because Inker's space-to-pan is a hold and
         # needs the release. Nothing below is a hold: every one of these is a
         # toggle or an action, so acting on the release too undoes the toggle
         # the press just made and submits a second job for one Ctrl+Enter.
@@ -655,7 +656,7 @@ class App:
         from .panes import settings_3d
 
         ctx = self.app_ctx
-        if ctx.state.mode == "paint":
+        if ctx.state.mode == "inker":
             from . import inker_mode
 
             ctx.state.landing = False
@@ -729,7 +730,7 @@ class App:
         from .panes import overlay
 
         overlay.doctor_banner(ctx)
-        if ctx.state.mode == "paint":
+        if ctx.state.mode == "inker":
             self._paint_workspace()
             imgui.end()
             self._overlays(viewport)
@@ -896,7 +897,7 @@ class App:
         imgui.same_line()
         selected = widgets.segmented_control(
             "mode-seg",
-            [("2d", "2D reference"), ("3d", "3D asset"), ("paint", "Paint")],
+            [("2d", "2D reference"), ("3d", "3D asset"), ("inker", "Inker")],
             state.mode,
         )
         if selected != state.mode:
@@ -940,7 +941,7 @@ class App:
         self._diagnostics_popup(checks)
 
     # Every binding the app answers to, in one place the user can find. The
-    # tuples are (keys, what), grouped; paint's letters come from TOOL_KEYS so
+    # tuples are (keys, what), grouped; Inker's letters come from TOOL_KEYS so
     # this list cannot drift from the handler.
     def _shortcuts_popup(self) -> None:
         from imgui_bundle import imgui
@@ -978,7 +979,7 @@ class App:
 
         tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
         table(
-            "Paint",
+            "Inker",
             [
                 (tools, "Pick a tool (hover a tool for its letter)"),
                 ("X", "Swap colours"),
@@ -1119,7 +1120,7 @@ class App:
         ctx = self.app_ctx
         if ctx is not None:
             _step("persist settings", lambda: self._persist(ctx))
-            _step("persist paint", lambda: self._persist_paint(ctx))
+            _step("persist inker", lambda: self._persist_inker(ctx))
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
         if self.viewer is not None:
@@ -1143,7 +1144,7 @@ class App:
         ctx.settings.set("filters", vars(ctx.state.filters))
         ctx.settings.flush()
 
-    def _persist_paint(self, ctx: Any) -> None:
+    def _persist_inker(self, ctx: Any) -> None:
         from . import inker_mode
 
         inker_mode.persist(ctx)

@@ -87,8 +87,8 @@ def _choose(ctx: Any) -> None:
     ):
         start_3d(ctx)
     imgui.dummy((0, sp(8)))
-    if _tile(ctx, "paint", icons.BRUSH, "Paint", "A canvas, or an image you already have."):
-        start_paint(ctx)
+    if _tile(ctx, "inker", icons.BRUSH, "Inker", "A canvas, or an image you already have."):
+        start_inker(ctx)
     imgui.dummy((0, sp(8)))
     if _tile(ctx, "open", icons.FOLDER_OPEN, "Open existing", "Everything already generated."):
         ctx.state.landing_view = "open"
@@ -122,10 +122,10 @@ def start_3d(ctx: Any) -> None:
     _leave(ctx)
 
 
-def start_paint(ctx: Any) -> None:
+def start_inker(ctx: Any) -> None:
     """Paint keeps whatever was open: unlike the two generate panes, there is
     no "fresh form" here -- the documents *are* the work."""
-    ctx.state.mode = "paint"
+    ctx.state.mode = "inker"
     _leave(ctx)
 
 

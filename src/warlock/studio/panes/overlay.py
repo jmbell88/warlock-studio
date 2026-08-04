@@ -31,7 +31,7 @@ def toolbar(ctx: Any) -> None:
     if ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
-        if imgui.button(f"{icons.BRUSH} Open in Paint"):
+        if imgui.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
         imgui.same_line()
     if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):

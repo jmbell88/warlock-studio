@@ -210,30 +210,30 @@ def _ora(size=(64, 64), layers=2) -> bytes:
 
 def test_the_layered_source_saves_beside_the_reference_it_flattens_to(svc):
     job_id = _reference(svc)
-    svc_files.save_paint_working(svc, job_id, _ora())
-    assert svc_files.paint_working_path(svc, job_id).exists()
+    svc_files.save_inker_working(svc, job_id, _ora())
+    assert svc_files.inker_working_path(svc, job_id).exists()
     # Internal: never listed, never downloadable.
-    assert svc_files.PAINT_WORKING not in svc_files.LISTED
-    assert svc_files.PAINT_WORKING not in svc_files.MEDIA
+    assert svc_files.INKER_WORKING not in svc_files.LISTED
+    assert svc_files.INKER_WORKING not in svc_files.MEDIA
 
 
 def test_a_layered_source_must_actually_be_one(svc):
     job_id = _reference(svc)
     with pytest.raises(Invalid):
-        svc_files.save_paint_working(svc, job_id, _png())
+        svc_files.save_inker_working(svc, job_id, _png())
 
 
 def test_a_layered_source_is_bounded(svc):
     job_id = _reference(svc)
     with pytest.raises(TooLarge):
-        svc_files.save_paint_working(svc, job_id, b"PK\x03\x04" + b"0" * svc_files.MAX_PAINT_BYTES)
+        svc_files.save_inker_working(svc, job_id, b"PK\x03\x04" + b"0" * svc_files.MAX_INKER_BYTES)
 
 
 def test_only_a_finished_reference_gets_a_layered_source(svc):
     job_id = _reference(svc)
     svc.store.set_status(job_id, "running")
     with pytest.raises(Invalid):
-        svc_files.save_paint_working(svc, job_id, _ora())
+        svc_files.save_inker_working(svc, job_id, _ora())
 
 
 def test_a_working_file_older_than_the_reference_is_treated_as_stale(svc):
@@ -243,17 +243,17 @@ def test_a_working_file_older_than_the_reference_is_treated_as_stale(svc):
     import time
 
     job_id = _reference(svc)
-    svc_files.save_paint_working(svc, job_id, _ora())
-    assert svc_files.paint_working_status(svc, job_id) == {"exists": True, "fresh": True}
+    svc_files.save_inker_working(svc, job_id, _ora())
+    assert svc_files.inker_working_status(svc, job_id) == {"exists": True, "fresh": True}
 
     later = time.time() + 10
     os.utime(svc.job_dir(job_id) / "input.png", (later, later))
-    status = svc_files.paint_working_status(svc, job_id)
+    status = svc_files.inker_working_status(svc, job_id)
     assert status["exists"] and not status["fresh"]
 
 
 def test_no_working_file_is_neither_present_nor_fresh(svc):
-    assert svc_files.paint_working_status(svc, _reference(svc)) == {
+    assert svc_files.inker_working_status(svc, _reference(svc)) == {
         "exists": False,
         "fresh": False,
     }
@@ -261,15 +261,15 @@ def test_no_working_file_is_neither_present_nor_fresh(svc):
 
 def test_discarding_the_working_file_is_forgiving_of_its_absence(svc):
     job_id = _reference(svc)
-    svc_files.discard_paint_working(svc, job_id)
-    svc_files.save_paint_working(svc, job_id, _ora())
-    svc_files.discard_paint_working(svc, job_id)
-    assert not svc_files.paint_working_path(svc, job_id).exists()
+    svc_files.discard_inker_working(svc, job_id)
+    svc_files.save_inker_working(svc, job_id, _ora())
+    svc_files.discard_inker_working(svc, job_id)
+    assert not svc_files.inker_working_path(svc, job_id).exists()
 
 
 def test_a_working_save_leaves_no_temp_file_behind(svc):
     job_id = _reference(svc)
-    svc_files.save_paint_working(svc, job_id, _ora())
+    svc_files.save_inker_working(svc, job_id, _ora())
     names = {p.name for p in svc.job_dir(job_id).iterdir()}
     assert not [n for n in names if n.endswith(".tmp")]
 
