@@ -75,3 +75,17 @@ def test_index_links_every_chapter():
     text = loader.load("00-index")
     linked = set(re.findall(r"\((\d\d-[\w-]+)\.md", text))
     assert linked == set(EXPECTED_KEYS) - {"00-index"}
+
+
+def test_help_targets_resolve():
+    from warlock.studio.manual.targets import HELP_TARGETS
+
+    assert HELP_TARGETS, "the context-help map must not be empty"
+    anchors = {
+        key: {b.anchor for b in blocks if isinstance(b, parser.Heading)}
+        for key, blocks in _all_blocks().items()
+    }
+    for pane, (chapter, anchor) in HELP_TARGETS.items():
+        assert chapter in anchors, f"{pane}: unknown chapter {chapter}"
+        if anchor is not None:
+            assert anchor in anchors[chapter], f"{pane}: missing anchor {chapter}#{anchor}"

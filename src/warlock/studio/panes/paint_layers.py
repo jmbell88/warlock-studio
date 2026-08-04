@@ -13,25 +13,37 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import paint, paint_mode, theme, widgets
+from ..manual import render as manual_render
 from . import paint_textures
 
 THUMB = 40.0
+
+# Opacity the active layer held when its slider drag began, keyed by layer uid.
+# Only ever holds an entry while a drag is in flight.
+_opacity_drag: dict[int, float] = {}
 
 
 def draw(ctx: Any) -> None:
     state = paint_mode.ensure(ctx)
     tab = state.active
     widgets.section("layers")
+    manual_render.help_button(ctx, "paint-layers")
     if tab is None:
         widgets.muted("Nothing open.")
         return
     doc = tab.doc
+    # Every control below restructures the stack, and a save is encoding that
+    # stack on a task thread. The canvas already refuses strokes mid-save for
+    # the same reason; disabling is the panel's version of that, and it says so
+    # on screen rather than swallowing clicks.
+    imgui.begin_disabled(tab.saving)
     _actions(ctx, doc)
     imgui.dummy((0, 4))
 
     # Reversed: the engine's list is painter's order, the panel is not.
     for index in range(len(doc.stack) - 1, -1, -1):
         _row(ctx, tab, doc, index)
+    imgui.end_disabled()
 
 
 def _actions(ctx: Any, doc: Any) -> None:
@@ -54,11 +66,17 @@ def _actions(ctx: Any, doc: Any) -> None:
     changed, value = imgui.slider_float("Opacity", layer.opacity, 0.0, 1.0)
     if changed:
         # Live while dragging, but only one undo step: set the value directly
-        # for the preview and record the step when the drag is released.
+        # for the preview and record the step when the drag is released. The
+        # value it started from has to be remembered here -- by release the
+        # layer already holds the new one, and asking the document to diff it
+        # against itself records nothing at all.
+        _opacity_drag.setdefault(layer.uid, layer.opacity)
         layer.opacity = value
         doc.invalidate_all()
     if imgui.is_item_deactivated_after_edit():
-        doc.set_layer_props(opacity=layer.opacity)
+        was = _opacity_drag.pop(layer.uid, None)
+        if was is not None:
+            doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
     blend = widgets.combo("Blend", layer.blend, [(m, m) for m in paint.BLEND_MODES])
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)

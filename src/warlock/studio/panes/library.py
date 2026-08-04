@@ -17,6 +17,7 @@ from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, theme, widgets
+from ..manual import render as manual_render
 from ..state import ACTIONS, primary_action
 from ..tokens import sp
 
@@ -26,6 +27,7 @@ THUMB_SIZE = 72.0
 
 def draw(ctx: Any) -> None:
     _filters(ctx)
+    manual_render.help_button(ctx, "library")
     imgui.separator()
     jobs = ctx.cache.visible(ctx.state.filters)
     if ctx.cache.error:

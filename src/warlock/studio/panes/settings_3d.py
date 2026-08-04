@@ -18,6 +18,7 @@ from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, theme, widgets
+from ..manual import render as manual_render
 
 # The only tier the UI offers. Every named tier needs a gltfpack that is not
 # vendored yet, so offering one would be offering a button that can only fail.
@@ -29,6 +30,7 @@ def draw(ctx: Any) -> None:
     form = state.form_3d
 
     widgets.section("Source")
+    manual_render.help_button(ctx, "settings-3d")
     _source(ctx)
 
     widgets.section("Mesh")

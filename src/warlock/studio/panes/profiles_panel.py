@@ -12,10 +12,13 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ...service import validation
 from .. import dialogs, profiles, theme, widgets
+from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:
+    manual_render.help_button(ctx, "profiles")
     if ctx.state.profile_draft is not None:
         _editor(ctx)
         return
@@ -124,8 +127,11 @@ def _editor(ctx: Any) -> None:
         changed, value = imgui.slider_float("Strength", float(draft["lora_weight"]), 0.0, 1.5)
         if changed:
             draft["lora_weight"] = value
+    # The same cap the service enforces. Accepting twice as much here only
+    # meant the refusal arrived at submit time, against a profile the user had
+    # already saved.
     draft["negative_prompt"] = widgets.multiline(
-        "Negative", draft.get("negative_prompt", ""), 54, 2000
+        "Negative", draft.get("negative_prompt", ""), 54, validation.MAX_PROMPT
     )
 
     widgets.section("Style")

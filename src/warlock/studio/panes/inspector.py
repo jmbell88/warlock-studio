@@ -16,6 +16,7 @@ from ...service import derive as svc_derive
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
 from .. import theme, widgets
+from ..manual import render as manual_render
 from ..state import format_duration
 from . import pose_panel, retarget_panel, sheet_panel
 
@@ -37,6 +38,7 @@ def draw(ctx: Any) -> None:
     # scroll column into three tabs, because reaching the sprite sheet on a
     # rigged mesh meant scrolling past the whole pose editor.
     _header(ctx, job)
+    manual_render.help_button(ctx, "inspector")
     _meta(ctx, job)
     if job.get("status") == "error":
         _error(ctx, job)

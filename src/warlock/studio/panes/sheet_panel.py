@@ -13,8 +13,10 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import rigging
 from ...service import sheets as svc_sheets
 from .. import dialogs, widgets
+from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 
 # 4/8/16: the direction counts every 2D engine's facing conventions already
@@ -28,8 +30,9 @@ def draw(ctx: Any, job: Any) -> None:
         return
     if not widgets.header("Sprite sheet", default_open=False):
         return
+    manual_render.help_button(ctx, "sheet")
 
-    form = _form(ctx)
+    form = _form(ctx, job["id"])
     _preview(ctx, form)
     _controls(ctx, job, form)
     _summary(ctx, form)
@@ -37,12 +40,19 @@ def draw(ctx: Any, job: Any) -> None:
     _saved(ctx, job)
 
 
-def _form(ctx: Any) -> dict[str, Any]:
-    """Lazily created and kept on the app state, so it survives a reselect."""
-    form = ctx.state.preview.setdefault("sheet_form", None)
-    if form is None:
+def _form(ctx: Any, job_id: str) -> dict[str, Any]:
+    """Lazily created and kept on the app state, so it survives a reselect.
+
+    Rebuilt when the selection moves to a different job, because half of it is
+    pose ids: those belong to the rig they were fitted to, and carrying them
+    across a selection change submits another job's poses -- which ``validate``
+    cannot catch, since it only checks that *a* rig exists.
+    """
+    form = ctx.state.preview.get("sheet_form")
+    if form is None or form.get("job_id") != job_id:
         defaults = (ctx.sheet_options or {}).get("defaults") or {}
         form = {
+            "job_id": job_id,
             "yaws": 8,
             "elevation": float(defaults.get("elevation") or 0.0),
             "frame_size": int(defaults.get("frame_size") or 128),
@@ -115,6 +125,12 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
     changed, elevation = imgui.slider_float("Elevation", form["elevation"], -60.0, 60.0, "%.0f deg")
     if changed:
         form["elevation"] = elevation
+    # The service validates and stores this and the saved list displays it;
+    # without an input there was no way to ever set it, so every sheet showed
+    # its raw id.
+    form["name"] = widgets.input_text(
+        "##sheet-name", form["name"], max_length=rigging.MAX_SHEET_NAME, hint="Name (optional)"
+    )
 
     poses = (ctx.state.preview or {}).get("poses") or []
     if poses:
@@ -208,6 +224,9 @@ def _saved(ctx: Any, job: Any) -> None:
         if imgui.small_button("Save PNG..."):
             _save(ctx, job_id, sheet_id)
         imgui.same_line()
+        if imgui.small_button("Save JSON..."):
+            _save_sidecar(ctx, job_id, sheet_id)
+        imgui.same_line()
         if imgui.small_button("Delete"):
             ctx.submit(
                 f"sheet-del:{job_id}:{sheet_id}",
@@ -231,3 +250,25 @@ def _save(ctx: Any, job_id: str, sheet_id: str) -> None:
         return dest
 
     ctx.submit(f"sheet-save:{job_id}:{sheet_id}", run)
+
+
+def _save_sidecar(ctx: Any, job_id: str, sheet_id: str) -> None:
+    """Export the cell map beside the PNG.
+
+    The sheet's contract with an importer is which cell holds which yaw, pose
+    and frame -- a bare PNG is a grid nothing can address. The record was
+    written, read back and displayed, but had no way out of the app.
+    """
+    import json
+
+    def run():
+        record = svc_sheets.get_sheet(ctx.svc, job_id, sheet_id)
+        dest = dialogs.save_file(
+            "Save sheet data", f"{job_id}_{sheet_id}.json", dialogs.filters_for("x.json")
+        )
+        if dest is None:
+            return None
+        dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        return dest
+
+    ctx.submit(f"sheet-save:{job_id}:{sheet_id}:json", run)

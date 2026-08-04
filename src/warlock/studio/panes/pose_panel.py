@@ -15,6 +15,7 @@ from imgui_bundle import imgui
 
 from ...service import rig as svc_rig
 from .. import dialogs, theme, widgets
+from ..manual import render as manual_render
 
 
 def draw(ctx: Any, job: Any) -> None:
@@ -24,6 +25,7 @@ def draw(ctx: Any, job: Any) -> None:
     rigged = "rig.glb" in files
     if not widgets.header("Pose"):
         return
+    manual_render.help_button(ctx, "pose")
     if not rigged:
         # Every other rig control hides itself when Blender is missing, so
         # "rig this mesh first" was instructing the user to press a button that

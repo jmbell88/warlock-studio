@@ -13,6 +13,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import icons, paint, paint_mode, paint_state, theme, widgets
+from ..manual import render as manual_render
 from ..paint_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 
 # Icon-only, five across: what every paint program's toolbox looks like. The
@@ -47,6 +48,7 @@ def draw(ctx: Any) -> None:
     state = paint_mode.ensure(ctx)
     tab = state.active
     widgets.section("tools")
+    manual_render.help_button(ctx, "paint-tools")
     _grid(state)
     imgui.dummy((0, 6))
     if tab is None:

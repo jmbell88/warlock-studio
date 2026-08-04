@@ -29,6 +29,7 @@ from ...service.validation import (
     random_seed,
 )
 from .. import dialogs, profiles, theme, widgets
+from ..manual import render as manual_render
 from ..widgets import field_options as _options
 
 PREVIEW_DEBOUNCE = 0.3
@@ -41,6 +42,7 @@ def draw(ctx: Any) -> None:
     _presets(ctx, form)
     _profiles(ctx, form)
     widgets.section("Prompt")
+    manual_render.help_button(ctx, "settings-2d")
     _prompt(ctx, form)
     _history(ctx, form)
     _preview(ctx)
