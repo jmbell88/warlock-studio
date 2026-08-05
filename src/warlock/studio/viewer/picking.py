@@ -5,7 +5,7 @@ a known place with a known radius -- a joint marker, a gizmo ring, a gizmo
 arrow -- so a closed-form test against a sphere, a torus band or a segment is
 both cheaper than a readback and, unlike one, testable without a context.
 
-Build mode adds the one case the analytic handles never covered: clicking the
+Clay adds the one case the analytic handles never covered: clicking the
 *geometry*. :func:`ray_triangles` is Moller-Trumbore, vectorised over the whole
 triangle array at once because a blockout mesh is hundreds of triangles and a
 Python loop per mouse move would be felt; :func:`ray_object` is the object-space
@@ -146,7 +146,7 @@ def ray_triangles(
 
     Moller-Trumbore, computed for every triangle at once. ``tris`` is an
     ``(T, 3)`` index array into ``positions``, which is what
-    :func:`~warlock.studio.build.mesh.triangulate` hands back -- so the index
+    :func:`~warlock.studio.clay.mesh.triangulate` hands back -- so the index
     returned is a *triangle* index, and a caller who wants the face the user
     selected maps it through that function's ``tri_face``.
 

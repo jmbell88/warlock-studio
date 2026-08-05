@@ -870,6 +870,30 @@ class Worker:
         if self._cancel.event.is_set():
             return
 
+        # The server's launch settings are per-job now, so a job that pins
+        # either one needs the resident server restarted before it runs. Two
+        # things keep this from disturbing anything above it. It is called with
+        # *resolved* values on every model-stage job, not only on a job that
+        # pins one -- so an ordinary job following a sweep unit restores the
+        # config's own settings, and nothing has to remember that the sweep
+        # changed them. And it is a no-op against a server that is not running,
+        # which is exactly the state exclusive mode's handoff has just left
+        # behind (stop -> SDXL -> unload), so the stop-before-load /
+        # unload-before-next-start choreography is byte-for-byte unchanged.
+        #
+        # A restart that then fails to come back is nothing new: ensure_started
+        # inside generate() raises, the job errors, and _check_backoff throttles
+        # the respawn.
+        await asyncio.to_thread(
+            self.trellis.ensure_config,
+            tex_res=int(params["trellis_tex_res"])
+            if "trellis_tex_res" in params
+            else self.config.trellis_tex_res,
+            band=int(params["trellis_band"])
+            if "trellis_band" in params
+            else self.config.trellis_band,
+        )
+
         self.progress.update(
             job_id,
             phase="trellis",

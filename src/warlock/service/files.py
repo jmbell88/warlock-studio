@@ -195,26 +195,26 @@ def discard_inker_working(svc: Any, job_id: str) -> None:
         (svc.job_dir(job_id) / INKER_WORKING).unlink(missing_ok=True)
 
 
-# The authored Build document behind a built asset, following the paint.ora
+# The authored Clay document behind a built asset, following the paint.ora
 # precedent exactly: absent from MEDIA and LISTED, never served, never
 # downloadable, and it goes away with the job directory for free. model.glb
 # stays the one name every consumer reads; this exists only so that reopening a
 # built asset brings its objects back instead of a single frozen mesh.
-BUILD_SOURCE = "build.wblk"
+CLAY_SOURCE = "build.wblk"  # the on-disk name predates the Clay rename
 
 # A .wblk is scene.json plus one npz per object. Geometry compresses, and Phase
 # 1 documents are a handful of primitives -- but a Phase 3 subdivided scene is
 # the case this bounds, and it is bounded on the same reasoning as every other
 # ceiling here rather than left open because today's files are small.
-MAX_BUILD_SOURCE_BYTES = 5 * MAX_UPLOAD_BYTES
+MAX_CLAY_SOURCE_BYTES = 5 * MAX_UPLOAD_BYTES
 
 
-def build_source_path(svc: Any, job_id: str) -> Path:
+def clay_source_path(svc: Any, job_id: str) -> Path:
     check_job_id(job_id)
-    return svc.job_dir(job_id) / BUILD_SOURCE
+    return svc.job_dir(job_id) / CLAY_SOURCE
 
 
-def build_source_status(svc: Any, job_id: str) -> dict[str, Any]:
+def clay_source_status(svc: Any, job_id: str) -> dict[str, Any]:
     """Whether an authored source exists for this asset.
 
     **No staleness rule**, unlike :func:`inker_working_status`, and the
@@ -227,10 +227,10 @@ def build_source_status(svc: Any, job_id: str) -> dict[str, Any]:
     which is the whole point of keeping the source.
     """
     check_job_id(job_id)
-    return {"exists": (svc.job_dir(job_id) / BUILD_SOURCE).exists()}
+    return {"exists": (svc.job_dir(job_id) / CLAY_SOURCE).exists()}
 
 
-def save_build_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+def save_clay_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     """Store the authored document beside the mesh it exported to.
 
     Written through a temp and ``os.replace``, as the layered source is: the
@@ -241,12 +241,12 @@ def save_build_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     """
     if svc.store.get(job_id) is None:
         raise NotFound("no such job")
-    if len(data) > MAX_BUILD_SOURCE_BYTES:
-        raise TooLarge("build document too large")
+    if len(data) > MAX_CLAY_SOURCE_BYTES:
+        raise TooLarge("clay document too large")
     if not data.startswith(ORA_MAGIC):
         # The same four bytes: a .wblk is a zip, as an .ora is.
-        raise Invalid("the build source must be a .wblk archive")
-    dest = svc.job_dir(job_id) / BUILD_SOURCE
+        raise Invalid("the clay source must be a .wblk archive")
+    dest = svc.job_dir(job_id) / CLAY_SOURCE
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".wblk.tmp")
     tmp.write_bytes(data)

@@ -18,7 +18,7 @@ EXPECTED_KEYS = [
     "04-rigging-and-posing",
     "05-sprite-sheets",
     "06-inker",
-    "07-build",
+    "07-clay",
     "08-library-and-jobs",
     "09-shortcuts",
     "10-installation",
@@ -91,6 +91,31 @@ def test_help_targets_resolve():
         assert chapter in anchors, f"{pane}: unknown chapter {chapter}"
         if anchor is not None:
             assert anchor in anchors[chapter], f"{pane}: missing anchor {chapter}#{anchor}"
+
+
+def test_no_prose_line_runs_past_the_wrap_column():
+    """Source lines stop where the renderer does.
+
+    ``render.MAX_LINE_CHARS`` is the column the app wraps prose at, so a source
+    line longer than that is one nobody reads at either end. Deliberately
+    *prose only*: a table row and a list item cannot be split across source
+    lines in this subset -- the parser joins a paragraph's lines with a space
+    but starts a new block on anything else -- so a rule over them would be a
+    rule about rendering, not about readability. Code fences are verbatim.
+    """
+    limit = 120
+    for chapter in loader.chapters():
+        fenced = False
+        for number, line in enumerate(loader.load(chapter.key).split("\n"), 1):
+            if line.startswith("```"):
+                fenced = not fenced
+                continue
+            stripped = line.lstrip()
+            if fenced or stripped.startswith(("|", "-", "#")) or re.match(r"\d+\. ", stripped):
+                continue
+            assert len(line) <= limit, (
+                f"{chapter.key}:{number}: {len(line)} characters; wrap prose at {limit}"
+            )
 
 
 def test_help_button_call_sites_match_help_targets():

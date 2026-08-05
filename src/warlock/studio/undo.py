@@ -5,7 +5,7 @@ and lived in ``studio/inker/undo.py``, but nothing in them is about pixels: an
 edit is a pair of ``undo``/``redo`` callbacks and a ``cost``, and the stack is a
 pair of lists bounded by bytes. The raster editor's own edit types -- patches,
 layer add/remove/move/props, selections, whole-canvas replays -- stay where they
-are, because *those* are about pixels and layers. What is here is the part Build
+are, because *those* are about pixels and layers. What is here is the part Clay
 mode needs too, with a ``MeshEdit`` in place of a ``PatchEdit``; a pure
 ``studio/build/`` package that reached into the raster editor for its history
 would be depending on the raster editor for no reason other than where the file

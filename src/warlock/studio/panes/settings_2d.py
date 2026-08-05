@@ -30,7 +30,7 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import dialogs, profiles, theme, widgets
+from .. import dialogs, profiles, theme, vector_presets, widgets
 from ..manual import render as manual_render
 from ..widgets import field_options as _options
 
@@ -42,6 +42,7 @@ def draw(ctx: Any) -> None:
     form = state.form_2d
 
     _presets(ctx, form)
+    _vector_presets(ctx)
     _profiles(ctx, form)
     _output(ctx, form)
     widgets.section("Prompt")
@@ -164,6 +165,29 @@ def _presets(ctx: Any, form: dict[str, Any]) -> None:
     if preset.get("prompt"):
         form["prompt"] = preset["prompt"]
     ctx.state.preview_dirty_at = time.monotonic()
+
+
+def _vector_presets(ctx: Any) -> None:
+    """The settings vectors Review found and the user saved.
+
+    A second picker rather than more entries in the shipped-preset combo: those
+    are starting points somebody wrote, these are configurations the recorded
+    verdicts say worked. Hidden entirely until one is saved, so a user who never
+    reviews anything never sees an empty control.
+
+    It fills *both* forms -- a vector carries the mesh-side settings too -- which
+    is why it takes ctx rather than the 2D form alone.
+    """
+    saved = vector_presets.list_presets(ctx.settings)
+    if not saved:
+        return
+    widgets.field_label("found settings")
+    options = [("", "-")] + [(name, name) for name in sorted(saved)]
+    chosen = widgets.combo("##vector-preset", "", options)
+    if chosen and chosen in saved:
+        vector_presets.apply(ctx.state, saved[chosen])
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.toast(f"Applied {chosen} to the 2D and 3D forms.")
 
 
 def _output(ctx: Any, form: dict[str, Any]) -> None:

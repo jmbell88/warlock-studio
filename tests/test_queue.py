@@ -1918,3 +1918,108 @@ async def test_a_failing_seam_measurement_does_not_fail_the_job(worker, monkeypa
 
     assert worker.store.get(job_id)["status"] == "done"
     assert "seam_report" not in worker.store.get(job_id)["params"]
+
+
+# --- the per-job trellis-server config --------------------------------------
+
+
+def _make_image_job_with(worker: Worker, **params) -> str:
+    job_id = worker.store.create("image", None, {"seed": 1, "resolution": 512, **params})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    return job_id
+
+
+async def test_a_job_that_pins_a_server_axis_restarts_a_warm_server(worker):
+    """The first job leaves the server warm on the config's own settings; the
+    second pins a different band and must get its own server."""
+    first = _make_image_job(worker)
+    second = _make_image_job_with(worker, trellis_band=8)
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(second)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(first)["status"] == "done"
+    assert worker.trellis.config_calls == [
+        (worker.config.trellis_tex_res, worker.config.trellis_band),
+        (worker.config.trellis_tex_res, 8),
+    ]
+    assert worker.trellis.restarts == 1
+    assert worker.trellis.band == 8
+
+
+async def test_a_job_matching_the_running_config_restarts_nothing(worker):
+    _make_image_job(worker)
+    _make_image_job(worker)
+
+    worker.start()
+    await _wait_until(
+        lambda: all(j["status"] == "done" for j in worker.store.list(10))
+    )
+    await worker.shutdown()
+
+    assert worker.trellis.restarts == 0
+
+
+async def test_an_ordinary_job_after_a_pinned_one_restores_the_config(worker):
+    """Nothing has to remember that a sweep changed the server: the check is
+    against what is running, and every model-stage job resolves its own."""
+    pinned = _make_image_job_with(worker, trellis_band=8, trellis_tex_res=2048)
+    plain = _make_image_job(worker)
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(plain)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(pinned)["status"] == "done"
+    assert worker.trellis.config_calls[-1] == (
+        worker.config.trellis_tex_res,
+        worker.config.trellis_band,
+    )
+    assert worker.trellis.restarts == 1
+
+
+async def test_ensure_config_never_runs_on_the_event_loop(worker):
+    """It calls stop(), which blocks for up to ~20 s in the real server."""
+    _make_image_job_with(worker, trellis_band=8)
+    loop_thread = threading.get_ident()
+
+    worker.start()
+    await _wait_until(lambda: worker.trellis.config_threads)
+    await worker.shutdown()
+
+    assert loop_thread not in worker.trellis.config_threads
+
+
+async def test_a_reference_job_never_touches_the_server_config(worker):
+    job_id = worker.store.create("text", "a chest", {"seed": 1}, stage="reference")
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.config_calls == []
+
+
+async def test_ensure_config_stops_only_a_running_server_with_a_different_config(tmp_path):
+    """The real thing, not the fake: the fields feed _argv, and there is no new
+    spawn site -- a restart is a stop plus the existing lazy start."""
+    from warlock.pipelines.trellis import TrellisServer
+
+    server = TrellisServer(tmp_path / "x.exe", tmp_path / "models", 9999, tex_res=512)
+    assert server.ensure_config(tex_res=1024, band=8) is False  # nothing running
+    assert "--band" in server._argv()
+    assert server._argv()[server._argv().index("--band") + 1] == "8"
+    assert server._argv()[server._argv().index("--tex-res") + 1] == "1024"
+
+    calls = []
+    server.stop = lambda: calls.append(1)
+    server._proc = SimpleNamespace(poll=lambda: None, pid=1)
+    assert server.ensure_config(tex_res=1024, band=8) is False
+    assert calls == []
+    assert server.ensure_config(tex_res=1024, band=None) is True
+    assert calls == [1]
+    assert "--band" not in server._argv()
+    server._proc = None

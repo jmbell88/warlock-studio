@@ -26,10 +26,31 @@ CREATE TABLE IF NOT EXISTS jobs (
     parent_id   TEXT,                           -- the reference job this was promoted from
     name        TEXT NOT NULL DEFAULT '',       -- user-given title; the prompt is the fallback
     tags        TEXT NOT NULL DEFAULT '',       -- comma-separated, normalized lowercase
-    favorite    INTEGER NOT NULL DEFAULT 0
+    favorite    INTEGER NOT NULL DEFAULT 0,
+    sweep_id    TEXT,                           -- NULL for an ordinary job
+    sweep_unit  TEXT NOT NULL DEFAULT ''        -- display label, e.g. "lora_weight=0.6 s42"
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
+
+CREATE TABLE IF NOT EXISTS sweeps (
+    id          TEXT PRIMARY KEY,
+    label       TEXT NOT NULL DEFAULT '',
+    prompt      TEXT NOT NULL DEFAULT '',
+    spec        TEXT NOT NULL DEFAULT '{}',     -- JSON: base vector, axes, vectors, seeds, stage
+    created_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS verdicts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    source      TEXT NOT NULL,                  -- 'human' | 'ai:<model>'
+    verdict     TEXT NOT NULL,                  -- accept | reject
+    reasons     TEXT NOT NULL DEFAULT '[]',     -- JSON list
+    vector      TEXT NOT NULL DEFAULT '{}',     -- JSON: the config vector, denormalized
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id);
 """
 # idx_jobs_parent is created by the migration below, not here: _SCHEMA's
 # CREATE TABLE IF NOT EXISTS is a no-op against a pre-existing table that
@@ -63,6 +84,38 @@ MIGRATIONS: list[list[str]] = [
     # without an index each is a full scan plus a sort of every row ever made.
     [
         "CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at)",
+    ],
+    # 4 -- in-app sweeps and verdicts. Sweep membership is *columns* rather
+    # than params keys for the reason the workshop metadata is: the list filters
+    # on it, and params is a JSON string sqlite cannot index into. It also
+    # sidesteps DERIVED_PARAMS entirely -- rerun_job and promote_to_model copy
+    # params and nothing else, so membership can never leak onto a reroll.
+    #
+    # The two new tables are also in _SCHEMA (executed on every open), so
+    # replaying them here is a no-op; they are repeated for the append-only
+    # contract's sake, so a reader of this list sees the whole shape of the
+    # change. The index on sweep_id is *not* in _SCHEMA, exactly as
+    # idx_jobs_parent is not: CREATE TABLE IF NOT EXISTS is a no-op against a
+    # pre-existing table, so the column may not exist when _SCHEMA runs.
+    [
+        "ALTER TABLE jobs ADD COLUMN sweep_id TEXT",
+        "ALTER TABLE jobs ADD COLUMN sweep_unit TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_sweep ON jobs(sweep_id)",
+        "CREATE TABLE IF NOT EXISTS sweeps ("
+        " id TEXT PRIMARY KEY,"
+        " label TEXT NOT NULL DEFAULT '',"
+        " prompt TEXT NOT NULL DEFAULT '',"
+        " spec TEXT NOT NULL DEFAULT '{}',"
+        " created_at REAL NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS verdicts ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " job_id TEXT NOT NULL,"
+        " source TEXT NOT NULL,"
+        " verdict TEXT NOT NULL,"
+        " reasons TEXT NOT NULL DEFAULT '[]',"
+        " vector TEXT NOT NULL DEFAULT '{}',"
+        " created_at REAL NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id)",
     ],
 ]
 
@@ -135,6 +188,8 @@ class JobStore:
         stage: str = "model",
         parent_id: str | None = None,
         status: str = "queued",
+        sweep_id: str | None = None,
+        sweep_unit: str = "",
     ) -> str:
         """Insert a job row. ``status`` is queued for everything the worker
         runs.
@@ -151,8 +206,8 @@ class JobStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO jobs (id, kind, status, prompt, params, created_at,"
-                " stage, parent_id, started_at, finished_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " stage, parent_id, started_at, finished_at, sweep_id, sweep_unit)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     kind,
@@ -164,6 +219,8 @@ class JobStore:
                     parent_id,
                     finished,
                     finished,
+                    sweep_id,
+                    sweep_unit,
                 ),
             )
             self._conn.commit()
@@ -379,9 +436,16 @@ class JobStore:
             self._conn.commit()
 
     def next_queued(self) -> dict[str, Any] | None:
+        """The oldest queued job. ``id`` is a secondary sort key for the reason
+        it is in ``children`` and ``list``: ``time.time()`` genuinely ties
+        across rows inserted in quick succession, which is exactly what a sweep
+        submit is -- N rows in one loop. A tie left order-undefined makes
+        dispatch order vary between runs of the same sweep, which in turn makes
+        the worker's config grouping (and so the number of trellis restarts)
+        vary. Correctness never depended on it; the restart count does."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 1"
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
             ).fetchone()
         return self._to_dict(row) if row else None
 
@@ -389,6 +453,181 @@ class JobStore:
         with self._lock:
             self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             self._conn.commit()
+
+    # --- sweeps ---------------------------------------------------------------
+
+    def create_sweep(self, label: str, prompt: str, spec: dict[str, Any]) -> str:
+        sweep_id = uuid.uuid4().hex[:12]
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO sweeps (id, label, prompt, spec, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (sweep_id, label, prompt, json.dumps(spec), time.time()),
+            )
+            self._conn.commit()
+        return sweep_id
+
+    def list_sweeps(self) -> list[dict[str, Any]]:
+        """Every sweep, newest first, each with its unit counts.
+
+        The counts come from one grouped join rather than a query per sweep:
+        this is read on every Review rescan, and the store is one serialized
+        connection every other reader is queued behind.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sweeps ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            counts = self._conn.execute(
+                "SELECT sweep_id,"
+                " COUNT(*) AS units,"
+                " SUM(CASE WHEN status IN ('done', 'error', 'cancelled') THEN 1 ELSE 0 END)"
+                "   AS done"
+                " FROM jobs WHERE sweep_id IS NOT NULL GROUP BY sweep_id"
+            ).fetchall()
+        tally = {r["sweep_id"]: (int(r["units"]), int(r["done"] or 0)) for r in counts}
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            units, done = tally.get(row["id"], (0, 0))
+            entry = dict(row)
+            entry["spec"] = json.loads(entry["spec"] or "{}")
+            entry["units"] = units
+            entry["done"] = done
+            entry["todo"] = units - done
+            out.append(entry)
+        return out
+
+    def get_sweep(self, sweep_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sweeps WHERE id = ?", (sweep_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        entry = dict(row)
+        entry["spec"] = json.loads(entry["spec"] or "{}")
+        return entry
+
+    def sweep_jobs(self, sweep_id: str) -> list[dict[str, Any]]:
+        """A sweep's units in submission order -- the order the worker will
+        dispatch them in, which is the order they were grouped into."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE sweep_id = ? ORDER BY created_at, id", (sweep_id,)
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    def delete_sweep(self, sweep_id: str) -> None:
+        """The sweeps row only. Its jobs and their verdicts are the caller's
+        business: ``service.sweeps.delete_sweep`` cancels and removes the jobs,
+        and the verdict rows are deliberately *kept* -- each carries its own
+        config-vector snapshot, which is the whole point of denormalizing it."""
+        with self._lock:
+            self._conn.execute("DELETE FROM sweeps WHERE id = ?", (sweep_id,))
+            self._conn.commit()
+
+    # --- verdicts -------------------------------------------------------------
+
+    def add_verdict(
+        self,
+        job_id: str,
+        *,
+        source: str,
+        verdict: str,
+        reasons: list[str],
+        vector: dict[str, Any],
+    ) -> int:
+        """Append one verdict. Append-only: a changed mind is a new row, and
+        ``latest_verdicts`` takes the highest id per (job, source), so the
+        history of what a reviewer thought survives the correction."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO verdicts (job_id, source, verdict, reasons, vector, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    source,
+                    verdict,
+                    json.dumps(list(reasons)),
+                    json.dumps(vector),
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def latest_verdicts(self) -> list[dict[str, Any]]:
+        """One row per (job_id, source) -- the newest, by id.
+
+        ``id`` rather than ``created_at``: the column is an AUTOINCREMENT
+        rowid, so it is strictly increasing even when two verdicts land inside
+        one ``time.time()`` tick, which at the rate a reviewer presses A they
+        genuinely do.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM verdicts WHERE id IN ("
+                " SELECT MAX(id) FROM verdicts GROUP BY job_id, source)"
+                " ORDER BY id"
+            ).fetchall()
+        return [self._verdict_to_dict(r) for r in rows]
+
+    def verdicts_for(self, job_ids: list[str], *, source: str | None = None) -> dict[
+        tuple[str, str], dict[str, Any]
+    ]:
+        """``{(job_id, source): latest verdict}`` for the jobs named.
+
+        Chunked because sqlite caps a statement at SQLITE_MAX_VARIABLE_NUMBER
+        (999 on the builds Python ships); a sweep of a few hundred units is
+        already within one chunk, but the ceiling is not this module's to
+        assume.
+        """
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        ids = list(job_ids)
+        if not ids:
+            return out
+        with self._lock:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                sql = (
+                    f"SELECT * FROM verdicts WHERE job_id IN ({marks})"
+                    " AND id IN (SELECT MAX(id) FROM verdicts GROUP BY job_id, source)"
+                )
+                args: list[Any] = list(chunk)
+                if source is not None:
+                    sql += " AND source = ?"
+                    args.append(source)
+                for row in self._conn.execute(sql, args).fetchall():
+                    record = self._verdict_to_dict(row)
+                    out[(record["job_id"], record["source"])] = record
+        return out
+
+    def unverdicted_models(self, *, source: str = "human", limit: int = 50) -> list[
+        dict[str, Any]
+    ]:
+        """Finished ordinary meshes nobody has judged, newest first.
+
+        ``sweep_id IS NULL`` because a sweep's units are reviewed under their
+        own sweep; this is the "daily use feeds the same findings pool" half,
+        and mixing the two would list every sweep unit twice.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE status = 'done' AND stage = 'model'"
+                " AND sweep_id IS NULL"
+                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?)"
+                " ORDER BY created_at DESC, id DESC LIMIT ?",
+                (source, limit),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    @staticmethod
+    def _verdict_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["reasons"] = json.loads(d["reasons"] or "[]")
+        d["vector"] = json.loads(d["vector"] or "{}")
+        return d
 
     @staticmethod
     def _to_dict(row: sqlite3.Row) -> dict[str, Any]:

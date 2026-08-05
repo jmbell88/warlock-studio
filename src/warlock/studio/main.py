@@ -36,11 +36,11 @@ MIN_SIZE = (1100, 700)
 # Pane widths and the sidebar split now live in layout.Layout, persisted and
 # draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
-# The modes that fill the host window with one pane. Inker and Build are not
+# The modes that fill the host window with one pane. Inker and Clay are not
 # here: each fills it with a three-column *workspace* instead, which is
 # ``modes.WORKSPACE_MODES``. Those three categories partition ``modes.KEYS``
 # exactly, and the partition is the guard on ``_build_ui``'s dispatch.
-_SINGLE_PANE_MODES = ("home", "manual", "clay", "settings")
+_SINGLE_PANE_MODES = ("home", "manual", "settings")
 
 
 def _min_window_size(monitor_scale: float) -> tuple[int, int]:
@@ -99,11 +99,11 @@ class App:
         # and cannot be the gate; imgui's own hover test on the viewport image
         # is, and it correctly goes false under popups and active widgets.
         self._viewport_hovered = False
-        # Build mode's own viewport, built on first use for the reason its
-        # state is: a session that never opens Build should not pay for a
+        # Clay's own viewport, built on first use for the reason its
+        # state is: a session that never opens Clay should not pay for a
         # renderer, a framebuffer and three gizmos.
-        self.build_view = None
-        # Build's own hover flag, set by the pane that draws its image, for the
+        self.clay_view = None
+        # Clay's own hover flag, set by the pane that draws its image, for the
         # reason _viewport_hovered exists: the host window is fullscreen, so
         # io.want_capture_mouse is always true and cannot be the gate.
         self._build_hovered = False
@@ -212,11 +212,11 @@ class App:
         from ..service import system as svc_system
 
         ctx = self.app_ctx
-        # Build's bridge asks the ctx for this rather than importing App: the
+        # Clay's bridge asks the ctx for this rather than importing App: the
         # render it needs is an offscreen GL draw on the frame thread, which is
         # the App's business and not a pane's. Attached here so the button has a
         # handler from the first frame rather than toasting "not wired up yet".
-        ctx.build_send_to_3d = self._build_send_to_3d
+        ctx.clay_send_to_3d = self._clay_send_to_3d
         ctx.guidance = svc_system.guidance_catalog()
         ctx.sheet_options = svc_sheets.sheet_options()
         # Marked rather than hidden when weights are absent: the combo listing
@@ -367,10 +367,10 @@ class App:
                     from . import inker_mode
 
                     inker_mode.on_task_failed(ctx, done)
-                elif done.key.startswith("build-"):
-                    from . import build_mode
+                elif done.key.startswith("clay-"):
+                    from . import clay_mode
 
-                    build_mode.on_task_failed(ctx, done)
+                    clay_mode.on_task_failed(ctx, done)
                 elif done.key.startswith("review-"):
                     from . import review_mode
 
@@ -411,16 +411,16 @@ class App:
             # task, so picking a 20 MB image never touches the frame thread.
             ctx.state.form_2d["ref_path"] = str(done.result)
             return
-        if key.startswith("build-"):
-            from . import build_mode
+        if key.startswith("clay-"):
+            from . import clay_mode
 
-            build_mode.on_task_done(ctx, done)
+            clay_mode.on_task_done(ctx, done)
             if isinstance(done.result, dict) and done.result.get("exported"):
                 # The card appears in the library like any other asset, so it
                 # needs the thumbnail every other asset gets -- and that is an
                 # offscreen GL draw, which belongs on the frame thread rather
                 # than in the task that minted the row.
-                self._capture_build_thumbnail(done.result["job_id"])
+                self._capture_clay_thumbnail(done.result["job_id"])
             return
         if key.startswith("inker-"):
             from . import inker_mode
@@ -671,10 +671,10 @@ class App:
                 if not io.want_text_input:
                     self._shortcut(event)
                 continue
-            # Build owns its own centre pane, so its viewport takes the mouse
+            # Clay owns its own centre pane, so its viewport takes the mouse
             # in that mode and the asset viewer never sees it -- the two would
             # otherwise both orbit on one drag.
-            if ctx.state.mode == "build":
+            if ctx.state.mode == "clay":
                 self._build_event(event)
                 continue
             # The viewer sees the mouse when it is over the viewport image, and
@@ -683,20 +683,20 @@ class App:
                 self.viewer.handle_event(event, hovered=self._viewport_hovered)
 
     def _build_event(self, event: Any) -> None:
-        """Route the mouse to Build's viewport, on the same hover rule.
+        """Route the mouse to Clay's viewport, on the same hover rule.
 
         A drag already in progress ignores the hover, so crossing onto a panel
         mid-orbit does not drop it -- which is exactly what ``_grab`` is for in
         the asset viewer.
         """
-        from . import build_mode
+        from . import clay_mode
 
-        tab = build_mode.active(self.app_ctx)
-        if tab is None or self.build_view is None:
+        tab = clay_mode.active(self.app_ctx)
+        if tab is None or self.clay_view is None:
             return
         hovered = self._build_hovered
-        if hovered or self.build_view._grab is not None:
-            self.build_view.handle_event(tab.doc, event, hovered)
+        if hovered or self.clay_view._grab is not None:
+            self.clay_view.handle_event(tab.doc, event, hovered)
 
     def _shortcut(self, event: Any) -> None:
         import pygame
@@ -718,20 +718,20 @@ class App:
             # viewport to frame; every one of these would act on a pane that is
             # not on screen.
             return
-        if ctx.state.mode == "build":
-            from . import build_mode
+        if ctx.state.mode == "clay":
+            from . import clay_mode
 
             # First refusal, and unconditional for the reason Inker's is:
             # handle_key returns False with no document open, and letting that
-            # fall through meant F/W/S acted on a viewport Build has replaced.
-            build_mode.handle_key(ctx, event)
+            # fall through meant F/W/S acted on a viewport Clay has replaced.
+            clay_mode.handle_key(ctx, event)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                self._frame_build_selection()
+                self._frame_clay_selection()
             return
         if ctx.state.mode == "review":
             from . import review_mode
 
-            # Unconditional for the reason Build's and Inker's are: handle_key
+            # Unconditional for the reason Clay's and Inker's are: handle_key
             # returns False with no sweep run open, and letting that fall
             # through would let A/S/R act on a viewport and forms Review has
             # replaced. Nothing below this line belongs to Review.
@@ -788,17 +788,17 @@ class App:
 
             inker_mode.open_path(ctx, path)
             return
-        if ctx.state.mode == "build":
-            from . import build_mode, build_state
+        if ctx.state.mode == "clay":
+            from . import clay_mode, clay_state
 
-            if path.suffix.lower() == build_state.WBLK_SUFFIX:
-                build_mode.open_path(ctx, path)
+            if path.suffix.lower() == clay_state.WBLK_SUFFIX:
+                clay_mode.open_path(ctx, path)
             else:
                 # A .glb is refused rather than imported: reading one back into
-                # editable objects is not Build Phase 1, and quietly making a
+                # editable objects is not Clay Phase 1, and quietly making a
                 # frozen one-object document out of it would be a feature
                 # nobody asked for wearing the name of one they did.
-                ctx.toast("Build opens .wblk documents. Drop one of those.", "error")
+                ctx.toast("Clay opens .wblk documents. Drop one of those.", "error")
             return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
@@ -823,14 +823,14 @@ class App:
         single pending question: three at once would silently drop two, and the
         user would lose whichever they were not shown.
         """
-        from . import build_mode, inker_mode
+        from . import clay_mode, inker_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
         inker_mode.guard(
             ctx,
             "quit",
-            lambda: build_mode.guard(
+            lambda: clay_mode.guard(
                 ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
             ),
         )
@@ -846,7 +846,6 @@ class App:
         from . import modes
         from .panes import (
             app_settings,
-            clay,
             inspector,
             landing,
             library,
@@ -899,12 +898,10 @@ class App:
                 from .manual import render as manual_render
 
                 manual_render.draw_body(ctx)
-            elif mode == "clay":
-                clay.draw(ctx)
             elif mode == "settings":
                 app_settings.draw(ctx)
-            elif mode == "build":
-                self._build_workspace()
+            elif mode == "clay":
+                self._clay_workspace()
             elif mode == "review":
                 self._review_workspace()
             else:
@@ -969,21 +966,21 @@ class App:
         self._overlays(viewport)
 
     def _ensure_build_view(self) -> Any:
-        from .build_view import BuildView
+        from .clay_view import ClayView
 
-        if self.build_view is None:
-            self.build_view = BuildView(self.ctx, self.app_ctx)
-        return self.build_view
+        if self.clay_view is None:
+            self.clay_view = ClayView(self.ctx, self.app_ctx)
+        return self.clay_view
 
-    def _frame_build_selection(self) -> None:
-        """F, in Build mode. Frames the selection, or the whole document."""
-        from . import build_mode
+    def _frame_clay_selection(self) -> None:
+        """F, in Clay. Frames the selection, or the whole document."""
+        from . import clay_mode
 
-        tab = build_mode.active(self.app_ctx)
-        if tab is not None and self.build_view is not None:
-            self.build_view.frame_selection(tab.doc)
+        tab = clay_mode.active(self.app_ctx)
+        if tab is not None and self.clay_view is not None:
+            self.clay_view.frame_selection(tab.doc)
 
-    def _capture_build_thumbnail(self, job_id: str) -> None:
+    def _capture_clay_thumbnail(self, job_id: str) -> None:
         """The library card's picture, from the viewport that is already drawn.
 
         On the frame thread because it reads a framebuffer, which is the same
@@ -994,16 +991,16 @@ class App:
         from ..service import files as svc_files
 
         ctx = self.app_ctx
-        if self.build_view is None:
+        if self.clay_view is None:
             return
         try:
-            data = self.build_view.thumbnail_png()
+            data = self.clay_view.thumbnail_png()
         except Exception:
             log.exception("could not capture a thumbnail for built asset %s", job_id)
             return
         ctx.submit(f"thumb:{job_id}", svc_files.save_thumbnail, ctx.svc, job_id, data)
 
-    def _build_send_to_3d(self, tab: Any) -> None:
+    def _clay_send_to_3d(self, tab: Any) -> None:
         """Render the document flat and hand the picture to trellis.
 
         The render is **synchronous on the frame thread** because it needs the
@@ -1019,14 +1016,14 @@ class App:
 
         ctx = self.app_ctx
         try:
-            png = self._render_build_reference(tab)
+            png = self._render_clay_reference(tab)
         except Exception:
             log.exception("could not render the build reference")
             ctx.toast("That document could not be rendered.", "error")
             return
         settings_3d.upload_bytes(ctx, png)
 
-    def _render_build_reference(self, tab: Any, size: int = 1024) -> bytes:
+    def _render_clay_reference(self, tab: Any, size: int = 1024) -> bytes:
         """One offscreen 1024-square draw of the document, as PNG bytes."""
         from .viewer import capture, glctx
 
@@ -1047,21 +1044,21 @@ class App:
         finally:
             target.release()
 
-    def _build_workspace(self) -> None:
+    def _clay_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses.
 
         Mirrors ``_inker_workspace`` line for line, including ``settings_share``
         for the vertical split, so the two editors do not drift into looking
         like different applications:
 
-            [ build_tools ]            [ build_outliner ]
-            [ build_props ]  viewport  [ build_bridge   ]
+            [ clay_tools ]            [ clay_outliner ]
+            [ clay_props ]  viewport  [ clay_bridge   ]
         """
         from imgui_bundle import imgui
 
-        from . import build_mode, widgets
+        from . import clay_mode, widgets
         from . import layout as layout_mod
-        from .panes import build_bridge, build_outliner, build_props, build_tools
+        from .panes import clay_bridge, clay_outliner, clay_props, clay_tools
         from .tokens import sp
 
         ctx = self.app_ctx
@@ -1073,16 +1070,16 @@ class App:
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("build-tools", (sidebar_w, tools_height), borders):
-            build_tools.draw(ctx)
+        if imgui.begin_child("clay-tools", (sidebar_w, tools_height), borders):
+            clay_tools.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("build-props", (sidebar_w, 0), borders):
-            build_props.draw(ctx)
+        if imgui.begin_child("clay-props", (sidebar_w, 0), borders):
+            clay_props.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("build-left-split")
+        drag = layout_mod.splitter("clay-left-split")
         if drag:
             lay.sidebar_w = min(
                 max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
@@ -1092,12 +1089,12 @@ class App:
         reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
         width = max(imgui.get_content_region_avail().x - reserved, sp(300))
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if imgui.begin_child("build-centre", (width, 0), borders, flags):
-            self._build_viewport(ctx, build_mode, widgets)
+        if imgui.begin_child("clay-centre", (width, 0), borders, flags):
+            self._clay_viewport(ctx, clay_mode, widgets)
         imgui.end_child()
 
         imgui.same_line()
-        drag = layout_mod.splitter("build-right-split")
+        drag = layout_mod.splitter("clay-right-split")
         if drag:
             lay.inspector_w = min(
                 max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
@@ -1106,20 +1103,20 @@ class App:
         imgui.same_line()
         imgui.begin_group()
         outliner_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("build-outliner", (0, outliner_height), borders):
-            build_outliner.draw(ctx)
+        if imgui.begin_child("clay-outliner", (0, outliner_height), borders):
+            clay_outliner.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("build-bridge", (0, 0), borders):
-            build_bridge.draw(ctx)
+        if imgui.begin_child("clay-bridge", (0, 0), borders):
+            clay_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
-    def _build_viewport(self, ctx: Any, build_mode: Any, widgets: Any) -> None:
+    def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
         from imgui_bundle import imgui
 
         from . import icons
 
-        tab = build_mode.active(ctx)
+        tab = clay_mode.active(ctx)
         if tab is None:
             widgets.empty_state(
                 icons.RULER,
@@ -1135,7 +1132,7 @@ class App:
             max(avail.y, 1.0),
         )
         view = self._ensure_build_view()
-        view.wireframe = build_mode.ensure(ctx).wireframe
+        view.wireframe = clay_mode.ensure(ctx).wireframe
         texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
         self._build_hovered = imgui.is_item_hovered()
@@ -1272,26 +1269,114 @@ class App:
         imgui.end_child()
 
     def _review_runs(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """The sweep list, and the form that launches a new one."""
         from imgui_bundle import imgui
 
         from . import icons, widgets
 
-        widgets.section("Sweep runs")
+        widgets.section("Sweeps")
         if widgets.disabled_button(f"{icons.REFRESH} Rescan", not state.scanning):
             review_mode.scan(ctx)
         if state.scanning:
             imgui.same_line()
             widgets.muted("Reading...")
-        if not state.runs:
-            widgets.muted("No sweep runs yet. Run: warlock bench sweep <spec>")
+        for sweep in state.sweeps:
+            todo = sweep["todo"]
+            total = len(sweep["units"])
+            selected = sweep["id"] == state.sweep_id
+            if imgui.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
+                review_mode.open_sweep(ctx, sweep["id"])
+            widgets.muted(f"   {total - todo}/{total} reviewed")
+            if selected and sweep["id"] != review_mode.RECENT_ID:
+                self._review_delete_button(ctx, state, review_mode, sweep)
+        imgui.separator()
+        self._review_form(ctx, state, review_mode)
+
+    def _review_delete_button(self, ctx: Any, state: Any, review_mode: Any, sweep: Any) -> None:
+        """Delete a sweep's jobs and meshes, keeping what they taught.
+
+        Behind the same confirm an asset delete goes through
+        (``panes/library.py``), because it is the same kind of act. What the
+        message has to say is the part that is *not* obvious: the verdicts and
+        the findings they feed survive, because each verdict carries its own
+        snapshot of the settings it was filed against.
+        """
+        from imgui_bundle import imgui
+
+        from . import dialogs, icons, widgets
+
+        sweep_id = sweep["id"]
+        if widgets.icon_button(
+            f"{icons.TRASH}##delete-{sweep_id}",
+            "Delete this sweep's jobs and meshes",
+            danger=True,
+            enabled=not state.scanning,
+        ):
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Delete this sweep?",
+                    message=(
+                        f"{sweep['label']}: its {len(sweep['units'])} job(s), their meshes "
+                        "and their reference images are deleted.\n\n"
+                        "The verdicts you recorded are kept, and so are the findings "
+                        "they feed -- each one carries its own copy of the settings it "
+                        "was filed against."
+                    ),
+                    confirm_label="Delete",
+                    cancel_label="Keep",
+                    on_confirm=lambda: review_mode.delete(ctx, sweep_id),
+                )
+            )
+        imgui.dummy((0, 0))
+
+    def _review_form(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """New sweep: a prompt, a baseline captured from the generate forms,
+        seeds, and the axes to vary."""
+        from imgui_bundle import imgui
+
+        from ..service import sweeps as sweeps_mod
+        from . import widgets
+
+        if not widgets.header("New sweep", default_open=False):
             return
-        for run in state.runs:
-            todo = run["todo"]
-            done = len(run["units"]) - todo
-            selected = run["dir"] == state.run_dir
-            if imgui.selectable(f"{run['label']}##run-{run['label']}", selected)[0]:
-                review_mode.open_run(ctx, run["dir"])
-            widgets.muted(f"   {done}/{len(run['units'])} reviewed")
+        form = state.form
+        widgets.field_label("prompt")
+        form.prompt = widgets.multiline("##sweep-prompt", form.prompt, 60, 1000)
+        widgets.field_label("name")
+        form.label = widgets.input_text("##sweep-label", form.label, max_length=120)
+        widgets.field_label("seeds")
+        form.seeds = widgets.input_text("##sweep-seeds", form.seeds, max_length=120)
+
+        if imgui.button("Start from current 2D/3D settings"):
+            form.base = review_mode.capture_base(ctx)
+            form.base_note = f"{len(form.base)} setting(s) captured"
+            ctx.toast("Captured the current settings as this sweep's baseline.")
+        widgets.muted(form.base_note or "No baseline captured; units use the defaults.")
+
+        widgets.field_label("vary")
+        options = [("", "-")] + [(p, p) for p in sweeps_mod.axis_params()]
+        for i, row in enumerate(form.axes):
+            imgui.push_id(f"axis-{i}")
+            row["param"] = widgets.combo("##param", row.get("param", ""), options, width=-1)
+            row["values"] = widgets.input_text(
+                "##values", row.get("values", ""), max_length=200, hint="comma-separated"
+            )
+            imgui.pop_id()
+        if imgui.button("Add axis"):
+            form.axes.append({"param": "", "values": ""})
+        if len(form.axes) > 1:
+            imgui.same_line()
+            if imgui.button("Remove axis"):
+                form.axes.pop()
+
+        planned = review_mode.preview_units(state)
+        widgets.muted(
+            "Fill in the prompt and one axis." if planned < 0
+            else f"{planned} job(s) - roughly two minutes of GPU each."
+        )
+        enabled = planned > 0 and not form.submitting and not state.scanning
+        if widgets.primary_button("Launch sweep", (-1, 0), enabled=enabled):
+            review_mode.launch(ctx)
 
     def _review_units(self, state: Any, review_mode: Any) -> None:
         from imgui_bundle import imgui
@@ -1300,12 +1385,12 @@ class App:
 
         widgets.section("Units")
         if not state.units:
-            widgets.muted("Nothing to review in this run.")
+            widgets.muted("Nothing to review here.")
             return
         for i, unit in enumerate(state.units):
             mark = {"accept": icons.CHECK, "reject": icons.X}.get(unit["verdict"] or "", " ")
             if imgui.selectable(
-                f"{mark} {review_mode.label(unit)}##unit-{unit['key']}", i == state.index
+                f"{mark} {review_mode.label(unit)}##unit-{unit['job_id']}", i == state.index
             )[0]:
                 review_mode.step(state, i - state.index)
 
@@ -1349,6 +1434,7 @@ class App:
             # refuses on exactly this condition -- this is the same refusal.
             widgets.muted("Finish or close the pose editor to review a mesh.")
             return
+
         self._review_load(unit, review_mode)
 
         image_pos = imgui.get_cursor_screen_pos()
@@ -1393,15 +1479,16 @@ class App:
 
         unit = review_mode.current(state)
         if unit is None:
-            widgets.muted("Pick a sweep run on the left.")
+            widgets.muted("Pick a sweep on the left.")
+            self._review_findings(ctx)
             return
 
         widgets.section(review_mode.label(unit))
-        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['key']}")
+        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
 
         reference = review_mode.reference_path(unit)
         if reference is not None:
-            texture = ctx.textures.get(review_mode.cache_id(state.run_dir, unit), reference)
+            texture = ctx.textures.get(review_mode.cache_id(unit), reference)
             if texture is not None:
                 side = min(imgui.get_content_region_avail().x, 220.0)
                 imgui.image(widgets.texture_ref(texture), (side, side))
@@ -1430,6 +1517,60 @@ class App:
             if unit["reasons"]:
                 recorded += " - " + ", ".join(unit["reasons"])
             widgets.muted(f"Recorded: {recorded}")
+
+        self._review_findings(ctx)
+
+    def _review_findings(self, ctx: Any) -> None:
+        """What the verdicts add up to, and the one-click way to reuse it.
+
+        A ranked config *vector* rather than a per-parameter marginal: the
+        marginals are confounded now (a verdict credits every setting in its
+        vector), and a whole configuration is the unconfounded answer -- as
+        well as being the thing a preset actually is.
+        """
+        from imgui_bundle import imgui
+
+        from ..bench import findings as findings_lib
+        from ..service import findings as svc_findings
+        from . import dialogs, vector_presets, widgets
+
+        doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
+        top = svc_findings.presets(doc or {})
+        imgui.separator()
+        if not widgets.header("What works", default_open=False):
+            return
+        if not top:
+            widgets.muted(
+                f"Nothing yet: a configuration needs {svc_findings.PRESET_MIN_N} "
+                "verdicts before it counts as a finding."
+            )
+            return
+        for entry in top[:5]:
+            rate = int(round(entry["accept_rate"] * 100))
+            summary = vector_presets.describe(entry["vector"])
+            imgui.text_wrapped(f"{rate}% of {entry['n']}  -  {summary}")
+            vector = entry["vector"]
+            if widgets.disabled_button(f"Apply to forms##apply-{entry['key']}", True):
+                vector_presets.apply(ctx.state, vector)
+                ctx.toast("Applied those settings to the 2D and 3D forms.")
+            imgui.same_line()
+            if widgets.disabled_button(f"Save as preset...##save-{entry['key']}", True):
+                ctx.prompts.ask(
+                    dialogs.Prompt(
+                        title="Save settings preset",
+                        label="Name",
+                        value="",
+                        on_accept=lambda name, v=vector: self._save_vector_preset(ctx, name, v),
+                    )
+                )
+            imgui.separator()
+
+    @staticmethod
+    def _save_vector_preset(ctx: Any, name: str, vector: dict) -> None:
+        from . import vector_presets
+
+        if vector_presets.save_preset(ctx.settings, name, vector):
+            ctx.toast(f"Saved the preset {name}.")
 
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.
@@ -1461,10 +1602,30 @@ class App:
         # quitting and closing a tab can lose pixels, and both ask.
         selected = widgets.segmented_control(
             "mode-seg",
-            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
+            [
+                (key, f"{icon} {label}")
+                for key, label, icon in [*modes.MODES, modes.QUIT]
+            ],
             state.mode,
         )
-        if selected != state.mode:
+        if selected == modes.QUIT[0]:
+            # An action rather than a mode, so ``state.mode`` is never assigned
+            # here -- cancelling leaves the switch exactly where it was. The
+            # window's X keeps today's behaviour (the unsaved-work chain, no
+            # extra question); only this button always asks, because a switch
+            # segment is a click away from every other mode.
+            from . import dialogs
+
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Quit Warlock Studio?",
+                    message="Anything still generating is cancelled.",
+                    confirm_label="Quit",
+                    cancel_label="Stay",
+                    on_confirm=self._request_quit,
+                )
+            )
+        elif selected != state.mode:
             state.mode = selected
             if selected == "home":
                 state.landing_view = "choose"
@@ -1536,15 +1697,15 @@ class App:
                 ("Esc", "Exit comparison / pose edit"),
             ],
         )
-        from .build_mode import TOOL_KEYS as BUILD_KEYS
+        from .clay_mode import TOOL_KEYS as CLAY_KEYS
         from .inker_mode import TOOL_KEYS
 
         table(
-            "Build",
+            "Clay",
             [
                 (
-                    " / ".join(k.upper() for k in BUILD_KEYS),
-                    " / ".join(BUILD_KEYS.values()),
+                    " / ".join(k.upper() for k in CLAY_KEYS),
+                    " / ".join(CLAY_KEYS.values()),
                 ),
                 ("F", "Frame the selection"),
                 ("Delete", "Delete the selected objects"),
@@ -1701,18 +1862,18 @@ class App:
         if ctx is not None:
             _step("persist settings", lambda: self._persist(ctx))
             _step("persist inker", lambda: self._persist_inker(ctx))
-            _step("persist build", lambda: self._persist_build(ctx))
+            _step("persist build", lambda: self._persist_clay(ctx))
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
         if self.viewer is not None:
             _step("release viewer", self.viewer.release)
         # ``getattr``, not an attribute access: teardown runs after a *failed*
-        # setup too, and Build's viewport is one of the last things constructed
+        # setup too, and Clay's viewport is one of the last things constructed
         # -- an AttributeError here would skip runtime.shutdown, which is the
         # step that stops the worker loop and the trellis child.
-        build_view = getattr(self, "build_view", None)
-        if build_view is not None:
-            _step("release build view", build_view.release)
+        clay_view = getattr(self, "clay_view", None)
+        if clay_view is not None:
+            _step("release clay view", clay_view.release)
         if self.imgui_renderer is not None:
             _step("shutdown imgui", self.imgui_renderer.shutdown)
         _step("pygame.quit", pygame.quit)
@@ -1740,10 +1901,10 @@ class App:
         inker_mode.persist(ctx)
         ctx.settings.flush()
 
-    def _persist_build(self, ctx: Any) -> None:
-        from . import build_mode
+    def _persist_clay(self, ctx: Any) -> None:
+        from . import clay_mode
 
-        build_mode.persist(ctx)
+        clay_mode.persist(ctx)
         ctx.settings.flush()
 
 

@@ -1,0 +1,324 @@
+"""Planning and launching a parameter sweep on the live queue.
+
+What changed, and why. The old ``bench/sweep.py`` was a CLI that stood up its
+own ``Runtime`` -- which collides with a running app, because the queue is one
+process holding one card -- read a spec file, and could only vary *one*
+parameter at a time against a baseline. It therefore could never rate a
+*combination* of settings, which is the thing anyone actually wants to know.
+
+So the unit of work here is a whole settings vector, not a single parameter.
+:func:`expand` is a convenience for building one common family of vectors (the
+one-factor-at-a-time fan-out, which is still the cheapest way to find out
+whether a knob matters at all), but :class:`SweepPlan` takes hand-picked
+``vectors`` just as happily, and both come out the far side as the same thing:
+a list of :class:`UnitPlan`, each of which becomes exactly one ordinary job.
+
+Three rules shape the rest.
+
+**Sweeps go through the front door.** A unit is submitted with
+``service.jobs.create_job`` and nothing else -- same validation, same VRAM
+admission, same directory-before-row ordering. What makes it a sweep unit is
+two *columns* on the row (``sweep_id``, ``sweep_unit``), which is what keeps
+membership out of ``params`` and therefore out of everything that copies
+params.
+
+**Admission is all-or-nothing.** Every unit is validated before a single row is
+written, because the alternative is a sweep that queues eleven jobs and then
+refuses the twelfth -- leaving the user with a partial run they did not ask for
+and cannot interpret. One bad unit refuses the whole sweep, naming itself.
+
+**Units are ordered to minimise trellis restarts.** Grouped by the server
+config they need, with the config's own settings first. This is best-effort
+ordering and nothing depends on it for correctness: ``Worker`` restarts the
+server whenever the running one does not match the job in hand, so a
+mis-ordered sweep costs restarts, never a wrong config.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+from dataclasses import dataclass, field
+from typing import Any
+
+from .. import guidance
+from . import jobs as jobs_mod
+from .core import WarlockService
+from .errors import Invalid, NotFound
+from .validation import check_seed, check_trellis_band, check_trellis_tex_res, check_vram
+
+log = logging.getLogger(__name__)
+
+# Axis params that are top-level ``create_job`` kwargs rather than guidance
+# fields. Ported from the deleted ``bench/sweep.py``, plus the two the old
+# module accepted at parse and then refused to run: ``trellis_band`` and
+# ``trellis_tex_res`` are ordinary per-job params now, so the SERVER_AXES
+# refusal has nothing left to refuse.
+KWARG_AXES = (
+    "lora_weight",
+    "profile",
+    "custom_triangles",
+    "negative_prompt",
+    "reference_prep",
+    "resolution",
+    "ip_scale",
+    "control_scale",
+    "control_end",
+    "bg_removal",
+    "size_m",
+    "trellis_band",
+    "trellis_tex_res",
+)
+
+# The two that decide how trellis-server is launched, and therefore the two
+# units are grouped by.
+SERVER_AXES = ("trellis_tex_res", "trellis_band")
+
+# How many jobs one submit may queue. Each is a real place in the serial
+# worker, and a model-stage unit is roughly two minutes of GPU -- 64 of them is
+# already a couple of hours, which is about as much as anyone can plan for in
+# one sitting.
+MAX_UNITS = 64
+
+
+def axis_params() -> tuple[str, ...]:
+    """Every param an axis may name, sorted -- what the form offers."""
+    return tuple(sorted(set(guidance.form_fields()) | set(KWARG_AXES)))
+
+
+@dataclass(frozen=True, slots=True)
+class Axis:
+    param: str
+    values: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class UnitPlan:
+    """One planned job: a label, the overrides on top of the plan's base, and
+    the seed. ``overrides`` empty is the baseline unit."""
+
+    label: str
+    overrides: dict[str, Any] = field(default_factory=dict)
+    seed: int = 42
+
+    def server_group(self, base: dict[str, Any]) -> tuple[Any, ...]:
+        merged = {**base, **self.overrides}
+        return tuple(merged.get(p) for p in SERVER_AXES)
+
+
+@dataclass(frozen=True, slots=True)
+class SweepPlan:
+    label: str
+    prompt: str
+    base: dict[str, Any] = field(default_factory=dict)
+    seeds: tuple[int, ...] = (42,)
+    axes: tuple[Axis, ...] = ()
+    vectors: tuple[dict[str, Any], ...] = ()
+    stage: str = "model"
+
+
+def expand(plan: SweepPlan) -> list[UnitPlan]:
+    """The plan's units, in the order they should be enqueued.
+
+    Baseline once per seed, then one unit per (axis value that differs from the
+    base, seed), then one per explicit vector per seed. A value equal to the
+    base is skipped: it would be an indistinguishable second copy of a unit
+    already planned.
+
+    The result is then stably sorted into server-config groups with the base
+    config's group first -- best-effort restart minimisation, see the module
+    docstring.
+    """
+    units: list[UnitPlan] = [UnitPlan(label="baseline", seed=s) for s in plan.seeds]
+    for axis in plan.axes:
+        for value in axis.values:
+            if plan.base.get(axis.param) == value:
+                continue
+            units.extend(
+                UnitPlan(
+                    label=f"{axis.param}={value}",
+                    overrides={axis.param: value},
+                    seed=seed,
+                )
+                for seed in plan.seeds
+            )
+    for i, vector in enumerate(plan.vectors, 1):
+        overrides = dict(vector)
+        label = overrides.pop("label", None) or f"combo {i}"
+        units.extend(
+            UnitPlan(label=str(label), overrides=overrides, seed=seed) for seed in plan.seeds
+        )
+
+    base_group = tuple(plan.base.get(p) for p in SERVER_AXES)
+    groups: list[tuple[Any, ...]] = []
+    for unit in units:
+        group = unit.server_group(plan.base)
+        if group not in groups:
+            groups.append(group)
+    # The base config first, then the rest in the order they were planned.
+    # ``sorted`` is stable, so within a group the planned order survives.
+    order = {group: (0 if group == base_group else 1 + groups.index(group)) for group in groups}
+    return sorted(units, key=lambda u: order[u.server_group(plan.base)])
+
+
+def unit_kwargs(plan: SweepPlan, unit: UnitPlan) -> dict[str, Any]:
+    """Exactly the kwargs ``create_job`` takes for this unit.
+
+    The three-tier routing the old sweep module had, minus its third tier's
+    refusal: a guidance field is merged into ``guidance_fields``, anything in
+    ``KWARG_AXES`` is a top-level kwarg, and an unknown param is an error here
+    rather than a silently dropped setting at submit time.
+    """
+    merged = {**plan.base, **unit.overrides}
+    known_guidance = set(guidance.form_fields())
+    fields: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {
+        "kind": "text",
+        "prompt": plan.prompt,
+        "output": "reference" if plan.stage == "reference" else "model",
+        "seed": int(unit.seed),
+    }
+    for param, value in merged.items():
+        if value is None or value == "":
+            continue
+        if param in known_guidance:
+            fields[param] = value
+        elif param in KWARG_AXES:
+            kwargs[param] = value
+        else:
+            raise Invalid(f"unknown sweep param {param!r}", field="axes")
+    kwargs["guidance_fields"] = fields
+    return kwargs
+
+
+def unit_label(unit: UnitPlan) -> str:
+    return f"{unit.label} s{unit.seed}"
+
+
+# --- admission ---------------------------------------------------------------
+
+
+def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
+    """Everything ``create_job`` would refuse, refused before anything is
+    written. Mirrors create_job's own order so the two cannot drift into
+    disagreeing about which unit is admissible."""
+    kwargs = unit_kwargs(plan, unit)
+    check_seed("seed", kwargs["seed"])
+    check_trellis_band(kwargs.get("trellis_band"))
+    check_trellis_tex_res(kwargs.get("trellis_tex_res"))
+    try:
+        params = guidance.normalize(
+            {
+                **kwargs["guidance_fields"],
+                "size_m": kwargs.get("size_m"),
+                "resolution": kwargs.get("resolution"),
+                "lora_weight": kwargs.get("lora_weight"),
+                "ip_scale": kwargs.get("ip_scale"),
+                "control_scale": kwargs.get("control_scale"),
+                "control_end": kwargs.get("control_end"),
+                "bg_removal": kwargs.get("bg_removal"),
+                "negative_prompt": kwargs.get("negative_prompt"),
+            }
+        )
+    except ValueError as exc:
+        raise Invalid(str(exc)) from exc
+    if "profile" in kwargs:
+        from ..pipelines import optimize
+
+        try:
+            optimize.resolve(kwargs["profile"], kwargs.get("custom_triangles"))
+        except ValueError as exc:
+            raise Invalid(str(exc), field="profile") from exc
+    check_vram(svc, "text", plan.stage, params)
+
+
+def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> None:
+    if not plan.prompt.strip():
+        raise Invalid("a sweep needs a prompt", field="prompt")
+    if plan.stage not in ("reference", "model"):
+        raise Invalid("stage must be 'reference' or 'model'", field="stage")
+    if not plan.seeds:
+        raise Invalid("a sweep needs at least one seed", field="seeds")
+    if not units:
+        raise Invalid("that sweep plans no units; add an axis value that differs")
+    if len(units) > MAX_UNITS:
+        raise Invalid(f"that sweep plans {len(units)} units; the limit is {MAX_UNITS}")
+    for unit in units:
+        try:
+            _check_unit(svc, plan, unit)
+        except Invalid as exc:
+            # Named, because "one of your twelve units is bad" is not something
+            # anyone can act on.
+            raise Invalid(f"{unit_label(unit)}: {exc}", field=exc.field) from exc
+
+
+# --- the operations ----------------------------------------------------------
+
+
+def create_sweep(svc: WarlockService, plan: SweepPlan) -> dict[str, Any]:
+    """Validate every unit, then queue them all under one sweep row."""
+    units = expand(plan)
+    _validate(svc, plan, units)
+
+    spec = {
+        "base": dict(plan.base),
+        "seeds": list(plan.seeds),
+        "axes": [{"param": a.param, "values": list(a.values)} for a in plan.axes],
+        "vectors": [dict(v) for v in plan.vectors],
+        "stage": plan.stage,
+    }
+    sweep_id = svc.store.create_sweep(plan.label or "sweep", plan.prompt, spec)
+    created: list[str] = []
+    try:
+        for unit in units:
+            job = jobs_mod.create_job(
+                svc,
+                **unit_kwargs(plan, unit),
+                sweep_id=sweep_id,
+                sweep_unit=unit_label(unit),
+            )
+            created.append(job["id"])
+    except Exception:
+        # Best-effort rollback, mirroring create_job's own cleanup: the
+        # validation pass makes this unreachable for a *bad* unit, so anything
+        # arriving here is a genuine failure (a full disk, a DB error) and a
+        # half-queued sweep is worse than none.
+        log.exception("sweep %s failed partway through; rolling back", sweep_id)
+        for job_id in created:
+            svc.store.cancel(job_id)
+            svc.store.delete(job_id)
+            shutil.rmtree(svc.job_dir(job_id), ignore_errors=True)
+        svc.store.delete_sweep(sweep_id)
+        raise
+    return {"id": sweep_id, "units": len(created), "jobs": created}
+
+
+def list_sweeps(svc: WarlockService) -> list[dict[str, Any]]:
+    return svc.store.list_sweeps()
+
+
+def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
+    """Cancel and remove a sweep's jobs, then the sweep row.
+
+    The verdict rows are deliberately kept. Each carries its own snapshot of
+    the config vector it was filed against, which is exactly the case this
+    denormalization exists for -- the assets are disposable, what was learned
+    from them is not.
+    """
+    sweep = svc.store.get_sweep(sweep_id)
+    if sweep is None:
+        raise NotFound("no such sweep")
+    removed = 0
+    for job in svc.store.sweep_jobs(sweep_id):
+        if job["status"] in ("queued", "running"):
+            # Through the service, so a running job's worker is actually asked
+            # to stop rather than only having its row rewritten.
+            try:
+                jobs_mod.cancel_job(svc, job["id"])
+            except Exception:
+                log.exception("could not cancel sweep job %s", job["id"])
+        svc.store.delete(job["id"])
+        shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
+        removed += 1
+    svc.store.delete_sweep(sweep_id)
+    return {"ok": True, "deleted": removed}

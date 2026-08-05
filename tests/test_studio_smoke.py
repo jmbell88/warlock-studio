@@ -303,12 +303,6 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
 
 
-def test_the_clay_placeholder_builds(app_ctx, imgui_ctx):
-    from warlock.studio.panes import clay
-
-    _frame(imgui_ctx, lambda: clay.draw(app_ctx))
-
-
 def test_the_settings_pane_builds(app_ctx, imgui_ctx):
     """Twice: once bare, once after the model lists are populated, because the
     pane reads them off the Ctx with getattr and both shapes must build."""
@@ -550,75 +544,75 @@ def test_the_widget_kit_builds_every_new_widget(app_ctx, imgui_ctx):
         _frame(imgui_ctx, build)
 
 
-# --- Build mode -------------------------------------------------------------
+# --- Clay mode -------------------------------------------------------------
 
 
-def _build_tab(app_ctx, *, objects: int = 2):
-    """A Build document with objects in it, adopted as the active tab."""
-    from warlock.studio import build_mode
-    from warlock.studio.build import document as bd
-    from warlock.studio.build import primitives as bp
+def _clay_tab(app_ctx, *, objects: int = 2):
+    """A Clay document with objects in it, adopted as the active tab."""
+    from warlock.studio import clay_mode
+    from warlock.studio.clay import document as bd
+    from warlock.studio.clay import primitives as bp
 
-    doc = bd.BuildDoc()
+    doc = bd.ClayDoc()
     for i in range(objects):
         doc.add_object(
             bd.Obj(uid=bd.new_uid(), name=f"obj{i}", mesh=bp.box(), generator="box",
                    params={"size": (1.0, 1.0, 1.0)})
         )
-    return build_mode.adopt(app_ctx, doc, title="Scene")
+    return clay_mode.adopt(app_ctx, doc, title="Scene")
 
 
-def test_the_build_panes_build_with_nothing_open(app_ctx, imgui_ctx):
+def test_the_clay_panes_build_with_nothing_open(app_ctx, imgui_ctx):
     """Every one of them has to survive the state the mode opens in."""
-    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
 
-    for pane in (build_tools, build_props, build_outliner, build_bridge):
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
-def test_the_build_panes_build_with_a_document_and_a_selection(app_ctx, imgui_ctx):
-    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+def test_the_clay_panes_build_with_a_document_and_a_selection(app_ctx, imgui_ctx):
+    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
 
-    tab = _build_tab(app_ctx)
+    tab = _clay_tab(app_ctx)
     tab.doc.select([tab.doc.objects[0].uid])
-    for pane in (build_tools, build_props, build_outliner, build_bridge):
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
-def test_the_build_panes_build_while_a_save_is_in_flight(app_ctx, imgui_ctx):
+def test_the_clay_panes_build_while_a_save_is_in_flight(app_ctx, imgui_ctx):
     """``saving`` puts every mutating control inside ``begin_disabled``, and an
     unbalanced disable stack is exactly the class of mistake this file exists
     to catch."""
-    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+    from warlock.studio.panes import clay_bridge, clay_outliner, clay_props, clay_tools
 
-    tab = _build_tab(app_ctx)
+    tab = _clay_tab(app_ctx)
     tab.doc.select([tab.doc.objects[0].uid])
     tab.saving = True
-    for pane in (build_tools, build_props, build_outliner, build_bridge):
+    for pane in (clay_tools, clay_props, clay_outliner, clay_bridge):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
-def test_the_build_properties_pane_builds_for_a_frozen_object(app_ctx, imgui_ctx):
+def test_the_clay_properties_pane_builds_for_a_frozen_object(app_ctx, imgui_ctx):
     """Phase 2's state: no generator, so the panel shows counts instead of
     parameters. Unreachable from the UI today and drawn here anyway, because it
     is one line away from being reachable."""
-    from warlock.studio.panes import build_props
+    from warlock.studio.panes import clay_props
 
-    tab = _build_tab(app_ctx, objects=1)
+    tab = _clay_tab(app_ctx, objects=1)
     obj = tab.doc.objects[0]
     tab.doc.set_props(obj.uid, generator=None)
     tab.doc.select([obj.uid])
-    _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+    _frame(imgui_ctx, lambda: clay_props.draw(app_ctx))
 
 
-def test_the_build_properties_pane_builds_for_every_generator(app_ctx, imgui_ctx):
+def test_the_clay_properties_pane_builds_for_every_generator(app_ctx, imgui_ctx):
     """The parameter widgets come off the registry, so every default type in it
     has to have a widget -- a float, an int and a tuple today."""
-    from warlock.studio.build import document as bd
-    from warlock.studio.build import primitives as bp
-    from warlock.studio.panes import build_props
+    from warlock.studio.clay import document as bd
+    from warlock.studio.clay import primitives as bp
+    from warlock.studio.panes import clay_props
 
-    tab = _build_tab(app_ctx, objects=0)
+    tab = _clay_tab(app_ctx, objects=0)
     for name, (defaults, build) in bp.GENERATORS.items():
         obj = bd.Obj(
             uid=bd.new_uid(), name=name, mesh=build(**defaults),
@@ -626,19 +620,19 @@ def test_the_build_properties_pane_builds_for_every_generator(app_ctx, imgui_ctx
         )
         tab.doc.add_object(obj)
         tab.doc.select([obj.uid])
-        _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+        _frame(imgui_ctx, lambda: clay_props.draw(app_ctx))
 
 
-def test_the_build_outliner_builds_with_a_rename_in_flight(app_ctx, imgui_ctx):
-    from warlock.studio import build_mode
-    from warlock.studio.panes import build_outliner
+def test_the_clay_outliner_builds_with_a_rename_in_flight(app_ctx, imgui_ctx):
+    from warlock.studio import clay_mode
+    from warlock.studio.panes import clay_outliner
 
-    tab = _build_tab(app_ctx)
-    build_mode.ensure(app_ctx).renaming = tab.doc.objects[0].uid
-    _frame(imgui_ctx, lambda: build_outliner.draw(app_ctx))
+    tab = _clay_tab(app_ctx)
+    clay_mode.ensure(app_ctx).renaming = tab.doc.objects[0].uid
+    _frame(imgui_ctx, lambda: clay_outliner.draw(app_ctx))
 
 
-def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
+def test_the_clay_properties_pane_enumerates_a_generator_it_has_never_seen(
     app_ctx, imgui_ctx, monkeypatch
 ):
     """A seventh primitive must need no edit to the pane.
@@ -649,9 +643,9 @@ def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
     labels are read back off the frame, so a default type with no widget shows
     up as a missing label rather than as a pane that merely did not crash.
     """
-    from warlock.studio.build import document as bd
-    from warlock.studio.build import primitives as bp
-    from warlock.studio.panes import build_props
+    from warlock.studio.clay import document as bd
+    from warlock.studio.clay import primitives as bp
+    from warlock.studio.panes import clay_props
 
     def wedge(width: float = 2.0, steps: int = 3, footprint=(1.0, 1.0)):
         return bp.box(size=(width, 1.0, 1.0))
@@ -659,7 +653,7 @@ def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
     defaults = {"width": 2.0, "steps": 3, "footprint": (1.0, 1.0)}
     monkeypatch.setitem(bp.GENERATORS, "wedge", (defaults, wedge))
 
-    tab = _build_tab(app_ctx, objects=0)
+    tab = _clay_tab(app_ctx, objects=0)
     obj = bd.Obj(
         uid=bd.new_uid(), name="Wedge", mesh=wedge(**defaults),
         generator="wedge", params=dict(defaults),
@@ -668,19 +662,19 @@ def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
     tab.doc.select([obj.uid])
 
     seen: list[str] = []
-    real = build_props._widget
+    real = clay_props._widget
 
     def spy(key, value, default):
         seen.append(key)
         return real(key, value, default)
 
-    monkeypatch.setattr(build_props, "_widget", spy)
-    _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+    monkeypatch.setattr(clay_props, "_widget", spy)
+    _frame(imgui_ctx, lambda: clay_props.draw(app_ctx))
     assert seen == ["width", "steps", "footprint"]
 
 
-def test_the_build_viewport_draws_through_the_real_imgui_backend(app_ctx, imgui_ctx, gl):
-    """The one part of the Build workspace the pane tests cannot reach.
+def test_the_clay_viewport_draws_through_the_real_imgui_backend(app_ctx, imgui_ctx, gl):
+    """The one part of the Clay workspace the pane tests cannot reach.
 
     ``widgets.texture_ref`` has to *register* the viewport texture with the
     backend as well as wrap it -- an id the renderer does not know maps to no
@@ -689,10 +683,10 @@ def test_the_build_viewport_draws_through_the_real_imgui_backend(app_ctx, imgui_
     """
     from imgui_bundle import imgui
 
-    from warlock.studio import build_view, widgets
+    from warlock.studio import clay_view, widgets
 
-    tab = _build_tab(app_ctx)
-    view = build_view.BuildView(gl, app_ctx)
+    tab = _clay_tab(app_ctx)
+    view = clay_view.ClayView(gl, app_ctx)
     try:
         view.frame_selection(tab.doc)
 
@@ -708,11 +702,11 @@ def test_the_build_viewport_draws_through_the_real_imgui_backend(app_ctx, imgui_
 def test_a_built_document_renders_the_flat_reference_trellis_is_given(app_ctx, gl):
     """No grid, no gizmos, no overlays, on a plain background: trellis is being
     handed a subject, and a grid line in the picture is a subject too."""
-    from warlock.studio import build_view
+    from warlock.studio import clay_view
     from warlock.studio.viewer import capture, glctx
 
-    tab = _build_tab(app_ctx)
-    view = build_view.BuildView(gl, app_ctx)
+    tab = _clay_tab(app_ctx)
+    view = clay_view.ClayView(gl, app_ctx)
     target = glctx.Viewport(gl, (128, 128))
     try:
         view.frame_selection(tab.doc)
@@ -742,3 +736,142 @@ def test_a_built_document_renders_the_flat_reference_trellis_is_given(app_ctx, g
     # White is there (the background) and so is something else (the subject).
     assert any(colour == (255, 255, 255) for _n, colour in colours)
     assert len(colours) > 1
+
+
+# --- review -----------------------------------------------------------------
+
+
+class _ReviewApp:
+    """The Review pane's drawing methods, unbound, over a stub app.
+
+    They live on ``App`` rather than in a pane module (Review draws its own
+    three columns), and none of them touches anything of ``self`` beyond the
+    other methods here -- so this is enough to build them for real.
+    """
+
+    from warlock.studio import main as _main
+
+    _review_runs = _main.App._review_runs
+    _review_delete_button = _main.App._review_delete_button
+    _review_form = _main.App._review_form
+    _review_units = _main.App._review_units
+    _review_verdict = _main.App._review_verdict
+    _review_findings = _main.App._review_findings
+    _save_vector_preset = _main.App._save_vector_preset
+
+
+def _review_state(ctx, *, with_units=True):
+    from warlock.studio import review_mode
+
+    state = review_mode.ensure(ctx)
+    units = []
+    if with_units:
+        job_id = _seeded(ctx, mesh_report={"triangles": 10, "watertight": True})
+        units = [
+            {
+                "job_id": job_id,
+                "label": "lora_weight=0.6 s1",
+                "status": "done",
+                "params": ctx.svc.store.get(job_id)["params"],
+                "dir": ctx.svc.job_dir(job_id),
+                "verdict": "reject",
+                "reasons": ["holes"],
+            }
+        ]
+    state.sweeps = [
+        {"id": review_mode.RECENT_ID, "label": "Recent, unreviewed",
+         "prompt": "", "units": [], "todo": 0},
+        {"id": "abcdef012345", "label": "lora sweep", "prompt": "a barrel",
+         "units": units, "todo": 0},
+    ]
+    state.sweep_id = "abcdef012345"
+    state.units = units
+    return state
+
+
+def test_the_review_panes_build_with_a_sweep_and_a_unit(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    state.form.prompt = "a barrel"
+    state.form.axes = [{"param": "lora_weight", "values": "0.6, 1.2"}]
+
+    _frame(
+        imgui_ctx,
+        lambda: (
+            app._review_runs(app_ctx, state, review_mode),
+            app._review_units(state, review_mode),
+            app._review_verdict(app_ctx, state, review_mode),
+        ),
+    )
+
+
+def test_the_review_panes_build_with_nothing_recorded(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx, with_units=False)
+
+    _frame(
+        imgui_ctx,
+        lambda: (
+            app._review_runs(app_ctx, state, review_mode),
+            app._review_units(state, review_mode),
+            app._review_verdict(app_ctx, state, review_mode),
+        ),
+    )
+
+
+def test_the_review_pane_builds_a_findings_table(app_ctx, imgui_ctx):
+    """The section only appears once a configuration has enough verdicts, so a
+    frame with an empty findings.json never touches the rows."""
+    import json
+
+    from warlock.studio import review_mode
+
+    bench = app_ctx.svc.config.bench_dir
+    bench.mkdir(parents=True, exist_ok=True)
+    (bench / "findings.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "params": {},
+                "vectors": [
+                    {"key": "abc123", "vector": {"lora_weight": 0.9, "platform": "pc"},
+                     "n": 8, "accepts": 6, "accept_rate": 0.75,
+                     "top_reasons": [["holes", 2]], "jobs": []}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+
+    _frame(imgui_ctx, lambda: app._review_verdict(app_ctx, state, review_mode))
+
+
+def test_the_2d_pane_builds_with_a_saved_vector_preset(app_ctx, imgui_ctx):
+    from warlock.studio import vector_presets
+    from warlock.studio.panes import settings_2d
+
+    vector_presets.save_preset(
+        app_ctx.settings, "chests", {"genre": "fantasy", "platform": "pc"}
+    )
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
+def test_the_inspector_builds_its_verdict_section_armed_and_not(app_ctx, imgui_ctx):
+    from warlock.studio.panes import inspector
+
+    app_ctx.state.mode = "3d"
+    job_id = _seeded(app_ctx)
+    app_ctx.svc.store.set_stage(job_id, "model")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    job = app_ctx.svc.store.get(job_id)
+
+    _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))
+    inspector.arm_verdict(app_ctx.state, job_id)
+    _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))

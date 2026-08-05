@@ -8,7 +8,7 @@ either half could be tested with alone -- an authored ``Model``, written, read
 back, and compared array for array.
 
 It lives here rather than at package root because of the layering rule the rest
-of the project keeps: ``service/`` never imports ``studio/``. Build mode
+of the project keeps: ``service/`` never imports ``studio/``. Clay
 produces bytes and hands them to the service layer, which writes them wherever
 an artifact goes. Nothing in the direction ``service -> studio`` is created by
 putting the writer next to the loader it inverts.
@@ -163,7 +163,7 @@ class _Writer:
         None rather than an empty one because the spec requires an accessor's
         ``count`` to be at least one: a zero-count accessor is not a degenerate
         file, it is an invalid one, and an object that the outliner is holding
-        with nothing in it yet is a state Build mode reaches routinely.
+        with nothing in it yet is a state Clay reaches routinely.
         """
         if len(prim.positions) == 0:
             return None
@@ -221,7 +221,7 @@ def write_glb(model: gltf.Model) -> bytes:
 
     Self-contained: one buffer, no URIs, nothing outside the file. Textures are
     not written at all -- ``Material``'s image slots survive a load so that the
-    viewer can draw an imported asset, but nothing in Build mode produces one,
+    viewer can draw an imported asset, but nothing in Clay produces one,
     and a writer that silently dropped them would be worse than one that never
     claimed to.
 
@@ -230,7 +230,7 @@ def write_glb(model: gltf.Model) -> bytes:
     the failure surfaces a long way from here.
     """
     if model.skins:
-        raise ValueError("write_glb does not write a skin; Build mode has none")
+        raise ValueError("write_glb does not write a skin; Clay has none")
 
     writer = _Writer()
     meshes = []

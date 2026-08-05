@@ -70,6 +70,7 @@ def _details_tab(ctx: Any, job: Any) -> None:
     _seam(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)
+        _verdict(ctx, job)
 
 
 def _rig_tab(ctx: Any, job: Any) -> None:
@@ -339,6 +340,69 @@ def _quality(ctx: Any, job: Any) -> None:
                 for a in attempts
             )
         )
+
+
+# --- verdicts ---------------------------------------------------------------
+#
+# The same Accept/Reject a sweep unit gets in Review, on any finished asset --
+# which is the point: daily use and a deliberate sweep feed one findings pool,
+# and the vast majority of assets anyone ever looks at were never part of a
+# sweep. The two halves that are easy to get wrong (when the reject is armed,
+# and what a recorded verdict does) are plain functions so they can be asserted
+# without a GL context.
+
+
+def verdict_armed(state: Any, job_id: str) -> bool:
+    return state.inspector_reject_armed == job_id
+
+
+def arm_verdict(state: Any, job_id: str | None) -> None:
+    state.inspector_reject_armed = job_id
+
+
+def record_verdict(ctx: Any, job_id: str, verdict: str, reasons: tuple[str, ...] = ()) -> bool:
+    """File a verdict and queue the findings recompute. -> whether it landed.
+
+    Inline on the frame thread for the reason Review's is: one INSERT under the
+    store's lock. The recompute that follows reads every verdict and writes a
+    file, so it is a task.
+    """
+    from ...service import findings as svc_findings
+    from ...service import verdicts as svc_verdicts
+    from ...service.errors import ServiceError
+
+    try:
+        svc_verdicts.record_verdict(ctx.svc, job_id, verdict=verdict, reasons=reasons)
+    except (ServiceError, OSError):
+        ctx.toast("Could not record that verdict.", "error")
+        return False
+    arm_verdict(ctx.state, None)
+    ctx.submit("review-findings", svc_findings.refresh, ctx.svc)
+    ctx.toast(f"Recorded: {verdict}.")
+    return True
+
+
+def _verdict(ctx: Any, job: Any) -> None:
+    from ...service import verdicts as svc_verdicts
+
+    if job.get("status") != "done" or job.get("stage") != "model":
+        return
+    if not widgets.header("Was this any good?", default_open=False):
+        return
+    job_id = job["id"]
+    widgets.muted("Feeds the same findings a sweep does.")
+    if widgets.primary_button("Accept"):
+        record_verdict(ctx, job_id, "accept")
+    imgui.same_line()
+    if imgui.button("Reject"):
+        arm_verdict(ctx.state, job_id)
+    if verdict_armed(ctx.state, job_id):
+        widgets.muted("Why?")
+        for reason in svc_verdicts.REASONS:
+            if imgui.button(f"{reason}##verdict-{reason}"):
+                record_verdict(ctx, job_id, "reject", (reason,))
+        if imgui.button("Cancel##verdict-cancel"):
+            arm_verdict(ctx.state, None)
 
 
 def _downloads(ctx: Any, job: Any) -> None:

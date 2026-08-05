@@ -3,9 +3,9 @@
 A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
 is a condensed subset — the tables below are the full list.
 
-One rule explains an apparent overlap between the tables below. While an Inker or Build document is
+One rule explains an apparent overlap between the tables below. While an Inker or Clay document is
 open, that mode takes every key — so in Inker `W` picks the wand rather than toggling wireframe, and
-in Build `W` is the move tool. Those viewport bindings would otherwise act on a viewport that is not
+in Clay `W` is the move tool. Those viewport bindings would otherwise act on a viewport that is not
 on screen.
 
 ## Everywhere
@@ -20,7 +20,7 @@ on screen.
 | S | Toggle turntable |
 | Esc | Exit comparison / pose edit |
 
-## Build
+## Clay
 
 | Keys | Action |
 | --- | --- |
@@ -37,7 +37,7 @@ on screen.
 | Esc | Clear the selection |
 
 Left-drag in empty space orbits, right-drag or middle-drag pans, and the wheel dollies — the same
-as the asset viewport. `1`, `2` and `3` are deliberately unbound: they are reserved for Build Phase
+as the asset viewport. `1`, `2` and `3` are deliberately unbound: they are reserved for Clay Phase
 2's vertex, edge and face modes.
 
 ## Inker

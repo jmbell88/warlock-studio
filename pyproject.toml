@@ -99,10 +99,5 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# pytest's default norecursedirs contains "build", so tests/build/ -- Build
-# mode's tests -- was collected when named directly and silently skipped by a
-# bare `pytest`, which is the worst of both worlds. This is that default with
-# "build" removed and nothing else changed.
-norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 asyncio_mode = "auto"
 markers = ["gpu: requires local GPU + model weights (deselect with '-m \"not gpu\"')"]

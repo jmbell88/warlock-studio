@@ -15,6 +15,7 @@ from imgui_bundle import imgui
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..manual import render as manual_render
+from ..tokens import sp
 
 # Icon-only, five across: what every paint program's toolbox looks like. The
 # name and shortcut live in the tooltip -- three columns of bare labels
@@ -68,7 +69,7 @@ def _grid(state: Any) -> None:
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
         icon = TOOL_ICONS.get(key) or label[:1]
-        if imgui.button(f"{icon}##tool{key}", (width, 30)):
+        if imgui.button(f"{icon}##tool{key}", (width, sp(30))):
             state.tool = key
         if selected:
             imgui.pop_style_color()

@@ -67,6 +67,7 @@ PERSON_STANDING = "\uE21E"  # person-standing
 PIPETTE = "\uE13F"  # pipette
 PLAY = "\uE140"  # play
 PLUS = "\uE141"  # plus
+POWER = "\uE144"  # power
 RECTANGLE = "\uE37A"  # rectangle-horizontal
 REDO = "\uE2A0"  # redo-2
 REFRESH = "\uE149"  # refresh-cw

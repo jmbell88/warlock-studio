@@ -22,6 +22,16 @@ from . import tokens
 
 FONT_DIR = Path(__file__).parent / "resources" / "fonts"
 
+# Lucide is upem 1000 / ascent 1000 / descent 0, with its ink flush at x=0 and
+# spanning y 0..~959; Inter's baseline sits at 0.801 of the line box (ascent
+# 1984 of 1984+494 over a 2048 upem). imgui bakes each merged source against
+# its *own* ascent-to-descent span and then draws it on the *destination*
+# font's baseline, so an unnudged icon occupies -0.158..0.801 of a 0..1 line
+# box -- 0.179 too high -- and sits 0.04 to the left inside its own advance.
+# Every icon button in the app centres on the line box or the advance, so this
+# one offset is what makes all of them land in the middle of their boxes.
+ICON_OFFSET = (0.040, 0.179)
+
 # ImFont handles, populated by load(). None means "run on imgui's default".
 REGULAR: Any = None
 MEDIUM: Any = None
@@ -38,6 +48,7 @@ def load(imgui: Any) -> None:
         font = io.fonts.add_font_from_file_ttf(str(FONT_DIR / name), base)
         merge = imgui.ImFontConfig()
         merge.merge_mode = True
+        merge.glyph_offset = imgui.ImVec2(base * ICON_OFFSET[0], base * ICON_OFFSET[1])
         io.fonts.add_font_from_file_ttf(str(FONT_DIR / "lucide.ttf"), base, merge)
         return font
 

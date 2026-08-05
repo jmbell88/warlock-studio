@@ -297,3 +297,22 @@ def test_count_reports_every_job_not_just_a_page(store):
         store.create("text", f"j{i}", {})
     assert store.count() == 7
     assert len(store.list(3)) == 3
+
+
+def test_a_batch_of_jobs_dispatches_in_a_deterministic_order(store):
+    """A sweep submits N rows in one loop, so ``time.time()`` genuinely ties
+    across them. Correctness never depended on the order -- the worker restarts
+    trellis-server whenever the running config does not match the job in hand --
+    but how many restarts a sweep costs does."""
+    ids = [store.create("text", "a chest", {}, f"{i:012x}") for i in range(6)]
+    for job_id in ids:
+        store._conn.execute(
+            "UPDATE jobs SET created_at = 100.0 WHERE id = ?", (job_id,)
+        )
+    store._conn.commit()
+
+    seen = []
+    while (job := store.next_queued()) is not None:
+        seen.append(job["id"])
+        store.claim(job["id"])
+    assert seen == sorted(ids)

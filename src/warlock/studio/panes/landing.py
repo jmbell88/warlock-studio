@@ -39,13 +39,26 @@ def draw(ctx: Any) -> None:
 def _tile(ctx: Any, key: str, icon: str, name: str, caption: str) -> bool:
     """A centred, clickable card: icon left, name and caption right."""
     width, height = sp(380), sp(64)
-    imgui.set_cursor_pos_x(max((imgui.get_window_width() - width) * 0.5, 0))
+    _centre(width)
     clicked = False
     with widgets.card(f"landing/{key}", (width, height)):
         imgui.dummy((0, sp(4)))
+        # The icon is one line and the text beside it is two, so drawing both
+        # from the same Y aligns the glyph with the *name* rather than with the
+        # block as a whole. Half the difference is the optical centre.
+        with fonts.title(imgui):
+            icon_h = imgui.get_text_line_height()
+        with fonts.label(imgui):
+            name_h = imgui.get_text_line_height()
+        with fonts.small(imgui):
+            caption_h = imgui.get_text_line_height()
+        group_h = name_h + caption_h + imgui.get_style().item_spacing.y
+        top = imgui.get_cursor_pos_y()
+        imgui.set_cursor_pos_y(top + max((group_h - icon_h) * 0.5, 0.0))
         with fonts.title(imgui):
             widgets.text_colored(theme.ACCENT, icon)
         imgui.same_line(sp(48))
+        imgui.set_cursor_pos_y(top)
         imgui.begin_group()
         with fonts.label(imgui):
             imgui.text(name)
@@ -59,15 +72,24 @@ def _tile(ctx: Any, key: str, icon: str, name: str, caption: str) -> bool:
     return clicked
 
 
+def _centre(width: float) -> None:
+    """Put the cursor where a ``width``-wide thing is centred in what is left.
+
+    ``get_window_width`` was the wrong measure: it ignores the host window's
+    own padding, so everything sat half a gutter off centre.
+    """
+    avail = imgui.get_content_region_avail().x
+    imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail - width) * 0.5, 0.0))
+
+
 def _choose(ctx: Any) -> None:
     avail = imgui.get_content_region_avail()
-    # Five tiles plus the title block; centre the stack in the upper half.
-    stack = sp(64 + 8) * 5 + sp(110)
+    # Six tiles plus the title block; centre the stack in the upper half.
+    stack = sp(64 + 8) * 6 + sp(110)
     imgui.dummy((0, max((avail.y - stack) * 0.4, sp(24))))
 
     def centred(text: str, colour: int | None = None) -> None:
-        width = imgui.calc_text_size(text).x
-        imgui.set_cursor_pos_x(max((imgui.get_window_width() - width) * 0.5, 0))
+        _centre(imgui.calc_text_size(text).x)
         if colour is None:
             imgui.text(text)
         else:
@@ -79,23 +101,23 @@ def _choose(ctx: Any) -> None:
         centred("A prompt becomes a reference image; a reference becomes a mesh.", theme.MUTED)
     imgui.dummy((0, sp(20)))
 
-    if _tile(ctx, "2d", icons.IMAGE, "New 2D image", "Compose a prompt and generate a reference."):
+    if _tile(ctx, "2d", icons.IMAGE, "New 2D Image", "Compose a prompt and generate a reference."):
         start_2d(ctx)
     imgui.dummy((0, sp(8)))
     if _tile(
-        ctx, "3d", icons.BOX, "New 3D model", "Start from a finished reference, or drop an image."
+        ctx, "3d", icons.BOX, "New 3D Model", "Start from a finished reference, or drop an image."
     ):
         start_3d(ctx)
     imgui.dummy((0, sp(8)))
     if _tile(ctx, "inker", icons.BRUSH, "Inker", "A canvas, or an image you already have."):
         start_inker(ctx)
-
-    if _tile(
-        ctx, "build", icons.RULER, "Build", "Block a shape out from primitives, by hand."
-    ):
-        start_build(ctx)
     imgui.dummy((0, sp(8)))
-    if _tile(ctx, "open", icons.FOLDER_OPEN, "Open existing", "Everything already generated."):
+    if _tile(
+        ctx, "clay", icons.RULER, "Clay", "Block a shape out from primitives, by hand."
+    ):
+        start_clay(ctx)
+    imgui.dummy((0, sp(8)))
+    if _tile(ctx, "open", icons.FOLDER_OPEN, "Open Existing", "Everything already generated."):
         ctx.state.landing_view = "open"
     imgui.dummy((0, sp(8)))
     active = profiles.get_active(ctx.settings)
@@ -134,10 +156,10 @@ def start_inker(ctx: Any) -> None:
     _leave(ctx)
 
 
-def start_build(ctx: Any) -> None:
-    """Build keeps whatever was open, as Inker does: the documents *are* the
+def start_clay(ctx: Any) -> None:
+    """Clay keeps whatever was open, as Inker does: the documents *are* the
     work, and there is no form to reset."""
-    ctx.state.mode = "build"
+    ctx.state.mode = "clay"
     _leave(ctx)
 
 

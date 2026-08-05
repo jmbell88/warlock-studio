@@ -115,7 +115,7 @@ CONDITIONING_PARAMS = (
 def check_glb(data: bytes, field: str = "glb") -> None:
     """Refuse bytes that are not a binary glTF carrying at least one mesh.
 
-    Belt and braces where the caller is Build mode -- we author those bytes --
+    Belt and braces where the caller is Clay mode -- we author those bytes --
     but "a caller-supplied input is bounded at the door" is the invariant and
     this is the door. Both refusals are worth having on their own terms: bytes
     that are not a GLB would mint a ``done`` row whose ``model.glb`` no reader
@@ -150,6 +150,43 @@ def check_seed(name: str, value: int | None) -> None:
         raise Invalid(f"{name} must be a whole number", field=name)
     if not 0 <= value <= MAX_SEED:
         raise Invalid(f"{name} must be between 0 and {MAX_SEED}", field=name)
+
+
+# The two trellis-server launch settings a job may now pin. Bounds are the
+# exe's own: --band is a narrow-band width in voxels (1 is degenerate, past ~64
+# the "narrow" band is the whole volume and the run will not fit), and
+# --tex-res is a texture edge in pixels. Both are checked at the door for the
+# reason every other cap here is: the cost of a bad one is a trellis-server
+# that fails to start two minutes into a queue, not an error the caller sees.
+MIN_TRELLIS_BAND = 1
+MAX_TRELLIS_BAND = 64
+MIN_TRELLIS_TEX_RES = 128
+MAX_TRELLIS_TEX_RES = 4096
+
+
+def check_trellis_band(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid("trellis_band must be a whole number", field="trellis_band")
+    if not MIN_TRELLIS_BAND <= value <= MAX_TRELLIS_BAND:
+        raise Invalid(
+            f"trellis_band must be between {MIN_TRELLIS_BAND} and {MAX_TRELLIS_BAND}",
+            field="trellis_band",
+        )
+
+
+def check_trellis_tex_res(value: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise Invalid("trellis_tex_res must be a whole number", field="trellis_tex_res")
+    if not MIN_TRELLIS_TEX_RES <= value <= MAX_TRELLIS_TEX_RES:
+        raise Invalid(
+            f"trellis_tex_res must be between {MIN_TRELLIS_TEX_RES} and "
+            f"{MAX_TRELLIS_TEX_RES}",
+            field="trellis_tex_res",
+        )
 
 
 def vram_plan(svc: Any) -> vram.Plan:

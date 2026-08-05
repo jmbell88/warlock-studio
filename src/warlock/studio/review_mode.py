@@ -1,81 +1,110 @@
-"""Review mode's controller: the verdict loop over a sweep's units.
+"""Review mode's controller: launching sweeps, and the verdict loop over them.
 
-The ``build_mode.py`` pattern -- state and logic here, drawing in ``main.py``,
+The ``clay_mode.py`` pattern -- state and logic here, drawing in ``main.py``,
 no imgui anywhere under this import -- so the part that is easy to get wrong is
 assertable without a GL context.
 
-What it is for. ``bench/sweep.py`` varies one parameter at a time and leaves a
-run directory full of meshes; ``bench/report.py`` turns verdicts on those meshes
-into a findings table. Nothing sat between the two except a directory listing
-and a mesh viewer the app already had, which is what this mode is: the units of
-one sweep run, one at a time, with the reference image beside the mesh and two
-keys to say whether it worked.
+What it is for. A sweep queues a family of settings vectors as ordinary jobs;
+this mode is where they are looked at, one at a time, with the reference image
+beside the mesh and two keys to say whether it worked. Those verdicts compile
+into ``findings.json``, which is what puts an "accept 6/8" under a control in
+the generate panes and what a saved vector preset is built from. The loop
+closes here.
 
-Three rules shape it.
+Four rules shape it.
 
-**A verdict is filed under the param and value the *run* recorded**, read off
-the item record rather than off the unit key or the axis spec.
-``report.aggregate`` groups on ``(param, str(value))``, and a verdict filed
-under anything else is not wrong so much as invisible -- it lands in a bucket
-nothing joins to and the findings table simply never mentions it.
+**A verdict is filed against a job id, and carries a snapshot of that job's
+whole config vector.** Not against a run-directory unit key, which only meant
+anything inside one run and evaporated when the run was pruned. The snapshot is
+what lets ``prune_jobs`` delete the assets without deleting what was learned
+from them -- see ``service/verdicts.py``.
+
+**Anything finished is reviewable.** The first bucket is not a sweep at all: it
+is the recent finished meshes nobody has judged, which is how ordinary daily
+use feeds the same findings pool a deliberate sweep does.
 
 **Reject waits for a reason.** ``R`` arms; the verdict is not written until one
-of the five reason keys is pressed. A bare rejection is a row the report can
+of the five reason keys is pressed. A bare rejection is a row the findings can
 count and nothing else, and the tally of *why* things fail is the one thing a
 sweep exists to produce. Accept has no such second step, because there is only
 one way for a mesh to be right.
 
 **The advance is to the next thing to do, not the next row.** A session is
-resumed far more often than it is started, so opening a run lands on its first
-unverdicted unit and recording steps past everything already answered.
+resumed far more often than it is started, so opening a sweep lands on its
+first unverdicted unit and recording steps past everything already answered.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..bench import verdicts as verdicts_mod
+from ..service import verdicts as verdicts_mod
 
 log = logging.getLogger(__name__)
 
-# The one task key. Prefixed, because the app claims results by prefix: a key
-# without one is a result delivered nowhere.
+# Task keys. Prefixed, because the app claims results by prefix: a key without
+# one is a result delivered nowhere.
 SCAN_KEY = "review-scan"
+DELETE_KEY = "review-delete"
+FINDINGS_KEY = "review-findings"
 
-# What this reviewer is called in verdicts.jsonl. A free string by design --
-# ``latest`` keys on (unit, source), so a future judge writing "ai:<model>"
-# sits beside a human's verdict rather than overwriting it.
-SOURCE = "human"
+# What this reviewer is called. A free string by design -- verdicts are keyed
+# on (job_id, source), so a future judge writing "ai:<model>" sits beside a
+# human's verdict rather than overwriting it.
+SOURCE = verdicts_mod.SOURCE_HUMAN
 
 # 1-5, in the order verdicts.REASONS lists them, so the pane can number the
 # buttons off the same table and the two can never disagree.
 REASON_KEYS = {str(i + 1): reason for i, reason in enumerate(verdicts_mod.REASONS)}
 
+# The synthetic first bucket: finished meshes from ordinary use that nobody has
+# judged. Not a sweep row, so it has no spec and cannot be deleted.
+RECENT_ID = "recent"
+RECENT_LABEL = "Recent, unreviewed"
+
 # The reference image a unit was generated from, in the order to look. A text
-# job writes reference.png; an upload has only the input it was given.
+# job writes reference.png (what trellis actually saw); an upload has only the
+# input it was given.
 REFERENCE_NAMES = ("reference.png", "input.png")
 
 
 @dataclass
-class ReviewState:
-    """One review session: which runs exist, which one is open, where in it.
+class SweepForm:
+    """The New sweep form. Axis rows are (param, comma-separated values) so the
+    control is a text field and the parsing is one place."""
 
-    Nothing here is persisted. A stored run directory would outlive the sweep
-    it names -- ``prune`` and a hand-deleted bench dir both make it a path to
-    nothing -- and a mode that opens on an error is worse than one that opens
-    on a list.
+    prompt: str = ""
+    seeds: str = "42"
+    axes: list[dict[str, str]] = field(default_factory=lambda: [{"param": "", "values": ""}])
+    label: str = ""
+    stage: str = "model"
+    # The settings the units start from, captured from the 2D/3D forms the user
+    # has already tuned. Empty until "start from current settings" is pressed --
+    # a sweep off an unstated baseline is not reproducible.
+    base: dict[str, Any] = field(default_factory=dict)
+    base_note: str = ""
+    submitting: bool = False
+
+
+@dataclass
+class ReviewState:
+    """One review session: which sweeps exist, which one is open, where in it.
+
+    Nothing here is persisted. A stored sweep id would outlive the sweep it
+    names -- deleting one, or a fresh data dir, both make it an id for nothing
+    -- and a mode that opens on an error is worse than one that opens on a list.
     """
 
-    # [{dir, label, units, todo}], newest first.
-    runs: list[dict[str, Any]] = field(default_factory=list)
-    run_dir: Path | None = None
-    # The open run's units, in the order the run recorded them. The dicts are
-    # the same objects the matching ``runs`` entry holds, so recording a
-    # verdict updates both the row and the list's remaining count.
+    # [{id, label, prompt, units, todo}], the recent-unreviewed bucket first
+    # then sweeps newest-first.
+    sweeps: list[dict[str, Any]] = field(default_factory=list)
+    sweep_id: str | None = None
+    # The open sweep's units. The dicts are the same objects the matching
+    # ``sweeps`` entry holds, so recording a verdict updates both the row and
+    # the list's remaining count.
     units: list[dict[str, Any]] = field(default_factory=list)
     index: int = 0
     # Whether R has been pressed and a reason key is what the mode is waiting
@@ -84,18 +113,14 @@ class ReviewState:
     pending_reject: bool = False
     # There is deliberately no "which unit is loaded" field here. What the
     # shared viewer is showing is ``viewer.path``, and a second copy of that
-    # answer is a way for the two to disagree: unit keys repeat across runs of
-    # the same spec, so a key-keyed marker says "already loaded" when the mesh
-    # on screen belongs to a different run -- and says the same thing after a
-    # trip through 3D has loaded a library asset into the same viewer. The pane
-    # compares paths, exactly as ``_sync_viewer`` does, and both cases fix
-    # themselves.
+    # answer is a way for the two to disagree -- see ``main._review_viewport``.
     scanning: bool = False
+    form: SweepForm = field(default_factory=SweepForm)
 
 
 def ensure(ctx: Any) -> ReviewState:
-    """The mode's state, built on first use -- lazy for the reason Build's is:
-    a session that never reviews a sweep should not pay for it."""
+    """The mode's state, built on first use -- lazy for the reason Clay's is:
+    a session that never reviews anything should not pay for it."""
     state = ctx.state.review
     if state is None:
         state = ReviewState()
@@ -106,121 +131,156 @@ def ensure(ctx: Any) -> ReviewState:
 # --- scanning ----------------------------------------------------------------
 
 
-def _unit_records(run_dir: Path) -> list[dict[str, Any]]:
-    """One row per unit, joined to whatever verdict it already carries.
+def _unit(job: dict[str, Any], recorded: dict[tuple[str, str], dict[str, Any]],
+          job_dir: Path) -> dict[str, Any]:
+    seen = recorded.get((job["id"], SOURCE)) or {}
+    return {
+        "job_id": job["id"],
+        "label": job.get("sweep_unit") or job.get("name") or job.get("prompt") or job["id"],
+        "status": job.get("status"),
+        "params": job.get("params") or {},
+        "dir": job_dir,
+        "verdict": seen.get("verdict"),
+        "reasons": list(seen.get("reasons") or ()),
+    }
 
-    ``latest_items`` is the join target rather than the sweep spec: it is what
-    was actually run, it survives a resume, and its ``param``/``value`` are the
-    pair the report groups on.
+
+def _collect(svc: Any) -> list[dict[str, Any]]:
+    """Every sweep and its units, plus the recent-unreviewed bucket.
+
+    Task thread only: several DB reads behind one serialized connection, and
+    the frame loop must never queue behind them.
     """
-    from ..bench import runner as runner_mod
-
-    recorded = verdicts_mod.latest(run_dir)
     out: list[dict[str, Any]] = []
-    for key, record in runner_mod.latest_items(run_dir).items():
-        seen = recorded.get((key, SOURCE))
+
+    recent = svc.store.unverdicted_models(source=SOURCE)
+    out.append(
+        {
+            "id": RECENT_ID,
+            "label": RECENT_LABEL,
+            "prompt": "Finished meshes from ordinary use that nobody has judged yet.",
+            "units": [_unit(job, {}, svc.job_dir(job["id"])) for job in recent],
+            "todo": len(recent),
+        }
+    )
+
+    for sweep in svc.store.list_sweeps():
+        jobs = svc.store.sweep_jobs(sweep["id"])
+        recorded = svc.store.verdicts_for([j["id"] for j in jobs], source=SOURCE)
+        units = [_unit(job, recorded, svc.job_dir(job["id"])) for job in jobs]
         out.append(
             {
-                "key": key,
-                "param": record.get("param"),
-                "value": record.get("value"),
-                "status": record.get("status"),
-                "seconds": record.get("seconds"),
-                "dir": run_dir / "items" / key,
-                "verdict": (seen or {}).get("verdict"),
-                "reasons": list((seen or {}).get("reasons") or ()),
-                # The archived job.json, read lazily on navigation and cached
-                # here. None means "not read yet", {} means "there is none".
-                "job": None,
-            }
-        )
-    return out
-
-
-def _collect(config: Any) -> list[dict[str, Any]]:
-    """Every sweep run and its units. Task thread only: this walks the whole
-    bench directory and reads two JSONL files per run."""
-    from ..bench import report as report_mod
-
-    out: list[dict[str, Any]] = []
-    for run_dir in report_mod.sweep_runs(config):
-        try:
-            units = _unit_records(run_dir)
-        except OSError:
-            log.exception("could not read the sweep run at %s", run_dir)
-            continue
-        out.append(
-            {
-                "dir": run_dir,
-                "label": run_dir.name,
+                "id": sweep["id"],
+                "label": sweep["label"],
+                "prompt": sweep["prompt"],
                 "units": units,
-                "todo": sum(1 for unit in units if unit["verdict"] is None),
+                "todo": sum(1 for u in units if u["verdict"] is None),
             }
         )
-    # Newest first: run directories are named by their start timestamp, and the
-    # sweep worth reviewing is almost always the one that just finished.
-    out.reverse()
     return out
 
 
 def scan(ctx: Any) -> None:
-    """Re-read the bench directory, off the frame thread."""
+    """Re-read the sweeps and their units, off the frame thread."""
     state = ensure(ctx)
     if state.scanning:
         return
     state.scanning = True
-    if not ctx.submit(SCAN_KEY, _collect, ctx.runtime.config):
+    if not ctx.submit(SCAN_KEY, _collect, ctx.svc):
         # The runner refuses a key already in flight. Leaving the flag set here
         # is what makes the mode permanently inert after a double click.
         state.scanning = False
 
 
+def delete(ctx: Any, sweep_id: str) -> bool:
+    """Delete a sweep's jobs and meshes, off the frame thread.
+
+    The verdicts stay: each carries the config vector it was filed against, so
+    what the sweep taught survives the assets it taught it with.
+    """
+    from ..service import sweeps as sweeps_mod
+
+    if sweep_id == RECENT_ID:
+        return False
+    return bool(ctx.submit(DELETE_KEY, sweeps_mod.delete_sweep, ctx.svc, sweep_id))
+
+
+def refresh_findings(ctx: Any) -> None:
+    """Recompute findings.json after a verdict, off the frame thread.
+
+    Fire-and-forget: the panes read the file through an mtime cache, so a
+    refresh that is refused because one is already in flight simply means the
+    next verdict's refresh picks up both.
+    """
+    from ..service import findings as findings_mod
+
+    ctx.submit(FINDINGS_KEY, findings_mod.refresh, ctx.svc)
+
+
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
+    if done.key == DELETE_KEY:
+        removed = 0
+        if isinstance(done.result, dict):
+            removed = int(done.result.get("deleted") or 0)
+        ctx.toast(f"Deleted {removed} job(s). Verdicts and findings kept.")
+        # The counts are now wrong and the viewer may be showing a mesh that no
+        # longer exists -- both are fixed by the rescan.
+        if state.sweep_id is not None and state.sweep_id != RECENT_ID:
+            state.sweep_id = None
+        scan(ctx)
+        return
+    if done.key == FINDINGS_KEY:
+        return
     if done.key != SCAN_KEY:
         return
     state.scanning = False
     if not isinstance(done.result, list):
         return
-    state.runs = done.result
+    state.sweeps = done.result
     # Whatever was open stays open if the rescan still finds it; otherwise the
-    # newest run, which is what an empty session wants and a pruned one needs.
-    wanted = state.run_dir
-    if wanted is not None and any(run["dir"] == wanted for run in state.runs):
-        open_run(ctx, wanted)
-    elif state.runs:
-        open_run(ctx, state.runs[0]["dir"])
+    # first bucket, which is what an empty session wants and a deleted one
+    # needs.
+    wanted = state.sweep_id
+    if wanted is not None and any(s["id"] == wanted for s in state.sweeps):
+        open_sweep(ctx, wanted)
+    elif state.sweeps:
+        open_sweep(ctx, state.sweeps[0]["id"])
     else:
-        state.run_dir, state.units, state.index = None, [], 0
+        state.sweep_id, state.units, state.index = None, [], 0
 
 
 def on_task_failed(ctx: Any, done: Any) -> None:
     """A failed scan must not leave the mode inert: ``scanning`` gates every
-    button and every key."""
+    button and every key. A failed launch must not leave the form inert either.
+    """
     state = ctx.state.review
-    if state is not None and done.key == SCAN_KEY:
+    if state is None:
+        return
+    if done.key == SCAN_KEY:
         state.scanning = False
+    if done.key == DELETE_KEY:
+        ctx.toast("Could not delete that sweep.", "error")
 
 
-# --- the open run ------------------------------------------------------------
+# --- the open sweep ----------------------------------------------------------
 
 
-def open_run(ctx: Any, run_dir: Path) -> None:
-    """Show a run, starting on the first unit with no verdict.
+def open_sweep(ctx: Any, sweep_id: str) -> None:
+    """Show a sweep, starting on the first unit with no verdict.
 
     Resuming is the common case: landing back on unit one every time is what
     makes it useless.
     """
     state = ensure(ctx)
-    entry = next((run for run in state.runs if run["dir"] == run_dir), None)
-    state.run_dir = run_dir
+    entry = next((s for s in state.sweeps if s["id"] == sweep_id), None)
+    state.sweep_id = sweep_id
     state.units = list(entry["units"]) if entry is not None else []
     state.pending_reject = False
     state.index = next(
         (i for i, unit in enumerate(state.units) if unit["verdict"] is None), 0
     )
-    _touch(state)
 
 
 def current(state: ReviewState) -> dict[str, Any] | None:
@@ -236,7 +296,6 @@ def step(state: ReviewState, delta: int) -> None:
         return
     state.index = min(max(state.index + delta, 0), len(state.units) - 1)
     state.pending_reject = False
-    _touch(state)
 
 
 def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
@@ -244,13 +303,10 @@ def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
 
     ``unverdicted_only`` is what a recorded verdict uses, and it means exactly
     what it says: the next unit **with no verdict**, searched forward and then
-    wrapping to the start, and staying put when there is none anywhere. It used
-    to fall through to a plain +1 when nothing unverdicted lay ahead, which put
-    the cursor on a unit that had already been answered and asked the same
-    question twice -- the one thing the flag exists to prevent. Wrapping is the
-    honest completion of the same idea: a reviewer who stepped back, answered
-    something, and has work left near the top wants to be taken to it rather
-    than nudged one row down a list they have finished.
+    wrapping to the start, and staying put when there is none anywhere. Falling
+    through to a plain +1 would put the cursor on a unit that had already been
+    answered and ask the same question twice -- the one thing the flag exists to
+    prevent. Wrapping is the honest completion of the same idea.
     """
     if not state.units:
         return
@@ -260,78 +316,198 @@ def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
         ahead = next((i for i in order if state.units[i]["verdict"] is None), None)
         if ahead is not None:
             state.index = ahead
-        _touch(state)
         return
     state.index = min(state.index + 1, len(state.units) - 1)
-    _touch(state)
 
 
 def record(ctx: Any, verdict: str, reasons: Any = ()) -> None:
     """Write one verdict for the unit on screen, then move on.
 
-    Inline on the frame thread on purpose: one flushed line appended to a small
-    file, the same IO class as ``settings.set``, and putting it on a task thread
-    would mean a keypress whose effect arrives some frames later -- which, at
-    the rate a reviewer presses A, reorders verdicts against navigation.
+    Inline on the frame thread on purpose: one INSERT under the store's RLock,
+    the same IO class as ``settings.set``, and putting it on a task thread would
+    mean a keypress whose effect arrives some frames later -- which, at the rate
+    a reviewer presses A, reorders verdicts against navigation. The findings
+    recompute that follows *is* a task, because it reads every verdict and
+    writes a file.
     """
+    from ..service.errors import ServiceError
+
     state = ensure(ctx)
     unit = current(state)
-    if unit is None or state.run_dir is None or state.scanning:
+    if unit is None or state.scanning:
         return
     reasons = list(reasons)
     try:
-        verdicts_mod.append_verdict(
-            state.run_dir,
-            unit=unit["key"],
-            source=SOURCE,
-            verdict=verdict,
-            reasons=reasons,
-            param=unit.get("param"),
-            value=unit.get("value"),
+        verdicts_mod.record_verdict(
+            ctx.svc, unit["job_id"], verdict=verdict, reasons=reasons, source=SOURCE
         )
-    except (OSError, ValueError):
-        log.exception("could not record a verdict for %s", unit["key"])
+    except (ServiceError, OSError):
+        log.exception("could not record a verdict for %s", unit["job_id"])
         ctx.toast("Could not record that verdict.", "error")
         return
     unit["verdict"] = verdict
     unit["reasons"] = reasons
     _recount(state)
+    refresh_findings(ctx)
     advance(state, unverdicted_only=True)
 
 
 def _recount(state: ReviewState) -> None:
-    """Keep the run list's remaining count true. The unit dicts are shared with
-    the ``runs`` entry, so only the tally needs recomputing."""
-    for run in state.runs:
-        if run["dir"] == state.run_dir:
-            run["todo"] = sum(1 for unit in run["units"] if unit["verdict"] is None)
+    """Keep the sweep list's remaining count true. The unit dicts are shared
+    with the ``sweeps`` entry, so only the tally needs recomputing."""
+    for sweep in state.sweeps:
+        if sweep["id"] == state.sweep_id:
+            sweep["todo"] = sum(1 for unit in sweep["units"] if unit["verdict"] is None)
+
+
+# --- launching a sweep -------------------------------------------------------
+
+
+def capture_base(ctx: Any) -> dict[str, Any]:
+    """The settings vector the two generate forms currently describe.
+
+    Reusing the forms the user has already tuned is the whole point: a sweep is
+    "this, but vary that", and re-picking a checkpoint and eleven taxonomy
+    selects inside a second form would be its own small hell.
+    """
+    from .. import guidance
+
+    state = ctx.state
+    form_2d, form_3d = state.form_2d, state.form_3d
+    known = set(guidance.form_fields())
+    base: dict[str, Any] = {
+        k: v for k, v in form_2d.items() if k in known and v not in ("", None)
+    }
+    if form_2d.get("style_lora"):
+        base["lora_weight"] = float(form_2d["lora_weight"])
+    if form_2d.get("negative_prompt"):
+        base["negative_prompt"] = form_2d["negative_prompt"]
+    # The 3D pane's platform is the geometry resolution and wins over the 2D
+    # pane's prompt-fragment one, because a sweep unit runs to a mesh.
+    if form_3d.get("platform"):
+        base["platform"] = form_3d["platform"]
+    if form_3d.get("bg_removal"):
+        base["bg_removal"] = form_3d["bg_removal"]
+    if form_3d.get("profile"):
+        base["profile"] = form_3d["profile"]
+    if float(form_3d.get("size_m") or 0) > 0:
+        base["size_m"] = float(form_3d["size_m"])
+    base["reference_prep"] = bool(form_3d.get("reference_prep"))
+    return base
+
+
+def parse_seeds(text: str) -> tuple[int, ...]:
+    """A comma-separated seed list. Raises ValueError, which the caller turns
+    into a toast -- an unparseable seed is a typo, not a crash."""
+    out: list[int] = []
+    for raw in str(text).split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        out.append(int(raw))
+    if not out:
+        raise ValueError("a sweep needs at least one seed")
+    return tuple(out)
+
+
+def _coerce(value: str) -> Any:
+    """An axis value typed as text, as the type the param wants.
+
+    int before float before bool-ish before string, because "8" must reach
+    ``trellis_band`` as 8 and not as "8" -- ``check_trellis_band`` demands a
+    whole number, and a string would be refused with a message about the type
+    rather than about the value.
+    """
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in ("true", "yes", "on"):
+        return True
+    if lowered in ("false", "no", "off"):
+        return False
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def build_plan(state: ReviewState) -> Any:
+    """The form as a ``SweepPlan``. Raises ValueError for a malformed form."""
+    from ..service.sweeps import Axis, SweepPlan
+
+    form = state.form
+    axes = []
+    for row in form.axes:
+        param = (row.get("param") or "").strip()
+        raw = (row.get("values") or "").strip()
+        if not param and not raw:
+            continue
+        if not param or not raw:
+            raise ValueError("every axis needs a parameter and at least one value")
+        values = tuple(_coerce(v) for v in raw.split(",") if v.strip())
+        if not values:
+            raise ValueError(f"axis {param} has no values")
+        axes.append(Axis(param=param, values=values))
+    return SweepPlan(
+        label=form.label.strip() or (form.prompt.strip()[:40] or "sweep"),
+        prompt=form.prompt.strip(),
+        base=dict(form.base),
+        seeds=parse_seeds(form.seeds),
+        axes=tuple(axes),
+        stage=form.stage,
+    )
+
+
+def launch(ctx: Any) -> bool:
+    """Validate and queue the form's sweep. -> whether anything was queued.
+
+    Inline on the frame thread, like ``settings_2d._submit``: it is N validated
+    inserts against the same store the panes already write to, and the
+    validation pass is what makes the whole thing all-or-nothing.
+    """
+    from ..service import sweeps as sweeps_mod
+    from ..service.errors import ServiceError
+
+    state = ensure(ctx)
+    if state.form.submitting or state.scanning:
+        return False
+    try:
+        plan = build_plan(state)
+    except ValueError as exc:
+        ctx.toast(str(exc), "error")
+        return False
+    state.form.submitting = True
+    try:
+        result = sweeps_mod.create_sweep(ctx.svc, plan)
+    except ServiceError as exc:
+        ctx.toast(exc.message, "error")
+        return False
+    except Exception:
+        log.exception("could not launch the sweep")
+        ctx.toast("Could not launch that sweep.", "error")
+        return False
+    finally:
+        state.form.submitting = False
+    ctx.toast(f"Queued {result['units']} unit(s).")
+    state.sweep_id = result["id"]
+    scan(ctx)
+    return True
+
+
+def preview_units(state: ReviewState) -> int:
+    """How many jobs the form would queue, or -1 if it cannot be planned yet."""
+    from ..service import sweeps as sweeps_mod
+
+    try:
+        return len(sweeps_mod.expand(build_plan(state)))
+    except Exception:
+        return -1
 
 
 # --- what the pane reads -----------------------------------------------------
-
-
-def _touch(state: ReviewState) -> None:
-    unit = current(state)
-    if unit is not None:
-        load_job(unit)
-
-
-def load_job(unit: dict[str, Any]) -> None:
-    """The archived ``job.json``, read once and cached on the unit.
-
-    Once per navigation on the frame thread is the same bargain every other
-    pane makes with a small file; once per *frame* is not, which is what the
-    cache is for. A missing or unreadable file caches ``{}`` rather than None,
-    so a broken unit is not re-read every frame either.
-    """
-    if unit.get("job") is not None:
-        return
-    path = Path(unit["dir"]) / "job.json"
-    try:
-        doc = json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError):
-        doc = {}
-    unit["job"] = doc if isinstance(doc, dict) else {}
 
 
 def model_path(unit: dict[str, Any]) -> Path:
@@ -339,7 +515,7 @@ def model_path(unit: dict[str, Any]) -> Path:
 
 
 def reference_path(unit: dict[str, Any]) -> Path | None:
-    """What the unit was generated from, or None if neither was copied."""
+    """What the unit was generated from, or None if neither exists."""
     for name in REFERENCE_NAMES:
         path = Path(unit["dir"]) / name
         if path.exists():
@@ -347,28 +523,28 @@ def reference_path(unit: dict[str, Any]) -> Path | None:
     return None
 
 
-def cache_id(run_dir: Path | None, unit: dict[str, Any]) -> str:
+def cache_id(unit: dict[str, Any]) -> str:
     """The id the thumbnail cache files this unit's reference under.
 
-    Qualified by the run, because ``ThumbnailCache`` keys on (id, mtime) and a
-    unit key alone is *not* unique: two runs of one sweep spec produce the same
-    keys, so the second run's references would be served the first run's
-    pixels for as long as both mtimes happened to match.
+    A job id is globally unique, which is what the old run-qualified unit key
+    was working around: unit keys repeated across runs of one sweep spec, so
+    the second run's references were served the first run's pixels.
     """
-    run = "" if run_dir is None else Path(run_dir).name
-    return f"review:{run}:{unit['key']}"
+    return f"review:{unit['job_id']}"
 
 
 def mesh_lines(unit: dict[str, Any]) -> list[str]:
     """The mesh verdicts the worker already computed, as text.
 
+    Read off the job row's params rather than an archived ``job.json``: the row
+    *is* the record now, so there is nothing to cache and nothing to go stale.
+
     Deliberately the two measurements kept apart everywhere else: the report
     ("will an importer accept it, will it sit on the floor") and the audit
-    ("can you see through it"). They answer different questions and merging
-    them into one badge is what made the old one claim watertight about a
-    silhouette check.
+    ("can you see through it"). Merging them into one badge is what made the old
+    one claim watertight about a silhouette check.
     """
-    params = (unit.get("job") or {}).get("params") or {}
+    params = unit.get("params") or {}
     lines: list[str] = []
     report = params.get("mesh_report")
     if isinstance(report, dict):
@@ -389,12 +565,9 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
 
 
 def label(unit: dict[str, Any]) -> str:
-    """One line naming what was varied -- ``lora_weight = 0.9``, or "baseline"
-    for the control unit, whose item record carries no param at all."""
-    param = unit.get("param")
-    if not param:
-        return "baseline"
-    return f"{param} = {unit.get('value')}"
+    """One line naming this unit -- its sweep label, or whatever an ordinary
+    asset is called."""
+    return str(unit.get("label") or unit.get("job_id") or "")
 
 
 # --- keys --------------------------------------------------------------------
@@ -404,10 +577,10 @@ def handle_key(ctx: Any, event: Any) -> bool:
     """Review's shortcuts. -> whether the key was consumed.
 
     The caller returns unconditionally either way, for the reason Inker's and
-    Build's do: Review has replaced the viewport and the forms, so a key
-    falling through here would toggle a wireframe or submit a job against a
-    pane that is not on screen. The return value is still honest, because it is
-    what the tests read.
+    Clay's do: Review has replaced the viewport and the forms, so a key falling
+    through here would toggle a wireframe or submit a job against a pane that is
+    not on screen. The return value is still honest, because it is what the
+    tests read.
     """
     import pygame
 

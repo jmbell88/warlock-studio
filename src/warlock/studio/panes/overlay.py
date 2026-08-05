@@ -219,7 +219,7 @@ def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
     text = {
         "2d": "Describe something and press Generate.",
-        "build": "Add a primitive to start blocking something out.",
+        "clay": "Add a primitive to start blocking something out.",
         "review": "Pick a sweep run to review.",
     }.get(ctx.state.mode, "Pick a finished reference, or open an image.")
     avail = imgui.get_content_region_avail()

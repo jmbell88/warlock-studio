@@ -311,7 +311,7 @@ class ScaleGizmo(Gizmo):
     the drag started**, never an absolute scale: the gizmo then needs to
     remember nothing about the object, and the caller multiplies the factor
     onto the scale it recorded when the drag began -- the same shape
-    ``BuildDoc.set_transform``'s ``was`` argument already takes.
+    ``ClayDoc.set_transform``'s ``was`` argument already takes.
 
     Existing gizmos are reused as-is. ``RotateGizmo`` and ``TranslateGizmo``
     are already documented as knowing nothing about bones, and nothing about a
@@ -387,7 +387,7 @@ class ScaleGizmo(Gizmo):
         import moderngl
 
         active = self.drag.axis if self.drag else self.hover
-        # World axes, as the translate gizmo uses: Build mode's objects carry a
+        # World axes, as the translate gizmo uses: Clay's objects carry a
         # rotation, and a scale typed into the properties panel is applied
         # before it, so a handle drawn in the object's rotated frame would drag
         # along an axis the number it edits does not lie on.

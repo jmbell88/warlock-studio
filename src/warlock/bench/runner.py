@@ -24,6 +24,7 @@ through at next launch.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import shutil
@@ -371,6 +372,96 @@ def _suppressed():
     import contextlib
 
     return contextlib.suppress(Exception)
+
+
+PURGED_FILE = "purged.json"
+
+
+def _media_files(run_dir: Path) -> list[Path]:
+    """Every file :func:`purge_media` would delete, as it exists right now.
+
+    One definition, used by both the measurement and the deletion, so the size
+    a user is shown before confirming is by construction the set that goes.
+    """
+    out: list[Path] = []
+    items = run_dir / "items"
+    if not items.is_dir():
+        return out
+    for item_dir in sorted(items.iterdir()):
+        if not item_dir.is_dir():
+            continue
+        for name in (*ARTIFACTS, SOURCE_ARTIFACT):
+            path = item_dir / name
+            if path.is_file():
+                out.append(path)
+        views = item_dir / "views"
+        if views.is_dir():
+            out.extend(sorted(p for p in views.glob("*.png") if p.is_file()))
+    return out
+
+
+def media_bytes(run_dir: Path) -> int:
+    """What :func:`purge_media` would free, in bytes."""
+    total = 0
+    for path in _media_files(run_dir):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def is_purged(run_dir: Path) -> bool:
+    return (Path(run_dir) / PURGED_FILE).is_file()
+
+
+def purge_media(run_dir: Path) -> dict[str, Any]:
+    """Delete a run's pixels and meshes, keeping everything that says what it
+    measured. Idempotent; returns the ``purged.json`` it writes.
+
+    **What this costs, plainly.** ``score.py`` re-scores retroactively from the
+    rendered views on disk, so a purged run keeps whatever ``scores.json`` it
+    already has but can never be scored with a *new* metric -- the mesh and the
+    reference image are gone. What survives is everything a comparison is built
+    from: ``items.jsonl``, ``manifest.json``, ``scores.json``, each unit's
+    ``views/views.json``, and the archived ``job.json`` (which carries
+    ``params["mesh_report"]`` and ``params["mesh_audit"]``).
+
+    This is disk space, not tidiness: a run's item dirs hold a GLB, up to four
+    PNGs and eight rendered views each, times as many units as the run had.
+    """
+    run_dir = Path(run_dir)
+    files = _media_files(run_dir)
+    freed = 0
+    removed: list[str] = []
+    for path in files:
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError:
+            log.exception("could not remove %s", path)
+            continue
+        freed += size
+        removed.append(path.relative_to(run_dir).as_posix())
+
+    doc: dict[str, Any] = {
+        "purged_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "freed_bytes": freed,
+        "files": removed,
+    }
+    if is_purged(run_dir):
+        # A second purge is a no-op that must not erase the first one's tally:
+        # what the run freed is a fact about the run, not about this call.
+        try:
+            previous = json.loads((run_dir / PURGED_FILE).read_text("utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if isinstance(previous, dict):
+            doc["freed_bytes"] = int(previous.get("freed_bytes") or 0) + freed
+            doc["files"] = list(previous.get("files") or ()) + removed
+            doc["purged_at"] = previous.get("purged_at") or doc["purged_at"]
+    (run_dir / PURGED_FILE).write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return doc
 
 
 def prune_runs(config: Any, keep: int) -> list[str]:

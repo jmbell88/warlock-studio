@@ -226,7 +226,7 @@ def upload_bytes(ctx: Any, data: bytes) -> None:
     """Start a mesh job from pixels that are already in memory.
 
     The path ``upload`` takes for a file, for a caller that has rendered the
-    picture rather than read it -- Build mode's "send to 3D", which draws the
+    picture rather than read it -- Clay's "send to 3D", which draws the
     document offscreen on the frame thread and hands the bytes over. The form
     values are read here for the same reason ``upload`` reads them here: they
     are UI state, and the task thread has no business touching them.

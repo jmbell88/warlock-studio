@@ -18,7 +18,7 @@ after a reorder still lands on the layer the edit was made to.
 
 The engine itself -- ``Edit``, ``CompoundEdit``, ``UndoStack``, the serial
 counter and the byte budget -- has no opinion about pixels and now lives in
-``studio/undo.py``, so Build mode can have the same history with its own edit
+``studio/undo.py``, so Clay can have the same history with its own edit
 types without depending on the raster editor. It is re-exported here unchanged:
 every module in this package imports those names from this one, and renaming
 those imports as part of a move would have made "did the move change

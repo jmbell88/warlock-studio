@@ -192,7 +192,7 @@ def test_two_equal_but_distinct_materials_are_written_separately() -> None:
 
 
 def test_a_model_without_uvs_writes_no_texcoord_and_still_loads() -> None:
-    """TEXCOORD_0 is optional in the spec, and Build Phase 1 has no textures.
+    """TEXCOORD_0 is optional in the spec, and Clay Phase 1 has no textures.
     Writing a zero-filled one would be four bytes a vertex of a lie."""
     model = gltf.Model([gltf.Node(name="n", mesh=0)], [0], [[_quad(uvs=False)]], [])
     data = glbwrite.write_glb(model)
@@ -339,7 +339,7 @@ def test_a_primitive_with_no_geometry_is_written_without_accessors() -> None:
 
 
 def test_a_model_with_a_skin_is_refused_rather_than_silently_flattened() -> None:
-    """Build mode has no skins. Dropping one would export a rig-shaped file with
+    """Clay has no skins. Dropping one would export a rig-shaped file with
     no rig in it, which fails a long way from here."""
     model = gltf.Model([gltf.Node(name="n")], [0], [], [gltf.Skin([0], np.eye(4)[None])])
     with pytest.raises(ValueError, match="skin"):

@@ -99,6 +99,18 @@ def test_the_kind_filter_tells_a_reference_from_a_mesh():
     assert Filters(kind="rig").matches(job(kind="rig", stage="model"))
 
 
+def test_a_sweep_unit_is_hidden_however_the_bar_is_set():
+    """One launched sweep is dozens of near-identical rows whose whole purpose
+    is to be compared against each other in Review. Left in, it buries a
+    workshop's actual assets."""
+    unit = job(prompt="a barrel", status="done", favorite=1, sweep_id="abcdef012345")
+    assert not Filters().matches(unit)
+    assert not Filters(text="barrel").matches(unit)
+    assert not Filters(favorites_only=True).matches(unit)
+    # And nothing else is affected: the column is None on an ordinary row.
+    assert Filters().matches(job(prompt="a barrel", sweep_id=None))
+
+
 def test_favourites_only_hides_everything_else():
     f = Filters(favorites_only=True)
     assert f.matches(job(favorite=1))
@@ -435,9 +447,9 @@ def test_every_mode_has_exactly_one_place_that_draws_it():
     """_build_ui's dispatch ends in a bare else, so an unlisted mode would
     silently draw Inker rather than fail. The partition is the guard.
 
-    Three categories, not two, since Build arrived: one pane, the shared asset
+    Three categories, not two, since Clay arrived: one pane, the shared asset
     viewport, or a mode's own three-column workspace. Making this a three-way
-    partition rather than filing Build under _SINGLE_PANE_MODES is the honest
+    partition rather than filing Clay under _SINGLE_PANE_MODES is the honest
     version -- a workspace is not one pane, and calling it one would leave the
     name lying about four of the five modes it covers.
     """
@@ -453,6 +465,33 @@ def test_every_mode_has_exactly_one_place_that_draws_it():
     # workspaces are the work modes that own their own centre pane.
     assert modes.VIEWPORT_MODES < modes.WORK_MODES
     assert modes.WORKSPACE_MODES < modes.WORK_MODES
+
+
+def test_quit_is_a_segment_in_the_switch_but_never_a_mode():
+    """Quitting is an action, not a place.
+
+    It is drawn in the mode switch because that is where the user looks for
+    "leave", but it must stay out of ``MODES``: it never lands in
+    ``AppState.mode``, it has no pane to draw, and the three categories above
+    have to partition ``KEYS`` exactly. The switch splices it on, and
+    ``_mode_switch`` branches on its key *before* assigning the mode, so
+    cancelling the confirm leaves the switch exactly where it was.
+    """
+    import inspect
+
+    from warlock.studio import main, modes
+
+    assert modes.QUIT[0] == "quit"
+    assert "quit" not in modes.KEYS
+    assert "quit" not in {k for k, _l, _i in modes.MODES}
+    assert "quit" not in modes.WORK_MODES | modes.VIEWPORT_MODES | modes.WORKSPACE_MODES
+    assert "quit" not in set(main._SINGLE_PANE_MODES)
+
+    source = inspect.getsource(main.App._mode_switch)
+    assert "modes.QUIT" in source
+    # The unsaved-work chain is _request_quit's, in the order the plumbing test
+    # pins; re-inlining it here would be a second chain to keep in step.
+    assert "self._request_quit" in source
 
 
 def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():

@@ -162,12 +162,18 @@ def _module_version(name: str) -> str | None:
 
 
 def trellis_recipe(config: Any, params: Mapping[str, Any], *, mesh_seed: int) -> dict[str, Any]:
-    """Everything that decided the mesh, in one json.dumps-able dict."""
+    """Everything that decided the mesh, in one json.dumps-able dict.
+
+    The two server settings are read from the job's own params when it pinned
+    them, and only otherwise from the config: a sweep unit that restarts
+    trellis-server with ``--band 8`` and then recorded the config's ``None``
+    would describe a server that did not run.
+    """
     return {
         "version": RECIPE_VERSION,
         "seed": mesh_seed,
-        "band": config.trellis_band,
-        "tex_res": config.trellis_tex_res,
+        "band": params.get("trellis_band", config.trellis_band),
+        "tex_res": params.get("trellis_tex_res", config.trellis_tex_res),
         "webp": config.trellis_webp,
         "mesh_profile": params.get("mesh_profile", config.mesh_profile),
         "platform": params.get("platform"),

@@ -23,6 +23,21 @@ log = logging.getLogger(__name__)
 _blocks_cache: dict[str, list[parser.Block]] = {}
 _chapters_cache: list[loader.Chapter] | None = None
 
+# Prose stops being readable long before a maximised window runs out of room:
+# a 2560px page wraps a paragraph at something like 300 characters, which the
+# eye cannot track back to the next line. Every measure in this module goes
+# through _measure() so the body, the headings, the code blocks and the tables
+# all stop at the same column.
+MAX_LINE_CHARS = 120
+
+
+def _measure() -> float:
+    """The wrap width: the pane, or 120 characters, whichever is narrower."""
+    return min(
+        imgui.get_content_region_avail().x,
+        imgui.calc_text_size("0").x * MAX_LINE_CHARS,
+    )
+
 
 def _toc() -> list[loader.Chapter]:
     global _chapters_cache
@@ -66,7 +81,12 @@ def draw_body(ctx: Any) -> None:
         _draw_toc(ms)
     imgui.end_child()
     imgui.same_line()
-    if imgui.begin_child("manual-page", (0, 0)):
+    # The TOC is bordered and so gets window padding for free; the page is not,
+    # and a borderless child pads by zero -- which is what put the prose flush
+    # against the divider.
+    if imgui.begin_child(
+        "manual-page", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
+    ):
         _draw_chapter(ctx, ms)
     imgui.end_child()
 
@@ -122,8 +142,13 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
     if isinstance(block, parser.Heading):
         imgui.dummy((0, sp(6)))
         if block.level <= 2:
+            # text_wrapped wraps at the content region, which is the one measure
+            # this module does not use; bracket it so a heading breaks on the
+            # same column the prose under it does.
+            imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + _measure())
             with fonts.push(imgui, fonts.SEMIBOLD, 22 if block.level == 1 else 17):
                 imgui.text_wrapped(block.text)
+            imgui.pop_text_wrap_pos()
         else:
             widgets.section(block.text)
         if anchor == block.anchor:
@@ -137,7 +162,7 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
         rows = block.text.count("\n") + 1
         height = imgui.get_text_line_height_with_spacing() * rows + sp(12)
         imgui.input_text_multiline(
-            f"##code-{index}", block.text, (-1, height),
+            f"##code-{index}", block.text, (_measure(), height),
             imgui.InputTextFlags_.read_only.value,
         )
     elif isinstance(block, parser.ListItem):
@@ -150,7 +175,7 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
         imgui.end_group()
     elif isinstance(block, parser.Table):
         flags = imgui.TableFlags_.borders.value | imgui.TableFlags_.row_bg.value
-        if imgui.begin_table(f"##table-{index}", len(block.header), flags):
+        if imgui.begin_table(f"##table-{index}", len(block.header), flags, (_measure(), 0.0)):
             for cell in block.header:
                 imgui.table_next_column()
                 with fonts.label(imgui):
@@ -168,7 +193,7 @@ def _draw_spans(ctx: Any, ms: Any, spans: tuple[parser.Span, ...]) -> None:
     imgui's text_wrapped wraps a single style run; a paragraph here changes
     colour and font mid-line, so the wrap decision has to be per word.
     """
-    max_x = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
+    max_x = imgui.get_cursor_pos_x() + _measure()
     started = False
     for span in spans:
         pieces = span.text.split(" ")

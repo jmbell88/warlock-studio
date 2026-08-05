@@ -92,3 +92,20 @@ def test_trellis_recipe_is_serialisable():
     json.dumps(recipe)
     assert recipe["seed"] == 42
     assert recipe["version"] == provenance.RECIPE_VERSION
+
+
+def test_a_pinned_server_config_is_what_the_recipe_records():
+    """A job that restarted trellis-server with its own band/tex-res must not
+    have the config's values recorded against it -- the recipe would describe a
+    server that never ran."""
+    config = Config()
+    pinned = provenance.trellis_recipe(
+        config, {"trellis_band": 8, "trellis_tex_res": 2048}, mesh_seed=42
+    )
+    assert (pinned["band"], pinned["tex_res"]) == (8, 2048)
+
+    plain = provenance.trellis_recipe(config, {}, mesh_seed=42)
+    assert (plain["band"], plain["tex_res"]) == (
+        config.trellis_band,
+        config.trellis_tex_res,
+    )

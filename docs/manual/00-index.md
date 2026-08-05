@@ -14,7 +14,7 @@ it running and keeping it running, and Part III explains how it is built.
 - [Rigging and posing](04-rigging-and-posing.md) — fitting a skeleton, posing it with gizmos, and saving poses.
 - [Sprite sheets](05-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
 - [Inker](06-inker.md) — the layered raster editor and the two directions it connects to the pipeline.
-- [Build](07-build.md) — modelling from primitives, and the two ways a built document leaves the mode.
+- [Clay](07-clay.md) — modelling from primitives, and the two ways a built document leaves the mode.
 - [The library and jobs](08-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
 - [Keyboard shortcuts](09-shortcuts.md) — every binding the app answers to.
 

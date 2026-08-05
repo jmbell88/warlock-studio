@@ -19,10 +19,8 @@ from ..config import get_config
 from . import calibrate as calibrate_mod
 from . import metrics as metrics_mod
 from . import recipe as recipe_mod
-from . import report as report_mod
 from . import runner as runner_mod
 from . import suite as suite_mod
-from . import sweep as sweep_mod
 
 
 def _timestamp() -> str:
@@ -120,29 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
     prune = sub.add_parser("prune", help="delete all but the newest runs")
     prune.add_argument("--keep", type=int, default=3)
 
-    sweep = sub.add_parser(
-        "sweep",
+    purge = sub.add_parser(
+        "purge",
         help=(
-            "run a parameter sweep (one axis at a time) against a fixed baseline; "
-            "turntable views need bpy (`uv sync --extra rig`)"
+            "free a finished run's disk space: delete its meshes, references and "
+            "rendered views, keeping its items, manifest and scores"
         ),
     )
-    sweep.add_argument("--spec", required=True, help="a sweep spec key under bench/sweeps")
-    sweep.add_argument(
-        "--resume",
-        type=Path,
-        default=None,
-        help="an existing sweep run directory; its own spec/seed selection is reused",
-    )
-    sweep.add_argument("--dry-run", action="store_true")
+    purge.add_argument("run_dir", type=Path, nargs="*", help="run directories under bench/runs")
+    purge.add_argument("--all", action="store_true", help="every run under bench/runs")
 
-    report = sub.add_parser("report", help="aggregate verdicts across sweep runs into findings")
-    report.add_argument(
-        "--threshold",
-        type=int,
-        default=5,
-        help="advisory: hide a param value's line when it has fewer than N verdicts",
-    )
     return parser
 
 
@@ -264,11 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"removed {len(removed)} run(s)")
         return 0
 
-    if args.command == "sweep":
-        return _sweep(config, args)
-
-    if args.command == "report":
-        return _report(config, args)
+    if args.command == "purge":
+        return _purge(config, args)
 
     return _run(config, args)
 
@@ -338,47 +320,38 @@ def _run(config, args) -> int:
     return 0
 
 
-def _sweep(config, args) -> int:
-    started = _timestamp()
-    try:
-        spec = sweep_mod.load(args.spec)
-    except ValueError as exc:
-        print(str(exc))
+def _mib(size: int) -> str:
+    return f"{size / (1024 * 1024):.1f} MiB"
+
+
+def _purge(config, args) -> int:
+    """Free disk space, keeping every measurement.
+
+    Deliberately explicit: a run directory or ``--all``, never a "newest N"
+    default like ``prune``'s. Purging is not reversible and the thing it costs
+    -- re-scoring a run with a new metric, and looking at its meshes in Review
+    -- is not obvious from the subcommand's name.
+    """
+    targets = [Path(p) for p in args.run_dir]
+    if args.all:
+        root = Path(config.bench_dir) / "runs"
+        targets = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+    if not targets:
+        print("nothing to purge; name a run directory or pass --all")
         return 1
-    recipe = recipe_mod.load(spec.recipe_key)
-    try:
-        run_dir, todo, doc = sweep_mod.plan_sweep(
-            config, spec, recipe, started=started, run_dir=args.resume
-        )
-    except ValueError as exc:
-        print(str(exc))
-        return 1
-    print(f"{len(todo)} unit(s)  sweep: {spec.key}   run dir: {run_dir}")
-    if args.dry_run:
-        for unit in todo:
-            print(f"  {unit.key}")
-        return 0
 
-    try:
-        out = sweep_mod.run_sweep(
-            config,
-            spec_key=args.spec, started=started, resume=args.resume, on_event=print,
-        )
-    except KeyboardInterrupt:
-        print("interrupted")
-        return 130
-    print(f"wrote {out}")
-    return 0
-
-
-def _report(config, args) -> int:
-    runs = report_mod.sweep_runs(config)
-    doc = report_mod.aggregate(runs)
-    json_path, md_path = report_mod.write_findings(config, doc)
-    for line in report_mod.summary_lines({"params": doc}, min_n=args.threshold):
-        print(line)
-    print(f"\nwrote {json_path}")
-    print(f"wrote {md_path}")
+    total = 0
+    for run_dir in targets:
+        if not run_dir.is_dir():
+            print(f"{run_dir}: no such run directory")
+            continue
+        if runner_mod.is_purged(run_dir):
+            print(f"{run_dir.name}: already purged")
+            continue
+        doc = runner_mod.purge_media(run_dir)
+        total += int(doc["freed_bytes"])
+        print(f"{run_dir.name}: freed {_mib(doc['freed_bytes'])} ({len(doc['files'])} files)")
+    print(f"freed {_mib(total)} in total")
     return 0
 
 

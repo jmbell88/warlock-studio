@@ -58,7 +58,8 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
   Covered in [Generating meshes](03-generating-meshes.md).
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
   [Inker](06-inker.md).
-- **Clay.** A placeholder. Sculpting is coming in a future update.
+- **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
+  export a `.glb` or import the document as an asset. Covered in [Clay](07-clay.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and a
   read-only list of the models it loaded. See
   [In-app settings](11-configuration.md#in-app-settings).

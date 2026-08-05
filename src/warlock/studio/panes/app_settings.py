@@ -23,7 +23,12 @@ from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
-    if imgui.begin_child("app-settings", (0, 0)):
+    # always_use_window_padding, because a *borderless* child gets zero window
+    # padding by default -- so this pane's content sat flush against the host
+    # window's left edge while every bordered sidebar got the theme's gutter.
+    if imgui.begin_child(
+        "app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
+    ):
         _interface(ctx)
         _layout(ctx)
         _models(ctx)

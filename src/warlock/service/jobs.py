@@ -25,6 +25,8 @@ from .validation import (
     check_glb,
     check_job_id,
     check_seed,
+    check_trellis_band,
+    check_trellis_tex_res,
     check_vram,
     normalize_tags,
     random_seed,
@@ -79,11 +81,15 @@ def create_job(
     reference_prep: bool | None = None,
     profile: str | None = None,
     custom_triangles: int | None = None,
+    trellis_band: int | None = None,
+    trellis_tex_res: int | None = None,
     image: bytes | None = None,
     reference: bytes | None = None,
     output: str = "model",
     count: int = 1,
     guidance_fields: dict[str, Any] | None = None,
+    sweep_id: str | None = None,
+    sweep_unit: str = "",
 ) -> dict[str, Any]:
     """Queue one job, or ``count`` reference candidates of one.
 
@@ -106,6 +112,11 @@ def create_job(
         # N meshes per submit is minutes of GPU each; only the cheap 4-step
         # image stages are worth batching.
         raise Invalid("count > 1 requires output=reference or output=tile", field="count")
+    if count > 1 and sweep_id:
+        # A sweep unit is one job: it is what a verdict is filed against and
+        # what a config vector describes. N candidates behind one unit label
+        # would make both ambiguous.
+        raise Invalid("a sweep unit is a single job", field="count")
     # An explicit resolution overrides the platform preset; the UI no longer
     # sends one, but the API keeps accepting it.
     if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
@@ -128,6 +139,8 @@ def create_job(
         ("mesh_seed", mesh_seed),
     ):
         check_seed(name, value)
+    check_trellis_band(trellis_band)
+    check_trellis_tex_res(trellis_tex_res)
 
     # Validated up front: a rejected request must not leave an input.png behind.
     params = _normalize_guidance(
@@ -162,6 +175,21 @@ def create_job(
         # queue.DEFAULT_REFERENCE_PREP rather than being pinned to whatever
         # today's default happens to be.
         params["reference_prep"] = bool(reference_prep)
+    for key, value in (
+        ("trellis_band", trellis_band),
+        ("trellis_tex_res", trellis_tex_res),
+    ):
+        # Written only when asked for, the reference_prep pattern: an unset job
+        # keeps following the config, rather than being pinned to whatever
+        # today's default happens to be. These are *inputs*, so they stay out of
+        # DERIVED_PARAMS -- a reroll reproducing the server config the mesh was
+        # made under is correct provenance, not an inherited verdict.
+        #
+        # The known limitation: with None meaning "unset", an explicit "auto
+        # band" is inexpressible when the config default is a number. Today's
+        # default is auto, so nothing can currently want it.
+        if value is not None:
+            params[key] = int(value)
     if rig:
         # Validated now rather than 90 seconds later: an unusable template
         # should cost the request, not the whole generation that precedes the
@@ -228,7 +256,15 @@ def create_job(
                     # rows, and prune deletes one dir without touching another.
                     (job_dir / "ref.png").write_bytes(normalized_ref)
                 made_dirs.append(job_dir)
-            svc.store.create(kind, prompt, candidate, job_id, stage=output)
+            svc.store.create(
+                kind,
+                prompt,
+                candidate,
+                job_id,
+                stage=output,
+                sweep_id=sweep_id,
+                sweep_unit=sweep_unit,
+            )
             ids.append(job_id)
     except Exception:
         # Only the candidates whose insert never landed: a row that exists owns
@@ -319,7 +355,7 @@ def import_mesh(
     The payoff is out of all proportion to the size of this function. Rigging,
     posing, sprite sheets, the triangle retarget and every mesh export are pure
     functions of ``model.glb``, so a row created here inherits all of them
-    without one of those paths learning that Build mode exists.
+    without one of those paths learning that Clay mode exists.
 
     ``source.glb`` is the authored mesh and ``model.glb`` derives from it, which
     is the existing invariant rather than a new one -- and it is what keeps
@@ -544,7 +580,7 @@ def rerun_job(
         # to open the document and change it.
         raise Invalid(
             "this asset was built rather than generated, so there is nothing to "
-            "regenerate; open it in Build mode to change the mesh"
+            "regenerate; open it in Clay to change the mesh"
         )
     kind = "image" if mode == "remesh" else source["kind"]
     src_png = svc.job_dir(job_id) / "input.png"

@@ -120,6 +120,40 @@ class TrellisServer:
             argv += ["--band", str(self._band)]
         return argv
 
+    def ensure_config(self, *, tex_res: int, band: int | None) -> bool:
+        """Adopt a launch config, stopping a server running with a different one.
+
+        -> whether a running server was stopped. There is no new spawn site: the
+        next ``ensure_started`` builds ``_argv`` from the fields written here, so
+        "restart with a different band" is exactly "stop, and let the existing
+        lazy start do its job".
+
+        The check is against the *running* server rather than against any
+        bookkeeping, which is what makes it free of state to get wrong: an idle
+        eviction, a crash or a cancel all leave nothing running, and nothing is
+        then stopped. Called on every model-stage job with fully resolved
+        values, so an ordinary job following a sweep unit restores the config's
+        own settings without anyone having to remember that the sweep changed
+        them.
+
+        Blocking (``stop`` is), so every caller dispatches it through
+        ``asyncio.to_thread`` exactly as they dispatch ``stop``.
+        """
+        with self._stop_lock:
+            changed = (self._tex_res, self._band) != (tex_res, band)
+            self._tex_res = tex_res
+            self._band = band
+            # Read under the same lock that guards stop()'s check-then-act, and
+            # released before calling it: _stop_lock is a plain Lock.
+            restart = changed and self._proc is not None and self._proc.poll() is None
+        if restart:
+            log.info(
+                "trellis-server config changed (tex_res=%s band=%s); restarting",
+                tex_res, band,
+            )
+            self.stop()
+        return restart
+
     def _reap_if_dead(self) -> None:
         """A self-crashed server otherwise leaks the old log handle and
         reader thread the next time _proc/_reader/_logfh are overwritten."""

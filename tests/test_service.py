@@ -753,3 +753,78 @@ def test_a_tile_cannot_be_remeshed_either(svc):
     svc.store.set_status(job_id, "error")
     with pytest.raises(Invalid, match="no subject"):
         svc_jobs.rerun_job(svc, job_id, mode="remesh")
+
+
+# --- the server-config axes -------------------------------------------------
+
+
+def test_the_server_axes_land_in_params_only_when_asked_for(svc):
+    pinned = svc_jobs.create_job(
+        svc, kind="text", prompt="a chest", output="reference",
+        trellis_band=8, trellis_tex_res=2048,
+    )
+    params = svc.store.get(pinned["id"])["params"]
+    assert (params["trellis_band"], params["trellis_tex_res"]) == (8, 2048)
+
+    plain = svc_jobs.create_job(svc, kind="text", prompt="a chest", output="reference")
+    unset = svc.store.get(plain["id"])["params"]
+    assert "trellis_band" not in unset and "trellis_tex_res" not in unset
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"trellis_band": 0},
+        {"trellis_band": 65},
+        {"trellis_band": 8.0},
+        {"trellis_tex_res": 64},
+        {"trellis_tex_res": 8192},
+        {"trellis_tex_res": True},
+    ],
+)
+def test_an_out_of_range_server_axis_is_refused_before_any_write(svc, kwargs):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc, kind="image", image=_png_bytes(), output="model", **kwargs
+        )
+    assert list(svc.config.data_dir.glob("*/input.png")) == []
+
+
+def test_the_server_axes_survive_a_reroll_because_they_are_inputs(svc):
+    created = svc_jobs.create_job(
+        svc, kind="text", prompt="a chest", output="reference", trellis_band=8
+    )
+    svc.store.set_status(created["id"], "done")
+    rerun = svc_jobs.rerun_job(svc, created["id"], mode="reroll")
+    assert svc.store.get(rerun["id"])["params"]["trellis_band"] == 8
+    assert "trellis_band" not in DERIVED_PARAMS
+
+
+# --- sweep membership -------------------------------------------------------
+
+
+def test_sweep_membership_is_columns_and_never_leaks_onto_a_reroll(svc):
+    sweep_id = svc.store.create_sweep("lora", "a chest", {})
+    created = svc_jobs.create_job(
+        svc, kind="text", prompt="a chest", output="reference",
+        sweep_id=sweep_id, sweep_unit="lora_weight=0.6 s42",
+    )
+    row = svc.store.get(created["id"])
+    assert row["sweep_id"] == sweep_id
+    assert row["sweep_unit"] == "lora_weight=0.6 s42"
+    # Not in params, so nothing that copies params can carry it.
+    assert "sweep_id" not in row["params"]
+
+    svc.store.set_status(created["id"], "done")
+    rerun = svc.store.get(svc_jobs.rerun_job(svc, created["id"], mode="reroll")["id"])
+    assert rerun["sweep_id"] is None
+    assert rerun["sweep_unit"] == ""
+
+
+def test_a_sweep_unit_is_a_single_job(svc):
+    sweep_id = svc.store.create_sweep("lora", "a chest", {})
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a chest", output="reference",
+            count=3, sweep_id=sweep_id,
+        )

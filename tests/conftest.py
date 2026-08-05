@@ -89,6 +89,26 @@ class FakeTrellisServer:
         # trellis-server.exe that ignores termination, so the only thing that
         # can end the run is Worker.shutdown()'s forced task.cancel() fallback.
         self.ignore_stop = False
+        # The launch config, mirrored from the real server's constructor
+        # defaults, plus a record of every ensure_config call and the thread it
+        # ran on -- ensure_config blocks (it calls stop), so like stop it must
+        # never run on the event loop.
+        self.tex_res = 512
+        self.band: int | None = None
+        self.config_calls: list[tuple[int, int | None]] = []
+        self.config_threads: list[int] = []
+        self.restarts = 0
+
+    def ensure_config(self, *, tex_res: int, band: int | None) -> bool:
+        self.config_calls.append((tex_res, band))
+        self.config_threads.append(threading.get_ident())
+        changed = (self.tex_res, self.band) != (tex_res, band)
+        self.tex_res, self.band = tex_res, band
+        if changed and self.running:
+            self.restarts += 1
+            self.stop()
+            return True
+        return False
 
     async def generate(
         self,

@@ -151,6 +151,12 @@ class Filters:
     sort: str = "newest"
 
     def matches(self, job: dict[str, Any]) -> bool:
+        if job.get("sweep_id"):
+            # A sweep's units are dozens of near-identical rows whose whole
+            # purpose is to be compared against each other in Review. Left in,
+            # one launched sweep buries a workshop's actual assets. They are
+            # reachable by their sweep, and deleting the sweep deletes them.
+            return False
         if self.favorites_only and not job.get("favorite"):
             return False
         if self.status != "all" and job.get("status") != self.status:
@@ -257,6 +263,11 @@ class AppState:
     mode: str = "home"
     selected: str | None = None
     comparing: str | None = None
+    # Which asset the inspector's Reject button is armed for, waiting on a
+    # reason. Keyed by job id rather than being a bare flag, so selecting a
+    # different asset disarms it -- an armed state belongs to the thing that was
+    # on screen when it was armed, exactly as Review's ``pending_reject`` does.
+    inspector_reject_armed: str | None = None
     form_2d: dict[str, Any] = field(default_factory=default_form_2d)
     form_3d: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FORM_3D))
     filters: Filters = field(default_factory=Filters)
@@ -286,13 +297,13 @@ class AppState:
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never draws pays nothing for it.
     inker: Any = None
-    # Build mode's own multi-document state, built on first use by
-    # ``build_mode.ensure``. Untyped and None here for the reason ``inker`` is:
+    # Clay's own multi-document state, built on first use by
+    # ``clay_mode.ensure``. Untyped and None here for the reason ``inker`` is:
     # AppState is the shared frame state and deliberately knows nothing about
-    # what a mode keeps, so a session that never opens Build mode pays nothing.
-    build: Any = None
+    # what a mode keeps, so a session that never opens Clay pays nothing.
+    clay: Any = None
     # Review mode's sweep runs and where in one it is, built on first use by
-    # ``review_mode.ensure`` and untyped here for the reason ``build`` is.
+    # ``review_mode.ensure`` and untyped here for the reason ``clay`` is.
     # Nothing in it is persisted: a stored run directory would outlive the
     # sweep it names.
     review: Any = None

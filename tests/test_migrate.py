@@ -176,3 +176,66 @@ def test_a_db_without_metadata_columns_gains_them(tmp_path):
         assert row["favorite"] == 0
     finally:
         store.close()
+
+
+def test_a_v3_db_gains_the_sweep_columns_and_the_new_tables(tmp_path):
+    """Migration 4 is additive over a v3 database: the two sweep columns land
+    on ``jobs`` defaulted to "not part of a sweep", and the sweeps/verdicts
+    tables appear."""
+    path = tmp_path / "v3.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+            prompt TEXT, params TEXT NOT NULL DEFAULT '{}', error TEXT,
+            created_at REAL NOT NULL, started_at REAL, finished_at REAL,
+            stage TEXT NOT NULL DEFAULT 'model', parent_id TEXT,
+            name TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
+            favorite INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs (id, kind, status, params, created_at)"
+        " VALUES ('aaaaaaaaaaaa', 'text', 'done', '{}', 1.0)"
+    )
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+    conn.close()
+
+    store = JobStore(path)
+    try:
+        row = store.list(10)[0]
+        assert row["sweep_id"] is None
+        assert row["sweep_unit"] == ""
+        # The new tables are usable, not merely present.
+        sweep_id = store.create_sweep("s", "p", {})
+        assert [s["id"] for s in store.list_sweeps()] == [sweep_id]
+        store.add_verdict("aaaaaaaaaaaa", source="human", verdict="accept",
+                          reasons=[], vector={"platform": "pc"})
+        assert store.latest_verdicts()[0]["vector"] == {"platform": "pc"}
+    finally:
+        store.close()
+
+    fresh_path = tmp_path / "fresh.sqlite"
+    fresh = JobStore(fresh_path)
+    fresh.close()
+
+    def shape(p):
+        c = sqlite3.connect(p)
+        info = {
+            table: c.execute(f"PRAGMA table_info({table})").fetchall()
+            for table in ("jobs", "sweeps", "verdicts")
+        }
+        version = c.execute("PRAGMA user_version").fetchone()[0]
+        indexes = {r[1] for r in c.execute("PRAGMA index_list(jobs)")}
+        c.close()
+        return info, version, indexes
+
+    migrated_shape, migrated_version, migrated_indexes = shape(path)
+    fresh_shape, fresh_version, fresh_indexes = shape(fresh_path)
+    assert migrated_shape == fresh_shape
+    assert migrated_version == fresh_version == len(MIGRATIONS)
+    assert "idx_jobs_sweep" in migrated_indexes
+    assert "idx_jobs_sweep" in fresh_indexes
