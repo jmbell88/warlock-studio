@@ -1466,6 +1466,22 @@ def _seeded_glb_bytes(worker: Worker) -> None:
     worker.trellis.generate = generate
 
 
+async def test_a_mesh_exactly_at_the_threshold_is_kept(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # The comparison is <=, so the threshold is the last acceptable value
+    # rather than the first rejected one.
+    _audits(monkeypatch, [0.1])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert len(w.trellis.generate_calls) == 1
+    store.close()
+
+
 async def test_without_the_setting_a_holey_mesh_is_kept(worker, monkeypatch):
     _audits(monkeypatch, [0.5])
     job_id = _make_image_job(worker)
@@ -1646,6 +1662,94 @@ async def test_a_cancel_stops_the_retry(tmp_path, fake_pipelines, monkeypatch):
     await w.shutdown()
 
     assert len(w.trellis.generate_calls) == 1
+    store.close()
+
+
+async def test_a_cancel_during_a_retry_kills_the_server(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # request_cancel reads the progress *phase* to decide whether to kill
+    # trellis-server, and killing it is the only abort trellis has. The retry's
+    # generate therefore has to re-declare phase="trellis": left at "audit" --
+    # what _audit_mesh set -- a cancel would set the event, skip the kill and
+    # then sit in the retry for a whole reconstruction.
+    _audits(monkeypatch, [0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=3, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    inner = w.trellis.generate
+
+    async def generate(image_path, output_path, **kwargs):
+        if w.trellis.generate_calls:
+            # Long enough to still be inside the retry when the cancel lands.
+            w.trellis.slices = 100
+        return await inner(image_path, output_path, **kwargs)
+
+    w.trellis.generate = generate
+    w.start()
+    await _wait_until(lambda: len(w.trellis.generate_calls) == 2)
+    await w.request_cancel(job_id)
+
+    assert w.trellis.stop_calls == 1
+    assert w.progress.snapshot()["phase"] == "trellis"
+    await _wait_until(lambda: store.get(job_id)["status"] == "cancelled", timeout=10.0)
+    await w.shutdown()
+    store.close()
+
+
+async def test_a_failed_staging_copy_gives_up_on_retrying_rather_than_on_the_job(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # The retry is what doubled a job's peak on-disk footprint, so a full disk
+    # is the realistic way its copy fails -- and it must cost the retry, never
+    # the mesh that is already on disk.
+    import warlock.queue as queue_mod
+
+    real = queue_mod.shutil.copyfile
+
+    def copyfile(src, dst, *args, **kwargs):
+        if str(dst).endswith("best.glb"):
+            raise OSError(28, "No space left on device")
+        return real(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(queue_mod.shutil, "copyfile", copyfile)
+    _audits(monkeypatch, [0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] in ("done", "error"))
+    await w.shutdown()
+
+    job = store.get(job_id)
+    assert job["status"] == "done"
+    assert job["error"] is None
+    assert len(w.trellis.generate_calls) == 1
+    assert job["params"]["mesh_audit"]["worst"] == 0.9
+    store.close()
+
+
+async def test_no_scratch_copy_is_taken_for_an_attempt_that_cannot_be_retried(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # Two whole GLBs. The copy belongs below the break check, so the attempt
+    # that ends the loop -- here the first, which passes -- never pays for one.
+    import warlock.queue as queue_mod
+
+    real = queue_mod.shutil.copyfile
+    copies: list[str] = []
+
+    def copyfile(src, dst, *args, **kwargs):
+        copies.append(str(dst))
+        return real(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(queue_mod.shutil, "copyfile", copyfile)
+    _audits(monkeypatch, [0.01])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert not [c for c in copies if "best" in c]
     store.close()
 
 

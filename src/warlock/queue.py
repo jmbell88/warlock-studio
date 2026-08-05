@@ -894,6 +894,10 @@ class Worker:
         retries = max(0, int(self.config.mesh_retries))
         keep = job_dir / "best.glb"
         keep_source = job_dir / "best.source.glb"
+        # Whether keep/keep_source currently hold the best attempt's pair. The
+        # loop only ever retries from a staged state, so this is True whenever
+        # a restore could be needed.
+        staged = False
         # Which attempt's reconstruction is sitting at source.glb/model.glb
         # right now, which is the only thing that decides whether the scratch
         # copies have to be put back. None means "no longer any attempt's" --
@@ -905,28 +909,20 @@ class Worker:
             audit = await self._audit_mesh(job_id, glb_path, params)
             worst = None if audit is None else audit.get("worst")
             attempts.append({"seed": mesh_seed, "worst": worst})
-            if best is None or (
+            new_best = best is None or (
                 worst is not None
                 and best["worst"] is not None
                 and worst < best["worst"]
-            ):
-                best = {
-                    "seed": mesh_seed,
-                    "worst": worst,
-                    "params": dict(params),
-                }
-                if retries:
-                    # Kept aside rather than trusted to be last: a reroll can
-                    # be worse, and then two minutes of GPU would have made the
-                    # asset worse than it already was. Both files, because
-                    # source.glb is what a later retarget re-derives model.glb
-                    # from -- a source left behind by the losing attempt would
-                    # quietly undo the choice made here the first time someone
-                    # changed a triangle budget. Only when a retry can actually
-                    # happen: with the feature off this is the whole cost of it
-                    # being present, and it should be nothing.
-                    await asyncio.to_thread(shutil.copyfile, glb_path, keep)
-                    await asyncio.to_thread(shutil.copyfile, source_glb, keep_source)
+            )
+            if new_best:
+                # params is snapshotted shallowly, which is exact today and
+                # deliberately so: _optimize, _apply_scale and _audit_mesh all
+                # *rebind* their top-level keys rather than mutating a nested
+                # value in place, so a shallow copy of the mapping isolates
+                # every value that can change between here and the restore. A
+                # callee that grew an in-place nested mutation would defeat it,
+                # which is the one thing to check before adding to this loop.
+                best = {"seed": mesh_seed, "worst": worst, "params": dict(params)}
             if (
                 worst is None
                 or worst <= self.config.mesh_hole_max
@@ -936,10 +932,53 @@ class Worker:
                 # A budget, not a loop, and an unmeasurable mesh is not a bad
                 # one: no verdict means the mesh already on disk is kept.
                 break
+            if new_best:
+                # Below the break, not above it: a copy taken on the attempt
+                # that turns out to be the last one is never read, and this is
+                # two whole GLBs. Reaching here means a retry is definitely
+                # about to overwrite them.
+                #
+                # Kept aside rather than trusted to be last, because a reroll
+                # can be worse and then two minutes of GPU would have made the
+                # asset worse than it already was. Both files, because
+                # source.glb is what a later retarget re-derives model.glb
+                # from -- a source left behind by the losing attempt would
+                # quietly undo the choice made here the first time someone
+                # changed a triangle budget.
+                try:
+                    await asyncio.to_thread(shutil.copyfile, glb_path, keep)
+                    await asyncio.to_thread(shutil.copyfile, source_glb, keep_source)
+                except OSError:
+                    # A full disk is the realistic way a tens-of-megabytes copy
+                    # fails, and this feature is what doubled the footprint. So
+                    # it gives up on retrying rather than failing a job whose
+                    # mesh is already on disk: without a copy of the attempt in
+                    # hand there is nothing to fall back to, and running trellis
+                    # again would risk overwriting the only good result.
+                    log.exception(
+                        "job %s: could not stage the mesh for a remesh; keeping it", job_id
+                    )
+                    break
+                staged = True
             mesh_seed = _fresh_seed()
             log.info(
                 "job %s: mesh audited %.3f open, past %.3f -- remeshing at seed %d",
                 job_id, worst, self.config.mesh_hole_max, mesh_seed,
+            )
+            # The phase, not just a label. request_cancel decides whether to
+            # kill trellis-server by reading it, and killing the subprocess is
+            # the only abort trellis has -- left at "audit" (what _audit_mesh
+            # set), a cancel would set the event, skip the kill and then block
+            # here for a whole reconstruction. Mirrors the first generate's
+            # update above, for the same reason.
+            self.progress.update(
+                job_id,
+                phase="trellis",
+                label="Remeshing" if self.trellis.running else "Starting 3D engine",
+                inner=0.0,
+                inner_next=0.02,
+                nominal=6.0,
+                detail=f"attempt {len(attempts) + 1}",
             )
             on_disk_seed = None
             try:
@@ -958,39 +997,67 @@ class Worker:
                 # left disowned rather than trusted (a half-written file is
                 # exactly what a failed run leaves), and the restore below puts
                 # the kept attempt's pair back.
-                # A cancel is not swallowed here: it arrives as a set event,
-                # which the `finally` in _process reads, or as CancelledError,
-                # which is a BaseException and passes straight through.
-                log.exception("remesh failed for job %s; keeping the best mesh so far", job_id)
+                if self._cancel.event.is_set():
+                    # Not a failure at all: request_cancel killed the server and
+                    # the in-flight post died with it, exactly as designed. A
+                    # traceback here would be noise on a routine cancel.
+                    log.info("job %s: remesh cancelled", job_id)
+                else:
+                    log.exception(
+                        "remesh failed for job %s; keeping the best mesh so far", job_id
+                    )
                 break
             on_disk_seed = mesh_seed
         # Whether what is on disk is what was chosen -- which is not the same
         # question as "did an earlier attempt win", because a retry that failed
         # part-way leaves neither attempt's reconstruction there.
-        restored = best is not None and on_disk_seed != best["seed"]
+        restored = best is not None and staged and on_disk_seed != best["seed"]
         if restored and best is not None:
             # Put the kept attempt's GLBs and its measurements back, so what is
             # on disk and what params claims about it describe the same mesh.
+            #
+            # source.glb first, and the order is the whole point: these are two
+            # files and no filesystem makes the pair atomic, so the question is
+            # which half-done state is survivable. Source-then-model leaves the
+            # *source* as the kept attempt's, and service.jobs.optimize_job
+            # re-derives model.glb from source.glb -- so the next retarget
+            # converges on the mesh that was chosen. The other order strands the
+            # winner's model.glb over the loser's source, and a retarget
+            # silently swaps the rejected reconstruction back in.
+            #
             # params is restored wholesale rather than key by key: the snapshot
-            # is a complete copy taken between two trellis runs, and only
+            # is a copy of the mapping taken between two trellis runs, and only
             # _optimize, _apply_scale and _audit_mesh write between then and
             # here, so replacing it is exact -- and stays exact when one of
             # those three grows a new key, which a hand-written strip list
             # would not.
-            await asyncio.to_thread(shutil.copyfile, keep, glb_path)
-            await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
-            params.clear()
-            params.update(best["params"])
+            try:
+                await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
+                await asyncio.to_thread(shutil.copyfile, keep, glb_path)
+            except OSError:
+                # Same rule as everywhere else here: the last attempt's mesh is
+                # on disk and usable, so a failed restore costs the user the
+                # better of two meshes, never the job.
+                log.exception(
+                    "job %s: could not restore the best mesh; keeping the last attempt", job_id
+                )
+                restored = False
+            else:
+                params.clear()
+                params.update(best["params"])
         if best is not None and (restored or len(attempts) > 1):
             if len(attempts) > 1:
                 params["mesh_attempts"] = attempts
             # The seed that reproduces the mesh that shipped, which is the best
             # attempt's and not necessarily the last one tried -- and the recipe
             # carries the same seed, or the provenance and the row would name
-            # different reconstructions.
-            params["mesh_seed"] = best["seed"]
+            # different reconstructions. If the restore itself failed then what
+            # shipped is the last *measured* attempt, and saying so beats
+            # claiming a seed whose mesh is not there.
+            kept_seed = best["seed"] if restored else attempts[-1]["seed"]
+            params["mesh_seed"] = kept_seed
             params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
-                self.config, params, mesh_seed=best["seed"]
+                self.config, params, mesh_seed=kept_seed
             )
             await asyncio.to_thread(self.store.set_params, job_id, params)
         for scratch in (keep, keep_source):

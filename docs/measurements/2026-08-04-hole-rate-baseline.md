@@ -158,8 +158,15 @@ wrote down from eyeballing perforated meshes. Two methods, one number.
 ## Verdict
 
 **Warranted.** 15 of 37 meshes exceeded 0.07. A retry threshold of 0.07 catches
-those and nothing else. Task 7 proceeds with `WARLOCK_REMESH_HOLE_MAX`
+those and nothing else. Task 7 proceeds with `WARLOCK_MESH_HOLE_MAX`
 defaulting to 0.07.
+
+(This paragraph first named the variable `WARLOCK_REMESH_HOLE_MAX`, which was
+never the name the code took: the shipped pair is `WARLOCK_MESH_RETRIES` and
+`WARLOCK_MESH_HOLE_MAX`, backing `Config.mesh_retries` and
+`Config.mesh_hole_max`. Corrected here rather than in the code, because the
+name is arbitrary and the number is not -- and a document and a config field
+naming different variables for the same ruling is how the two drift apart.)
 
 ## Observation: a >50% reference-stage refusal rate
 

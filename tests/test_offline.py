@@ -47,6 +47,26 @@ def test_vram_exclusive_flag_parses_from_env(monkeypatch):
     assert Config().vram_exclusive is None
 
 
+def test_the_measured_hole_threshold_is_the_shipped_default(monkeypatch):
+    # The whole of the 2026-08-04 measurement gate's ruling lives in one string
+    # literal in config.py, and every remesh test passes its own threshold
+    # explicitly -- so without this, a typo in the default would be invisible.
+    # See docs/measurements/2026-08-04-hole-rate-baseline.md: 0.07 is the
+    # midpoint of the empty gap between 0.0308 and 0.1010.
+    monkeypatch.delenv("WARLOCK_MESH_HOLE_MAX", raising=False)
+    monkeypatch.delenv("WARLOCK_MESH_RETRIES", raising=False)
+    assert Config().mesh_hole_max == 0.07
+    # And off, which is the other half of the ruling.
+    assert Config().mesh_retries == 0
+    monkeypatch.setenv("WARLOCK_MESH_HOLE_MAX", "0.25")
+    monkeypatch.setenv("WARLOCK_MESH_RETRIES", "2")
+    assert Config().mesh_hole_max == 0.25
+    assert Config().mesh_retries == 2
+    # Floored, so a negative budget is off rather than an infinite loop.
+    monkeypatch.setenv("WARLOCK_MESH_RETRIES", "-3")
+    assert Config().mesh_retries == 0
+
+
 def test_vram_logging_never_imports_torch_itself(monkeypatch):
     """vram_gib runs on the event loop, and importing torch takes seconds -- an
     image job on a machine where torch isn't loaded must not pay for it. The
