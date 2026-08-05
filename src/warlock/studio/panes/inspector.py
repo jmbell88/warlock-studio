@@ -1,9 +1,11 @@
 """The selected asset: what it is, what it cost, and what you can take away.
 
-The downloads section is the interesting part. Eight artifacts, three states
-each -- ready, derivable, impossible -- and the difference matters: a greyed
-"FBX" with "needs Blender" under it is information, while a missing one is a
-mystery.
+The downloads section is the interesting part. Each artifact has three states
+-- ready, derivable, impossible -- and the difference matters: a greyed "FBX"
+with "needs Blender" under it is information, while a missing one is a mystery.
+*Which* artifacts appear is a function of the job: a reference was being shown
+the mesh grid, so all eight of its buttons were permanently greyed, which reads
+as a broken asset rather than as a 2D one.
 """
 
 from __future__ import annotations
@@ -276,13 +278,19 @@ def _downloads(ctx: Any, job: Any) -> None:
     job_id = job["id"]
     files = set(job.get("files") or [])
     has_mesh = "model.glb" in files
+    two_d = job.get("stage") in ("reference", "tile")
     if not imgui.begin_table("downloads", 2):
         return
-    for name, label in widgets.ARTIFACTS:
+    for name, label in widgets.artifacts_for(job):
         # job["files"] is the sanctioned answer; a raw exists() check here used
         # to re-enable buttons the service would then refuse.
         ready = name in files
-        derivable = has_mesh and svc_derive.derivable(name)
+        # A 2D export is derivable from the reference's own pixels, so it is
+        # gated on nothing else: model.glb is not in the question a reference
+        # asks, and the old has_mesh gate is what greyed every one of them out.
+        derivable = (
+            svc_derive.derivable_2d(name) if two_d else has_mesh and svc_derive.derivable(name)
+        )
         blocked = _why_blocked(ctx, name, ready, derivable)
         key = f"save:{job_id}:{name}"
         busy = ctx.busy(key)
@@ -297,6 +305,9 @@ def _downloads(ctx: Any, job: Any) -> None:
         if blocked and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             imgui.set_tooltip(blocked)
     imgui.end_table()
+    if two_d:
+        _matte_note(ctx)
+        _manifest_summary(ctx, job)
 
 
 def _why_blocked(ctx: Any, name: str, ready: bool, derivable: bool) -> str | None:
@@ -307,6 +318,78 @@ def _why_blocked(ctx: Any, name: str, ready: bool, derivable: bool) -> str | Non
     if derivable:
         return None
     return "not available for this asset"
+
+
+def _matte_note(ctx: Any) -> None:
+    """Why the cutouts look the way they do.
+
+    Not a reason a button is blocked, which is why it sits under the grid
+    rather than in ``_why_blocked``: the exports always work. The question a
+    user has when the edges come out ragged is whether that is the model or the
+    fallback, and nothing in the UI could answer it -- the doctor row says the
+    same thing in a place nobody opens mid-export.
+    """
+    from ...pipelines import matting
+
+    if matting.available(ctx.svc.config):
+        return
+    widgets.muted(
+        "Cutouts use the corner fill -- edges are rougher than the matting "
+        "model's. See the matting row under Settings for the one-time download."
+    )
+
+
+def _manifest_summary(ctx: Any, job: Any) -> None:
+    """The pivot and the alpha QA, read off the manifest that was written.
+
+    Read from the file rather than recomputed: the manifest is the thing an
+    importer will consume, so showing anything else here would let the two
+    disagree about the asset. Parsed at most once per version of the file --
+    see ``_manifest`` -- because a frame is not the place to do it again.
+    """
+    manifest = _manifest(ctx, job["id"])
+    if manifest is None:
+        return
+    for name, entry in sorted((manifest.get("artifacts") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        bits = [name]
+        if entry.get("pivot"):
+            bits.append(f"pivot {entry['pivot'][0]:.0f},{entry['pivot'][1]:.0f}")
+        alpha = entry.get("alpha") or {}
+        if alpha.get("islands", 0) > 1:
+            bits.append(f"{alpha['islands']} separate pieces")
+        widgets.muted(" - ".join(bits))
+
+
+def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
+    """The job's parsed manifest.json, or None if there isn't a readable one.
+
+    A stat every frame and a parse only when the file has changed. That split
+    is the whole point: the export tab redraws sixty times a second, a
+    derivation running on the TaskRunner rewrites the manifest underneath it,
+    and re-reading on an mtime is how ``ThumbnailCache`` already reconciles
+    those two facts. The slot lives on ``AppState`` rather than in a module
+    global so the pane itself stays stateless.
+    """
+    import json
+
+    path = ctx.job_dir(job_id) / "manifest.json"
+    try:
+        key = (job_id, path.stat().st_mtime_ns)
+    except OSError:
+        return None
+    cached = ctx.state.manifest
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    try:
+        manifest = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    ctx.state.manifest = (key, manifest)
+    return manifest
 
 
 def duration(job: Any) -> str:

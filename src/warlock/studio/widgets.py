@@ -35,6 +35,39 @@ ARTIFACTS = (
     ("input.png", "Reference image"),
 )
 
+# What a finished *reference* can hand over. A separate tuple rather than a
+# filtered ARTIFACTS: the two lists have nothing in common but input.png, and a
+# reference offered eight greyed mesh buttons -- which is what it used to get --
+# reads as a broken asset rather than as a 2D one.
+ARTIFACTS_2D = (
+    ("icon.png", "Icon PNG"),
+    ("sprite.png", "Sprite PNG"),
+    ("pixel_32.png", "Pixel 32"),
+    ("pixel_64.png", "Pixel 64"),
+    ("pixel_128.png", "Pixel 128"),
+    ("manifest.json", "Manifest"),
+    ("input.png", "Source image"),
+)
+
+
+def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """The Export tab's grid for one job.
+
+    Keyed on the stage rather than on which files happen to exist: every entry
+    in both tuples is *derivable*, so a list built from what is on disk would
+    hide exactly the exports that have not been produced yet -- which is all of
+    them, the first time.
+
+    A ``tile`` takes the 2D list wholesale for now, mirroring ``files.ready``'s
+    own forward-looking arm. That is deliberately provisional in both places:
+    the cutout exports are meaningless for a seamless texture, but what a tile
+    *should* offer is not knowable until the stage exists, so narrowing it
+    belongs with the task that introduces one rather than here.
+    """
+    if job.get("stage") in ("reference", "tile"):
+        return ARTIFACTS_2D
+    return ARTIFACTS
+
 
 def texture_ref(texture: Any) -> Any:
     """A moderngl texture as something ``imgui.image`` will accept.

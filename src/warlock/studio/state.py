@@ -277,6 +277,13 @@ class AppState:
     # lazy so a session that never draws pays nothing for it.
     inker: Any = None
     manual: ManualState = field(default_factory=ManualState)
+    # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
+    # so the Export tab reads and parses it once per version of the file rather
+    # than once per frame. The same (id, mtime) idiom ThumbnailCache uses, for
+    # the same reason: the stat that decides whether to re-read is the cheap
+    # half, and a derivation rewrites the manifest under a tab that is open.
+    # One slot, because one asset is inspected at a time.
+    manifest: Any = None
 
     # -- toasts ------------------------------------------------------------
 
