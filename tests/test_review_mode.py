@@ -681,6 +681,31 @@ def test_the_workspace_refuses_to_load_over_the_pose_editor():
     assert "return" in source[pose_at : source.index("self._review_load")]
 
 
+def test_the_workspace_clears_a_stale_compare_split_before_drawing():
+    """3D's Escape handler (``main.App._shortcut``) is the only other place
+    that clears ``ctx.state.comparing`` -- and Review's own Escape branch
+    (also in ``_shortcut``) returns unconditionally before that handler runs,
+    so a split entered in 3D and never exited would otherwise stay armed
+    forever once the mode switches to Review. ``_draw_viewport_image`` halves
+    the width for *any* mode whenever ``comparing`` is set, so without this
+    check Review draws a sweep unit's mesh next to a stale compare texture.
+
+    Checked at the top of ``_review_viewport`` -- which runs every frame
+    Review is on screen, not only on the first frame after the mode switch --
+    so it also covers 3D -> Review -> 3D -> Review re-entry, not just a single
+    transition."""
+    import inspect
+
+    from warlock.studio import main
+
+    source = inspect.getsource(main.App._review_viewport)
+    comparing_at = source.index("ctx.state.comparing")
+    assert comparing_at < source.index("review_mode.current(state)")
+    guarded = source[comparing_at : source.index("review_mode.current(state)")]
+    assert "ctx.state.comparing = None" in guarded
+    assert "self.viewer.exit_compare()" in guarded
+
+
 def test_arriving_in_review_scans_and_arriving_repeatedly_does_not():
     """Driven off the mode change rather than off "the list is empty", which
     would submit a walk of the bench directory every frame on a machine that

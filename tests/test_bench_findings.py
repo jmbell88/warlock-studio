@@ -166,3 +166,24 @@ def test_hint_unknown_value_is_none(tmp_path):
 
 def test_hint_on_none_doc_is_none(tmp_path):
     assert findings_mod.hint(None, "lora_weight", 0.6) is None
+
+
+def test_hint_missing_accepts_key_does_not_raise(tmp_path):
+    """A parseable but malformed findings.json (``n`` present, ``accepts``
+    missing) must not crash the frame thread with a KeyError -- ``n`` is
+    already read with ``.get``, ``accepts`` must be too."""
+    doc = _doc({"lora_weight": {"0.6": {"n": 8}}})
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "accept 0/8"
+
+
+def test_hint_matches_a_float32_slider_value_against_a_string_key(tmp_path):
+    """``findings.json`` keys a bucket by ``str()`` of the sweep's JSON
+    value ("0.6"), but imgui's float32 ``slider_float`` hands back
+    0.6000000238418579 -- the float32 rounding of 0.6, not the float
+    ``str(0.6)`` would parse back to. A literal ``str(value)`` lookup misses
+    every such slider; ``hint`` must fall back to a rounded float
+    comparison."""
+    doc = _doc({"lora_weight": {"0.6": {"n": 8, "accepts": 6}}})
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6000000238418579) == "accept 6/8"

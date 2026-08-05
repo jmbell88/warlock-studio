@@ -1327,6 +1327,20 @@ class App:
         from . import widgets
         from .panes import overlay
 
+        ctx = self.app_ctx
+        if ctx.state.comparing:
+            # 3D's Escape handler does exactly this pair (main.py's
+            # ``_shortcut``), but Review draws no compare UI of its own and
+            # its Escape branch returns before that handler runs -- so a
+            # split entered in 3D and never exited stays armed forever once
+            # the mode switches. ``_draw_viewport_image`` halves the width
+            # for any mode whenever ``comparing`` is set, so without this a
+            # sweep unit's mesh renders next to a stale compare texture.
+            # Checked every frame Review draws (not just on entry), so it
+            # also covers 3D -> Review -> 3D -> Review re-entry.
+            ctx.state.comparing = None
+            self.viewer.exit_compare()
+
         unit = review_mode.current(state)
         if self.viewer.pose_mode:
             # The pose editor owns the viewer and holds unsaved rotations;

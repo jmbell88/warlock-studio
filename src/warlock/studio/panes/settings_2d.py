@@ -426,13 +426,29 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
         return
     form["base_model"] = widgets.combo("Model", form["base_model"], ctx.base_models)
+    hint = _findings_hint(ctx, "base_model", form["base_model"])
+    if hint is not None:
+        imgui.same_line()
+        imgui.text_disabled(hint)
     form["style_lora"] = widgets.combo("Style LoRA", form["style_lora"], ctx.style_loras)
+    hint = _findings_hint(ctx, "style_lora", form["style_lora"])
+    if hint is not None:
+        imgui.same_line()
+        imgui.text_disabled(hint)
     if form["style_lora"]:
         # Hidden without a LoRA rather than disabled: a weight slider with
         # nothing to weight is a control that cannot do anything.
         changed, value = imgui.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
         if changed:
             form["lora_weight"] = value
+        # The only shipped sweep is lora-weight-v1, so this is the one
+        # slider in the form with a findings bucket behind it -- the
+        # feedback loop the sweep exists for. findings.hint absorbs the
+        # float32 rounding a slider hands back (see its docstring).
+        hint = _findings_hint(ctx, "lora_weight", form["lora_weight"])
+        if hint is not None:
+            imgui.same_line()
+            imgui.text_disabled(hint)
     inert = negative_prompt_note(ctx, form)
     if inert is not None:
         # Disabled rather than hidden, and with the reason underneath: the

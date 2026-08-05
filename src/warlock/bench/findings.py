@@ -54,10 +54,31 @@ def load(path: Path) -> dict[str, Any] | None:
 def hint(doc: dict[str, Any] | None, param: str, value: Any, *, min_n: int = 5) -> str | None:
     """``"accept 6/8"`` for ``param``/``value`` in ``doc``, or ``None`` when
     there is no bucket, or it has fewer than ``min_n`` verdicts -- a thin
-    bucket is noise, not a finding."""
+    bucket is noise, not a finding.
+
+    ``findings.json`` keys a bucket by ``str()`` of the JSON value the sweep
+    recorded (e.g. ``"0.6"``), but an imgui float32 slider hands back
+    ``0.6000000238418579`` -- the float32 rounding of ``0.6``, not the
+    ``float`` Python would make from the string. A straight ``str(value)``
+    lookup misses every such slider, silently, forever. So a float value that
+    misses the literal-string lookup gets a second pass: every bucket key
+    that itself parses as a float is compared to ``value`` rounded to 6
+    decimals, which absorbs float32's error (~1e-7 relative) while still
+    telling "0.6" apart from "0.65"."""
     if doc is None:
         return None
-    entry = ((doc.get("params") or {}).get(param) or {}).get(str(value))
+    bucket = (doc.get("params") or {}).get(param) or {}
+    entry = bucket.get(str(value))
+    if entry is None and isinstance(value, float):
+        target = round(value, 6)
+        for key, candidate in bucket.items():
+            try:
+                key_value = float(key)
+            except ValueError:
+                continue
+            if round(key_value, 6) == target:
+                entry = candidate
+                break
     if entry is None or entry.get("n", 0) < min_n:
         return None
-    return f"accept {entry['accepts']}/{entry['n']}"
+    return f"accept {entry.get('accepts', 0)}/{entry['n']}"
