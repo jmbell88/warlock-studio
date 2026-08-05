@@ -26,12 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import models
-from .prompt import (  # noqa: F401 -- re-exported
-    PROMPT_TEMPLATE,
-    TILE_TEMPLATE,
-    chunk,
-    pad_pair,
-)
+from .prompt import PROMPT_TEMPLATE, TILE_TEMPLATE, chunk, pad_pair
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +74,12 @@ def circular_padding(*modules: Any):
     modules can legitimately reach the same child (a pipeline that shares an
     encoder between components), and recording it twice would capture
     "circular" the second time round and then restore that -- the exact leak
-    the finally exists to prevent, arrived at from the other direction.
+    the finally exists to prevent, arrived at from the other direction. Raw
+    ``id()`` values are sound as keys only because ``previous`` holds a strong
+    reference to every conv whose id is in ``seen``, so nothing recorded can be
+    collected and have its id recycled for the block's duration: make
+    ``previous`` weak, or clear it before the restore, and the de-dup silently
+    starts skipping live modules.
     """
     import torch
 
@@ -618,7 +618,7 @@ class Text2Image:
 
     def _recipe(
         self, seed, text, negative_prompt, lora, lora_weight, conditioning, chunks,
-        tile=False,
+        tile,
     ) -> dict[str, Any]:
         """Everything that decided this image, assembled the same way (and at
         the same point) last_prompt is -- so a job can record what produced it
