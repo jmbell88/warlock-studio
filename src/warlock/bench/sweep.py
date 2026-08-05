@@ -29,10 +29,15 @@ builds a job's kwargs:
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 SWEEP_DIR = Path(__file__).resolve().parent / "sweeps"
 
@@ -275,3 +280,161 @@ def unit_kwargs(
     else:
         kwargs[param] = unit.value
     return kwargs
+
+
+# --- running -----------------------------------------------------------------
+#
+# Mirrors runner.run almost exactly -- same threading model, same manifest /
+# resume machinery -- but the unit of work is a SweepUnit against one fixed
+# item rather than an (item, seed) pair over a whole suite. SweepSpec already
+# carries .key/.path/.seeds, which is exactly what manifest.build_manifest
+# wants from a "suite" argument, so it stands in for one directly rather than
+# needing an adapter class.
+
+SWEEP_STAGE = "model"
+
+
+def _refuse_server_axes(spec: SweepSpec) -> None:
+    server = sorted({a.param for a in spec.axes if a.param in SERVER_AXES})
+    if server:
+        raise ValueError(
+            f"sweep {spec.key!r} has server-config axis {server}; running one "
+            "means restarting trellis-server between groups, which is phase "
+            "2, not yet implemented"
+        )
+
+
+def plan_sweep(
+    config: Any,
+    spec: SweepSpec,
+    recipe: Any,
+    *,
+    started: str,
+    run_dir: Path | None = None,
+) -> tuple[Path, list[SweepUnit], dict[str, Any]]:
+    """Everything decided before a single job is submitted -- the sweep
+    analogue of ``runner.plan_run``, so ``--dry-run`` is this code path minus
+    execution rather than a second implementation of the planning rules."""
+    from . import manifest as manifest_mod
+
+    _refuse_server_axes(spec)
+    todo = plan_units(spec)
+    directory = run_dir or (Path(config.bench_dir) / "runs" / f"{started}-sweep-{spec.key}")
+    doc = manifest_mod.build_manifest(
+        config, spec, recipe,
+        stage=SWEEP_STAGE, items=[spec.item.id], seeds=list(spec.seeds), started=started,
+    )
+    doc["sweep"] = {
+        "key": spec.key,
+        "axes": [{"param": a.param, "values": list(a.values)} for a in spec.axes],
+    }
+    return directory, todo, doc
+
+
+def run_sweep(
+    config: Any,
+    *,
+    spec_key: str,
+    started: str,
+    resume: Path | None = None,
+    on_event: Callable[[str], None] | None = None,
+) -> Path:
+    """Execute a sweep and return its run directory."""
+    from ..studio.runtime import Runtime
+    from . import manifest as manifest_mod
+    from . import recipe as recipe_mod
+    from . import runner as runner_mod
+
+    say = on_event or (lambda msg: log.info("%s", msg))
+    spec = load(spec_key)
+    _refuse_server_axes(spec)
+    # Before the manifest is built, not when Runtime starts -- see runner.run.
+    runner_mod._resolve_vram(config)
+    recipe = recipe_mod.load(spec.recipe_key)
+
+    already: set[str] = set()
+    if resume is not None:
+        try:
+            stored = manifest_mod.read_manifest(resume)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"{resume}: not a bench run directory "
+                f"({manifest_mod.FILENAME} is unreadable: {exc})"
+            ) from None
+        run_dir, todo, doc = plan_sweep(config, spec, recipe, started=started, run_dir=resume)
+        # Refuse before a single job is submitted, exactly as runner.run does:
+        # a run half-measured against two checkpoints -- or two sweep spec
+        # files -- is worse than no run.
+        manifest_mod.assert_resumable(stored, doc)
+        already = runner_mod.completed(resume)
+        again = runner_mod.retryable(resume)
+        say(f"resuming {resume.name}: {len(already)} of {len(todo)} already done")
+        if again:
+            say(f"retrying {len(again)} unit(s) that did not finish")
+    else:
+        run_dir, todo, doc = plan_sweep(config, spec, recipe, started=started)
+        manifest_mod.write_manifest(run_dir, doc)
+
+    pending = [u for u in todo if u.key not in already]
+    if not pending:
+        say("nothing to do")
+        return run_dir
+
+    with Runtime(config) as svc:
+        for n, unit in enumerate(pending, 1):
+            say(f"[{n}/{len(pending)}] {unit.key}")
+            try:
+                record = _run_sweep_unit(svc, config, run_dir, spec, recipe, unit)
+            except KeyboardInterrupt:
+                say("interrupted; the in-flight job has been cancelled")
+                raise
+            runner_mod.append_item(run_dir, record)
+    return run_dir
+
+
+def _run_sweep_unit(
+    svc: Any,
+    config: Any,
+    run_dir: Path,
+    spec: SweepSpec,
+    recipe: Any,
+    unit: SweepUnit,
+) -> dict[str, Any]:
+    from ..service import jobs as svc_jobs
+    from . import runner as runner_mod
+
+    item_dir = run_dir / "items" / unit.key
+    item_dir.mkdir(parents=True, exist_ok=True)
+
+    kwargs = unit_kwargs(spec, recipe, unit, stage=SWEEP_STAGE)
+    started = time.monotonic()
+    job_id = svc_jobs.create_job(svc, **kwargs)["id"]
+    try:
+        job = runner_mod._await_job(svc, job_id)
+    except BaseException:
+        # Includes KeyboardInterrupt: the queue is serial, so leaving a job
+        # running would block whatever the user does next.
+        with runner_mod._suppressed():
+            svc_jobs.cancel_job(svc, job_id)
+        raise
+
+    elapsed = time.monotonic() - started
+    runner_mod._copy_artifacts(config.job_dir(job_id), item_dir)
+    (item_dir / "job.json").write_text(json.dumps(job, indent=2, default=str), encoding="utf-8")
+
+    record = {
+        "key": unit.key,
+        "param": unit.param,
+        "value": unit.value,
+        "job": job_id,
+        "status": job.get("status"),
+        "error": job.get("error"),
+        "seconds": round(elapsed, 2),
+    }
+    # Views are always attempted for a done unit with a mesh -- unlike
+    # runner.run's --render flag, a sweep exists to compare meshes, so there
+    # is no "skip rendering" mode. A render failure costs this unit its
+    # automatic score, not the run: non-fatal, recorded as views: false.
+    if job.get("status") == "done" and (item_dir / "model.glb").exists():
+        record["views"] = runner_mod._render_views(item_dir)
+    return record

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from warlock import guidance
+from warlock.bench import manifest as manifest_mod
 from warlock.bench import recipe as recipe_mod
+from warlock.bench import runner as runner_mod
 from warlock.bench import sweep as sweep_mod
+from warlock.config import Config
 
 
 def _raw(**overrides):
@@ -258,3 +263,177 @@ def test_every_axis_value_the_guidance_tier_accepts_normalizes(tmp_path):
         if axis.param in guidance.form_fields():
             for value in axis.values:
                 guidance.normalize({axis.param: value})
+
+
+# --- running -------------------------------------------------------------------
+
+
+@pytest.fixture
+def config(tmp_path):
+    return Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        t2i_model_root=tmp_path / "t2i",
+        bench_dir=tmp_path / "bench",
+    )
+
+
+_SMALL_RAW = {
+    "key": "small",
+    "label": "small",
+    "recipe_key": "baseline-turbo-raw",
+    "item": {
+        "id": "sweep-widget",
+        "category": "prop",
+        "prompt": "a small widget",
+        "guidance": {},
+    },
+    "axes": [{"param": "custom_triangles", "values": [5000]}],
+    "seeds": [1],
+}
+
+
+def _write_spec(sweep_dir, raw, name="small"):
+    sweep_dir.mkdir(parents=True, exist_ok=True)
+    path = sweep_dir / f"{name}.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def sweep_dir(tmp_path, monkeypatch):
+    directory = tmp_path / "sweeps"
+    monkeypatch.setattr(sweep_mod, "SWEEP_DIR", directory)
+    _write_spec(directory, _SMALL_RAW)
+    return directory
+
+
+def test_plan_sweep_marks_the_manifest_with_the_sweep_section(config, sweep_dir):
+    spec = sweep_mod.load("small")
+    recipe = recipe_mod.load(spec.recipe_key)
+    run_dir, todo, doc = sweep_mod.plan_sweep(config, spec, recipe, started="20260805-120000")
+
+    assert run_dir.name == "20260805-120000-sweep-small"
+    assert len(todo) == 2  # baseline + the one differing custom_triangles value
+    assert doc["sweep"]["key"] == "small"
+    assert doc["sweep"]["axes"] == [{"param": "custom_triangles", "values": [5000]}]
+    assert doc["suite"]["key"] == "small"
+    assert doc["suite"]["file"] != "missing"
+
+
+def test_a_server_axis_sweep_is_refused_before_planning(config, sweep_dir):
+    raw = dict(_SMALL_RAW, key="server", axes=[{"param": "trellis_band", "values": [1, 2]}])
+    _write_spec(sweep_dir, raw, "server")
+    spec = sweep_mod.load("server")
+    recipe = recipe_mod.load(spec.recipe_key)
+
+    with pytest.raises(ValueError, match="phase 2|server-config"):
+        sweep_mod.plan_sweep(config, spec, recipe, started="t")
+
+
+def test_a_server_axis_sweep_is_refused_before_the_runtime_starts(config, sweep_dir):
+    raw = dict(_SMALL_RAW, key="server", axes=[{"param": "trellis_band", "values": [1, 2]}])
+    _write_spec(sweep_dir, raw, "server")
+
+    with pytest.raises(ValueError, match="phase 2|server-config"):
+        sweep_mod.run_sweep(config, spec_key="server", started="t")
+
+
+def test_run_sweep_writes_a_manifest_a_jsonl_and_one_dir_per_unit(
+    config, sweep_dir, fake_pipelines
+):
+    run_dir = sweep_mod.run_sweep(config, spec_key="small", started="20260805-120000")
+
+    assert (run_dir / "manifest.json").exists()
+    manifest = manifest_mod.read_manifest(run_dir)
+    assert manifest["sweep"]["key"] == "small"
+
+    records = runner_mod.read_items(run_dir)
+    keys = {r["key"] for r in records}
+    assert keys == {"baseline--s1", "custom_triangles=5000--s1"}
+    assert all(r["status"] == "done" for r in records)
+    assert all("param" in r and "value" in r for r in records)
+    baseline = next(r for r in records if r["key"] == "baseline--s1")
+    assert baseline["param"] is None
+    varied = next(r for r in records if r["key"] == "custom_triangles=5000--s1")
+    assert varied["param"] == "custom_triangles"
+    assert varied["value"] == 5000
+    for record in records:
+        item_dir = run_dir / "items" / record["key"]
+        assert (item_dir / "job.json").exists()
+        assert (item_dir / "model.glb").exists()
+
+
+def test_a_resume_only_reruns_what_did_not_finish(config, sweep_dir, fake_pipelines, monkeypatch):
+    run_dir = sweep_mod.run_sweep(config, spec_key="small", started="20260805-120000")
+    records = runner_mod.read_items(run_dir)
+    assert len(records) == 2
+
+    # Simulate one unit having failed, so a resume must retry only that one.
+    lines = (run_dir / runner_mod.ITEMS_FILE).read_text("utf-8").splitlines()
+    lines[-1] = json.dumps({**json.loads(lines[-1]), "status": "error", "error": "boom"})
+    (run_dir / runner_mod.ITEMS_FILE).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert runner_mod.completed(run_dir) == {"baseline--s1"}
+
+    seen_job_ids: list[str] = []
+    from warlock.service import jobs as svc_jobs
+
+    real_create = svc_jobs.create_job
+
+    def watching(svc, **kwargs):
+        out = real_create(svc, **kwargs)
+        seen_job_ids.append(out["id"])
+        return out
+
+    monkeypatch.setattr(svc_jobs, "create_job", watching)
+    sweep_mod.run_sweep(config, spec_key="small", started="20260805-130000", resume=run_dir)
+
+    # Only the one retryable unit was resubmitted.
+    assert len(seen_job_ids) == 1
+    assert runner_mod.completed(run_dir) == {"baseline--s1", "custom_triangles=5000--s1"}
+
+
+def test_resume_against_a_changed_spec_file_is_refused(config, sweep_dir, fake_pipelines):
+    run_dir = sweep_mod.run_sweep(config, spec_key="small", started="20260805-120000")
+
+    # The spec file on disk changes -- e.g. a value under the same key edited
+    # in place -- so its fingerprint moves and a resume must be refused.
+    changed = dict(_SMALL_RAW, axes=[{"param": "custom_triangles", "values": [9999]}])
+    _write_spec(sweep_dir, changed, "small")
+
+    with pytest.raises(manifest_mod.NotResumable):
+        sweep_mod.run_sweep(config, spec_key="small", started="20260805-130000", resume=run_dir)
+
+
+def test_views_are_attempted_for_a_done_unit_with_a_mesh(
+    config, sweep_dir, fake_pipelines, monkeypatch
+):
+    calls: list = []
+
+    def fake_render(item_dir):
+        calls.append(item_dir)
+        return True
+
+    monkeypatch.setattr(runner_mod, "_render_views", fake_render)
+    run_dir = sweep_mod.run_sweep(config, spec_key="small", started="20260805-120000")
+
+    records = runner_mod.read_items(run_dir)
+    assert all(r["views"] is True for r in records)
+    assert len(calls) == 2
+
+
+def test_a_view_render_failure_is_non_fatal_and_recorded(
+    config, sweep_dir, fake_pipelines, monkeypatch
+):
+    def failing(item_dir):
+        return False
+
+    monkeypatch.setattr(runner_mod, "_render_views", failing)
+    run_dir = sweep_mod.run_sweep(config, spec_key="small", started="20260805-120000")
+
+    records = runner_mod.read_items(run_dir)
+    assert all(r["status"] == "done" for r in records)
+    assert all(r["views"] is False for r in records)
