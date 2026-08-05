@@ -34,6 +34,31 @@ engine with nothing in the file to explain why. Convexity is what makes
 ``mesh.triangulate``'s fan correct -- it fans from each face's first corner and
 a fan across a reflex corner puts a triangle outside the polygon.
 
+That first claim takes **two** assertions, not one, and the obvious one is the
+weaker of the pair. Summing ``(centroid - centre) . normal`` over the faces is
+six times the enclosed volume, so it says the shell is oriented *outward* --
+but reversing a single face changes it by only twice that face's own
+contribution, which is small beside the whole volume. Measured on these
+generators, flipping one face leaves the sum positive every time, and flipping
+the cone's base leaves it at ``7e-18``: positive by float noise. So the tests
+also assert that **no ordered corner pair ``(a, b)`` occurs twice across all
+faces**, which is what "consistently oriented" means -- neighbouring faces
+traverse their shared edge in opposite directions, so a directed edge is used
+once and a flipped face immediately collides with its neighbour. The undirected
+edge-use count cannot stand in for it: it keys on the sorted pair and is
+orientation-blind by construction. Consistency plus a positive volume is the
+whole claim; either alone is not.
+
+**Sizes are taken as magnitudes.** Every extent -- a box's ``size``, a radius, a
+height, the tube -- is passed through ``abs``, because a negative one does not
+mean a mirrored primitive, it means an inside-out one: a negative height puts a
+cylinder's bottom ring above its top and every side quad and both caps then
+face inward, and ``validate`` would accept it happily because it checks CSR
+structure and index ranges and nothing geometric. A numeric property field is
+one keystroke away from a minus sign, and mirroring is ``mesh.transformed``'s
+job -- it reverses the loops to keep the winding honest, which a generator
+handed a negative number cannot do on the caller's behalf.
+
 Every face comes back **flat-shaded on material zero**. Flat rather than smooth
 on the curved shapes deliberately: ``smooth`` is per-face and a shading tool
 sets it later, and until there is one, faceted geometry that tells the truth
@@ -87,6 +112,13 @@ def _ring(radius: float, y: float, segments: int) -> np.ndarray:
     is the correct winding for a **bottom** cap, and a top cap is the same ring
     reversed. Getting that backwards is the flipped-cap bug, which is why it is
     written down here rather than rediscovered at each call site.
+
+    A ring is a polygon, so a primitive's measured bounds reach its full radius
+    only when a vertex happens to land on the axis -- true for any ``segments``
+    divisible by four, which every default here is, and slightly short of it
+    otherwise. That is honest behaviour for a polygonal approximation rather
+    than something to correct for, but a properties panel showing a measured
+    "size" beside a requested radius should expect the two to differ.
     """
     theta = np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False)
     return np.stack(
@@ -118,8 +150,12 @@ def _side_quads(lower: int, upper: int, segments: int) -> list[list[int]]:
 
 
 def box(size: Sequence[float] = (1.0, 1.0, 1.0)) -> Mesh:
-    """An axis-aligned box of the given full extents, centred on the origin."""
-    hx, hy, hz = (float(s) * 0.5 for s in size)
+    """An axis-aligned box of the given full extents, centred on the origin.
+
+    A negative extent is taken as its magnitude, not as a mirror -- see the
+    module docstring.
+    """
+    hx, hy, hz = (abs(float(s)) * 0.5 for s in size)
     positions = np.array(
         [
             [-hx, -hy, -hz],
@@ -151,7 +187,7 @@ def plane(size: Sequence[float] = (1.0, 1.0)) -> Mesh:
     direction to derive, so its facing is a decision rather than a consequence.
     +Y, because a sheet a user drops into the scene is a floor.
     """
-    hx, hz = (float(s) * 0.5 for s in size)
+    hx, hz = (abs(float(s)) * 0.5 for s in size)
     positions = np.array(
         [[-hx, 0.0, +hz], [+hx, 0.0, +hz], [+hx, 0.0, -hz], [-hx, 0.0, -hz]],
         dtype="f4",
@@ -162,8 +198,8 @@ def plane(size: Sequence[float] = (1.0, 1.0)) -> Mesh:
 def cylinder(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Mesh:
     """A tube with an n-gon cap at each end, axis along Y."""
     n = max(int(segments), MIN_SEGMENTS)
-    h = float(height) * 0.5
-    positions = np.concatenate([_ring(radius, -h, n), _ring(radius, +h, n)])
+    r, h = abs(float(radius)), abs(float(height)) * 0.5
+    positions = np.concatenate([_ring(r, -h, n), _ring(r, +h, n)])
     faces = _side_quads(0, n, n)
     faces.append(list(range(n)))  # bottom cap, ring order, normal -Y
     faces.append(list(range(2 * n - 1, n - 1, -1)))  # top cap, reversed, normal +Y
@@ -180,8 +216,8 @@ def cone(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Mesh:
     corners on the way to the GPU regardless.
     """
     n = max(int(segments), MIN_SEGMENTS)
-    h = float(height) * 0.5
-    positions = np.concatenate([_ring(radius, -h, n), [[0.0, +h, 0.0]]])
+    r, h = abs(float(radius)), abs(float(height)) * 0.5
+    positions = np.concatenate([_ring(r, -h, n), [[0.0, +h, 0.0]]])
     apex = n
     faces: list[list[int]] = [[i, apex, (i + 1) % n] for i in range(n)]
     faces.append(list(range(n)))  # base cap, normal -Y
@@ -200,7 +236,7 @@ def uv_sphere(radius: float = 0.5, segments: int = 16, rings: int = 8) -> Mesh:
     """
     n = max(int(segments), MIN_SEGMENTS)
     m = max(int(rings), MIN_RINGS)
-    r = float(radius)
+    r = abs(float(radius))
 
     top, bottom = 0, 1 + (m - 1) * n
     rows = []
@@ -232,10 +268,18 @@ def torus(
     radius, so the outer extent is their sum -- the same pair of numbers
     Blender's torus takes, and the reason the default pair adds to 0.5: every
     primitive here defaults to fitting a one-metre box.
+
+    **A ``tube`` larger than ``radius`` self-intersects and is not refused
+    here.** The mesh stays valid, closed and outward-wound -- the tube simply
+    passes through its own axis -- so there is no geometric rule to enforce, and
+    the two are legitimately independent right up to the point where they are
+    not. Keeping the pair sane is the properties panel's business (a soft clamp
+    on the tube slider), which is the same division of labour as ``segments``:
+    the generator refuses only what it cannot represent.
     """
     n = max(int(segments), MIN_SEGMENTS)
     k = max(int(sides), MIN_SEGMENTS)
-    R, r = float(radius), float(tube)
+    R, r = abs(float(radius)), abs(float(tube))
 
     theta = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)[:, None]
     phi = np.linspace(0.0, 2.0 * np.pi, k, endpoint=False)[None, :]
