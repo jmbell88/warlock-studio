@@ -39,15 +39,7 @@ VERDICTS = ("accept", "reject")
 # not free text, so a later report can tally them. Meaningful on reject only,
 # but not refused on accept: a reviewer who mis-clicks a reason before
 # switching to Accept should not be blocked by it.
-REASONS = (
-    "silhouette",
-    "topology",
-    "material",
-    "scale",
-    "artifact",
-    "prompt-mismatch",
-    "other",
-)
+REASONS = ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")
 
 
 def _now() -> str:
@@ -89,6 +81,10 @@ def append_verdict(
         "value": value,
         "created_at": _now(),
     }
+    # append_item assumes run_dir already exists (plan_run/plan_sweep always
+    # create it first); a verdict can be the first thing written to a run
+    # directory in a test or a standalone review session, so this mkdir has
+    # no analogue there.
     run_dir.mkdir(parents=True, exist_ok=True)
     with (run_dir / FILENAME).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record) + "\n")
