@@ -117,6 +117,27 @@ class Config:
     reference_retries: int = field(
         default_factory=lambda: max(0, int(os.environ.get("WARLOCK_REFERENCE_RETRIES", "0")))
     )
+    # How many extra times the trellis stage may run when the finished mesh
+    # audits worse than mesh_hole_max. 0 -- off -- because a retry is two
+    # minutes of GPU the user did not ask for, and a remesh is a reroll rather
+    # than a repair: the second reconstruction can perfectly well be worse than
+    # the first, which is why the loop keeps whichever attempt measured best
+    # rather than whichever came last.
+    mesh_retries: int = field(
+        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_MESH_RETRIES", "0")))
+    )
+    # The worst-view see-through fraction past which a mesh is worth redoing.
+    # 0.07 is measured, not guessed, the same way trellis_band was settled by a
+    # sweep: docs/measurements/2026-08-04-hole-rate-baseline.md ran the whole
+    # core-v1 suite at two seeds and found the hole rate sharply bimodal, with
+    # *nothing at all* between 0.0308 and 0.1010 -- 22 of 37 meshes below the
+    # gap and 15 above it, out to 0.556. 0.07 is the midpoint of that empty gap
+    # rather than a percentile, so it is the value furthest from either cluster
+    # and the one least disturbed by a future sample shifting one of them; any
+    # threshold inside the gap selects the identical fifteen meshes.
+    mesh_hole_max: float = field(
+        default_factory=lambda: float(os.environ.get("WARLOCK_MESH_HOLE_MAX", "0.07"))
+    )
     # Where `python -m warlock.bench` writes its runs. Outside data_dir on
     # purpose: a benchmark run copies its artifacts rather than referencing
     # them, precisely so it survives prune_jobs.

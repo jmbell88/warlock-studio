@@ -23,6 +23,7 @@ import functools
 import json
 import logging
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
@@ -564,6 +565,11 @@ class Worker:
             paths = [
                 job_dir / "model.glb",
                 job_dir / "source.glb",
+                # The remesh loop's scratch copies of both, held only while a
+                # retry is in flight. A cancel lands mid-loop, so they are as
+                # much this run's leftovers as the two above.
+                job_dir / "best.glb",
+                job_dir / "best.source.glb",
                 # Both derived from ref.png/input.png by this run. ref.png
                 # itself stays: it is a user-supplied input, and keeping it is
                 # what makes "cancel, tweak, resubmit" work.
@@ -873,9 +879,91 @@ class Worker:
             resolution=resolution,
             bg_removal=str(params.get("bg_removal") or "auto"),
         )
-        await self._optimize(job_id, source_glb, glb_path, params)
-        await self._apply_scale(job_id, glb_path, params)
-        await self._audit_mesh(job_id, glb_path, params)
+        # The remesh loop, and it re-enters only the trellis half. Everything
+        # above it -- the VRAM handoff, the reference measurement, the
+        # composition gate -- has already happened and is deliberately not
+        # repeated: under exclusive mode the handoff is a property of the
+        # stage, not of an attempt, exactly as the reference reroll's is.
+        #
+        # Off unless mesh_retries says otherwise, in which case a mesh whose
+        # worst view is more see-through than mesh_hole_max is reconstructed
+        # again at a fresh seed. See config.mesh_hole_max for where that number
+        # came from.
+        best: dict[str, Any] | None = None
+        attempts: list[dict[str, Any]] = []
+        retries = max(0, int(self.config.mesh_retries))
+        keep = job_dir / "best.glb"
+        keep_source = job_dir / "best.source.glb"
+        while True:
+            await self._optimize(job_id, source_glb, glb_path, params)
+            await self._apply_scale(job_id, glb_path, params)
+            audit = await self._audit_mesh(job_id, glb_path, params)
+            worst = None if audit is None else audit.get("worst")
+            attempts.append({"seed": mesh_seed, "worst": worst})
+            if best is None or (
+                worst is not None
+                and best["worst"] is not None
+                and worst < best["worst"]
+            ):
+                best = {
+                    "seed": mesh_seed,
+                    "worst": worst,
+                    "params": dict(params),
+                }
+                if retries:
+                    # Kept aside rather than trusted to be last: a reroll can
+                    # be worse, and then two minutes of GPU would have made the
+                    # asset worse than it already was. Both files, because
+                    # source.glb is what a later retarget re-derives model.glb
+                    # from -- a source left behind by the losing attempt would
+                    # quietly undo the choice made here the first time someone
+                    # changed a triangle budget. Only when a retry can actually
+                    # happen: with the feature off this is the whole cost of it
+                    # being present, and it should be nothing.
+                    await asyncio.to_thread(shutil.copyfile, glb_path, keep)
+                    await asyncio.to_thread(shutil.copyfile, source_glb, keep_source)
+            if (
+                worst is None
+                or worst <= self.config.mesh_hole_max
+                or len(attempts) > retries
+                or self._cancel.event.is_set()
+            ):
+                # A budget, not a loop, and an unmeasurable mesh is not a bad
+                # one: no verdict means the mesh already on disk is kept.
+                break
+            mesh_seed = _fresh_seed()
+            log.info(
+                "job %s: mesh audited %.3f open, past %.3f -- remeshing at seed %d",
+                job_id, worst, self.config.mesh_hole_max, mesh_seed,
+            )
+            await self.trellis.generate(
+                trellis_input,
+                source_glb,
+                seed=mesh_seed,
+                resolution=resolution,
+                bg_removal=str(params.get("bg_removal") or "auto"),
+            )
+        if len(attempts) > 1 and best is not None:
+            if best["seed"] != attempts[-1]["seed"]:
+                # An earlier attempt won: put its GLBs and its measurements
+                # back, so what is on disk and what params claims about it
+                # describe the same mesh.
+                await asyncio.to_thread(shutil.copyfile, keep, glb_path)
+                await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
+                params.update(best["params"])
+            params["mesh_attempts"] = attempts
+            # The seed that reproduces the mesh that shipped, which is the
+            # best attempt's and not necessarily the last one's -- and the
+            # recipe carries the same seed, or the provenance and the row would
+            # name different reconstructions.
+            params["mesh_seed"] = best["seed"]
+            params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
+                self.config, params, mesh_seed=best["seed"]
+            )
+            await asyncio.to_thread(self.store.set_params, job_id, params)
+        for scratch in (keep, keep_source):
+            with contextlib.suppress(OSError):
+                scratch.unlink()
 
     async def _rig(self, job: dict[str, Any]) -> None:
         """Fit a skeleton to a finished job's mesh, out-of-process in Blender.
@@ -1238,7 +1326,7 @@ class Worker:
 
     async def _audit_mesh(
         self, job_id: str, glb_path: Path, params: dict[str, Any]
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Measure how see-through the finished mesh is and record it.
 
         trellis-server's narrow-band remesh can emit a crust of disconnected
@@ -1248,9 +1336,15 @@ class Worker:
         finishes. Runs after _apply_scale so it measures the mesh that will
         actually be downloaded; like scaling it is CPU-only and holds no GPU
         memory, so it sits outside the VRAM handoff.
+
+        Returns the summary it stored, or None whenever it stored nothing --
+        because it was cancelled, or because the measurement itself broke.
+        The remesh loop in _generate reads that to decide whether the mesh is
+        worth redoing, and None is deliberately not a bad verdict: no
+        measurement means no retry, exactly as with the retry switched off.
         """
         if self._cancel is not None and self._cancel.event.is_set():
-            return
+            return None
         self.progress.update(
             job_id,
             phase="audit",
@@ -1276,7 +1370,7 @@ class Worker:
             # already on disk and fine. Log it and leave mesh_audit unset --
             # the UI renders no badge rather than a wrong one.
             log.exception("mesh audit failed for job %s", job_id)
-            return
+            return None
         # Only the summary is stored: the per-view detail would ride along on
         # every row of the 100-job list for no one to read.
         params["mesh_audit"] = {
@@ -1307,6 +1401,7 @@ class Worker:
             job_id, report["worst"], report["mean"], report["faces"],
         )
         await asyncio.to_thread(self.store.set_params, job_id, params)
+        return params["mesh_audit"]
 
     async def _get_text2image(self, base_key: str):
         """The resident image pipeline, swapped if the job wants a different base.

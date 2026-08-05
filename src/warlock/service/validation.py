@@ -75,6 +75,9 @@ DERIVED_PARAMS = (
     # Provenance for a reroll that already happened. It describes this run's
     # attempts, so a rerun inheriting it would claim retries it never made.
     "reference_attempts",
+    # The same, for the mesh half: it describes this run's reconstructions, so
+    # a rerun inheriting it would claim remeshes it never made.
+    "mesh_attempts",
     "control_hint",
     "recipe",
 )

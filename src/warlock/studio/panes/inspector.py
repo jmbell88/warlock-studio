@@ -264,6 +264,18 @@ def _quality(ctx: Any, job: Any) -> None:
     if isinstance(audit, dict) and audit.get("hole_ratio") is not None:
         widgets.muted(f"visible openings: {float(audit['hole_ratio']) * 100:.1f}%")
 
+    attempts = params.get("mesh_attempts")
+    if isinstance(attempts, list) and len(attempts) > 1:
+        # Only ever present on a job the remesh actually ran for, so the line
+        # doubles as the answer to "why is this not the mesh seed I asked for".
+        widgets.muted(
+            f"remeshed {len(attempts) - 1} time(s); kept the best of "
+            + ", ".join(
+                "unmeasured" if a.get("worst") is None else f"{float(a['worst']) * 100:.1f}%"
+                for a in attempts
+            )
+        )
+
 
 def _downloads(ctx: Any, job: Any) -> None:
     """The Export tab: a two-column grid of artifacts.

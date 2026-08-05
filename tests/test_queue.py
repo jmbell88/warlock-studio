@@ -1406,3 +1406,232 @@ async def test_a_failed_measurement_still_records_the_seed_that_shipped(
     assert attempts[1]["measured"] is False
     assert attempts[1]["ok"] is True
     store.close()
+
+
+# --- the opt-in remesh -------------------------------------------------------
+
+
+def _audits(monkeypatch, worsts: list[float]):
+    """meshaudit.hole_fraction returning a scripted sequence."""
+    import warlock.meshaudit as meshaudit_mod
+
+    seen = {"n": 0}
+
+    def fake(path, views, resolution):
+        value = worsts[min(seen["n"], len(worsts) - 1)]
+        seen["n"] += 1
+        return {
+            "worst": value, "mean": value / 2, "faces": 1000,
+            "resolution": resolution, "views": [],
+        }
+
+    monkeypatch.setattr(meshaudit_mod, "hole_fraction", fake)
+    return seen
+
+
+def _retry_worker(tmp_path, **config_kwargs):
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        **config_kwargs,
+    )
+    store = JobStore(config.db_path)
+    return Worker(config, store), store
+
+
+def _retry_job(worker: Worker, store: JobStore, **params) -> str:
+    job_id = store.create("image", None, {"seed": 3, "resolution": 512, **params})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    return job_id
+
+
+def _seeded_glb_bytes(worker: Worker) -> None:
+    """Make the fake reconstruction distinguishable per attempt.
+
+    The stock fake writes the same eight bytes every time, which cannot tell
+    the kept attempt's GLB from the losing one's -- and that is exactly what
+    the restore has to get right, for source.glb as well as for model.glb.
+    """
+    inner = worker.trellis.generate
+
+    async def generate(image_path, output_path, *, seed=42, **kwargs):
+        result = await inner(image_path, output_path, seed=seed, **kwargs)
+        output_path.write_bytes(f"glb-{seed}".encode())
+        return result
+
+    worker.trellis.generate = generate
+
+
+async def test_without_the_setting_a_holey_mesh_is_kept(worker, monkeypatch):
+    _audits(monkeypatch, [0.5])
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert len(worker.trellis.generate_calls) == 1
+    assert "mesh_attempts" not in worker.store.get(job_id)["params"]
+    # Off by default means literally nothing extra on disk either.
+    assert not (worker.config.job_dir(job_id) / "best.glb").exists()
+
+
+async def test_a_holey_mesh_is_remeshed_with_a_fresh_seed(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    _audits(monkeypatch, [0.5, 0.01])
+    w, store = _retry_worker(tmp_path, mesh_retries=1, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store, mesh_seed=3)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    seeds = [c["seed"] for c in w.trellis.generate_calls]
+    assert len(seeds) == 2 and seeds[0] == 3 and seeds[1] != 3
+    params = store.get(job_id)["params"]
+    assert [a["worst"] for a in params["mesh_attempts"]] == [0.5, 0.01]
+    assert [a["seed"] for a in params["mesh_attempts"]] == seeds
+    assert params["mesh_audit"]["worst"] == 0.01
+    store.close()
+
+
+async def test_a_mesh_that_passes_is_never_remeshed(tmp_path, fake_pipelines, monkeypatch):
+    _audits(monkeypatch, [0.01])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert len(w.trellis.generate_calls) == 1
+    assert "mesh_attempts" not in store.get(job_id)["params"]
+    store.close()
+
+
+async def test_the_remesh_budget_is_a_ceiling_not_a_loop(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # Every attempt fails the threshold. The job still ends, having run the
+    # trellis stage exactly retries + 1 times.
+    _audits(monkeypatch, [0.5])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert len(w.trellis.generate_calls) == 3
+    assert len(store.get(job_id)["params"]["mesh_attempts"]) == 3
+    store.close()
+
+
+async def test_the_best_attempt_is_the_one_kept_even_when_it_is_the_first(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # A reroll can be worse. Keeping the newest would then have spent two
+    # minutes of GPU to make the asset worse than it already was.
+    _audits(monkeypatch, [0.3, 0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=1, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    _seeded_glb_bytes(w)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    params = store.get(job_id)["params"]
+    assert params["mesh_audit"]["worst"] == 0.3
+    # The seed on record is the one that reproduces the GLB that shipped, not
+    # the last one tried -- provenance, the same rule reference_seed follows.
+    first = w.trellis.generate_calls[0]["seed"]
+    assert params["mesh_seed"] == first
+    assert params["recipe"]["trellis"]["seed"] == first
+    job_dir = w.config.job_dir(job_id)
+    # Both halves of the on-disk contract: model.glb is what shipped and
+    # source.glb is what it was derived from. A later retarget re-derives
+    # model.glb from source.glb, so a source left behind by the losing
+    # attempt would quietly undo the choice made here.
+    assert (job_dir / "model.glb").read_bytes() == f"glb-{first}".encode()
+    assert (job_dir / "source.glb").read_bytes() == f"glb-{first}".encode()
+    assert not (job_dir / "best.glb").exists()
+    assert not (job_dir / "best.source.glb").exists()
+    store.close()
+
+
+async def test_the_last_attempt_wins_when_it_is_the_best(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    _audits(monkeypatch, [0.9, 0.2])
+    w, store = _retry_worker(tmp_path, mesh_retries=1, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    _seeded_glb_bytes(w)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    params = store.get(job_id)["params"]
+    last = w.trellis.generate_calls[-1]["seed"]
+    assert params["mesh_audit"]["worst"] == 0.2
+    assert params["mesh_seed"] == last
+    job_dir = w.config.job_dir(job_id)
+    assert (job_dir / "source.glb").read_bytes() == f"glb-{last}".encode()
+    store.close()
+
+
+async def test_an_unmeasurable_mesh_is_never_remeshed(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # No verdict is not a bad verdict: the audit blowing up leaves the mesh
+    # that is already on disk alone, exactly as it does with the retry off.
+    import warlock.meshaudit as meshaudit_mod
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("trimesh said no")
+
+    monkeypatch.setattr(meshaudit_mod, "hole_fraction", explode)
+    w, store = _retry_worker(tmp_path, mesh_retries=3, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert len(w.trellis.generate_calls) == 1
+    store.close()
+
+
+async def test_a_cancel_stops_the_retry(tmp_path, fake_pipelines, monkeypatch):
+    _audits(monkeypatch, [0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=3, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    w.start()
+    await _wait_until(lambda: w.trellis.running)
+    await w.request_cancel(job_id)
+    await _wait_until(lambda: store.get(job_id)["status"] == "cancelled")
+    await w.shutdown()
+
+    assert len(w.trellis.generate_calls) == 1
+    store.close()
+
+
+async def test_a_cancelled_retry_leaves_no_scratch_glb(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # best.glb is scratch belonging to this run, so _discard_artifacts owes it
+    # the same cleanup model.glb and source.glb already get.
+    _audits(monkeypatch, [0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=3, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    job_dir = w.config.job_dir(job_id)
+    w.start()
+    await _wait_until(lambda: w.trellis.running)
+    (job_dir / "best.glb").write_bytes(b"scratch")
+    (job_dir / "best.source.glb").write_bytes(b"scratch")
+    await w.request_cancel(job_id)
+    await _wait_until(lambda: store.get(job_id)["status"] == "cancelled")
+    await w.shutdown()
+
+    assert not (job_dir / "best.glb").exists()
+    assert not (job_dir / "best.source.glb").exists()
+    store.close()
