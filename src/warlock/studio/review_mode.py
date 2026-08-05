@@ -82,9 +82,14 @@ class ReviewState:
     # for. Cleared by anything that moves, because the armed state belongs to
     # the unit that was on screen when it was armed.
     pending_reject: bool = False
-    # The unit key whose model.glb the shared viewer is currently showing, so
-    # the pane loads a mesh on a change of unit rather than every frame.
-    loaded_key: str | None = None
+    # There is deliberately no "which unit is loaded" field here. What the
+    # shared viewer is showing is ``viewer.path``, and a second copy of that
+    # answer is a way for the two to disagree: unit keys repeat across runs of
+    # the same spec, so a key-keyed marker says "already loaded" when the mesh
+    # on screen belongs to a different run -- and says the same thing after a
+    # trip through 3D has loaded a library asset into the same viewer. The pane
+    # compares paths, exactly as ``_sync_viewer`` does, and both cases fix
+    # themselves.
     scanning: bool = False
 
 
@@ -235,32 +240,28 @@ def step(state: ReviewState, delta: int) -> None:
 
 
 def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
-    """Forward one, or forward to the next thing left to do.
+    """Forward one, or on to the next thing left to do.
 
-    ``unverdicted_only`` is what a recorded verdict uses: walking back onto
-    work already answered asks the same question twice. It falls back to a
-    plain step when there is nothing left ahead, so the pane keeps showing the
-    unit the verdict was just given to rather than jumping to the start.
+    ``unverdicted_only`` is what a recorded verdict uses, and it means exactly
+    what it says: the next unit **with no verdict**, searched forward and then
+    wrapping to the start, and staying put when there is none anywhere. It used
+    to fall through to a plain +1 when nothing unverdicted lay ahead, which put
+    the cursor on a unit that had already been answered and asked the same
+    question twice -- the one thing the flag exists to prevent. Wrapping is the
+    honest completion of the same idea: a reviewer who stepped back, answered
+    something, and has work left near the top wants to be taken to it rather
+    than nudged one row down a list they have finished.
     """
     if not state.units:
         return
     state.pending_reject = False
     if unverdicted_only:
-        ahead = next(
-            (
-                i
-                for i in range(state.index + 1, len(state.units))
-                if state.units[i]["verdict"] is None
-            ),
-            None,
-        )
+        order = list(range(state.index + 1, len(state.units))) + list(range(state.index))
+        ahead = next((i for i in order if state.units[i]["verdict"] is None), None)
         if ahead is not None:
             state.index = ahead
-            _touch(state)
-            return
-        if all(unit["verdict"] is not None for unit in state.units):
-            _touch(state)
-            return
+        _touch(state)
+        return
     state.index = min(state.index + 1, len(state.units) - 1)
     _touch(state)
 
@@ -344,6 +345,18 @@ def reference_path(unit: dict[str, Any]) -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def cache_id(run_dir: Path | None, unit: dict[str, Any]) -> str:
+    """The id the thumbnail cache files this unit's reference under.
+
+    Qualified by the run, because ``ThumbnailCache`` keys on (id, mtime) and a
+    unit key alone is *not* unique: two runs of one sweep spec produce the same
+    keys, so the second run's references would be served the first run's
+    pixels for as long as both mtimes happened to match.
+    """
+    run = "" if run_dir is None else Path(run_dir).name
+    return f"review:{run}:{unit['key']}"
 
 
 def mesh_lines(unit: dict[str, Any]) -> list[str]:

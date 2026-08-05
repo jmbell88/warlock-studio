@@ -411,6 +411,26 @@ def test_recording_advances_past_units_that_already_have_a_verdict(config):
     assert review_mode.current(state)["key"] == "c"
 
 
+def test_recording_wraps_to_work_left_behind_the_cursor(config):
+    """The flag is called ``unverdicted_only`` and now means it. It used to
+    fall through to a plain +1 when nothing unverdicted lay ahead, which put
+    the cursor on a unit that had already been answered -- the one thing it
+    exists to prevent."""
+    ctx = FakeCtx(config)
+    run_dir = _sweep_run(config, "20260101-sweep-x", _units("a", "b", "c"))
+    for unit in ("b", "c"):
+        verdicts_mod.append_verdict(
+            run_dir, unit=unit, source="human", verdict="accept",
+            param="lora_weight", value=0.9,
+        )
+    state = _scanned(ctx)
+    review_mode.step(state, 1)  # onto "b", already answered, with "a" behind
+    assert review_mode.current(state)["key"] == "b"
+
+    review_mode.record(ctx, "reject", ("holes",))
+    assert review_mode.current(state)["key"] == "a"
+
+
 def test_the_last_unit_stays_put_when_there_is_nothing_left_to_do(config):
     ctx = FakeCtx(config)
     _sweep_run(config, "20260101-sweep-x", _units("a"))
@@ -620,15 +640,45 @@ def test_review_takes_first_refusal_on_the_keyboard():
     assert "return" in source[review_at : source.index("inker_mode.handle_key")]
 
 
-def test_the_workspace_loads_a_mesh_on_a_change_of_unit_not_every_frame():
+def test_the_workspace_decides_what_to_load_the_way_sync_viewer_does():
+    """Against ``viewer.path``, never against a remembered unit key -- see the
+    two behavioural tests below for what a key-keyed marker got wrong. No
+    ``loaded_key`` anywhere, because a second copy of "what is loaded" is how
+    the two answers drift apart in the first place."""
+    import inspect
+
+    from warlock.studio import main, review_mode
+
+    source = inspect.getsource(main.App._review_load)
+    assert "self.viewer.path == wanted" in source
+    assert "loaded_key" not in inspect.getsource(main.App._review_viewport)
+    assert "loaded_key" not in Path(review_mode.__file__).read_text("utf-8")
+
+
+def test_the_workspace_asks_whether_there_is_a_unit_before_asking_the_viewer():
+    """Arriving from 3D leaves a library asset loaded, so testing ``has_model``
+    first drew that asset in Review's centre with no unit selected -- a mesh on
+    screen that no button on the right refers to."""
     import inspect
 
     from warlock.studio import main
 
     source = inspect.getsource(main.App._review_viewport)
-    assert "loaded_key" in source
-    assert "load_model" not in source  # it is behind the guard, in _review_load
-    assert "load_model" in inspect.getsource(main.App._review_load)
+    assert source.index("if unit is None") < source.index("self.viewer.has_model")
+
+
+def test_the_workspace_refuses_to_load_over_the_pose_editor():
+    """``_sync_viewer`` refuses on exactly this condition: loading discards
+    unsaved rotations without the confirm ``pose_panel.guard`` puts in front of
+    every other exit."""
+    import inspect
+
+    from warlock.studio import main
+
+    source = inspect.getsource(main.App._review_viewport)
+    pose_at = source.index("self.viewer.pose_mode")
+    assert pose_at < source.index("self._review_load")
+    assert "return" in source[pose_at : source.index("self._review_load")]
 
 
 def test_arriving_in_review_scans_and_arriving_repeatedly_does_not():
@@ -642,3 +692,154 @@ def test_arriving_in_review_scans_and_arriving_repeatedly_does_not():
     source = inspect.getsource(main.App._build_ui)
     assert "review_mode.scan" in source
     assert 'self._last_mode and ctx.state.mode == "review"' in source
+
+
+# --- loading the mesh (the shared viewer) ------------------------------------
+
+
+class _FakeViewer:
+    """Only the four members ``_review_load`` touches. No GL, no imgui."""
+
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.model: Any = None
+        self.pose_mode = False
+        self.loads: list[Path] = []
+        self.cleared = 0
+
+    @property
+    def has_model(self) -> bool:
+        return self.model is not None
+
+    def load_model(self, path: Path) -> None:
+        self.loads.append(Path(path))
+        self.path = Path(path)
+        self.model = object()
+
+    def clear(self) -> None:
+        self.cleared += 1
+        self.model = None
+        self.path = None
+
+
+class _FakeApp:
+    """``_review_load`` unbound, over a fake viewer -- the whole decision it
+    makes is which path to hand the viewer, which needs no window."""
+
+    from warlock.studio import main as _main
+
+    _review_load = _main.App._review_load
+
+    def __init__(self, ctx: Any) -> None:
+        self.viewer = _FakeViewer()
+        self.app_ctx = ctx
+
+
+def test_switching_runs_reloads_a_unit_whose_key_is_identical(config):
+    """The bug a remembered unit key caused, and the reason the comparison is
+    against ``viewer.path``: two runs of one sweep spec produce *identical*
+    unit keys, so clicking the second run kept the first run's mesh on screen
+    while every button on the right filed verdicts against the second.
+    """
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", _units("a"))
+    _sweep_run(config, "20260202-sweep-x", _units("a"))
+    state = _scanned(ctx)
+    app = _FakeApp(ctx)
+
+    first, second = state.runs[0]["dir"], state.runs[1]["dir"]
+    review_mode.open_run(ctx, first)
+    app._review_load(review_mode.current(state), review_mode)
+    review_mode.open_run(ctx, second)
+    app._review_load(review_mode.current(state), review_mode)
+
+    assert len(app.viewer.loads) == 2
+    assert app.viewer.loads[0] != app.viewer.loads[1]
+    assert app.viewer.loads[0].parent.parent.parent == first
+    assert app.viewer.loads[1].parent.parent.parent == second
+
+
+def test_coming_back_from_3d_reloads_the_unit_that_is_still_selected(config):
+    """3D loads a library asset into this same viewer. A marker keyed on the
+    unit still matched on the way back, so Review drew the library's asset
+    under its own verdict buttons."""
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", _units("a"))
+    state = _scanned(ctx)
+    app = _FakeApp(ctx)
+    unit = review_mode.current(state)
+
+    app._review_load(unit, review_mode)
+    # 3D happens: something else takes the viewer.
+    app.viewer.load_model(Path(config.data_dir) / "some-job" / "model.glb")
+    app._review_load(unit, review_mode)
+
+    assert app.viewer.path == review_mode.model_path(unit)
+    assert app.viewer.loads[-1] == review_mode.model_path(unit)
+
+
+def test_showing_the_same_unit_again_does_not_reload_it(config):
+    """The other half: a comparison that never matched would decode a GLB
+    every frame."""
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", _units("a"))
+    state = _scanned(ctx)
+    app = _FakeApp(ctx)
+
+    for _ in range(3):
+        app._review_load(review_mode.current(state), review_mode)
+    assert len(app.viewer.loads) == 1
+
+
+def test_a_unit_with_no_mesh_is_attempted_once_not_every_frame(config):
+    """``viewer.path`` is set even with nothing to show, or an errored unit
+    re-clears the viewer sixty times a second."""
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", [{"key": "a", "status": "error"}])
+    state = _scanned(ctx)
+    unit = review_mode.current(state)
+    review_mode.model_path(unit).unlink()
+    app = _FakeApp(ctx)
+
+    for _ in range(3):
+        app._review_load(unit, review_mode)
+    assert app.viewer.cleared == 1
+    assert app.viewer.has_model is False
+
+
+def test_a_mesh_that_will_not_open_is_reported_once(config):
+    """A toast per frame is not a report, it is a wall."""
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", _units("a"))
+    state = _scanned(ctx)
+    unit = review_mode.current(state)
+    app = _FakeApp(ctx)
+
+    def boom(path):
+        raise ValueError("not a GLB")
+
+    app.viewer.load_model = boom
+    for _ in range(3):
+        app._review_load(unit, review_mode)
+
+    assert len(ctx.toasts) == 1
+    assert ctx.toasts[0][1] == "error"
+
+
+def test_the_thumbnail_id_is_qualified_by_the_run(config):
+    """ThumbnailCache keys on (id, mtime), and unit keys repeat across runs of
+    one spec -- an unqualified id serves one run's reference for another's."""
+    ctx = FakeCtx(config)
+    _sweep_run(config, "20260101-sweep-x", _units("a"))
+    _sweep_run(config, "20260202-sweep-x", _units("a"))
+    state = _scanned(ctx)
+
+    first, second = state.runs[0]["dir"], state.runs[1]["dir"]
+    unit = state.runs[0]["units"][0]
+    assert review_mode.cache_id(first, unit) != review_mode.cache_id(second, unit)
+
+    import inspect
+
+    from warlock.studio import main
+
+    assert "cache_id" in inspect.getsource(main.App._review_verdict)

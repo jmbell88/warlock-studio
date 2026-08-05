@@ -1312,9 +1312,15 @@ class App:
     def _review_viewport(self, state: Any, review_mode: Any, width: float) -> None:
         """The unit's mesh, in the shared viewer.
 
-        The load is keyed on the unit rather than done every frame, and it is
-        the same call ``_sync_viewer`` makes: on the frame thread, tolerating a
-        unit whose job errored and left no mesh behind.
+        **What decides whether to load is ``viewer.path``, not a remembered
+        unit key** -- the same comparison ``_sync_viewer`` makes, and for a
+        stronger reason here. Unit keys repeat across runs of one sweep spec,
+        so a key-keyed marker said "already showing that" when the mesh on
+        screen belonged to a *different run*, and a verdict was then filed
+        against a mesh nobody had looked at. The same marker also survived a
+        trip through 3D, which loads a library asset into this same viewer, so
+        coming back drew that asset under Review's verdict buttons. Comparing
+        paths fixes both, structurally, and needs no reset anywhere.
         """
         from imgui_bundle import imgui
 
@@ -1322,31 +1328,48 @@ class App:
         from .panes import overlay
 
         unit = review_mode.current(state)
-        key = unit["key"] if unit is not None else None
-        if key != state.loaded_key:
-            state.loaded_key = key
-            self._review_load(unit, review_mode)
+        if self.viewer.pose_mode:
+            # The pose editor owns the viewer and holds unsaved rotations;
+            # loading over it would discard them without the confirm every
+            # other exit goes through (``pose_panel.guard``). ``_sync_viewer``
+            # refuses on exactly this condition -- this is the same refusal.
+            widgets.muted("Finish or close the pose editor to review a mesh.")
+            return
+        self._review_load(unit, review_mode)
 
         image_pos = imgui.get_cursor_screen_pos()
         avail = imgui.get_content_region_avail()
         height = max(avail.y, 64)
-        if self.viewer.has_model:
-            self._draw_viewport_image(image_pos, width, height)
-        elif unit is None:
+        if unit is None:
+            # Before ``has_model``: arriving from 3D leaves an asset loaded,
+            # and asking the viewer first drew that asset with no unit selected
+            # -- a mesh on screen that no button on the right refers to.
             overlay.placeholder(self.app_ctx)
+        elif self.viewer.has_model:
+            self._draw_viewport_image(image_pos, width, height)
         else:
             widgets.muted(f"No mesh for this unit (status: {unit['status']}).")
 
     def _review_load(self, unit: Any, review_mode: Any) -> None:
-        path = None if unit is None else review_mode.model_path(unit)
-        if path is None or not path.exists():
+        """Show the unit's mesh if the viewer is not already showing it.
+
+        ``viewer.path`` is set even when there is nothing to show, so a unit
+        whose job errored (or whose GLB will not open) is tried once rather
+        than re-attempted -- and re-toasted -- on every frame.
+        """
+        wanted = None if unit is None else review_mode.model_path(unit)
+        if self.viewer.path == wanted:
+            return
+        if wanted is None or not wanted.exists():
             self.viewer.clear()
+            self.viewer.path = wanted
             return
         try:
-            self.viewer.load_model(path)
+            self.viewer.load_model(wanted)
         except Exception:
-            log.exception("could not open %s", path)
+            log.exception("could not open %s", wanted)
             self.viewer.clear()
+            self.viewer.path = wanted
             self.app_ctx.toast("Could not open that sweep unit's mesh.", "error")
 
     def _review_verdict(self, ctx: Any, state: Any, review_mode: Any) -> None:
@@ -1364,7 +1387,7 @@ class App:
 
         reference = review_mode.reference_path(unit)
         if reference is not None:
-            texture = ctx.textures.get(unit["key"], reference)
+            texture = ctx.textures.get(review_mode.cache_id(state.run_dir, unit), reference)
             if texture is not None:
                 side = min(imgui.get_content_region_avail().x, 220.0)
                 imgui.image(widgets.texture_ref(texture), (side, side))
