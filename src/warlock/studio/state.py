@@ -173,9 +173,12 @@ class Filters:
         def key(job: dict[str, Any]) -> tuple[int, float]:
             rank = (job.get("params") or {}).get("rank")
             if not isinstance(rank, dict):
-                # Unranked sorts last rather than at zero: most of a workshop
-                # predates the score, and burying it under refused candidates
-                # would make "best first" mean "oldest first".
+                # Unranked sorts into its own bucket *below* every scored job,
+                # a refused one included. Most of a workshop predates the
+                # score, so treating "no score" as a middling one would scatter
+                # hundreds of old assets through the ranked candidates the
+                # sort exists to surface -- and treating it as zero would tie
+                # it with the refused, which the bucket keeps distinct.
                 return (1, 0.0)
             try:
                 return (0, -float(rank.get("score") or 0.0))

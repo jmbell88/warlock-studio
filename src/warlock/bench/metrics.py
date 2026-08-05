@@ -102,15 +102,11 @@ def _dino_model(config: Any = None, device: str | None = None):
     the models that are producing the asset. The benchmark passes None and
     keeps the old behaviour.
     """
-    import torch
-
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    key = f"{_dino_dir(config)}|{device}"
-    hit = _model_cache.get(key)
-    if hit is not None:
-        return hit
-
+    # Load-bearing ordering, the same one dino_available's docstring states and
+    # test_offline.py pins for Text2Image.load(): the existence check precedes
+    # the torch import, so a checkout without the text2image extra gets the
+    # actionable "download it once with ..." rather than an ImportError about a
+    # dependency that was never the problem.
     path = _dino_dir(config)
     if not path.exists():
         from .. import models
@@ -119,6 +115,15 @@ def _dino_model(config: Any = None, device: str | None = None):
             f"DINOv2 not found at {path}. Download once with:\n"
             f"  {models.METRIC_MODELS['dinov2'].download}"
         )
+    import torch
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    key = f"{path}|{device}"
+    hit = _model_cache.get(key)
+    if hit is not None:
+        return hit
+
     from transformers import AutoImageProcessor, AutoModel
 
     processor = AutoImageProcessor.from_pretrained(str(path), local_files_only=True)
@@ -167,11 +172,15 @@ def reference_cosine(
     absolute terms is absent, and comparing candidates of one submit against
     one anchor is exactly the comparison the number supports.
     """
-    import torch
-
     a, b = imageprep.prepare_references(a_path, b_path)
     if a is None or b is None:
         return None
+    # Below the pairing, for the same reason the existence check sits above the
+    # import in _dino_model: a pair with no subject is answered without ever
+    # needing torch, and paying seconds for an import to return None is a cost
+    # with nothing on the other side of it.
+    import torch
+
     return float(torch.sum(_embed(a, config, device) * _embed(b, config, device)).item())
 
 

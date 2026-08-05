@@ -99,10 +99,12 @@ class Config:
     mesh_profile: str = field(
         default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "raw")
     )
-    # Whether a finished reference is scored against the active profile's
-    # style anchor as well as its own composition report. On by default: the
-    # composition half costs nothing (the report is already measured) and the
-    # anchor half only runs when there is a ref.png and DINOv2 is on disk.
+    # Whether a finished reference is scored against the run's conditioning
+    # reference -- ref.png, which is the active profile's style anchor when one
+    # is set and otherwise whatever image the user attached -- as well as
+    # against its own composition report. On by default: the composition half
+    # costs nothing (the report is already measured) and the anchor half only
+    # runs when there is a ref.png and DINOv2 is on disk.
     rank_candidates: bool = field(
         default_factory=lambda: os.environ.get("WARLOCK_RANK", "on").lower()
         not in ("0", "false", "off", "no")

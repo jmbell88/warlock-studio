@@ -48,7 +48,9 @@ def test_warnings_cost_less_than_reasons():
     warned = rank.composition_score(
         _report(occupancy=0.78, components=1, warnings=("close to the edge",))
     )
-    assert 0.0 < warned < 1.0
+    clean = rank.composition_score(_report(occupancy=0.78, components=1))
+    refused = rank.composition_score(_report(ok=False, reasons=("too small",)))
+    assert refused < warned < clean
 
 
 def test_no_report_at_all_is_a_middling_score_not_a_zero():

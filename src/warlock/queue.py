@@ -717,7 +717,7 @@ class Worker:
                     ).as_dict()
                     try:
                         params["rank"] = await asyncio.to_thread(
-                            self._rank_reference, job_dir, params
+                            self._rank_reference, image_path, params
                         )
                     except Exception:
                         # Advisory: the image is on disk and fine. The UI shows
@@ -1134,21 +1134,27 @@ class Worker:
         params["transform"] = transform
         await asyncio.to_thread(self.store.set_params, job_id, params)
 
-    def _rank_reference(self, job_dir: Path, params: dict[str, Any]) -> dict[str, Any]:
+    def _rank_reference(self, image_path: Path, params: dict[str, Any]) -> dict[str, Any]:
         """Score a finished reference. Blocking -- called through to_thread.
+
+        ``image_path`` is the same input.png the report was measured from and is
+        passed in rather than re-derived, so the two halves of the score can
+        never end up describing different files.
 
         The anchor half is opportunistic in three separate ways, and every one
         of them is a "leave the number out", never a failure: ranking can be
-        switched off, ref.png only exists when something conditioned the run,
-        and DINOv2 is an optional download. What is left is the composition
-        score, which is free -- the report was measured either way.
+        switched off, ref.png -- the conditioning reference, whether the
+        profile's style anchor or an image the user attached themselves -- is
+        only there on a run that had one, and DINOv2 is an optional download.
+        What is left is the composition score, which is free: the report was
+        measured either way.
         """
         from .bench import metrics
         from .pipelines import rank
 
         report = params.get("reference_report")
         cosine = None
-        anchor = job_dir / "ref.png"
+        anchor = image_path.parent / "ref.png"
         if self.config.rank_candidates and anchor.exists():
             try:
                 if metrics.dino_available(self.config):
@@ -1156,7 +1162,7 @@ class Worker:
                     # resident trellis and a resident SDXL pipe, and a metric
                     # must not take VRAM from the models making the asset.
                     cosine = metrics.reference_cosine(
-                        anchor, job_dir / "input.png", self.config, device="cpu"
+                        anchor, image_path, self.config, device="cpu"
                     )
             except Exception:
                 log.exception("anchor similarity failed; ranking on composition alone")

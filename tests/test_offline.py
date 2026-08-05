@@ -96,6 +96,7 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
         "warlock.pipelines.conditioning",
         "warlock.pipelines.control",
         "warlock.pipelines.reference",
+        "warlock.pipelines.rank",
         "warlock.provenance",
     ],
 )
