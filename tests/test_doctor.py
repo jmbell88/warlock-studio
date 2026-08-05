@@ -55,8 +55,8 @@ def test_gguf_check_reports_missing_dir_as_fatal(tmp_path):
 
 def test_birefnet_check_is_not_fatal_when_missing(tmp_path):
     checks = {c.name: c for c in run_checks(_config(tmp_path))}
-    assert checks["birefnet.gguf (background removal)"].ok is False
-    assert checks["birefnet.gguf (background removal)"].fatal is False
+    assert checks["trellis: birefnet.gguf (background removal)"].ok is False
+    assert checks["trellis: birefnet.gguf (background removal)"].fatal is False
 
 
 def test_port_check_reports_a_free_port_as_ok(tmp_path):
@@ -196,25 +196,46 @@ def test_a_missing_matting_model_is_non_fatal_and_says_what_happens_instead(tmp_
     config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
     checks = {c.name: c for c in run_checks(config)}
     for spec in model_registry.MATTING_MODELS.values():
-        row = checks[f"matting model: {spec.label}"]
+        row = checks[f"host matting: {spec.label}"]
         assert row.ok is False
         assert row.fatal is False
         # The row exists to explain a quality difference, so it has to name
         # both the consequence and the one-time download that removes it.
         assert "fall back" in row.detail
         assert "hf download" in row.detail
+        # And the download is not only weights: the repo's modelling code
+        # imports packages this project does not declare, so a user who
+        # follows this row exactly still has to be told about them.
+        assert "you may also need" in row.detail
 
 
-def test_a_present_matting_model_says_it_runs_the_repos_own_code(tmp_path):
-    # trust_remote_code is stated where the user can see it, not only in a
-    # docstring: transformers executes the snapshot's own modelling code in
-    # this process, and that is a thing to be told about rather than to find.
+def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path):
+    # All the row has done is stat a directory. Whether the model then loads
+    # depends on imports inside code Warlock does not ship, so a green row that
+    # said "ready" would be a promise it never checked.
     root = tmp_path / "t2i"
     for spec in model_registry.MATTING_MODELS.values():
         (root / spec.dir_name).mkdir(parents=True)
         (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
     checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
     for spec in model_registry.MATTING_MODELS.values():
-        row = checks[f"matting model: {spec.label}"]
+        row = checks[f"host matting: {spec.label}"]
         assert row.ok is True
-        assert ("modelling code" in row.detail) is spec.remote_code
+        assert "weights present" in row.detail
+        assert "not checked" in row.detail
+        # trust_remote_code is disclosed where the user can see it, in the
+        # words it deserves: not "loads modelling code", which reads as
+        # loading weights, but that other people's Python runs in this process.
+        assert ("third-party Python" in row.detail) is spec.remote_code
+
+
+def test_the_two_birefnet_rows_are_told_apart(tmp_path):
+    # One BiRefNet lives inside trellis-server as a GGUF, the other on the host
+    # for 2D exports. They are different downloads, and a user looking at rough
+    # edges has to be able to tell which row is about which.
+    names = [c.name for c in run_checks(_config(tmp_path))]
+    birefnet = [n for n in names if "irefnet" in n or "iRefNet" in n]
+    assert len(birefnet) == 2
+    assert len(set(birefnet)) == 2
+    assert any(n.startswith("trellis:") for n in birefnet)
+    assert any(n.startswith("host matting:") for n in birefnet)

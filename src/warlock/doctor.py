@@ -117,7 +117,9 @@ def _birefnet_check(config: Config) -> Check:
         if ok
         else f"missing at {path} -- background matting falls back to a threshold cutout"
     )
-    return Check("birefnet.gguf (background removal)", ok, detail, fatal=False)
+    # Named for the process that loads it: there is a second BiRefNet on the
+    # host now (see _matting_checks) and the two are different downloads.
+    return Check("trellis: birefnet.gguf (background removal)", ok, detail, fatal=False)
 
 
 def _gltfpack_check(config: Config) -> Check:
@@ -300,26 +302,40 @@ def _metric_checks(config: Config) -> list[Check]:
 
 
 def _matting_checks(config: Config) -> list[Check]:
-    """The host-side matting weights, non-fatal.
+    """The host-side matting *weights*, non-fatal -- and only the weights.
 
     Missing, every 2D export still works -- the corner flood fill in
     pipelines/reference.py produces the alpha instead, with visibly rougher
     edges on anything that is not on a plain background. That is a quality
     difference the user should be able to see the cause of, which is what this
     row is for.
+
+    A green row deliberately claims less than "matting is ready". All it has
+    looked at is a directory: whether the model then loads depends on imports
+    inside the repo's own modelling code, which are that repo's business and
+    not packages this project declares. Saying "ready" on the strength of a
+    stat would turn a real failure into a silent fall-back to the flood fill
+    with a green row above it, which is the worst of both answers.
     """
     checks: list[Check] = []
     for spec in models.MATTING_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
         ok = (path / "config.json").exists()
         if ok:
-            detail = str(path)
+            detail = f"weights present at {path} -- not checked: whether the model loads"
             if spec.remote_code:
-                detail += " -- loads the repo's own modelling code from this directory"
+                detail += (
+                    "; loading it executes third-party Python from this directory "
+                    "in this process (transformers runs the repo's own modelling code)"
+                )
         else:
             detail = (
                 f"not found at {path} -- 2D exports fall back to the corner fill; "
                 f"download with:\n  {spec.download}"
             )
-        checks.append(Check(f"matting model: {spec.label}", ok, detail, fatal=False))
+        # "host matting", against _birefnet_check's "trellis": two rows, two
+        # different BiRefNets -- one GGUF inside trellis-server, this one on
+        # the host for 2D exports -- and a user with rough edges has to be able
+        # to tell which download the row is asking for.
+        checks.append(Check(f"host matting: {spec.label}", ok, detail, fatal=False))
     return checks

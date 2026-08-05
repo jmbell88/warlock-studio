@@ -7,17 +7,38 @@ path so nothing downstream has to know which one ran.
 
 from __future__ import annotations
 
+import logging
+import sys
+import types
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from PIL import Image, ImageDraw
 
 from warlock import models
 from warlock.pipelines import matting
 
 
+@pytest.fixture(autouse=True)
+def _no_model_carried_between_tests():
+    # The cache (and the failure sentinel beside it) is module state that
+    # outlives a test by design; nothing here should inherit either.
+    matting.unload()
+    yield
+    matting.unload()
+
+
 def _config(tmp_path):
     return SimpleNamespace(t2i_model_root=tmp_path)
+
+
+def _weights(tmp_path):
+    spec = models.MATTING_MODELS[models.DEFAULT_MATTING]
+    root = tmp_path / spec.dir_name
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}", encoding="utf-8")
+    return root
 
 
 def _subject():
@@ -103,3 +124,44 @@ def test_a_model_mask_that_finds_nothing_falls_back(tmp_path, monkeypatch):
     )
     _mask, source = matting.mask(_subject(), _config(tmp_path))
     assert source == "flood"
+
+
+def test_an_opaque_alpha_channel_is_not_a_cutout(tmp_path):
+    # Having a channel is not using one: a great many tools write RGBA whether
+    # or not anything is transparent. Believing an opaque one returns the whole
+    # frame as subject, labelled "alpha" -- the manifest's word for exact.
+    mask, source = matting.mask(_subject().convert("RGBA"), _config(tmp_path))
+    assert source == "flood"
+    assert mask[48, 48] and not mask[2, 2]
+    assert not mask.all()
+
+
+def test_a_checkpoint_that_will_not_load_is_only_tried_once(tmp_path, monkeypatch, caplog):
+    # An export is a loop over images. A broken install must cost one load
+    # attempt and one line, not one attempt and one traceback per image.
+    _weights(tmp_path)
+    calls: list[str] = []
+
+    def boom(*a, **k):
+        calls.append("load")
+        raise RuntimeError("half a download")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoModelForImageSegmentation=SimpleNamespace(from_pretrained=boom)
+        ),
+    )
+    with caplog.at_level(logging.WARNING, logger="warlock.pipelines.matting"):
+        for _ in range(3):
+            _m, source = matting.mask(_subject(), _config(tmp_path))
+            assert source == "flood"
+
+    assert len(calls) == 1
+    assert sum(record.exc_info is not None for record in caplog.records) == 1
+    # ... and the memory of it is droppable, so repairing the download does not
+    # need a restart.
+    matting.unload()
+    matting.mask(_subject(), _config(tmp_path))
+    assert len(calls) == 2

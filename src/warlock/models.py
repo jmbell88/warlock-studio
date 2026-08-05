@@ -351,13 +351,21 @@ MATTING_MODELS: dict[str, MattingModel] = _table(
         # and the 3D input derived from the same reference agree about where
         # the subject ends, which two different matting models would not.
         "birefnet",
-        "BiRefNet (background removal)",
+        "BiRefNet",
         "birefnet",
         remote_code=True,
         download=(
             "uvx hf download ZhengPeng7/BiRefNet "
             '--include "*.json" --include "*.py" --include "*.safetensors" '
-            "--local-dir models/birefnet"
+            "--local-dir models/birefnet\n"
+            # The weights are not the whole download. The repo's own modelling
+            # code builds its backbone through packages this project does not
+            # depend on, so a user who runs only the line above gets a
+            # directory doctor can see and a model that cannot import. Phrased
+            # as "may" because which of them is needed is a property of that
+            # repo's code, not something Warlock can assert from here.
+            "  you may also need: uv pip install timm torchvision "
+            "-- BiRefNet's modelling code imports them and Warlock does not ship them"
         ),
     ),
 )

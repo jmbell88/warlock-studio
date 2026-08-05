@@ -126,6 +126,17 @@ class Report:
         }
 
 
+def has_alpha(image: PILImage) -> bool:
+    """Whether ``subject_mask`` will read an alpha channel rather than flood fill.
+
+    Exported rather than left inline because a second caller now has to make
+    the same decision: ``pipelines/matting.py`` reports *which* source produced
+    a matte and that string goes into an export manifest, so a copy of this
+    condition that drifted would label a flood fill as ground truth.
+    """
+    return image.mode in ("RGBA", "LA") or "transparency" in image.info
+
+
 def subject_mask(image: PILImage):
     """A boolean mask of the subject: the alpha channel when there is one,
     otherwise a corner flood fill of the background.
@@ -139,7 +150,7 @@ def subject_mask(image: PILImage):
     import cv2
     import numpy as np
 
-    if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+    if has_alpha(image):
         alpha = np.asarray(image.convert("RGBA"))[:, :, 3]
         return alpha > 8
 
