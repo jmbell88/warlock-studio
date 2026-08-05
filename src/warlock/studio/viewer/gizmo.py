@@ -32,6 +32,14 @@ RING_SEGMENTS = 48
 # How close to the ring's line a click must land, as a fraction of its radius.
 RING_TOLERANCE = 0.12
 ARROW_TOLERANCE = 0.10
+# The uniform-scale handle at the gizmo's centre, as a fraction of its size.
+CENTRE_RADIUS = 0.14
+# A scale factor is clamped here rather than allowed to reach zero or go
+# negative. Zero is a transform that cannot be inverted -- picking and the
+# gizmo's own placement both stop working -- and negative is a mirror, which
+# has to be baked into the mesh (``build.ops.mirror``) because glTF readers
+# disagree about whether a negative scale flips the winding.
+MIN_SCALE_FACTOR = 1e-4
 
 AXES = {
     "x": np.array([1.0, 0.0, 0.0]),
@@ -68,6 +76,37 @@ def arrow(axis: str) -> np.ndarray:
     verts = [np.zeros(3), tip]
     for side in (perp, -perp, other, -other):
         verts += [tip, tip - direction * 0.25 + side * 0.1]
+    return np.array(verts, dtype="f4")
+
+
+def scale_handle(axis: str) -> np.ndarray:
+    """-> (n, 3) line vertices: a shaft along ``axis`` ending in a small cube.
+
+    A cube rather than an arrowhead, which is the convention every modelling
+    package uses to tell a scale handle from a translate one at a glance; drawn
+    as its twelve edges rather than as a solid, because the overlay pass is
+    unlit and depth-less and a shaded box reads as a flat blob.
+    """
+    direction = AXES[axis]
+    perp = AXES["y"] if axis != "y" else AXES["x"]
+    other = np.cross(direction, perp)
+    half = 0.06
+    # The box is centred so that its far face lands exactly at unit length, as
+    # ``arrow()``'s tip does: the two handles are the same length, and the hit
+    # test's reach is one number for both.
+    centre = direction * (1.0 - half)
+    corners = [
+        centre + perp * (a * half) + other * (b * half) + direction * (c * half)
+        for a in (-1, 1)
+        for b in (-1, 1)
+        for c in (-1, 1)
+    ]
+    verts = [np.zeros(3), centre]
+    # The twelve edges of the box: every pair of corners differing in one axis.
+    for i, a in enumerate(corners):
+        for j, b in enumerate(corners):
+            if j > i and np.count_nonzero(~np.isclose(a, b)) == 1:
+                verts += [a, b]
     return np.array(verts, dtype="f4")
 
 
@@ -254,6 +293,111 @@ class TranslateGizmo(Gizmo):
             items.append(
                 DrawItem(
                     vao=self._geometry(f"arrow:{axis}", arrow(axis)),
+                    color=(*_rgb(colour), 1.0),
+                    model=model,
+                    mode=moderngl.LINES,
+                )
+            )
+        return items
+
+
+class ScaleGizmo(Gizmo):
+    """Three axis handles and a uniform one at the centre.
+
+    Built the same way :class:`TranslateGizmo` is and on the same
+    ``closest_on_axis`` solve, because a scale drag along an axis *is* a
+    translate drag whose result is read as a ratio rather than as a
+    displacement. What it hands back is a per-axis factor **relative to where
+    the drag started**, never an absolute scale: the gizmo then needs to
+    remember nothing about the object, and the caller multiplies the factor
+    onto the scale it recorded when the drag began -- the same shape
+    ``BuildDoc.set_transform``'s ``was`` argument already takes.
+
+    Existing gizmos are reused as-is. ``RotateGizmo`` and ``TranslateGizmo``
+    are already documented as knowing nothing about bones, and nothing about a
+    scale handle changes that.
+    """
+
+    def _centre_radius(self) -> float:
+        return self.scale * CENTRE_RADIUS
+
+    def hit(self, origin: np.ndarray, direction: np.ndarray) -> str | None:
+        # The uniform handle first, and not by distance: all three axis handles
+        # *start* at the origin, so a click on the centre is within tolerance
+        # of every one of them and would go to whichever the loop reached
+        # first. The centre owns its own radius.
+        if picking.ray_sphere(origin, direction, self.origin, self._centre_radius()) is not None:
+            return "xyz"
+        best: tuple[float, str] | None = None
+        for axis, unit in AXES.items():
+            s, distance = picking.closest_on_axis(origin, direction, self.origin, unit)
+            if not (0.0 <= s <= self.scale * 1.15):
+                continue
+            if distance <= self.scale * ARROW_TOLERANCE and (best is None or distance < best[0]):
+                best = (distance, axis)
+        return None if best is None else best[1]
+
+    def _reach(self, axis: str, origin: np.ndarray, direction: np.ndarray) -> float:
+        """How far along the drag's measuring line the ray currently points.
+
+        For an axis handle that is the parameter along the axis. For the
+        uniform handle there is no axis, so it is the distance from the gizmo's
+        centre to the ray's closest approach -- camera-free, and it behaves the
+        way a user expects: drag away from the centre and the object grows.
+        """
+        if axis in AXES:
+            s, _distance = picking.closest_on_axis(origin, direction, self.origin, AXES[axis])
+            return s
+        offset = np.asarray(origin, dtype="f8") - self.origin
+        along = float(np.dot(offset, direction))
+        closest = offset - np.asarray(direction, dtype="f8") * along
+        return float(np.linalg.norm(closest))
+
+    def begin(self, axis: str, origin: np.ndarray, direction: np.ndarray) -> bool:
+        self.drag = Drag(
+            axis=axis,
+            start=np.array([self._reach(axis, origin, direction), 0.0, 0.0]),
+            origin=self.origin.copy(),
+            normal=AXES.get(axis, np.ones(3) / math.sqrt(3.0)),
+        )
+        return True
+
+    def update(self, origin: np.ndarray, direction: np.ndarray) -> np.ndarray | None:
+        """-> a ``(3,)`` factor relative to the drag's start, or None.
+
+        None when there is no drag, and also when the drag began *at* the
+        gizmo's origin: there is no ratio to take from a start of zero, and the
+        infinity a naive divide produces would reach the document as an
+        object's scale.
+        """
+        if self.drag is None:
+            return None
+        start = float(self.drag.start[0])
+        if abs(start) < 1e-9:
+            return None
+        ratio = max(self._reach(self.drag.axis, origin, direction) / start, MIN_SCALE_FACTOR)
+        factors = np.ones(3)
+        if self.drag.axis in AXES:
+            factors["xyz".index(self.drag.axis)] = ratio
+        else:
+            factors[:] = ratio
+        return factors
+
+    def draws(self) -> list[DrawItem]:
+        import moderngl
+
+        active = self.drag.axis if self.drag else self.hover
+        # World axes, as the translate gizmo uses: Build mode's objects carry a
+        # rotation, and a scale typed into the properties panel is applied
+        # before it, so a handle drawn in the object's rotated frame would drag
+        # along an axis the number it edits does not lie on.
+        model = _frame(self.origin, m3.identity(), self.scale)
+        items = []
+        for axis in AXES:
+            colour = HOVER_COLOR if axis == active else AXIS_COLORS[axis]
+            items.append(
+                DrawItem(
+                    vao=self._geometry(f"scale:{axis}", scale_handle(axis)),
                     color=(*_rgb(colour), 1.0),
                     model=model,
                     mode=moderngl.LINES,
