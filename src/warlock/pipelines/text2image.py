@@ -26,7 +26,12 @@ from pathlib import Path
 from typing import Any
 
 from .. import models
-from .prompt import PROMPT_TEMPLATE, chunk, pad_pair  # noqa: F401 -- re-exported
+from .prompt import (  # noqa: F401 -- re-exported
+    PROMPT_TEMPLATE,
+    TILE_TEMPLATE,
+    chunk,
+    pad_pair,
+)
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +54,50 @@ def _scheduler(name: str, current):
 
 def _noop() -> None:
     """The unconditioned path's teardown."""
+
+
+@contextlib.contextmanager
+def circular_padding(*modules: Any):
+    """Make every Conv2d in ``modules`` pad circularly, then put it back.
+
+    This is the whole seamlessness mechanism, and it is three lines because
+    torch already does the work: ``_ConvNd`` computes
+    ``_reversed_padding_repeated_twice`` in ``__init__`` regardless of mode and
+    ``_conv_forward`` branches on ``padding_mode != 'zeros'`` at call time, so
+    flipping the attribute is enough -- no rebuild, no reload, no second
+    checkpoint. With it, the model's receptive field wraps, and SDXL produces
+    an image whose left edge continues into its right.
+
+    Reverted in a finally, and to each module's *own* previous mode rather than
+    to a blanket "zeros". The pipe is resident and shared with ordinary jobs:
+    a patch that leaked would make every later reference tile, which is
+    invisible until someone looks at the edges of an image nobody looks at the
+    edges of. A ``None`` module is skipped -- a pipeline component can
+    legitimately be absent, and this is the wrong place to find out.
+
+    Each conv is recorded at most once, keyed by identity. Two of the passed
+    modules can legitimately reach the same child (a pipeline that shares an
+    encoder between components), and recording it twice would capture
+    "circular" the second time round and then restore that -- the exact leak
+    the finally exists to prevent, arrived at from the other direction.
+    """
+    import torch
+
+    previous: list[tuple[Any, str]] = []
+    seen: set[int] = set()
+    try:
+        for module in modules:
+            if module is None:
+                continue
+            for child in module.modules():
+                if isinstance(child, torch.nn.Conv2d) and id(child) not in seen:
+                    seen.add(id(child))
+                    previous.append((child, child.padding_mode))
+                    child.padding_mode = "circular"
+        yield
+    finally:
+        for child, mode in previous:
+            child.padding_mode = mode
 
 
 class JobCancelled(Exception):
@@ -441,6 +490,7 @@ class Text2Image:
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
+        tile: bool = False,
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -452,6 +502,12 @@ class Text2Image:
         ``conditioning`` is a pipelines.conditioning.Conditioning or None. None
         -- and a Conditioning with neither half in play -- takes a path that is
         byte-for-byte what this method did before conditioning existed.
+
+        ``tile`` switches every Conv2d in the UNet and the VAE to circular
+        padding for the duration of this call, which makes the output natively
+        seamless. It is a property of one job, never of the pipe: the same
+        resident pipeline serves ordinary references, so the patch is applied
+        here and reverted before this method returns.
         """
         import torch
 
@@ -473,7 +529,16 @@ class Text2Image:
         # prompt encodes -- can raise, and each of those failures used to skip
         # teardown() entirely and strand the ControlNet and image encoder in
         # VRAM for the life of the process.
+        stack = contextlib.ExitStack()
         try:
+            if tile:
+                # The VAE decoder as well as the UNet: a seamless latent
+                # decoded through zero-padded convolutions grows a visible
+                # border, which is the failure that makes people reach for an
+                # inpainting pass they do not need.
+                stack.enter_context(
+                    circular_padding(self._pipe.unet, getattr(self._pipe, "vae", None))
+                )
             # After from_pipe, never before: the adapters have to be set on the
             # pipeline object that is actually called.
             self._apply_adapters(target, lora, lora_weight)
@@ -493,7 +558,11 @@ class Text2Image:
             # are what the adapter was fitted on, so they belong with the rest
             # of the model-facing scaffolding.
             style = models.STYLE_LORAS.get(lora or "")
-            text = PROMPT_TEMPLATE.format(prompt=prompt)
+            # Only the framing template belongs here; the guidance-field subset
+            # a tile wants is applied by the caller, which composes ``prompt``,
+            # exactly as it is for an object today.
+            template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
+            text = template.format(prompt=prompt)
             if style is not None and style.trigger and lora in self._adapters:
                 text = f"{style.trigger}, {text}"
             self.last_prompt = text
@@ -538,16 +607,18 @@ class Text2Image:
                 **extra,
             ).images[0]
         finally:
+            stack.close()
             teardown()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image.save(output_path)
         self.last_used = time.monotonic()
         self.last_recipe = self._recipe(seed, text, negative_prompt, lora, lora_weight,
-                                        conditioning, len(positive_chunks))
+                                        conditioning, len(positive_chunks), tile)
         return output_path
 
     def _recipe(
-        self, seed, text, negative_prompt, lora, lora_weight, conditioning, chunks
+        self, seed, text, negative_prompt, lora, lora_weight, conditioning, chunks,
+        tile=False,
     ) -> dict[str, Any]:
         """Everything that decided this image, assembled the same way (and at
         the same point) last_prompt is -- so a job can record what produced it
@@ -565,6 +636,7 @@ class Text2Image:
             "prompt": text,
             "negative_prompt": negative_prompt or "",
             "prompt_chunks": chunks,
+            "tile": bool(tile),
             "models": provenance.model_fingerprints({"base_model": self._model_dir}),
             "versions": provenance.versions(),
         }

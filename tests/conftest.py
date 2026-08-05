@@ -148,6 +148,7 @@ class FakeText2Image:
         # asserted at this boundary -- an unconditioned job must hand the
         # pipeline conditioning=None, not an empty Conditioning.
         self.conditionings: list = []
+        self.tiles: list[bool] = []
         self.last_prompt = ""
         self.last_recipe: dict = {}
 
@@ -164,8 +165,10 @@ class FakeText2Image:
         on_state=None,
         on_step=None,
         cancel_event=None,
+        tile=False,
     ):
         self.prompts.append(prompt)
+        self.tiles.append(tile)
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
