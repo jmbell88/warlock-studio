@@ -39,14 +39,18 @@ def test_the_engine_imports_nothing_from_the_raster_editor() -> None:
     # would put Build mode behind a pixel buffer.
     source = engine.__file__
     assert source is not None
+    # And assert the property, not today's exact import list: a new stdlib
+    # import in the engine is legitimate and must not fail this test, whereas
+    # *any* relative import is a dependency on the package the engine was
+    # extracted out of.
     tree = ast.parse(Path(source).read_text(encoding="utf-8"))
-    imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
+            for alias in node.names:
+                assert not alias.name.startswith("warlock.studio.inker"), alias.name
         elif isinstance(node, ast.ImportFrom):
-            imported.add("." * node.level + (node.module or ""))
-    assert imported == {"__future__", "itertools", "dataclasses", "typing"}
+            assert node.level == 0, f"relative import: {'.' * node.level}{node.module}"
+            assert not (node.module or "").startswith("warlock.studio.inker"), node.module
 
 
 def test_inker_re_exports_the_same_objects_not_copies() -> None:
