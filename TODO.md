@@ -127,6 +127,32 @@ path today; each is a small, well-understood improvement.
 
 ---
 
+## Bench follow-ups
+
+Recorded during the parameter-sweep benchmark work (`warlock.bench sweep`, T1-T8 on `update-plan`).
+Neither is a defect — both are the next two things a follow-up session would build.
+
+- **AI judge.** `src/warlock/bench/verdicts.py`'s module docstring already documents the seam:
+  a future `bench/judge.py` would read, per unit directory (`<run_dir>/items/<unit_key>/`),
+  `views/*.png` + `views.json` (the rendered turntable), `reference.png` (what the item asked for),
+  and `job.json` (whose `params["mesh_report"]`/`params["mesh_audit"]` carry the topology/silhouette
+  verdicts the worker already computed), score them with a model, and write the result through the
+  same `append_verdict(..., source="ai:<model>")` human review already uses — e.g.
+  `source="ai:gpt-4-vision"`. Nothing about storage would need to change: `latest` keys on
+  `(unit, source)`, so a human's verdict on a unit and an AI's sit side by side rather than one
+  overwriting the other, and `report.aggregate`'s `sources` breakdown already tallies accept/reject
+  per source. The human verdicts that accumulate across runs in the meantime are the calibration
+  set a judge would eventually be checked against.
+- **Sweep phase 2: server-config axes.** `bench/sweep.py`'s `SERVER_AXES` (`trellis_band`,
+  `trellis_tex_res`) are accepted by the spec parser — so a spec naming one loads, and the file that
+  will eventually drive it can be written and reviewed now — but both `unit_kwargs` and
+  `_refuse_server_axes` raise on them today, because running one means something trellis-server is
+  launched with, not something a request carries: `plan_sweep`/`run_sweep` would need to group units
+  by server config and restart trellis-server between groups, with the config override recorded
+  per-group in the manifest rather than as a single top-level field.
+
+---
+
 ## Notes for whoever picks this up
 
 - **Commit convention is unchanged**: subject exactly `Warlock v0.0.7`, detail in the body, ending
