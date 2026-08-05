@@ -1,0 +1,22 @@
+{
+  "key": "lora-weight-v1",
+  "label": "LoRA weight",
+  "recipe_key": "baseline-turbo-raw",
+  "item": {
+    "id": "sweep-chest",
+    "category": "prop",
+    "prompt": "an ornate treasure chest with brass fittings",
+    "guidance": {
+      "category": "prop",
+      "genre": "fantasy",
+      "material": "wood",
+      "condition": "worn",
+      "style_lora": "render3d"
+    }
+  },
+  "axes": [
+    {"param": "lora_weight", "values": [0.6, 0.9, 1.2]}
+  ],
+  "seeds": [7, 42, 1234, 20260805],
+  "notes": "Never edited in place, like a suite file: a run's manifest records this file's fingerprint. render3d's own default_weight is 0.9, so that value is the baseline and plan_units skips it -- the two extra values are what actually get run."
+}
