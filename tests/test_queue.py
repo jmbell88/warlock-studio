@@ -1299,3 +1299,53 @@ async def test_the_retry_budget_is_a_ceiling_not_a_loop(
     assert len(w._text2image.seeds) == 3
     assert store.get(job_id)["status"] == "done"
     store.close()
+
+
+async def test_a_model_stage_job_measures_nothing_when_the_reroll_is_off(worker, monkeypatch):
+    # The default path pays for no *extra* measurement. The one call the whole
+    # job makes is reference.prepare's, further down and unchanged -- the loop
+    # adds none of its own, which is what the early break is for. Drop that
+    # break and this is 2.
+    calls = _bad_then_good(monkeypatch, failures=0)
+    job_id = worker.store.create("text", "a barrel", {"seed": 5})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert calls["n"] == 1
+    assert worker._text2image.seeds == [5]
+
+
+async def test_a_cancel_between_samples_stops_the_reroll(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """A refused report is not worth another four seconds of a job the user
+    has already given up on."""
+    import warlock.pipelines.reference as reference_mod
+    from warlock.config import Config
+    from warlock.db import JobStore
+
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        reference_retries=1,
+    )
+    store = JobStore(config.db_path)
+    w = Worker(config, store)
+
+    def fake(path):
+        # The cancel lands while the first sample's report is being measured:
+        # the budget still has a retry in it, and it must not be spent.
+        w._cancel.event.set()
+        return reference_mod.Report(ok=False, reasons=("the subject runs off the frame",))
+
+    monkeypatch.setattr(reference_mod, "measure_file", fake)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "cancelled")
+    await w.shutdown()
+
+    assert w._text2image.seeds == [5]
+    store.close()

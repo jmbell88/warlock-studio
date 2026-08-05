@@ -735,9 +735,22 @@ class Worker:
                         # flood fill here would be pure cost.
                         break
                     # Measure only, and never a rejection: the user is judging
-                    # the image, and the mesh stage is where the cost is. This
-                    # is what promote_to_model's soft check reads.
-                    report = await asyncio.to_thread(reference.measure_file, image_path)
+                    # the image, and the mesh stage is where the cost is. On a
+                    # reference job this is what promote_to_model's soft check
+                    # reads; on a model-stage job with the reroll on it is not
+                    # stored at all (see the `if is_reference` below) and exists
+                    # purely to decide whether to redraw, because
+                    # reference.prepare measures again a few lines further down.
+                    try:
+                        report = await asyncio.to_thread(reference.measure_file, image_path)
+                    except Exception:
+                        # Advisory, exactly as the ranking below is: the image
+                        # is already on disk and fine, so no verdict means no
+                        # reroll -- never a job failed by its own second
+                        # opinion. measure_file catches its own read errors, so
+                        # reaching here means the measurement itself broke.
+                        log.exception("measuring the reference failed for job %s", job_id)
+                        break
                     if is_reference:
                         params["reference_report"] = report.as_dict()
                     attempts.append(
