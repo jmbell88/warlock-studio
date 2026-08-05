@@ -46,11 +46,20 @@ from .mesh import Mesh
 def mesh_bytes(mesh: Mesh) -> int:
     """Every array a mesh owns, added up -- the number eviction spends.
 
-    Derived from the dataclass's fields rather than listed, so a Phase 2 field
-    (UVs, creases) is counted the day it is added rather than the day someone
-    notices the budget has stopped matching reality.
+    Derived from the dataclass's fields rather than listed, so a later field
+    (creases, per-corner colours) is counted the day it is added rather than
+    the day someone notices the budget has stopped matching reality. An
+    optional field that is absent -- ``uv`` on an authored mesh -- is skipped
+    rather than summed, which is the whole reason the sum is not a bare
+    generator over the fields.
     """
-    return int(sum(getattr(mesh, f.name).nbytes for f in fields(mesh)))
+    return int(
+        sum(
+            arr.nbytes
+            for arr in (getattr(mesh, f.name) for f in fields(mesh))
+            if arr is not None
+        )
+    )
 
 
 def _own(value: Any) -> Any:

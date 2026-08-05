@@ -56,6 +56,7 @@ _DTYPES = {
     "starts": "i4",
     "material": "i4",
     "smooth": "?",
+    "uv": "f4",
 }
 
 
@@ -65,6 +66,19 @@ class Mesh:
 
     ``eq=False`` deliberately: numpy arrays have no truthy ``==``, and identity
     comparison is what the GPU cache wants anyway.
+
+    **UVs are per corner, and optional.** ``uv`` is one row per entry in
+    ``loops`` rather than one per vertex, because a texture seam is exactly the
+    case where one vertex carries two different texture coordinates -- two
+    corners at one position -- and a per-vertex array cannot express it without
+    splitting the position too, which would split the *topology* to describe a
+    property of the shading. ``None`` means "this mesh has no texture
+    coordinates", which is what every primitive generator produces and what
+    keeps an authored document byte-identical to what it was before UVs
+    existed. Every op states its policy for the field: preserved (the corner
+    keeps its uv), interpolated (a new corner's uv is a lerp within the face
+    that made it, which is seam-safe because it never reads another face's
+    corners) or inherited (a new face copies the corners it was extruded from).
     """
 
     positions: np.ndarray  # (V, 3) f4
@@ -72,10 +86,14 @@ class Mesh:
     starts: np.ndarray  # (F+1,) i4  CSR offsets into loops
     material: np.ndarray  # (F,)   i4  index into the document palette
     smooth: np.ndarray  # (F,)   bool
+    uv: np.ndarray | None = None  # (L, 2) f4, per face corner, or absent
 
     def __post_init__(self) -> None:
         for f in fields(self):
-            arr = np.array(getattr(self, f.name), dtype=_DTYPES[f.name], copy=True)
+            value = getattr(self, f.name)
+            if value is None:
+                continue
+            arr = np.array(value, dtype=_DTYPES[f.name], copy=True)
             arr.setflags(write=False)
             object.__setattr__(self, f.name, arr)
 
@@ -123,6 +141,11 @@ def validate(mesh: Mesh) -> None:
     if len(mesh.smooth) != n_faces:
         raise ValueError(
             f"smooth must be one per face ({n_faces}), got {len(mesh.smooth)}"
+        )
+    if mesh.uv is not None and mesh.uv.shape != (len(mesh.loops), 2):
+        raise ValueError(
+            f"uv must be one (u, v) per face corner ({len(mesh.loops)}, 2), "
+            f"got {mesh.uv.shape}"
         )
 
 
@@ -245,12 +268,15 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return np.divide(v, length, out=np.zeros_like(v), where=length > 0.0)
 
 
-def render_arrays(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(positions, normals, indices)`` ready for a GPU upload.
+def render_arrays(
+    mesh: Mesh,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
+    """``(positions, normals, uvs, indices)`` ready for a GPU upload.
 
-    ``positions`` is ``(N, 3)`` f4, ``normals`` ``(N, 3)`` f4 and ``indices``
-    a flat ``(T * 3,)`` u4 -- the same shapes ``viewer.gltf.Primitive`` uses,
-    so the viewport's existing upload path takes them unchanged.
+    ``positions`` is ``(N, 3)`` f4, ``normals`` ``(N, 3)`` f4, ``uvs``
+    ``(N, 2)`` f4 or ``None``, and ``indices`` a flat ``(T * 3,)`` u4 -- the
+    same shapes ``viewer.gltf.Primitive`` uses, so the viewport's existing
+    upload path takes them unchanged.
 
     **A flat face splits a vertex per corner; a smooth face shares one.** A
     flat cube therefore emits twenty-four vertices and a smooth cube eight.
@@ -261,12 +287,26 @@ def render_arrays(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     export. A vertex touched by both a smooth and a flat face gets both
     treatments -- the smooth faces share it, the flat ones each get their own
     copy -- and only the smooth faces contribute to the shared normal.
+
+    **A textured mesh gives that sharing up entirely**, and emits one vertex
+    per corner. A UV is a per-corner property, so two corners of a smooth face
+    that meet at one position and carry different texture coordinates cannot be
+    one GPU vertex however the normals work out -- and a seam is precisely that
+    case. Rather than split only the corners that disagree, which would make
+    the emitted vertex count depend on the UV values, a mesh with ``uv`` splits
+    all of them: the normals are computed exactly as above (the smooth ones
+    still share their *value*, accumulated across the face's smooth
+    neighbours), only the buffer is no longer de-duplicated. The extra vertices
+    cost upload bandwidth on an imported mesh and nothing at all on an authored
+    one, which has no UVs.
     """
     n_faces = face_count(mesh)
     if n_faces == 0:
+        empty_uv = None if mesh.uv is None else np.zeros((0, 2), dtype="f4")
         return (
             np.zeros((0, 3), dtype="f4"),
             np.zeros((0, 3), dtype="f4"),
+            empty_uv,
             np.zeros(0, dtype="u4"),
         )
 
@@ -275,6 +315,9 @@ def render_arrays(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     counts = np.diff(mesh.starts).astype("i8")
     face_of_corner = np.repeat(np.arange(n_faces, dtype="i8"), counts)
     smooth_corner = mesh.smooth[face_of_corner]
+
+    if mesh.uv is not None:
+        return _render_arrays_per_corner(mesh, raw, unit, face_of_corner, smooth_corner)
 
     # Shared half: only vertices that a smooth face touches get an entry, and
     # each accumulates the area-weighted normals of its smooth faces alone.
@@ -306,7 +349,38 @@ def render_arrays(mesh: Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     corners, _ = _fan_corners(mesh)
     indices = corner_vertex[corners].reshape(-1).astype("u4")
-    return positions, normals, indices
+    return positions, normals, None, indices
+
+
+def _render_arrays_per_corner(
+    mesh: Mesh,
+    raw: np.ndarray,
+    unit: np.ndarray,
+    face_of_corner: np.ndarray,
+    smooth_corner: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """:func:`render_arrays` for a mesh that has UVs: one vertex per corner.
+
+    The normal is the same value the shared path would have produced -- a
+    smooth corner still gets the area-weighted sum over the smooth faces at its
+    *vertex*, not just its own face's -- so a textured smooth sphere shades
+    identically to an untextured one. Only the de-duplication is gone.
+    """
+    assert mesh.uv is not None
+    accum = np.zeros((len(mesh.positions), 3), dtype="f8")
+    smooth_loops = mesh.loops[smooth_corner]
+    np.add.at(accum, smooth_loops, raw[face_of_corner[smooth_corner]])
+
+    normals = unit[face_of_corner]
+    normals[smooth_corner] = _normalize(accum[smooth_loops])
+
+    corners, _ = _fan_corners(mesh)
+    return (
+        mesh.positions[mesh.loops].astype("f4"),
+        normals.astype("f4"),
+        np.array(mesh.uv, dtype="f4", copy=True),
+        corners.reshape(-1).astype("u4"),
+    )
 
 
 # --- transforms and measurement ---------------------------------------------
@@ -336,12 +410,21 @@ def transformed(mesh: Mesh, matrix: np.ndarray) -> Mesh:
     else:
         positions = np.zeros((0, 3), dtype="f8")
 
-    loops = mesh.loops
+    loops, uv = mesh.loops, mesh.uv
     if np.linalg.det(m[:3, :3]) < 0.0:
-        loops = np.concatenate(
-            [face(mesh, i)[::-1] for i in range(face_count(mesh))]
-            or [np.zeros(0, dtype="i4")]
+        # The UV travels with its corner, so the same permutation reverses it:
+        # a mirrored face's corners keep the texture coordinates they had, in
+        # the order the reversed loop reads them.
+        perm = np.concatenate(
+            [
+                np.arange(mesh.starts[i], mesh.starts[i + 1], dtype="i8")[::-1]
+                for i in range(face_count(mesh))
+            ]
+            or [np.zeros(0, dtype="i8")]
         )
+        loops = mesh.loops[perm]
+        if uv is not None:
+            uv = uv[perm]
 
     return Mesh(
         positions=positions,
@@ -349,6 +432,7 @@ def transformed(mesh: Mesh, matrix: np.ndarray) -> Mesh:
         starts=mesh.starts,
         material=mesh.material,
         smooth=mesh.smooth,
+        uv=uv,
     )
 
 

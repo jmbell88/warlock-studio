@@ -46,6 +46,7 @@ def _from_faces(positions: np.ndarray, faces: list[list[int]], **kw: object) -> 
         starts=starts,
         material=kw.get("material", np.zeros(n, dtype="i4")),
         smooth=kw.get("smooth", np.zeros(n, dtype=bool)),
+        uv=kw.get("uv"),
     )
 
 
@@ -232,38 +233,153 @@ def test_triangulate_an_empty_mesh_yields_empty_arrays() -> None:
 
 
 def test_render_arrays_splits_a_vertex_per_corner_on_a_flat_cube() -> None:
-    positions, normals, indices = bm.render_arrays(box())
+    positions, normals, uvs, indices = bm.render_arrays(box())
     assert len(positions) == 24
     assert len(normals) == 24
     assert len(indices) == 6 * 2 * 3
+    assert uvs is None
 
 
 def test_render_arrays_shares_vertices_on_a_smooth_cube() -> None:
-    positions, normals, indices = bm.render_arrays(box(smooth=np.ones(6, bool)))
+    positions, normals, uvs, indices = bm.render_arrays(box(smooth=np.ones(6, bool)))
     assert len(positions) == 8
     assert len(normals) == 8
     assert len(indices) == 6 * 2 * 3
+    assert uvs is None
 
 
 def test_render_arrays_normals_on_a_unit_box_point_outward() -> None:
     for smooth in (np.zeros(6, bool), np.ones(6, bool)):
-        positions, normals, _ = bm.render_arrays(box(smooth=smooth))
+        positions, normals, _, _ = bm.render_arrays(box(smooth=smooth))
         centre = np.zeros(3)
         assert float(np.sum((positions - centre) * normals)) > 0.0
 
 
 def test_render_arrays_normals_are_unit_length() -> None:
-    _, normals, _ = bm.render_arrays(box())
+    _, normals, _, _ = bm.render_arrays(box())
     assert np.allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-5)
 
 
 def test_render_arrays_indices_stay_inside_the_emitted_vertices() -> None:
     mixed = box(smooth=np.array([True] * 3 + [False] * 3))
-    positions, _, indices = bm.render_arrays(mixed)
+    positions, _, _, indices = bm.render_arrays(mixed)
     assert indices.max() < len(positions)
     # Three smooth faces touch every one of the eight corners; the three flat
     # ones contribute four corners each.
     assert len(positions) == 8 + 12
+
+
+# --- uv ---------------------------------------------------------------------
+
+
+def _uv_box() -> bm.Mesh:
+    """The unit box with a distinct uv per corner, so nothing can share one."""
+    m = box()
+    uv = np.arange(len(m.loops) * 2, dtype="f4").reshape(-1, 2) / 100.0
+    return bm.Mesh(
+        positions=m.positions,
+        loops=m.loops,
+        starts=m.starts,
+        material=m.material,
+        smooth=m.smooth,
+        uv=uv,
+    )
+
+
+def test_a_mesh_without_uvs_carries_none_rather_than_an_empty_array() -> None:
+    assert box().uv is None
+
+
+def test_uvs_are_copied_and_made_read_only_like_every_other_array() -> None:
+    given = np.zeros((24, 2), dtype="f4")
+    m = _from_faces(BOX_POSITIONS, BOX_FACES, uv=given)
+    assert m.uv is not given
+    with pytest.raises(ValueError):
+        m.uv[0, 0] = 1.0
+
+
+def test_validate_accepts_one_uv_per_face_corner() -> None:
+    bm.validate(_uv_box())
+
+
+def test_validate_rejects_uvs_that_are_not_one_per_corner() -> None:
+    m = box()
+    with pytest.raises(ValueError, match="uv must be one"):
+        bm.validate(
+            bm.Mesh(
+                positions=m.positions,
+                loops=m.loops,
+                starts=m.starts,
+                material=m.material,
+                smooth=m.smooth,
+                uv=np.zeros((len(m.positions), 2), dtype="f4"),
+            )
+        )
+
+
+def test_a_textured_mesh_renders_one_vertex_per_corner() -> None:
+    m = _uv_box()
+    positions, normals, uvs, indices = bm.render_arrays(m)
+    assert len(positions) == len(m.loops) == 24
+    assert len(normals) == 24
+    assert uvs is not None
+    assert np.array_equal(uvs, m.uv)
+    assert indices.max() < len(positions)
+
+
+def test_a_textured_mesh_gives_up_sharing_but_not_smooth_normals() -> None:
+    """A smooth textured cube emits 24 vertices carrying the 8 shared normals."""
+    smooth = np.ones(6, bool)
+    shared = bm.render_arrays(box(smooth=smooth))
+    m = _uv_box()
+    textured = bm.Mesh(
+        positions=m.positions,
+        loops=m.loops,
+        starts=m.starts,
+        material=m.material,
+        smooth=smooth,
+        uv=m.uv,
+    )
+    positions, normals, _, _ = bm.render_arrays(textured)
+    assert len(positions) == 24 and len(shared[0]) == 8
+    # Every corner's normal is the one its vertex got on the shared path.
+    for corner, vertex in enumerate(textured.loops):
+        assert np.allclose(normals[corner], shared[1][vertex], atol=1e-6)
+
+
+def test_a_textured_empty_mesh_renders_an_empty_uv_array_not_none() -> None:
+    empty = bm.Mesh(
+        positions=np.zeros((0, 3), dtype="f4"),
+        loops=np.zeros(0, dtype="i4"),
+        starts=np.zeros(1, dtype="i4"),
+        material=np.zeros(0, dtype="i4"),
+        smooth=np.zeros(0, dtype=bool),
+        uv=np.zeros((0, 2), dtype="f4"),
+    )
+    _, _, uvs, _ = bm.render_arrays(empty)
+    assert uvs is not None and uvs.shape == (0, 2)
+
+
+def test_mesh_bytes_skips_an_absent_uv_and_counts_a_present_one() -> None:
+    from warlock.studio.clay.edits import mesh_bytes
+
+    plain, textured = box(), _uv_box()
+    assert mesh_bytes(textured) == mesh_bytes(plain) + textured.uv.nbytes
+
+
+def test_a_mirror_reverses_the_uvs_with_the_loops_they_belong_to() -> None:
+    m = _uv_box()
+    out = bm.transformed(m, m3.scaling(m3.vec3(-1.0, 1.0, 1.0)))
+    assert out.uv is not None
+    for i in range(bm.face_count(m)):
+        lo, hi = int(m.starts[i]), int(m.starts[i + 1])
+        assert np.array_equal(out.uv[lo:hi], m.uv[lo:hi][::-1])
+
+
+def test_a_transform_without_a_mirror_carries_the_uvs_through_unchanged() -> None:
+    m = _uv_box()
+    out = bm.transformed(m, m3.translation(m3.vec3(1.0, 0.0, 0.0)))
+    assert np.array_equal(out.uv, m.uv)
 
 
 # --- transformed ------------------------------------------------------------
@@ -298,7 +414,7 @@ def test_transformed_by_a_mirror_reverses_every_face_loop() -> None:
 
 def test_transformed_by_a_mirror_keeps_normals_pointing_outward() -> None:
     out = bm.transformed(box(), m3.scaling(m3.vec3(-1.0, 1.0, 1.0)))
-    positions, normals, _ = bm.render_arrays(out)
+    positions, normals, _, _ = bm.render_arrays(out)
     assert float(np.sum(positions * normals)) > 0.0
 
 

@@ -407,3 +407,62 @@ def test_every_mesh_the_document_converts_is_valid() -> None:
     for prims in model.meshes:
         for prim in prims:
             assert len(prim.indices) % 3 == 0
+
+
+# --- _submesh ---------------------------------------------------------------
+
+
+def _submesh_by_loop(mesh: bm.Mesh, faces: np.ndarray) -> bm.Mesh:
+    """The per-face Python gather ``_submesh`` replaced, kept as the oracle."""
+    counts = np.diff(mesh.starts).astype("i8")[faces]
+    starts = np.concatenate([[0], np.cumsum(counts)]).astype("i4")
+    parts = [bm.face(mesh, int(f)) for f in faces]
+    return bm.Mesh(
+        positions=mesh.positions,
+        loops=np.concatenate(parts) if parts else np.zeros(0, dtype="i4"),
+        starts=starts,
+        material=mesh.material[faces],
+        smooth=mesh.smooth[faces],
+    )
+
+
+def test_the_vectorised_submesh_gather_matches_a_per_face_loop() -> None:
+    # Mixed arity on purpose: the cylinder has n-gon caps and quad sides, so
+    # the offset arithmetic has to cope with faces of two different lengths.
+    for mesh in (bp.box(), bp.cylinder(segments=7), bp.uv_sphere()):
+        for faces in (
+            np.arange(bm.face_count(mesh)),
+            np.arange(0, bm.face_count(mesh), 2),
+            np.array([bm.face_count(mesh) - 1, 0]),
+            np.zeros(0, dtype="i8"),
+        ):
+            out = bd._submesh(mesh, faces)
+            bm.validate(out)
+            want = _submesh_by_loop(mesh, faces)
+            assert np.array_equal(out.loops, want.loops)
+            assert np.array_equal(out.starts, want.starts)
+
+
+def test_submesh_gathers_the_uvs_alongside_the_corners() -> None:
+    mesh = bp.box()
+    uv = np.arange(len(mesh.loops) * 2, dtype="f4").reshape(-1, 2)
+    textured = bm.Mesh(
+        positions=mesh.positions,
+        loops=mesh.loops,
+        starts=mesh.starts,
+        material=mesh.material,
+        smooth=mesh.smooth,
+        uv=uv,
+    )
+    faces = np.array([4, 1])
+    out = bd._submesh(textured, faces)
+    bm.validate(out)
+    assert out.uv is not None
+    want = np.concatenate(
+        [uv[int(textured.starts[f]) : int(textured.starts[f + 1])] for f in faces]
+    )
+    assert np.array_equal(out.uv, want)
+
+
+def test_submesh_of_an_untextured_mesh_stays_untextured() -> None:
+    assert bd._submesh(bp.box(), np.array([0, 2])).uv is None

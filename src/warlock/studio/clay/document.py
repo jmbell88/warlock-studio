@@ -340,20 +340,32 @@ def _submesh(mesh: bm.Mesh, faces: np.ndarray) -> bm.Mesh:
     free: ``render_arrays`` emits a vertex only for a corner that some face in
     *this* submesh uses, so an untouched position costs nothing downstream, and
     not re-indexing means not having a second place that could get the mapping
-    wrong.
+    wrong. The same does *not* go for ``uv``, which is indexed by corner rather
+    than by vertex and so has to be gathered alongside ``loops``.
+
+    The corner gather is arithmetic rather than a loop over faces because this
+    runs once per material per object per rebuild, and an imported mesh has
+    hundreds of thousands of faces: a Python-level pass over them here was the
+    single worst hot spot in the rebuild.
     """
     counts = np.diff(mesh.starts).astype("i8")[faces]
     starts = np.concatenate([[0], np.cumsum(counts)]).astype("i4")
-    if len(faces):
-        loops = np.concatenate([bm.face(mesh, int(f)) for f in faces])
+    total = int(starts[-1]) if len(starts) else 0
+    if total:
+        # For every output corner, the index of the corner it came from:
+        # its face's start, plus how far into that face it sits.
+        face_of_corner = np.repeat(np.arange(len(faces), dtype="i8"), counts)
+        within = np.arange(total, dtype="i8") - starts[:-1].astype("i8")[face_of_corner]
+        corners = mesh.starts[:-1].astype("i8")[faces][face_of_corner] + within
     else:
-        loops = np.zeros(0, dtype="i4")
+        corners = np.zeros(0, dtype="i8")
     return bm.Mesh(
         positions=mesh.positions,
-        loops=loops,
+        loops=mesh.loops[corners],
         starts=starts,
         material=mesh.material[faces],
         smooth=mesh.smooth[faces],
+        uv=None if mesh.uv is None else mesh.uv[corners],
     )
 
 
@@ -375,12 +387,13 @@ def to_primitives(obj: Obj, materials: Sequence[gltf.Material]) -> list[gltf.Pri
     prims = []
     for index in np.unique(mesh.material):
         faces = np.flatnonzero(mesh.material == index)
-        positions, normals, indices = bm.render_arrays(_submesh(mesh, faces))
+        positions, normals, uvs, indices = bm.render_arrays(_submesh(mesh, faces))
         prims.append(
             gltf.Primitive(
                 positions=positions,
                 indices=indices,
                 normals=normals,
+                uvs=uvs,
                 material=_material_at(materials, int(index)),
             )
         )
