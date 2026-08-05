@@ -84,6 +84,23 @@ def new_uid() -> int:
     return next(_uids)
 
 
+def reserve_uid(uid: int) -> None:
+    """Guarantee that :func:`new_uid` never hands back ``uid`` or anything below.
+
+    A saved document carries its uids, and a reload that reissued them would
+    silently retarget every undo step recorded against one. But the counter is
+    per *process*, not per document, so a file whose uids run past where this
+    session happens to have got to would otherwise collide the moment the user
+    adds an object -- the new object and a restored one wearing one number, and
+    the first edit to either landing on whichever ``index_of`` reaches first.
+    So the reader raises the floor as it restores. Deliberately monotonic: the
+    counter never moves backwards, so loading a small document after a large
+    one cannot undo the protection the large one bought.
+    """
+    global _uids
+    _uids = itertools.count(max(int(uid) + 1, next(_uids)))
+
+
 def default_material(name: str = "Material") -> gltf.Material:
     """A plain untextured dielectric -- the palette entry a new object gets.
 
