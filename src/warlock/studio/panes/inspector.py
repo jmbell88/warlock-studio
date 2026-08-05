@@ -277,7 +277,6 @@ def _downloads(ctx: Any, job: Any) -> None:
     widgets.section("Downloads")
     job_id = job["id"]
     files = set(job.get("files") or [])
-    has_mesh = "model.glb" in files
     two_d = job.get("stage") in ("reference", "tile")
     if not imgui.begin_table("downloads", 2):
         return
@@ -285,13 +284,7 @@ def _downloads(ctx: Any, job: Any) -> None:
         # job["files"] is the sanctioned answer; a raw exists() check here used
         # to re-enable buttons the service would then refuse.
         ready = name in files
-        # A 2D export is derivable from the reference's own pixels, so it is
-        # gated on nothing else: model.glb is not in the question a reference
-        # asks, and the old has_mesh gate is what greyed every one of them out.
-        derivable = (
-            svc_derive.derivable_2d(name) if two_d else has_mesh and svc_derive.derivable(name)
-        )
-        blocked = _why_blocked(ctx, name, ready, derivable)
+        blocked = _why_blocked(ctx, name, ready, _derivable(job, files, name))
         key = f"save:{job_id}:{name}"
         busy = ctx.busy(key)
         imgui.table_next_column()
@@ -308,6 +301,26 @@ def _downloads(ctx: Any, job: Any) -> None:
     if two_d:
         _matte_note(ctx)
         _manifest_summary(ctx, job)
+
+
+def _derivable(job: Any, files: set[str], name: str) -> bool:
+    """Whether this job could produce ``name`` if the button were pressed.
+
+    A 2D export comes from the reference's own pixels, so it is gated on those
+    and not on a ``model.glb`` a reference will never have -- which is the old
+    gate, and which greyed out every one of them. But it *is* gated on the job
+    having finished: the mesh half got that for free, because model.glb is not
+    listed until the worker is done with it, whereas ``derivable_2d`` answers a
+    question about the name alone and would light six buttons on a queued job
+    whose only outcome is an error toast. The conditions are deliberately the
+    same three ``service.files.ready`` applies, restated here in terms of the
+    listing rather than of the disk, because the frame thread may not stat.
+    """
+    if job.get("stage") in ("reference", "tile"):
+        return (
+            job.get("status") == "done" and "input.png" in files and svc_derive.derivable_2d(name)
+        )
+    return "model.glb" in files and svc_derive.derivable(name)
 
 
 def _why_blocked(ctx: Any, name: str, ready: bool, derivable: bool) -> str | None:

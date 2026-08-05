@@ -57,6 +57,41 @@ def test_every_offered_name_is_servable():
             assert name in svc_files.MEDIA
 
 
+# -- whether a button is pressable ----------------------------------------
+
+
+def _derivable(job, name):
+    return inspector._derivable(job, set(job.get("files") or []), name)
+
+
+def test_a_finished_reference_can_derive_its_2d_exports():
+    job = _job(files=["input.png"])
+    assert _derivable(job, "icon.png")
+    assert _derivable(job, "manifest.json")
+
+
+def test_a_reference_still_running_cannot():
+    # derivable_2d answers a question about the *name*; without the status the
+    # grid lit six buttons whose only outcome was an error toast.
+    job = _job(files=["input.png"])
+    job["status"] = "running"
+    assert not _derivable(job, "icon.png")
+
+
+def test_a_reference_with_no_pixels_yet_cannot():
+    assert not _derivable(_job(), "icon.png")
+
+
+def test_a_reference_is_never_offered_a_mesh_derivation():
+    assert not _derivable(_job(files=["input.png"]), "model.stl")
+
+
+def test_a_mesh_derives_from_its_glb_and_not_from_its_input():
+    job = _job(stage="model", files=["input.png", "model.glb"])
+    assert _derivable(job, "model.stl")
+    assert not _derivable(job, "icon.png")
+
+
 # -- the manifest the Export tab shows under the grid ----------------------
 
 
