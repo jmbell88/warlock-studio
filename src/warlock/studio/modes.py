@@ -22,6 +22,7 @@ MODES: list[tuple[str, str, str]] = [
     ("3d", "3D", icons.BOX),
     ("inker", "Inker", icons.PEN_TOOL),
     ("build", "Build", icons.RULER),
+    ("review", "Review", icons.CIRCLE_CHECK),
     ("clay", "Clay", icons.EGG),
     ("settings", "Settings", icons.SETTINGS),
 ]
@@ -30,19 +31,22 @@ MODES: list[tuple[str, str, str]] = [
 # Manual, Clay and Settings are places you pass through: they have no form to
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
-WORK_MODES = frozenset({"2d", "3d", "inker", "build"})
+WORK_MODES = frozenset({"2d", "3d", "inker", "build", "review"})
 
 # The subset that draws the *asset* viewport, and therefore the only modes
 # whose selection is worth loading a mesh for. Inker and Build each own their
 # own centre pane -- Build's draws a live document rather than a file, so
-# ``_sync_viewer`` has nothing to do for it and returns early.
+# ``_sync_viewer`` has nothing to do for it and returns early. Review is not
+# here either, and deliberately: it *borrows* the shared viewer, but for a
+# sweep unit's mesh rather than for the library selection, so leaving it out is
+# what stops ``_sync_viewer`` reloading the selected asset over it.
 VIEWPORT_MODES = frozenset({"2d", "3d"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
-# its own three-column workspace. Inker and Build are the two, and the three
-# categories partition KEYS exactly -- which matters because ``_build_ui``'s
-# dispatch ends in a bare ``else``, so an unlisted mode would draw one of these
-# rather than fail.
-WORKSPACE_MODES = frozenset({"inker", "build"})
+# its own three-column workspace. Inker, Build and Review are the three, and
+# the three categories partition KEYS exactly -- which matters because
+# ``_build_ui``'s dispatch ends in a bare ``else``, so an unlisted mode would
+# draw one of these rather than fail.
+WORKSPACE_MODES = frozenset({"inker", "build", "review"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)

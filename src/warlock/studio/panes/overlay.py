@@ -220,6 +220,7 @@ def placeholder(ctx: Any) -> None:
     text = {
         "2d": "Describe something and press Generate.",
         "build": "Add a primitive to start blocking something out.",
+        "review": "Pick a sweep run to review.",
     }.get(ctx.state.mode, "Pick a finished reference, or open an image.")
     avail = imgui.get_content_region_avail()
     imgui.dummy((0, max(avail.y * 0.5 - 20, 0)))

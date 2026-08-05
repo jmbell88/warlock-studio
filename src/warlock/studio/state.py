@@ -291,6 +291,11 @@ class AppState:
     # AppState is the shared frame state and deliberately knows nothing about
     # what a mode keeps, so a session that never opens Build mode pays nothing.
     build: Any = None
+    # Review mode's sweep runs and where in one it is, built on first use by
+    # ``review_mode.ensure`` and untyped here for the reason ``build`` is.
+    # Nothing in it is persisted: a stored run directory would outlive the
+    # sweep it names.
+    review: Any = None
     manual: ManualState = field(default_factory=ManualState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
     # so the Export tab reads and parses it once per version of the file rather

@@ -371,6 +371,12 @@ class App:
                     from . import build_mode
 
                     build_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("review-"):
+                    from . import review_mode
+
+                    # Same rule: ``scanning`` gates every button and key, so a
+                    # failed scan that left it set would make the mode inert.
+                    review_mode.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -420,6 +426,11 @@ class App:
             from . import inker_mode
 
             inker_mode.on_task_done(ctx, done)
+            return
+        if key.startswith("review-"):
+            from . import review_mode
+
+            review_mode.on_task_done(ctx, done)
             return
         if key == "submit":
             ctx.cache.invalidate()
@@ -717,6 +728,15 @@ class App:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
                 self._frame_build_selection()
             return
+        if ctx.state.mode == "review":
+            from . import review_mode
+
+            # Unconditional for the reason Build's and Inker's are: handle_key
+            # returns False with no sweep run open, and letting that fall
+            # through would let A/S/R act on a viewport and forms Review has
+            # replaced. Nothing below this line belongs to Review.
+            review_mode.handle_key(ctx, event)
+            return
         if ctx.state.mode == "inker":
             from . import inker_mode
 
@@ -844,6 +864,15 @@ class App:
         # to show what was just picked.
         if ctx.state.mode != self._last_mode and ctx.state.mode in modes.VIEWPORT_MODES:
             self._sync_viewer()
+        if ctx.state.mode != self._last_mode and ctx.state.mode == "review":
+            # Arriving is the one moment a rescan is certainly wanted, and it
+            # is a mode change rather than a job-cache tick, so nothing else
+            # would ask. Driven off the change and not off "the list is empty",
+            # which would submit a walk of the bench directory every frame on a
+            # machine that has never run a sweep.
+            from . import review_mode
+
+            review_mode.scan(ctx)
         self._last_mode = ctx.state.mode
 
         viewport = imgui.get_main_viewport()
@@ -876,6 +905,8 @@ class App:
                 app_settings.draw(ctx)
             elif mode == "build":
                 self._build_workspace()
+            elif mode == "review":
+                self._review_workspace()
             else:
                 self._inker_workspace()
             imgui.end()
@@ -1176,6 +1207,192 @@ class App:
             inker_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
+
+    def _review_workspace(self) -> None:
+        """The same sidebar / centre / sidebar skeleton every other mode uses:
+
+            [ review-runs  ]              [ review-verdict ]
+            [ review-units ]  the mesh    [ the reference  ]
+
+        The centre borrows the *shared* asset viewer rather than a second one:
+        one GL context, one framebuffer, and a sweep unit's model.glb is an
+        ordinary GLB. Leaving Review needs no cleanup because ``_sync_viewer``
+        compares ``viewer.path`` against what the selection implies and reloads
+        the moment 3D is on screen again.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from . import review_mode
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        state = review_mode.ensure(ctx)
+        lay = self.layout
+        sidebar_w = sp(lay.sidebar_w)
+        inspector_w = sp(lay.inspector_w)
+        style = imgui.get_style()
+        borders = imgui.ChildFlags_.borders.value
+
+        imgui.begin_group()
+        runs_height = imgui.get_content_region_avail().y * lay.settings_share
+        if imgui.begin_child("review-runs", (sidebar_w, runs_height), borders):
+            self._review_runs(ctx, state, review_mode)
+        imgui.end_child()
+        if imgui.begin_child("review-units", (sidebar_w, 0), borders):
+            self._review_units(state, review_mode)
+        imgui.end_child()
+        imgui.end_group()
+
+        imgui.same_line()
+        drag = layout_mod.splitter("review-left-split")
+        if drag:
+            lay.sidebar_w = min(
+                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
+        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
+        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if imgui.begin_child("review-centre", (width, 0), borders, flags):
+            self._review_viewport(state, review_mode, width)
+        imgui.end_child()
+
+        imgui.same_line()
+        drag = layout_mod.splitter("review-right-split")
+        if drag:
+            lay.inspector_w = min(
+                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
+        if imgui.begin_child("review-verdict", (0, 0), borders):
+            self._review_verdict(ctx, state, review_mode)
+        imgui.end_child()
+
+    def _review_runs(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import icons, widgets
+
+        widgets.section("Sweep runs")
+        if widgets.disabled_button(f"{icons.REFRESH} Rescan", not state.scanning):
+            review_mode.scan(ctx)
+        if state.scanning:
+            imgui.same_line()
+            widgets.muted("Reading...")
+        if not state.runs:
+            widgets.muted("No sweep runs yet. Run: warlock bench sweep <spec>")
+            return
+        for run in state.runs:
+            todo = run["todo"]
+            done = len(run["units"]) - todo
+            selected = run["dir"] == state.run_dir
+            if imgui.selectable(f"{run['label']}##run-{run['label']}", selected)[0]:
+                review_mode.open_run(ctx, run["dir"])
+            widgets.muted(f"   {done}/{len(run['units'])} reviewed")
+
+    def _review_units(self, state: Any, review_mode: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import icons, widgets
+
+        widgets.section("Units")
+        if not state.units:
+            widgets.muted("Nothing to review in this run.")
+            return
+        for i, unit in enumerate(state.units):
+            mark = {"accept": icons.CHECK, "reject": icons.X}.get(unit["verdict"] or "", " ")
+            if imgui.selectable(
+                f"{mark} {review_mode.label(unit)}##unit-{unit['key']}", i == state.index
+            )[0]:
+                review_mode.step(state, i - state.index)
+
+    def _review_viewport(self, state: Any, review_mode: Any, width: float) -> None:
+        """The unit's mesh, in the shared viewer.
+
+        The load is keyed on the unit rather than done every frame, and it is
+        the same call ``_sync_viewer`` makes: on the frame thread, tolerating a
+        unit whose job errored and left no mesh behind.
+        """
+        from imgui_bundle import imgui
+
+        from . import widgets
+        from .panes import overlay
+
+        unit = review_mode.current(state)
+        key = unit["key"] if unit is not None else None
+        if key != state.loaded_key:
+            state.loaded_key = key
+            self._review_load(unit, review_mode)
+
+        image_pos = imgui.get_cursor_screen_pos()
+        avail = imgui.get_content_region_avail()
+        height = max(avail.y, 64)
+        if self.viewer.has_model:
+            self._draw_viewport_image(image_pos, width, height)
+        elif unit is None:
+            overlay.placeholder(self.app_ctx)
+        else:
+            widgets.muted(f"No mesh for this unit (status: {unit['status']}).")
+
+    def _review_load(self, unit: Any, review_mode: Any) -> None:
+        path = None if unit is None else review_mode.model_path(unit)
+        if path is None or not path.exists():
+            self.viewer.clear()
+            return
+        try:
+            self.viewer.load_model(path)
+        except Exception:
+            log.exception("could not open %s", path)
+            self.viewer.clear()
+            self.app_ctx.toast("Could not open that sweep unit's mesh.", "error")
+
+    def _review_verdict(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import widgets
+
+        unit = review_mode.current(state)
+        if unit is None:
+            widgets.muted("Pick a sweep run on the left.")
+            return
+
+        widgets.section(review_mode.label(unit))
+        widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['key']}")
+
+        reference = review_mode.reference_path(unit)
+        if reference is not None:
+            texture = ctx.textures.get(unit["key"], reference)
+            if texture is not None:
+                side = min(imgui.get_content_region_avail().x, 220.0)
+                imgui.image(widgets.texture_ref(texture), (side, side))
+
+        for line in review_mode.mesh_lines(unit):
+            widgets.muted(line)
+
+        imgui.separator()
+        enabled = not state.scanning
+        if widgets.primary_button("Accept (A)", enabled=enabled):
+            review_mode.record(ctx, "accept")
+        imgui.same_line()
+        if widgets.disabled_button("Reject (R)", enabled):
+            state.pending_reject = True
+        imgui.same_line()
+        if widgets.disabled_button("Skip (S)", enabled):
+            review_mode.advance(state)
+
+        if state.pending_reject:
+            widgets.muted("Why? (1-5, Esc to cancel)")
+            for number, reason in review_mode.REASON_KEYS.items():
+                if widgets.disabled_button(f"{number}  {reason}", enabled):
+                    review_mode.record(ctx, "reject", (reason,))
+        elif unit["verdict"]:
+            recorded = unit["verdict"]
+            if unit["reasons"]:
+                recorded += " - " + ", ".join(unit["reasons"])
+            widgets.muted(f"Recorded: {recorded}")
 
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.
