@@ -1601,6 +1601,40 @@ async def test_an_unmeasurable_mesh_is_never_remeshed(
     store.close()
 
 
+async def test_a_failed_remesh_does_not_fail_a_job_that_already_had_a_mesh(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    # The retry is this code's own idea, so it may not retroactively fail a job
+    # whose GLB is already on disk -- the rule the audit, the report and the
+    # grounding all follow. The half-written source.glb the failed run left is
+    # replaced by the kept attempt's, not trusted.
+    _audits(monkeypatch, [0.9])
+    w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)
+    job_id = _retry_job(w, store)
+    _seeded_glb_bytes(w)
+    inner = w.trellis.generate
+
+    async def generate(image_path, output_path, **kwargs):
+        if w.trellis.generate_calls:
+            output_path.write_bytes(b"half-written")
+            raise RuntimeError("trellis-server died")
+        return await inner(image_path, output_path, **kwargs)
+
+    w.trellis.generate = generate
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] in ("done", "error"))
+    await w.shutdown()
+
+    job = store.get(job_id)
+    assert job["status"] == "done"
+    assert job["error"] is None
+    job_dir = w.config.job_dir(job_id)
+    assert (job_dir / "model.glb").read_bytes() == b"glb-3"
+    assert (job_dir / "source.glb").read_bytes() == b"glb-3"
+    assert store.get(job_id)["params"]["mesh_audit"]["worst"] == 0.9
+    store.close()
+
+
 async def test_a_cancel_stops_the_retry(tmp_path, fake_pipelines, monkeypatch):
     _audits(monkeypatch, [0.9])
     w, store = _retry_worker(tmp_path, mesh_retries=3, mesh_hole_max=0.1)

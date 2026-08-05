@@ -894,6 +894,11 @@ class Worker:
         retries = max(0, int(self.config.mesh_retries))
         keep = job_dir / "best.glb"
         keep_source = job_dir / "best.source.glb"
+        # Which attempt's reconstruction is sitting at source.glb/model.glb
+        # right now, which is the only thing that decides whether the scratch
+        # copies have to be put back. None means "no longer any attempt's" --
+        # a retry that raised part-way through writing source.glb.
+        on_disk_seed: int | None = mesh_seed
         while True:
             await self._optimize(job_id, source_glb, glb_path, params)
             await self._apply_scale(job_id, glb_path, params)
@@ -936,26 +941,53 @@ class Worker:
                 "job %s: mesh audited %.3f open, past %.3f -- remeshing at seed %d",
                 job_id, worst, self.config.mesh_hole_max, mesh_seed,
             )
-            await self.trellis.generate(
-                trellis_input,
-                source_glb,
-                seed=mesh_seed,
-                resolution=resolution,
-                bg_removal=str(params.get("bg_removal") or "auto"),
-            )
-        if len(attempts) > 1 and best is not None:
-            if best["seed"] != attempts[-1]["seed"]:
-                # An earlier attempt won: put its GLBs and its measurements
-                # back, so what is on disk and what params claims about it
-                # describe the same mesh.
-                await asyncio.to_thread(shutil.copyfile, keep, glb_path)
-                await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
-                params.update(best["params"])
-            params["mesh_attempts"] = attempts
-            # The seed that reproduces the mesh that shipped, which is the
-            # best attempt's and not necessarily the last one's -- and the
-            # recipe carries the same seed, or the provenance and the row would
-            # name different reconstructions.
+            on_disk_seed = None
+            try:
+                await self.trellis.generate(
+                    trellis_input,
+                    source_glb,
+                    seed=mesh_seed,
+                    resolution=resolution,
+                    bg_removal=str(params.get("bg_removal") or "auto"),
+                )
+            except Exception:
+                # The best reconstruction so far is already on disk and the
+                # retry was this code's own idea, so a retry that blows up must
+                # not retroactively fail a job that had a mesh -- the same rule
+                # the audit, the report and the grounding follow. source.glb is
+                # left disowned rather than trusted (a half-written file is
+                # exactly what a failed run leaves), and the restore below puts
+                # the kept attempt's pair back.
+                # A cancel is not swallowed here: it arrives as a set event,
+                # which the `finally` in _process reads, or as CancelledError,
+                # which is a BaseException and passes straight through.
+                log.exception("remesh failed for job %s; keeping the best mesh so far", job_id)
+                break
+            on_disk_seed = mesh_seed
+        # Whether what is on disk is what was chosen -- which is not the same
+        # question as "did an earlier attempt win", because a retry that failed
+        # part-way leaves neither attempt's reconstruction there.
+        restored = best is not None and on_disk_seed != best["seed"]
+        if restored and best is not None:
+            # Put the kept attempt's GLBs and its measurements back, so what is
+            # on disk and what params claims about it describe the same mesh.
+            # params is restored wholesale rather than key by key: the snapshot
+            # is a complete copy taken between two trellis runs, and only
+            # _optimize, _apply_scale and _audit_mesh write between then and
+            # here, so replacing it is exact -- and stays exact when one of
+            # those three grows a new key, which a hand-written strip list
+            # would not.
+            await asyncio.to_thread(shutil.copyfile, keep, glb_path)
+            await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
+            params.clear()
+            params.update(best["params"])
+        if best is not None and (restored or len(attempts) > 1):
+            if len(attempts) > 1:
+                params["mesh_attempts"] = attempts
+            # The seed that reproduces the mesh that shipped, which is the best
+            # attempt's and not necessarily the last one tried -- and the recipe
+            # carries the same seed, or the provenance and the row would name
+            # different reconstructions.
             params["mesh_seed"] = best["seed"]
             params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
                 self.config, params, mesh_seed=best["seed"]
