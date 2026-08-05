@@ -87,7 +87,12 @@ class _Ctx2D:
         self.state = SimpleNamespace(
             form_2d={**default_form_2d(), **form}, remember_prompt=lambda p: None
         )
-        self.svc = object()
+        # No active profile is ever set, so anchor_kwargs's consultation of
+        # ctx.settings / ctx.svc.config short-circuits before either is read
+        # for real -- these only need to exist, the same as on the live
+        # AppContext.
+        self.settings = SimpleNamespace(get=lambda key, default=None: default)
+        self.svc = SimpleNamespace(config=SimpleNamespace(data_dir=None))
         self.submitted: list = []
 
     def submit(self, key, fn, *args, **kwargs):

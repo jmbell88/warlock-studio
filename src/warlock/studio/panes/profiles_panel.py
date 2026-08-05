@@ -8,11 +8,13 @@ landing screen happens when there is no form on screen at all.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
 
 from ...service import validation
+from ...service.validation import MAX_UPLOAD_BYTES
 from .. import dialogs, profiles, theme, widgets
 from ..manual import render as manual_render
 from . import settings_2d
@@ -68,7 +70,9 @@ def _list(ctx: Any) -> None:
                     message=f"{name} is removed. Nothing already generated changes.",
                     confirm_label="Delete",
                     cancel_label="Keep",
-                    on_confirm=lambda n=name: profiles.delete_profile(ctx.settings, n),
+                    on_confirm=lambda n=name: profiles.delete_profile(
+                        ctx.settings, n, ctx.svc.config
+                    ),
                 )
             )
         imgui.separator()
@@ -150,6 +154,8 @@ def _editor(ctx: Any) -> None:
         "##p_platform", draft.get("platform", ""), widgets.field_options(ctx, "platform")
     )
 
+    _anchor(ctx, name)
+
     imgui.dummy((0, 8))
     imgui.separator()
     saveable = bool(ctx.state.profile_draft_name.strip())
@@ -160,18 +166,80 @@ def _editor(ctx: Any) -> None:
         _close(ctx)
 
 
+def _anchor(ctx: Any, name: str) -> None:
+    """The style anchor: one image every asset in this set is conditioned on.
+
+    Only offered on a profile that has been saved once, because the anchor is
+    stored against the name -- there is nowhere to put it while the editor is
+    still holding an unnamed draft.
+    """
+    widgets.section("Style anchor")
+    saved = profiles.list_profiles(ctx.settings)
+    if name not in saved:
+        widgets.muted("Save the profile once, then attach an anchor image to it.")
+        return
+    fields = saved[name]
+    path = profiles.anchor_path(ctx.svc.config, fields)
+    if path is not None:
+        if ctx.textures is not None:
+            texture = ctx.textures.get(f"anchor:{name}", path)
+            if texture is not None:
+                imgui.image(widgets.texture_ref(texture), (96, 96))
+        changed, value = imgui.slider_float(
+            "Strength##anchor", float(fields.get("anchor_scale") or 0.6), 0.0, 1.5
+        )
+        if changed:
+            profiles.save_profile(
+                ctx.settings, name, {**fields, "anchor_scale": float(value)}
+            )
+        if imgui.small_button("Remove anchor"):
+            profiles.clear_anchor(ctx.settings, ctx.svc.config, name)
+        imgui.same_line()
+    busy = ctx.busy("anchor-pick")
+    if widgets.disabled_button(
+        "Choose an image..." if path is None else "Replace...", not busy
+    ):
+        ctx.submit("anchor-pick", _pick_anchor, ctx, name)
+    if path is None:
+        widgets.muted(
+            "Every generation under this profile is conditioned on the anchor, "
+            "which is what keeps a set of assets looking like one set."
+        )
+
+
+def _pick_anchor(ctx: Any, name: str) -> None:
+    """Runs on a task thread: both the dialog and the read block."""
+    chosen = dialogs.open_file("Choose a style anchor", dialogs.IMAGE_FILTER)
+    if chosen is None:
+        return
+    with Path(chosen).open("rb") as fh:
+        data = fh.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        ctx.toast("That image is over 20 MB.", "error")
+        return
+    profiles.set_anchor(ctx.settings, ctx.svc.config, name, data)
+    ctx.toast(f"Anchor set for {name}.")
+
+
 def _save(ctx: Any) -> None:
     name = ctx.state.profile_draft_name.strip()
     origin = ctx.state.profile_draft_origin
     # capture(), not the raw draft: the draft is a whole blank form with the
     # profile laid over it, and saving it wholesale would store every field the
     # profile is not supposed to carry.
-    profiles.save_profile(ctx.settings, name, profiles.capture(ctx.state.profile_draft))
+    fields = profiles.capture(ctx.state.profile_draft)
+    if origin and origin != name:
+        # A rename moves the anchor with the profile: save_profile preserves
+        # anchor fields under the *same* name, and this is the one path where
+        # the name changes underneath them.
+        carried = profiles.list_profiles(ctx.settings).get(origin) or {}
+        fields.update({k: carried[k] for k in profiles.ANCHOR_FIELDS if k in carried})
+    profiles.save_profile(ctx.settings, name, fields)
     if origin and origin != name:
         # A rename moves the profile rather than forking it: the editor was
         # opened on one entry, and leaving the old name behind would make a
         # typo correction look like it silently duplicated everything.
-        profiles.delete_profile(ctx.settings, origin)
+        profiles.delete_profile(ctx.settings, origin, ctx.svc.config)
     profiles.set_active(ctx.settings, name)
     ctx.toast(f"Saved the profile {name}.")
     _close(ctx)

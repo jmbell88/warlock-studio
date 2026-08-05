@@ -238,6 +238,15 @@ def _reference(ctx: Any, form: dict[str, Any]) -> None:
         return
 
     path = form["ref_path"]
+    if not path:
+        found = profiles.active_anchor(ctx.settings, ctx.svc.config)
+        if found is not None:
+            active = profiles.get_active(ctx.settings)
+            widgets.muted(
+                f"The profile {active} has a style anchor; every generation "
+                "under it is conditioned on that image. Attaching one here "
+                "replaces it for this asset."
+            )
     if path:
         imgui.text_wrapped(Path(path).name)
         if imgui.button("Clear##ref"):
@@ -472,6 +481,31 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def anchor_kwargs(ctx: Any, form: dict[str, Any], kwargs: dict[str, Any]) -> str:
+    """Fold the active profile's style anchor into a submit, in place.
+
+    -> the path to read as the conditioning reference, or "" for none.
+
+    A manual attachment wins and this returns "" for it: the anchor is what a
+    whole set has in common, and the image the user just dropped is what this
+    one asset needs. The path is *returned* rather than read here because this
+    runs on the frame thread and generate() reads files in its task.
+    """
+    if form.get("ref_path"):
+        return ""
+    found = profiles.active_anchor(ctx.settings, ctx.svc.config)
+    if found is None:
+        return ""
+    path, scale = found
+    # setdefault, not assignment: a form that already names an adapter chose
+    # it, and the anchor only supplies one where there was none.
+    kwargs.setdefault("guidance_fields", {}).setdefault(
+        "ip_adapter", profiles.ANCHOR_ADAPTER
+    )
+    kwargs["ip_scale"] = float(scale)
+    return str(path)
+
+
 def generate(ctx: Any, form: dict[str, Any]) -> None:
     if validate(form):
         return
@@ -481,7 +515,7 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         form["seed"] = random_seed()
     ctx.state.remember_prompt(form["prompt"])
     kwargs = submit_kwargs(form)
-    ref_path = form.get("ref_path") or ""
+    ref_path = form.get("ref_path") or anchor_kwargs(ctx, form, kwargs)
 
     # The form values are read here, on the frame thread, because they are UI
     # state; the *file* is read in the task, because a large one would freeze

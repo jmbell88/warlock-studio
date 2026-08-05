@@ -175,3 +175,18 @@ def test_no_active_profile_means_no_anchor(env):
     profiles.save_profile(env.settings, "house", {})
     profiles.set_anchor(env.settings, env.config, "house", PNG)
     assert profiles.active_anchor(env.settings, env.config) is None
+
+
+def test_a_rename_keeps_the_anchor_and_its_file(env):
+    # The editor's own sequence: save under the new name, delete the old.
+    profiles.save_profile(env.settings, "house", {})
+    profiles.set_anchor(env.settings, env.config, "house", PNG)
+    carried = profiles.list_profiles(env.settings)["house"]
+
+    profiles.save_profile(
+        env.settings, "manor", {k: carried[k] for k in profiles.ANCHOR_FIELDS}
+    )
+    profiles.delete_profile(env.settings, "house", env.config)
+
+    stored = profiles.list_profiles(env.settings)["manor"]
+    assert profiles.anchor_path(env.config, stored) is not None
