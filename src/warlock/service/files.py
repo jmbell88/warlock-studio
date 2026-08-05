@@ -38,6 +38,20 @@ MEDIA = {
     "textures.zip": "application/zip",
     "rig.glb": "model/gltf-binary",
     "thumb.png": "image/png",
+    # The 2D exports. Derived from input.png on a finished reference exactly
+    # the way the mesh exports derive from model.glb -- so every reference
+    # already on disk gains them, which is the whole reason they are derived
+    # rather than produced by a second kind of job.
+    #
+    # Each pixel size is its own literal name because MEDIA is the allowlist
+    # that keeps a caller-supplied string off the filesystem: a pixel_{n}.png
+    # pattern would put the number back in the caller's hands.
+    "icon.png": "image/png",
+    "sprite.png": "image/png",
+    "pixel_32.png": "image/png",
+    "pixel_64.png": "image/png",
+    "pixel_128.png": "image/png",
+    "manifest.json": "application/json",
     # The traceback errors.write_error_log already writes per job. The DB only
     # ever holds the one-line friendly sentence, so without this the actual
     # failure is on disk and unreachable from the UI.
@@ -311,6 +325,23 @@ def measure_storage(data_dir: Path) -> dict[str, Any]:
 # model.glb itself is ready, and never independently of it.
 DERIVED = ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model.fbx")
 
+# Everything that is a pure function of a *reference's* input.png. Kept apart
+# from DERIVED rather than merged into it: the two sets have different sources,
+# different readiness rules and different jobs they apply to, and one tuple
+# would have to be filtered at every use anyway.
+DERIVED_2D = (
+    "icon.png",
+    "sprite.png",
+    "pixel_32.png",
+    "pixel_64.png",
+    "pixel_128.png",
+    "manifest.json",
+)
+
+# Which pixel-art size each artifact name means. The names are literals for the
+# allowlist's sake; this is where they get their number back.
+PIXEL_ARTIFACTS = {"pixel_32.png": 32, "pixel_64.png": 64, "pixel_128.png": 128}
+
 # The order attach_files lists them in. Derived artifacts are deliberately
 # absent: they are produced on request, so listing them would claim a file that
 # usually isn't on disk.
@@ -349,6 +380,15 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # and the worker writes rig.json last, which makes it the completion
         # marker for the pair.
         return (job_dir / "rig.json").exists() and path.exists()
+    if name in DERIVED_2D:
+        # A reference's pixels, and only a reference's: a mesh job's input.png
+        # is the picture it was reconstructed *from*, so an icon derived from
+        # it would quietly claim to be an export of the mesh.
+        return (
+            job.get("stage") in ("reference", "tile")
+            and job.get("status") == "done"
+            and (job_dir / "input.png").exists()
+        )
     if name in DERIVED:
         # Derivable, not present: the caller still has to produce it.
         return ready(job, job_dir, "model.glb")
