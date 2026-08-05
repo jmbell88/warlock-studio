@@ -18,7 +18,7 @@ Beside the box, a **Recent** button opens your last twenty prompts, most recent 
 deduplicated — it appears once you have generated at least one reference, so there is history to
 show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](07-library-and-jobs.md#rerun-and-promotion).
+menu instead, which is described in [Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
 
 Under **Advanced** there is a second box, **Negative**, listing what the image must not contain. It
 is pre-filled with the things that most often ruin a reconstruction:

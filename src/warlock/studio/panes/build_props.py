@@ -26,6 +26,7 @@ from imgui_bundle import imgui
 
 from .. import build_mode, icons, widgets
 from ..build import primitives as bp
+from ..manual import render as manual_render
 
 # How a parameter's type decides its widget. Read off the *default value*,
 # because a registry entry carries no schema and does not need one: a float
@@ -37,6 +38,7 @@ def draw(ctx: Any) -> None:
     state = build_mode.ensure(ctx)
     tab = state.active
     widgets.section("properties")
+    manual_render.help_button(ctx, "build-props")
     if tab is None:
         widgets.muted("Nothing open.")
         return

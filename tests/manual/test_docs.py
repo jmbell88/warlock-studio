@@ -18,14 +18,15 @@ EXPECTED_KEYS = [
     "04-rigging-and-posing",
     "05-sprite-sheets",
     "06-inker",
-    "07-library-and-jobs",
-    "08-shortcuts",
-    "09-installation",
-    "10-configuration",
-    "11-troubleshooting",
-    "12-architecture",
-    "13-pipelines",
-    "14-extending",
+    "07-build",
+    "08-library-and-jobs",
+    "09-shortcuts",
+    "10-installation",
+    "11-configuration",
+    "12-troubleshooting",
+    "13-architecture",
+    "14-pipelines",
+    "15-extending",
 ]
 
 

@@ -26,7 +26,7 @@ the promotion inherit whatever the reference happened to record.
 Derived values never carry across. Anything the worker recorded about the *source* run's artifacts
 — the composed prompt, the mesh report, the applied transform — is stripped, so a new job never
 wears a quality verdict about a mesh that does not exist yet. See
-[Rerun and promotion](07-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
 
 If the reference's own quality report says it may not reconstruct, promoting it opens a confirm
 naming the reasons, with **Build anyway** as the affirmative. It is a confirm rather than a refusal
@@ -162,4 +162,4 @@ without Blender installed, "not available for this asset" for a mesh export on a
 job. A missing button would be a mystery; a disabled one with a reason is information.
 
 For bulk export of several assets at once, and for the storage those files occupy, see
-[The library and jobs](07-library-and-jobs.md#storage-and-pruning).
+[The library and jobs](08-library-and-jobs.md#storage-and-pruning).

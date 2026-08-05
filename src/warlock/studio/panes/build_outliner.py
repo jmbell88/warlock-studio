@@ -18,6 +18,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import build_mode, icons, theme, widgets
+from ..manual import render as manual_render
 
 ROW_HEIGHT = 24.0
 
@@ -26,6 +27,7 @@ def draw(ctx: Any) -> None:
     state = build_mode.ensure(ctx)
     tab = state.active
     widgets.section("outliner")
+    manual_render.help_button(ctx, "build-outliner")
     if tab is None:
         widgets.muted("Nothing open.")
         return

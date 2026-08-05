@@ -22,6 +22,7 @@ from .. import build_mode, build_state, icons, widgets
 from ..build import document as bd
 from ..build import ops
 from ..build import primitives as bp
+from ..manual import render as manual_render
 
 COLUMNS = 4
 
@@ -51,6 +52,7 @@ def draw(ctx: Any) -> None:
     state = build_mode.ensure(ctx)
     tab = state.active
     widgets.section("tools")
+    manual_render.help_button(ctx, "build-tools")
     _tool_grid(state)
     imgui.dummy((0, 6))
     if tab is None:

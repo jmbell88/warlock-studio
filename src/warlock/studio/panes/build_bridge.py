@@ -25,12 +25,14 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import build_mode, icons, widgets
+from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:
     state = build_mode.ensure(ctx)
     tab = state.active
     widgets.section("document")
+    manual_render.help_button(ctx, "build-bridge")
     if tab is None:
         widgets.muted("Nothing open.")
         return

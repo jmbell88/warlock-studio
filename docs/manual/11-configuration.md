@@ -21,7 +21,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_IDLE` | `600` | Seconds of queue inactivity before resident models are evicted to free VRAM. |
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
-| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](11-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
+| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](12-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
 | `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Not yet vendored; without it jobs ship the raw reconstruction. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. Every other tier needs `gltfpack`, so `raw` is the only one that can currently succeed. |
 | `WARLOCK_BENCH_DIR` | `bench/` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
@@ -109,7 +109,7 @@ So the variable is the right tool for exactly one case: swapping in another dist
 that wants the same sampler settings. A model that needs different settings wants a registry entry
 in `models.py` instead, which carries its own image size, step count, guidance scale, variant,
 scheduler and always-on step-distillation LoRA — because those are properties of the checkpoint, not
-of the user's preference. [Adding an image model](14-extending.md#adding-an-image-model) is the
+of the user's preference. [Adding an image model](15-extending.md#adding-an-image-model) is the
 procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
@@ -135,5 +135,5 @@ sections* re-opens every section that has been collapsed anywhere in the app.
 **Models.** A read-only list of the image models and style LoRAs the app knows about, marking any
 whose weights are missing, plus whether rigging is available. It is the same information the startup
 diagnostics report, in a place you can look at without opening the log. Weights are one-time manual
-downloads by design — see [Adding an image model](14-extending.md#adding-an-image-model) — so
+downloads by design — see [Adding an image model](15-extending.md#adding-an-image-model) — so
 there is nothing to install from here. Model management is coming in a future update.

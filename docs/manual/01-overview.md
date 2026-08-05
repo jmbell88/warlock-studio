@@ -61,7 +61,7 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
 - **Clay.** A placeholder. Sculpting is coming in a future update.
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and a
   read-only list of the models it loaded. See
-  [In-app settings](10-configuration.md#in-app-settings).
+  [In-app settings](11-configuration.md#in-app-settings).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
@@ -91,7 +91,7 @@ Once you are in the workspace, the window is three columns:
   three tabs, **Details**, **Rig & Pose** and **Export**; in 2D mode, **Details** and **Export**.
 
 At the far right of the top bar are two small controls. The **?** button opens the keyboard
-shortcut list, which is also reproduced in [Keyboard shortcuts](08-shortcuts.md). Beside it is the
+shortcut list, which is also reproduced in [Keyboard shortcuts](09-shortcuts.md). Beside it is the
 **health dot**: green when every startup check passed, amber when a non-fatal check failed (missing
 optional weights, no gltfpack, no CUDA), and red when something fatal failed or the worker died.
 Clicking it opens the full diagnostics list.

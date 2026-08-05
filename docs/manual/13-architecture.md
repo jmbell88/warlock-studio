@@ -42,7 +42,7 @@ interval to be a multiple of.
 The visible consequence of the split is that the app survives the worker dying. The window and the
 job store are in different threads from the GPU pipeline, so a worker that fails takes the queue
 with it and leaves the UI standing — which is exactly why there is a banner saying so. See
-[The GPU worker stopped](11-troubleshooting.md#the-gpu-worker-stopped).
+[The GPU worker stopped](12-troubleshooting.md#the-gpu-worker-stopped).
 
 ## The service layer
 
@@ -61,7 +61,7 @@ them into a single class would only put that structure back inside one file.
 
 `WarlockService` itself holds the small amount of state the functions share: the config, the store,
 the worker handle, the loop reference, the doctor-check cache, and the table of per-artifact
-conversion locks described under [Derived artifacts](13-pipelines.md#derived-artifacts).
+conversion locks described under [Derived artifacts](14-pipelines.md#derived-artifacts).
 
 ## The job store
 
@@ -107,8 +107,8 @@ tests. They are set with `setdefault`, so a deliberate override by the user stil
 
 Missing weights therefore fail loudly with the exact one-time `hf download` command rather than
 being fetched. That is the whole reason installation has a manual download step at all — see
-[Model weights](09-installation.md#model-weights) and
-[Offline by design](09-installation.md#offline-by-design).
+[Model weights](10-installation.md#model-weights) and
+[Offline by design](10-installation.md#offline-by-design).
 
 ## The GL context
 
@@ -146,4 +146,4 @@ The GLB loader is hand-rolled for two reasons that no general-purpose loader sat
 discards a scene root's transform, which is precisely where the grounding transform is written, and
 it has no notion of a skin. `viewer/gltf.py` keeps the node graph live after loading, because posing
 *is* setting a joint node's local rotation and recomputing world matrices — see
-[The pose contract](13-pipelines.md#the-pose-contract).
+[The pose contract](14-pipelines.md#the-pose-contract).

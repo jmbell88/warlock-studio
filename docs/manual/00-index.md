@@ -14,17 +14,18 @@ it running and keeping it running, and Part III explains how it is built.
 - [Rigging and posing](04-rigging-and-posing.md) — fitting a skeleton, posing it with gizmos, and saving poses.
 - [Sprite sheets](05-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
 - [Inker](06-inker.md) — the layered raster editor and the two directions it connects to the pipeline.
-- [The library and jobs](07-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
-- [Keyboard shortcuts](08-shortcuts.md) — every binding the app answers to.
+- [Build](07-build.md) — modelling from primitives, and the two ways a built document leaves the mode.
+- [The library and jobs](08-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
+- [Keyboard shortcuts](09-shortcuts.md) — every binding the app answers to.
 
 ## Setup & operations
 
-- [Installation](09-installation.md) — requirements, dependencies and the one-time model downloads.
-- [Configuration](10-configuration.md) — environment variables, data locations and VRAM modes.
-- [Troubleshooting](11-troubleshooting.md) — what the diagnostics say and what to do about it.
+- [Installation](10-installation.md) — requirements, dependencies and the one-time model downloads.
+- [Configuration](11-configuration.md) — environment variables, data locations and VRAM modes.
+- [Troubleshooting](12-troubleshooting.md) — what the diagnostics say and what to do about it.
 
 ## Architecture
 
-- [Architecture](12-architecture.md) — the process, the threads, the job store and the service layer.
-- [Pipelines](13-pipelines.md) — how a job travels from prompt to GLB.
-- [Extending](14-extending.md) — adding a model, a skeleton or a guidance field.
+- [Architecture](13-architecture.md) — the process, the threads, the job store and the service layer.
+- [Pipelines](14-pipelines.md) — how a job travels from prompt to GLB.
+- [Extending](15-extending.md) — adding a model, a skeleton or a guidance field.

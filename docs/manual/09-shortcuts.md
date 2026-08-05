@@ -3,10 +3,10 @@
 A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
 is a condensed subset — the tables below are the full list.
 
-One rule explains an apparent overlap between the two tables below. While an Inker document is open,
-Inker takes every key — so `W` picks the wand rather than toggling wireframe, and `S` picks the
-ellipse-select tool rather than the turntable. Those viewport bindings would otherwise act on a
-viewport that is not on screen.
+One rule explains an apparent overlap between the tables below. While an Inker or Build document is
+open, that mode takes every key — so in Inker `W` picks the wand rather than toggling wireframe, and
+in Build `W` is the move tool. Those viewport bindings would otherwise act on a viewport that is not
+on screen.
 
 ## Everywhere
 
@@ -19,6 +19,26 @@ viewport that is not on screen.
 | W | Toggle wireframe |
 | S | Toggle turntable |
 | Esc | Exit comparison / pose edit |
+
+## Build
+
+| Keys | Action |
+| --- | --- |
+| Q / W / E / R | Select / move / rotate / scale |
+| F | Frame the selection |
+| Delete | Delete the selected objects |
+| Ctrl+D | Duplicate the selection |
+| Ctrl+A | Select every object |
+| Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+N / Ctrl+O | New / open a document |
+| Ctrl+E | Export to the library |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous document |
+| Esc | Clear the selection |
+
+Left-drag in empty space orbits, right-drag or middle-drag pans, and the wheel dollies — the same
+as the asset viewport. `1`, `2` and `3` are deliberately unbound: they are reserved for Build Phase
+2's vertex, edge and face modes.
 
 ## Inker
 

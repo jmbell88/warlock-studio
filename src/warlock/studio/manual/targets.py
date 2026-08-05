@@ -9,7 +9,7 @@ from __future__ import annotations
 HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "settings-2d": ("02-generating-references", None),
     "settings-3d": ("03-generating-meshes", None),
-    "library": ("07-library-and-jobs", None),
+    "library": ("08-library-and-jobs", None),
     "inspector": ("03-generating-meshes", "exports"),
     "retarget": ("03-generating-meshes", "triangle-budget"),
     "pose": ("04-rigging-and-posing", "posing"),
@@ -17,6 +17,10 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "inker-tools": ("06-inker", "tools"),
     "inker-layers": ("06-inker", "layers"),
     "inker-bridge": ("06-inker", "pipeline-bridges"),
-    "profiles": ("07-library-and-jobs", "profiles"),
-    "app-settings": ("10-configuration", "in-app-settings"),
+    "build-tools": ("07-build", "transforming"),
+    "build-props": ("07-build", "materials"),
+    "build-outliner": ("07-build", "adding-a-primitive"),
+    "build-bridge": ("07-build", "the-two-ways-out"),
+    "profiles": ("08-library-and-jobs", "profiles"),
+    "app-settings": ("11-configuration", "in-app-settings"),
 }
