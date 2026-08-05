@@ -109,6 +109,14 @@ class Config:
         default_factory=lambda: os.environ.get("WARLOCK_RANK", "on").lower()
         not in ("0", "false", "off", "no")
     )
+    # How many extra times a text job may redraw its reference when the
+    # composition report refuses the one it just drew. 0 -- off -- because a
+    # retry is another four seconds of GPU the user did not ask for, and the
+    # report's rules are heuristics: a refusal is a strong hint, not a fact.
+    # 1 is the setting that pays for itself.
+    reference_retries: int = field(
+        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_REFERENCE_RETRIES", "0")))
+    )
     # Where `python -m warlock.bench` writes its runs. Outside data_dir on
     # purpose: a benchmark run copies its artifacts rather than referencing
     # them, precisely so it survives prune_jobs.

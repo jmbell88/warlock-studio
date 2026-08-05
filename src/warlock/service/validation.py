@@ -72,6 +72,9 @@ DERIVED_PARAMS = (
     # Advisory, and about *this* run's image: a reroll that inherited it would
     # wear a verdict about pixels it is about to replace.
     "rank",
+    # Provenance for a reroll that already happened. It describes this run's
+    # attempts, so a rerun inheriting it would claim retries it never made.
+    "reference_attempts",
     "control_hint",
     "recipe",
 )

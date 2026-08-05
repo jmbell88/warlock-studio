@@ -22,6 +22,7 @@ import contextlib
 import functools
 import json
 import logging
+import secrets
 import sys
 import tempfile
 import threading
@@ -61,6 +62,16 @@ T2I_PHASES = {
 # subjects scored with meshaudit.hole_fraction -- the same way
 # Config.trellis_band was settled.
 DEFAULT_REFERENCE_PREP = False
+
+
+def _fresh_seed() -> int:
+    """A new 31-bit seed for a retry.
+
+    Local rather than imported from service.validation: queue.py imports only
+    top-level modules by design, and this is the same three-line contract --
+    31-bit so it round-trips through an sqlite INTEGER unchanged.
+    """
+    return secrets.randbelow(2**31)
 
 
 @dataclass
@@ -691,30 +702,64 @@ class Worker:
             # PROMPT_TEMPLATE still wraps this with the TRELLIS-friendly
             # single-object framing.
             composed = guidance.compose_prompt(job["prompt"] or "", params)
+            # The reroll lives *inside* the try below, so however many samples
+            # it draws there is still one load and one unload around all of
+            # them: the VRAM handoff is a property of the stage, not of an
+            # attempt.
+            attempts: list[dict[str, Any]] = []
+            seed = reference_seed
+            retries = max(0, int(self.config.reference_retries))
+            is_reference = job.get("stage") == "reference"
             try:
-                await asyncio.to_thread(
-                    functools.partial(
-                        t2i.generate,
-                        composed,
-                        image_path,
-                        seed=reference_seed,
-                        lora=style_lora,
-                        lora_weight=lora_weight,
-                        negative_prompt=str(params.get("negative_prompt") or ""),
-                        conditioning=cond,
-                        on_state=lambda s: self._t2i_state(job_id, s),
-                        on_step=lambda i, n: self._t2i_step(job_id, i, n),
-                        cancel_event=self._cancel.event,
+                while True:
+                    await asyncio.to_thread(
+                        functools.partial(
+                            t2i.generate,
+                            composed,
+                            image_path,
+                            seed=seed,
+                            lora=style_lora,
+                            lora_weight=lora_weight,
+                            negative_prompt=str(params.get("negative_prompt") or ""),
+                            conditioning=cond,
+                            on_state=lambda s: self._t2i_state(job_id, s),
+                            on_step=lambda i, n: self._t2i_step(job_id, i, n),
+                            cancel_event=self._cancel.event,
+                        )
                     )
-                )
-                params["composed_prompt"] = t2i.last_prompt or composed
-                if job.get("stage") == "reference":
+                    params["composed_prompt"] = t2i.last_prompt or composed
+                    if not (is_reference or retries):
+                        # Nothing to measure it for: a model-stage job with the
+                        # retry off is measured a few lines further down by
+                        # reference.prepare anyway, and paying for a second
+                        # flood fill here would be pure cost.
+                        break
                     # Measure only, and never a rejection: the user is judging
                     # the image, and the mesh stage is where the cost is. This
                     # is what promote_to_model's soft check reads.
-                    params["reference_report"] = (
-                        await asyncio.to_thread(reference.measure_file, image_path)
-                    ).as_dict()
+                    report = await asyncio.to_thread(reference.measure_file, image_path)
+                    if is_reference:
+                        params["reference_report"] = report.as_dict()
+                    attempts.append(
+                        {"seed": seed, "ok": report.ok, "reasons": list(report.reasons)}
+                    )
+                    if report.ok or len(attempts) > retries or self._cancel.event.is_set():
+                        # A budget, not a loop: the report's rules are
+                        # heuristics, so past the ceiling the user gets the
+                        # last attempt rather than a job that refuses to end.
+                        break
+                    seed = _fresh_seed()
+                    log.info(
+                        "job %s: rerolling the reference (%s)",
+                        job_id,
+                        "; ".join(report.reasons),
+                    )
+                if len(attempts) > 1:
+                    # Only when it actually retried: a single-attempt job's
+                    # provenance is already the seed in params.
+                    params["reference_attempts"] = attempts
+                    params["reference_seed"] = seed
+                if is_reference:
                     try:
                         params["rank"] = await asyncio.to_thread(
                             self._rank_reference, image_path, params

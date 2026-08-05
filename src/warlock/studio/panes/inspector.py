@@ -192,6 +192,17 @@ def _reference(ctx: Any, job: Any) -> None:
         elif report.get("normalised"):
             widgets.muted("recentred and rescaled before upload")
 
+    attempts = params.get("reference_attempts")
+    if isinstance(attempts, list) and len(attempts) > 1:
+        # Only ever present on a job the reroll actually ran for, so the line
+        # doubles as the answer to "why is this not the seed I asked for".
+        widgets.muted(
+            f"redrawn {len(attempts) - 1} time(s): "
+            + "; ".join(
+                f"seed {a.get('seed')} {'kept' if a.get('ok') else 'refused'}" for a in attempts
+            )
+        )
+
     hint = params.get("control_hint")
     if isinstance(hint, dict) and hint.get("edge_fraction") is not None:
         # The number that answers "my silhouette lock did nothing": near zero

@@ -1206,3 +1206,96 @@ async def test_a_mesh_job_is_not_ranked(worker):
     await worker.shutdown()
 
     assert "rank" not in worker.store.get(job_id)["params"]
+
+
+def _bad_then_good(monkeypatch, failures: int):
+    """reference.measure_file that refuses the first `failures` calls."""
+    import warlock.pipelines.reference as reference_mod
+
+    calls = {"n": 0}
+
+    def fake(path):
+        calls["n"] += 1
+        ok = calls["n"] > failures
+        return reference_mod.Report(
+            ok=ok, reasons=() if ok else ("the subject runs off the frame",)
+        )
+
+    monkeypatch.setattr(reference_mod, "measure_file", fake)
+    return calls
+
+
+async def test_without_the_setting_a_bad_reference_is_not_rerolled(worker, monkeypatch):
+    _bad_then_good(monkeypatch, failures=99)
+    job_id = worker.store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.seeds == [5]
+    assert "reference_attempts" not in worker.store.get(job_id)["params"]
+
+
+async def test_a_bad_reference_is_rerolled_once_with_a_fresh_seed(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    from warlock.config import Config
+    from warlock.db import JobStore
+
+    _bad_then_good(monkeypatch, failures=1)
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        reference_retries=1,
+    )
+    store = JobStore(config.db_path)
+    w = Worker(config, store)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    # Read the teardown counters before shutdown(), which unloads the pipe
+    # itself and would mask what the job did.
+    unloads, trims = w._text2image.unload_calls, w._text2image.trim_calls
+    await w.shutdown()
+
+    seeds = w._text2image.seeds
+    assert len(seeds) == 2
+    assert seeds[0] == 5 and seeds[1] != 5
+    attempts = store.get(job_id)["params"]["reference_attempts"]
+    assert [a["ok"] for a in attempts] == [False, True]
+    assert [a["seed"] for a in attempts] == seeds
+    # One load and one teardown around both samples: the retry must not repeat
+    # the VRAM handoff, which is the whole reason it lives inside the try.
+    assert unloads == 0
+    assert trims == 1
+    store.close()
+
+
+async def test_the_retry_budget_is_a_ceiling_not_a_loop(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    from warlock.config import Config
+    from warlock.db import JobStore
+
+    _bad_then_good(monkeypatch, failures=99)
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        reference_retries=2,
+    )
+    store = JobStore(config.db_path)
+    w = Worker(config, store)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    # Three samples, then it stops and hands the user the last one -- the
+    # report is a heuristic, and refusing to finish would be worse.
+    assert len(w._text2image.seeds) == 3
+    assert store.get(job_id)["status"] == "done"
+    store.close()
