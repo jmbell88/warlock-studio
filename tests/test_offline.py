@@ -93,6 +93,7 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
 @pytest.mark.parametrize(
     "module",
     [
+        "warlock.pipelines.asset2d",
         "warlock.pipelines.conditioning",
         "warlock.pipelines.control",
         "warlock.pipelines.reference",
