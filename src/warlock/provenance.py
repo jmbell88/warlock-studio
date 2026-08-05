@@ -115,8 +115,9 @@ def versions() -> dict[str, str]:
     """Versions of the libraries that can change output.
 
     Includes prompt.PROMPT_VERSION, which is the whole reason this is not just
-    a pip freeze: a change to PROMPT_TEMPLATE or chunk() silently invalidates
-    every benchmark comparison, and nothing in a dependency version records it.
+    a pip freeze: a change to PROMPT_TEMPLATE, TILE_TEMPLATE, TILE_FIELDS or
+    chunk() silently invalidates every benchmark comparison, and nothing in a
+    dependency version records it.
 
     An already-imported module answers from its ``__version__``; anything else
     is read from installed distribution metadata rather than imported. That

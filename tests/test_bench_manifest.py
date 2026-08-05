@@ -101,7 +101,7 @@ def test_a_swapped_checkpoint_refuses_a_resume(tmp_path):
 
 def test_a_prompt_compiler_change_refuses_a_resume(tmp_path):
     """The whole reason PROMPT_VERSION exists: no dependency version moves
-    when PROMPT_TEMPLATE does."""
+    when PROMPT_TEMPLATE, TILE_TEMPLATE or TILE_FIELDS does."""
     a = _doc(tmp_path)
     # Derived from the recorded value rather than written as a literal: this
     # test is about a prompt-compiler change refusing a resume, not about any

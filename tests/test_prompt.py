@@ -6,10 +6,17 @@ import pytest
 
 from warlock.pipelines import prompt
 
-pytest.importorskip("transformers")
-
 MODEL_DIR = Path(__file__).resolve().parents[1] / "models" / "sdxl-turbo"
-pytestmark = pytest.mark.skipif(
+
+# Deliberately *not* a module-level pytestmark. Only chunk()/count() need a
+# real CLIP tokenizer; build(), pad_pair() and everything about TILE_TEMPLATE
+# and TILE_FIELDS is pure string assembly. A module-level skip made a checkout
+# without the sdxl-turbo weights -- a worktree, say -- silently stop asserting
+# the tile field partition, which is exactly the regression those tests exist
+# to catch. The transformers import lives in the fixture for the same reason:
+# prompt.py imports it inside load_tokenizers(), so the module is importable
+# without it.
+needs_tokenizer = pytest.mark.skipif(
     not (MODEL_DIR / "tokenizer" / "vocab.json").exists(),
     reason="local sdxl-turbo tokenizer not downloaded",
 )
@@ -17,14 +24,17 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def tokenizers():
+    pytest.importorskip("transformers")
     return prompt.load_tokenizers(MODEL_DIR)
 
 
+@needs_tokenizer
 def test_short_prompt_yields_exactly_one_chunk(tokenizers):
     chunks = prompt.chunk("a wooden crate, worn condition", tokenizers)
     assert chunks == ["a wooden crate, worn condition"]
 
 
+@needs_tokenizer
 def test_a_long_prompt_yields_more_than_one_chunk(tokenizers):
     fragment = "an ornate medieval fantasy weapon with intricate engravings"
     long_text = ", ".join([fragment] * 8)
@@ -34,6 +44,7 @@ def test_a_long_prompt_yields_more_than_one_chunk(tokenizers):
         assert prompt.count(c, tokenizers) <= 77
 
 
+@needs_tokenizer
 def test_chunking_never_splits_a_phrase(tokenizers):
     text = "alpha one, beta two, gamma three"
     chunks = prompt.chunk(text, tokenizers, limit=5)
@@ -41,6 +52,7 @@ def test_chunking_never_splits_a_phrase(tokenizers):
         assert any(phrase in c for c in chunks)
 
 
+@needs_tokenizer
 def test_a_lone_overlong_phrase_falls_back_to_whitespace_split(tokenizers):
     single_phrase = " ".join(["overlong"] * 40)
     chunks = prompt.chunk(single_phrase, tokenizers, limit=10)
@@ -49,6 +61,7 @@ def test_a_lone_overlong_phrase_falls_back_to_whitespace_split(tokenizers):
         assert prompt.count(c, tokenizers) <= 12
 
 
+@needs_tokenizer
 def test_a_single_unsplittable_atom_is_hard_split_not_truncated(tokenizers):
     # One whitespace-free "word" (a pasted URL, say) that alone exceeds the
     # limit: chunk() must slice it rather than emit an over-limit chunk the
@@ -62,6 +75,7 @@ def test_a_single_unsplittable_atom_is_hard_split_not_truncated(tokenizers):
     assert "".join(chunks) == atom
 
 
+@needs_tokenizer
 def test_empty_prompt_yields_one_empty_chunk(tokenizers):
     assert prompt.chunk("", tokenizers) == [""]
 
@@ -128,4 +142,20 @@ def test_the_tile_field_list_is_a_real_subset_of_the_taxonomy():
     from warlock import guidance
     from warlock.pipelines import prompt as prompt_mod
 
-    assert set(prompt_mod.TILE_FIELDS) < set(guidance.form_fields())
+    # Against _PROMPT_FIELDS, not form_fields(). form_fields() is tuple(_TABLES)
+    # and so includes base_model, style_lora, ip_adapter and control -- fields
+    # that contribute no prompt fragment at all, so a TILE_FIELDS entry naming
+    # one would satisfy that weaker check while adding nothing to a tile prompt.
+    assert set(prompt_mod.TILE_FIELDS) < set(guidance._PROMPT_FIELDS)
+
+
+def test_no_object_field_leaks_into_the_tile_subset():
+    # The partition pinned in the direction that actually goes wrong. Asserting
+    # only that a category fragment is absent from one composed prompt leaves
+    # "someone adds mood or rarity to TILE_FIELDS" -- the exact regression that
+    # turns a "cobblestone" tile into a picture of a cobblestone -- passing.
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert set(prompt_mod.TILE_FIELDS).isdisjoint(
+        {"category", "silhouette", "rarity", "emissive", "mood", "platform"}
+    )
