@@ -15,7 +15,14 @@ reasons that both bite later rather than now:
   or rebuild an index when a quad becomes a pentagon.
 
 The cost is that ``starts`` has to be kept honest -- hence :func:`validate`,
-which every op that builds a mesh by hand should be tested against.
+which every op that builds a mesh by hand should be tested against. Nothing
+else here re-checks it: :func:`edges`, :func:`_next_corner` and
+:func:`_face_normals` all *assume* an already-validated mesh, and on an
+invalid one they do not raise, they quietly produce wrong answers -- a face
+with fewer than three corners makes ``np.add.reduceat`` hand back a bare row
+instead of a sum, and makes ``_next_corner`` write its wrap index into the
+previous face's span. A primitive generator or a Phase 2 op that builds a
+``Mesh`` by hand should therefore run :func:`validate` in its tests.
 
 **Every array is a copy, and every copy is read-only.** ``Mesh`` is a frozen
 dataclass, but ``frozen=True`` only stops the *fields* being reassigned; a
@@ -83,9 +90,7 @@ def validate(mesh: Mesh) -> None:
     generator in ``primitives.py`` is tested through it. The rules are the
     ones a slice-by-offsets layout cannot enforce by construction.
     """
-    if mesh.positions.ndim != 2 or (
-        mesh.positions.size and mesh.positions.shape[1] != 3
-    ):
+    if mesh.positions.ndim != 2 or mesh.positions.shape[1] != 3:
         raise ValueError(f"positions must be (V, 3), got {mesh.positions.shape}")
     if mesh.loops.ndim != 1 or mesh.starts.ndim != 1:
         raise ValueError("loops and starts must each be one-dimensional")

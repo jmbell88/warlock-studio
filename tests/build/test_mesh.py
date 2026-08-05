@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
 
@@ -87,6 +89,34 @@ def test_an_empty_mesh_is_a_valid_csr_mesh() -> None:
             smooth=np.zeros(0, dtype=bool),
         )
     )
+
+
+def test_validate_rejects_positions_that_are_not_three_wide() -> None:
+    with pytest.raises(ValueError, match=r"positions must be \(V, 3\)"):
+        bm.validate(
+            bm.Mesh(
+                positions=np.zeros((4, 5), dtype="f4"),
+                loops=np.zeros(0, dtype="i4"),
+                starts=np.zeros(1, dtype="i4"),
+                material=np.zeros(0, dtype="i4"),
+                smooth=np.zeros(0, dtype=bool),
+            )
+        )
+
+
+def test_validate_rejects_empty_positions_that_are_not_three_wide() -> None:
+    # An empty mesh is valid, but only as (0, 3) -- a (0, 5) array is as
+    # malformed as any other and used to slip through the empty case.
+    with pytest.raises(ValueError, match=r"positions must be \(V, 3\)"):
+        bm.validate(
+            bm.Mesh(
+                positions=np.zeros((0, 5), dtype="f4"),
+                loops=np.zeros(0, dtype="i4"),
+                starts=np.zeros(1, dtype="i4"),
+                material=np.zeros(0, dtype="i4"),
+                smooth=np.zeros(0, dtype=bool),
+            )
+        )
 
 
 def test_validate_rejects_starts_that_are_not_monotonic() -> None:
@@ -328,13 +358,17 @@ def test_a_face_slice_cannot_be_written_through() -> None:
 
 def test_a_mesh_field_cannot_be_reassigned() -> None:
     m = box()
-    with pytest.raises(Exception):  # noqa: B017 -- dataclasses raises FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
         m.positions = np.zeros((1, 3), "f4")  # type: ignore[misc]
 
 
 def test_a_meshs_arrays_own_their_bytes() -> None:
     # A view of a big shared buffer reports its own tiny nbytes while keeping
-    # the base alive, and nbytes is what undo eviction is driven by.
+    # the base alive, and nbytes is what undo eviction is driven by. Built
+    # from a slice of a 10k-vertex scratch buffer, the mesh must still own
+    # every byte it claims -- base is None on all five fields, never merely a
+    # smaller base.
     big = np.zeros((10_000, 3), dtype="f4")
     m = _from_faces(big[:8], BOX_FACES)
-    assert m.positions.base is None or m.positions.base.nbytes <= m.positions.nbytes
+    for arr in (m.positions, m.loops, m.starts, m.material, m.smooth):
+        assert arr.base is None
