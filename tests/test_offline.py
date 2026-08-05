@@ -96,6 +96,11 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
         "warlock.pipelines.asset2d",
         "warlock.pipelines.conditioning",
         "warlock.pipelines.control",
+        # Not a pure module -- it loads a model -- but the rule it has to keep
+        # is the same one: available() is the question every caller asks first
+        # and it must be answerable without paying for a torch import, so torch
+        # stays inside _load/_model_mask where the weights already exist.
+        "warlock.pipelines.matting",
         "warlock.pipelines.reference",
         "warlock.pipelines.rank",
         "warlock.provenance",

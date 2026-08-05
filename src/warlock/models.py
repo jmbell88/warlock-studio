@@ -317,6 +317,52 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
 )
 
 
+DEFAULT_MATTING = "birefnet"
+
+
+@dataclass(frozen=True, slots=True)
+class MattingModel:
+    """A model that separates a subject from its background, host-side.
+
+    Its own table rather than another MetricModel: a metric measures a finished
+    asset and its absence costs a number, while this one *produces* an asset's
+    alpha and its absence costs edge quality on every 2D export. Both are
+    optional and neither is ever downloaded at runtime, which is all they have
+    in common.
+
+    ``remote_code`` is stated rather than implied. The published repo ships its
+    own modelling code and transformers executes it on load. It comes from the
+    snapshot the user downloaded once -- nothing is fetched, and the offline
+    invariant holds -- but it is third-party Python running in this process,
+    and doctor says so out loud rather than leaving it in a docstring.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    remote_code: bool = False
+    download: str = ""
+
+
+MATTING_MODELS: dict[str, MattingModel] = _table(
+    MattingModel(
+        # BiRefNet and not something smaller, because trellis-server already
+        # uses BiRefNet internally for bg_removal="birefnet" -- so a 2D export
+        # and the 3D input derived from the same reference agree about where
+        # the subject ends, which two different matting models would not.
+        "birefnet",
+        "BiRefNet (background removal)",
+        "birefnet",
+        remote_code=True,
+        download=(
+            "uvx hf download ZhengPeng7/BiRefNet "
+            '--include "*.json" --include "*.py" --include "*.safetensors" '
+            "--local-dir models/birefnet"
+        ),
+    ),
+)
+
+
 def controlnet_bases() -> list[str]:
     """Base models a ControlNet may be attached to -- the UI hides the whole
     Structure group when the chosen base is not one of these, rather than

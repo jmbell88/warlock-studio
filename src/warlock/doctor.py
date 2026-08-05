@@ -45,6 +45,7 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _disk_check(config),
         _port_check(config, trellis_running),
         *_t2i_checks(config),
+        *_matting_checks(config),
         blender_check(),
     ]
 
@@ -295,4 +296,30 @@ def _metric_checks(config: Config) -> list[Check]:
             f"  {spec.download}"
         )
         checks.append(Check(f"metric model: {spec.label}", ok, detail, fatal=False))
+    return checks
+
+
+def _matting_checks(config: Config) -> list[Check]:
+    """The host-side matting weights, non-fatal.
+
+    Missing, every 2D export still works -- the corner flood fill in
+    pipelines/reference.py produces the alpha instead, with visibly rougher
+    edges on anything that is not on a plain background. That is a quality
+    difference the user should be able to see the cause of, which is what this
+    row is for.
+    """
+    checks: list[Check] = []
+    for spec in models.MATTING_MODELS.values():
+        path = config.t2i_model_root / spec.dir_name
+        ok = (path / "config.json").exists()
+        if ok:
+            detail = str(path)
+            if spec.remote_code:
+                detail += " -- loads the repo's own modelling code from this directory"
+        else:
+            detail = (
+                f"not found at {path} -- 2D exports fall back to the corner fill; "
+                f"download with:\n  {spec.download}"
+            )
+        checks.append(Check(f"matting model: {spec.label}", ok, detail, fatal=False))
     return checks

@@ -83,6 +83,7 @@ def test_run_checks_returns_every_check(tmp_path):
         + len(model_registry.IP_ADAPTERS)
         + len(model_registry.CONTROLNETS)
         + len(model_registry.METRIC_MODELS)
+        + len(model_registry.MATTING_MODELS)
     )
     assert len(run_checks(_config(tmp_path))) == expected
 
@@ -189,3 +190,31 @@ def test_controlnet_rows_are_non_fatal_and_name_their_download(tmp_path):
         assert row.ok is False
         assert row.fatal is False
         assert "hf download" in row.detail
+
+
+def test_a_missing_matting_model_is_non_fatal_and_says_what_happens_instead(tmp_path):
+    config = _config(tmp_path, t2i_model_root=tmp_path / "t2i")
+    checks = {c.name: c for c in run_checks(config)}
+    for spec in model_registry.MATTING_MODELS.values():
+        row = checks[f"matting model: {spec.label}"]
+        assert row.ok is False
+        assert row.fatal is False
+        # The row exists to explain a quality difference, so it has to name
+        # both the consequence and the one-time download that removes it.
+        assert "fall back" in row.detail
+        assert "hf download" in row.detail
+
+
+def test_a_present_matting_model_says_it_runs_the_repos_own_code(tmp_path):
+    # trust_remote_code is stated where the user can see it, not only in a
+    # docstring: transformers executes the snapshot's own modelling code in
+    # this process, and that is a thing to be told about rather than to find.
+    root = tmp_path / "t2i"
+    for spec in model_registry.MATTING_MODELS.values():
+        (root / spec.dir_name).mkdir(parents=True)
+        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    for spec in model_registry.MATTING_MODELS.values():
+        row = checks[f"matting model: {spec.label}"]
+        assert row.ok is True
+        assert ("modelling code" in row.detail) is spec.remote_code
