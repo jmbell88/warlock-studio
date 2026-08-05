@@ -85,3 +85,47 @@ def test_build_reproduces_the_trigger_and_template_order():
 def test_build_with_no_trigger_has_no_leading_comma():
     text = prompt.build("a barrel", {})
     assert text.startswith("a barrel, single object centered")
+
+
+def test_a_tile_prompt_does_not_ask_for_a_single_centred_object():
+    from warlock.pipelines import prompt as prompt_mod
+
+    out = prompt_mod.build("mossy cobblestone", {}, tile=True)
+    assert "single object" not in out
+    assert "seamless" in out and "tileable" in out
+
+
+def test_a_tile_prompt_keeps_the_users_words_first():
+    from warlock.pipelines import prompt as prompt_mod
+
+    out = prompt_mod.build("mossy cobblestone", {}, tile=True)
+    assert out.startswith("mossy cobblestone")
+
+
+def test_a_tile_uses_only_the_surface_half_of_the_taxonomy():
+    from warlock import guidance
+    from warlock.pipelines import prompt as prompt_mod
+
+    params = guidance.normalize(
+        {"material": "stone", "category": "weapon", "silhouette": "elongated"}
+    )
+    out = prompt_mod.build("cobblestone", params, tile=True)
+    assert guidance.MATERIALS["stone"].prompt in out
+    assert guidance.CATEGORIES["weapon"].prompt not in out
+
+
+def test_the_object_prompt_is_unchanged_by_the_tile_addition():
+    # The default path must be byte-identical: every recipe on disk was
+    # recorded against it.
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert prompt_mod.build("a barrel", {}) == prompt_mod.PROMPT_TEMPLATE.format(
+        prompt="a barrel"
+    )
+
+
+def test_the_tile_field_list_is_a_real_subset_of_the_taxonomy():
+    from warlock import guidance
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert set(prompt_mod.TILE_FIELDS) < set(guidance.form_fields())

@@ -402,8 +402,15 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def compose_prompt(user_prompt: str, params: dict[str, Any]) -> str:
+def compose_prompt(
+    user_prompt: str, params: dict[str, Any], fields: tuple[str, ...] | None = None
+) -> str:
     """Fold the guidance fragments into the subject clause of the SDXL prompt.
+
+    ``fields`` restricts which tables contribute, defaulting to all of them in
+    their canonical order. The one caller that narrows it is the tile path: a
+    tile has no subject, so category, silhouette and rarity describe an object
+    that is not in the picture, and a prompt that names one gets an object.
 
     Unknown or absent values are skipped rather than raising: params may come
     from a job row created before a taxonomy entry was renamed or removed, and
@@ -411,6 +418,8 @@ def compose_prompt(user_prompt: str, params: dict[str, Any]) -> str:
     """
     parts = [user_prompt.strip()]
     for field in _PROMPT_FIELDS:
+        if fields is not None and field not in fields:
+            continue
         option = _TABLES[field].get(str(params.get(field, "")))
         if option is not None:
             parts.append(option.prompt)

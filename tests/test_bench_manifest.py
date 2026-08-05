@@ -103,7 +103,11 @@ def test_a_prompt_compiler_change_refuses_a_resume(tmp_path):
     """The whole reason PROMPT_VERSION exists: no dependency version moves
     when PROMPT_TEMPLATE does."""
     a = _doc(tmp_path)
-    b = {**a, "versions": {**a["versions"], "prompt": "2"}}
+    # Derived from the recorded value rather than written as a literal: this
+    # test is about a prompt-compiler change refusing a resume, not about any
+    # particular PROMPT_VERSION, and a literal silently stops testing anything
+    # the moment the compiler is bumped to it.
+    b = {**a, "versions": {**a["versions"], "prompt": a["versions"]["prompt"] + "-changed"}}
     with pytest.raises(manifest_mod.NotResumable, match="prompt"):
         manifest_mod.assert_resumable(a, b)
 

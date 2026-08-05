@@ -325,3 +325,18 @@ def test_the_composed_prompt_never_sees_a_conditioning_field():
     assert guidance.compose_prompt("a crate", plain) == guidance.compose_prompt(
         "a crate", conditioned
     )
+
+
+def test_compose_prompt_can_be_restricted_to_a_field_subset():
+    params = guidance.normalize({"material": "stone", "category": "weapon"})
+    both = guidance.compose_prompt("x", params)
+    narrow = guidance.compose_prompt("x", params, fields=("material",))
+    assert len(narrow) < len(both)
+    assert guidance.MATERIALS["stone"].prompt in narrow
+
+
+def test_compose_prompt_with_no_subset_is_unchanged():
+    params = guidance.normalize({"material": "stone", "category": "weapon"})
+    assert guidance.compose_prompt("x", params) == guidance.compose_prompt(
+        "x", params, fields=None
+    )

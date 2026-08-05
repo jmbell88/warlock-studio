@@ -33,10 +33,33 @@ PROMPT_TEMPLATE = (
     "full object in frame, no cropping, no text, no watermark"
 )
 
-# Bumped whenever PROMPT_TEMPLATE or chunk() changes. Recorded by
-# provenance.versions() so a prompt-compiler edit cannot silently invalidate a
-# benchmark comparison -- no dependency version moves when this file does.
-PROMPT_VERSION = 1
+# The tile template, and every clause of it is the opposite of the one above.
+# PROMPT_TEMPLATE asks for a single centred object, the full object in frame
+# and no cropping -- which is a description of exactly what a tileable texture
+# must not be. A flat orthographic top-down framing is what makes the circular
+# padding in text2image produce something that reads as a surface rather than
+# as a photograph of one.
+TILE_TEMPLATE = (
+    "{prompt}, seamless tileable texture, flat top-down orthographic view, "
+    "even diffuse lighting, no shadows, uniform scale, repeating pattern, "
+    "no single focal object, no text, no watermark, no border"
+)
+
+# The half of the taxonomy that describes a *surface*. The rest -- category,
+# silhouette, rarity, mood, emissive, platform -- describes an object, and
+# naming one in a tile prompt is how a "cobblestone" tile comes back as a
+# picture of a cobblestone.
+TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_style")
+
+# Bumped whenever PROMPT_TEMPLATE, TILE_TEMPLATE, TILE_FIELDS or chunk()
+# changes. Recorded by provenance.versions() so a prompt-compiler edit cannot
+# silently invalidate a benchmark comparison -- no dependency version moves
+# when this file does.
+#
+# 2: TILE_TEMPLATE and the tile field subset. The object path's output is
+# unchanged, so an object recipe recorded under 1 still reproduces exactly;
+# the bump is about the compiler, not about any one prompt.
+PROMPT_VERSION = 2
 
 _tokenizer_cache: dict[Path, tuple[Any, Any]] = {}
 
@@ -155,14 +178,23 @@ def pad_pair(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
     return (a + [""] * (n - len(a)), b + [""] * (n - len(b)))
 
 
-def build(user_prompt: str, params: dict[str, Any], *, trigger: str = "") -> str:
-    """The final positive prompt: guidance fragments, then the LoRA trigger
-    (if any), then PROMPT_TEMPLATE's TRELLIS-friendly framing -- the same
-    assembly text2image.generate() has always done by hand, exposed here so
-    /api/prompt-preview can show it before a job runs.
+def build(
+    user_prompt: str, params: dict[str, Any], *, trigger: str = "", tile: bool = False
+) -> str:
+    """The final positive prompt.
+
+    Guidance fragments, then the LoRA trigger (if any), then the framing
+    template -- the same assembly text2image.generate() does by hand, exposed
+    here so the prompt preview can show it before a job runs. ``tile`` swaps
+    both halves at once: the surface-only field subset and the tileable
+    template, which have to travel together because either alone produces the
+    wrong picture.
     """
     from .. import guidance
 
-    composed = guidance.compose_prompt(user_prompt, params)
-    text = PROMPT_TEMPLATE.format(prompt=composed)
+    composed = guidance.compose_prompt(
+        user_prompt, params, fields=TILE_FIELDS if tile else None
+    )
+    template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
+    text = template.format(prompt=composed)
     return f"{trigger}, {text}" if trigger else text
