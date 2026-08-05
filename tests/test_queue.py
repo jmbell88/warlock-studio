@@ -1838,11 +1838,18 @@ async def test_the_prompt_preview_mirror_agrees_with_the_worker_and_the_pipeline
     tile_id = worker.store.create("text", "cobblestone", dict(params), stage="tile")
     ref_id = worker.store.create("text", "cobblestone", dict(params), stage="reference")
     worker.start()
+    await _wait_until(lambda: worker.store.get(tile_id)["status"] == "done")
     await _wait_until(lambda: worker.store.get(ref_id)["status"] == "done")
     await worker.shutdown()
 
-    tile_composed, ref_composed = worker._text2image.prompts
-    assert worker.store.get(tile_id)["status"] == "done"
+    # Keyed by the job rather than by position: both prompts are recorded on
+    # one fake pipe, and unpacking them in order would silently swap the two
+    # assertions -- passing for the wrong reason -- if the worker ever stopped
+    # dispatching in creation order. composed_prompt is what the job itself
+    # recorded, so it cannot be attributed to the wrong row.
+    tile_composed = worker.store.get(tile_id)["params"]["composed_prompt"]
+    ref_composed = worker.store.get(ref_id)["params"]["composed_prompt"]
+    assert {tile_composed, ref_composed} == set(worker._text2image.prompts)
     # The template half is what generate() applies to the string the worker
     # handed it; tests/test_tiling.py pins that it applies exactly these two.
     assert prompt_lib.build("cobblestone", params, tile=True) == (

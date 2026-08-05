@@ -445,3 +445,68 @@ def test_an_unmeasured_reroll_attempt_is_not_called_a_refusal():
     # that fails it.
     assert inspector._attempt_verdict({}) == "refused"
     assert inspector._attempt_verdict(None) == "?"
+
+
+# --- remesh is offered in two places, and they must agree --------------------
+
+
+def test_a_finished_tile_is_not_offered_a_remesh():
+    """The context menu's gate, which is the call site that was missed.
+
+    A tile has no subject to reconstruct, so ``rerun_job`` refuses to remesh
+    one. Right-click -> Remesh therefore reached the service, was refused and
+    came back as an error toast -- the exact failure the ``rerollable`` check
+    beside it exists to prevent.
+    """
+    from warlock.studio.panes import library
+
+    tile = {"id": "a", "stage": "tile", "kind": "text", "files": ["input.png"]}
+    assert library._remeshable(tile) is False
+
+
+def test_a_finished_reference_is_still_offered_a_remesh():
+    from warlock.studio.panes import library
+
+    reference = {"id": "a", "stage": "reference", "kind": "text", "files": ["input.png"]}
+    assert library._remeshable(reference) is True
+
+
+def test_a_job_with_no_image_is_not_offered_a_remesh():
+    from warlock.studio.panes import library
+
+    assert library._remeshable({"id": "a", "stage": "model", "files": []}) is False
+
+
+def test_the_retry_ladder_rerolls_a_tile_rather_than_remeshing_it():
+    """The other call site, through the action it actually submits."""
+    from warlock.studio.panes import library
+
+    calls: list[dict] = []
+
+    class Ctx:
+        svc = object()
+
+        def submit(self, key, fn, *args, **kwargs):
+            calls.append({"key": key, "fn": fn, "kwargs": kwargs})
+
+    job = {"id": "a", "stage": "tile", "kind": "text", "files": ["input.png"]}
+    library.run_action(Ctx(), job, "retry")
+
+    assert [c["kwargs"]["mode"] for c in calls] == ["reroll"]
+
+
+def test_both_remesh_call_sites_go_through_the_one_predicate():
+    """Stated once so it cannot be honoured in one place and not the other.
+
+    The regression this pins is not a wrong answer, it is a *second* copy of
+    the rule: the menu item and the retry ladder held the same expression, one
+    of them learned about tiles and the other did not.
+    """
+    from warlock.studio.panes import library
+
+    assert len(_calls_to(library, "_remeshable")) == 2
+    source = inspect.getsource(library)
+    assert source.count('"input.png" in') == 1, (
+        "a second inline input.png gate has appeared; route it through "
+        "_remeshable instead"
+    )

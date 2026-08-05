@@ -254,7 +254,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         rerollable = not (job["kind"] == "image" and job.get("stage") == "reference")
         if rerollable and imgui.menu_item("Reroll", "", False)[0]:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
-        if "input.png" in files and imgui.menu_item("Remesh", "", False)[0]:
+        if _remeshable(job) and imgui.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
     if "model.glb" in files:
         if imgui.menu_item("Compare with selected", "", False)[0]:
@@ -322,19 +322,26 @@ def _skeleton(ctx: Any) -> str | None:
     return (ctx.state.form_3d or {}).get("rig_template") or None
 
 
+def _remeshable(job: Any) -> bool:
+    """Whether "keep this image, rebuild the mesh" is offered for this job.
+
+    One predicate rather than the same expression at each call site, because
+    the two have already drifted apart once. The retry ladder learned that a
+    tile has no subject to reconstruct and the context menu did not, so
+    right-click -> Remesh on a finished tile reached ``rerun_job``, was refused
+    and came back as an error toast. That is the rule ``rerollable`` two lines
+    above the menu item states in prose: never offer an action the service will
+    refuse. Stated once, it cannot be honoured in one place and not the other.
+    """
+    return "input.png" in (job.get("files") or []) and job.get("stage") != "tile"
+
+
 def run_action(ctx: Any, job: Any, action: str) -> None:
     job_id = job["id"]
     if action == "cancel":
         ctx.submit(f"cancel:{job_id}", svc_jobs.cancel_job, ctx.svc, job_id)
     elif action == "retry":
-        # A tile is excluded whatever it has on disk: rerun_job refuses to
-        # remesh one, so reaching for it here would turn the retry button into
-        # an error toast for the one stage that can never have a mesh.
-        mode = (
-            "remesh"
-            if "input.png" in (job.get("files") or []) and job.get("stage") != "tile"
-            else "reroll"
-        )
+        mode = "remesh" if _remeshable(job) else "reroll"
         ctx.submit(f"retry:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode=mode)
     elif action == "promote":
         ctx.state.source_job = job_id

@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at  REAL NOT NULL,
     started_at  REAL,
     finished_at REAL,
-    stage       TEXT NOT NULL DEFAULT 'model',  -- 'reference' | 'model'
+    stage       TEXT NOT NULL DEFAULT 'model',  -- 'reference' | 'tile' | 'model'
     parent_id   TEXT,                           -- the reference job this was promoted from
     name        TEXT NOT NULL DEFAULT '',       -- user-given title; the prompt is the fallback
     tags        TEXT NOT NULL DEFAULT '',       -- comma-separated, normalized lowercase

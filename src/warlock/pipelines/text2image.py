@@ -503,11 +503,14 @@ class Text2Image:
         -- and a Conditioning with neither half in play -- takes a path that is
         byte-for-byte what this method did before conditioning existed.
 
-        ``tile`` switches every Conv2d in the UNet and the VAE to circular
-        padding for the duration of this call, which makes the output natively
-        seamless. It is a property of one job, never of the pipe: the same
-        resident pipeline serves ordinary references, so the patch is applied
-        here and reverted before this method returns.
+        ``tile`` switches every Conv2d in the UNet, the VAE and an attached
+        ControlNet to circular padding for the duration of this call, which
+        makes the output natively seamless. The ControlNet is included because
+        its residuals are added into the UNet at every block, so a zero-padded
+        hint branch would contribute a seam to a sample whose every other
+        convolution wraps. It is a property of one job, never of the pipe: the
+        same resident pipeline serves ordinary references, so the patch is
+        applied here and reverted before this method returns.
         """
         import torch
 
