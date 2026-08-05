@@ -409,10 +409,17 @@ def test_a_wrapped_view_is_re_derived_after_a_hand_edit(svc):
     # gone.
     job_id = _reference(svc, stage="tile")
     first = svc_derive.get_file(svc, job_id, "wrap_preview.png")
-    stamp = first.stat().st_mtime_ns
+    before = first.read_bytes()
     _hand_edit(svc, job_id)
     again = svc_derive.get_file(svc, job_id, "wrap_preview.png")
-    assert again.stat().st_mtime_ns > stamp
+
+    # By content, not by mtime. The rule under test is "a stale view is
+    # re-derived", and the edit genuinely changes the pixels -- whereas two
+    # writes a few milliseconds apart can share an mtime, because the system
+    # clock behind a file timestamp ticks far more coarsely than the timestamp
+    # can express. An mtime assertion here failed once for exactly that reason
+    # while the behaviour it was checking was correct.
+    assert again.read_bytes() != before
 
 
 def test_a_mesh_job_cannot_derive_a_sprite(svc):
