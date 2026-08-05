@@ -545,3 +545,66 @@ def test_both_remesh_call_sites_go_through_the_one_predicate():
         "a second inline input.png gate has appeared; route it through "
         "_remeshable instead"
     )
+
+
+# --- Build mode's panes ------------------------------------------------------
+
+
+def test_the_properties_pane_never_lists_a_generator_by_name():
+    """The registry is data precisely so the pane is not a chain of names."""
+    from warlock.studio.build import primitives as bp
+    from warlock.studio.panes import build_props
+
+    source = inspect.getsource(build_props)
+    for name in bp.GENERATORS:
+        assert f'"{name}"' not in source, f"{name} is hardcoded in build_props"
+
+
+def test_every_build_pane_gates_its_controls_on_saving():
+    """The rule Inker had to learn: a save encodes the live document on a task
+    thread, so a control that restructures it mid-encode writes a file
+    describing a document that never existed."""
+    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+
+    for pane in (build_tools, build_props, build_outliner, build_bridge):
+        source = inspect.getsource(pane)
+        assert "saving" in source, f"{pane.__name__} does not consult tab.saving"
+
+
+def test_the_bridge_offers_both_output_paths_and_they_are_different_calls():
+    """Two genuinely different things: the exact geometry, or a picture trellis
+    reinterprets. A bridge that wired both to one call would look complete."""
+    from warlock.studio.panes import build_bridge
+
+    source = inspect.getsource(build_bridge)
+    assert "export_asset" in source
+    assert "send_to_3d" in source
+
+
+def test_the_tools_pane_mirrors_through_ops_rather_than_negating_a_scale():
+    """A negative node scale is one line and is how an inside-out asset ships:
+    glTF readers disagree about whether it flips the winding."""
+    from warlock.studio.panes import build_tools
+
+    source = inspect.getsource(build_tools)
+    assert "ops.mirror" in source
+    assert "scale=-" not in source
+
+
+def test_the_outliner_addresses_every_row_by_uid():
+    """An index stops naming the thing it named the moment anything moves, and
+    the outliner is the thing that moves them."""
+    from warlock.studio.panes import build_outliner
+
+    tree = ast.parse(inspect.getsource(build_outliner))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("set_props", "remove_object", "select")
+    ]
+    assert calls, "the outliner changes nothing at all"
+    for call in calls:
+        rendered = ast.unparse(call)
+        assert "uid" in rendered, f"{rendered} does not address its object by uid"

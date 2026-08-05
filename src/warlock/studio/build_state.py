@@ -128,6 +128,10 @@ class BuildState:
 
     # What the properties panel offers when the user adds something.
     generator: str = "box"
+    # The object whose name is being edited in the outliner, or 0. A uid rather
+    # than an index, for the reason every address in this package is one: the
+    # outliner reorders and a rename in flight must not follow the position.
+    renaming: int = 0
 
     # Drag state. ``ref`` is what the handle was grabbed at, so a drag is
     # measured against the press rather than against the previous frame --

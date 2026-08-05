@@ -548,3 +548,132 @@ def test_the_widget_kit_builds_every_new_widget(app_ctx, imgui_ctx):
     # exercises the animated paths rather than the first-sighting snap.
     for _ in range(2):
         _frame(imgui_ctx, build)
+
+
+# --- Build mode -------------------------------------------------------------
+
+
+def _build_tab(app_ctx, *, objects: int = 2):
+    """A Build document with objects in it, adopted as the active tab."""
+    from warlock.studio import build_mode
+    from warlock.studio.build import document as bd
+    from warlock.studio.build import primitives as bp
+
+    doc = bd.BuildDoc()
+    for i in range(objects):
+        doc.add_object(
+            bd.Obj(uid=bd.new_uid(), name=f"obj{i}", mesh=bp.box(), generator="box",
+                   params={"size": (1.0, 1.0, 1.0)})
+        )
+    return build_mode.adopt(app_ctx, doc, title="Scene")
+
+
+def test_the_build_panes_build_with_nothing_open(app_ctx, imgui_ctx):
+    """Every one of them has to survive the state the mode opens in."""
+    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+
+    for pane in (build_tools, build_props, build_outliner, build_bridge):
+        _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
+
+
+def test_the_build_panes_build_with_a_document_and_a_selection(app_ctx, imgui_ctx):
+    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+
+    tab = _build_tab(app_ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    for pane in (build_tools, build_props, build_outliner, build_bridge):
+        _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
+
+
+def test_the_build_panes_build_while_a_save_is_in_flight(app_ctx, imgui_ctx):
+    """``saving`` puts every mutating control inside ``begin_disabled``, and an
+    unbalanced disable stack is exactly the class of mistake this file exists
+    to catch."""
+    from warlock.studio.panes import build_bridge, build_outliner, build_props, build_tools
+
+    tab = _build_tab(app_ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    tab.saving = True
+    for pane in (build_tools, build_props, build_outliner, build_bridge):
+        _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
+
+
+def test_the_build_properties_pane_builds_for_a_frozen_object(app_ctx, imgui_ctx):
+    """Phase 2's state: no generator, so the panel shows counts instead of
+    parameters. Unreachable from the UI today and drawn here anyway, because it
+    is one line away from being reachable."""
+    from warlock.studio.panes import build_props
+
+    tab = _build_tab(app_ctx, objects=1)
+    obj = tab.doc.objects[0]
+    tab.doc.set_props(obj.uid, generator=None)
+    tab.doc.select([obj.uid])
+    _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+
+
+def test_the_build_properties_pane_builds_for_every_generator(app_ctx, imgui_ctx):
+    """The parameter widgets come off the registry, so every default type in it
+    has to have a widget -- a float, an int and a tuple today."""
+    from warlock.studio.build import document as bd
+    from warlock.studio.build import primitives as bp
+    from warlock.studio.panes import build_props
+
+    tab = _build_tab(app_ctx, objects=0)
+    for name, (defaults, build) in bp.GENERATORS.items():
+        obj = bd.Obj(
+            uid=bd.new_uid(), name=name, mesh=build(**defaults),
+            generator=name, params=dict(defaults),
+        )
+        tab.doc.add_object(obj)
+        tab.doc.select([obj.uid])
+        _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+
+
+def test_the_build_outliner_builds_with_a_rename_in_flight(app_ctx, imgui_ctx):
+    from warlock.studio import build_mode
+    from warlock.studio.panes import build_outliner
+
+    tab = _build_tab(app_ctx)
+    build_mode.ensure(app_ctx).renaming = tab.doc.objects[0].uid
+    _frame(imgui_ctx, lambda: build_outliner.draw(app_ctx))
+
+
+def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
+    app_ctx, imgui_ctx, monkeypatch
+):
+    """A seventh primitive must need no edit to the pane.
+
+    Asserted by registering one and *drawing* it: the claim is about what the
+    pane enumerates, and a chain of ``if name == "box"`` would satisfy any
+    source check while showing this object no parameters at all. The widget
+    labels are read back off the frame, so a default type with no widget shows
+    up as a missing label rather than as a pane that merely did not crash.
+    """
+    from warlock.studio.build import document as bd
+    from warlock.studio.build import primitives as bp
+    from warlock.studio.panes import build_props
+
+    def wedge(width: float = 2.0, steps: int = 3, footprint=(1.0, 1.0)):
+        return bp.box(size=(width, 1.0, 1.0))
+
+    defaults = {"width": 2.0, "steps": 3, "footprint": (1.0, 1.0)}
+    monkeypatch.setitem(bp.GENERATORS, "wedge", (defaults, wedge))
+
+    tab = _build_tab(app_ctx, objects=0)
+    obj = bd.Obj(
+        uid=bd.new_uid(), name="Wedge", mesh=wedge(**defaults),
+        generator="wedge", params=dict(defaults),
+    )
+    tab.doc.add_object(obj)
+    tab.doc.select([obj.uid])
+
+    seen: list[str] = []
+    real = build_props._widget
+
+    def spy(key, value, default):
+        seen.append(key)
+        return real(key, value, default)
+
+    monkeypatch.setattr(build_props, "_widget", spy)
+    _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
+    assert seen == ["width", "steps", "footprint"]
