@@ -67,6 +67,7 @@ def draw(ctx: Any) -> None:
 def _details_tab(ctx: Any, job: Any) -> None:
     _settings(ctx, job)
     _reference(ctx, job)
+    _seam(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)
 
@@ -239,6 +240,62 @@ def _reference(ctx: Any, job: Any) -> None:
         imgui.image(widgets.texture_ref(texture), (THUMB_SIZE, THUMB_SIZE))
 
 
+def seam_verdict(report: Any) -> tuple[int, str] | None:
+    """The one line that says whether the tile actually tiles, or None.
+
+    A pure function of the stored report, so the wording is assertable without
+    a GL context -- and so the number and the word never come from two places.
+    The ratio is "how much worse than the picture's own grain the wrap seam is",
+    which is why the threshold is quoted alongside it: a bare 3.4 is a number
+    nobody can calibrate against, while "3.4, over 2.00" says which way it went
+    and by how far.
+    """
+    if not isinstance(report, dict):
+        return None
+    worst = float(report.get("worst") or 0.0)
+    if report.get("seamless"):
+        return (theme.OK, f"seamless -- edge/grain {worst:.2f}")
+    threshold = float(report.get("threshold") or 0.0)
+    return (theme.WARN, f"visible seam -- edge/grain {worst:.2f}, over {threshold:.2f}")
+
+
+def _seam(ctx: Any, job: Any) -> None:
+    """Whether the tile actually tiles, and what it looks like wrapped.
+
+    The ratio alone is a number nobody can calibrate against by eye, which is
+    what the wrapped view is for: rolled by half, what was the wrap seam runs
+    through the middle of the frame, where a discontinuity is obvious. It is a
+    derived artifact like every other export rather than something this pane
+    writes -- the roll reads and rewrites a full-size PNG, which is emphatically
+    not frame-thread work, and going through ``derive.get_file`` means the
+    button here and the Export tab's produce the same file under the same lock.
+    """
+    verdict = seam_verdict((job.get("params") or {}).get("seam_report"))
+    if verdict is None:
+        return
+    if not widgets.header("Seam"):
+        return
+    report = job["params"]["seam_report"]
+    widgets.text_colored(*verdict)
+    widgets.muted(
+        f"left/right {float(report.get('horizontal') or 0.0):.2f} - "
+        f"top/bottom {float(report.get('vertical') or 0.0):.2f}"
+    )
+    if ctx.textures is None:
+        return
+    job_id = job["id"]
+    # The cache answers "is it on disk yet" as a side effect of answering "give
+    # me the texture": a missing file is a None, which is exactly the state in
+    # which the button should be offered.
+    texture = ctx.textures.get(f"{job_id}:wrap", ctx.job_dir(job_id) / "wrap_preview.png")
+    key = f"wrap:{job_id}"
+    if texture is None:
+        if widgets.disabled_button("Show it wrapped", not ctx.busy(key)):
+            ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, "wrap_preview.png")
+        return
+    imgui.image(widgets.texture_ref(texture), (THUMB_SIZE * 2, THUMB_SIZE * 2))
+
+
 def _quality(ctx: Any, job: Any) -> None:
     params = job.get("params") or {}
     report = params.get("mesh_report")
@@ -289,9 +346,10 @@ def _downloads(ctx: Any, job: Any) -> None:
     widgets.section("Downloads")
     job_id = job["id"]
     files = set(job.get("files") or [])
-    # Provisional in the same way ``widgets.artifacts_for`` is, and B8 must move
-    # the two together: a seamless texture has no use for the cutout exports.
-    two_d = job.get("stage") in ("reference", "tile")
+    # Both notes under the grid are about cutouts -- which matte cut them, and
+    # what each one came out as -- so they belong to the stage that has any. A
+    # tile's manifest holds the recipe and no artifact entries at all.
+    cutouts = job.get("stage") == "reference"
     if not imgui.begin_table("downloads", 2):
         return
     for name, label in widgets.artifacts_for(job):
@@ -312,7 +370,7 @@ def _downloads(ctx: Any, job: Any) -> None:
         if blocked and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             imgui.set_tooltip(blocked)
     imgui.end_table()
-    if two_d:
+    if cutouts:
         # Read once and handed to both: the two notes answer halves of the same
         # question, and asking for the manifest twice in a frame would make the
         # cheap-stat property depend on how many readers there happen to be.
@@ -338,15 +396,17 @@ def _derivable(job: Any, files: set[str], name: str) -> bool:
     ``test_the_pane_agrees_with_the_service_about_every_artifact``, which is
     what stops the restatement drifting.
 
-    The ``tile`` arm is provisional, exactly as ``widgets.artifacts_for``'s is,
-    and B8 must move both: the cutout exports are meaningless for a seamless
-    texture, but what a tile *should* offer is not knowable until the stage
-    exists. Narrowing ``files.ready``'s tile arm without narrowing this one
-    shows up as that cross-check going red rather than as a wrong button.
+    Which names each image stage may ask for is deliberately *not* restated: a
+    reference has the cutouts and a tile has the wrapped view, and that split is
+    a fact about the artifacts rather than about the disk, so it is read
+    straight off ``derivable_2d`` at no cost.
     """
-    if job.get("stage") in ("reference", "tile"):
+    stage = job.get("stage")
+    if stage in ("reference", "tile"):
         return (
-            job.get("status") == "done" and "input.png" in files and svc_derive.derivable_2d(name)
+            job.get("status") == "done"
+            and "input.png" in files
+            and svc_derive.derivable_2d(name, stage)
         )
     return "model.glb" in files and svc_derive.derivable(name)
 

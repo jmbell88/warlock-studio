@@ -19,6 +19,7 @@ from imgui_bundle import imgui
 
 from ... import guidance as guidancelib
 from ... import models as modelslib
+from ...pipelines import prompt as prompt_lib
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
 from ...service.errors import Invalid
@@ -41,6 +42,7 @@ def draw(ctx: Any) -> None:
 
     _presets(ctx, form)
     _profiles(ctx, form)
+    _output(ctx, form)
     widgets.section("Prompt")
     manual_render.help_button(ctx, "settings-2d")
     _prompt(ctx, form)
@@ -65,8 +67,28 @@ GUIDANCE_GROUPS = (
 )
 
 
-def _guidance(ctx: Any, form: dict[str, Any]) -> None:
+def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The taxonomy groups this form should draw.
+
+    A tile has no subject, so category, silhouette, rarity, mood and emissive
+    describe something that is deliberately not in the picture -- drawing them
+    would offer controls the prompt compiler then throws away. The fields are
+    not *cleared*, only hidden and unsubmitted, so switching back brings back
+    what was typed.
+    """
+    if form.get("output") != "tile":
+        return GUIDANCE_GROUPS
+    allowed = set(prompt_lib.TILE_FIELDS)
+    out = []
     for title, fields in GUIDANCE_GROUPS:
+        kept = tuple(f for f in fields if f in allowed)
+        if kept:
+            out.append((title, kept))
+    return tuple(out)
+
+
+def _guidance(ctx: Any, form: dict[str, Any]) -> None:
+    for title, fields in guidance_groups(form):
         widgets.section(title)
         if imgui.begin_table(f"guidance/{title}", 2):
             for field in fields:
@@ -75,6 +97,11 @@ def _guidance(ctx: Any, form: dict[str, Any]) -> None:
                 imgui.set_next_item_width(-1)
                 form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field), 0)
             imgui.end_table()
+    if form.get("output") == "tile":
+        # platform is a hint about how much detail to draw an *object* with,
+        # and is not in TILE_FIELDS -- so on a tile it is a control whose value
+        # the prompt compiler discards.
+        return
     # Narrowed to leave room for the marker: a full-width combo pushes it off
     # the panel, and the note is the whole reason this control is not the 3D
     # pane's platform.
@@ -121,6 +148,29 @@ def _presets(ctx: Any, form: dict[str, Any]) -> None:
     if preset.get("prompt"):
         form["prompt"] = preset["prompt"]
     ctx.state.preview_dirty_at = time.monotonic()
+
+
+def _output(ctx: Any, form: dict[str, Any]) -> None:
+    """Object or tile -- the one thing that changes what this pane submits.
+
+    A segmented control rather than a combo: there are exactly two, and the
+    choice changes which guidance groups are on screen, so it has to read as a
+    mode and not as one more select in a column of selects.
+    """
+    before = form.get("output", "reference")
+    form["output"] = widgets.segmented_control(
+        "output",
+        [("reference", "Object"), ("tile", "Seamless tile")],
+        before,
+    )
+    if form["output"] != before:
+        ctx.state.preview_dirty_at = time.monotonic()
+    if form["output"] == "tile":
+        widgets.muted(
+            "A tile is drawn with wrapping convolutions, so its edges match "
+            "when repeated. It has no subject, so the object taxonomy is "
+            "hidden and it cannot be made into a mesh."
+        )
 
 
 def _profiles(ctx: Any, form: dict[str, Any]) -> None:
@@ -209,6 +259,10 @@ def _preview(ctx: Any) -> None:
             ctx.svc,
             {**raw, "prompt": None},
             state.form_2d["prompt"],
+            # Threaded rather than inferred: the output kind is not a guidance
+            # field, so without it a tile would be previewed through the
+            # single-centred-object framing its job will never use.
+            tile=state.form_2d.get("output") == "tile",
         ):
             state.preview_dirty_at = 0.0
     preview = state.preview
@@ -386,7 +440,7 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
     footer talked about the count as if it were visible.
     """
     widgets.section("Run")
-    imgui.text("References")
+    imgui.text("Tiles" if form.get("output") == "tile" else "References")
     for count in (1, 2, 4, 8):
         imgui.same_line()
         if imgui.radio_button(f"{count}##count", form["count"] == count):
@@ -418,10 +472,9 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         imgui.text_wrapped(problem)
         imgui.pop_style_color()
     count = int(form["count"])
+    noun = "tile" if form.get("output") == "tile" else "reference"
     widgets.muted(
-        f"{count} reference{'s' if count > 1 else ''} - a few seconds each"
-        if count > 1
-        else "One reference - a few seconds"
+        f"{count} {noun}s - a few seconds each" if count > 1 else f"One {noun} - a few seconds"
     )
     busy = ctx.busy("submit")
     if widgets.primary_button("Generate", (-1, 34), enabled=not problems and not busy):
@@ -458,16 +511,26 @@ def validate(form: dict[str, Any]) -> list[str]:
 def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     """The 2D form as create_job takes it.
 
-    Always ``output="reference"``: this pane is the first stage of a two-stage
-    pipeline made visible, and going straight to a mesh from here would spend
-    two minutes of GPU on an image nobody has approved.
+    ``output`` is this pane's own switch and never "model": this pane is the
+    first stage of a two-stage pipeline made visible, and going straight to a
+    mesh from here would spend two minutes of GPU on an image nobody has
+    approved. A tile has no second stage at all.
     """
+    tile = form.get("output") == "tile"
     known = set(guidancelib.form_fields())
+    if tile:
+        # The hidden groups must not reach the submit either: a row claiming a
+        # category the prompt compiler discarded is a lie about what produced
+        # the image. base_model and style_lora are re-added because they are
+        # model identity rather than subject taxonomy -- a tile still needs a
+        # checkpoint, and the trigger word of a style LoRA is prepended to a
+        # tile prompt exactly as it is to an object's.
+        known &= set(prompt_lib.TILE_FIELDS) | {"base_model", "style_lora"}
     fields = {k: v for k, v in form.items() if k in known and v not in ("", None)}
     return {
         "kind": "text",
         "prompt": form["prompt"].strip(),
-        "output": "reference",
+        "output": "tile" if tile else "reference",
         "count": int(form["count"]),
         "seed": int(form["seed"]),
         "negative_prompt": form["negative_prompt"] or None,

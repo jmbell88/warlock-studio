@@ -62,6 +62,12 @@ def default_form_2d() -> dict[str, Any]:
         "seed_locked": False,
         "count": 1,
         "platform": "",
+        # reference | tile. What this pane submits. A tile is the same pipeline
+        # with circular padding and a different framing template, so it belongs
+        # to the pane that owns the prompt rather than to a mode of its own --
+        # and it is persisted, unlike the seed, because someone making a
+        # texture set is making several.
+        "output": "reference",
         # Conditioning. Every number is a float literal on purpose:
         # restore_form gates on `type(value) is type(default)`, so an int here
         # would make a persisted 0.6 fail to restore.

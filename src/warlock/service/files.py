@@ -51,6 +51,10 @@ MEDIA = {
     "pixel_32.png": "image/png",
     "pixel_64.png": "image/png",
     "pixel_128.png": "image/png",
+    # A tile's own export, and the only one the cutouts are replaced by: the
+    # texture rolled by half in both axes, so what was the wrap seam runs
+    # through the middle of the frame where a discontinuity is visible.
+    "wrap_preview.png": "image/png",
     "manifest.json": "application/json",
     # The traceback errors.write_error_log already writes per job. The DB only
     # ever holds the one-line friendly sentence, so without this the actual
@@ -338,7 +342,7 @@ DERIVED = ("model.stl", "model_obj.zip", "collision.glb", "textures.zip", "model
 # from DERIVED rather than merged into it: the two sets have different sources,
 # different readiness rules and different jobs they apply to, and one tuple
 # would have to be filtered at every use anyway.
-DERIVED_2D = (
+REFERENCE_2D = (
     "icon.png",
     "sprite.png",
     "pixel_32.png",
@@ -346,6 +350,34 @@ DERIVED_2D = (
     "pixel_128.png",
     "manifest.json",
 )
+
+# And what a *tile's* input.png can produce, which is deliberately almost none
+# of the above. Every cutout is the operation of lifting a subject off its
+# background, and a seamless texture is background: an icon of one is the whole
+# frame with a matte guessed over it, and a sprite of one is a trim box around
+# nothing. What a tile has instead is the wrapped view -- the only export that
+# says something true about it that the PNG itself does not.
+TILE_2D = ("wrap_preview.png", "manifest.json")
+
+# The union: what ``fresh_2d`` and ``derivable_2d`` answer about a *name*,
+# independently of the job asking. The per-stage split above is what decides
+# whether a given job may ask.
+DERIVED_2D = REFERENCE_2D + ("wrap_preview.png",)
+
+
+def derived_2d_for(stage: str | None) -> tuple[str, ...]:
+    """Which 2D exports this stage's input.png can produce.
+
+    One function rather than a condition restated wherever the question comes
+    up: it is asked by ``ready``, by the Export tab's grid and by the pane's
+    copy of the derivability rule, and those three drifting apart is a button
+    that lights up and then produces an error toast.
+    """
+    if stage == "tile":
+        return TILE_2D
+    if stage == "reference":
+        return REFERENCE_2D
+    return ()
 
 # Which pixel-art size each artifact name means. The names are literals for the
 # allowlist's sake; this is where they get their number back.
@@ -427,11 +459,14 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # marker for the pair.
         return (job_dir / "rig.json").exists() and path.exists()
     if name in DERIVED_2D:
-        # A reference's pixels, and only a reference's: a mesh job's input.png
-        # is the picture it was reconstructed *from*, so an icon derived from
-        # it would quietly claim to be an export of the mesh.
+        # A reference's or a tile's pixels, and only those: a mesh job's
+        # input.png is the picture it was reconstructed *from*, so an icon
+        # derived from it would quietly claim to be an export of the mesh. The
+        # two image stages take different halves of the set -- see
+        # ``derived_2d_for`` -- so the stage decides the name as well as the
+        # permission.
         return (
-            job.get("stage") in ("reference", "tile")
+            name in derived_2d_for(job.get("stage"))
             and job.get("status") == "done"
             and (job_dir / "input.png").exists()
         )

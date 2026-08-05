@@ -52,17 +52,31 @@ def test_every_job_can_still_take_away_its_source_image():
 def test_every_offered_name_is_servable():
     from warlock.service import files as svc_files
 
-    for stage in ("reference", "model"):
+    for stage in ("reference", "tile", "model"):
         for name, _label in widgets.artifacts_for(_job(stage=stage)):
             assert name in svc_files.MEDIA
 
 
-def test_a_tile_provisionally_takes_the_whole_2d_grid():
-    # Deliberately today's behaviour and not the eventual one: a seamless
-    # texture has no use for the cutout exports, but what a tile *should* offer
-    # is B8's to decide once the stage exists. Pinned so that change lands as a
-    # test somebody must update rather than as a silent shift.
-    assert widgets.artifacts_for(_job(stage="tile")) is widgets.ARTIFACTS_2D
+def test_a_tile_is_not_offered_the_cutout_exports():
+    # A cutout is the subject lifted off its background, and a seamless texture
+    # is background: an icon of one is the whole frame with a matte guessed
+    # over it, which is a picture of nothing.
+    names = [n for n, _label in widgets.artifacts_for(_job(stage="tile"))]
+    assert "icon.png" not in names
+    assert "sprite.png" not in names
+    assert not [n for n in names if n.startswith("pixel_")]
+
+
+def test_a_tile_offers_the_texture_itself_and_its_wrapped_view():
+    names = [n for n, _label in widgets.artifacts_for(_job(stage="tile"))]
+    assert names == ["input.png", "wrap_preview.png", "manifest.json"]
+
+
+def test_a_reference_is_not_offered_a_wrap_preview():
+    # Nothing wraps: the ratio the preview exists to make visible is only ever
+    # measured on a tile.
+    names = [n for n, _label in widgets.artifacts_for(_job())]
+    assert "wrap_preview.png" not in names
 
 
 # -- whether a button is pressable ----------------------------------------

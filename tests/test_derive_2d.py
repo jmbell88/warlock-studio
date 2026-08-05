@@ -353,7 +353,49 @@ def test_every_2d_artifact_has_a_derivation():
         svc_derive.MANIFEST,
         "icon.png",
         "sprite.png",
+        "wrap_preview.png",
     } | set(svc_files.PIXEL_ARTIFACTS)
+
+
+def test_a_tile_derives_a_wrapped_view_of_itself(svc):
+    job_id = _reference(svc, stage="tile")
+    path = svc_derive.get_file(svc, job_id, "wrap_preview.png")
+    assert path.name == "wrap_preview.png"
+    with Image.open(path) as im:
+        assert im.size == (128, 128)
+        # Rolled by half in both axes: the corner pixel of the source is now
+        # the centre pixel, which is the whole point -- the wrap seam runs
+        # through the middle of the frame where a discontinuity is visible.
+        assert im.convert("RGB").getpixel((64, 64)) == (200, 200, 200)
+
+
+def test_a_tile_cannot_derive_the_cutout_exports(svc):
+    # The cutout half of the 2D set is about lifting a subject off a
+    # background, and a tile is background. Refused at the service, not merely
+    # hidden in the pane: the two answer the same question and the pane's copy
+    # is pinned to this one.
+    job_id = _reference(svc, stage="tile")
+    for name in ("icon.png", "sprite.png", "pixel_64.png"):
+        with pytest.raises(NotReady):
+            svc_derive.get_file(svc, job_id, name)
+
+
+def test_a_reference_has_nothing_to_wrap(svc):
+    job_id = _reference(svc)
+    with pytest.raises(NotReady):
+        svc_derive.get_file(svc, job_id, "wrap_preview.png")
+
+
+def test_a_wrapped_view_is_re_derived_after_a_hand_edit(svc):
+    # The same staleness rule every other 2D export follows: it is a view of
+    # input.png, so an edit makes the cached one a picture of pixels that are
+    # gone.
+    job_id = _reference(svc, stage="tile")
+    first = svc_derive.get_file(svc, job_id, "wrap_preview.png")
+    stamp = first.stat().st_mtime_ns
+    _hand_edit(svc, job_id)
+    again = svc_derive.get_file(svc, job_id, "wrap_preview.png")
+    assert again.stat().st_mtime_ns > stamp
 
 
 def test_a_mesh_job_cannot_derive_a_sprite(svc):
@@ -378,10 +420,17 @@ def test_an_unknown_2d_artifact_is_still_refused(svc):
 
 
 def test_derivable_2d_answers_for_the_whole_set():
-    for name in svc_files.DERIVED_2D:
-        assert svc_derive.derivable_2d(name)
-    assert not svc_derive.derivable_2d("model.stl")
-    assert not svc_derive.derivable_2d("nonsense.png")
+    for name in svc_files.REFERENCE_2D:
+        assert svc_derive.derivable_2d(name, "reference")
+    for name in svc_files.TILE_2D:
+        assert svc_derive.derivable_2d(name, "tile")
+    # Each stage is refused the other's half, which is the whole reason the
+    # stage is an argument.
+    assert not svc_derive.derivable_2d("icon.png", "tile")
+    assert not svc_derive.derivable_2d("wrap_preview.png", "reference")
+    assert not svc_derive.derivable_2d("icon.png", "model")
+    assert not svc_derive.derivable_2d("model.stl", "reference")
+    assert not svc_derive.derivable_2d("nonsense.png", "reference")
 
 
 def test_every_2d_artifact_is_in_the_media_allowlist():

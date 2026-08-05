@@ -100,9 +100,14 @@ def derivable(name: str) -> bool:
     return name in files.DERIVED
 
 
-def derivable_2d(name: str) -> bool:
-    """Whether ``name`` can be produced from a reference's input.png."""
-    return name in files.DERIVED_2D
+def derivable_2d(name: str, stage: str | None) -> bool:
+    """Whether ``name`` can be produced from *this stage's* input.png.
+
+    The stage is an argument rather than an assumption because the two image
+    stages take different halves of the set: a reference has the cutouts and a
+    tile has the wrapped view, and neither has the other's.
+    """
+    return name in files.derived_2d_for(stage)
 
 
 # The manifest's name, and with it the lock discipline around it. Deriving an
@@ -148,6 +153,19 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
         # again, not existence -- a stale artifact is one the waiter wants
         # rebuilt, not one it can be handed.
         if files.fresh_2d(job_dir, name):
+            return
+        if name == "wrap_preview.png":
+            # The one 2D export that is not a cutout, and so the one that runs
+            # no matte: it is a view of the whole frame rather than a
+            # measurement of a subject in it. Nothing about it goes in the
+            # manifest for the same reason -- an entry there records the matte
+            # that cut an artifact and the alpha it came out with, and this has
+            # neither.
+            from ..pipelines import seam
+
+            tmp = job_dir / f".{name}.tmp"
+            seam.wrap_preview(source, tmp)
+            os.replace(tmp, job_dir / name)
             return
         with Image.open(source) as image:
             image.load()

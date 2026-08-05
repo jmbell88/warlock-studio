@@ -49,22 +49,34 @@ ARTIFACTS_2D = (
     ("input.png", "Source image"),
 )
 
+# And what a finished *tile* can. Almost none of the list above: every cutout
+# is the operation of lifting a subject off a background, and a seamless
+# texture is background. The texture itself comes first here rather than last,
+# because for a tile input.png is the asset and not the input to one.
+ARTIFACTS_TILE = (
+    ("input.png", "Tile PNG"),
+    ("wrap_preview.png", "Wrapped view"),
+    ("manifest.json", "Manifest"),
+)
+
 
 def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The Export tab's grid for one job.
 
     Keyed on the stage rather than on which files happen to exist: every entry
-    in both tuples is *derivable*, so a list built from what is on disk would
-    hide exactly the exports that have not been produced yet -- which is all of
-    them, the first time.
+    in all three tuples is *derivable*, so a list built from what is on disk
+    would hide exactly the exports that have not been produced yet -- which is
+    all of them, the first time.
 
-    A ``tile`` takes the 2D list wholesale for now, mirroring ``files.ready``'s
-    own forward-looking arm. That is deliberately provisional in both places:
-    the cutout exports are meaningless for a seamless texture, but what a tile
-    *should* offer is not knowable until the stage exists, so narrowing it
-    belongs with the task that introduces one rather than here.
+    The three lists are what ``service.files.derived_2d_for`` says each stage
+    can produce, plus the source image every job may take away;
+    ``test_every_offered_name_is_servable`` and the inspector's cross-check
+    against ``files.ready`` are what keep them from drifting from it.
     """
-    if job.get("stage") in ("reference", "tile"):
+    stage = job.get("stage")
+    if stage == "tile":
+        return ARTIFACTS_TILE
+    if stage == "reference":
         return ARTIFACTS_2D
     return ARTIFACTS
 
