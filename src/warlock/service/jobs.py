@@ -18,9 +18,11 @@ from .validation import (
     DERIVED_PARAMS,
     MAX_JOB_NAME,
     MAX_LIST_LIMIT,
+    MAX_MESH_BYTES,
     MAX_PROMPT,
     MAX_REFERENCE_COUNT,
     MAX_UPLOAD_BYTES,
+    check_glb,
     check_job_id,
     check_seed,
     check_vram,
@@ -299,6 +301,87 @@ def import_reference(
     return {"id": job_id}
 
 
+def import_mesh(
+    svc: WarlockService,
+    glb: bytes,
+    *,
+    name: str | None = None,
+    prompt: str | None = None,
+    size_m: float | None = None,
+) -> dict[str, Any]:
+    """Mint a finished model row from geometry that was built, not reconstructed.
+
+    Modelled line for line on :func:`import_reference`, which mints a finished
+    *reference* row from pixels that were painted: no worker run, because the
+    artifact already exists and queueing one would spend two minutes of GPU
+    reproducing what the user just made.
+
+    The payoff is out of all proportion to the size of this function. Rigging,
+    posing, sprite sheets, the triangle retarget and every mesh export are pure
+    functions of ``model.glb``, so a row created here inherits all of them
+    without one of those paths learning that Build mode exists.
+
+    ``source.glb`` is the authored mesh and ``model.glb`` derives from it, which
+    is the existing invariant rather than a new one -- and it is what keeps
+    ``optimize_job``'s retarget working on a built asset, since a retarget
+    re-derives from the source.
+    """
+    from ..pipelines import postprocess
+
+    if len(glb) > MAX_MESH_BYTES:
+        raise TooLarge("mesh is over 100 MB")
+    check_glb(glb)
+    if prompt is not None and len(prompt) > MAX_PROMPT:
+        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+
+    params: dict[str, Any] = {
+        "seed": 0,
+        "mesh_seed": random_seed(),
+        # An input, not a derived value, so it stays out of DERIVED_PARAMS: it
+        # is a statement about where the geometry came from, and it is what
+        # rerun_job reads to refuse a regenerate that has nothing to regenerate.
+        "built": True,
+        "imported": True,
+    }
+    if size_m is not None:
+        params["size_m"] = float(size_m)
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = svc.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    source = job_dir / "source.glb"
+    model = job_dir / "model.glb"
+    # Written before the row, and cleaned up if the insert fails: the same
+    # ordering create_job and import_reference use, for the same reason.
+    source.write_bytes(glb)
+    shutil.copyfile(source, model)
+    try:
+        try:
+            params["transform"] = postprocess.normalize_glb(
+                model, float(size_m) if size_m else None
+            )
+            params["scale_factor"] = params["transform"]["scale"]
+        except Exception:
+            # Logged and swallowed, as the worker's own grounding step is: the
+            # GLB is already on disk, and a mesh trimesh cannot parse must not
+            # fail a job that has produced one. Grounding runs on every asset
+            # regardless of whether a size was asked for.
+            log.exception("normalize failed for built asset %s; leaving the mesh as-is", job_id)
+        try:
+            from .. import meshreport
+
+            params["mesh_report"] = meshreport.build(model, target_size_m=size_m)
+        except Exception:
+            log.exception("mesh report failed for built asset %s", job_id)
+        svc.store.create("image", prompt or "", params, job_id, stage="model", status="done")
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+    if name:
+        svc.store.set_meta(job_id, name=name[:MAX_JOB_NAME])
+    return {"id": job_id}
+
+
 def list_jobs(
     svc: WarlockService, limit: int = 100, before: tuple[float, str] | None = None
 ) -> list[dict[str, Any]]:
@@ -452,6 +535,17 @@ def rerun_job(
         # trellis turning a texture into a lumpy plane. Rerolling one is fine
         # -- it stays a tile.
         raise Invalid("a tile has no subject to reconstruct")
+    if source["params"].get("built"):
+        # Both modes, and before the input.png check below -- which would
+        # otherwise refuse this with the reference message, telling the user to
+        # go and edit an image that has never existed. There is no generator
+        # behind a built asset: a reroll has no seed to change and a remesh has
+        # no reference to reconstruct from. The way to get a different mesh is
+        # to open the document and change it.
+        raise Invalid(
+            "this asset was built rather than generated, so there is nothing to "
+            "regenerate; open it in Build mode to change the mesh"
+        )
     kind = "image" if mode == "remesh" else source["kind"]
     src_png = svc.job_dir(job_id) / "input.png"
     if kind == "image" and not src_png.exists():

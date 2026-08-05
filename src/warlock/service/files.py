@@ -195,6 +195,65 @@ def discard_inker_working(svc: Any, job_id: str) -> None:
         (svc.job_dir(job_id) / INKER_WORKING).unlink(missing_ok=True)
 
 
+# The authored Build document behind a built asset, following the paint.ora
+# precedent exactly: absent from MEDIA and LISTED, never served, never
+# downloadable, and it goes away with the job directory for free. model.glb
+# stays the one name every consumer reads; this exists only so that reopening a
+# built asset brings its objects back instead of a single frozen mesh.
+BUILD_SOURCE = "build.wblk"
+
+# A .wblk is scene.json plus one npz per object. Geometry compresses, and Phase
+# 1 documents are a handful of primitives -- but a Phase 3 subdivided scene is
+# the case this bounds, and it is bounded on the same reasoning as every other
+# ceiling here rather than left open because today's files are small.
+MAX_BUILD_SOURCE_BYTES = 5 * MAX_UPLOAD_BYTES
+
+
+def build_source_path(svc: Any, job_id: str) -> Path:
+    check_job_id(job_id)
+    return svc.job_dir(job_id) / BUILD_SOURCE
+
+
+def build_source_status(svc: Any, job_id: str) -> dict[str, Any]:
+    """Whether an authored source exists for this asset.
+
+    **No staleness rule**, unlike :func:`inker_working_status`, and the
+    difference is not an oversight. That rule exists because a revert, a
+    regenerate or a remesh rewrites ``input.png`` behind the layers, leaving
+    them describing an image that is gone. Nothing does that here: a build
+    export writes the GLB and the ``.wblk`` in one operation, and the one thing
+    that later rewrites ``model.glb`` -- a triangle retarget -- does not make
+    the authored document wrong. It makes the served mesh a *derivative* of it,
+    which is the whole point of keeping the source.
+    """
+    check_job_id(job_id)
+    return {"exists": (svc.job_dir(job_id) / BUILD_SOURCE).exists()}
+
+
+def save_build_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+    """Store the authored document beside the mesh it exported to.
+
+    Written through a temp and ``os.replace``, as the layered source is: the
+    file is read whole by the reader and a torn one is a document that will not
+    open. The caller writes the GLB first and this second, so a crash between
+    the two leaves the sidecar absent rather than lying about a mesh it did not
+    produce.
+    """
+    if svc.store.get(job_id) is None:
+        raise NotFound("no such job")
+    if len(data) > MAX_BUILD_SOURCE_BYTES:
+        raise TooLarge("build document too large")
+    if not data.startswith(ORA_MAGIC):
+        # The same four bytes: a .wblk is a zip, as an .ora is.
+        raise Invalid("the build source must be a .wblk archive")
+    dest = svc.job_dir(job_id) / BUILD_SOURCE
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".wblk.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return {"ok": True}
+
+
 def _editable_reference(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:
     """The gates the 2D editor and promote_to_model agree on."""
     check_job_id(job_id)

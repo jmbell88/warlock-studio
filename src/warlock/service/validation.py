@@ -36,6 +36,18 @@ JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16_000_000
 
+# A GLB arriving at ``import_mesh``. Larger than the image ceiling because the
+# thing being handed over is geometry with its textures inside it -- a
+# reconstruction routinely runs to tens of megabytes -- and smaller than the
+# layered-document ceiling because, unlike an .ora, nothing here is a stack of
+# full-canvas buffers. The check is on the bytes, before anything is decoded or
+# written: this is the door, and refusing at the door is what stops a job
+# directory existing for a request that was never going to succeed.
+MAX_MESH_BYTES = 100 * 1024 * 1024
+
+# The first four bytes of a binary glTF: "glTF", little-endian, as a u32.
+GLB_MAGIC = b"glTF"
+
 # A rendered snapshot of the viewport at list size.
 MAX_THUMB_BYTES = 512 * 1024
 
@@ -98,6 +110,34 @@ CONDITIONING_PARAMS = (
     "control_scale",
     "control_end",
 )
+
+
+def check_glb(data: bytes, field: str = "glb") -> None:
+    """Refuse bytes that are not a binary glTF carrying at least one mesh.
+
+    Belt and braces where the caller is Build mode -- we author those bytes --
+    but "a caller-supplied input is bounded at the door" is the invariant and
+    this is the door. Both refusals are worth having on their own terms: bytes
+    that are not a GLB would mint a ``done`` row whose ``model.glb`` no reader
+    can open, and a GLB with no mesh in it would mint one whose every
+    downstream export -- STL, OBJ, FBX, collision, sheet -- produced an empty
+    file, each failing far from here with a message about its own format.
+
+    Deliberately structural rather than semantic: the JSON chunk is parsed and
+    the mesh list is looked at, and nothing is decoded. A mesh that is *bad* is
+    the mesh report's business, not the door's.
+    """
+    from ..glbio import read_glb
+
+    if not data.startswith(GLB_MAGIC):
+        raise Invalid("that file is not a binary glTF (.glb)", field=field)
+    try:
+        doc, _buffer = read_glb(data)
+    except Exception as exc:
+        raise Invalid("that .glb could not be read", field=field) from exc
+    meshes = doc.get("meshes") or []
+    if not any(mesh.get("primitives") for mesh in meshes):
+        raise Invalid("that .glb has no mesh in it", field=field)
 
 
 def check_seed(name: str, value: int | None) -> None:
