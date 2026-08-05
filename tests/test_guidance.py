@@ -84,6 +84,13 @@ def test_compose_prompt_ignores_stale_values():
     assert guidance.compose_prompt("a barrel", {"genre": "retired"}) == "a barrel"
 
 
+def test_catalog_publishes_the_cfg_bases_the_ui_gates_on():
+    from warlock import models
+
+    catalog = guidance.catalog()
+    assert catalog["cfg_bases"] == models.cfg_bases()
+
+
 def test_catalog_covers_every_field_and_is_json_safe():
     import json
 

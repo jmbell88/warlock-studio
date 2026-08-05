@@ -15,6 +15,7 @@ from imgui_bundle import imgui
 from ...service import validation
 from .. import dialogs, profiles, theme, widgets
 from ..manual import render as manual_render
+from . import settings_2d
 
 
 def draw(ctx: Any) -> None:
@@ -130,9 +131,15 @@ def _editor(ctx: Any) -> None:
     # The same cap the service enforces. Accepting twice as much here only
     # meant the refusal arrived at submit time, against a profile the user had
     # already saved.
+    inert = settings_2d.negative_prompt_note(ctx, draft)
+    if inert is not None:
+        imgui.begin_disabled()
     draft["negative_prompt"] = widgets.multiline(
         "Negative", draft.get("negative_prompt", ""), 54, validation.MAX_PROMPT
     )
+    if inert is not None:
+        imgui.end_disabled()
+        widgets.muted(inert)
 
     widgets.section("Style")
     for field in profiles.TAXONOMY:

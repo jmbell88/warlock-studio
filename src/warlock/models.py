@@ -324,6 +324,19 @@ def controlnet_bases() -> list[str]:
     return [m.key for m in BASE_MODELS.values() if m.controlnet]
 
 
+def cfg_bases() -> list[str]:
+    """Base models where a negative prompt actually does something.
+
+    text2image encodes the negative branch only when ``guidance_scale > 1.0``
+    -- there is no unconditional branch to steer at CFG 0 -- so on a distilled
+    4-step base the field is inert. Derived from the number rather than
+    declared per model, unlike ``controlnet`` above: "does classifier-free
+    guidance run" *is* the guidance scale, whereas "is a ControlNet qualified
+    against this checkpoint" is a judgement no threshold can make.
+    """
+    return [m.key for m in BASE_MODELS.values() if m.guidance_scale > 1.0]
+
+
 def catalog() -> dict[str, Any]:
     """The two tables in guidance.catalog()'s field shape, for the same selects."""
     return {

@@ -125,6 +125,18 @@ def test_controlnet_bases_is_non_empty_and_real():
     assert all(b in models.BASE_MODELS for b in bases)
 
 
+def test_cfg_bases_are_exactly_the_ones_that_encode_a_negative_prompt():
+    # text2image only encodes the negative prompt when guidance_scale > 1.0,
+    # so this list is what the UI may present the field as live for.
+    bases = models.cfg_bases()
+    assert bases
+    assert all(models.BASE_MODELS[b].guidance_scale > 1.0 for b in bases)
+    assert all(
+        m.key in bases for m in models.BASE_MODELS.values() if m.guidance_scale > 1.0
+    )
+    assert "turbo" not in bases
+
+
 def test_catalog_stays_json_safe():
     import json
 

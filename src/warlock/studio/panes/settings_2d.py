@@ -270,10 +270,9 @@ def _reference(ctx: Any, form: dict[str, Any]) -> None:
             form["ip_scale"] = value
 
     widgets.section("Structure")
-    if form["base_model"] not in (ctx.guidance.get("controlnet_bases") or []):
-        widgets.muted(
-            "Structure control needs a full-CFG model -- pick one under Advanced."
-        )
+    note = structure_note(ctx, form)
+    if note is not None:
+        widgets.muted(note)
         return
     form["control"] = widgets.combo("##control", form["control"], _options(ctx, "control"))
     if form["control"]:
@@ -305,6 +304,45 @@ def _range(ctx: Any, key: str, low: float, high: float) -> tuple[float, float]:
     return (low, high)
 
 
+def _base_labels(ctx: Any, keys: list[str]) -> str:
+    """The picker's own labels for a set of base-model keys.
+
+    Labels rather than keys: "sdxl_cfg" is not what the combo shows, and a
+    message naming something the user cannot find in the list is worse than no
+    message at all.
+    """
+    labels = [label for key, label in (ctx.base_models or []) if key in keys]
+    return ", ".join(labels or keys)
+
+
+def negative_prompt_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Why the negative prompt is inert here, or None when it is live.
+
+    A distilled base runs at guidance 0, and text2image encodes the negative
+    branch only above 1.0 -- so on turbo the field accepted text, stored it in
+    params and changed nothing about the image. That silence is the bug; this
+    is the sentence that ends it.
+    """
+    bases = ctx.guidance.get("cfg_bases") or []
+    if (form.get("base_model") or "") in bases:
+        return None
+    return (
+        "This model runs at guidance 0, so the negative prompt has no effect. "
+        f"It does on: {_base_labels(ctx, bases)}."
+    )
+
+
+def structure_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Which bases could run the ControlNet this one cannot, or None."""
+    bases = ctx.guidance.get("controlnet_bases") or []
+    if (form.get("base_model") or "") in bases:
+        return None
+    return (
+        "Structure control needs a full-CFG model -- pick one of "
+        f"{_base_labels(ctx, bases)} under Advanced."
+    )
+
+
 def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
         return
@@ -316,10 +354,19 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         changed, value = imgui.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
         if changed:
             form["lora_weight"] = value
+    inert = negative_prompt_note(ctx, form)
+    if inert is not None:
+        # Disabled rather than hidden, and with the reason underneath: the
+        # field holds text the user typed under another base, and hiding it
+        # would make that text vanish without saying why.
+        imgui.begin_disabled()
     before = form["negative_prompt"]
     form["negative_prompt"] = widgets.multiline("Negative", before, 54, MAX_PROMPT)
     if form["negative_prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
+    if inert is not None:
+        imgui.end_disabled()
+        widgets.muted(inert)
 
 
 def _run_controls(ctx: Any, form: dict[str, Any]) -> None:

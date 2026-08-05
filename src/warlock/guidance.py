@@ -512,6 +512,10 @@ def catalog() -> dict[str, Any]:
         # Not a select, so not under "fields": what the UI checks the chosen
         # base against before it draws the Structure group at all.
         "controlnet_bases": models.controlnet_bases(),
+        # Same shape and the same purpose as controlnet_bases: what the UI
+        # checks the chosen base against before it presents the negative
+        # prompt as a live control rather than an inert one.
+        "cfg_bases": models.cfg_bases(),
         # Copied, not handed out: the UI reads these and a shared dict would let
         # a caller mutate the shipped table.
         "presets": [dict(p) for p in PRESETS],
