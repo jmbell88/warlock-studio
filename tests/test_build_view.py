@@ -33,15 +33,11 @@ class _State:
 
 
 class _Ctx:
-    """What ``BuildView`` reads from its ctx: a moderngl context and the mode
-    state it takes the current tool from."""
+    """The *app* ctx, which is not the GL one. ``BuildView`` takes both, and
+    the only thing it wants from this one is the selected transform tool."""
 
-    def __init__(self, gl: Any, tool: str = "select") -> None:
-        self._gl = gl
+    def __init__(self, tool: str = "select") -> None:
         self.state = type("S", (), {"build": _State(tool)})()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._gl, name)
 
 
 def _doc(*, count: int = 2) -> bd.BuildDoc:
@@ -60,7 +56,7 @@ def _doc(*, count: int = 2) -> bd.BuildDoc:
 
 @pytest.fixture
 def view(gl):
-    v = build_view.BuildView(_Ctx(gl))
+    v = build_view.BuildView(gl, _Ctx())
     yield v
     v.release()
 
@@ -163,7 +159,7 @@ def test_deleting_an_object_releases_its_upload(view) -> None:
 def test_releasing_twice_does_not_raise(gl) -> None:
     """Teardown runs on a path that can already have torn down -- a failed
     startup, or a mode switch racing a close."""
-    v = build_view.BuildView(_Ctx(gl))
+    v = build_view.BuildView(gl, _Ctx())
     v.release()
     v.clear()
 
@@ -202,7 +198,7 @@ def test_a_redraw_at_the_same_size_forgets_nothing(view, monkeypatch) -> None:
 
 
 def test_release_forgets_the_texture_before_freeing_it(gl, monkeypatch) -> None:
-    v = build_view.BuildView(_Ctx(gl))
+    v = build_view.BuildView(gl, _Ctx())
     order: list[str] = []
     monkeypatch.setattr(v, "_forget", lambda tex: order.append("forget"))
     real_release = v.viewport.release
@@ -354,7 +350,7 @@ def test_no_gizmo_is_active_for_the_select_tool(view) -> None:
 
 
 def test_no_gizmo_is_active_with_nothing_selected(view) -> None:
-    view.ctx.state.build.tool = "move"
+    view.app_ctx.state.build.tool = "move"
     assert view.active_gizmo(_doc(count=1)) is None
 
 
@@ -365,7 +361,7 @@ def test_no_gizmo_is_active_with_nothing_selected(view) -> None:
 def test_each_transform_tool_drives_its_own_gizmo(view, tool: str, attr: str) -> None:
     doc = _doc(count=1)
     doc.select([doc.objects[0].uid])
-    view.ctx.state.build.tool = tool
+    view.app_ctx.state.build.tool = tool
     assert view.active_gizmo(doc) is getattr(view, attr)
 
 
@@ -378,7 +374,7 @@ def test_a_gizmo_drag_records_one_history_step_per_object(view) -> None:
     doc = _doc(count=1)
     obj = doc.objects[0]
     doc.select([obj.uid])
-    view.ctx.state.build.tool = "move"
+    view.app_ctx.state.build.tool = "move"
     view._rect = RECT
 
     view._grab = "gizmo"
@@ -399,7 +395,7 @@ def test_a_drag_on_an_object_deleted_midway_does_not_raise(view) -> None:
     doc = _doc(count=1)
     obj = doc.objects[0]
     doc.select([obj.uid])
-    view.ctx.state.build.tool = "move"
+    view.app_ctx.state.build.tool = "move"
     view._grab = "gizmo"
     view._drag_start = {obj.uid: tuple(np.array(v, copy=True) for v in obj.trs())}
 

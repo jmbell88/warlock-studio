@@ -36,12 +36,11 @@ MIN_SIZE = (1100, 700)
 # Pane widths and the sidebar split now live in layout.Layout, persisted and
 # draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
-# Modes that fill the host window with one pane instead of the three-column
-# settings / viewport / inspector layout the two generate modes share. Together
-# with modes.VIEWPORT_MODES this must cover modes.KEYS exactly -- the dispatch
-# in _build_ui ends in a bare else, so an unlisted mode would silently draw
-# Inker. tests/test_studio_state.py pins the partition.
-_SINGLE_PANE_MODES = ("home", "manual", "clay", "settings", "inker")
+# The modes that fill the host window with one pane. Inker and Build are not
+# here: each fills it with a three-column *workspace* instead, which is
+# ``modes.WORKSPACE_MODES``. Those three categories partition ``modes.KEYS``
+# exactly, and the partition is the guard on ``_build_ui``'s dispatch.
+_SINGLE_PANE_MODES = ("home", "manual", "clay", "settings")
 
 
 def _min_window_size(monitor_scale: float) -> tuple[int, int]:
@@ -100,6 +99,14 @@ class App:
         # and cannot be the gate; imgui's own hover test on the viewport image
         # is, and it correctly goes false under popups and active widgets.
         self._viewport_hovered = False
+        # Build mode's own viewport, built on first use for the reason its
+        # state is: a session that never opens Build should not pay for a
+        # renderer, a framebuffer and three gizmos.
+        self.build_view = None
+        # Build's own hover flag, set by the pane that draws its image, for the
+        # reason _viewport_hovered exists: the host window is fullscreen, so
+        # io.want_capture_mouse is always true and cannot be the gate.
+        self._build_hovered = False
 
     # -- setup -------------------------------------------------------------
 
@@ -205,6 +212,11 @@ class App:
         from ..service import system as svc_system
 
         ctx = self.app_ctx
+        # Build's bridge asks the ctx for this rather than importing App: the
+        # render it needs is an offscreen GL draw on the frame thread, which is
+        # the App's business and not a pane's. Attached here so the button has a
+        # handler from the first frame rather than toasting "not wired up yet".
+        ctx.build_send_to_3d = self._build_send_to_3d
         ctx.guidance = svc_system.guidance_catalog()
         ctx.sheet_options = svc_sheets.sheet_options()
         # Marked rather than hidden when weights are absent: the combo listing
@@ -347,13 +359,18 @@ class App:
         for done in ctx.tasks.poll():
             if not done.ok:
                 ctx.toast(done.message or "That did not work.", "error")
+                # A failed save must not leave the document locked: saving
+                # disables every editing control, so without this one bad
+                # write makes the tab read-only until it is closed. Each
+                # editor claims its own key prefix.
                 if done.key.startswith("inker-"):
                     from . import inker_mode
 
-                    # A failed save must not leave the document locked: saving
-                    # disables every editing control, so without this one bad
-                    # write makes the tab read-only until it is closed.
                     inker_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("build-"):
+                    from . import build_mode
+
+                    build_mode.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -387,6 +404,17 @@ class App:
             # Only the path is kept here; the bytes are read in the submit
             # task, so picking a 20 MB image never touches the frame thread.
             ctx.state.form_2d["ref_path"] = str(done.result)
+            return
+        if key.startswith("build-"):
+            from . import build_mode
+
+            build_mode.on_task_done(ctx, done)
+            if isinstance(done.result, dict) and done.result.get("exported"):
+                # The card appears in the library like any other asset, so it
+                # needs the thumbnail every other asset gets -- and that is an
+                # offscreen GL draw, which belongs on the frame thread rather
+                # than in the task that minted the row.
+                self._capture_build_thumbnail(done.result["job_id"])
             return
         if key.startswith("inker-"):
             from . import inker_mode
@@ -632,10 +660,32 @@ class App:
                 if not io.want_text_input:
                     self._shortcut(event)
                 continue
+            # Build owns its own centre pane, so its viewport takes the mouse
+            # in that mode and the asset viewer never sees it -- the two would
+            # otherwise both orbit on one drag.
+            if ctx.state.mode == "build":
+                self._build_event(event)
+                continue
             # The viewer sees the mouse when it is over the viewport image, and
             # a drag already in progress keeps it wherever the cursor goes.
             if self._viewport_hovered or self.viewer._grab is not None:
                 self.viewer.handle_event(event, hovered=self._viewport_hovered)
+
+    def _build_event(self, event: Any) -> None:
+        """Route the mouse to Build's viewport, on the same hover rule.
+
+        A drag already in progress ignores the hover, so crossing onto a panel
+        mid-orbit does not drop it -- which is exactly what ``_grab`` is for in
+        the asset viewer.
+        """
+        from . import build_mode
+
+        tab = build_mode.active(self.app_ctx)
+        if tab is None or self.build_view is None:
+            return
+        hovered = self._build_hovered
+        if hovered or self.build_view._grab is not None:
+            self.build_view.handle_event(tab.doc, event, hovered)
 
     def _shortcut(self, event: Any) -> None:
         import pygame
@@ -656,6 +706,16 @@ class App:
             # Home, the Manual, Clay and Settings have no form to submit and no
             # viewport to frame; every one of these would act on a pane that is
             # not on screen.
+            return
+        if ctx.state.mode == "build":
+            from . import build_mode
+
+            # First refusal, and unconditional for the reason Inker's is:
+            # handle_key returns False with no document open, and letting that
+            # fall through meant F/W/S acted on a viewport Build has replaced.
+            build_mode.handle_key(ctx, event)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
+                self._frame_build_selection()
             return
         if ctx.state.mode == "inker":
             from . import inker_mode
@@ -708,6 +768,18 @@ class App:
 
             inker_mode.open_path(ctx, path)
             return
+        if ctx.state.mode == "build":
+            from . import build_mode, build_state
+
+            if path.suffix.lower() == build_state.WBLK_SUFFIX:
+                build_mode.open_path(ctx, path)
+            else:
+                # A .glb is refused rather than imported: reading one back into
+                # editable objects is not Build Phase 1, and quietly making a
+                # frozen one-object document out of it would be a feature
+                # nobody asked for wearing the name of one they did.
+                ctx.toast("Build opens .wblk documents. Drop one of those.", "error")
+            return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
             return
@@ -725,12 +797,22 @@ class App:
         settings_3d.upload(ctx, path)
 
     def _request_quit(self) -> None:
-        from . import inker_mode
+        """One chain, in order: painted pixels, then built geometry, then a pose.
+
+        Nested rather than asked side by side, because ``ConfirmQueue`` holds a
+        single pending question: three at once would silently drop two, and the
+        user would lose whichever they were not shown.
+        """
+        from . import build_mode, inker_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
         inker_mode.guard(
-            ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
+            ctx,
+            "quit",
+            lambda: build_mode.guard(
+                ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
+            ),
         )
 
     def _quit(self) -> None:
@@ -781,7 +863,7 @@ class App:
 
         overlay.doctor_banner(ctx)
         mode = ctx.state.mode
-        if mode in _SINGLE_PANE_MODES:
+        if mode in _SINGLE_PANE_MODES or mode in modes.WORKSPACE_MODES:
             if mode == "home":
                 landing.draw(ctx)
             elif mode == "manual":
@@ -792,6 +874,8 @@ class App:
                 clay.draw(ctx)
             elif mode == "settings":
                 app_settings.draw(ctx)
+            elif mode == "build":
+                self._build_workspace()
             else:
                 self._inker_workspace()
             imgui.end()
@@ -852,6 +936,178 @@ class App:
         imgui.end_child()
         imgui.end()
         self._overlays(viewport)
+
+    def _ensure_build_view(self) -> Any:
+        from .build_view import BuildView
+
+        if self.build_view is None:
+            self.build_view = BuildView(self.ctx, self.app_ctx)
+        return self.build_view
+
+    def _frame_build_selection(self) -> None:
+        """F, in Build mode. Frames the selection, or the whole document."""
+        from . import build_mode
+
+        tab = build_mode.active(self.app_ctx)
+        if tab is not None and self.build_view is not None:
+            self.build_view.frame_selection(tab.doc)
+
+    def _capture_build_thumbnail(self, job_id: str) -> None:
+        """The library card's picture, from the viewport that is already drawn.
+
+        On the frame thread because it reads a framebuffer, which is the same
+        reason ``ctx.capture_thumbnail`` is -- and it is the one deliberate
+        exception to "the frame loop never blocks", being a single offscreen
+        read rather than work.
+        """
+        from ..service import files as svc_files
+
+        ctx = self.app_ctx
+        if self.build_view is None:
+            return
+        try:
+            data = self.build_view.thumbnail_png()
+        except Exception:
+            log.exception("could not capture a thumbnail for built asset %s", job_id)
+            return
+        ctx.submit(f"thumb:{job_id}", svc_files.save_thumbnail, ctx.svc, job_id, data)
+
+    def _build_send_to_3d(self, tab: Any) -> None:
+        """Render the document flat and hand the picture to trellis.
+
+        The render is **synchronous on the frame thread** because it needs the
+        GL context -- one offscreen draw, exactly what ``capture_thumbnail``
+        already is. Only the service call goes to a task thread, which is the
+        shape ``inker_mode.send_to_3d`` already has.
+
+        Flat-shaded, on a plain background, with no grid, no gizmos and no
+        overlays: trellis is being given a *subject*, and a grid line in the
+        picture is a subject too.
+        """
+        from .panes import settings_3d
+
+        ctx = self.app_ctx
+        try:
+            png = self._render_build_reference(tab)
+        except Exception:
+            log.exception("could not render the build reference")
+            ctx.toast("That document could not be rendered.", "error")
+            return
+        settings_3d.upload_bytes(ctx, png)
+
+    def _render_build_reference(self, tab: Any, size: int = 1024) -> bytes:
+        """One offscreen 1024-square draw of the document, as PNG bytes."""
+        from .viewer import capture, glctx
+
+        view = self._ensure_build_view()
+        view.sync(tab.doc)
+        target = glctx.Viewport(self.ctx, (size, size))
+        try:
+            view.renderer.draw(
+                target,
+                view.camera,
+                view._composite(tab.doc),
+                flat=True,
+                show_grid=False,
+                background=(1.0, 1.0, 1.0, 1.0),
+                overlays=[],
+            )
+            return capture.png_bytes(target)
+        finally:
+            target.release()
+
+    def _build_workspace(self) -> None:
+        """The same sidebar / centre / sidebar skeleton every other mode uses.
+
+        Mirrors ``_inker_workspace`` line for line, including ``settings_share``
+        for the vertical split, so the two editors do not drift into looking
+        like different applications:
+
+            [ build_tools ]            [ build_outliner ]
+            [ build_props ]  viewport  [ build_bridge   ]
+        """
+        from imgui_bundle import imgui
+
+        from . import build_mode, widgets
+        from . import layout as layout_mod
+        from .panes import build_bridge, build_outliner, build_props, build_tools
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        lay = self.layout
+        sidebar_w = sp(lay.sidebar_w)
+        inspector_w = sp(lay.inspector_w)
+        style = imgui.get_style()
+        borders = imgui.ChildFlags_.borders.value
+
+        imgui.begin_group()
+        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        if imgui.begin_child("build-tools", (sidebar_w, tools_height), borders):
+            build_tools.draw(ctx)
+        imgui.end_child()
+        if imgui.begin_child("build-props", (sidebar_w, 0), borders):
+            build_props.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+        imgui.same_line()
+        drag = layout_mod.splitter("build-left-split")
+        if drag:
+            lay.sidebar_w = min(
+                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
+        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
+        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if imgui.begin_child("build-centre", (width, 0), borders, flags):
+            self._build_viewport(ctx, build_mode, widgets)
+        imgui.end_child()
+
+        imgui.same_line()
+        drag = layout_mod.splitter("build-right-split")
+        if drag:
+            lay.inspector_w = min(
+                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
+            )
+            lay.save()
+        imgui.same_line()
+        imgui.begin_group()
+        outliner_height = imgui.get_content_region_avail().y * lay.settings_share
+        if imgui.begin_child("build-outliner", (0, outliner_height), borders):
+            build_outliner.draw(ctx)
+        imgui.end_child()
+        if imgui.begin_child("build-bridge", (0, 0), borders):
+            build_bridge.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+    def _build_viewport(self, ctx: Any, build_mode: Any, widgets: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import icons
+
+        tab = build_mode.active(ctx)
+        if tab is None:
+            widgets.empty_state(
+                icons.RULER,
+                "Nothing open",
+                "Start a document, or drop a .wblk on the window.",
+            )
+            return
+        avail = imgui.get_content_region_avail()
+        rect = (
+            imgui.get_cursor_screen_pos().x,
+            imgui.get_cursor_screen_pos().y,
+            max(avail.x, 1.0),
+            max(avail.y, 1.0),
+        )
+        view = self._ensure_build_view()
+        view.wireframe = build_mode.ensure(ctx).wireframe
+        texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
+        imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
+        self._build_hovered = imgui.is_item_hovered()
 
     def _inker_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton the other modes use.
@@ -1026,8 +1282,27 @@ class App:
                 ("Esc", "Exit comparison / pose edit"),
             ],
         )
+        from .build_mode import TOOL_KEYS as BUILD_KEYS
         from .inker_mode import TOOL_KEYS
 
+        table(
+            "Build",
+            [
+                (
+                    " / ".join(k.upper() for k in BUILD_KEYS),
+                    " / ".join(BUILD_KEYS.values()),
+                ),
+                ("F", "Frame the selection"),
+                ("Delete", "Delete the selected objects"),
+                ("Ctrl+D", "Duplicate"),
+                ("Ctrl+A", "Select all"),
+                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+                ("Ctrl+N / O", "New / open"),
+                ("Ctrl+E", "Export to the library"),
+                ("Ctrl+Tab", "Next document"),
+            ],
+        )
         tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
         table(
             "Inker",
@@ -1172,10 +1447,18 @@ class App:
         if ctx is not None:
             _step("persist settings", lambda: self._persist(ctx))
             _step("persist inker", lambda: self._persist_inker(ctx))
+            _step("persist build", lambda: self._persist_build(ctx))
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
         if self.viewer is not None:
             _step("release viewer", self.viewer.release)
+        # ``getattr``, not an attribute access: teardown runs after a *failed*
+        # setup too, and Build's viewport is one of the last things constructed
+        # -- an AttributeError here would skip runtime.shutdown, which is the
+        # step that stops the worker loop and the trellis child.
+        build_view = getattr(self, "build_view", None)
+        if build_view is not None:
+            _step("release build view", build_view.release)
         if self.imgui_renderer is not None:
             _step("shutdown imgui", self.imgui_renderer.shutdown)
         _step("pygame.quit", pygame.quit)
@@ -1201,6 +1484,12 @@ class App:
         from . import inker_mode
 
         inker_mode.persist(ctx)
+        ctx.settings.flush()
+
+    def _persist_build(self, ctx: Any) -> None:
+        from . import build_mode
+
+        build_mode.persist(ctx)
         ctx.settings.flush()
 
 

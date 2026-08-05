@@ -107,8 +107,18 @@ def _object_key(obj: Any, materials: tuple[int, ...]) -> tuple[Any, ...]:
 class BuildView:
     """The Build viewport, from the UI's point of view."""
 
-    def __init__(self, ctx: Any) -> None:
+    def __init__(self, ctx: Any, app_ctx: Any = None) -> None:
+        """``ctx`` is the moderngl context, as ``Viewer``'s is.
+
+        ``app_ctx`` is separate and optional because the two are genuinely
+        different things and conflating them is the bug this signature exists
+        to prevent: everything that draws needs the GL context, and the only
+        thing that needs the app is reading which transform tool is selected --
+        which is an *app* setting shared across documents, so the view reads it
+        rather than holding a copy that could drift.
+        """
         self.ctx = ctx
+        self.app_ctx = app_ctx
         self.renderer = Renderer(ctx)
         self.viewport = glctx.Viewport(ctx, (16, 16))
         self.camera = Camera()
@@ -251,8 +261,7 @@ class BuildView:
         *app* setting shared across documents -- so this reads it rather than
         holding it.
         """
-        state = getattr(self.ctx.state, "build", None)
-        kind = GIZMO_FOR_TOOL.get(getattr(state, "tool", "select"), "")
+        kind = GIZMO_FOR_TOOL.get(getattr(self.state, "tool", "select"), "")
         if not kind or not doc.selection:
             return None
         return {
@@ -260,6 +269,12 @@ class BuildView:
             "rotate": self.rotate_gizmo,
             "scale": self.scale_gizmo,
         }[kind]
+
+    @property
+    def state(self) -> Any:
+        """Build mode's state, or None when the view is driven headlessly."""
+        app_ctx = self.app_ctx
+        return None if app_ctx is None else getattr(app_ctx.state, "build", None)
 
     def selection_centre(self, doc: Any) -> np.ndarray | None:
         lo, hi = self.world_bounds(doc, selected_only=True)
@@ -439,7 +454,7 @@ class BuildView:
         gizmo = self.active_gizmo(doc)
         if gizmo is None:
             return
-        state = getattr(self.ctx.state, "build", None)
+        state = self.state
         origin, direction = self._ray(local)
         delta = gizmo.update(origin, direction)
         if delta is None:

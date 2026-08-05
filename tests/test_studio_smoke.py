@@ -677,3 +677,68 @@ def test_the_build_properties_pane_enumerates_a_generator_it_has_never_seen(
     monkeypatch.setattr(build_props, "_widget", spy)
     _frame(imgui_ctx, lambda: build_props.draw(app_ctx))
     assert seen == ["width", "steps", "footprint"]
+
+
+def test_the_build_viewport_draws_through_the_real_imgui_backend(app_ctx, imgui_ctx, gl):
+    """The one part of the Build workspace the pane tests cannot reach.
+
+    ``widgets.texture_ref`` has to *register* the viewport texture with the
+    backend as well as wrap it -- an id the renderer does not know maps to no
+    moderngl object, and every image in the UI comes out as the font atlas. A
+    frame that draws it for real is the only thing that says so.
+    """
+    from imgui_bundle import imgui
+
+    from warlock.studio import build_view, widgets
+
+    tab = _build_tab(app_ctx)
+    view = build_view.BuildView(gl, app_ctx)
+    try:
+        view.frame_selection(tab.doc)
+
+        def build():
+            texture = view.draw(tab.doc, (0.0, 0.0, 320.0, 240.0), 1 / 60)
+            imgui.image(widgets.texture_ref(texture), (320, 240), (0, 1), (1, 0))
+
+        _frame(imgui_ctx, build)
+    finally:
+        view.release()
+
+
+def test_a_built_document_renders_the_flat_reference_trellis_is_given(app_ctx, gl):
+    """No grid, no gizmos, no overlays, on a plain background: trellis is being
+    handed a subject, and a grid line in the picture is a subject too."""
+    from warlock.studio import build_view
+    from warlock.studio.viewer import capture, glctx
+
+    tab = _build_tab(app_ctx)
+    view = build_view.BuildView(gl, app_ctx)
+    target = glctx.Viewport(gl, (128, 128))
+    try:
+        view.frame_selection(tab.doc)
+        view.sync(tab.doc)
+        view.renderer.draw(
+            target,
+            view.camera,
+            view._composite(tab.doc),
+            flat=True,
+            show_grid=False,
+            background=(1.0, 1.0, 1.0, 1.0),
+            overlays=[],
+        )
+        png = capture.png_bytes(target)
+    finally:
+        target.release()
+        view.release()
+
+    assert png.startswith(b"\x89PNG")
+    import io as _io
+
+    from PIL import Image
+
+    with Image.open(_io.BytesIO(png)) as im:
+        pixels = im.convert("RGB")
+        colours = pixels.getcolors(maxcolors=1 << 16) or []
+    # White is there (the background) and so is something else (the subject).
+    assert any(colour == (255, 255, 255) for _n, colour in colours)
+    assert len(colours) > 1

@@ -217,11 +217,10 @@ def doctor_banner(ctx: Any) -> None:
 
 def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
-    text = (
-        "Describe something and press Generate."
-        if ctx.state.mode == "2d"
-        else "Pick a finished reference, or open an image."
-    )
+    text = {
+        "2d": "Describe something and press Generate.",
+        "build": "Add a primitive to start blocking something out.",
+    }.get(ctx.state.mode, "Pick a finished reference, or open an image.")
     avail = imgui.get_content_region_avail()
     imgui.dummy((0, max(avail.y * 0.5 - 20, 0)))
     width = imgui.calc_text_size(text).x

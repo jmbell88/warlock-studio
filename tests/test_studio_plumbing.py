@@ -608,3 +608,98 @@ def test_the_outliner_addresses_every_row_by_uid():
     for call in calls:
         rendered = ast.unparse(call)
         assert "uid" in rendered, f"{rendered} does not address its object by uid"
+
+
+# --- Build as the eighth mode ------------------------------------------------
+
+
+def test_build_claims_its_own_task_prefix_on_both_paths():
+    """A key nothing claims is a result delivered nowhere -- and on the failure
+    path it is a tab left read-only forever."""
+    source = inspect.getsource(main.App._collect_tasks)
+    assert 'startswith("build-")' in source
+    assert "build_mode.on_task_failed" in source
+    assert "build_mode.on_task_done" in inspect.getsource(main.App._on_task_done)
+
+
+def test_build_takes_first_refusal_on_the_keyboard():
+    """Build owns the centre pane, so the global F/W/S bindings -- which act on
+    the asset viewer -- must be shadowed rather than run underneath it."""
+    source = inspect.getsource(main.App._shortcut)
+    build_at = source.index("build_mode.handle_key")
+    viewer_at = source.index("self.viewer.frame()")
+    assert build_at < viewer_at
+    # And it returns, so nothing below belongs to Build.
+    assert "return" in source[build_at : source.index("inker_mode.handle_key")]
+
+
+def test_the_quit_guard_asks_about_built_geometry_too():
+    """One chain, nested: ConfirmQueue holds a single pending question, so
+    three asked side by side would silently drop two."""
+    source = inspect.getsource(main.App._request_quit)
+    for guard in ("inker_mode.guard", "build_mode.guard", "pose_panel.guard"):
+        assert guard in source
+    assert source.index("inker_mode.guard") < source.index("build_mode.guard")
+    assert source.index("build_mode.guard") < source.index("pose_panel.guard")
+
+
+def test_a_dropped_glb_is_refused_in_build_mode():
+    """Reading a GLB back into editable objects is not Build Phase 1, and a
+    frozen one-object document would be a different feature wearing its name."""
+    source = inspect.getsource(main.App._on_drop)
+    assert "WBLK_SUFFIX" in source
+    assert ".wblk" in source
+
+
+def test_build_persists_its_recent_list_and_no_mode():
+    source = inspect.getsource(main.App)
+    assert "build_mode.persist" in source
+    # The guard the whole app is under; restated here because Build is the
+    # newest place that could have broken it.
+    assert 'settings.set("mode"' not in source
+
+
+def test_the_send_to_3d_render_carries_no_grid_gizmo_or_overlay():
+    """trellis is being handed a *subject*. A grid line in the picture is a
+    subject too, and it comes back as geometry nobody asked for."""
+    source = inspect.getsource(main.App._render_build_reference)
+    assert "show_grid=False" in source
+    assert "overlays=[]" in source
+    assert "flat=True" in source
+
+
+def test_the_send_to_3d_render_happens_on_the_frame_thread():
+    """It needs the GL context. Only the service call goes to a task thread,
+    which is the shape inker_mode.send_to_3d already has."""
+    source = inspect.getsource(main.App._build_send_to_3d)
+    assert "submit" not in source
+    assert "upload_bytes" in source
+    assert "submit" in inspect.getsource(
+        __import__("warlock.studio.panes.settings_3d", fromlist=["x"]).upload_bytes
+    )
+
+
+def test_both_upload_paths_read_the_same_form():
+    """A form field honoured for a dropped file and ignored for a rendered one
+    is the shape of bug this consolidation exists to prevent."""
+    from warlock.studio.panes import settings_3d
+
+    assert len(_calls_to(settings_3d, "_upload_kwargs")) == 2
+
+
+def test_build_is_a_workspace_rather_than_a_single_pane():
+    from warlock.studio import main as main_mod
+    from warlock.studio import modes
+
+    assert "build" in modes.WORKSPACE_MODES
+    assert "build" not in main_mod._SINGLE_PANE_MODES
+    assert "build" not in modes.VIEWPORT_MODES
+    assert "build" in modes.WORK_MODES
+
+
+def test_the_asset_viewer_never_sees_the_mouse_in_build_mode():
+    """Both viewports would orbit on one drag otherwise."""
+    source = inspect.getsource(main.App._events)
+    build_at = source.index('ctx.state.mode == "build"')
+    viewer_at = source.index("self.viewer.handle_event")
+    assert build_at < viewer_at

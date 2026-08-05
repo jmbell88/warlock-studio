@@ -433,14 +433,26 @@ def test_the_ui_scale_slider_can_only_offer_a_zoom_that_survives_the_clamp():
 
 def test_every_mode_has_exactly_one_place_that_draws_it():
     """_build_ui's dispatch ends in a bare else, so an unlisted mode would
-    silently draw Inker rather than fail. The partition is the guard."""
+    silently draw Inker rather than fail. The partition is the guard.
+
+    Three categories, not two, since Build arrived: one pane, the shared asset
+    viewport, or a mode's own three-column workspace. Making this a three-way
+    partition rather than filing Build under _SINGLE_PANE_MODES is the honest
+    version -- a workspace is not one pane, and calling it one would leave the
+    name lying about four of the five modes it covers.
+    """
     from warlock.studio import main, modes
 
     single = set(main._SINGLE_PANE_MODES)
-    assert single | modes.VIEWPORT_MODES == set(modes.KEYS)
-    assert not (single & modes.VIEWPORT_MODES)
-    # The viewport modes are work modes, and Inker is a work mode without one.
+    categories = [single, set(modes.VIEWPORT_MODES), set(modes.WORKSPACE_MODES)]
+    assert set().union(*categories) == set(modes.KEYS)
+    for i, first in enumerate(categories):
+        for second in categories[i + 1 :]:
+            assert not (first & second)
+    # Every viewport mode and every workspace mode is a work mode; the
+    # workspaces are the work modes that own their own centre pane.
     assert modes.VIEWPORT_MODES < modes.WORK_MODES
+    assert modes.WORKSPACE_MODES < modes.WORK_MODES
 
 
 def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():

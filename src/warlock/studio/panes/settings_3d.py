@@ -211,8 +211,29 @@ def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> No
     go()
 
 
-def upload(ctx: Any, path: Path) -> None:
-    """Start a mesh job from an image on disk (a picker, or a dropped file)."""
+def upload_bytes(ctx: Any, data: bytes) -> None:
+    """Start a mesh job from pixels that are already in memory.
+
+    The path ``upload`` takes for a file, for a caller that has rendered the
+    picture rather than read it -- Build mode's "send to 3D", which draws the
+    document offscreen on the frame thread and hands the bytes over. The form
+    values are read here for the same reason ``upload`` reads them here: they
+    are UI state, and the task thread has no business touching them.
+    """
+    kwargs = _upload_kwargs(ctx)
+
+    def run():
+        return svc_jobs.create_job(ctx.svc, image=data, **kwargs)
+
+    ctx.submit("submit", run)
+
+
+def _upload_kwargs(ctx: Any) -> dict[str, Any]:
+    """The 3D form as create_job keyword arguments.
+
+    Shared by both upload paths so a form field cannot be honoured for a
+    dropped file and quietly ignored for a rendered one.
+    """
     form = ctx.state.form_3d
     kwargs: dict[str, Any] = {"kind": "image"}
     if form["platform"]:
@@ -230,6 +251,12 @@ def upload(ctx: Any, path: Path) -> None:
         kwargs["rig"] = True
         if form["rig_template"]:
             kwargs["rig_template"] = form["rig_template"]
+    return kwargs
+
+
+def upload(ctx: Any, path: Path) -> None:
+    """Start a mesh job from an image on disk (a picker, or a dropped file)."""
+    kwargs = _upload_kwargs(ctx)
 
     # The form values are read here, on the frame thread, because they are UI
     # state; the *file* is read in the task, because a large one would freeze

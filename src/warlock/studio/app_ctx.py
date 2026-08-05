@@ -42,6 +42,10 @@ class Ctx:
     # Set by the App, which owns the task keys these results come back on.
     load_presets: Any = lambda _template: None
     refresh_rig_data: Any = lambda: None
+    # Build's "send to 3D": an offscreen GL draw on the frame thread, which is
+    # the App's business rather than a pane's. None until the App attaches it,
+    # so a headless caller gets a clear refusal rather than a half-drawn frame.
+    build_send_to_3d: Any = None
     guidance: dict[str, Any] = field(default_factory=dict)
     sheet_options: dict[str, Any] = field(default_factory=dict)
     # The monitor scale sampled at startup, kept apart from tokens.SCALE so the

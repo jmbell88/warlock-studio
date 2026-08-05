@@ -89,6 +89,11 @@ def _choose(ctx: Any) -> None:
     imgui.dummy((0, sp(8)))
     if _tile(ctx, "inker", icons.BRUSH, "Inker", "A canvas, or an image you already have."):
         start_inker(ctx)
+
+    if _tile(
+        ctx, "build", icons.RULER, "Build", "Block a shape out from primitives, by hand."
+    ):
+        start_build(ctx)
     imgui.dummy((0, sp(8)))
     if _tile(ctx, "open", icons.FOLDER_OPEN, "Open existing", "Everything already generated."):
         ctx.state.landing_view = "open"
@@ -126,6 +131,13 @@ def start_inker(ctx: Any) -> None:
     """Inker keeps whatever was open: unlike the two generate panes, there is
     no "fresh form" here -- the documents *are* the work."""
     ctx.state.mode = "inker"
+    _leave(ctx)
+
+
+def start_build(ctx: Any) -> None:
+    """Build keeps whatever was open, as Inker does: the documents *are* the
+    work, and there is no form to reset."""
+    ctx.state.mode = "build"
     _leave(ctx)
 
 
