@@ -10,23 +10,45 @@ rather than generated.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from PIL import Image, ImageDraw
 
 from warlock.service import derive as svc_derive
+from warlock.service import export as svc_export
 from warlock.service import files as svc_files
 from warlock.service.errors import NotFound, NotReady
+
+
+def _draw(job_dir, box):
+    im = Image.new("RGB", (128, 128), (200, 200, 200))
+    ImageDraw.Draw(im).rectangle(box, fill=(40, 40, 40))
+    im.save(job_dir / "input.png")
 
 
 def _reference(svc, *, status="done", stage="reference"):
     job_id = svc.store.create("text", "a barrel", {"seed": 1}, stage=stage, status=status)
     job_dir = svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    im = Image.new("RGB", (128, 128), (200, 200, 200))
-    ImageDraw.Draw(im).rectangle((32, 24, 96, 104), fill=(40, 40, 40))
-    im.save(job_dir / "input.png")
+    _draw(job_dir, (32, 24, 96, 104))
     return job_id
+
+
+def _hand_edit(svc, job_id, box=(8, 8, 40, 40)):
+    """Overwrite input.png the way save_edited_image does, newer than anything.
+
+    The explicit utime is not a workaround for a fast test: mtime granularity
+    is a property of the filesystem, and pinning the ordering is what makes
+    these assertions about the staleness rule rather than about how long a PNG
+    encode happened to take.
+    """
+    job_dir = svc.job_dir(job_id)
+    _draw(job_dir, box)
+    source = job_dir / "input.png"
+    latest = max(p.stat().st_mtime_ns for p in job_dir.iterdir())
+    os.utime(source, ns=(latest + 1_000_000_000, latest + 1_000_000_000))
+    return job_dir
 
 
 def test_an_icon_is_derived_on_first_request(svc):
@@ -52,7 +74,9 @@ def test_a_sprite_is_trimmed_to_the_subject(svc):
         assert im.size == (65, 81)
 
 
-@pytest.mark.parametrize("name,size", [("pixel_32.png", 32), ("pixel_64.png", 64)])
+@pytest.mark.parametrize(
+    "name,size", [("pixel_32.png", 32), ("pixel_64.png", 64), ("pixel_128.png", 128)]
+)
 def test_each_pixel_size_is_its_own_artifact(svc, name, size):
     job_id = _reference(svc)
     with Image.open(svc_derive.get_file(svc, job_id, name)) as im:
@@ -138,6 +162,198 @@ def test_two_artifacts_derived_at_once_both_land_in_the_manifest(svc):
 
     manifest = json.loads((svc.job_dir(job_id) / "manifest.json").read_text("utf-8"))
     assert set(manifest["artifacts"]) == {"icon.png", "pixel_32.png"}
+
+
+def test_an_edited_reference_derives_its_exports_again(svc):
+    # get_file caches on freshness, not existence. A hand edit or a revert
+    # rewrites input.png in place, and an export older than it depicts pixels
+    # that are gone -- which, cached on existence, it would depict forever.
+    job_id = _reference(svc)
+    with Image.open(svc_derive.get_file(svc, job_id, "sprite.png")) as im:
+        assert im.size == (65, 81)
+
+    _hand_edit(svc, job_id, box=(8, 8, 40, 40))
+
+    with Image.open(svc_derive.get_file(svc, job_id, "sprite.png")) as im:
+        assert im.size == (33, 33)
+
+
+def test_an_edit_drops_the_manifest_entries_it_invalidates(svc):
+    # The manifest must not outlive its entries. An entry is a claim about one
+    # file's pivot, alpha and matte, so an entry for an export that was not
+    # re-derived is a verdict on an image the user has replaced.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    svc_derive.get_file(svc, job_id, "sprite.png")
+
+    job_dir = _hand_edit(svc, job_id)
+    svc_derive.get_file(svc, job_id, "icon.png")
+
+    manifest = json.loads((job_dir / "manifest.json").read_text("utf-8"))
+    assert set(manifest["artifacts"]) == {"icon.png"}
+    # And the surviving entry describes the new pixels, not the old ones.
+    assert manifest["artifacts"]["icon.png"]["source"] == [128, 128]
+    assert manifest["artifacts"]["icon.png"]["trim"] == [8, 8, 41, 41]
+
+
+def test_a_revert_invalidates_the_exports_of_the_edit(svc):
+    # Driven through the real editor calls, because revert is the one write
+    # where the content changes and the timestamp could go *backwards*: the
+    # backup was copied when the first edit was made and copyfile does not
+    # preserve mtimes, so a restored input.png would carry that older moment
+    # and leave the edit's exports looking current.
+    import io
+    import time
+
+    job_id = _reference(svc)
+    job_dir = svc.job_dir(job_id)
+
+    buf = io.BytesIO()
+    edited = Image.new("RGB", (128, 128), (200, 200, 200))
+    ImageDraw.Draw(edited).rectangle((8, 8, 40, 40), fill=(40, 40, 40))
+    edited.save(buf, "PNG")
+    svc_files.save_edited_image(svc, job_id, buf.getvalue())
+
+    with Image.open(svc_derive.get_file(svc, job_id, "sprite.png")) as im:
+        assert im.size == (33, 33)
+
+    # Age everything, so the revert's own timestamp is unambiguously newer
+    # whatever the host clock's granularity is -- Windows file times advance in
+    # ~15 ms steps, which two writes in one test can easily share. This is what
+    # keeps the assertion about the rule instead of about the clock.
+    old = time.time_ns() - 5_000_000_000
+    for entry in job_dir.iterdir():
+        os.utime(entry, ns=(old, old))
+
+    svc_files.revert_reference(svc, job_id)
+
+    with Image.open(svc_derive.get_file(svc, job_id, "sprite.png")) as im:
+        assert im.size == (65, 81)
+
+
+def test_a_manifest_asked_for_after_an_edit_claims_nothing_stale(svc):
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    _hand_edit(svc, job_id)
+
+    manifest = json.loads(svc_derive.get_file(svc, job_id, "manifest.json").read_text("utf-8"))
+
+    assert manifest["artifacts"] == {}
+
+
+def test_a_manifest_entry_goes_away_with_its_artifact(svc):
+    # Nothing deletes a 2D export today, but the entry outliving the file is
+    # the same failure as the entry outliving the pixels, and one rule covers
+    # both: an entry survives only while its file is on disk and current.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    job_dir = svc.job_dir(job_id)
+    (job_dir / "icon.png").unlink()
+
+    svc_derive.get_file(svc, job_id, "sprite.png")
+
+    manifest = json.loads((job_dir / "manifest.json").read_text("utf-8"))
+    assert set(manifest["artifacts"]) == {"sprite.png"}
+
+
+def test_a_bulk_export_never_zips_a_stale_2d_artifact(svc):
+    # bulk_export deliberately does not derive on demand, so freshness is the
+    # only thing keeping a superseded icon out of the zip.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    assert svc_export.collect(svc, [job_id], ["icon.png"])
+
+    _hand_edit(svc, job_id)
+
+    assert svc_export.collect(svc, [job_id], ["icon.png"]) == []
+    # An artifact that is not a 2D export is unaffected by the same gate.
+    assert svc_export.collect(svc, [job_id], ["input.png"])
+
+
+def test_the_manifest_records_a_hand_edit_beside_the_recipe(svc):
+    # The recipe hash claims a seed and a model produced these pixels. After an
+    # edit that is no longer the whole truth, which is the reason _remeasure
+    # records the flag at all -- so it has to travel with the claim.
+    job_id = svc.store.create(
+        "text",
+        "a barrel",
+        {"seed": 1, "recipe": {"reference": {"seed": 1}}, "hand_edited": True},
+        stage="reference",
+        status="done",
+    )
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _draw(job_dir, (32, 24, 96, 104))
+
+    svc_derive.get_file(svc, job_id, "icon.png")
+
+    manifest = json.loads((job_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["hand_edited"] is True
+    assert manifest["recipe"] is not None
+
+
+def test_an_untouched_reference_is_not_claimed_to_be_hand_edited(svc):
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    manifest = json.loads((svc.job_dir(job_id) / "manifest.json").read_text("utf-8"))
+    assert manifest["hand_edited"] is False
+
+
+def test_a_corrupt_manifest_is_rebuilt_rather_than_failing_the_export(svc):
+    # Every entry is reproducible by re-deriving the artifact it describes, so
+    # a truncated manifest costs metadata and never an export -- but it must
+    # not be *silently* merged into either, which would produce valid JSON
+    # around whatever survived the truncation.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "icon.png")
+    job_dir = svc.job_dir(job_id)
+    (job_dir / "manifest.json").write_text('{"artifacts": {"icon.p', encoding="utf-8")
+
+    svc_derive.get_file(svc, job_id, "sprite.png")
+
+    manifest = json.loads((job_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["job"] == job_id
+    assert set(manifest["artifacts"]) == {"sprite.png"}
+
+
+def test_a_manifest_that_is_not_an_object_is_replaced(svc):
+    job_id = _reference(svc)
+    job_dir = svc.job_dir(job_id)
+    (job_dir / "manifest.json").write_text("[1, 2, 3]", encoding="utf-8")
+    _hand_edit(svc, job_id, box=(32, 24, 96, 104))
+
+    svc_derive.get_file(svc, job_id, "icon.png")
+
+    manifest = json.loads((job_dir / "manifest.json").read_text("utf-8"))
+    assert manifest["version"] == 1
+    assert set(manifest["artifacts"]) == {"icon.png"}
+
+
+def test_an_image_with_no_subject_refuses_rather_than_writing_a_blank(svc):
+    # A fully transparent icon.png is indistinguishable from a successful
+    # export until somebody opens it, so NoSubject becomes NotReady and no
+    # file is written at all.
+    job_id = _reference(svc)
+    job_dir = svc.job_dir(job_id)
+    Image.new("RGB", (64, 64), (200, 200, 200)).save(job_dir / "input.png")
+
+    # The message is asserted because "file not ready" is the generic refusal
+    # this same call makes for half a dozen other reasons; without it the test
+    # would pass on any of them.
+    with pytest.raises(NotReady, match="no subject"):
+        svc_derive.get_file(svc, job_id, "icon.png")
+    assert not (job_dir / "icon.png").exists()
+
+
+def test_every_2d_artifact_has_a_derivation():
+    # The table and the branches in _derive_2d have to agree: an artifact added
+    # to DERIVED_2D and nowhere else would reach a request before anyone found
+    # out. Caught here, at edit time, instead.
+    assert set(svc_files.DERIVED_2D) == {
+        svc_derive.MANIFEST,
+        "icon.png",
+        "sprite.png",
+    } | set(svc_files.PIXEL_ARTIFACTS)
 
 
 def test_a_mesh_job_cannot_derive_a_sprite(svc):

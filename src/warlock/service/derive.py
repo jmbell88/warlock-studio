@@ -80,7 +80,11 @@ def get_file(svc: WarlockService, job_id: str, name: str) -> Path:
                     # "this model has no textures" is a fact about the mesh,
                     # not a fault -- the artifact simply cannot exist.
                     raise NotReady(str(exc)) from exc
-    if not path.exists() and name in files.DERIVED_2D:
+    # Freshness rather than existence: a hand edit or a revert rewrites
+    # input.png in place, and an artifact older than it is a picture of pixels
+    # that are gone. files.fresh_2d answers "missing" and "stale" the same way
+    # on purpose -- both mean derive it again.
+    if name in files.DERIVED_2D and not files.fresh_2d(job_dir, name):
         _derive_2d(svc, job, job_id, job_dir, name)
     if not path.exists():
         raise NotReady("file not ready")
@@ -101,10 +105,15 @@ def derivable_2d(name: str) -> bool:
     return name in files.DERIVED_2D
 
 
-# The manifest is written under its own lock, always taken *inside* the
-# artifact's. Two derivations of different artifacts genuinely race for it, and
-# a consistent order is the only thing standing between that and a deadlock --
-# nothing anywhere may take the manifest lock first.
+# The manifest's name, and with it the lock discipline around it. Deriving an
+# artifact takes that artifact's lock and the manifest's *inside* it, never the
+# other way about: two derivations of different artifacts genuinely race for
+# the manifest, and a consistent order is the only thing standing between that
+# and a deadlock. The single path that does not nest the two is a request for
+# the manifest itself, where they would be one and the same non-reentrant lock
+# -- it takes the manifest lock alone (see _derive_2d), which leaves the
+# manifest lock innermost on every path there is. Nothing anywhere may hold the
+# manifest lock and then reach for an artifact's.
 MANIFEST = "manifest.json"
 
 
@@ -135,8 +144,10 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
         return
     with svc.convert_lock(job_id, name):
         # Re-checked inside the lock, for the reason the mesh exports give:
-        # whoever waited here was waiting for exactly this file.
-        if (job_dir / name).exists():
+        # whoever waited here was waiting for exactly this file. Freshness
+        # again, not existence -- a stale artifact is one the waiter wants
+        # rebuilt, not one it can be handed.
+        if files.fresh_2d(job_dir, name):
             return
         with Image.open(source) as image:
             image.load()
@@ -146,8 +157,16 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
                     out, meta = asset2d.icon(image, mask)
                 elif name == "sprite.png":
                     out, meta = asset2d.sprite(image, mask)
-                else:
+                elif name in files.PIXEL_ARTIFACTS:
                     out, meta = asset2d.pixel(image, mask, size=files.PIXEL_ARTIFACTS[name])
+                else:
+                    # Unreachable while DERIVED_2D and the branches above agree,
+                    # which test_every_2d_artifact_has_a_derivation asserts at
+                    # edit time. Spelled out anyway so that a seventh artifact
+                    # added to the tuple and nowhere else surfaces as a service
+                    # error the UI can show, rather than as a bare KeyError out
+                    # of a dict lookup.
+                    raise Failed(f"no derivation for {name}")
             except asset2d.NoSubject as exc:
                 # A fact about the image, not a fault -- the same shape
                 # glb_to_textures_zip's "this model has no textures" takes.
@@ -175,6 +194,16 @@ def _write_manifest(
     Read-modify-write under the manifest's own lock, because that is what it
     is: several artifacts derived concurrently each add their own entry, and
     a whole-file write from a stale read would drop whichever landed first.
+
+    The merge prunes as well as adds, and that is the half that keeps the
+    manifest honest. An entry describes a file: its pivot, its alpha, which
+    matte cut it. So an entry whose file is gone -- or is stale, because a hand
+    edit rewrote input.png under it -- is a claim about pixels nobody can look
+    at, and after an edit the whole set of them would be a verdict on a deleted
+    image. Pruning against ``fresh_2d`` is deliberately the *only* mechanism
+    here: dropping the file wholesale when it is itself stale would say the
+    same thing in a second way, and would still leave the deleted-artifact case
+    unhandled, whereas asking the freshness question per entry handles both.
     """
     import json
 
@@ -185,18 +214,33 @@ def _write_manifest(
         try:
             manifest = json.loads(path.read_text("utf-8"))
         except (OSError, ValueError):
+            # A truncated or hand-mangled manifest starts again from nothing.
+            # Every entry in it is reproducible by re-deriving the artifact it
+            # describes, so the recoverable loss is preferable to failing an
+            # export on a file that is pure metadata.
             manifest = {}
         if not isinstance(manifest, dict):
             manifest = {}
         manifest.setdefault("version", 1)
         manifest["job"] = job_id
         manifest["prompt"] = job.get("prompt") or ""
-        manifest["recipe"] = asset2d.recipe_hash(
-            (job.get("params") or {}).get("recipe", {}).get("reference")
-        )
-        artifacts = manifest.setdefault("artifacts", {})
+        params = job.get("params") or {}
+        manifest["recipe"] = asset2d.recipe_hash((params.get("recipe") or {}).get("reference"))
+        # The recipe alone claims a seed and a model produced these pixels,
+        # which after a hand edit is no longer the whole truth -- the same
+        # reason files._remeasure records the flag in the first place. B4 shows
+        # the manifest to the user, so the caveat has to travel with the claim.
+        manifest["hand_edited"] = bool(params.get("hand_edited"))
+        previous = manifest.get("artifacts")
+        artifacts = previous if isinstance(previous, dict) else {}
+        artifacts = {
+            key: entry
+            for key, entry in artifacts.items()
+            if key != name and files.fresh_2d(job_dir, key)
+        }
         if name is not None and meta is not None:
             artifacts[name] = meta
+        manifest["artifacts"] = artifacts
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         os.replace(tmp, path)

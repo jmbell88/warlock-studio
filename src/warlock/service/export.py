@@ -44,7 +44,11 @@ def collect(svc: WarlockService, ids: list[str], names: list[str]) -> list[tuple
         job_dir = svc.job_dir(job_id)
         for name in names:
             path = job_dir / name
-            if path.exists() and files.ready(job, job_dir, name):
+            # fresh_2d as well as ready: this is a serving path that never
+            # derives, so without it a batch would zip an icon left over from
+            # a reference the user has since edited. It answers True for every
+            # name that is not a 2D export, so nothing else changes.
+            if path.exists() and files.ready(job, job_dir, name) and files.fresh_2d(job_dir, name):
                 out.append((f"{job_id}/{name}", path))
     return out
 

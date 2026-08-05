@@ -283,6 +283,15 @@ def revert_reference(svc: Any, job_id: str) -> dict[str, Any]:
     if not original.exists():
         raise Conflict("this reference has no unedited original")
     os.replace(original, dest)
+    # Touched, because a restore is the one write here that would otherwise
+    # arrive wearing an *older* timestamp than the pixels it replaces: the
+    # backup was copied when the first edit was made, and shutil.copyfile does
+    # not preserve mtimes, so the restored file carries that moment rather than
+    # this one. fresh_2d compares every derived export against this mtime, so
+    # without the touch a revert would leave the exports of the edit looking
+    # current -- the exact staleness the comparison exists to catch, in the
+    # only direction where the content changes and the clock goes backwards.
+    os.utime(dest)
     _remeasure(svc, job_id, dest, hand_edited=False)
     return {"ok": True}
 
@@ -356,6 +365,43 @@ LISTED = (
     "thumb.png",
     "error.log",
 )
+
+
+def fresh_2d(job_dir: Path, name: str) -> bool:
+    """Whether a derived 2D artifact still describes the input.png on disk.
+
+    An mtime comparison, and deliberately the same idiom -- for the same
+    reason -- as ``inker_working_status``'s. ``input.png`` has several writers:
+    ``save_edited_image``, ``revert_reference``, and the Inker's linked save,
+    which writes input.png *first* precisely so that this comparison decides
+    staleness. Invalidating by unlinking beside each of them is a rule every
+    writer added later has to remember, and the one that forgets serves an icon
+    of pixels that no longer exist -- forever, because ``get_file`` caches on
+    existence. A file older than its source cannot be forgotten about, because
+    the question is asked at the only moment that matters: when somebody wants
+    to serve it.
+
+    A name that is not derived from input.png is always fresh. This is a
+    freshness rule and not an existence check, so any caller may ask it of any
+    name -- but for a 2D artifact "does not exist" and "is stale" are the same
+    answer, which is what lets ``get_file`` treat both as "derive it".
+    """
+    if name not in DERIVED_2D:
+        return True
+    path = job_dir / name
+    source = job_dir / "input.png"
+    try:
+        if not path.exists():
+            return False
+        if not source.exists():
+            # Nothing left to be stale against. ``ready`` has already refused
+            # the whole set when input.png is missing, so this is reachable
+            # only in a race, and the artifact is the better answer than a
+            # spurious re-derivation that has no source to read.
+            return True
+        return path.stat().st_mtime_ns >= source.stat().st_mtime_ns
+    except OSError:
+        return False
 
 
 def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
