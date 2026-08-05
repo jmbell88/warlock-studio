@@ -13,8 +13,9 @@ and it already handles an unrigged mesh -- every pose call in it is guarded on
 The camera constants below are the whole reason ``bench calibrate`` exists.
 Nothing in this repo has established that TRELLIS aligns a reconstruction to
 its input camera, and PROMPT_TEMPLATE asks for a 3/4 perspective view rather
-than an axis-aligned front. Until a sweep says otherwise these are a guess,
-and the metric that depends on them says so.
+than an axis-aligned front. The sweep has now been run and it says there is no
+fixed matched view at all, so these remain a guess permanently -- see the note
+on the constants below.
 """
 
 from __future__ import annotations
@@ -29,10 +30,16 @@ from ..pipelines import sheet
 # added before Blender sees a cell. Column 0 is by construction the matched
 # view and the other seven are its turntable.
 #
-# UNCALIBRATED. Set these from `python -m warlock.bench calibrate` over 5-10
-# real jobs spanning categories, and paste the table here -- the pattern
-# Config.trellis_band follows. If the argmax scatters across items there is no
-# fixed match, and the metric becomes max-over-8-views instead.
+# UNCALIBRATED, and now measurably uncalibratable -- do not repeat the sweep
+# expecting a number. `python -m warlock.bench calibrate --all` was run on
+# 2026-08-05 over 37 finished jobs spanning every category in core-v1, and the
+# per-job argmax scattered by 330 degrees (silhouette_iou) and 300 degrees
+# (dino_cosine) against a STABLE_YAW_SPREAD of 30. The two metrics do not agree
+# with each other either, and it scatters within every category as well as
+# across them: there is no fixed matched view, so these stay a guess and column
+# 0 is not the matched view of anything. Any fidelity metric built on top of
+# this has to be max-over-8-views. See docs/measurements/
+# 2026-08-04-view-calibration.md for the tables and the reasoning.
 REFERENCE_YAW = 0.0
 REFERENCE_ELEVATION = 20.0
 
