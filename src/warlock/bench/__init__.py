@@ -2,9 +2,12 @@
 
 This package exists to answer one question the app cannot: did a change make
 the assets better, or does it only feel that way? It is a developer tool, not
-a feature -- nothing in ``studio/`` or ``service/`` imports it, and it reaches
-the app the same way a user does, through ``service.jobs.create_job`` on a
-real ``studio.runtime.Runtime``.
+a feature -- nothing in ``studio/`` or ``service/`` reaches into it to run a
+sweep or score anything, and it reaches the app the same way a user does,
+through ``service.jobs.create_job`` on a real ``studio.runtime.Runtime``. The
+one exception is ``bench.findings``, a pure-stdlib, torch-free reader of
+``findings.json`` that the generate panes import to show an "accept 6/8"
+hint next to a field -- reading a report is not running a benchmark.
 
 The split mirrors pipelines/sheet.py: everything decidable (the suite, the
 recipes, the manifest, the grid, the aggregation in ``score.py``) is pure and

@@ -59,6 +59,30 @@ def test_load_corrupt_json_returns_none(tmp_path):
     assert findings_mod.load(path) is None
 
 
+def test_load_corrupt_json_caches_by_mtime_not_none(tmp_path, monkeypatch):
+    """A corrupt-but-present file's stat() succeeds every time, so caching
+    the miss as (None, None) would never match the real mtime and every call
+    would re-read and re-parse -- exactly what the mtime gate exists to
+    avoid. The second call on an unchanged corrupt file must not re-read."""
+    findings_mod._CACHE.clear()
+    path = tmp_path / "findings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    calls = []
+    orig_read_text = type(path).read_text
+
+    def counting_read_text(self, *a, **k):
+        calls.append(self)
+        return orig_read_text(self, *a, **k)
+
+    monkeypatch.setattr(type(path), "read_text", counting_read_text)
+
+    assert findings_mod.load(path) is None
+    assert findings_mod.load(path) is None
+    assert len(calls) == 1
+
+
 def test_load_reads_a_valid_file(tmp_path):
     findings_mod._CACHE.clear()
     path = tmp_path / "findings.json"

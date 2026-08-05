@@ -39,7 +39,12 @@ def load(path: Path) -> dict[str, Any] | None:
 
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        _CACHE[path] = (None, None)
+        # Cached by *this* mtime, not None: stat() succeeds for a
+        # corrupt-but-present file, so caching (None, None) here would never
+        # match a real mtime and every call would re-read and re-parse the
+        # same broken file, forever -- exactly the per-frame cost the mtime
+        # gate exists to avoid.
+        _CACHE[path] = (mtime, None)
         return None
 
     _CACHE[path] = (mtime, doc)
