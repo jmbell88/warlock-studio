@@ -19,6 +19,7 @@ from imgui_bundle import imgui
 
 from ... import guidance as guidancelib
 from ... import models as modelslib
+from ...bench import findings as findings_lib
 from ...pipelines import prompt as prompt_lib
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
@@ -87,6 +88,17 @@ def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], 
     return tuple(out)
 
 
+def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
+    """The sweep's own verdict on this field's current value, or None.
+
+    Read fresh every frame -- ``findings.load`` is mtime-cached, so the common
+    case (no bench dir, or an unchanged file) costs one ``stat()`` and never
+    blocks the frame loop.
+    """
+    doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
+    return findings_lib.hint(doc, param, value)
+
+
 def _guidance(ctx: Any, form: dict[str, Any]) -> None:
     for title, fields in guidance_groups(form):
         widgets.section(title)
@@ -96,6 +108,10 @@ def _guidance(ctx: Any, form: dict[str, Any]) -> None:
                 widgets.field_label(field.replace("_", " "))
                 imgui.set_next_item_width(-1)
                 form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field), 0)
+                hint = _findings_hint(ctx, field, form[field])
+                if hint is not None:
+                    imgui.same_line()
+                    imgui.text_disabled(hint)
             imgui.end_table()
     if form.get("output") == "tile":
         # platform is a hint about how much detail to draw an *object* with,

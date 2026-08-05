@@ -14,6 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_UPLOAD_BYTES, random_seed
@@ -42,6 +43,10 @@ def draw(ctx: Any) -> None:
         "separate thing -- a hint in the prompt."
     )
     form["profile"] = widgets.combo("Budget", form["profile"], PROFILES)
+    hint = _findings_hint(ctx, "profile", form["profile"])
+    if hint is not None:
+        imgui.same_line()
+        imgui.text_disabled(hint)
 
     changed, size = imgui.input_float("Size (m)", float(form["size_m"]), 0.0, 0.0, "%.2f")
     if changed:
@@ -74,6 +79,12 @@ def draw(ctx: Any) -> None:
 
 
 # --- pieces -----------------------------------------------------------------
+
+
+def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
+    """Same lookup as the 2D pane's -- see ``settings_2d._findings_hint``."""
+    doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
+    return findings_lib.hint(doc, param, value)
 
 
 def _platform_options(ctx: Any) -> list[tuple[str, str]]:
