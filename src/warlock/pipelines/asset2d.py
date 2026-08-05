@@ -125,7 +125,14 @@ def icon(
     )
     resized = cropped.resize(target, Image.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    canvas.paste(resized, ((size - target[0]) // 2, (size - target[1]) // 2), resized)
+    # A straight copy, with no mask argument. Handing an RGBA image to paste as
+    # its own mask does not composite it: PIL mixes every band including alpha
+    # against the destination, so a rim pixel comes back as ``a*a/255`` with its
+    # RGB dragged toward the transparent black canvas. The LANCZOS resample above
+    # produces exactly that partial-alpha rim, so the masked form haloed every
+    # icon and rounded rim alpha below ~16 away entirely. The canvas is empty,
+    # so there is nothing to composite against in the first place.
+    canvas.paste(resized, ((size - target[0]) // 2, (size - target[1]) // 2))
     return (
         canvas,
         {
@@ -143,23 +150,37 @@ def sprite(
 ) -> tuple[PILImage, dict[str, Any]]:
     """The subject alone, at its native resolution, with a pivot.
 
-    No canvas and no resize: a sprite is placed by its pivot, so padding it to
-    a square would only move the pivot away from the thing it is meant to
-    anchor. Bottom-centre is the default because that is where an engine puts
-    a standing character's feet, and it is recorded rather than assumed --
-    an importer that guesses is an importer that is wrong for half a set.
+    No resize, and by default no canvas either: a sprite is placed by its
+    pivot, so anything that grows the image has to leave the pivot on the
+    subject or it has moved the thing the pivot was meant to anchor. Padding
+    exists for the engines that need a bleed margin around a sprite, and it is
+    the *subject's* bottom-centre that is recorded either way -- measured from
+    the padded canvas's own origin, so ``pivot_rule`` stays literally true at
+    any pad rather than only at zero. Bottom-centre because that is where an
+    engine puts a standing character's feet, and it is recorded rather than
+    assumed -- an importer that guesses is an importer that is wrong for half
+    a set.
+
+    ``pad`` and ``margin`` are both recorded, as ``icon`` records its own pad:
+    a consumer that wants the subject's own bounds back needs the margin in
+    pixels, and rounding it out of a fraction at the far end would not always
+    land on the same pixel we did.
     """
     from PIL import Image
 
     cropped, box = _trimmed(image, mask)
-    if pad:
-        margin = int(round(max(cropped.size) * pad))
+    subject = cropped.size
+    margin = int(round(max(cropped.size) * pad)) if pad else 0
+    if margin:
         canvas = Image.new(
             "RGBA",
             (cropped.width + 2 * margin, cropped.height + 2 * margin),
             (0, 0, 0, 0),
         )
-        canvas.paste(cropped, (margin, margin), cropped)
+        # No mask argument, for the reason spelled out in ``icon``: an RGBA
+        # image used as its own paste mask has its alpha squared and its
+        # colour pulled toward the empty canvas.
+        canvas.paste(cropped, (margin, margin))
         cropped = canvas
     return (
         cropped,
@@ -168,7 +189,9 @@ def sprite(
             "canvas": [cropped.width, cropped.height],
             "trim": list(box),
             "source": [image.width, image.height],
-            "pivot": [cropped.width / 2.0, float(cropped.height)],
+            "pad": float(pad),
+            "margin": margin,
+            "pivot": [margin + subject[0] / 2.0, float(margin + subject[1])],
             "pivot_rule": "bottom-centre",
         },
     )
@@ -188,7 +211,6 @@ def pixel(
     which on a cutout means most of the palette describing the transparent
     background.
     """
-    import numpy as np
     from PIL import Image
 
     cropped, box = _trimmed(image, mask)
@@ -205,14 +227,11 @@ def pixel(
         flat = small.convert("RGB").quantize(
             colors=palette, method=Image.Quantize.MEDIANCUT
         )
+        # The alpha is carried around the quantize rather than through it, and
+        # put back untouched: median cut only ever rewrites RGB, so the cutout
+        # the resample produced survives the palette reduction exactly.
         small = flat.convert("RGBA")
         small.putalpha(alpha)
-        # Re-cut to the alpha we started with: quantize is nearest-in-palette
-        # per pixel and knows nothing about the cutout, so a background pixel
-        # can pick up a subject colour and reappear once alpha is restored.
-        arr = np.array(small)
-        arr[:, :, 3] = np.asarray(alpha)
-        small = Image.fromarray(arr, "RGBA")
     return (
         small,
         {

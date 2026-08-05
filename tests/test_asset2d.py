@@ -74,6 +74,50 @@ def test_icon_padding_leaves_a_margin_on_the_long_axis():
     assert extent(padded) < extent(tight)
 
 
+def _disc(size=(128, 128), box=(14, 14, 113, 113), colour=(255, 0, 0)):
+    """A round subject, so the downscale leaves a real partial-alpha rim."""
+    im = Image.new("RGB", size, (200, 200, 200))
+    ImageDraw.Draw(im).ellipse(box, fill=colour)
+    mask = np.asarray(im.convert("RGB")).sum(axis=2) < 500
+    return im, mask
+
+
+def test_an_icons_soft_rim_keeps_the_subjects_own_colour():
+    # Compositing the resample against the empty canvas *through its own alpha*
+    # premultiplies it: every rim pixel gets its colour dragged toward the
+    # transparent black it is drawn onto, which is a dark halo around every
+    # icon in the set. The subject is a single flat red, so any visible pixel
+    # that is not that red has been faded toward the background.
+    im, mask = _disc(colour=(255, 0, 0))
+
+    out, _meta = asset2d.icon(im, mask, size=48, pad=0.0)
+
+    arr = np.asarray(out)
+    visible = arr[:, :, 3] > 0
+    rim = visible & (arr[:, :, 3] < 255)
+    assert rim.sum() > 100, "no partial-alpha rim to test -- the fixture is wrong"
+    assert arr[:, :, 0][visible].min() == 255
+
+
+def test_an_icon_keeps_the_coverage_it_downsampled():
+    # The other half of the same mistake: using the resample as its own paste
+    # mask also squares the alpha, so the faintest rim pixels round away to
+    # nothing and the subject quietly loses area. A downscale by a normalised
+    # filter conserves coverage -- total alpha is the subject's area times the
+    # scale squared -- so the coverage the icon carries is checkable without
+    # reference to how it was resampled.
+    im, mask = _disc()
+    size = 48
+
+    out, meta = asset2d.icon(im, mask, size=size, pad=0.0)
+
+    left, top, right, bottom = meta["trim"]
+    scale = size / max(right - left, bottom - top)
+    expected = float(mask.sum()) * scale * scale
+    carried = np.asarray(out)[:, :, 3].astype(float).sum() / 255.0
+    assert carried == pytest.approx(expected, rel=0.005)
+
+
 def test_an_icon_records_where_it_trimmed_from():
     im, mask = _subject(box=(32, 20, 96, 100))
     _out, meta = asset2d.icon(im, mask)
@@ -92,6 +136,42 @@ def test_a_sprites_pivot_is_bottom_centre_by_default():
     im, mask = _subject(box=(32, 20, 96, 100))
     _out, meta = asset2d.sprite(im, mask)
     assert meta["pivot"] == [32.5, 81.0]
+
+
+def test_a_padded_sprites_pivot_stays_on_the_subjects_feet():
+    # Padding grows the canvas, and a pivot measured from the padded canvas's
+    # own bottom edge sits in the empty margin rather than on the subject --
+    # a whole set placed a few pixels into the floor, while pivot_rule still
+    # claims bottom-centre. The pivot must land on the subject at any pad.
+    im, mask = _subject(box=(32, 20, 96, 100))
+
+    _flush, plain = asset2d.sprite(im, mask)
+    out, meta = asset2d.sprite(im, mask, pad=0.1)
+
+    assert plain["margin"] == 0 and plain["pad"] == 0.0
+    assert meta["pivot_rule"] == "bottom-centre"
+
+    alpha = np.asarray(out)[:, :, 3]
+    x, y = meta["pivot"]
+    # The pivot is the subject's bottom edge: the last subject row is opaque,
+    # the row the pivot sits on is already margin.
+    assert alpha[int(y) - 1, int(x)] == 255
+    assert alpha[int(y), int(x)] == 0
+
+
+def test_a_padded_sprites_placement_is_derivable_from_its_metadata():
+    # An importer only ever sees the manifest. Without the margin recorded it
+    # cannot tell a padded sprite from a subject that simply has transparent
+    # edges, so it cannot put the subject back where it was.
+    im, mask = _subject(box=(32, 20, 96, 100))
+
+    _out, meta = asset2d.sprite(im, mask, pad=0.1)
+
+    left, top, right, bottom = meta["trim"]
+    margin = meta["margin"]
+    assert margin > 0
+    assert meta["canvas"] == [right - left + 2 * margin, bottom - top + 2 * margin]
+    assert meta["pivot"] == [margin + (right - left) / 2.0, float(margin + bottom - top)]
 
 
 def test_a_sprite_is_a_cutout_not_a_crop_of_the_background():
