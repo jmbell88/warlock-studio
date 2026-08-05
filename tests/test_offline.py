@@ -123,6 +123,7 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
         "warlock.pipelines.matting",
         "warlock.pipelines.reference",
         "warlock.pipelines.rank",
+        "warlock.pipelines.seam",
         "warlock.provenance",
     ],
 )

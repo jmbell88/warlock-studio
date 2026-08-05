@@ -133,12 +133,17 @@ class _StubPipe:
         self.scheduler = object()
         self.modes_during_call: list[str] = []
         self.raises: Exception | None = None
+        # Only set by the conditioning test. Absent by default so every other
+        # test's expected mode list is unchanged.
+        self.controlnet = None
 
     def disable_lora(self) -> None:
         pass
 
     def __call__(self, **_kwargs):
         self.modes_during_call = _modes(self.unet) + _modes(self.vae)
+        if self.controlnet is not None:
+            self.modes_during_call += _modes(self.controlnet)
         if self.raises is not None:
             raise self.raises
         return SimpleNamespace(images=[_StubImage()])
@@ -207,3 +212,23 @@ def test_a_tiled_generation_that_raises_leaves_the_next_one_untiled(stub_t2i, tm
     pipe.raises = None
     t2i.generate("a wooden crate", tmp_path / "b.png")
     assert pipe.modes_during_call == ["zeros"] * 4
+
+
+def test_an_attached_controlnet_is_patched_too(stub_t2i, monkeypatch, tmp_path):
+    # The hint branch is a separate module tree whose residuals are added into
+    # the UNet at every block, so leaving it zero-padded contributes a seam to
+    # a sample whose every other convolution wraps. The alternative -- refusing
+    # tile+Structure at the door -- would remove a legitimate combination
+    # (a tiling brick wall guided by a depth hint) to avoid a one-word fix.
+    t2i, pipe = stub_t2i
+    pipe.controlnet = _Net()
+    monkeypatch.setattr(t2i, "_conditioned", lambda cond: (pipe, {}, lambda: None))
+    cond = SimpleNamespace(as_dict=lambda: {})
+
+    t2i.generate("brick wall", tmp_path / "a.png", conditioning=cond, tile=True)
+
+    # unet, vae, then the ControlNet: six convs, all wrapping.
+    assert pipe.modes_during_call == ["circular"] * 6
+    # And restored with the rest -- the ControlNet is dropped by teardown, but
+    # a shared conv reached through it must not be left tiled.
+    assert _modes(pipe.controlnet) == ["zeros", "zeros"]

@@ -191,12 +191,16 @@ class Filters:
 def _kind_of(job: dict[str, Any]) -> str:
     """What the filter calls this row.
 
-    Not simply job["kind"]: a text job that stops at a reference and one that
-    goes on to a mesh are the same kind and different things to look for.
+    Not simply job["kind"]: a text job that stops at a reference, one that
+    stops at a tile and one that goes on to a mesh are all the same kind and
+    three different things to look for.
     """
     if job.get("kind") in ("rig", "sheet"):
         return job["kind"]
-    return "reference" if job.get("stage") == "reference" else "model"
+    stage = job.get("stage")
+    if stage in ("reference", "tile"):
+        return stage
+    return "model"
 
 
 @dataclass
@@ -343,6 +347,10 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
     if status != "done":
         return None
     files = job.get("files") or []
+    if job.get("stage") == "tile":
+        # No mesh, no rig: a tile's next step is to be exported, which the
+        # inspector's Export tab is. "Open" selects it and shows that tab.
+        return "open" if "input.png" in files else None
     if job.get("stage") == "reference":
         # A finished reference's next step is the mesh it exists for.
         return "promote" if "input.png" in files else None

@@ -160,9 +160,9 @@ def _open(ctx: Any) -> None:
 
 
 def _continue(ctx: Any, job: dict[str, Any]) -> None:
-    # The same reference/model split the library filter uses: a job that stops
-    # at an image opens in the pane that made it, anything else in 3D.
-    ctx.state.mode = "2d" if job.get("stage") == "reference" else "3d"
+    # The same reference/tile/model split the library filter uses: a job that
+    # stops at an image opens in the pane that made it, anything else in 3D.
+    ctx.state.mode = "2d" if job.get("stage") in ("reference", "tile") else "3d"
     _leave(ctx)
 
 

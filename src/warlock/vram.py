@@ -117,9 +117,11 @@ def estimate(
         if params.get("ip_adapter"):
             sdxl += IP_ENCODER_GIB
 
-    if stage == "reference":
-        # No reconstruction at all. Under coexist a warm trellis is still
-        # resident beside the pipe and its memory is not given back.
+    if stage in ("reference", "tile"):
+        # No reconstruction at all -- a tile never reaches trellis, and the
+        # circular-padding patch allocates nothing. Under coexist a warm
+        # trellis is still resident beside the pipe and its memory is not
+        # given back.
         return sdxl if exclusive else sdxl + TRELLIS_GIB
 
     trellis = _trellis_cost(params)

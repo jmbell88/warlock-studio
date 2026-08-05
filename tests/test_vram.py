@@ -215,3 +215,15 @@ def test_armed_answers_without_raising():
     from warlock import winjob
 
     assert isinstance(winjob.armed(), bool)
+
+
+def test_a_tile_costs_what_a_reference_costs():
+    # Same pipe, same size, one sample -- the circular padding changes no
+    # allocation. A stage the estimate did not know would fall through to the
+    # mesh branch and price a trellis run that never happens.
+    assert vram.estimate("text", "tile", {}, exclusive=True) == vram.estimate(
+        "text", "reference", {}, exclusive=True
+    )
+    assert vram.estimate("text", "tile", {}, exclusive=False) == vram.estimate(
+        "text", "reference", {}, exclusive=False
+    )

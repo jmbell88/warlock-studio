@@ -91,6 +91,7 @@ def _filters(ctx: Any) -> None:
         [
             ("all", "any kind"),
             ("reference", "references"),
+            ("tile", "tiles"),
             ("model", "meshes"),
             ("rig", "rigs"),
             ("sheet", "sheets"),
@@ -326,7 +327,14 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
     if action == "cancel":
         ctx.submit(f"cancel:{job_id}", svc_jobs.cancel_job, ctx.svc, job_id)
     elif action == "retry":
-        mode = "remesh" if "input.png" in (job.get("files") or []) else "reroll"
+        # A tile is excluded whatever it has on disk: rerun_job refuses to
+        # remesh one, so reaching for it here would turn the retry button into
+        # an error toast for the one stage that can never have a mesh.
+        mode = (
+            "remesh"
+            if "input.png" in (job.get("files") or []) and job.get("stage") != "tile"
+            else "reroll"
+        )
         ctx.submit(f"retry:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode=mode)
     elif action == "promote":
         ctx.state.source_job = job_id
@@ -335,7 +343,9 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id, template=_skeleton(ctx))
     elif action == "open":
         select(ctx, job_id)
-        ctx.state.mode = "3d"
+        # A job that stops at an image opens in the pane that made it. A tile
+        # has no mesh at all, so opening it in 3D would show an empty viewport.
+        ctx.state.mode = "2d" if job.get("stage") in ("reference", "tile") else "3d"
 
 
 def compare(ctx: Any, job_id: str) -> None:

@@ -536,8 +536,21 @@ class Text2Image:
                 # decoded through zero-padded convolutions grows a visible
                 # border, which is the failure that makes people reach for an
                 # inpainting pass they do not need.
+                #
+                # And the ControlNet, when one is attached. It is a separate
+                # module tree with its own Conv2d stack, and its residuals are
+                # added into the UNet at every block -- so a hint branch left
+                # zero-padded contributes a seam of its own to a sample whose
+                # every other convolution wraps. The de-dup in circular_padding
+                # is what makes passing it alongside the UNet safe: from_pipe
+                # shares components by identity, so the same conv can be
+                # reachable through both.
                 stack.enter_context(
-                    circular_padding(self._pipe.unet, getattr(self._pipe, "vae", None))
+                    circular_padding(
+                        self._pipe.unet,
+                        getattr(self._pipe, "vae", None),
+                        getattr(target, "controlnet", None),
+                    )
                 )
             # After from_pipe, never before: the adapters have to be set on the
             # pipeline object that is actually called.

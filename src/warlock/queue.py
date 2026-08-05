@@ -35,7 +35,8 @@ from typing import Any
 from . import errors, guidance, memlog, models, provenance, rigging, vram
 from .config import Config
 from .db import JobStore
-from .pipelines import control, reference
+from .pipelines import control, reference, seam
+from .pipelines import prompt as prompt_lib
 from .pipelines.trellis import TrellisServer
 from .progress import ProgressBus, TrellisProgressParser
 
@@ -704,10 +705,22 @@ class Worker:
             # a base switch frees the previous 7 GB pipe, and doing it here
             # keeps the stop-before-load ordering intact either way.
             t2i = await self._get_text2image(base_key)
+            is_tile = job.get("stage") == "tile"
             # The guidance fragments steer the subject; text2image's own
             # PROMPT_TEMPLATE still wraps this with the TRELLIS-friendly
             # single-object framing.
-            composed = guidance.compose_prompt(job["prompt"] or "", params)
+            #
+            # A tile's guidance is the surface half of the taxonomy only:
+            # category, silhouette and rarity describe an object that is
+            # deliberately not in the picture, and naming one gets an object.
+            # The template half of the same switch is generate()'s, chosen off
+            # the tile= flag below -- both have to move together, which is what
+            # prompt.build() mirrors for the preview.
+            composed = guidance.compose_prompt(
+                job["prompt"] or "",
+                params,
+                fields=prompt_lib.TILE_FIELDS if is_tile else None,
+            )
             # The reroll lives *inside* the try below, so however many samples
             # it draws there is still one load and one unload around all of
             # them: the VRAM handoff is a property of the stage, not of an
@@ -731,9 +744,24 @@ class Worker:
                             on_state=lambda s: self._t2i_state(job_id, s),
                             on_step=lambda i, n: self._t2i_step(job_id, i, n),
                             cancel_event=self._cancel.event,
+                            tile=is_tile,
                         )
                     )
                     params["composed_prompt"] = t2i.last_prompt or composed
+                    if is_tile:
+                        # A seam verdict, never a composition one: the rejection
+                        # rules below are all about where a *subject* sits, and
+                        # a tile has none -- so entering the reroll loop would
+                        # redraw it for failing a test it cannot pass. Advisory
+                        # and swallowed on failure, the same rule _audit_mesh
+                        # follows: the PNG is on disk and fine.
+                        try:
+                            params["seam_report"] = await asyncio.to_thread(
+                                seam.report, image_path
+                            )
+                        except Exception:
+                            log.exception("seam measurement failed for job %s", job_id)
+                        break
                     if not (is_reference or retries):
                         # Nothing to measure it for: a model-stage job with the
                         # retry off is measured a few lines further down by
@@ -813,23 +841,30 @@ class Worker:
                     # anything, so the VRAM-modes invariant is untouched.
                     await asyncio.to_thread(t2i.trim)
 
-            if job.get("stage") == "reference":
+            if job.get("stage") in ("reference", "tile"):
                 # The whole point of the split: the user judges the image before
                 # anything pays for a trellis run. The job is finished here --
                 # promotion creates a separate child job (app.promote_to_model).
-                _log_mem("after reference-only job")
+                # A tile never has a mesh stage at all, and is not promotable.
+                _log_mem("after image-only job")
                 return
         elif not image_path.exists():
             raise RuntimeError("image job has no uploaded input.png")
 
-        if job.get("stage") == "reference":
+        if job.get("stage") in ("reference", "tile"):
             # The text branch returns here itself, having just generated the
             # image. This catches the other kind: a reference whose pixels came
             # from an upload or the paint editor. Its stage says the job stops
             # before the mesh, and honouring that is a property of the *stage*,
             # not of how the image was made -- reading it off the kind is how a
             # painted reference used to buy an unasked-for trellis run.
-            _log_mem("after reference-only job")
+            #
+            # "tile" is here for the same reason rather than because it can
+            # happen: create_job refuses a non-text tile, so nothing should
+            # reach this line with that stage. But the check that stops a job
+            # short of trellis must be about the stage and nothing else, or a
+            # future door onto a tile inherits a two-minute reconstruction.
+            _log_mem("after image-only job")
             return
 
         if self._cancel.event.is_set():

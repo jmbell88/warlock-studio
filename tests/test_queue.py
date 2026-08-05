@@ -1773,3 +1773,141 @@ async def test_a_cancelled_retry_leaves_no_scratch_glb(
     assert not (job_dir / "best.glb").exists()
     assert not (job_dir / "best.source.glb").exists()
     store.close()
+
+
+# --- tiles ------------------------------------------------------------------
+
+
+async def test_a_tile_job_never_reaches_trellis(worker):
+    job_id = worker.store.create("text", "cobblestone", {"seed": 1}, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls == []
+    assert (worker.config.job_dir(job_id) / "input.png").exists()
+
+
+async def test_a_tile_job_asks_the_pipeline_to_tile(worker):
+    job_id = worker.store.create("text", "cobblestone", {"seed": 1}, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.tiles == [True]
+
+
+async def test_an_ordinary_reference_does_not_tile(worker):
+    job_id = worker.store.create("text", "a barrel", {"seed": 1}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker._text2image.tiles == [False]
+
+
+async def test_a_tile_composes_only_the_surface_half_of_the_taxonomy(worker):
+    # The half of the tile switch the worker owns. text2image chooses the
+    # template; the field subset is chosen here, and B6 shipped the template
+    # without it -- so a tile got the tileable framing wrapped around a prompt
+    # that still named a weapon.
+    from warlock import guidance
+
+    params = guidance.normalize({"material": "stone", "category": "weapon"})
+    params["seed"] = 1
+    job_id = worker.store.create("text", "cobblestone", params, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    composed = worker._text2image.prompts[0]
+    assert guidance.MATERIALS["stone"].prompt in composed
+    assert guidance.CATEGORIES["weapon"].prompt not in composed
+
+
+async def test_the_prompt_preview_mirror_agrees_with_the_worker_and_the_pipeline(worker):
+    # prompt.build() is a *mirror* of an assembly split across two modules --
+    # queue.py picks the field subset, text2image.generate picks the template
+    # -- and nothing else checks that the two agree. A tile is the first case
+    # where they can differ, because both halves change at once.
+    from warlock import guidance
+    from warlock.pipelines import prompt as prompt_lib
+
+    params = guidance.normalize({"material": "stone", "category": "weapon"})
+    params["seed"] = 1
+    tile_id = worker.store.create("text", "cobblestone", dict(params), stage="tile")
+    ref_id = worker.store.create("text", "cobblestone", dict(params), stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(ref_id)["status"] == "done")
+    await worker.shutdown()
+
+    tile_composed, ref_composed = worker._text2image.prompts
+    assert worker.store.get(tile_id)["status"] == "done"
+    # The template half is what generate() applies to the string the worker
+    # handed it; tests/test_tiling.py pins that it applies exactly these two.
+    assert prompt_lib.build("cobblestone", params, tile=True) == (
+        prompt_lib.TILE_TEMPLATE.format(prompt=tile_composed)
+    )
+    assert prompt_lib.build("cobblestone", params) == (
+        prompt_lib.PROMPT_TEMPLATE.format(prompt=ref_composed)
+    )
+
+
+async def test_a_tile_is_measured_for_seams_not_for_composition(worker, monkeypatch):
+    from warlock.pipelines import seam as seam_mod
+
+    monkeypatch.setattr(
+        seam_mod,
+        "report",
+        lambda path: {
+            "horizontal": 1.1,
+            "vertical": 1.2,
+            "worst": 1.2,
+            "seamless": True,
+            "threshold": 2.0,
+        },
+    )
+    job_id = worker.store.create("text", "cobblestone", {"seed": 1}, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    params = worker.store.get(job_id)["params"]
+    assert params["seam_report"]["seamless"] is True
+    # A tile has no subject, so the composition report would be a verdict about
+    # something that is deliberately not in the picture.
+    assert "reference_report" not in params
+    assert "rank" not in params
+
+
+async def test_a_tile_is_never_rerolled_for_its_composition(worker, monkeypatch):
+    # The reroll's rules are all about where a *subject* sits, so a tile that
+    # entered the loop would be redrawn for failing a test it cannot pass.
+    from warlock.pipelines import reference as reference_mod
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("a tile was measured for composition")
+
+    monkeypatch.setattr(reference_mod, "measure_file", _forbidden)
+    monkeypatch.setattr(worker.config, "reference_retries", 3)
+    job_id = worker.store.create("text", "cobblestone", {"seed": 1}, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert len(worker._text2image.prompts) == 1
+
+
+async def test_a_failing_seam_measurement_does_not_fail_the_job(worker, monkeypatch):
+    from warlock.pipelines import seam as seam_mod
+
+    monkeypatch.setattr(
+        seam_mod, "report", lambda path: (_ for _ in ()).throw(ValueError("too small"))
+    )
+    job_id = worker.store.create("text", "cobblestone", {"seed": 1}, stage="tile")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+    assert "seam_report" not in worker.store.get(job_id)["params"]

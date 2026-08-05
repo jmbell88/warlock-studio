@@ -672,3 +672,84 @@ def test_a_promotion_refuses_a_reference_that_cannot_reconstruct(svc):
 
 def test_a_rank_never_survives_into_a_new_job():
     assert "rank" in DERIVED_PARAMS
+
+
+# --- tiles ------------------------------------------------------------------
+
+
+def test_a_tile_job_is_accepted_and_lands_at_the_tile_stage(svc):
+    out = svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")
+    assert svc.store.get(out["id"])["stage"] == "tile"
+
+
+def test_only_text_jobs_can_be_tiles(svc):
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="image", image=_png_bytes(), output="tile")
+
+
+def test_tiles_can_be_batched_like_references(svc):
+    out = svc_jobs.create_job(
+        svc, kind="text", prompt="cobblestone", output="tile", count=3
+    )
+    assert len(out["ids"]) == 3
+
+
+def test_a_tile_cannot_be_promoted_to_a_mesh(svc):
+    # There is no subject to reconstruct. Refusing at the door beats two
+    # minutes of trellis turning a texture into a lumpy plane.
+    out = svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")
+    job_id = out["id"]
+    svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(job_id) / "input.png").write_bytes(_png_bytes())
+    svc.store.set_status(job_id, "done")
+    with pytest.raises(Invalid, match="no subject"):
+        svc_jobs.promote_to_model(svc, job_id)
+
+
+def test_a_tile_is_priced_as_the_image_stage_it_is(svc):
+    # The admission check has to name the tile stage, not fall through to the
+    # mesh branch: a card that can hold an image model but not trellis must
+    # still be allowed to make a texture.
+    _small_card(svc, total=10.0)
+    assert svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")["id"]
+    with pytest.raises(Invalid):
+        svc_jobs.create_job(svc, kind="text", prompt="a barrel", output="model")
+
+
+def test_a_seam_report_never_survives_into_a_new_job():
+    assert "seam_report" in DERIVED_PARAMS
+
+
+def test_the_tile_flag_is_an_input_and_not_a_derived_value():
+    # A reroll of a tile must stay a tile. The stage carries that, and the
+    # top-level flag must never join the strip list -- only the copy that rides
+    # inside params["recipe"], which is stripped with the rest of the recipe.
+    assert "tile" not in DERIVED_PARAMS
+
+
+def test_the_prompt_preview_mirrors_a_tile_rather_than_an_object(svc):
+    from warlock.service import system as svc_system
+
+    body = svc_system.prompt_preview(svc, {}, "cobblestone", tile=True)
+    assert "seamless" in body["prompt"]
+    assert "single object" not in body["prompt"]
+
+
+def test_a_reroll_of_a_tile_stays_a_tile(svc):
+    out = svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")
+    svc.store.set_status(out["id"], "done")
+    new_id = svc_jobs.rerun_job(svc, out["id"], mode="reroll")["id"]
+    assert svc.store.get(new_id)["stage"] == "tile"
+
+
+def test_a_tile_cannot_be_remeshed_either(svc):
+    # The other door onto a trellis run from an image that has no subject.
+    # promote_to_model is the one the 3D pane offers; remesh is the one the
+    # library's retry button reaches for whenever an input.png exists.
+    out = svc_jobs.create_job(svc, kind="text", prompt="cobblestone", output="tile")
+    job_id = out["id"]
+    svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(job_id) / "input.png").write_bytes(_png_bytes())
+    svc.store.set_status(job_id, "error")
+    with pytest.raises(Invalid, match="no subject"):
+        svc_jobs.rerun_job(svc, job_id, mode="remesh")

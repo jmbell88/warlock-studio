@@ -68,13 +68,18 @@ def guidance_catalog() -> dict[str, Any]:
 
 
 def prompt_preview(
-    svc: WarlockService, raw: dict[str, Any], prompt: str = ""
+    svc: WarlockService, raw: dict[str, Any], prompt: str = "", *, tile: bool = False
 ) -> dict[str, Any]:
     """The composed prompt and its token/chunk cost, before submission.
 
     tokens/chunks are best-effort -- null when transformers isn't installed or
     the base model's weights aren't downloaded, the same degrade-not-fail
     pattern doctor.py uses. Blocking: loading the tokenizers reads from disk.
+
+    ``tile`` has to be threaded through rather than inferred from ``raw``: the
+    output kind is not a guidance field, and without it the preview of a tile
+    would show the single-centred-object framing the job will not use, which
+    is worse than no preview at all.
     """
     from ..pipelines import prompt as prompt_pipeline
     from ..pipelines.text2image import Text2Image
@@ -95,7 +100,7 @@ def prompt_preview(
     )
     if len(prompt) > MAX_PROMPT:
         raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
-    positive = prompt_pipeline.build(prompt, params, trigger=trigger)
+    positive = prompt_pipeline.build(prompt, params, trigger=trigger, tile=tile)
 
     tokens = chunks = None
     try:

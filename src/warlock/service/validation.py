@@ -69,6 +69,11 @@ DERIVED_PARAMS = (
     "sheet_id",
     "cells",
     "reference_report",
+    # Advisory, and about this run's pixels -- a reroll inheriting it would
+    # claim a seam verdict about an image it is about to replace. The tile
+    # *flag* is deliberately not here: that is an input, like output, and
+    # stripping it would turn a rerolled tile into an object.
+    "seam_report",
     # Advisory, and about *this* run's image: a reroll that inherited it would
     # wear a verdict about pixels it is about to replace.
     "rank",

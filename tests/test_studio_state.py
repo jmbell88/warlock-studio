@@ -660,3 +660,24 @@ def test_a_malformed_rank_is_treated_as_unranked():
     filters = statelib.Filters(sort="best")
     jobs = [{"id": "a", "params": {"rank": "nonsense"}}, _ranked("b", 0.2)]
     assert [j["id"] for j in filters.order(jobs)] == ["b", "a"]
+
+
+def test_the_kind_filter_knows_a_tile():
+    assert statelib._kind_of({"kind": "text", "stage": "tile"}) == "tile"
+
+
+def test_a_finished_tile_offers_no_mesh():
+    job = {"status": "done", "stage": "tile", "kind": "text", "files": ["input.png"]}
+    assert statelib.primary_action(job) != "promote"
+
+
+def test_a_finished_tile_opens_rather_than_offering_nothing():
+    # Its next step is an export, which the inspector's Export tab is; "open"
+    # is what selects the row and shows it.
+    job = {"status": "done", "stage": "tile", "kind": "text", "files": ["input.png"]}
+    assert statelib.primary_action(job) == "open"
+
+
+def test_a_tile_with_no_image_offers_nothing():
+    job = {"status": "done", "stage": "tile", "kind": "text", "files": []}
+    assert statelib.primary_action(job) is None
