@@ -113,7 +113,7 @@ class JobsCache:
         return None if job_id is None else self.by_id.get(job_id)
 
     def visible(self, filters: Any) -> list[dict[str, Any]]:
-        return [j for j in self.jobs if filters.matches(j)]
+        return filters.order([j for j in self.jobs if filters.matches(j)])
 
     def children(self, job_id: str) -> list[dict[str, Any]]:
         return [j for j in self.jobs if j.get("parent_id") == job_id]

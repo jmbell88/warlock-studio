@@ -715,6 +715,14 @@ class Worker:
                     params["reference_report"] = (
                         await asyncio.to_thread(reference.measure_file, image_path)
                     ).as_dict()
+                    try:
+                        params["rank"] = await asyncio.to_thread(
+                            self._rank_reference, job_dir, params
+                        )
+                    except Exception:
+                        # Advisory: the image is on disk and fine. The UI shows
+                        # no score rather than a wrong one.
+                        log.exception("ranking failed for job %s", job_id)
                 if t2i.last_recipe:
                     params.setdefault("recipe", {})["reference"] = t2i.last_recipe
                 await asyncio.to_thread(self.store.set_params, job_id, params)
@@ -1125,6 +1133,34 @@ class Worker:
         params["scale_factor"] = transform["scale"]
         params["transform"] = transform
         await asyncio.to_thread(self.store.set_params, job_id, params)
+
+    def _rank_reference(self, job_dir: Path, params: dict[str, Any]) -> dict[str, Any]:
+        """Score a finished reference. Blocking -- called through to_thread.
+
+        The anchor half is opportunistic in three separate ways, and every one
+        of them is a "leave the number out", never a failure: ranking can be
+        switched off, ref.png only exists when something conditioned the run,
+        and DINOv2 is an optional download. What is left is the composition
+        score, which is free -- the report was measured either way.
+        """
+        from .bench import metrics
+        from .pipelines import rank
+
+        report = params.get("reference_report")
+        cosine = None
+        anchor = job_dir / "ref.png"
+        if self.config.rank_candidates and anchor.exists():
+            try:
+                if metrics.dino_available(self.config):
+                    # CPU deliberately: this runs on the job queue beside a
+                    # resident trellis and a resident SDXL pipe, and a metric
+                    # must not take VRAM from the models making the asset.
+                    cosine = metrics.reference_cosine(
+                        anchor, job_dir / "input.png", self.config, device="cpu"
+                    )
+            except Exception:
+                log.exception("anchor similarity failed; ranking on composition alone")
+        return rank.score(report, cosine)
 
     async def _audit_mesh(
         self, job_id: str, glb_path: Path, params: dict[str, Any]

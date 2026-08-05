@@ -70,6 +70,32 @@ def test_the_border_colour_is_the_background_not_an_average(tmp_path):
         assert imageprep.border_colour(im) == BG
 
 
+def test_two_opaque_references_pair_up(tmp_path):
+    # prepare_pair takes the render side's subject from its alpha, which two
+    # SDXL images do not have -- so the reference pipeline needs its own.
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    for path, box in ((a, (20, 20, 60, 90)), (b, (40, 30, 70, 100))):
+        im = Image.new("RGB", (128, 128), BG)
+        ImageDraw.Draw(im).rectangle(box, fill=(20, 20, 20))
+        im.save(path)
+
+    left, right = imageprep.prepare_references(a, b)
+
+    assert left is not None and right is not None
+    assert left.size == right.size == (imageprep.PAIR_SIZE, imageprep.PAIR_SIZE)
+    assert left.mode == right.mode == "RGB"
+
+
+def test_a_reference_with_no_subject_pairs_to_nothing(tmp_path):
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    Image.new("RGB", (64, 64), BG).save(a)
+    im = Image.new("RGB", (64, 64), BG)
+    ImageDraw.Draw(im).rectangle((10, 10, 40, 50), fill=(0, 0, 0))
+    im.save(b)
+
+    assert imageprep.prepare_references(a, b) == (None, None)
+
+
 # --- silhouette IoU ----------------------------------------------------------
 
 

@@ -627,3 +627,36 @@ def test_the_conditioning_pickers_are_not_plain_guidance_combos():
     fields = statelib.guidance_fields()
     assert "ip_adapter" not in fields
     assert "control" not in fields
+
+
+# --- ordering ----------------------------------------------------------------
+
+
+def _ranked(job_id, score):
+    return {"id": job_id, "created_at": 0.0, "params": {"rank": {"score": score}}}
+
+
+def test_the_default_order_is_the_order_it_was_given():
+    filters = statelib.Filters()
+    jobs = [_ranked("a", 0.1), _ranked("b", 0.9)]
+    assert [j["id"] for j in filters.order(jobs)] == ["a", "b"]
+
+
+def test_sorting_by_best_puts_the_highest_score_first():
+    filters = statelib.Filters(sort="best")
+    jobs = [_ranked("a", 0.1), _ranked("b", 0.9), _ranked("c", 0.5)]
+    assert [j["id"] for j in filters.order(jobs)] == ["b", "c", "a"]
+
+
+def test_unranked_jobs_sort_last_and_keep_their_own_order():
+    # Most of a workshop predates the score. Sorting them to the top on a
+    # missing value would make "best first" show the oldest assets.
+    filters = statelib.Filters(sort="best")
+    jobs = [{"id": "a", "params": {}}, _ranked("b", 0.4), {"id": "c", "params": {}}]
+    assert [j["id"] for j in filters.order(jobs)] == ["b", "a", "c"]
+
+
+def test_a_malformed_rank_is_treated_as_unranked():
+    filters = statelib.Filters(sort="best")
+    jobs = [{"id": "a", "params": {"rank": "nonsense"}}, _ranked("b", 0.2)]
+    assert [j["id"] for j in filters.order(jobs)] == ["b", "a"]

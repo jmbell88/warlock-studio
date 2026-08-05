@@ -98,6 +98,13 @@ def _filters(ctx: Any) -> None:
         width=110,
     )
     imgui.same_line()
+    filters.sort = widgets.combo(
+        "##sort",
+        filters.sort,
+        [("newest", "newest first"), ("best", "best first")],
+        width=110,
+    )
+    imgui.same_line()
     # A star that lights up, not a checkbox labelled "*".
     lit = filters.favorites_only
     if lit:
@@ -158,6 +165,15 @@ def _card_body(ctx: Any, job: Any) -> None:
     widgets.status_pill(job["status"])
     imgui.same_line()
     widgets.quality_badge(job)
+    rank = (job.get("params") or {}).get("rank")
+    if isinstance(rank, dict) and rank.get("score") is not None:
+        imgui.same_line()
+        widgets.muted(f"{float(rank['score']) * 100:.0f}%")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "How well framed this reference is, and -- when the profile "
+                "has a style anchor -- how close it looks to it. Advisory."
+            )
     if job["status"] == "queued":
         # Where in line it is: the queue used to be invisible past the pill.
         waiting = [j["id"] for j in reversed(ctx.cache.jobs) if j.get("status") == "queued"]

@@ -133,3 +133,38 @@ def prepare_pair(
     ref_out = _square_crop(ref_rgb, ref_box, background).resize((size, size), Image.LANCZOS)
     render_out = _square_crop(flat, box, background).resize((size, size), Image.LANCZOS)
     return (ref_out, render_out)
+
+
+def prepare_references(
+    a_path: Path, b_path: Path, *, size: int = PAIR_SIZE
+) -> tuple[Any, Any]:
+    """-> two references, cropped to their subjects and made comparable.
+
+    The same crop-and-square treatment ``prepare_pair`` gives a render, but
+    both sides measured with ``reference_mask``: two SDXL images are opaque,
+    so the alpha route that identifies a rendered subject finds nothing at all
+    and would score every pair as None.
+
+    The background is taken from the *first* image, so a candidate is judged
+    against the anchor's background rather than the two differing in a way the
+    metric can see.
+    """
+    from PIL import Image
+
+    prepared = []
+    background = None
+    for path in (a_path, b_path):
+        with Image.open(path) as im:
+            im.load()
+            if background is None:
+                background = border_colour(im)
+            mask = reference_mask(im)
+            box = _bbox(mask) if mask is not None else None
+            if box is None:
+                return (None, None)
+            prepared.append(
+                _square_crop(im.convert("RGB"), box, background).resize(
+                    (size, size), Image.LANCZOS
+                )
+            )
+    return (prepared[0], prepared[1])

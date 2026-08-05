@@ -69,6 +69,9 @@ DERIVED_PARAMS = (
     "sheet_id",
     "cells",
     "reference_report",
+    # Advisory, and about *this* run's image: a reroll that inherited it would
+    # wear a verdict about pixels it is about to replace.
+    "rank",
     "control_hint",
     "recipe",
 )

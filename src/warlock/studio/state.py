@@ -140,6 +140,9 @@ class Filters:
     status: str = "all"  # all | done | running | error
     kind: str = "all"  # all | reference | model | rig | sheet
     favorites_only: bool = False
+    # newest | best. Persisted with the rest of the filter bar, because a
+    # workshop is browsed the same way every session.
+    sort: str = "newest"
 
     def matches(self, job: dict[str, Any]) -> bool:
         if self.favorites_only and not job.get("favorite"):
@@ -156,6 +159,30 @@ class Filters:
             if needle not in haystack:
                 return False
         return True
+
+    def order(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The list in the order the bar asks for.
+
+        Stable and non-destructive: "newest" returns the query's own order
+        untouched, and "best" is a stable sort, so candidates that share a
+        score stay in submission order rather than shuffling every refresh.
+        """
+        if self.sort != "best":
+            return list(jobs)
+
+        def key(job: dict[str, Any]) -> tuple[int, float]:
+            rank = (job.get("params") or {}).get("rank")
+            if not isinstance(rank, dict):
+                # Unranked sorts last rather than at zero: most of a workshop
+                # predates the score, and burying it under refused candidates
+                # would make "best first" mean "oldest first".
+                return (1, 0.0)
+            try:
+                return (0, -float(rank.get("score") or 0.0))
+            except (TypeError, ValueError):
+                return (1, 0.0)
+
+        return sorted(jobs, key=key)
 
 
 def _kind_of(job: dict[str, Any]) -> str:

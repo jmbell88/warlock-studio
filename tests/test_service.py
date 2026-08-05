@@ -668,3 +668,7 @@ def test_a_promotion_refuses_a_reference_that_cannot_reconstruct(svc):
 
     # Heuristics about composition, not facts -- so it is bypassable.
     assert svc_jobs.promote_to_model(svc, job_id, force=True)["parent"] == job_id
+
+
+def test_a_rank_never_survives_into_a_new_job():
+    assert "rank" in DERIVED_PARAMS

@@ -92,10 +92,21 @@ def _dino_dir(config: Any = None) -> Path:
     return root / spec.dir_name
 
 
-def _dino_model(config: Any = None):
-    """Load DINOv2 once per process -- a 160-item run would otherwise pay for
-    it 1280 times."""
-    key = str(_dino_dir(config))
+def _dino_model(config: Any = None, device: str | None = None):
+    """Load DINOv2 once per (path, device) -- a 160-item run would otherwise
+    pay for it 1280 times.
+
+    ``device`` is explicit rather than "cuda if available" for one caller: the
+    app scores candidates on the job queue, beside a resident trellis and a
+    resident SDXL pipe, and a metric has no business taking VRAM away from
+    the models that are producing the asset. The benchmark passes None and
+    keeps the old behaviour.
+    """
+    import torch
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    key = f"{_dino_dir(config)}|{device}"
     hit = _model_cache.get(key)
     if hit is not None:
         return hit
@@ -108,25 +119,22 @@ def _dino_model(config: Any = None):
             f"DINOv2 not found at {path}. Download once with:\n"
             f"  {models.METRIC_MODELS['dinov2'].download}"
         )
-    import torch
     from transformers import AutoImageProcessor, AutoModel
 
     processor = AutoImageProcessor.from_pretrained(str(path), local_files_only=True)
     model = AutoModel.from_pretrained(str(path), local_files_only=True)
     model.eval()
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-    _model_cache[key] = (processor, model)
-    return (processor, model)
+    model = model.to(device)
+    _model_cache[key] = (processor, model, device)
+    return _model_cache[key]
 
 
-def _embed(image: Any, config: Any = None):
+def _embed(image: Any, config: Any = None, device: str | None = None):
     import torch
 
-    processor, model = _dino_model(config)
+    processor, model, resolved = _dino_model(config, device)
     inputs = processor(images=image, return_tensors="pt")
-    if torch.cuda.is_available():
-        inputs = {k: v.to("cuda") for k, v in inputs.items()}
+    inputs = {k: v.to(resolved) for k, v in inputs.items()}
     with torch.no_grad():
         out = model(**inputs)
     # The CLS token, which is DINOv2's whole-image descriptor.
@@ -144,8 +152,27 @@ def dino_cosine(reference_path: Path, render_path: Path, config: Any = None) -> 
     ref, render = imageprep.prepare_pair(reference_path, render_path)
     if ref is None or render is None:
         return None
-    a, b = _embed(ref, config), _embed(render, config)
+    a, b = _embed(ref, config, None), _embed(render, config, None)
     return float(torch.sum(a * b).item())
+
+
+def reference_cosine(
+    a_path: Path, b_path: Path, config: Any = None, device: str | None = None
+) -> float | None:
+    """Cosine similarity between two *references*, higher is more alike.
+
+    The A-against-A caveat in this module's docstring is not merely satisfied
+    here, it is the whole point: both sides are SDXL output on a plain
+    background, so the style gap that makes ``dino_cosine`` unreadable in
+    absolute terms is absent, and comparing candidates of one submit against
+    one anchor is exactly the comparison the number supports.
+    """
+    import torch
+
+    a, b = imageprep.prepare_references(a_path, b_path)
+    if a is None or b is None:
+        return None
+    return float(torch.sum(_embed(a, config, device) * _embed(b, config, device)).item())
 
 
 def available(config: Any = None) -> tuple[str, ...]:

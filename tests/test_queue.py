@@ -1164,3 +1164,45 @@ async def test_a_cancelled_job_keeps_the_users_reference(worker):
     assert (job_dir / "ref.png").exists()
     assert not (job_dir / "reference.png").exists()
     assert not (job_dir / "control.png").exists()
+
+
+async def test_a_finished_reference_carries_a_rank(worker):
+    job_id = worker.store.create("text", "a barrel", {"seed": 1}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    rank = worker.store.get(job_id)["params"]["rank"]
+    assert 0.0 <= rank["score"] <= 1.0
+    # No ref.png, so nothing to compare against -- the composition half stands
+    # on its own rather than the whole thing being absent.
+    assert rank["anchor"] is None
+
+
+async def test_a_failing_rank_does_not_fail_the_job(worker, monkeypatch):
+    # Same rule as the mesh audit: a diagnostic must never be able to fail a
+    # job whose artifact is already on disk.
+    import warlock.pipelines.rank as rank_mod
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rank_mod, "score", boom)
+    job_id = worker.store.create("text", "a barrel", {"seed": 1}, stage="reference")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+    assert "rank" not in worker.store.get(job_id)["params"]
+
+
+async def test_a_mesh_job_is_not_ranked(worker):
+    # The score is about choosing between reference candidates; a mesh job has
+    # nothing to choose between and the measurement would be noise in params.
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert "rank" not in worker.store.get(job_id)["params"]
