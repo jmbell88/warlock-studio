@@ -57,6 +57,14 @@ def test_every_offered_name_is_servable():
             assert name in svc_files.MEDIA
 
 
+def test_a_tile_provisionally_takes_the_whole_2d_grid():
+    # Deliberately today's behaviour and not the eventual one: a seamless
+    # texture has no use for the cutout exports, but what a tile *should* offer
+    # is B8's to decide once the stage exists. Pinned so that change lands as a
+    # test somebody must update rather than as a silent shift.
+    assert widgets.artifacts_for(_job(stage="tile")) is widgets.ARTIFACTS_2D
+
+
 # -- whether a button is pressable ----------------------------------------
 
 
@@ -92,6 +100,57 @@ def test_a_mesh_derives_from_its_glb_and_not_from_its_input():
     assert not _derivable(job, "icon.png")
 
 
+def test_the_pane_agrees_with_the_service_about_every_artifact(tmp_path):
+    """``inspector._derivable`` and ``files.ready`` must answer identically.
+
+    The pane restates the service's rules rather than calling it, because
+    ``ready`` takes a job dir and would be a stat per artifact per frame. That
+    restatement is only safe while something holds the two together: the tile
+    arm of ``files.ready`` is slated to change in B8, and without this the copy
+    in the pane would quietly keep the old behaviour and light the wrong
+    buttons. ``files`` is built by ``attach_files``, which is itself ``ready``
+    over ``LISTED`` -- so this also pins the step the restatement leans on,
+    that ``"input.png" in files`` means what ``(job_dir / "input.png").exists()``
+    means.
+    """
+    from warlock.service import files as svc_files
+
+    # The comparison is against ``ready or derivable``, which is what the grid
+    # actually composes: ``ready`` answers "may this be served", and for a file
+    # already on disk -- input.png, model.glb -- that is true while "could it be
+    # derived" is false. Deriving is the half the pane restates; serving it
+    # reads straight off the listing.
+    names = (*svc_files.DERIVED_2D, "model.glb", "model.stl", "model.fbx", "input.png")
+    checked = 0
+    for stage in ("reference", "tile", "model"):
+        for status in ("queued", "running", "done", "error"):
+            for has_input in (False, True):
+                for has_glb in (False, True):
+                    if has_glb and stage != "model":
+                        # Not a state that occurs: only a mesh job's directory
+                        # ever holds a model.glb, and inventing one would have
+                        # the test assert about a job that cannot exist.
+                        continue
+                    job_dir = tmp_path / f"{stage}-{status}-{has_input}-{has_glb}"
+                    job_dir.mkdir()
+                    if has_input:
+                        (job_dir / "input.png").write_bytes(b"")
+                    if has_glb:
+                        (job_dir / "model.glb").write_bytes(b"")
+                    job = {"id": job_dir.name, "stage": stage, "status": status}
+                    svc_files.attach_files(job, job_dir)
+                    files = set(job["files"])
+                    for name in names:
+                        pane = name in files or inspector._derivable(job, files, name)
+                        assert pane == svc_files.ready(job, job_dir, name), (
+                            f"{stage}/{status} input={has_input} glb={has_glb} {name}"
+                        )
+                        checked += 1
+    # Guards against a matrix that silently collapses to nothing: 8 states each
+    # for reference and tile, 16 for a mesh (which alone can hold a model.glb).
+    assert checked == 32 * len(names)
+
+
 # -- the manifest the Export tab shows under the grid ----------------------
 
 
@@ -119,6 +178,23 @@ def test_a_mangled_manifest_is_not_an_error(tmp_path):
     assert inspector._manifest(_Ctx(tmp_path), "abc123abc123") is None
 
 
+def test_a_manifest_that_is_not_an_object_is_not_an_error(tmp_path):
+    (tmp_path / "manifest.json").write_text("[1, 2, 3]", encoding="utf-8")
+    assert inspector._manifest(_Ctx(tmp_path), "abc123abc123") is None
+
+
+def test_an_unreadable_manifest_is_not_re_read_every_frame(tmp_path):
+    # The one state that would otherwise defeat the cache entirely: "cannot be
+    # parsed" is an answer about this version of the file just as a dict is,
+    # and without the sentinel a mangled manifest is a read plus a failed parse
+    # sixty times a second for as long as it stays mangled.
+    path = tmp_path / "manifest.json"
+    path.write_text("{not json", encoding="utf-8")
+    ctx = _Ctx(tmp_path)
+    assert inspector._manifest(ctx, "abc123abc123") is None
+    assert ctx.state.manifest == (("abc123abc123", path.stat().st_mtime_ns), None)
+
+
 def test_the_manifest_is_parsed_once_per_version_not_once_per_frame(tmp_path):
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({"artifacts": {"icon.png": {}}}), encoding="utf-8")
@@ -136,11 +212,121 @@ def test_a_rewritten_manifest_is_re_read(tmp_path):
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({"artifacts": {"icon.png": {}}}), encoding="utf-8")
     ctx = _Ctx(tmp_path)
-    assert list(inspector._manifest(ctx, "abc")["artifacts"]) == ["icon.png"]
+    assert list(inspector._manifest(ctx, "abc123abc123")["artifacts"]) == ["icon.png"]
     # A derivation running on the TaskRunner rewrites it under an open tab.
     # The mtime is forced rather than trusted: two writes inside one clock tick
     # would make the test assert the filesystem's resolution, not the cache.
     later = path.stat().st_mtime_ns + 10**9
     path.write_text(json.dumps({"artifacts": {"sprite.png": {}}}), encoding="utf-8")
     os.utime(path, ns=(later, later))
-    assert list(inspector._manifest(ctx, "abc")["artifacts"]) == ["sprite.png"]
+    assert list(inspector._manifest(ctx, "abc123abc123")["artifacts"]) == ["sprite.png"]
+
+
+# -- what the notes under the grid actually say ----------------------------
+
+
+def _lines(monkeypatch, fn, *args):
+    """Run a note function with ``widgets.muted`` captured.
+
+    The notes are the only part of the pane whose *wording* is a contract --
+    with B3, which records ``hand_edited`` and ``matte`` specifically so this
+    task can show them -- and capturing the one widget they use is what makes
+    that assertable without a GL context.
+    """
+    out: list[str] = []
+    monkeypatch.setattr(inspector.widgets, "muted", out.append)
+    fn(*args)
+    return out
+
+
+def test_the_summary_carries_b3s_hand_edited_caveat(monkeypatch):
+    manifest = {"hand_edited": True, "artifacts": {}}
+    lines = _lines(monkeypatch, inspector._manifest_summary, manifest)
+    assert any("hand-edited" in line for line in lines)
+
+
+def test_an_untouched_reference_says_nothing_about_hand_edits(monkeypatch):
+    manifest = {"hand_edited": False, "artifacts": {}}
+    assert _lines(monkeypatch, inspector._manifest_summary, manifest) == []
+
+
+def test_the_matte_is_reported_per_artifact_not_from_the_current_config(monkeypatch):
+    # An icon cut before the weights were installed is still a corner fill, and
+    # the config-level note would stop mentioning it the moment they landed.
+    manifest = {
+        "artifacts": {
+            "icon.png": {"matte": "flood"},
+            "sprite.png": {"matte": "birefnet", "pivot": [12.0, 34.0]},
+        }
+    }
+    lines = _lines(monkeypatch, inspector._manifest_summary, manifest)
+    assert "icon.png - corner fill" in lines
+    assert "sprite.png - pivot 12,34" in lines
+
+
+def test_the_summary_reports_a_matte_that_came_apart(monkeypatch):
+    manifest = {"artifacts": {"icon.png": {"alpha": {"islands": 3}}}}
+    lines = _lines(monkeypatch, inspector._manifest_summary, manifest)
+    assert "icon.png - 3 separate pieces" in lines
+
+
+def test_a_mangled_entry_does_not_break_the_summary(monkeypatch):
+    manifest = {"artifacts": {"icon.png": "not a dict"}}
+    assert _lines(monkeypatch, inspector._manifest_summary, manifest) == []
+
+
+class _MatteCtx:
+    def __init__(self):
+        self.svc = types.SimpleNamespace(config=None)
+
+
+def test_the_config_note_appears_only_before_anything_is_derived(monkeypatch):
+    from warlock.pipelines import matting
+
+    monkeypatch.setattr(matting, "available", lambda _config: False)
+    ctx = _MatteCtx()
+    assert _lines(monkeypatch, inspector._matte_note, ctx, None) != []
+    assert _lines(monkeypatch, inspector._matte_note, ctx, {"artifacts": {}}) != []
+    # Once entries exist they answer the question per artifact and truthfully,
+    # so repeating the config-level guess would be noise beside them.
+    assert _lines(monkeypatch, inspector._matte_note, ctx, {"artifacts": {"icon.png": {}}}) == []
+
+
+def test_no_config_note_when_the_weights_are_installed(monkeypatch):
+    from warlock.pipelines import matting
+
+    monkeypatch.setattr(matting, "available", lambda _config: True)
+    assert _lines(monkeypatch, inspector._matte_note, _MatteCtx(), None) == []
+
+
+# -- why a button is disabled ----------------------------------------------
+
+
+class _BlockCtx:
+    rigging_available = True
+
+
+def test_an_unfinished_job_says_so_rather_than_claiming_it_never_can(monkeypatch):
+    job = _job(files=["input.png"])
+    job["status"] = "running"
+    assert (
+        inspector._why_blocked(_BlockCtx(), job, "icon.png", False, _derivable(job, "icon.png"))
+        == "not finished yet"
+    )
+
+
+def test_a_failed_job_is_not_promised_an_export_that_is_not_coming():
+    job = _job(files=["input.png"])
+    job["status"] = "error"
+    assert (
+        inspector._why_blocked(_BlockCtx(), job, "icon.png", False, _derivable(job, "icon.png"))
+        == "not available for this asset"
+    )
+
+
+def test_a_finished_reference_blocks_nothing_it_can_derive():
+    job = _job(files=["input.png"])
+    assert (
+        inspector._why_blocked(_BlockCtx(), job, "icon.png", False, _derivable(job, "icon.png"))
+        is None
+    )

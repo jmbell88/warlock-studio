@@ -277,6 +277,8 @@ def _downloads(ctx: Any, job: Any) -> None:
     widgets.section("Downloads")
     job_id = job["id"]
     files = set(job.get("files") or [])
+    # Provisional in the same way ``widgets.artifacts_for`` is, and B8 must move
+    # the two together: a seamless texture has no use for the cutout exports.
     two_d = job.get("stage") in ("reference", "tile")
     if not imgui.begin_table("downloads", 2):
         return
@@ -284,7 +286,7 @@ def _downloads(ctx: Any, job: Any) -> None:
         # job["files"] is the sanctioned answer; a raw exists() check here used
         # to re-enable buttons the service would then refuse.
         ready = name in files
-        blocked = _why_blocked(ctx, name, ready, _derivable(job, files, name))
+        blocked = _why_blocked(ctx, job, name, ready, _derivable(job, files, name))
         key = f"save:{job_id}:{name}"
         busy = ctx.busy(key)
         imgui.table_next_column()
@@ -299,8 +301,12 @@ def _downloads(ctx: Any, job: Any) -> None:
             imgui.set_tooltip(blocked)
     imgui.end_table()
     if two_d:
-        _matte_note(ctx)
-        _manifest_summary(ctx, job)
+        # Read once and handed to both: the two notes answer halves of the same
+        # question, and asking for the manifest twice in a frame would make the
+        # cheap-stat property depend on how many readers there happen to be.
+        manifest = _manifest(ctx, job_id)
+        _matte_note(ctx, manifest)
+        _manifest_summary(manifest)
 
 
 def _derivable(job: Any, files: set[str], name: str) -> bool:
@@ -314,7 +320,17 @@ def _derivable(job: Any, files: set[str], name: str) -> bool:
     question about the name alone and would light six buttons on a queued job
     whose only outcome is an error toast. The conditions are deliberately the
     same three ``service.files.ready`` applies, restated here in terms of the
-    listing rather than of the disk, because the frame thread may not stat.
+    listing rather than of the disk, because the frame thread may not stat --
+    ``ready`` takes a job dir and would be a stat per artifact per frame. The
+    two are pinned equal across the whole stage x status x files matrix by
+    ``test_the_pane_agrees_with_the_service_about_every_artifact``, which is
+    what stops the restatement drifting.
+
+    The ``tile`` arm is provisional, exactly as ``widgets.artifacts_for``'s is,
+    and B8 must move both: the cutout exports are meaningless for a seamless
+    texture, but what a tile *should* offer is not knowable until the stage
+    exists. Narrowing ``files.ready``'s tile arm without narrowing this one
+    shows up as that cross-check going red rather than as a wrong button.
     """
     if job.get("stage") in ("reference", "tile"):
         return (
@@ -323,27 +339,43 @@ def _derivable(job: Any, files: set[str], name: str) -> bool:
     return "model.glb" in files and svc_derive.derivable(name)
 
 
-def _why_blocked(ctx: Any, name: str, ready: bool, derivable: bool) -> str | None:
+def _why_blocked(ctx: Any, job: Any, name: str, ready: bool, derivable: bool) -> str | None:
     if ready:
         return None
     if name == "model.fbx" and not ctx.rigging_available:
         return "needs Blender"
     if derivable:
         return None
+    if job.get("status") in ("queued", "running"):
+        # Correctly disabled, and it used to be misleadingly explained: every
+        # export on an unfinished job read "not available for this asset",
+        # which says the asset cannot have the file rather than that it has not
+        # got it yet. An errored job keeps the other wording, because there
+        # "not yet" would promise something that is not coming.
+        return "not finished yet"
     return "not available for this asset"
 
 
-def _matte_note(ctx: Any) -> None:
-    """Why the cutouts look the way they do.
+def _matte_note(ctx: Any, manifest: Any) -> None:
+    """Why the cutouts will look the way they do, before any of them exist.
 
     Not a reason a button is blocked, which is why it sits under the grid
     rather than in ``_why_blocked``: the exports always work. The question a
     user has when the edges come out ragged is whether that is the model or the
     fallback, and nothing in the UI could answer it -- the doctor row says the
     same thing in a place nobody opens mid-export.
+
+    Deliberately only for the case where nothing has been derived yet. Once
+    artifacts exist, each manifest entry records the matte that actually cut
+    it, and ``_manifest_summary`` says so per artifact -- which is the truthful
+    answer where this one is merely the current one: an icon cut by the corner
+    fill before the weights were installed would, on this note alone, claim
+    nothing at all the moment they were.
     """
     from ...pipelines import matting
 
+    if manifest is not None and (manifest.get("artifacts") or {}):
+        return
     if matting.available(ctx.svc.config):
         return
     widgets.muted(
@@ -352,17 +384,24 @@ def _matte_note(ctx: Any) -> None:
     )
 
 
-def _manifest_summary(ctx: Any, job: Any) -> None:
-    """The pivot and the alpha QA, read off the manifest that was written.
+def _manifest_summary(manifest: Any) -> None:
+    """The pivot, the alpha QA and the matte, read off the manifest as written.
 
     Read from the file rather than recomputed: the manifest is the thing an
     importer will consume, so showing anything else here would let the two
-    disagree about the asset. Parsed at most once per version of the file --
-    see ``_manifest`` -- because a frame is not the place to do it again.
+    disagree about the asset. That is also why the matte is reported per
+    artifact -- ``derive`` records which one cut each file, and a file on disk
+    was cut by whatever was installed when it was made, not by what is
+    installed now.
+
+    The hand-edited caveat travels with the recipe for the reason
+    ``derive._write_manifest`` records it: the recipe hash names a seed and a
+    model, which after a hand edit is no longer the whole story of the pixels.
     """
-    manifest = _manifest(ctx, job["id"])
     if manifest is None:
         return
+    if manifest.get("hand_edited"):
+        widgets.muted("hand-edited -- the recipe describes the generated image, not these pixels")
     for name, entry in sorted((manifest.get("artifacts") or {}).items()):
         if not isinstance(entry, dict):
             continue
@@ -372,6 +411,8 @@ def _manifest_summary(ctx: Any, job: Any) -> None:
         alpha = entry.get("alpha") or {}
         if alpha.get("islands", 0) > 1:
             bits.append(f"{alpha['islands']} separate pieces")
+        if entry.get("matte") == "flood":
+            bits.append("corner fill")
         widgets.muted(" - ".join(bits))
 
 
@@ -384,6 +425,13 @@ def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
     and re-reading on an mtime is how ``ThumbnailCache`` already reconciles
     those two facts. The slot lives on ``AppState`` rather than in a module
     global so the pane itself stays stateless.
+
+    A failure to parse is cached too, as ``(key, None)``. "Unreadable" is an
+    answer about that version of the file exactly as a parsed dict is, and a
+    truncated or hand-mangled manifest is the one state that would otherwise be
+    read and parsed *every* frame, for as long as it stayed mangled -- which is
+    the per-frame read this cache exists to remove. A missing file needs no
+    sentinel: the stat fails, so nothing is read either way.
     """
     import json
 
@@ -398,9 +446,9 @@ def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
     try:
         manifest = json.loads(path.read_text("utf-8"))
     except (OSError, ValueError):
-        return None
+        manifest = None
     if not isinstance(manifest, dict):
-        return None
+        manifest = None
     ctx.state.manifest = (key, manifest)
     return manifest
 
