@@ -1349,3 +1349,60 @@ async def test_a_cancel_between_samples_stops_the_reroll(
 
     assert w._text2image.seeds == [5]
     store.close()
+
+
+async def test_a_failed_measurement_still_records_the_seed_that_shipped(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The provenance is about which image is on disk, not about the verdict.
+
+    A reroll draws seed B, and the measurement of B then breaks. Stopping is
+    right -- no verdict, no further reroll -- but the attempt happened and B is
+    what the user is looking at, so params must say so. Recording nothing left
+    reference_seed naming seed A, which no longer reproduces the image.
+    """
+    import warlock.pipelines.reference as reference_mod
+    from warlock.config import Config
+    from warlock.db import JobStore
+
+    calls = {"n": 0}
+
+    def fake(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return reference_mod.Report(ok=False, reasons=("the subject runs off the frame",))
+        raise RuntimeError("the measurement itself broke")
+
+    monkeypatch.setattr(reference_mod, "measure_file", fake)
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        reference_retries=1,
+    )
+    store = JobStore(config.db_path)
+    w = Worker(config, store)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] in ("done", "error"))
+    await w.shutdown()
+
+    params = store.get(job_id)["params"]
+    seeds = w._text2image.seeds
+    assert len(seeds) == 2
+    # A measurement that breaks is advisory, so the job still finishes.
+    assert store.get(job_id)["status"] == "done"
+    # The seed on record is the one whose image is on disk, not the refused one.
+    assert params["reference_seed"] == seeds[1]
+    attempts = params["reference_attempts"]
+    assert [a["seed"] for a in attempts] == seeds
+    assert attempts[0] == {
+        "seed": seeds[0],
+        "ok": False,
+        "reasons": ["the subject runs off the frame"],
+    }
+    # Recorded as unmeasured rather than as a refusal: no verdict was reached.
+    assert attempts[1]["measured"] is False
+    assert attempts[1]["ok"] is True
+    store.close()

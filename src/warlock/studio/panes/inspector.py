@@ -163,6 +163,23 @@ def _settings(ctx: Any, job: Any) -> None:
         imgui.tree_pop()
 
 
+def _attempt_verdict(attempt: Any) -> str:
+    """What one reroll attempt is to be called in the attempts line.
+
+    Three words rather than two, because "not measured" is a third state and
+    not a flavour of "refused": the composition report can fail to run at all
+    (queue.py records the attempt with measured False, following
+    reference.unmeasured), and calling that a refusal would put a verdict in
+    the UI that nothing ever reached. Written against .get throughout, so an
+    attempt row from before the third state existed still renders.
+    """
+    if not isinstance(attempt, dict):
+        return "?"
+    if attempt.get("measured") is False:
+        return "not measured"
+    return "kept" if attempt.get("ok") else "refused"
+
+
 def _reference(ctx: Any, job: Any) -> None:
     """What the mesh engine was actually handed, and what it made of it.
 
@@ -198,9 +215,7 @@ def _reference(ctx: Any, job: Any) -> None:
         # doubles as the answer to "why is this not the seed I asked for".
         widgets.muted(
             f"redrawn {len(attempts) - 1} time(s): "
-            + "; ".join(
-                f"seed {a.get('seed')} {'kept' if a.get('ok') else 'refused'}" for a in attempts
-            )
+            + "; ".join(f"seed {a.get('seed')} {_attempt_verdict(a)}" for a in attempts)
         )
 
     hint = params.get("control_hint")

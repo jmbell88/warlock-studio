@@ -427,3 +427,21 @@ def test_the_retarget_panel_calls_the_service_function_that_had_no_caller():
     source = inspect.getsource(retarget_panel._submit)
     assert "svc_jobs.optimize_job" in source
     assert "custom_triangles" in source
+
+
+def test_an_unmeasured_reroll_attempt_is_not_called_a_refusal():
+    """The attempts line has three states, not two: a measurement that never
+    ran is not a verdict, and labelling it "refused" invents one."""
+    from warlock.studio.panes import inspector
+
+    assert inspector._attempt_verdict({"seed": 1, "ok": True, "reasons": []}) == "kept"
+    assert inspector._attempt_verdict({"seed": 2, "ok": False, "reasons": ["x"]}) == "refused"
+    assert (
+        inspector._attempt_verdict({"seed": 3, "ok": True, "reasons": [], "measured": False})
+        == "not measured"
+    )
+    # Rows written before the third key existed, and anything malformed, still
+    # render: the inspector draws a finished job and must never be the thing
+    # that fails it.
+    assert inspector._attempt_verdict({}) == "refused"
+    assert inspector._attempt_verdict(None) == "?"

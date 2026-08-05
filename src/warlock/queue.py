@@ -750,6 +750,16 @@ class Worker:
                         # opinion. measure_file catches its own read errors, so
                         # reaching here means the measurement itself broke.
                         log.exception("measuring the reference failed for job %s", job_id)
+                        # The attempt still happened and its image is the one on
+                        # disk, so it is recorded before the break or the
+                        # provenance would name an earlier seed that no longer
+                        # reproduces what shipped. ok is True with measured
+                        # False, following reference.unmeasured: "we could not
+                        # measure this" is not "this was refused", and the
+                        # sample is the one being kept.
+                        attempts.append(
+                            {"seed": seed, "ok": True, "reasons": [], "measured": False}
+                        )
                         break
                     if is_reference:
                         params["reference_report"] = report.as_dict()
