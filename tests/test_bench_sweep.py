@@ -437,3 +437,77 @@ def test_a_view_render_failure_is_non_fatal_and_recorded(
     records = runner_mod.read_items(run_dir)
     assert all(r["status"] == "done" for r in records)
     assert all(r["views"] is False for r in records)
+
+
+# --- CLI: `sweep` subcommand ----------------------------------------------------
+
+
+from warlock.bench import __main__ as bench_main  # noqa: E402
+
+
+def _sweep_args(**overrides):
+    parsed = bench_main.build_parser().parse_args(
+        ["sweep", "--spec", overrides.pop("spec", "small")]
+        + (["--resume", str(overrides.pop("resume"))] if "resume" in overrides else [])
+        + (["--dry-run"] if overrides.pop("dry_run", False) else [])
+    )
+    return parsed
+
+
+def test_sweep_dry_run_prints_the_plan_without_a_runtime(config, sweep_dir, monkeypatch, capsys):
+    from warlock.studio import runtime as runtime_mod
+
+    def _boom(*a, **kw):
+        raise AssertionError("dry-run must not construct a Runtime")
+
+    monkeypatch.setattr(runtime_mod, "Runtime", _boom)
+
+    args = _sweep_args(spec="small", dry_run=True)
+    rc = bench_main._sweep(config, args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "baseline--s1" in out
+    assert "custom_triangles=5000--s1" in out
+    assert "2 unit(s)" in out
+
+
+def test_sweep_dry_run_touches_no_run_directory(config, sweep_dir):
+    args = _sweep_args(spec="small", dry_run=True)
+    bench_main._sweep(config, args)
+
+    runs_dir = config.bench_dir / "runs"
+    assert not runs_dir.exists() or not list(runs_dir.iterdir())
+
+
+def test_sweep_runs_and_reports_the_written_run_dir(config, sweep_dir, fake_pipelines, capsys):
+    args = _sweep_args(spec="small")
+    rc = bench_main._sweep(config, args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "wrote " in out
+    run_dirs = list((config.bench_dir / "runs").iterdir())
+    assert len(run_dirs) == 1
+    assert str(run_dirs[0]) in out
+
+
+def test_sweep_an_unknown_spec_key_reports_and_exits_nonzero(config, sweep_dir, capsys):
+    args = _sweep_args(spec="does-not-exist")
+    rc = bench_main._sweep(config, args)
+
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "does-not-exist" in out
+
+
+def test_sweep_a_server_axis_spec_is_refused_before_a_runtime(config, sweep_dir, capsys):
+    raw = dict(_SMALL_RAW, key="server", axes=[{"param": "trellis_band", "values": [1, 2]}])
+    _write_spec(sweep_dir, raw, "server")
+
+    args = _sweep_args(spec="server")
+    rc = bench_main._sweep(config, args)
+
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "phase 2" in out or "server-config" in out

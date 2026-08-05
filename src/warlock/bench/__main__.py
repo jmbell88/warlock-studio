@@ -19,8 +19,10 @@ from ..config import get_config
 from . import calibrate as calibrate_mod
 from . import metrics as metrics_mod
 from . import recipe as recipe_mod
+from . import report as report_mod
 from . import runner as runner_mod
 from . import suite as suite_mod
+from . import sweep as sweep_mod
 
 
 def _timestamp() -> str:
@@ -117,6 +119,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     prune = sub.add_parser("prune", help="delete all but the newest runs")
     prune.add_argument("--keep", type=int, default=3)
+
+    sweep = sub.add_parser(
+        "sweep",
+        help=(
+            "run a parameter sweep (one axis at a time) against a fixed baseline; "
+            "turntable views need bpy (`uv sync --extra rig`)"
+        ),
+    )
+    sweep.add_argument("--spec", required=True, help="a sweep spec key under bench/sweeps")
+    sweep.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="an existing sweep run directory; its own spec/seed selection is reused",
+    )
+    sweep.add_argument("--dry-run", action="store_true")
+
+    report = sub.add_parser("report", help="aggregate verdicts across sweep runs into findings")
+    report.add_argument(
+        "--threshold",
+        type=int,
+        default=5,
+        help="advisory: hide a param value's line when it has fewer than N verdicts",
+    )
     return parser
 
 
@@ -238,6 +264,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"removed {len(removed)} run(s)")
         return 0
 
+    if args.command == "sweep":
+        return _sweep(config, args)
+
+    if args.command == "report":
+        return _report(config, args)
+
     return _run(config, args)
 
 
@@ -303,6 +335,50 @@ def _run(config, args) -> int:
         print("interrupted")
         return 130
     print(f"wrote {out}")
+    return 0
+
+
+def _sweep(config, args) -> int:
+    started = _timestamp()
+    try:
+        spec = sweep_mod.load(args.spec)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    recipe = recipe_mod.load(spec.recipe_key)
+    try:
+        run_dir, todo, doc = sweep_mod.plan_sweep(
+            config, spec, recipe, started=started, run_dir=args.resume
+        )
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    print(f"{len(todo)} unit(s)  sweep: {spec.key}   run dir: {run_dir}")
+    if args.dry_run:
+        for unit in todo:
+            print(f"  {unit.key}")
+        return 0
+
+    try:
+        out = sweep_mod.run_sweep(
+            config,
+            spec_key=args.spec, started=started, resume=args.resume, on_event=print,
+        )
+    except KeyboardInterrupt:
+        print("interrupted")
+        return 130
+    print(f"wrote {out}")
+    return 0
+
+
+def _report(config, args) -> int:
+    runs = report_mod.sweep_runs(config)
+    doc = report_mod.aggregate(runs)
+    json_path, md_path = report_mod.write_findings(config, doc)
+    for line in report_mod.summary_lines({"params": doc}, min_n=args.threshold):
+        print(line)
+    print(f"\nwrote {json_path}")
+    print(f"wrote {md_path}")
     return 0
 
 

@@ -376,3 +376,88 @@ def test_summary_lines_reports_accept_rate_and_nothing_to_score(tmp_path):
     assert any("lora_weight" in line for line in lines)
     assert any("1/1 accepted" in line for line in lines)
     assert any("nothing to score" in line for line in lines)
+
+
+def test_summary_lines_min_n_hides_a_thin_bucket(tmp_path):
+    run_dir = _sweep_run(tmp_path, "r1")
+    _write_items(run_dir, [_item("lora_weight=0.6--s1", "lora_weight", 0.6)])
+    verdicts_mod.append_verdict(
+        run_dir, unit="lora_weight=0.6--s1", source="human", verdict="accept",
+        param="lora_weight", value=0.6,
+    )
+    doc = report_mod.aggregate([run_dir])
+    full = {"version": 1, "generated": "x", "params": doc}
+
+    lines = report_mod.summary_lines(full, min_n=5)
+
+    assert lines == ["no verdicts recorded yet"]
+
+
+def test_summary_lines_min_n_defaults_to_showing_everything(tmp_path):
+    run_dir = _sweep_run(tmp_path, "r1")
+    _write_items(run_dir, [_item("lora_weight=0.6--s1", "lora_weight", 0.6)])
+    verdicts_mod.append_verdict(
+        run_dir, unit="lora_weight=0.6--s1", source="human", verdict="accept",
+        param="lora_weight", value=0.6,
+    )
+    doc = report_mod.aggregate([run_dir])
+    full = {"version": 1, "generated": "x", "params": doc}
+
+    assert report_mod.summary_lines(full) == report_mod.summary_lines(full, min_n=0)
+
+
+# --- CLI: `report` subcommand ----------------------------------------------------
+
+
+from warlock.bench import __main__ as bench_main  # noqa: E402
+
+
+def test_report_cli_with_no_sweep_runs_says_so_and_exits_zero(tmp_path, config, capsys):
+    args = bench_main.build_parser().parse_args(["report"])
+    rc = bench_main._report(config, args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no verdicts recorded yet" in out
+    assert (config.bench_dir / "findings.json").exists()
+    assert (config.bench_dir / "findings.md").exists()
+
+
+def test_report_cli_prints_summary_and_both_paths(tmp_path, config, capsys):
+    run_dir = _sweep_run(tmp_path, "r1")
+    _write_items(run_dir, [_item("lora_weight=0.6--s1", "lora_weight", 0.6)])
+    verdicts_mod.append_verdict(
+        run_dir, unit="lora_weight=0.6--s1", source="human", verdict="accept",
+        param="lora_weight", value=0.6,
+    )
+
+    args = bench_main.build_parser().parse_args(["report", "--threshold", "0"])
+    rc = bench_main._report(config, args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "lora_weight" in out
+    json_path = config.bench_dir / "findings.json"
+    md_path = config.bench_dir / "findings.md"
+    assert str(json_path) in out
+    assert str(md_path) in out
+
+
+def test_report_cli_threshold_hides_a_thin_bucket_but_findings_json_keeps_it(
+    tmp_path, config, capsys
+):
+    run_dir = _sweep_run(tmp_path, "r1")
+    _write_items(run_dir, [_item("lora_weight=0.6--s1", "lora_weight", 0.6)])
+    verdicts_mod.append_verdict(
+        run_dir, unit="lora_weight=0.6--s1", source="human", verdict="accept",
+        param="lora_weight", value=0.6,
+    )
+
+    args = bench_main.build_parser().parse_args(["report", "--threshold", "5"])
+    rc = bench_main._report(config, args)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "lora_weight" not in out
+    written = json.loads((config.bench_dir / "findings.json").read_text("utf-8"))
+    assert written["params"]["lora_weight"]["0.6"]["n"] == 1

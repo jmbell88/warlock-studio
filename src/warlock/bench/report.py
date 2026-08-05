@@ -169,18 +169,27 @@ def write_findings(config: Any, doc: dict[str, dict[str, dict[str, Any]]]) -> tu
     return json_path, md_path
 
 
-def summary_lines(doc: dict[str, Any]) -> list[str]:
+def summary_lines(doc: dict[str, Any], *, min_n: int = 0) -> list[str]:
     """One line per param value, mirroring ``score.summary_lines``'s style: a
     header, then indented figures, "nothing to score" when a metric has no
-    number rather than a bare ``None``."""
+    number rather than a bare ``None``.
+
+    ``min_n`` is advisory display filtering only -- a value bucket with fewer
+    than ``min_n`` verdicts is left out of the printed table (and its param
+    header, if that leaves the param with no values at all), never out of
+    ``findings.json``, which keeps every bucket regardless. The default of 0
+    hides nothing, so every existing caller's output is unchanged."""
     params = doc.get("params") or {}
     if not params:
         return ["no verdicts recorded yet"]
     out: list[str] = []
     for param in sorted(params):
-        out.append(f"{param}:")
         values = params[param]
-        for value in sorted(values):
+        shown = [value for value in sorted(values) if values[value]["n"] >= min_n]
+        if not shown:
+            continue
+        out.append(f"{param}:")
+        for value in shown:
             entry = values[value]
             out.append(
                 f"  {value}: {entry['accepts']}/{entry['n']} accepted"
@@ -196,4 +205,6 @@ def summary_lines(doc: dict[str, Any]) -> list[str]:
             if entry["top_reasons"]:
                 reasons = ", ".join(f"{reason} x{count}" for reason, count in entry["top_reasons"])
                 out.append(f"    top reject reasons: {reasons}")
+    if not out:
+        return ["no verdicts recorded yet"]
     return out
