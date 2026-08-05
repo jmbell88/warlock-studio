@@ -286,6 +286,11 @@ class AppState:
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never draws pays nothing for it.
     inker: Any = None
+    # Build mode's own multi-document state, built on first use by
+    # ``build_mode.ensure``. Untyped and None here for the reason ``inker`` is:
+    # AppState is the shared frame state and deliberately knows nothing about
+    # what a mode keeps, so a session that never opens Build mode pays nothing.
+    build: Any = None
     manual: ManualState = field(default_factory=ManualState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
     # so the Export tab reads and parses it once per version of the file rather
