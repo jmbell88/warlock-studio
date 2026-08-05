@@ -68,10 +68,15 @@ def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     would hide exactly the exports that have not been produced yet -- which is
     all of them, the first time.
 
-    The three lists are what ``service.files.derived_2d_for`` says each stage
-    can produce, plus the source image every job may take away;
-    ``test_every_offered_name_is_servable`` and the inspector's cross-check
-    against ``files.ready`` are what keep them from drifting from it.
+    The two image stages' lists are labels for exactly what
+    ``service.files.derived_2d_for`` says each can produce, plus the source
+    image every job may take away. They are literals rather than a lookup
+    because the *order* is a UI decision the service has no opinion about --
+    a tile leads with its own PNG, a reference ends with the image it was
+    drawn from -- and the price of that is a second place to edit. What keeps
+    the two from drifting is ``test_the_grid_offers_exactly_what_each_stage_
+    can_derive``, which fails on a name added to one and not the other: a
+    label missing here is not a wrong button, it is no button at all.
     """
     stage = job.get("stage")
     if stage == "tile":

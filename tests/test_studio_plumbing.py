@@ -378,6 +378,41 @@ def test_copying_settings_cannot_smuggle_a_derived_value_into_the_form():
     assert set(form) & {"composed_prompt", "mesh_report", "transform", "hand_edited"} == set()
 
 
+def _copy_ctx():
+    from types import SimpleNamespace
+
+    from warlock.studio.state import default_form_2d
+
+    return SimpleNamespace(
+        state=SimpleNamespace(form_2d=default_form_2d(), mode="3d"),
+        toast=lambda _text: None,
+    )
+
+
+def test_copying_a_tiles_settings_keeps_it_a_tile():
+    """The one field params cannot carry: tile-ness lives in the stage.
+
+    A form filled from params alone opens in Object mode, which for a texture
+    means the pane offers a taxonomy the prompt compiler will discard and a
+    second stage the job cannot have.
+    """
+    from warlock.studio.panes import library
+
+    ctx = _copy_ctx()
+    library._copy_settings(ctx, {"stage": "tile", "params": {"prompt": "cobblestone"}})
+    assert ctx.state.form_2d["output"] == "tile"
+    assert ctx.state.mode == "2d"
+
+
+def test_copying_a_references_settings_makes_an_object():
+    from warlock.studio.panes import library
+
+    ctx = _copy_ctx()
+    ctx.state.form_2d["output"] = "tile"
+    library._copy_settings(ctx, {"stage": "reference", "params": {"prompt": "a barrel"}})
+    assert ctx.state.form_2d["output"] == "reference"
+
+
 def test_copying_settings_survives_a_junk_value():
     from warlock.studio.state import form_from_params
 

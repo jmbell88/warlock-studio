@@ -362,7 +362,13 @@ TILE_2D = ("wrap_preview.png", "manifest.json")
 # The union: what ``fresh_2d`` and ``derivable_2d`` answer about a *name*,
 # independently of the job asking. The per-stage split above is what decides
 # whether a given job may ask.
-DERIVED_2D = REFERENCE_2D + ("wrap_preview.png",)
+# Composed rather than written out, and that is not tidiness: the two halves
+# overlap in manifest.json and a hand-written union is only ever right by
+# coincidence. A tile-only artifact added to TILE_2D and missed here would be
+# ``ready`` -- derived_2d_for says so -- while get_file's derivation gate and
+# fresh_2d, which both key on this tuple, would never produce it: an enabled
+# button that answers NotReady for ever.
+DERIVED_2D = REFERENCE_2D + tuple(n for n in TILE_2D if n not in REFERENCE_2D)
 
 
 def derived_2d_for(stage: str | None) -> tuple[str, ...]:

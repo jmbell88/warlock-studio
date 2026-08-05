@@ -306,7 +306,14 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     """
     from ..state import form_from_params
 
-    ctx.state.form_2d = form_from_params(job.get("params") or {})
+    form = form_from_params(job.get("params") or {})
+    # The output switch is restored from the *stage*, because that is where a
+    # job's tile-ness lives -- params never carries it, so a form filled from
+    # params alone would open in Object mode and quietly offer to make a mesh
+    # of a texture. The whole job row is in hand here; form_from_params is not
+    # given it, because it is the params allowlist and must stay one.
+    form["output"] = "tile" if job.get("stage") == "tile" else "reference"
+    ctx.state.form_2d = form
     ctx.state.mode = "2d"
     ctx.toast("Settings copied to the form.")
 

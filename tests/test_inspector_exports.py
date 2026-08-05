@@ -72,6 +72,26 @@ def test_a_tile_offers_the_texture_itself_and_its_wrapped_view():
     assert names == ["input.png", "wrap_preview.png", "manifest.json"]
 
 
+def test_the_grid_offers_exactly_what_each_stage_can_derive():
+    """The label tuples and ``derived_2d_for`` are one list written twice.
+
+    The grid is literals so the *order* can be a UI decision, which means a
+    name added to ``TILE_2D`` or ``REFERENCE_2D`` and not to the tuple beside
+    it loses its button entirely -- not a wrong button, no button. Nothing else
+    catches that: the servable test only asks about MEDIA, and the cross-check
+    against ``files.ready`` never looks at the grid at all.
+    """
+    from warlock.service import files as svc_files
+
+    for stage in ("reference", "tile"):
+        offered = {n for n, _label in widgets.artifacts_for(_job(stage=stage))}
+        # input.png is the source image every job may take away, and is served
+        # rather than derived -- so it is the one name in the grid that is not
+        # in the derivable set.
+        assert "input.png" in offered
+        assert offered - {"input.png"} == set(svc_files.derived_2d_for(stage))
+
+
 def test_a_reference_is_not_offered_a_wrap_preview():
     # Nothing wraps: the ratio the preview exists to make visible is only ever
     # measured on a tile.

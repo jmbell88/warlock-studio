@@ -9,6 +9,7 @@ writing the same filename.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -164,8 +165,18 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
             from ..pipelines import seam
 
             tmp = job_dir / f".{name}.tmp"
-            seam.wrap_preview(source, tmp)
-            os.replace(tmp, job_dir / name)
+            try:
+                seam.wrap_preview(source, tmp)
+                os.replace(tmp, job_dir / name)
+            finally:
+                # A failed or half-written roll must not leave its staging file
+                # in the job directory: nothing ever looks at a dotfile again,
+                # so it would sit there until the job was pruned. Suppressed
+                # and not merely missing_ok, because a cleanup that raises here
+                # would replace the failure the caller needs to see. Harmless
+                # after a success, where the replace has already consumed it.
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
             return
         with Image.open(source) as image:
             image.load()
@@ -192,10 +203,17 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
         meta["matte"] = matte
         meta["alpha"] = asset2d.alpha_report(out)
         # Staged and renamed: a concurrent reader of an artifact this job
-        # derived a moment ago must never see a half-written PNG.
+        # derived a moment ago must never see a half-written PNG. The finally
+        # is the same rule the wrapped view above follows -- an encode that
+        # raises half way through would otherwise strand its staging file for
+        # the life of the job directory.
         tmp = job_dir / f".{name}.tmp"
-        out.save(tmp, "PNG")
-        os.replace(tmp, job_dir / name)
+        try:
+            out.save(tmp, "PNG")
+            os.replace(tmp, job_dir / name)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         _write_manifest(svc, job, job_id, job_dir, name, meta)
 
 

@@ -290,7 +290,14 @@ def _seam(ctx: Any, job: Any) -> None:
     texture = ctx.textures.get(f"{job_id}:wrap", ctx.job_dir(job_id) / "wrap_preview.png")
     key = f"wrap:{job_id}"
     if texture is None:
-        if widgets.disabled_button("Show it wrapped", not ctx.busy(key)):
+        busy = ctx.busy(key)
+        if busy:
+            # The same idiom the Export grid uses beside a busy artifact:
+            # rolling a 1024-square PNG is several hundred milliseconds, and a
+            # button that only greys out reads as one that did nothing.
+            widgets.spinner()
+            imgui.same_line()
+        if widgets.disabled_button("Show it wrapped", not busy):
             ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, "wrap_preview.png")
         return
     imgui.image(widgets.texture_ref(texture), (THUMB_SIZE * 2, THUMB_SIZE * 2))

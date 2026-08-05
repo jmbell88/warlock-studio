@@ -380,6 +380,23 @@ def test_a_tile_cannot_derive_the_cutout_exports(svc):
             svc_derive.get_file(svc, job_id, name)
 
 
+def test_a_failed_roll_leaves_no_staging_file_behind(svc, monkeypatch):
+    # Nothing ever looks at a dotfile again, so one stranded by a failure sits
+    # in the job directory until the job is pruned. The cutout branch stages
+    # the same way and now cleans up the same way.
+    from warlock.pipelines import seam
+
+    def boom(src, dest):
+        dest.write_bytes(b"half a png")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(seam, "wrap_preview", boom)
+    job_id = _reference(svc, stage="tile")
+    with pytest.raises(OSError):
+        svc_derive.get_file(svc, job_id, "wrap_preview.png")
+    assert not list(svc.job_dir(job_id).glob(".*.tmp"))
+
+
 def test_a_reference_has_nothing_to_wrap(svc):
     job_id = _reference(svc)
     with pytest.raises(NotReady):
