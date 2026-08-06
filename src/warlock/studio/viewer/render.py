@@ -149,7 +149,16 @@ class Renderer:
                 # The inverse transpose, so a non-uniform scale does not tilt
                 # the normals. Rebuilt per node because the placement transform
                 # is uniform but a glTF node's need not be.
-                normal_matrix = np.linalg.inv(world[:3, :3]).T
+                #
+                # A zero on any scale axis makes the 3x3 singular, and an
+                # unguarded inverse raised out of the *draw* -- one flattened
+                # object took the whole viewport down. Its normals are
+                # undefined either way, so the identity is as good an answer as
+                # exists and the rest of the scene still renders.
+                try:
+                    normal_matrix = np.linalg.inv(world[:3, :3]).T
+                except np.linalg.LinAlgError:
+                    normal_matrix = np.eye(3)
                 program["u_normal_matrix"].write(
                     np.ascontiguousarray(normal_matrix.T, dtype="f4").tobytes()
                 )

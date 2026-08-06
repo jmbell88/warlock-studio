@@ -199,6 +199,7 @@ def vram_plan(svc: Any) -> vram.Plan:
         budget_gib=svc.config.vram_budget_gib,
         total_gib=svc.config.vram_total_gib,
         device=vram.device_memory(),
+        explicit=svc.config.vram_exclusive_explicit,
     )
 
 

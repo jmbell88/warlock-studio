@@ -985,8 +985,13 @@ class Worker:
             )
         )
         params["reference_report"] = report.as_dict()
-        params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
-            self.config, params, mesh_seed=mesh_seed
+        # Off the loop thread: the recipe fingerprints trellis-server.exe and
+        # the models directory, which is real disk I/O, and this thread is the
+        # one hosting cancellation.
+        params.setdefault("recipe", {})["trellis"] = await asyncio.to_thread(
+            functools.partial(
+                provenance.trellis_recipe, self.config, params, mesh_seed=mesh_seed
+            )
         )
         await asyncio.to_thread(self.store.set_params, job_id, params)
         if not report.ok:
@@ -1177,8 +1182,10 @@ class Worker:
             # claiming a seed whose mesh is not there.
             kept_seed = best["seed"] if restored else attempts[-1]["seed"]
             params["mesh_seed"] = kept_seed
-            params.setdefault("recipe", {})["trellis"] = provenance.trellis_recipe(
-                self.config, params, mesh_seed=kept_seed
+            params.setdefault("recipe", {})["trellis"] = await asyncio.to_thread(
+                functools.partial(
+                    provenance.trellis_recipe, self.config, params, mesh_seed=kept_seed
+                )
             )
             await asyncio.to_thread(self.store.set_params, job_id, params)
         for scratch in (keep, keep_source):

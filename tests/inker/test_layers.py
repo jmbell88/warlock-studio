@@ -101,6 +101,20 @@ def test_removing_keeps_the_active_index_inside_the_stack():
     assert stack.active_index == 0
 
 
+def test_removing_a_layer_below_the_active_one_keeps_the_same_layer_active():
+    """A clamp alone is not enough: removing below the active layer shifts
+    every index above it down, so ``active_index`` kept pointing at whatever
+    had been *above* it. The active layer silently became a different layer and
+    the next stroke landed on it."""
+    stack = _stack((1, 1, 1, 255), (2, 2, 2, 255), (3, 3, 3, 255), active=2)
+    was = stack.active.uid
+
+    stack.remove(0)
+
+    assert stack.active.uid == was
+    assert stack.active_index == 1
+
+
 # --- compositing ------------------------------------------------------------
 
 

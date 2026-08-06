@@ -84,17 +84,48 @@ def _rig_tab(ctx: Any, job: Any) -> None:
 
 # --- pieces -----------------------------------------------------------------
 
+# Field text the queue refused, keyed by submit key. Frame thread only, and
+# cleared the moment a submit is accepted, so it holds at most one entry per
+# field being typed into right now. See ``_write_field``.
+_unsent: dict[str, str] = {}
+
+
+def _write_field(ctx: Any, key: str, job_id: str, payload: Any, typed: str, current: str) -> None:
+    """Submit an edited field, retrying until the queue takes it.
+
+    ``TaskRunner.submit`` refuses a key already in flight and nothing re-arms
+    it, and ``widgets.input_text`` hands back the *passed* value on a frame
+    with no keystroke -- so the frame after a refusal compared the stale cached
+    job against itself, found no difference, and the keystrokes typed during
+    the write were simply gone. Fast typing committed a prefix.
+
+    The unsent text is held here instead and retried every frame until a submit
+    is accepted, which is also what clears it.
+    """
+    if typed != current:
+        _unsent[key] = typed
+    pending = _unsent.get(key)
+    if pending is None:
+        return
+    if ctx.submit(key, svc_jobs.update_job, ctx.svc, job_id, payload(pending)):
+        _unsent.pop(key, None)
+
 
 def _header(ctx: Any, job: Any) -> None:
     job_id = job["id"]
     name = widgets.input_text("##name", job.get("name") or "", max_length=120, hint="Name")
-    if name != (job.get("name") or ""):
-        ctx.submit(f"name:{job_id}", svc_jobs.update_job, ctx.svc, job_id, {"name": name})
+    _write_field(
+        ctx, f"name:{job_id}", job_id, lambda v: {"name": v}, name, job.get("name") or ""
+    )
     tags = widgets.input_text("##tags", job.get("tags") or "", max_length=400, hint="tags, comma")
-    if tags != (job.get("tags") or ""):
-        ctx.submit(
-            f"tags:{job_id}", svc_jobs.update_job, ctx.svc, job_id, {"tags": tags.split(",")}
-        )
+    _write_field(
+        ctx,
+        f"tags:{job_id}",
+        job_id,
+        lambda v: {"tags": v.split(",")},
+        tags,
+        job.get("tags") or "",
+    )
     widgets.status_pill(job["status"])
     imgui.same_line()
     favourite = bool(job.get("favorite"))

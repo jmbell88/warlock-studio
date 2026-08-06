@@ -193,6 +193,15 @@ class Plan:
     """The resolved value of ``Config.vram_exclusive``."""
     reason: str
     """Why, in one line, for the log and the doctor row."""
+    explicit: bool = False
+    """Whether the mode came from ``WARLOCK_VRAM_EXCLUSIVE`` rather than the card.
+
+    Carried rather than re-derived, because it stops being derivable the moment
+    the decision is written back: ``Runtime._resolve_vram`` puts a plain bool
+    onto the tri-state ``Config.vram_exclusive``, so every later ``plan()``
+    call -- every health poll -- saw a set value and reported an auto-selected
+    mode as "set explicitly by WARLOCK_VRAM_EXCLUSIVE".
+    """
 
     @property
     def enforced(self) -> bool:
@@ -208,6 +217,7 @@ def plan(
     budget_gib: float | None = None,
     total_gib: float | None = None,
     device: DeviceMemory | None = None,
+    explicit: bool | None = None,
 ) -> Plan:
     """Resolve the mode and the budget.
 
@@ -215,7 +225,14 @@ def plan(
     is honoured verbatim and never overridden -- auto-detection exists to give
     an unconfigured host a sane default, not to argue with one that was
     configured.
+
+    ``explicit`` says whether that set value came from the environment, for a
+    caller resolving a config the startup pass has already written a bool back
+    onto. Left None it is inferred, which is right the first time and only the
+    first time.
     """
+    if explicit is None:
+        explicit = exclusive is not None
     total = total_gib if total_gib is not None else (device.total_gib if device else None)
     if total is None:
         return Plan(
@@ -223,11 +240,12 @@ def plan(
             None,
             bool(exclusive),
             "no CUDA device detected; VRAM admission control is off",
+            explicit,
         )
 
     budget = budget_gib if budget_gib is not None else max(total - HEADROOM_GIB, 0.0)
 
-    if exclusive is not None:
+    if exclusive is not None and explicit:
         mode = "exclusive" if exclusive else "coexist"
         return Plan(
             total,
@@ -235,6 +253,19 @@ def plan(
             exclusive,
             f"{total:.1f} GiB card, {budget:.1f} GiB budget; "
             f"{mode} set explicitly by WARLOCK_VRAM_EXCLUSIVE",
+            True,
+        )
+    if exclusive is not None:
+        # Already resolved once, and told so. Report the mode without claiming
+        # an origin: re-deriving it here is what invented the environment
+        # variable nobody set.
+        mode = "exclusive" if exclusive else "coexist"
+        return Plan(
+            total,
+            budget,
+            exclusive,
+            f"{total:.1f} GiB card, {budget:.1f} GiB budget; {mode}",
+            False,
         )
 
     auto = budget < COEXIST_GIB

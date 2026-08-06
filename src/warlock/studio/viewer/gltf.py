@@ -235,8 +235,24 @@ class Model:
 # --- loading ----------------------------------------------------------------
 
 
+#: Extensions this loader implements. Anything a file lists as *required*
+#: beyond these changes what its bytes mean, so it is refused rather than
+#: decoded as though the extension were absent.
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset()
+
+
 def load(path: Path | bytes) -> Model:
     gltf, buffer = read_glb(path)
+    # Refused rather than misread. KHR_mesh_quantization is the one that will
+    # arrive first -- gltfpack -c writes it -- and a quantized position stream
+    # decoded as though it were plain floats is geometry that looks like
+    # nothing, with nothing in the data to say why.
+    required = set(gltf.get("extensionsRequired") or []) - SUPPORTED_EXTENSIONS
+    if required:
+        raise ValueError(
+            "this GLB requires glTF extensions this viewer does not implement: "
+            + ", ".join(sorted(required))
+        )
     reader = _Reader(gltf, buffer)
     materials = [reader.material(m) for m in gltf.get("materials", [])]
     meshes = [
@@ -308,6 +324,25 @@ class _Reader:
         rows = raw[np.arange(count)[:, None] * stride + np.arange(item)[None, :]]
         return np.ascontiguousarray(rows).view(dtype).reshape(count, ncomp)
 
+    def decoded(self, index: int) -> np.ndarray:
+        """An accessor with its ``normalized`` flag honoured.
+
+        The flag says the integers encode a float in 0..1 (or -1..1 signed), so
+        reading them raw gives a UV of 65535 or a colour of 255 -- geometry and
+        materials that are silently, enormously wrong rather than broken. The
+        skin-weight path below already did this by hand for the one case that
+        turned up in practice; this is the same rule for every attribute.
+        """
+        acc = self.gltf["accessors"][index]
+        raw = self.accessor(index)
+        if not acc.get("normalized") or raw.dtype.kind not in "iu":
+            return raw
+        info = np.iinfo(raw.dtype)
+        if raw.dtype.kind == "u":
+            return raw.astype("f4") / float(info.max)
+        # Signed: the spec's own formula, which clamps -128 and -32768 to -1.
+        return np.maximum(raw.astype("f4") / float(info.max), -1.0)
+
     def _check_buffer(self, view: dict) -> None:
         """Refuse a view that points at a buffer we do not have.
 
@@ -333,16 +368,18 @@ class _Reader:
             raise ValueError("a primitive with no POSITION is not renderable")
         if prim.get("mode", 4) != 4:
             raise ValueError(f"unsupported primitive mode {prim.get('mode')}")
-        positions = self.accessor(attrs["POSITION"]).astype("f4")
+        positions = self.decoded(attrs["POSITION"]).astype("f4")
         if "indices" in prim:
+            # Indices are never normalized -- they are indices -- so they take
+            # the raw path deliberately.
             indices = self.accessor(prim["indices"]).reshape(-1).astype("u4")
         else:
             indices = np.arange(len(positions), dtype="u4")
         out = Primitive(positions=positions, indices=indices)
         if "NORMAL" in attrs:
-            out.normals = self.accessor(attrs["NORMAL"]).astype("f4")
+            out.normals = self.decoded(attrs["NORMAL"]).astype("f4")
         if "TEXCOORD_0" in attrs:
-            out.uvs = self.accessor(attrs["TEXCOORD_0"]).astype("f4")
+            out.uvs = self.decoded(attrs["TEXCOORD_0"]).astype("f4")
         if "JOINTS_0" in attrs:
             out.joints = self.accessor(attrs["JOINTS_0"]).astype("i4")
         if "WEIGHTS_0" in attrs:
@@ -428,9 +465,17 @@ class _Reader:
         data = self._image_bytes(image)
         if data is None:
             return None
-        with Image.open(io.BytesIO(data)) as im:
-            rgba = im.convert("RGBA")
-            return rgba.width, rgba.height, rgba.tobytes()
+        try:
+            with Image.open(io.BytesIO(data)) as im:
+                rgba = im.convert("RGBA")
+                return rgba.width, rgba.height, rgba.tobytes()
+        except Exception:
+            # The stated policy for images, applied to the decode as well as to
+            # the lookup: a texture that cannot be read is a cosmetic loss, and
+            # raising here turned one corrupt map into "this file will not
+            # open" -- for a mesh that is otherwise entirely intact.
+            log.warning("skipping a texture whose image data could not be decoded")
+            return None
 
     def skin(self, skin: dict) -> Skin:
         joints = list(skin["joints"])

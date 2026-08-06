@@ -178,6 +178,14 @@ class UndoStack:
         everything that writes pixels calls ``commit_floating`` first, so
         nothing above this edit describes the region it restores.
 
+        **That precondition is the caller's, and this class cannot check it.**
+        The stack holds opaque ``Edit``s and has no idea which of them touch
+        pixels; the guarantee comes from ``Document`` calling
+        ``commit_floating`` at the top of every mutating method, which
+        ``tests/inker/test_regressions.py`` pins from the outside. A future
+        caller that revokes a step with pixel writes above it gets a corrupt
+        document and no complaint from here.
+
         Returns False when the edit has already been evicted or undone, in
         which case there is nothing to put back and nothing to corrupt.
         """

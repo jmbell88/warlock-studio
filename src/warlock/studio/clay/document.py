@@ -304,6 +304,11 @@ class ClayDoc:
         no warning. Geometry that is no longer what a generator would build is
         a fact about ``set_mesh``, not about which caller remembered.
 
+        The freeze is pushed *with* the mesh edit, as one ``CompoundEdit``:
+        two steps meant one Ctrl+Z restored the generator claim over the
+        still-edited mesh -- the exact state the freeze exists to prevent --
+        and the user had to press again to get out of it.
+
         ``keep_generator`` is the single exception, for the properties panel's
         own rebuild: there the new mesh *is* what the generator makes, which is
         the one case where the claim is still true.
@@ -312,10 +317,16 @@ class ClayDoc:
         if mesh is obj.mesh:
             return False
         before, obj.mesh = obj.mesh, mesh
-        self.history.push(MeshEdit(uid, before, mesh))
+        edits: list[Any] = [MeshEdit(uid, before, mesh)]
         if not keep_generator and obj.generator is not None:
-            # Through set_props, so it undoes with the edit it belongs to.
-            self.set_props(uid, generator=None, params={})
+            # One step, not two. Pushed separately, a single Ctrl+Z restored
+            # the generator claim over the still-edited mesh -- the exact state
+            # the freeze exists to prevent -- and only a second press undid the
+            # edit it belongs to.
+            was = {"generator": obj.generator, "params": obj.params}
+            obj.generator, obj.params = None, {}
+            edits.append(ObjectPropsEdit(uid, was, {"generator": None, "params": {}}))
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         if select is not None:
             self.set_element_sel(uid, select)
         self.touch()

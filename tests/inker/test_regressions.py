@@ -82,6 +82,27 @@ def test_a_snapshot_restore_does_not_alias_the_snapshot_pixels():
     assert int(doc.stack.active.pixels[3, 3, 0]) == 10
 
 
+# -- steps that change nothing are not steps ---------------------------------
+
+
+def test_reselecting_the_same_region_pushes_nothing():
+    """Dirty is a comparison against ``history.head``, so a step that changes
+    nothing makes a saved document ask to be saved again and spends a Ctrl+Z
+    doing nothing. The both-None case was guarded; an identical *non*-empty
+    mask -- a marquee redrawn over itself, Select All twice, feather 0 -- was
+    not."""
+    doc = _doc()
+    rect = SelectionMask.from_rect(doc.size, (2, 2, 6, 6))
+    doc.select(rect)
+    depth = len(doc.history)
+
+    doc.select(SelectionMask.from_rect(doc.size, (2, 2, 6, 6)))
+    doc.select_all()
+    doc.select_all()
+
+    assert len(doc.history) == depth + 1, "only the select-all is a real change"
+
+
 # -- the floating buffer's half of history -----------------------------------
 
 

@@ -102,7 +102,10 @@ def test_adding_and_undoing_a_layer_returns_the_same_object_on_redo():
     assert len(doc.stack) == 1
     edit.redo(doc)
     assert doc.stack[1] is added
-    assert edit.cost == 0
+    # An undone add holds the only reference to a full-canvas layer, so it has
+    # to report that to the byte budget: a cost of zero let an unbounded number
+    # of them sit past the ceiling, invisible to eviction.
+    assert edit.cost == added.pixels.nbytes
 
 
 def test_removing_a_layer_keeps_its_pixels_so_the_undo_is_exact():

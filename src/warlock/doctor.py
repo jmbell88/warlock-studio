@@ -170,6 +170,7 @@ def _vram_check(config: Config) -> Check:
         budget_gib=config.vram_budget_gib,
         total_gib=config.vram_total_gib,
         device=device,
+        explicit=config.vram_exclusive_explicit,
     )
     if not resolved.enforced:
         return Check("VRAM budget", True, resolved.reason, fatal=False)

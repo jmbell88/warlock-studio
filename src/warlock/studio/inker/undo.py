@@ -116,6 +116,13 @@ class LayerAddEdit(Edit):
     index: int
     layer: Any
 
+    def __post_init__(self) -> None:
+        # An undone add holds the *only* reference to a full-canvas layer, so
+        # a cost of zero made it invisible to the byte budget: a document could
+        # pin an unbounded number of them past the 192 MiB ceiling. Same
+        # measurement LayerRemoveEdit already made.
+        self.cost = int(self.layer.pixels.nbytes)
+
     def undo(self, doc: Any) -> None:
         doc.stack.remove(doc.stack.index_of(self.layer.uid))
         doc.invalidate_all()

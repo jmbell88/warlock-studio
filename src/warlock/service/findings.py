@@ -42,8 +42,11 @@ survive ``delete_sweep`` and ``prune_jobs``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
+import os
+import tempfile
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -417,5 +420,20 @@ def refresh(svc: Any) -> Path:
     bench_dir = Path(svc.config.bench_dir)
     bench_dir.mkdir(parents=True, exist_ok=True)
     path = bench_dir / JSON_FILENAME
-    path.write_text(json.dumps(aggregate(svc.store), indent=2), encoding="utf-8")
+    # Staged, like every other file something else reads -- ``postprocess._staged``
+    # is the same idiom, written out here rather than imported because that
+    # module pulls trimesh in. Both settings panes load this through
+    # ``bench.findings.load`` on the frame thread, and a bare ``write_text``
+    # lets one of them observe a half-written document. It self-heals on the
+    # next recompute, which is exactly why it survived as the one unstaged
+    # writer.
+    fd, raw = tempfile.mkstemp(dir=bench_dir, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    tmp = Path(raw)
+    try:
+        tmp.write_text(json.dumps(aggregate(svc.store), indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
     return path

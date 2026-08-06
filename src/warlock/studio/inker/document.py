@@ -538,12 +538,17 @@ class Document:
         if self.mask is not None and self.mask.is_empty:
             self.mask = None
         after = None if self.mask is None else self.mask.mask
+        # Nothing changed, so nothing to undo. Pushing anyway -- which
+        # subtracting from an empty selection did -- moved the head, and dirty
+        # is a comparison against the head: an Alt-drag on a canvas with no
+        # selection made a saved document ask to be saved again, and spent a
+        # Ctrl+Z doing nothing. The both-None case was the one that reproduced;
+        # re-selecting the same region (a marquee redrawn over itself, Select
+        # All twice, feathering by zero) is the same no-op and was still
+        # pushing.
         if before is None and after is None:
-            # Nothing changed, so nothing to undo. Pushing anyway -- which
-            # subtracting from an empty selection did -- moved the head, and
-            # dirty is a comparison against the head: an Alt-drag on a canvas
-            # with no selection made a saved document ask to be saved again,
-            # and spent a Ctrl+Z doing nothing.
+            return
+        if before is not None and after is not None and np.array_equal(before, after):
             return
         self.history.push(SelectionEdit(before, after))
         self.rev += 1
@@ -910,8 +915,13 @@ class Document:
         )
         before = lower.pixels.copy()
         lower.pixels[:] = merged
-        # The merged result absorbed the lower layer's own opacity and blend,
-        # so leaving them applied a second time would double them.
+        # The merged result already has the lower layer's opacity baked into
+        # it, so leaving that applied a second time would double it. Its blend
+        # mode is *dropped* rather than absorbed -- there is nothing here for
+        # it to blend against, since what sits below the pair is not part of
+        # this composite -- and it has to be reset either way: a lower layer
+        # left on "multiply" would then multiply the merged pixels against
+        # everything beneath it.
         props_before = {"opacity": lower.opacity, "blend": lower.blend}
         lower.opacity, lower.blend = 1.0, "normal"
         removed = self.stack.remove(index)

@@ -145,6 +145,48 @@ def test_the_env_flag_is_tri_state(monkeypatch):
     assert Config().vram_exclusive is True
 
 
+def test_a_resolved_config_stops_claiming_an_env_var_nobody_set(monkeypatch):
+    """``Runtime._resolve_vram`` writes a plain bool back onto the tri-state,
+    so every later ``plan()`` -- every health poll, the doctor row -- saw a set
+    value and reported the auto-selected mode as "set explicitly by
+    WARLOCK_VRAM_EXCLUSIVE"."""
+    from warlock import doctor
+
+    monkeypatch.delenv("WARLOCK_VRAM_EXCLUSIVE", raising=False)
+    config = Config(vram_total_gib=32.0)
+
+    first = vram.plan(
+        exclusive=config.vram_exclusive,
+        total_gib=config.vram_total_gib,
+        explicit=config.vram_exclusive_explicit,
+    )
+    assert first.explicit is False
+    assert "auto-selected" in first.reason
+
+    # What the runtime writes back.
+    config.vram_exclusive = first.exclusive
+    config.vram_budget_gib = first.budget_gib
+    config.vram_exclusive_explicit = first.explicit
+
+    assert "WARLOCK_VRAM_EXCLUSIVE" not in doctor._vram_check(config).detail
+
+
+def test_an_explicit_choice_still_says_so_after_it_is_resolved(monkeypatch):
+    from warlock import doctor
+
+    monkeypatch.setenv("WARLOCK_VRAM_EXCLUSIVE", "1")
+    config = Config(vram_total_gib=32.0)
+    plan = vram.plan(
+        exclusive=config.vram_exclusive,
+        total_gib=config.vram_total_gib,
+        explicit=config.vram_exclusive_explicit,
+    )
+    assert plan.explicit is True
+    config.vram_exclusive, config.vram_exclusive_explicit = plan.exclusive, plan.explicit
+
+    assert "WARLOCK_VRAM_EXCLUSIVE" in doctor._vram_check(config).detail
+
+
 def test_the_total_and_budget_overrides_parse(monkeypatch):
     monkeypatch.setenv("WARLOCK_VRAM_TOTAL", "12")
     monkeypatch.setenv("WARLOCK_VRAM_BUDGET", "10.5")

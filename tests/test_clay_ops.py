@@ -201,6 +201,25 @@ def test_deleting_elements_freezes_the_generator() -> None:
     assert doc.by_uid(uid).generator is None
 
 
+def test_one_undo_takes_back_the_edit_and_its_freeze_together() -> None:
+    """The freeze was a second history step, so a single Ctrl+Z restored the
+    generator claim over the still-edited mesh -- the exact state the freeze
+    exists to prevent -- and only a second press undid the edit it belongs to.
+    Touching the size field in between rebuilt a pristine box over the edit."""
+    doc, uid = _doc()
+    _faces(doc, uid, 0)
+    mesh, sel = ops_topo.delete_faces(doc.by_uid(uid).mesh, doc.element_sel_of(uid))
+    original = doc.by_uid(uid).mesh
+    doc.set_mesh(uid, mesh, select=sel)
+
+    assert doc.undo() is True
+
+    obj = doc.by_uid(uid)
+    assert obj.mesh is original
+    assert obj.generator == "box"
+    assert obj.params == {"size": (1.0, 1.0, 1.0)}
+
+
 def test_a_rebuild_from_the_generator_is_the_one_thing_that_keeps_it() -> None:
     """Otherwise editing a box's size would freeze it on the first keystroke
     and the field would disappear under the user's hands."""
@@ -288,6 +307,8 @@ def test_mirror_bakes_into_the_mesh_and_leaves_the_scale_positive() -> None:
     doc.select([uid])
     clay_ops.run(_Ctx(), doc, clay_ops.get("mirror-x"))
     assert np.allclose(doc.by_uid(uid).scale, [1.0, 1.0, 1.0])
-    # Mesh, transform, and the freeze the mesh change now carries with it.
-    assert len(doc.history) == 3
+    # Two steps: the transform, and the mesh change with its freeze compounded
+    # into it. The freeze used to be a third, so one Ctrl+Z put the generator
+    # claim back over the mirrored mesh.
+    assert len(doc.history) == 2
     assert doc.by_uid(uid).generator is None

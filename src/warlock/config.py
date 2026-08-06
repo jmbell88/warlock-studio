@@ -235,6 +235,13 @@ class Config:
     vram_exclusive: bool | None = field(
         default_factory=lambda: _env_opt_bool("WARLOCK_VRAM_EXCLUSIVE")
     )
+    # Whether the value above came from the environment. Captured because the
+    # resolve destroys the evidence: writing a plain bool back over the
+    # tri-state makes "was this chosen or configured" underivable, so every
+    # later plan() -- every health poll -- reported an auto-selected mode as
+    # set by an environment variable nobody set. None means "not resolved yet",
+    # i.e. infer it from vram_exclusive.
+    vram_exclusive_explicit: bool | None = None
     # What one job may ask the card for, in GiB. None = device total minus
     # vram.HEADROOM_GIB, which is what you want unless the driver misreports.
     vram_budget_gib: float | None = field(

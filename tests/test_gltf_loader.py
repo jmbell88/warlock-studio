@@ -428,6 +428,99 @@ def test_an_accessor_reading_past_the_chunk_is_refused():
         gltf.load(data)
 
 
+def test_a_required_extension_this_loader_does_not_implement_is_refused():
+    """KHR_mesh_quantization is the one that arrives first -- gltfpack -c
+    writes it, and gltfpack is the binary this project is about to vendor. A
+    quantized position stream decoded as though it were plain floats is
+    geometry that looks like nothing, with nothing in the data to say why."""
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        extensionsRequired=["KHR_mesh_quantization"],
+    )
+    with pytest.raises(ValueError, match="KHR_mesh_quantization"):
+        gltf.load(data)
+
+
+def test_an_extension_that_is_merely_used_is_not_a_refusal():
+    """``extensionsUsed`` is advisory -- the file still reads correctly with
+    the extension ignored, which is exactly what a viewer should do."""
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        extensionsUsed=["KHR_materials_emissive_strength"],
+    )
+    assert gltf.load(data).meshes
+
+
+def test_a_normalized_uv_accessor_is_decoded_rather_than_read_raw():
+    """``normalized`` says the integers encode a float in 0..1. Read raw, a UV
+    comes back as 65535 -- a texture tiled sixty-five thousand times, which is
+    wrong in a way that looks like a broken material rather than a bad read."""
+    positions = np.zeros((3, 3), dtype="<f4")
+    uvs = np.array([[0, 0], [65535, 0], [0, 32768]], dtype="<u2")
+    binary = positions.tobytes() + uvs.tobytes()
+    doc = {
+        "asset": {"version": "2.0"},
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {
+                "bufferView": 1,
+                "componentType": 5123,
+                "count": 3,
+                "type": "VEC2",
+                "normalized": True,
+            },
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": positions.nbytes},
+            {"buffer": 0, "byteOffset": positions.nbytes, "byteLength": uvs.nbytes},
+        ],
+        "buffers": [{"byteLength": len(binary)}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}}]}],
+        "nodes": [{"mesh": 0}],
+        "scenes": [{"nodes": [0]}],
+    }
+
+    [[prim]] = gltf.load(_glb(doc, binary)).meshes
+
+    assert np.allclose(prim.uvs, [[0.0, 0.0], [1.0, 0.0], [0.0, 0.5]], atol=1e-4)
+
+
+def test_a_corrupt_texture_costs_the_texture_and_not_the_model(caplog):
+    """The stated policy for images, applied to the decode as well as to the
+    lookup: a texture that cannot be read is a cosmetic loss. Raising turned
+    one bad map into "this file will not open" for an intact mesh."""
+    import base64
+
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    junk = base64.b64encode(b"not a png at all").decode()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        images=[{"uri": f"data:image/png;base64,{junk}"}],
+        textures=[{"source": 0}],
+        materials=[
+            {"name": "shell", "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}
+        ],
+        meshes=[
+            {"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}
+        ],
+    )
+
+    model = gltf.load(data)
+
+    [[prim]] = model.meshes
+    assert len(prim.positions) == 3, "the mesh still loads"
+    assert prim.material is not None and prim.material.name == "shell"
+    assert prim.material.base_color is None, "only the unreadable map is lost"
+
+
 def test_a_glb_with_no_scenes_keeps_its_hierarchy():
     """Taking every node as a root made update_world visit each child twice --
     once under its parent, then again as a root with an identity parent, which

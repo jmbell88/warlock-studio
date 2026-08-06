@@ -189,9 +189,11 @@ def _resolve_vram(config: Any) -> None:
         budget_gib=config.vram_budget_gib,
         total_gib=config.vram_total_gib,
         device=vram.probe(),
+        explicit=config.vram_exclusive_explicit,
     )
     config.vram_exclusive = plan.exclusive
     config.vram_budget_gib = plan.budget_gib
+    config.vram_exclusive_explicit = plan.explicit
 
 
 def run(

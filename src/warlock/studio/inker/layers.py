@@ -131,7 +131,14 @@ class LayerStack:
         if len(self.layers) == 1:
             raise ValueError("the last layer cannot be removed")
         gone = self.layers.pop(index)
-        self.active_index = min(self.active_index, len(self.layers) - 1)
+        # Shifted, not just clamped. Removing a layer *below* the active one
+        # moves every index above it down by one, so a clamp alone left
+        # ``active_index`` pointing at the layer that used to be above it --
+        # the active layer silently became a different layer, and the next
+        # stroke landed on it.
+        if index < self.active_index:
+            self.active_index -= 1
+        self.active_index = max(0, min(self.active_index, len(self.layers) - 1))
         return gone
 
     def move(self, index: int, to: int) -> int:

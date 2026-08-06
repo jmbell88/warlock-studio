@@ -117,9 +117,12 @@ class Runtime:
             budget_gib=self.config.vram_budget_gib,
             total_gib=self.config.vram_total_gib,
             device=vram.probe(),
+            explicit=self.config.vram_exclusive_explicit,
         )
         self.config.vram_exclusive = plan.exclusive
         self.config.vram_budget_gib = plan.budget_gib
+        # Recorded before the write above makes it underivable; see the field.
+        self.config.vram_exclusive_explicit = plan.explicit
         log.info("vram: %s", plan.reason)
         return plan
 
@@ -162,13 +165,22 @@ class Runtime:
                 log.exception("the worker did not shut down cleanly")
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._loop.stop)
+        loop_stopped = True
         if self._thread is not None:
             self._thread.join(SHUTDOWN_TIMEOUT)
+            # Checked, not assumed. ``join`` with a timeout returns whether it
+            # waited long enough only via ``is_alive``, and the worker runs on
+            # this thread -- so a loop that has not unwound is a second writer
+            # the store-closing decision below has to account for, exactly as
+            # the TaskRunner's ``drained`` is.
+            loop_stopped = not self._thread.is_alive()
+            if not loop_stopped:
+                log.warning("the worker loop did not stop within %.0fs", SHUTDOWN_TIMEOUT)
         # After the loop, so a task still calling into the service finds the
         # store open rather than closed underneath it.
         # Bounded: a task parked in a never-dismissed native dialog would
         # otherwise hold the process open after the window has already gone.
-        drained = self.tasks.shutdown(timeout=SHUTDOWN_TIMEOUT)
+        drained = self.tasks.shutdown(timeout=SHUTDOWN_TIMEOUT) and loop_stopped
         if self.store is not None:
             if drained:
                 self.store.close()
@@ -180,7 +192,7 @@ class Runtime:
                 # will poll. The process is exiting; sqlite releases the file
                 # either way, and leaking a handle for the last second of a
                 # shutdown costs less than corrupting the last write.
-                log.warning("tasks still running at shutdown; leaving the store open")
+                log.warning("work still running at shutdown; leaving the store open")
         self.worker = self.svc = self.store = None
         self._loop = self._thread = None
 
