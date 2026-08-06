@@ -246,7 +246,7 @@ class Viewer:
         """Draw one frame into the viewport. -> the resolved texture."""
         self._rect = rect
         width, height = int(max(rect[2], 1)), int(max(rect[3], 1))
-        self.viewport.resize((width, height))
+        self._resize(self.viewport, width, height)
         self.camera.update(dt)
         self.renderer.draw(
             self.viewport,
@@ -259,7 +259,7 @@ class Viewer:
         if self.comparing and self.compare_viewport is not None:
             # One camera state, two renders: the point of a comparison is that
             # both meshes are seen from the identical angle.
-            self.compare_viewport.resize((width, height))
+            self._resize(self.compare_viewport, width, height)
             self.compare_camera.copy_from(self.camera)
             self.renderer.draw(
                 self.compare_viewport,
@@ -269,6 +269,29 @@ class Viewer:
                 wireframe=self.wireframe,
             )
         return self.viewport.texture
+
+    def _resize(self, viewport: glctx.Viewport, width: int, height: int) -> None:
+        """Resize, forgetting the outgoing texture first.
+
+        ``Viewport.resize`` releases its texture and makes a new one, and the
+        imgui backend maps GL names to moderngl objects: releasing without
+        forgetting leaves it holding a dead object under a name the driver is
+        free to reissue, which is how an unrelated image starts rendering as
+        this one. Same rule, same shape as ``ClayView._resize``.
+        """
+        if (width, height) == viewport.size:
+            return
+        self._forget(viewport.texture)
+        viewport.resize((width, height))
+
+    def _forget(self, texture: Any) -> None:
+        if texture is None:
+            return
+        from . import imgui_backend
+
+        renderer = imgui_backend.current()
+        if renderer is not None:
+            renderer.forget_texture(texture)
 
     def _overlays(self, height: int) -> list[Any]:
         if not self.pose_mode or not self.editor.bound:
@@ -430,7 +453,9 @@ class Viewer:
         self.markers.release()
         self.rotate_gizmo.release()
         self.translate_gizmo.release()
+        self._forget(self.viewport.texture)
         self.viewport.release()
         if self.compare_viewport is not None:
+            self._forget(self.compare_viewport.texture)
             self.compare_viewport.release()
         self.renderer.release()

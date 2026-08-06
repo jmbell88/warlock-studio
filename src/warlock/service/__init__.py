@@ -21,7 +21,6 @@ from .errors import (
     NotReady,
     ServiceError,
     TooLarge,
-    Unavailable,
 )
 
 __all__ = [
@@ -32,6 +31,5 @@ __all__ = [
     "NotReady",
     "ServiceError",
     "TooLarge",
-    "Unavailable",
     "WarlockService",
 ]

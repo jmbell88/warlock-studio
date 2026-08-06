@@ -126,15 +126,6 @@ def prompt_preview(
     }
 
 
-def preview_fields(mapping: Any) -> dict[str, Any]:
-    """Every taxonomy field present in ``mapping``, keyed by name.
-
-    One place, so a new guidance.py table is picked up by every caller without
-    another edit here.
-    """
-    return {f: mapping.get(f) for f in guidance.form_fields() if f in mapping}
-
-
 def trellis_log(svc: WarlockService) -> dict[str, Any]:
     """The tail of the shared trellis log, as text.
 

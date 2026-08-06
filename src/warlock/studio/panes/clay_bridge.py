@@ -102,9 +102,9 @@ def _outputs(ctx: Any, tab: Any) -> None:
         )
 
     if widgets.disabled_button(f"{icons.SEND} Send to 3D", ready):
-        # Wired in Task 13, which owns the offscreen render: the picture has to
-        # be drawn on the frame thread because it needs the GL context, and the
-        # bridge is not where that belongs.
+        # The App owns the offscreen render: the picture has to be drawn on
+        # the frame thread because it needs the GL context, and the bridge is
+        # not where that belongs.
         send_to_3d(ctx, tab)
     if imgui.is_item_hovered():
         imgui.set_tooltip(
@@ -118,11 +118,12 @@ def _outputs(ctx: Any, tab: Any) -> None:
 
 
 def send_to_3d(ctx: Any, tab: Any) -> None:
-    """Placeholder until Task 13 supplies the offscreen render.
+    """Hand the document to the App's offscreen render (``_clay_send_to_3d``).
 
-    Named and called from here rather than left as a dead button, so the wiring
-    that Task 13 completes has exactly one place to land and the pane needs no
-    edit when it does.
+    The indirection through ``ctx`` is the point: the render needs the GL
+    context and therefore the frame thread, which is the App's business. A
+    headless ctx that never attached the handler gets a clear refusal rather
+    than a half-drawn frame.
     """
     handler = getattr(ctx, "clay_send_to_3d", None)
     if handler is None:

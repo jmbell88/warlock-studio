@@ -75,8 +75,8 @@ job keeps running whichever mode you are in, and the progress card floats over e
 
 ## The window
 
-The app opens on Home, every launch: only the three working modes are remembered between runs, and
-none of them is what you want to be dropped into before you have said what you are doing. **Home**
+The app opens on Home, every launch: no mode is remembered between runs, because none of them is
+what you want to be dropped into before you have said what you are doing. **Home**
 is the first entry in the mode switch described above, and returns there at any time.
 
 Once you are in the workspace, the window is three columns:

@@ -36,8 +36,8 @@ FINDINGS_VERSION = 1
 JSON_FILENAME = "findings.json"
 
 # The only two metrics the old report ever emitted. Kept in the output as
-# nulls rather than dropped: ``bench/report.summary_lines`` and anything else
-# reading findings.json expects the keys to exist. Nothing computes them any
+# nulls rather than dropped: anything reading findings.json (the generate
+# panes through ``bench.findings.load``) expects the keys to exist. Nothing computes them any
 # more -- they were joined from a sweep run's scores.json, which the run-dir
 # path took with it.
 METRIC_NAMES = ("silhouette_iou", "dino_cosine")
@@ -224,25 +224,3 @@ def refresh(svc: Any) -> Path:
     path = bench_dir / JSON_FILENAME
     path.write_text(json.dumps(aggregate(svc.store), indent=2), encoding="utf-8")
     return path
-
-
-def summary_lines(doc: dict[str, Any], *, min_n: int = 0) -> list[str]:
-    """The params table as text -- what ``bench report`` used to print."""
-    params = doc.get("params") or {}
-    out: list[str] = []
-    for param in sorted(params):
-        values = params[param]
-        shown = [value for value in sorted(values) if values[value]["n"] >= min_n]
-        if not shown:
-            continue
-        out.append(f"{param}:")
-        for value in shown:
-            entry = values[value]
-            out.append(
-                f"  {value}: {entry['accepts']}/{entry['n']} accepted"
-                f" (rate {entry['accept_rate']})"
-            )
-            if entry["top_reasons"]:
-                reasons = ", ".join(f"{r} x{c}" for r, c in entry["top_reasons"])
-                out.append(f"    top reject reasons: {reasons}")
-    return out or ["no verdicts recorded yet"]

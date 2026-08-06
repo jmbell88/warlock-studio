@@ -7,7 +7,7 @@ pair of lists bounded by bytes. The raster editor's own edit types -- patches,
 layer add/remove/move/props, selections, whole-canvas replays -- stay where they
 are, because *those* are about pixels and layers. What is here is the part Clay
 mode needs too, with a ``MeshEdit`` in place of a ``PatchEdit``; a pure
-``studio/build/`` package that reached into the raster editor for its history
+``studio/clay/`` package that reached into the raster editor for its history
 would be depending on the raster editor for no reason other than where the file
 happened to sit.
 

@@ -146,4 +146,3 @@ def test_refresh_is_written_even_with_nothing_recorded(svc):
     doc = bench_findings.load(path)
     assert doc["params"] == {}
     assert doc["vectors"] == []
-    assert svc_findings.summary_lines(doc) == ["no verdicts recorded yet"]

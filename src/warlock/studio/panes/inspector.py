@@ -326,8 +326,8 @@ def _quality(ctx: Any, job: Any) -> None:
         ):
             if key in report:
                 widgets.muted(f"{label}: {report[key]}")
-    if isinstance(audit, dict) and audit.get("hole_ratio") is not None:
-        widgets.muted(f"visible openings: {float(audit['hole_ratio']) * 100:.1f}%")
+    if isinstance(audit, dict) and audit.get("worst") is not None:
+        widgets.muted(f"visible openings: {float(audit['worst']) * 100:.1f}%")
 
     attempts = params.get("mesh_attempts")
     if isinstance(attempts, list) and len(attempts) > 1:

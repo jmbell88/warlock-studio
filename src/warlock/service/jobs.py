@@ -720,6 +720,10 @@ def promote_to_model(
         for k, v in source["params"].items()
         if k not in DERIVED_PARAMS and k not in CONDITIONING_PARAMS
     }
+    # rerun_of is provenance of the *reference*: this job's lineage is
+    # parent_id, and carrying it would claim the mesh is a rerun of a
+    # reference it never was.
+    params.pop("rerun_of", None)
     # No ref.png is copied either: the promotion is an image job, and the
     # conditioning already did its work in the reference this promotes.
 

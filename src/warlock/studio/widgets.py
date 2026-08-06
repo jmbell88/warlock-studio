@@ -158,8 +158,8 @@ def quality_badge(job: dict[str, Any]) -> None:
         text_colored(colour, verdict)
         return
     audit = params.get("mesh_audit")
-    if isinstance(audit, dict) and audit.get("hole_ratio") is not None:
-        ratio = float(audit["hole_ratio"])
+    if isinstance(audit, dict) and audit.get("worst") is not None:
+        ratio = float(audit["worst"])
         colour = theme.OK if ratio < 0.02 else theme.WARN if ratio < 0.08 else theme.ERR
         text_colored(colour, f"{ratio * 100:.1f}% open")
 

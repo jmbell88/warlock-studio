@@ -799,6 +799,16 @@ def test_promote_without_overrides_inherits_the_reference(svc):
     assert params["bg_removal"] == "birefnet"
 
 
+def test_promote_does_not_claim_to_be_a_rerun(svc):
+    # A rerolled reference carries rerun_of; the promotion's lineage is
+    # parent_id, so carrying rerun_of onto the child would claim the mesh job
+    # is a rerun of a *reference* it never was.
+    ref_id = _done_reference(svc)
+    svc.store.merge_params(ref_id, {"rerun_of": "aaaaaaaaaaaa"})
+    params = _params(svc, svc_jobs.promote_to_model(svc, ref_id)["id"])
+    assert "rerun_of" not in params
+
+
 def test_promote_can_clear_an_inherited_rig_request(svc):
     ref_id = _done_reference(svc, rig=True)
     params = _params(svc, svc_jobs.promote_to_model(svc, ref_id, rig=False)["id"])

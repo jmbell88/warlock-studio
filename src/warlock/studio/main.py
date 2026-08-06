@@ -714,7 +714,7 @@ class App:
         from . import modes
 
         if ctx.state.mode not in modes.WORK_MODES:
-            # Home, the Manual, Clay and Settings have no form to submit and no
+            # Home, the Manual and Settings have no form to submit and no
             # viewport to frame; every one of these would act on a pane that is
             # not on screen.
             return
@@ -1710,11 +1710,26 @@ class App:
             [
                 ("F1", "Switch to the Manual"),
                 ("F10", "Toggle the frame-rate readout"),
+            ],
+        )
+        table(
+            "2D / 3D",
+            [
                 ("Ctrl+Enter", "Generate / Make 3D"),
                 ("F", "Frame the model"),
                 ("W", "Toggle wireframe"),
                 ("S", "Toggle turntable"),
                 ("Esc", "Exit comparison / pose edit"),
+            ],
+        )
+        table(
+            "Review",
+            [
+                ("A", "Accept the unit on screen"),
+                ("R", "Reject (then 1-5 picks the reason)"),
+                ("S", "Skip to the next unverdicted unit"),
+                ("Left / Right", "Previous / next unit"),
+                ("Esc", "Cancel a pending reject"),
             ],
         )
         from .clay_mode import TOOL_KEYS as CLAY_KEYS

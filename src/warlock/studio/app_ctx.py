@@ -56,7 +56,6 @@ class Ctx:
     layout: Any = None
     base_models: list[tuple[str, str]] = field(default_factory=list)
     style_loras: list[tuple[str, str]] = field(default_factory=list)
-    quit_requested: bool = False
 
     # -- shorthands --------------------------------------------------------
 

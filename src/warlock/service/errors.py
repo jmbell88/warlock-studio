@@ -62,21 +62,9 @@ class TooLarge(ServiceError):
 class Failed(ServiceError):
     """A subprocess or conversion that should have worked, didn't.
 
-    Distinct from Unavailable, which is "this machine can't do that at all":
     Blender is installed and the bake still died, gltfpack ran and returned
     garbage. The user's only useful response is to retry or report it, which is
     exactly what a 500 said.
     """
 
     status = 500
-
-
-class Unavailable(ServiceError):
-    """A dependency needed for this operation is missing or failed.
-
-    Blender not installed, gltfpack not vendored, a subprocess that died. The
-    distinction from Invalid is whose fault it is, which is exactly what the
-    user needs to know before they try again.
-    """
-
-    status = 503

@@ -257,9 +257,10 @@ class AppState:
     """The whole UI's mutable state."""
 
     # The one thing that decides what a pane shows, one of ``modes.KEYS``:
-    # home | manual | 2d | 3d | inker | clay | settings. It defaults to the
-    # Home screen, which is what makes the chooser appear on every launch
-    # rather than only the first ever; only the work modes are persisted.
+    # home | manual | 2d | 3d | inker | clay | review | settings. It defaults
+    # to the Home screen, which is what makes the chooser appear on every
+    # launch rather than only the first ever; no mode is ever persisted
+    # (``test_no_mode_is_persisted_anywhere`` pins that).
     mode: str = "home"
     selected: str | None = None
     comparing: str | None = None
@@ -282,7 +283,6 @@ class AppState:
     show_fps: bool = False
     wireframe: bool = False
     turntable: bool = False
-    show_advanced: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
     last_error: str | None = None
     # The Home screen's sub-view. Not persisted: Home always opens on the
