@@ -56,6 +56,18 @@ def normalise_rect(p0: tuple[int, int], p1: tuple[int, int]) -> tuple[int, int, 
     return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
 
+def _masked_alpha(pixels: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """A copy of ``pixels`` with a selection mask folded into its alpha.
+
+    The one invariant shared by a lifted buffer and the clipboard: pixels that
+    carry their own coverage, so whatever composites them later needs no mask
+    at all -- and a feathered edge stays feathered through both.
+    """
+    out = pixels.copy()
+    out[..., 3] = (out[..., 3].astype(np.float32) * mask / 255.0).astype(np.uint8)
+    return out
+
+
 def matte_for(pixels: np.ndarray) -> RGBA | None:
     """What a flattened export puts behind transparency, decided once at load.
 
@@ -581,8 +593,7 @@ class Document:
 
         # The floating pixels keep their own alpha *multiplied* by the mask, so
         # a feathered lift floats a feathered chunk rather than a hard one.
-        pixels = before.copy()
-        pixels[..., 3] = (pixels[..., 3].astype(np.float32) * crop / 255.0).astype(np.uint8)
+        pixels = _masked_alpha(before, crop)
         kept = 1.0 - crop.astype(np.float32) / 255.0
         cut = before.copy()
         cut[..., 3] = (before[..., 3].astype(np.float32) * kept).astype(np.uint8)
@@ -682,7 +693,20 @@ class Document:
     # -- clipboard ----------------------------------------------------------
 
     def copy(self) -> bool:
-        """Copy the selection (or the floating buffer) to the app clipboard."""
+        """Copy the selection (or the floating buffer) to the app clipboard.
+
+        The pixels carry the mask in their alpha, which is exactly the
+        invariant :meth:`lift` gives a :class:`FloatingBuffer` -- and it has to
+        be, because ``paste`` floats what it takes verbatim and
+        ``commit_floating`` composites a buffer without consulting its mask.
+        Putting the *rectangular* crop on the clipboard instead meant an
+        ordinary Ctrl+C over a lasso, ellipse, wand or feathered selection
+        pasted its full bounding box, while hit-testing (which does read the
+        mask) still only let the user grab the shape they selected.
+
+        The mask travels beside the pixels regardless: a paste has to know
+        which of them are its own for that hit-test.
+        """
         if self.floating is not None:
             self.clipboard.put(self.floating.pixels, self.floating.mask)
             return True
@@ -693,9 +717,8 @@ class Document:
         if box is None:
             return False
         x0, y0, x1, y1 = box
-        self.clipboard.put(
-            self.stack.active.pixels[y0:y1, x0:x1], self.mask.mask[y0:y1, x0:x1]
-        )
+        crop = self.mask.mask[y0:y1, x0:x1]
+        self.clipboard.put(_masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop), crop)
         return True
 
     def cut(self) -> bool:
@@ -771,11 +794,9 @@ class Document:
             taken = self.clipboard.take()
             if taken is None:
                 return False
-            pixels, mask = taken
-            pixels = pixels.copy()
-            pixels[..., 3] = (
-                pixels[..., 3].astype(np.float32) * mask / 255.0
-            ).astype(np.uint8)
+            # No second multiply: what the clipboard holds already carries its
+            # mask in alpha, and applying it twice darkens every feathered edge.
+            pixels, _mask = taken
         self.commit_floating()
         width, height = self.size
         placed = tf.resize_canvas(pixels, (width, height))

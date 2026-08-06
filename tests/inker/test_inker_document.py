@@ -384,6 +384,39 @@ def test_a_cut_copies_before_it_deletes():
     assert _at(doc, 9, 9) == RED
 
 
+def test_an_ordinary_paste_carries_the_selection_shape_not_its_bounding_box():
+    """``paste`` floats what it takes verbatim and ``commit_floating``
+    composites without consulting a mask, so a rectangular clipboard crop
+    pasted the whole bounding box of a lasso or ellipse -- while hit-testing,
+    which does read the mask, only let the user grab the shape."""
+    doc = _doc((16, 16), RED)
+    doc.select(inker.SelectionMask.from_ellipse((16, 16), (0, 0, 8, 8)))
+    assert doc.copy()
+    landed = doc.add_layer()  # onto empty pixels, so the paste is what is seen
+    assert doc.paste((8, 8))
+    doc.commit_floating()
+
+    # The ellipse's centre landed; its bounding box's corner did not.
+    assert int(landed.pixels[12, 12, 3]) == 255
+    assert int(landed.pixels[8, 8, 3]) == 0
+
+
+def test_a_feathered_copy_is_not_attenuated_twice_by_paste_as_layer():
+    """The clipboard's pixels carry their mask, so the layer paste must not
+    apply it a second time."""
+    doc = _doc((16, 16), RED)
+    doc.select(inker.SelectionMask.from_rect((16, 16), (4, 4, 12, 12)).feathered(2.0))
+    assert doc.copy()
+    taken = doc.clipboard.take()  # a copy; the clipboard is not cleared
+    assert taken is not None
+    assert doc.paste_as_layer()
+    height, width = taken[0].shape[:2]
+    placed = doc.stack.active.pixels[:height, :width]  # resize_canvas anchors top-left
+    assert np.array_equal(placed[..., 3], taken[0][..., 3])
+    alpha = taken[0][..., 3]
+    assert ((alpha > 0) & (alpha < 255)).any()  # the feather is really there
+
+
 def test_pasting_an_empty_clipboard_does_nothing():
     assert not _doc().paste()
 
