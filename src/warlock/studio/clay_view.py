@@ -159,9 +159,17 @@ class _SelOverlay:
     on the first two because ``Mesh`` and ``ElementSel`` are both frozen and
     replaced whole rather than mutated -- which is exactly what makes identity
     a sound cache key, and is stated as such in both of their docstrings.
+
+    ``specs`` is the draw list built from those buffers, cached here because it
+    too is a pure function of the key: every index buffer is decided by the
+    mesh, the selection, the mode and the hover, so it is built once per key
+    and replayed each frame. Building it per frame -- which is what calling
+    ``indexed`` per draw per frame amounts to -- minted a fresh IBO and VAO
+    every time and released them only on a key change, a GL-object leak at
+    frame rate for as long as the cursor held still.
     """
 
-    __slots__ = ("ctx", "key", "pos_vbo", "count", "_ibos", "_vaos", "_program")
+    __slots__ = ("ctx", "key", "pos_vbo", "count", "specs", "_ibos", "_vaos", "_program")
 
     def __init__(self, ctx: Any, program: Any, key: Any, positions: Any) -> None:
         self.ctx = ctx
@@ -170,6 +178,7 @@ class _SelOverlay:
         data = np.ascontiguousarray(positions, dtype="f4")
         self.count = len(data)
         self.pos_vbo = ctx.buffer(data.tobytes())
+        self.specs: list[Any] | None = None
         self._ibos: list[Any] = []
         self._vaos: list[Any] = []
 
@@ -193,6 +202,7 @@ class _SelOverlay:
         return vao
 
     def release(self) -> None:
+        self.specs = None
         for vao in self._vaos:
             vao.release()
         for ibo in self._ibos:
@@ -455,10 +465,37 @@ class ClayView:
     def _overlay_items(
         self, obj: Any, overlay: Any, world: Any, mode: str, sel: Any, hover: int
     ) -> list[Any]:
+        if overlay.specs is None:
+            overlay.specs = self._overlay_specs(obj, overlay, mode, sel, hover)
+        items: list[Any] = []
+        for vao, gl_mode, color, depth, size, biased in overlay.specs:
+            items.append(
+                DrawItem(
+                    vao=vao,
+                    color=color,
+                    model=_toward_eye(self.camera.position) @ world if biased
+                    else world,
+                    mode=gl_mode,
+                    depth=depth,
+                    point_size=size,
+                )
+            )
+        return items
+
+    def _overlay_specs(
+        self, obj: Any, overlay: Any, mode: str, sel: Any, hover: int
+    ) -> list[Any]:
+        """Build the overlay's draws, once per cache key.
+
+        Only the matrices are per-frame -- the object can move under a drag and
+        the fill's eye-ward bias follows the camera -- which is why a spec
+        records *whether* to bias rather than a matrix, and why ``world`` is
+        composed by the caller each frame.
+        """
         from .clay.adjacency import adjacency, cached_triangulation
 
         adj = adjacency(obj.mesh)
-        items: list[Any] = []
+        specs: list[Any] = []
 
         def add(
             indices: Any,
@@ -467,20 +504,11 @@ class ClayView:
             *,
             depth: bool,
             size: float = 0.0,
-            model: Any = None,
+            biased: bool = False,
         ) -> None:
             vao = overlay.indexed(indices, gl_mode)
             if vao is not None:
-                items.append(
-                    DrawItem(
-                        vao=vao,
-                        color=color,
-                        model=world if model is None else model,
-                        mode=gl_mode,
-                        depth=depth,
-                        point_size=size,
-                    )
-                )
+                specs.append((vao, gl_mode, color, depth, size, biased))
 
         # The dim guides: where the elements are, before any is picked.
         add(adj.edge_verts, moderngl.LINES, GUIDE_COLOR, depth=True)
@@ -502,14 +530,13 @@ class ClayView:
                 # Depth-tested, so a fill on the far side of a closed mesh does
                 # not bleed through it -- and biased toward the eye so it does
                 # not z-fight the very face it is covering.
-                add(chosen, moderngl.TRIANGLES, FILL_COLOR, depth=True,
-                    model=_toward_eye(self.camera.position) @ world)
+                add(chosen, moderngl.TRIANGLES, FILL_COLOR, depth=True, biased=True)
                 add(_face_outline(obj.mesh, sel.faces), moderngl.LINES, SEL_COLOR,
                     depth=False)
                 if hover >= 0:
                     add(tris[tri_face == hover], moderngl.TRIANGLES, HOVER_COLOR,
                         depth=False)
-        return items
+        return specs
 
     def _release_overlays(self) -> None:
         for overlay in self._overlays.values():

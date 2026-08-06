@@ -705,6 +705,29 @@ def test_element_overlays_are_built_and_released_with_the_mode(view) -> None:
     assert view._overlays == {}, "object mode releases them"
 
 
+def test_repeated_element_draws_reuse_the_overlays_gl_objects(view) -> None:
+    """The draw list is a pure function of the overlay's cache key, so drawing
+    an unchanged frame again must mint no GL objects. Each ``indexed`` call
+    used to append a fresh IBO and VAO per draw per frame, released only on a
+    key change -- a leak at frame rate for as long as the cursor held still."""
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    doc.set_element_sel(doc.objects[0].uid, el.ElementSel(faces=[0]))
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    overlay = next(iter(view._overlays.values()))
+    count = len(overlay._vaos)
+    assert count > 0
+
+    view.draw(doc, RECT, 0.0)
+    view.draw(doc, RECT, 0.0)
+    assert next(iter(view._overlays.values())) is overlay, "the key did not change"
+    assert len(overlay._vaos) == count
+
+
 # --- textured documents reach the GPU unchanged (T23) ------------------------
 
 

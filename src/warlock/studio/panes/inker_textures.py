@@ -14,6 +14,7 @@ structural change and a freshly opened file both need.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 # The checkerboard behind transparency. One small texture drawn tiled, so the
@@ -37,8 +38,14 @@ def _forget(ctx: Any, texture: Any) -> None:
     texture.release()
 
 
-def _cached(ctx: Any, key: str, size: tuple[int, int], data: bytes) -> Any:
-    """Create or resize a texture in a named slot."""
+def _cached(ctx: Any, key: str, size: tuple[int, int], data: Callable[[], bytes]) -> Any:
+    """Create or resize a texture in a named slot.
+
+    ``data`` is a thunk, not bytes: the common frame -- the texture exists at
+    the right size and nothing changed -- must cost no pixel copy, and eagerly
+    flattening a megapixel composite to pass in here was a full-canvas copy
+    per frame whether or not it was used.
+    """
     gl = ctx.viewer.ctx
     texture = ctx.state.preview.get(key)
     if texture is not None and texture.size != size:
@@ -46,7 +53,7 @@ def _cached(ctx: Any, key: str, size: tuple[int, int], data: bytes) -> Any:
         texture = None
         ctx.state.preview.pop(f"{key}:rev", None)
     if texture is None:
-        texture = gl.texture(size, 4, data)
+        texture = gl.texture(size, 4, data())
         ctx.state.preview[key] = texture
     return texture
 
@@ -60,7 +67,7 @@ def composite(ctx: Any, tab: Any, *, nearest: bool) -> Any:
     rev_key = f"{key}:rev"
     image = doc.image
     fresh = ctx.state.preview.get(key) is None
-    texture = _cached(ctx, key, image.size, image.tobytes())
+    texture = _cached(ctx, key, image.size, image.tobytes)
     region = doc.take_dirty()
     if not fresh and ctx.state.preview.get(rev_key) != doc.rev:
         if region is not None:
@@ -82,12 +89,11 @@ def floating(ctx: Any, tab: Any, *, nearest: bool) -> Any:
     buf = tab.doc.floating
     key = _slot(tab.uid, "floating")
     rev_key = f"{key}:rev"
-    size = buf.size
-    data = buf.pixels.tobytes()
-    texture = _cached(ctx, key, size, data)
-    if ctx.state.preview.get(rev_key) != buf.rev:
-        texture.write(data)
-        ctx.state.preview[rev_key] = buf.rev
+    fresh = ctx.state.preview.get(key) is None
+    texture = _cached(ctx, key, buf.size, buf.pixels.tobytes)
+    if not fresh and ctx.state.preview.get(rev_key) != buf.rev:
+        texture.write(buf.pixels.tobytes())
+    ctx.state.preview[rev_key] = buf.rev
     mode = ctx.viewer.ctx.NEAREST if nearest else ctx.viewer.ctx.LINEAR
     texture.filter = (mode, mode)
     return texture
@@ -115,7 +121,7 @@ def layer_thumb(ctx: Any, tab: Any, index: int, size: int = 48) -> Any:
         return texture
     small = Image.fromarray(layer.pixels, "RGBA").resize((size, size), Image.BOX)
     data = np.asarray(small, dtype=np.uint8).tobytes()
-    texture = _cached(ctx, key, (size, size), data)
+    texture = _cached(ctx, key, (size, size), lambda: data)
     texture.write(data)
     ctx.state.preview[rev_key] = stamp
     return texture
