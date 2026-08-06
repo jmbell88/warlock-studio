@@ -162,12 +162,17 @@ class PromptQueue:
         imgui.set_next_item_width(320)
         if not imgui.is_any_item_active():
             imgui.set_keyboard_focus_here()
-        changed, value = imgui.input_text(
+        # ``enter_returns_true`` makes the returned flag mean *Enter was
+        # pressed*, not *the text changed* -- but the returned string is the
+        # live buffer either way. Storing it only when the flag was set left
+        # ``value`` at whatever it was seeded with for the whole modal, so
+        # typing a name and clicking Save saved the old one (or, for a fresh
+        # prompt, silently refused an empty string). Only Enter ever worked.
+        entered, value = imgui.input_text(
             prompt.label, prompt.value, imgui.InputTextFlags_.enter_returns_true.value
         )
-        if changed:
-            prompt.value = value
-        accepted = changed or imgui.button("Save", (150, 0))
+        prompt.value = value
+        accepted = entered or imgui.button("Save", (150, 0))
         imgui.same_line()
         cancelled = imgui.button("Cancel", (150, 0))
         if accepted and prompt.value.strip():

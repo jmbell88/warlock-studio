@@ -137,9 +137,14 @@ def get(name: str) -> Op:
 
 
 def toast(ctx: Any, message: str) -> None:
-    toasts = getattr(ctx, "toasts", None)
-    if toasts is not None:
-        toasts.error(message)
+    """A refusal, shown. ``Ctx.toast(text, level)`` is the whole API.
+
+    It used to reach for a ``ctx.toasts`` attribute that the real ``Ctx`` has
+    never had, so every refusal this module raises -- "can't delete the last
+    object", every per-object one -- was raised, caught, formatted and thrown
+    away in the running app, and only the test doubles ever saw one.
+    """
+    ctx.toast(message, "error")
 
 
 def defaults_for(op: Op) -> dict[str, float]:

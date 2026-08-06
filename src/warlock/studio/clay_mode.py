@@ -573,9 +573,8 @@ def _escape(state: ClayState, tab: ClayTab, doc: Any) -> None:
 
 
 def _toast(ctx: Any, message: str) -> None:
-    toasts = getattr(ctx, "toasts", None)
-    if toasts is not None:
-        toasts.error(message)
+    """See ``clay_ops.toast``: the attribute this reached for never existed."""
+    ctx.toast(message, "error")
 
 
 def _ctrl_key(

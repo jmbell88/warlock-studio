@@ -21,16 +21,21 @@ from warlock.studio.clay import primitives as bp
 
 
 class _Toasts:
+    """Only what ``Ctx`` really offers. The double used to carry an ``error``
+    method under a ``ctx.toasts`` attribute the app has never had, which is
+    exactly how every refusal passed here and vanished in the real app."""
+
     def __init__(self) -> None:
         self.errors: list[str] = []
-
-    def error(self, message: str) -> None:
-        self.errors.append(message)
 
 
 class _Ctx:
     def __init__(self) -> None:
         self.toasts = _Toasts()
+
+    def toast(self, message: str, level: str = "info") -> None:
+        if level == "error":
+            self.toasts.errors.append(message)
 
 
 def _doc() -> tuple[bd.ClayDoc, int]:

@@ -24,13 +24,16 @@ class _Toasts:
     def __init__(self) -> None:
         self.errors: list[str] = []
 
-    def error(self, message: str) -> None:
-        self.errors.append(message)
-
 
 class _Ctx:
+    """``toast(text, level)`` and nothing else -- the real ``Ctx``'s API."""
+
     def __init__(self) -> None:
         self.toasts = _Toasts()
+
+    def toast(self, message: str, level: str = "info") -> None:
+        if level == "error":
+            self.toasts.errors.append(message)
 
 
 def test_place_a_box_select_a_face_extrude_drag_and_undo() -> None:
