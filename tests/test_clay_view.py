@@ -401,3 +401,305 @@ def test_a_drag_on_an_object_deleted_midway_does_not_raise(view) -> None:
 
     doc.remove_object(obj.uid)
     view.handle_event(doc, pygame.event.Event(pygame.MOUSEBUTTONUP, button=1), False)
+
+
+# --- element modes: input, overlays and the live drag (T15-T17) --------------
+
+
+@pytest.fixture(autouse=True)
+def headless_mods(monkeypatch):
+    """``pygame.key.get_mods`` raises with no display; stub it at zero.
+
+    Autouse because every press now reads the modifier state -- see
+    ``clay_view``'s module docstring on why it is read from the platform rather
+    than shadowed off KEYDOWN/KEYUP -- and a test that forgot would exercise the
+    fallback rather than the code.
+    """
+    import pygame
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0, raising=False)
+    return monkeypatch
+
+
+def _hold(monkeypatch, mods: int) -> None:
+    import pygame
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods, raising=False)
+
+
+def _face_mode(doc: bd.ClayDoc) -> None:
+    doc.set_element_mode("face")
+
+
+def _centre() -> tuple[int, int]:
+    return (int(RECT[2] * 0.5), int(RECT[3] * 0.5))
+
+
+def _press(view, doc, pos, button: int = 1) -> None:
+    import pygame
+
+    view.handle_event(
+        doc, pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=pos), True
+    )
+
+
+def _release(view, doc, pos, button: int = 1) -> None:
+    import pygame
+
+    view.handle_event(
+        doc, pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=pos), True
+    )
+
+
+def test_clicking_a_face_in_face_mode_selects_that_face(view) -> None:
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    _press(view, doc, _centre())
+    uid = doc.objects[0].uid
+    assert doc.selection == {uid}
+    assert len(doc.element_sel_of(uid).faces) == 1
+
+
+def test_shift_adds_and_ctrl_subtracts(view, headless_mods) -> None:
+    import pygame
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    uid = doc.objects[0].uid
+
+    _press(view, doc, _centre())
+    first = doc.element_sel_of(uid).faces.tolist()
+    assert first
+
+    _hold(headless_mods, pygame.KMOD_CTRL)
+    _press(view, doc, _centre())
+    assert first[0] not in doc.element_sel_of(uid).faces.tolist()
+
+    _hold(headless_mods, pygame.KMOD_SHIFT)
+    _press(view, doc, _centre())
+    assert first[0] in doc.element_sel_of(uid).faces.tolist()
+
+
+def test_clicking_empty_space_with_the_select_tool_starts_a_marquee(view) -> None:
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    _press(view, doc, (2, 2))
+    assert view._grab == "marquee"
+    assert view.marquee is not None
+
+
+def test_a_marquee_over_the_whole_viewport_takes_every_face(view) -> None:
+    import pygame
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    far = (int(RECT[2]) - 1, int(RECT[3]) - 1)
+    _press(view, doc, (1, 1))
+    view.handle_event(doc, pygame.event.Event(pygame.MOUSEMOTION, pos=far), True)
+    _release(view, doc, far)
+    assert view.marquee is None
+    assert len(doc.element_sel_of(doc.objects[0].uid).faces) == 6
+
+
+def test_a_zero_area_marquee_clears_the_selection(view) -> None:
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    _press(view, doc, _centre())
+    assert doc.element_sel
+
+    _press(view, doc, (2, 2))
+    _release(view, doc, (2, 2))
+    assert doc.element_sel == {}
+
+
+def test_alt_drag_orbits_instead_of_selecting(view, headless_mods) -> None:
+    import pygame
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    _hold(headless_mods, pygame.KMOD_ALT)
+    _press(view, doc, _centre())
+    assert view._grab == "orbit"
+    assert doc.element_sel == {}
+
+
+def test_the_middle_button_pans_and_the_right_one_no_longer_does(view) -> None:
+    doc = _doc(count=1)
+    view.draw(doc, RECT, 0.0)
+    _press(view, doc, _centre(), button=2)
+    assert view._grab == "pan"
+
+    view._grab = None
+    _press(view, doc, _centre(), button=3)
+    assert view._grab is None, "RMB pan is gone; the right button is the menu's"
+
+
+def test_a_right_click_asks_for_the_menu_and_a_right_drag_does_not(view) -> None:
+    doc = _doc(count=1)
+    view.draw(doc, RECT, 0.0)
+
+    _press(view, doc, (40, 40), button=3)
+    _release(view, doc, (41, 41), button=3)
+    assert view.menu_request == (41.0, 41.0)
+
+    view.menu_request = None
+    _press(view, doc, (40, 40), button=3)
+    _release(view, doc, (90, 90), button=3)
+    assert view.menu_request is None
+
+
+def test_hovering_reports_an_element_and_moving_off_clears_it(view) -> None:
+    import pygame
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    view.handle_event(doc, pygame.event.Event(pygame.MOUSEMOTION, pos=_centre()), True)
+    assert view.hover_element is not None
+    view.handle_event(doc, pygame.event.Event(pygame.MOUSEMOTION, pos=(1, 1)), True)
+    assert view.hover_element is None
+
+
+def test_the_screen_cache_reprojects_only_when_something_moved(view) -> None:
+    doc = _doc(count=1)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    uid = doc.objects[0].uid
+
+    first = view.screen_of(doc, uid)
+    assert view.screen_of(doc, uid) is first, "nothing moved, so nothing reprojected"
+
+    doc.set_transform(uid, translation=(1.0, 0.0, 0.0))
+    assert view.screen_of(doc, uid) is not first
+
+
+def test_the_gizmo_sits_at_the_selected_elements_centroid(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    centre = view.selection_centre(doc)
+    # Face 0 of the box is the -Y face, so the centroid is half a metre below
+    # the object's own centre rather than at it.
+    assert centre is not None
+    assert centre[1] == pytest.approx(-0.5)
+
+
+def test_the_select_tool_shows_no_gizmo_in_an_element_mode(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    doc.set_element_sel(doc.objects[0].uid, el.ElementSel(faces=[0]))
+    view.app_ctx.state.clay.tool = "select"
+    assert view.active_gizmo(doc) is None
+    view.app_ctx.state.clay.tool = "move"
+    assert view.active_gizmo(doc) is not None
+
+
+def test_an_element_drag_previews_without_rebuilding_or_pushing(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    view.app_ctx.state.clay.tool = "move"
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    rebuilds, depth = view.rebuilds, len(doc.history)
+    view._begin_element_drag(doc)
+    centre = view.element_centre(doc)
+    view._preview_element_drag(doc, centre + np.array([0.0, 1.0, 0.0]), view.state)
+
+    assert view.rebuilds == rebuilds, "a preview writes buffers, it does not rebuild"
+    assert len(doc.history) == depth, "and it pushes nothing"
+    assert np.allclose(doc.by_uid(uid).mesh.positions, bp.box().positions), (
+        "the document mesh is untouched until the release"
+    )
+
+
+def test_releasing_an_element_drag_pushes_one_step_per_object(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    view.app_ctx.state.clay.tool = "move"
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    before = doc.by_uid(uid).mesh
+    view._begin_element_drag(doc)
+    view._preview_element_drag(
+        doc, view.element_centre(doc) + np.array([0.0, -1.0, 0.0]), view.state
+    )
+    assert doc.by_uid(uid).mesh is before, "the preview leaves the document alone"
+
+    depth = len(doc.history)
+    view._grab = "gizmo"
+    view._release_drag(doc)
+    assert len(doc.history) == depth + 1
+
+    moved = doc.by_uid(uid).mesh.positions
+    touched = el.affected_verts(before, doc.element_sel_of(uid))
+    assert np.allclose(moved[touched] - before.positions[touched], [0.0, -1.0, 0.0])
+
+    doc.undo()
+    assert np.allclose(doc.by_uid(uid).mesh.positions, before.positions)
+
+
+def test_a_zero_movement_element_drag_pushes_nothing(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    view.app_ctx.state.clay.tool = "move"
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    view._begin_element_drag(doc)
+    depth = len(doc.history)
+    view._grab = "gizmo"
+    view._release_drag(doc)
+    assert len(doc.history) == depth
+    assert uid not in view._cache, "the previewed buffers are evicted, not left stale"
+
+
+def test_element_overlays_are_built_and_released_with_the_mode(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    doc.set_element_sel(doc.objects[0].uid, el.ElementSel(faces=[0]))
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    assert view._overlays, "an element mode draws its overlay"
+
+    doc.set_element_mode("object")
+    view.draw(doc, RECT, 0.0)
+    assert view._overlays == {}, "object mode releases them"

@@ -141,6 +141,18 @@ class ClayState:
     drag_axis: str = ""
     ref: dict[str, Any] = field(default_factory=dict)
 
+    # The parameterised op whose popup is open, by name, and the values every
+    # such op was last run with. Remembered per op rather than per invocation:
+    # a user beveling six edges in turn wants the same width each time, and
+    # retyping it is the whole reason a modeller keeps the last value.
+    pending_op: str = ""
+    op_params: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    # Where a Shift+click range in the outliner is measured from. A uid, for the
+    # reason every address in this package is one: the list reorders, and an
+    # anchor that was an index would silently point at a different row.
+    outliner_anchor: int = 0
+
     # -- documents ---------------------------------------------------------
 
     @property

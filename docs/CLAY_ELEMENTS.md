@@ -197,13 +197,13 @@ T6–T8 are independent after T5. Order is easy → hard.
 
 Starts after T5; runs in parallel with Phase 2.
 
-- [ ] **T13 — document layer.** `element_mode`/`element_sel` +
+- [x] **T13 — document layer.** `element_mode`/`element_sel` +
   `set_element_mode` (converting via `elements.convert`), `set_element_sel`
   (maintaining the `doc.selection` invariant; `remove_object` pops),
   `set_mesh(select=)`; `UndoStack.top`/`redo_top`; undo reconciliation (drop
   touched uids only, walking `CompoundEdit`); extend
   `tests/clay/test_serialize.py::test_a_restored_document_has_nothing_selected`.
-- [ ] **T14 — `clay/pick.py` + face-pick refactor.** Pure numpy and
+- [x] **T14 — `clay/pick.py` + face-pick refactor.** Pure numpy and
   headless-testable: `project` (one matmul), vertex/edge screen-space nearest
   (VERT 8px / EDGE 6px), occlusion as a depth test against the ray-picked
   surface plus a bias — which rejects far-side elements of closed meshes, picks
@@ -215,7 +215,7 @@ Starts after T5; runs in parallel with Phase 2.
   `ClayView.pick_face` → `Hit(uid, t, face)` using `cached_triangulation`
   (finally consuming `tri_face`); `pick()` keeps returning a uid so existing
   tests pass; `_Entry` carries `tris`/`tri_face`/`edges`.
-- [ ] **T15 — input rewiring.** `_press` button 3 → `_rmb_press` (menu on a <4px
+- [x] **T15 — input rewiring.** `_press` button 3 → `_rmb_press` (menu on a <4px
   release; a drag does nothing); button 2 → pan; **RMB pan removed**. LMB
   dispatch order in element modes: gizmo hit → element pick (combine by
   modifier: none=replace, Shift=add, Ctrl=subtract; Alt+drag always orbits) →
@@ -231,7 +231,7 @@ Starts after T5; runs in parallel with Phase 2.
   at press via `pygame.key.get_mods()` → add the autouse headless stub fixture
   to `tests/test_clay_view.py` (it raises headlessly; `test_clay_mode` has the
   pattern).
-- [ ] **T16 — selection rendering.** `DrawItem` gains `depth: bool = False` and
+- [x] **T16 — selection rendering.** `DrawItem` gains `depth: bool = False` and
   `point_size: float = 0.0`; the renderer draws depth-tested overlay items
   first, then depth-off as today; everything goes through the existing "solid"
   program (the gizmo idiom — no new shader). `_SelOverlay` per uid: one
@@ -243,7 +243,7 @@ Starts after T5; runs in parallel with Phase 2.
   z-fighting: a shrink-toward-eye bias baked into the model matrix, not
   `glPolygonOffset`. The marquee rectangle is drawn with
   `imgui.get_window_draw_list()` in `main._clay_viewport` (the pane layer).
-- [ ] **T17 — element gizmos + live preview.** Gizmo at the `affected_verts`
+- [x] **T17 — element gizmos + live preview.** Gizmo at the `affected_verts`
   world centroid; Q shows no gizmo in element modes. Per-object
   `_ElementDrag(before_mesh, verts, local_positions, matrix, inverse)`;
   per-frame world affine (translate/rotate/scale with the existing
@@ -258,7 +258,7 @@ Starts after T5; runs in parallel with Phase 2.
 
 ## Phase 4 — Ops UI
 
-- [ ] **T18 — registry + menu + panes.** `studio/clay_ops.py` (`Op`, `OPS`,
+- [x] **T18 — registry + menu + panes.** `studio/clay_ops.py` (`Op`, `OPS`,
   `menu(mode)`, `by_key(mode)`, `register`); move the Duplicate/Bake/Mirror/
   Delete/Frame bodies here (`clay_tools` and `_duplicate_selection` become thin
   calls); element-mode built-ins Select All/None/Invert. `panes/clay_menu.py`:
@@ -271,7 +271,7 @@ Starts after T5; runs in parallel with Phase 2.
   `ClayState.outliner_anchor`). Props: an element-mode summary line ("vertex
   mode — 12 selected across 2 objects"); the frozen `generator is None` branch
   becomes reachable, needing no change.
-- [ ] **T19 — register the element ops + parameter popups.** Register extrude
+- [x] **T19 — register the element ops + parameter popups.** Register extrude
   (runs at 0 and selects the caps — the user drags), delete, dissolve, flip,
   fill hole, collapse, subdivide, smooth (CC). Ops with a parameter — bevel
   (width), inset (thickness/depth), weld (eps), loop cut (t), CC (levels, warn
@@ -284,7 +284,7 @@ Starts after T5; runs in parallel with Phase 2.
 
 ## Phase 5 — Import and textures
 
-- [ ] **T20 — serialization v2.** `VERSION = 2` written unconditionally; the npz
+- [x] **T20 — serialization v2.** `VERSION = 2` written unconditionally; the npz
   gains an optional `"uv"` member (the required five are unchanged; the reader
   defaults it to `None`); `textures/<n>.png` zip members (PIL PNG encode,
   `ZIP_STORED`, `_EPOCH` timestamps, so repeat saves are byte-identical within a

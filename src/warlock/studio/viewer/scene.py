@@ -125,14 +125,50 @@ class GpuPrimitive:
             columns += [primitive.joints.view("f4"), primitive.weights]
             self._parts += [("4i", "a_joints", 16), ("4f", "a_weights", 16)]
 
-        interleaved = np.concatenate(
-            [np.ascontiguousarray(c, dtype="f4").reshape(count, -1) for c in columns],
-            axis=1,
-        )
-        self.vbo = ctx.buffer(np.ascontiguousarray(interleaved).tobytes())
+        self.vbo = ctx.buffer(self._interleave(columns, count))
         self.ibo = ctx.buffer(np.ascontiguousarray(primitive.indices, "u4").tobytes())
         self.defines = tuple(material.defines + (["SKINNED"] if self.skinned else []))
         self._vaos: dict[int, moderngl.VertexArray] = {}
+
+    @staticmethod
+    def _interleave(columns: list[Any], count: int) -> bytes:
+        return np.ascontiguousarray(
+            np.concatenate(
+                [np.ascontiguousarray(c, dtype="f4").reshape(count, -1) for c in columns],
+                axis=1,
+            )
+        ).tobytes()
+
+    def update_vertices(self, primitive: Primitive) -> None:
+        """Rewrite the vertex data in place, keeping the buffer and every VAO.
+
+        For a *live* edit that moves vertices without changing topology -- a
+        gizmo drag over a mesh selection. Rebuilding the ``GpuPrimitive`` would
+        release and recreate the buffer and drop the cached vertex arrays, once
+        per frame of the drag, for data that is the same size and the same
+        layout as what is already there.
+
+        The layout is not duplicated at the call site: this rebuilds the same
+        column list ``__init__`` does, so a future attribute is added in one
+        place. It refuses a primitive whose vertex count differs, because that
+        is a topology change wearing a movement's clothes and writing it would
+        silently truncate.
+        """
+        count = len(primitive.positions)
+        if count != len(self.primitive.positions):
+            raise ValueError(
+                f"update_vertices needs the same vertex count: had "
+                f"{len(self.primitive.positions)}, got {count}"
+            )
+        normals = primitive.normals
+        if normals is None:
+            normals = _face_normals(primitive)
+        uvs = primitive.uvs if primitive.uvs is not None else np.zeros((count, 2), "f4")
+        columns = [primitive.positions, normals, uvs]
+        if self.skinned:
+            columns += [primitive.joints.view("f4"), primitive.weights]
+        self.vbo.write(self._interleave(columns, count))
+        self.primitive = primitive
 
     def vao(self, program: Any) -> moderngl.VertexArray:
         """One vertex array per program, cached: the same primitive is drawn by

@@ -1115,6 +1115,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import icons
+        from .panes import clay_menu
 
         tab = clay_mode.active(ctx)
         if tab is None:
@@ -1131,11 +1132,32 @@ class App:
             max(avail.x, 1.0),
             max(avail.y, 1.0),
         )
+        state = clay_mode.ensure(ctx)
         view = self._ensure_build_view()
-        view.wireframe = clay_mode.ensure(ctx).wireframe
+        view.wireframe = state.wireframe
+        view.show_grid = state.grid
         texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
         self._build_hovered = imgui.is_item_hovered()
+        self._clay_marquee(imgui, view, rect)
+        clay_menu.draw(ctx, view)
+
+    def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:
+        """The selection rectangle, drawn in imgui rather than in GL.
+
+        It is a two-dimensional screen decoration with no depth and no place in
+        the scene, so putting it through the renderer would mean a vertex
+        buffer rebuilt every mouse-move for four corners. The draw list is
+        already there and already clipped to this window.
+        """
+        box = getattr(view, "marquee", None)
+        if box is None:
+            return
+        draw = imgui.get_window_draw_list()
+        x0, y0 = rect[0] + min(box[0], box[2]), rect[1] + min(box[1], box[3])
+        x1, y1 = rect[0] + max(box[0], box[2]), rect[1] + max(box[1], box[3])
+        draw.add_rect_filled((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.08)))
+        draw.add_rect((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.55)))
 
     def _inker_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton the other modes use.

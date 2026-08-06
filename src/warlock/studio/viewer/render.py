@@ -27,9 +27,19 @@ from .scene import GpuModel
 class DrawItem:
     """One overlay draw: a vertex array, a colour and how to draw it.
 
-    Markers and gizmo handles are the only users. They are described rather
-    than drawn directly so the renderer can order them (depth off, last)
-    without each of them knowing that it is an overlay.
+    Markers, gizmo handles and Clay's element-selection overlays are the users.
+    They are described rather than drawn directly so the renderer can order
+    them without each of them knowing that it is an overlay.
+
+    ``depth`` is the one thing they genuinely disagree about. A joint marker
+    inside a mesh must draw through it -- one you cannot see is one you cannot
+    grab -- but a selected vertex on the *far* side of a closed mesh must not,
+    or the user is looking at a cloud of dots with no way to tell which are in
+    front. So depth-tested items draw first, into the depth buffer the model
+    left behind, and depth-off items draw over them, exactly as before.
+
+    ``point_size`` is only read for ``POINTS``; zero leaves whatever the
+    context had, which is what every existing caller wants.
     """
 
     vao: Any
@@ -37,6 +47,8 @@ class DrawItem:
     model: np.ndarray = field(default_factory=m3.identity)
     mode: int = moderngl.TRIANGLES
     vertices: int = -1
+    depth: bool = False
+    point_size: float = 0.0
 
 
 class Renderer:
@@ -89,17 +101,29 @@ class Renderer:
             ctx.wireframe = False
 
         if overlays:
-            # Depth off and drawn last: a joint marker inside the mesh is the
-            # normal case, and one you cannot see is one you cannot grab.
-            ctx.disable(moderngl.DEPTH_TEST)
+            # Depth-tested first, then depth-off over the top -- see
+            # ``DrawItem.depth``. Everything goes through the one "solid"
+            # program, the gizmo idiom: an overlay is a coloured vertex array,
+            # and a second shader would be a second place to keep the tone
+            # mapping in step.
             program = self.programs.get("solid")
             program["u_view"].write(m3.gl_bytes(view))
             program["u_proj"].write(m3.gl_bytes(proj))
             program["u_exposure"].value = self.exposure
-            for item in overlays:
-                program["u_model"].write(m3.gl_bytes(item.model))
-                program["u_color"].value = item.color
-                item.vao.render(mode=item.mode, vertices=item.vertices)
+            for tested in (True, False):
+                items = [item for item in overlays if item.depth is tested]
+                if not items:
+                    continue
+                if tested:
+                    ctx.enable(moderngl.DEPTH_TEST)
+                else:
+                    ctx.disable(moderngl.DEPTH_TEST)
+                for item in items:
+                    if item.point_size:
+                        ctx.point_size = item.point_size
+                    program["u_model"].write(m3.gl_bytes(item.model))
+                    program["u_color"].value = item.color
+                    item.vao.render(mode=item.mode, vertices=item.vertices)
             ctx.enable(moderngl.DEPTH_TEST)
 
         viewport.resolve()

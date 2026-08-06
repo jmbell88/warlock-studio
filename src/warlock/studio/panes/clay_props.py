@@ -43,6 +43,7 @@ def draw(ctx: Any) -> None:
         widgets.muted("Nothing open.")
         return
     doc = tab.doc
+    _element_summary(doc)
     obj = _selected(doc)
     if obj is None:
         widgets.empty_state(icons.BOX, "Nothing selected", "Click an object in the viewport.")
@@ -57,6 +58,29 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 6))
     _material(doc, obj)
     imgui.end_disabled()
+
+
+def _element_summary(doc: Any) -> None:
+    """One line saying what is selected inside the objects, in element modes.
+
+    The object panel below stays exactly as it was -- an element selection is
+    still an object selection, by the document's own invariant -- so this adds
+    a line rather than replacing the pane. It is also where the *frozen* branch
+    of the generator section finally becomes reachable: an op that edits
+    topology clears ``generator``, and this is usually the first thing the user
+    sees afterwards.
+    """
+    if doc.element_mode == "object":
+        return
+    total = sum(sel.count(doc.element_mode) for sel in doc.element_sel.values())
+    noun = {"vertex": "vertices", "edge": "edges", "face": "faces"}[doc.element_mode]
+    objects = len(doc.element_sel)
+    if total == 0:
+        widgets.muted(f"{doc.element_mode} mode -- nothing selected")
+    else:
+        across = "1 object" if objects == 1 else f"{objects} objects"
+        widgets.muted(f"{doc.element_mode} mode -- {total} {noun} across {across}")
+    imgui.dummy((0, 4))
 
 
 def _selected(doc: Any) -> Any:

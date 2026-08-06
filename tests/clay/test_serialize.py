@@ -19,6 +19,7 @@ import pytest
 
 from warlock.studio.clay import document as bd
 from warlock.studio.clay import elements as el
+from warlock.studio.clay import mesh as bm
 from warlock.studio.clay import primitives as bp
 from warlock.studio.clay import serialize as ser
 from warlock.studio.viewer import gltf
@@ -262,3 +263,129 @@ def test_the_archive_holds_one_mesh_per_object() -> None:
     with zipfile.ZipFile(BytesIO(ser.wblk_bytes(doc))) as zf:
         names = set(zf.namelist())
     assert names == {ser.SCENE} | {f"meshes/{o.uid}.npz" for o in doc.objects}
+
+
+# --- version 2: uvs and textures --------------------------------------------
+
+
+def _tex(seed: int = 0) -> tuple[int, int, bytes]:
+    return (2, 2, bytes((seed + i) % 256 for i in range(2 * 2 * 4)))
+
+
+def _uvd(mesh):
+    n = len(mesh.loops)
+    uv = np.stack([np.arange(n, dtype="f4") / n, np.zeros(n, dtype="f4")], axis=1)
+    return bm.Mesh(
+        positions=mesh.positions,
+        loops=mesh.loops,
+        starts=mesh.starts,
+        material=mesh.material,
+        smooth=mesh.smooth,
+        uv=uv,
+    )
+
+
+def test_the_version_is_written_unconditionally() -> None:
+    """No "downgrade when nothing needs v2": a format that sometimes claims to
+    be v1 for the same code is a format with two readers."""
+    plain = json.loads(ser.scene_json(_doc()))
+    assert plain["version"] == 2
+    assert "textures" not in plain, "an untextured document stays v1-shaped"
+    assert "textures" not in plain["materials"][0]
+
+
+def test_uvs_survive_a_round_trip_and_absent_ones_stay_absent() -> None:
+    doc = bd.ClayDoc()
+    textured = doc.add_object(bd.Obj(uid=bd.new_uid(), name="T", mesh=_uvd(bp.plane())))
+    plain = doc.add_object(bd.Obj(uid=bd.new_uid(), name="P", mesh=bp.box()))
+
+    out = _roundtrip(doc)
+    assert np.array_equal(
+        out.by_uid(textured.uid).mesh.uv, doc.by_uid(textured.uid).mesh.uv
+    )
+    assert out.by_uid(plain.uid).mesh.uv is None
+
+
+def test_textures_round_trip_pixel_for_pixel() -> None:
+    image = _tex()
+    doc = bd.ClayDoc(
+        objects=[bd.Obj(uid=bd.new_uid(), name="P", mesh=bp.plane())],
+        materials=[gltf.Material(name="m", base_color=image, normal=_tex(7))],
+    )
+    out = _roundtrip(doc)
+    assert out.materials[0].base_color == image
+    assert out.materials[0].normal == _tex(7)
+    assert out.materials[0].metallic_roughness is None
+
+
+def test_a_shared_texture_is_written_once() -> None:
+    image = _tex()
+    doc = bd.ClayDoc(
+        objects=[bd.Obj(uid=bd.new_uid(), name="P", mesh=bp.plane())],
+        materials=[
+            gltf.Material(name="a", base_color=image),
+            gltf.Material(name="b", base_color=image, emissive=image),
+        ],
+    )
+    names = zipfile.ZipFile(BytesIO(ser.wblk_bytes(doc))).namelist()
+    assert [n for n in names if n.startswith("textures/")] == ["textures/0.png"]
+
+    out = _roundtrip(doc)
+    assert out.materials[0].base_color == out.materials[1].base_color
+
+
+def test_a_textured_save_is_still_byte_identical_when_repeated() -> None:
+    doc = bd.ClayDoc(
+        objects=[bd.Obj(uid=bd.new_uid(), name="P", mesh=_uvd(bp.plane()))],
+        materials=[gltf.Material(name="m", base_color=_tex())],
+    )
+    assert ser.wblk_bytes(doc) == ser.wblk_bytes(doc)
+
+
+def test_a_version_1_file_still_opens_with_no_uvs_and_no_textures() -> None:
+    """The whole point of making ``uv`` optional rather than required."""
+    doc = _doc()
+    v1 = _rewrite_version(ser.wblk_bytes(doc), 1)
+    out = ser.read_wblk(v1)
+    assert all(obj.mesh.uv is None for obj in out.objects)
+    assert all(m.base_color is None for m in out.materials)
+
+
+def test_a_version_3_file_is_refused() -> None:
+    v3 = _rewrite_version(ser.wblk_bytes(_doc()), 3)
+    with pytest.raises(ValueError, match="newer version"):
+        ser.read_wblk(v3)
+
+
+def test_a_missing_texture_member_is_refused_rather_than_blanked() -> None:
+    doc = bd.ClayDoc(
+        objects=[bd.Obj(uid=bd.new_uid(), name="P", mesh=bp.plane())],
+        materials=[gltf.Material(name="m", base_color=_tex())],
+    )
+    data = ser.wblk_bytes(doc)
+    out = BytesIO()
+    source = zipfile.ZipFile(BytesIO(data))
+    with zipfile.ZipFile(out, "w") as zf:
+        for name in source.namelist():
+            if not name.startswith("textures/"):
+                zf.writestr(name, source.read(name))
+    with pytest.raises(ValueError, match="texture the file does not carry"):
+        ser.read_wblk(out.getvalue())
+
+
+def _rewrite_version(data: bytes, version: int) -> bytes:
+    """The same archive with ``scene.json``\'s version replaced."""
+    source = zipfile.ZipFile(BytesIO(data))
+    scene = json.loads(source.read(ser.SCENE))
+    scene["version"] = version
+    if version < 2:
+        scene.pop("textures", None)
+        for material in scene["materials"]:
+            material.pop("textures", None)
+    out = BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr(ser.SCENE, json.dumps(scene))
+        for name in source.namelist():
+            if name != ser.SCENE:
+                zf.writestr(name, source.read(name))
+    return out.getvalue()

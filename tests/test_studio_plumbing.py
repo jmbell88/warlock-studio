@@ -583,12 +583,19 @@ def test_the_bridge_offers_both_output_paths_and_they_are_different_calls():
 
 def test_the_tools_pane_mirrors_through_ops_rather_than_negating_a_scale():
     """A negative node scale is one line and is how an inside-out asset ships:
-    glTF readers disagree about whether it flips the winding."""
+    glTF readers disagree about whether it flips the winding.
+
+    The mirror body moved out of the pane and into the ops registry when the
+    pane stopped keeping its own list of what Clay can do; the guard followed
+    it, because the invariant is about the *op* rather than about the button.
+    """
+    from warlock.studio import clay_ops
     from warlock.studio.panes import clay_tools
 
-    source = inspect.getsource(clay_tools)
-    assert "ops.mirror" in source
+    source = inspect.getsource(clay_ops)
+    assert "clay_ops_geom.mirror" in source
     assert "scale=-" not in source
+    assert "scale=-" not in inspect.getsource(clay_tools)
 
 
 def test_the_outliner_addresses_every_row_by_uid():

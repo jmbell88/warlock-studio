@@ -25,6 +25,30 @@ The reader restores a document by *construction* rather than through
 ``add_object``, which would push one undo step per object and open every file
 already dirty; and it raises the process-wide uid floor as it goes, so a fresh
 object cannot be minted onto a uid a restored one already wears.
+
+**Version 2 adds uvs and textures**, and is written unconditionally -- there is
+no "downgrade if the document happens to have neither", because a format that
+sometimes claims to be v1 and sometimes v2 for the same code is a format with
+two readers. A v1 file still opens: its meshes get ``uv=None`` and its
+materials no textures, which is exactly what a v1 document was.
+
+Textures are ``textures/<n>.png`` members, PNG-encoded and stored *uncompressed*
+in the zip -- a PNG is already deflated, and deflating it again costs time to
+make it very slightly bigger. They are deduplicated by the identity of the
+``(width, height, bytes)`` tuple across all five slots of all materials, which
+is the same identity rule ``GpuMaterial``, ``to_model`` and ``write_glb`` all
+de-duplicate on: a document whose eight objects share one baked base-colour map
+writes one PNG. A ``scene.json`` for an untextured document is v1-shaped apart
+from the version number, so the readable half stays readable.
+
+The one accepted cost is stated rather than hidden: the PNG encode runs on the
+frame thread, and at 0.2--0.5 s for a 2K map it is a visible hitch. Saves are
+explicit and infrequent, and moving the encode off-thread means either encoding
+a document the user is still editing or copying every texture first.
+
+**A missing texture member is refused**, exactly as a missing mesh is, and for
+the same reason: opening the file with a blank material would show the user a
+model that looks finished and is not, and let them save it over their work.
 """
 
 from __future__ import annotations
@@ -40,16 +64,32 @@ from ..viewer import gltf
 from . import mesh as bm
 from .document import ClayDoc, Obj, reserve_uid
 
-VERSION = 1
+VERSION = 2
 SCENE = "scene.json"
 MESH_DIR = "meshes"
+TEXTURE_DIR = "textures"
 
 # 1980-01-01, the earliest a zip can express. Any fixed value would do; this one
 # is the conventional choice for a reproducible archive and is obviously not a
 # real modification time, which is the point -- nobody should read it as one.
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 
+# The five arrays every mesh has. ``uv`` is deliberately *not* here: it is
+# optional, so it is written only when present and defaulted to None on read,
+# which is what lets a v1 file load without a migration.
 _MESH_FIELDS = ("positions", "loops", "starts", "material", "smooth")
+
+# The texture slots, in the order ``scene.TEXTURE_SLOTS`` lists them. Mirrored
+# rather than imported because ``clay/`` does not import the GL layer -- and the
+# names are a *file format* here, so pinning them locally is what stops a
+# rename in the renderer silently changing what a saved document means.
+TEXTURE_FIELDS = (
+    "base_color",
+    "metallic_roughness",
+    "normal",
+    "emissive",
+    "occlusion",
+)
 
 
 # --- writing ----------------------------------------------------------------
@@ -73,14 +113,23 @@ def _npz_bytes(arrays: dict[str, np.ndarray]) -> bytes:
     return out.getvalue()
 
 
-def _material_json(material: gltf.Material) -> dict[str, Any]:
-    """The factors, and only the factors.
+def _material_json(
+    material: gltf.Material, textures: dict[int, int] | None = None
+) -> dict[str, Any]:
+    """The factors, plus the index of each texture slot that has one.
 
-    Every texture slot is deliberately dropped. Clay paints none, they
-    are decoded pixel buffers rather than files, and a format that carried them
-    would be making a promise about textures that nothing upstream can keep.
+    Clay paints no textures, but it now *imports* them, and an imported asset
+    that lost its baked maps on the way through a save would be worse than one
+    that could not be imported at all. The slot map is omitted entirely when
+    there are none, so an authored document's JSON is v1-shaped.
     """
-    return {
+    slots = {}
+    if textures is not None:
+        for slot in TEXTURE_FIELDS:
+            image = getattr(material, slot, None)
+            if image is not None:
+                slots[slot] = textures[id(image)]
+    entry: dict[str, Any] = {
         "name": material.name,
         "base_color_factor": [float(v) for v in material.base_color_factor],
         "metallic_factor": float(material.metallic_factor),
@@ -90,6 +139,9 @@ def _material_json(material: gltf.Material) -> dict[str, Any]:
         "alpha_mode": str(material.alpha_mode),
         "alpha_cutoff": float(material.alpha_cutoff),
     }
+    if slots:
+        entry["textures"] = slots
+    return entry
 
 
 def _object_json(obj: Obj) -> dict[str, Any]:
@@ -106,6 +158,39 @@ def _object_json(obj: Obj) -> dict[str, Any]:
     }
 
 
+def _collect_textures(doc: ClayDoc) -> tuple[list[Any], dict[int, int]]:
+    """Every distinct texture in the palette, and a map from identity to index.
+
+    Identity rather than value: a texture is a multi-megabyte bytes object and
+    comparing two of them per material per save is the wrong price for the same
+    answer. It is also the rule every other consumer already uses.
+    """
+    images: list[Any] = []
+    index: dict[int, int] = {}
+    for material in doc.materials:
+        for slot in TEXTURE_FIELDS:
+            image = getattr(material, slot, None)
+            if image is None or id(image) in index:
+                continue
+            index[id(image)] = len(images)
+            images.append(image)
+    return images, index
+
+
+def _png_bytes(image: tuple[int, int, bytes]) -> bytes:
+    """One ``(width, height, rgba)`` slot as PNG bytes.
+
+    ``optimize`` is left off deliberately: it is several times slower for a few
+    per cent, and this runs on the frame thread.
+    """
+    from PIL import Image
+
+    width, height, data = image
+    out = io.BytesIO()
+    Image.frombytes("RGBA", (int(width), int(height)), bytes(data)).save(out, "PNG")
+    return out.getvalue()
+
+
 def scene_json(doc: ClayDoc) -> str:
     """``scene.json``'s text: sorted keys, indented, one object per entry.
 
@@ -114,25 +199,39 @@ def scene_json(doc: ClayDoc) -> str:
     and by a diff. The mesh arrays are the reason the format is a zip; there is
     no size argument left for minifying the small half.
     """
-    scene = {
+    images, index = _collect_textures(doc)
+    scene: dict[str, Any] = {
         "version": VERSION,
-        "materials": [_material_json(m) for m in doc.materials],
+        "materials": [_material_json(m, index) for m in doc.materials],
         "objects": [_object_json(o) for o in doc.objects],
     }
+    if images:
+        scene["textures"] = [
+            {"file": f"{TEXTURE_DIR}/{i}.png", "width": int(w), "height": int(h)}
+            for i, (w, h, _data) in enumerate(images)
+        ]
     return json.dumps(scene, sort_keys=True, indent=2)
 
 
 def wblk_bytes(doc: ClayDoc) -> bytes:
     """The document as the bytes of a ``.wblk`` archive."""
     out = io.BytesIO()
+    images, _index = _collect_textures(doc)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(zipfile.ZipInfo(SCENE, _EPOCH), scene_json(doc))
         for obj in doc.objects:
             arrays = {name: getattr(obj.mesh, name) for name in _MESH_FIELDS}
+            if obj.mesh.uv is not None:
+                arrays["uv"] = obj.mesh.uv
             zf.writestr(
                 zipfile.ZipInfo(f"{MESH_DIR}/{int(obj.uid)}.npz", _EPOCH),
                 _npz_bytes(arrays),
             )
+        for i, image in enumerate(images):
+            info = zipfile.ZipInfo(f"{TEXTURE_DIR}/{i}.png", _EPOCH)
+            # Stored, not deflated: a PNG is already compressed, and deflating
+            # it again spends time to make it marginally bigger.
+            zf.writestr(info, _png_bytes(image), zipfile.ZIP_STORED)
     return out.getvalue()
 
 
@@ -154,6 +253,10 @@ def _read_mesh(zf: zipfile.ZipFile, uid: int) -> bm.Mesh:
             arrays = {name: npz[name] for name in _MESH_FIELDS}
         except KeyError as exc:
             raise ValueError(f"a mesh in this clay document is incomplete: {exc}") from exc
+        # Optional, and absent from every v1 file: a mesh without it simply has
+        # no texture coordinates, which is what a v1 mesh was.
+        if "uv" in npz.files:
+            arrays["uv"] = npz["uv"]
     mesh = bm.Mesh(**arrays)
     # Validate rather than trust: the CSR offsets are the one part of the file
     # that a truncated write or a hand edit makes *quietly* wrong -- ``edges``
@@ -163,8 +266,37 @@ def _read_mesh(zf: zipfile.ZipFile, uid: int) -> bm.Mesh:
     return mesh
 
 
-def _material_from(entry: dict[str, Any]) -> gltf.Material:
+def _read_textures(zf: zipfile.ZipFile, scene: dict[str, Any]) -> list[Any]:
+    """Decode every ``textures/<n>.png`` the scene names, in order.
+
+    A member the scene names and the archive does not carry is refused rather
+    than skipped -- the half-read-is-worse-than-refused rule the mesh reader
+    follows, and more sharply here, because a material with its map silently
+    dropped looks like a deliberately untextured one.
+    """
+    from PIL import Image
+
+    out = []
+    for entry in scene.get("textures", []):
+        name = str(entry.get("file", ""))
+        try:
+            raw = zf.read(name)
+        except KeyError as exc:
+            raise ValueError(
+                f"this clay document names a texture the file does not carry ({name})"
+            ) from exc
+        image = Image.open(io.BytesIO(raw)).convert("RGBA")
+        out.append((image.width, image.height, image.tobytes()))
+    return out
+
+
+def _material_from(entry: dict[str, Any], textures: list[Any]) -> gltf.Material:
+    slots = {}
+    for slot, index in (entry.get("textures") or {}).items():
+        if slot in TEXTURE_FIELDS and 0 <= int(index) < len(textures):
+            slots[slot] = textures[int(index)]
     return gltf.Material(
+        **slots,
         name=str(entry.get("name", "")),
         base_color_factor=tuple(entry.get("base_color_factor", (1.0, 1.0, 1.0, 1.0))),
         metallic_factor=float(entry.get("metallic_factor", 1.0)),
@@ -197,6 +329,7 @@ def read_wblk(data: bytes) -> ClayDoc:
         )
 
     with zf:
+        textures = _read_textures(zf, scene)
         objects = []
         for entry in scene.get("objects", []):
             uid = int(entry["uid"])
@@ -218,5 +351,5 @@ def read_wblk(data: bytes) -> ClayDoc:
 
     return ClayDoc(
         objects=objects,
-        materials=[_material_from(m) for m in scene.get("materials", [])],
+        materials=[_material_from(m, textures) for m in scene.get("materials", [])],
     )

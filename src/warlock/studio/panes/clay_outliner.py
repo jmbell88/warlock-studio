@@ -9,6 +9,13 @@ Selection here is the same selection the viewport shows, and it is deliberately
 **not undoable**: clicking an object is not laborious to redo the way a lasso
 is, an undoable selection would move ``history.head``, and a document would
 then ask to be saved because the user looked at a different object.
+
+**Ctrl toggles and Shift extends**, the convention every file list and every
+outliner shares. The range anchor is a *uid* on ``ClayState`` rather than a row
+index, for the reason every address in this package is one: the list reorders,
+and an index anchor would quietly measure the range from a different object.
+An anchor that has been deleted falls back to the clicked row, which is the
+same thing a plain click does.
 """
 
 from __future__ import annotations
@@ -49,6 +56,31 @@ def draw(ctx: Any) -> None:
     imgui.end_disabled()
 
 
+def _click(state: Any, doc: Any, obj: Any) -> None:
+    """Apply one row click, honouring Ctrl (toggle) and Shift (range)."""
+    io = imgui.get_io()
+    if io.key_shift and state.outliner_anchor:
+        range_uids = _range(doc, state.outliner_anchor, obj.uid)
+        doc.select(range_uids)
+        return
+    if io.key_ctrl:
+        chosen_uids = set(doc.selection) ^ {obj.uid}
+        doc.select(chosen_uids)
+    else:
+        doc.select([obj.uid])
+    state.outliner_anchor = obj.uid
+
+
+def _range(doc: Any, anchor: int, uid: int) -> list[int]:
+    """Every object between two uids in document order, inclusive."""
+    order = [o.uid for o in doc.objects]
+    try:
+        lo, hi = sorted((order.index(anchor), order.index(uid)))
+    except ValueError:
+        return [uid]
+    return order[lo : hi + 1]
+
+
 def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
     selected = obj.uid in doc.selection
     imgui.push_id(str(obj.uid))
@@ -73,7 +105,7 @@ def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
         if not obj.visible:
             widgets.text_colored(theme.MUTED, "")
         if imgui.selectable(f"{label}##row", selected, imgui.SelectableFlags_.none, (width, 0))[0]:
-            doc.select([obj.uid])
+            _click(state, doc, obj)
         if imgui.is_item_hovered() and imgui.is_mouse_double_clicked(0):
             state.renaming = obj.uid
 

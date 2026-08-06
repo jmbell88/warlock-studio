@@ -29,6 +29,19 @@ sort that fail invisibly:
   clear colour straight back to sRGB, so it is the literal hex, and the
   renderer owns that; nothing here re-grades it.
 
+**The mouse map is Wings3D's, and RMB pan is gone.** Right-drag used to pan,
+and the context menu needs the right button more: a menu that appears under the
+cursor with the ops that apply to what is selected is the whole point of an
+element-mode editor, and a modifier-plus-right-drag would be a worse pan than
+the middle button already is. So button 2 pans, button 3 opens the menu on a
+*release within four pixels of the press* -- a right-drag does nothing at all,
+which means a user who grabs the wrong button mid-orbit loses nothing.
+
+**Modifiers are read at the press, from ``pygame.key.get_mods()``.** Not from
+the event: a ``MOUSEBUTTONDOWN`` carries no modifier state, and tracking KEYDOWN
+and KEYUP to shadow it is a second copy of something the platform already knows
+and gets wrong the first time the window loses focus with Shift held.
+
 Registration has a matching half that ``Viewport`` makes easy to miss:
 ``resize`` releases and recreates its texture, so a resize frees a GL name the
 imgui backend may still be holding. :meth:`ClayView.draw` forgets the outgoing
@@ -41,17 +54,44 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import moderngl
 import numpy as np
 
 from .clay import document as bd
+from .clay.topo import corner_spans as _corner_spans
+from .clay.topo import flat_next as _flat_next
 from .viewer import capture, glctx, gltf, picking
 from .viewer import math3d as m3
 from .viewer import scene as scenelib
 from .viewer.camera import Camera, screen_ray
 from .viewer.gizmo import RotateGizmo, ScaleGizmo, TranslateGizmo
-from .viewer.render import Renderer
+from .viewer.render import DrawItem, Renderer
 
 log = logging.getLogger(__name__)
+
+@dataclass
+class _ElementDrag:
+    """One object's half of a live element drag.
+
+    Everything is recorded at the press and nothing is re-read during the drag:
+    ``before`` is the mesh the gizmo was grabbed over, ``verts`` the vertices it
+    moves, ``local`` their object-space positions then, and ``matrix`` /
+    ``inverse`` the object's placement. A drag that re-read the object every
+    frame would compound its own output -- each frame applying the delta to the
+    result of the last -- and drift away from the cursor.
+    """
+
+    before: Any
+    verts: Any
+    local: Any
+    matrix: Any
+    inverse: Any
+    # The positions the last preview frame produced. The commit reads *this*
+    # rather than the object's mesh, because the whole point of the preview is
+    # that the object's mesh never moved -- reading it back would find the
+    # press-time geometry and commit nothing at all.
+    preview: Any = None
+
 
 @dataclass(frozen=True)
 class Hit:
@@ -71,6 +111,95 @@ class Hit:
 # Which gizmo each tool drives. Held as data so the dispatch is one lookup
 # rather than a chain that a fifth tool would have to be threaded through.
 GIZMO_FOR_TOOL = {"move": "translate", "rotate": "rotate", "scale": "scale"}
+
+
+def _about(centre: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    """*matrix* conjugated to act about *centre* rather than about the origin."""
+    to = m3.identity()
+    to[:3, 3] = -np.asarray(centre, dtype="f8")
+    back = m3.identity()
+    back[:3, 3] = np.asarray(centre, dtype="f8")
+    return back @ matrix @ to
+
+
+def _apply_affine(matrix: np.ndarray, points: np.ndarray) -> np.ndarray:
+    homo = np.hstack([np.asarray(points, dtype="f8"), np.ones((len(points), 1))])
+    return (np.asarray(matrix, dtype="f8") @ homo.T).T[:, :3]
+
+
+# --- the element-selection overlay -------------------------------------------
+
+# Colours, matching the rest of the app's accent language: red for what is
+# selected, yellow for what the cursor is over, and a dim grey for the guides
+# that show where the elements *are* before any of them is selected.
+SEL_COLOR = (0.95, 0.25, 0.25, 1.0)
+HOVER_COLOR = (1.0, 0.85, 0.2, 1.0)
+GUIDE_COLOR = (0.55, 0.58, 0.62, 0.35)
+FILL_COLOR = (0.95, 0.25, 0.25, 0.28)
+
+# How far a selected face's translucent fill is pulled toward the eye, as a
+# fraction of its distance. ``glPolygonOffset`` is the textbook answer and is
+# deliberately not used: it is global GL state that moderngl caches, so setting
+# it here would leak into the gizmo pass and the grid, and unsetting it is one
+# more thing to get wrong on an early return. Scaling the model matrix about
+# the eye is local to the draw and needs no cleanup.
+FILL_BIAS = 0.0015
+
+
+class _SelOverlay:
+    """One object's selection overlay: guides, selection, hover, and the fill.
+
+    **One position buffer, many index buffers.** Every overlay draw for an
+    object reads the same vertices -- the wireframe guide, the selected edges,
+    the hovered face -- so uploading the positions once and varying only the
+    index buffer is both the small upload and the reason a *hover* change is
+    nearly free: it rebuilds one tiny index buffer and touches nothing else.
+
+    The whole thing is keyed on ``(id(mesh), id(sel), mode, hover)``. Identity
+    on the first two because ``Mesh`` and ``ElementSel`` are both frozen and
+    replaced whole rather than mutated -- which is exactly what makes identity
+    a sound cache key, and is stated as such in both of their docstrings.
+    """
+
+    __slots__ = ("ctx", "key", "pos_vbo", "count", "_ibos", "_vaos", "_program")
+
+    def __init__(self, ctx: Any, program: Any, key: Any, positions: Any) -> None:
+        self.ctx = ctx
+        self._program = program
+        self.key = key
+        data = np.ascontiguousarray(positions, dtype="f4")
+        self.count = len(data)
+        self.pos_vbo = ctx.buffer(data.tobytes())
+        self._ibos: list[Any] = []
+        self._vaos: list[Any] = []
+
+    def write_positions(self, positions: Any) -> None:
+        """Rewrite the vertices in place, for a live drag. No VAO is rebuilt."""
+        data = np.ascontiguousarray(positions, dtype="f4")
+        if len(data) == self.count:
+            self.pos_vbo.write(data.tobytes())
+
+    def indexed(self, indices: Any, mode: int) -> Any:
+        """A vertex array over the shared positions and a fresh index buffer."""
+        flat = np.ascontiguousarray(indices, dtype="u4").reshape(-1)
+        if len(flat) == 0:
+            return None
+        ibo = self.ctx.buffer(flat.tobytes())
+        vao = self.ctx.vertex_array(
+            self._program, [(self.pos_vbo, "3f", "a_position")], ibo
+        )
+        self._ibos.append(ibo)
+        self._vaos.append(vao)
+        return vao
+
+    def release(self) -> None:
+        for vao in self._vaos:
+            vao.release()
+        for ibo in self._ibos:
+            ibo.release()
+        self._vaos.clear()
+        self._ibos.clear()
+        self.pos_vbo.release()
 
 
 class _Composite:
@@ -139,6 +268,10 @@ class ClayView:
         self.viewport = glctx.Viewport(ctx, (16, 16))
         self.camera = Camera()
         self.wireframe = False
+        # The grid toggle in the tools pane had no reader at all: the pane wrote
+        # ``state.grid`` and the renderer was never told. One field, set by the
+        # pane layer beside ``wireframe``, which already worked that way.
+        self.show_grid = True
         self.radius = 1.0
 
         self.translate_gizmo = TranslateGizmo(ctx, self.renderer.programs)
@@ -151,10 +284,30 @@ class ClayView:
         self.rebuilds = 0
 
         self._rect = (0.0, 0.0, 1.0, 1.0)
-        self._grab: str | None = None  # orbit | pan | gizmo
+        self._grab: str | None = None  # orbit | pan | gizmo | marquee
         self._last_mouse = (0.0, 0.0)
         self._drag_uids: list[int] = []
         self._drag_start: dict[int, tuple[Any, Any, Any]] = {}
+
+        # What the cursor is over in an element mode, as ``(uid, index)`` read
+        # through the document's own mode. Updated only on motion with no grab
+        # -- a hover that recomputed every frame would reproject every vertex
+        # of every object while the scene sits perfectly still.
+        self.hover_element: tuple[int, int] | None = None
+        self._screens: dict[int, tuple[Any, Any]] = {}
+
+        # Where the right button went down, and where the menu should open.
+        # ``menu_request`` is read and cleared by the pane layer, which is the
+        # only layer allowed to know imgui exists.
+        self._rmb_at: tuple[float, float] | None = None
+        self.menu_request: tuple[float, float] | None = None
+        # The live marquee rectangle in viewport pixels, drawn by the pane.
+        self.marquee: tuple[float, float, float, float] | None = None
+        self._marquee_from: tuple[float, float] | None = None
+        self._marquee_add = "replace"
+        self._element_drags: dict[int, _ElementDrag] = {}
+        self._overlays: dict[int, _SelOverlay] = {}
+        self._element_centre = np.zeros(3)
 
     # -- the GPU cache -----------------------------------------------------
 
@@ -190,6 +343,7 @@ class ClayView:
         for entry in self._cache.values():
             entry.gpu.release()
         self._cache.clear()
+        self._screens.clear()
 
     # -- drawing -----------------------------------------------------------
 
@@ -206,7 +360,8 @@ class ClayView:
             self.camera,
             self._composite(doc),
             wireframe=self.wireframe,
-            overlays=self._gizmo_draws(doc, height),
+            show_grid=self.show_grid,
+            overlays=self._element_overlays(doc) + self._gizmo_draws(doc, height),
         )
         return self.viewport.texture
 
@@ -258,6 +413,109 @@ class ClayView:
         if renderer is not None:
             renderer.forget_texture(texture)
 
+    def _element_overlays(self, doc: Any) -> list[Any]:
+        """The element-mode overlay draws for every visible object.
+
+        Guides are depth-tested, so the far side of a closed mesh does not fog
+        the near one with a grey haze; the *selection* is depth-off, so a
+        selected vertex you have orbited behind the surface is still visible
+        and still says it is selected. That split is the whole reason
+        ``DrawItem`` grew a ``depth`` flag.
+        """
+        if doc.element_mode == "object":
+            self._release_overlays()
+            return []
+
+        program = self.renderer.programs.get("solid")
+        mode = doc.element_mode
+        hover = self.hover_element
+        items: list[Any] = []
+        live: set[int] = set()
+        for obj in doc.objects:
+            if not obj.visible or len(obj.mesh.positions) == 0:
+                continue
+            live.add(obj.uid)
+            sel = doc.element_sel_of(obj.uid)
+            hover_index = hover[1] if hover is not None and hover[0] == obj.uid else -1
+            key = (id(obj.mesh), id(sel), mode, hover_index)
+            overlay = self._overlays.get(obj.uid)
+            if overlay is None or overlay.key != key:
+                if overlay is not None:
+                    overlay.release()
+                overlay = _SelOverlay(self.ctx, program, key, obj.mesh.positions)
+                self._overlays[obj.uid] = overlay
+            world = m3.compose(obj.translation, obj.rotation, obj.scale)
+            items.extend(
+                self._overlay_items(obj, overlay, world, mode, sel, hover_index)
+            )
+        for uid in [u for u in self._overlays if u not in live]:
+            self._overlays.pop(uid).release()
+        return items
+
+    def _overlay_items(
+        self, obj: Any, overlay: Any, world: Any, mode: str, sel: Any, hover: int
+    ) -> list[Any]:
+        from .clay.adjacency import adjacency, cached_triangulation
+
+        adj = adjacency(obj.mesh)
+        items: list[Any] = []
+
+        def add(
+            indices: Any,
+            gl_mode: int,
+            color: Any,
+            *,
+            depth: bool,
+            size: float = 0.0,
+            model: Any = None,
+        ) -> None:
+            vao = overlay.indexed(indices, gl_mode)
+            if vao is not None:
+                items.append(
+                    DrawItem(
+                        vao=vao,
+                        color=color,
+                        model=world if model is None else model,
+                        mode=gl_mode,
+                        depth=depth,
+                        point_size=size,
+                    )
+                )
+
+        # The dim guides: where the elements are, before any is picked.
+        add(adj.edge_verts, moderngl.LINES, GUIDE_COLOR, depth=True)
+        if mode == "vertex":
+            add(np.arange(len(obj.mesh.positions)), moderngl.POINTS, GUIDE_COLOR,
+                depth=True, size=3.0)
+            add(sel.verts, moderngl.POINTS, SEL_COLOR, depth=False, size=7.0)
+            if hover >= 0:
+                add([hover], moderngl.POINTS, HOVER_COLOR, depth=False, size=9.0)
+        elif mode == "edge":
+            ids = adj.edge_ids(sel.edges)
+            add(adj.edge_verts[ids[ids >= 0]], moderngl.LINES, SEL_COLOR, depth=False)
+            if hover >= 0:
+                add(adj.edge_verts[hover], moderngl.LINES, HOVER_COLOR, depth=False)
+        else:
+            tris, tri_face = cached_triangulation(obj.mesh)
+            if len(tris):
+                chosen = tris[np.isin(tri_face, sel.faces)]
+                # Depth-tested, so a fill on the far side of a closed mesh does
+                # not bleed through it -- and biased toward the eye so it does
+                # not z-fight the very face it is covering.
+                add(chosen, moderngl.TRIANGLES, FILL_COLOR, depth=True,
+                    model=_toward_eye(self.camera.position) @ world)
+                add(_face_outline(obj.mesh, sel.faces), moderngl.LINES, SEL_COLOR,
+                    depth=False)
+                if hover >= 0:
+                    add(tris[tri_face == hover], moderngl.TRIANGLES, HOVER_COLOR,
+                        depth=False)
+        return items
+
+    def _release_overlays(self) -> None:
+        for overlay in self._overlays.values():
+            overlay.release()
+        self._overlays.clear()
+
     def _gizmo_draws(self, doc: Any, height: int) -> list[Any]:
         gizmo = self.active_gizmo(doc)
         if gizmo is None:
@@ -275,10 +533,13 @@ class ClayView:
 
         The tool lives on the mode's state rather than here, because it is an
         *app* setting shared across documents -- so this reads it rather than
-        holding it.
+        holding it. Q (select) draws no gizmo in any mode, which in an element
+        mode is what frees the left button for the marquee.
         """
         kind = GIZMO_FOR_TOOL.get(getattr(self.state, "tool", "select"), "")
         if not kind or not doc.selection:
+            return None
+        if doc.element_mode != "object" and not doc.element_sel:
             return None
         return {
             "translate": self.translate_gizmo,
@@ -293,8 +554,38 @@ class ClayView:
         return None if app_ctx is None else getattr(app_ctx.state, "clay", None)
 
     def selection_centre(self, doc: Any) -> np.ndarray | None:
+        """Where the gizmo goes: the object box's centre, or the elements'.
+
+        In an element mode the gizmo belongs to what is selected *inside* the
+        objects, not to the objects: putting it at the object's centre would
+        leave a user dragging a handle two metres from the four vertices it
+        moves, with the rotate ring pivoting about a point they never chose.
+        """
+        if doc.element_mode != "object":
+            return self.element_centre(doc)
         lo, hi = self.world_bounds(doc, selected_only=True)
         return None if lo is None else (lo + hi) * 0.5
+
+    def element_centre(self, doc: Any) -> np.ndarray | None:
+        """The world centroid of every selected element, across every object."""
+        from .clay import elements as el
+
+        total = np.zeros(3)
+        count = 0
+        for uid, sel in doc.element_sel.items():
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            verts = el.affected_verts(obj.mesh, sel)
+            if not len(verts):
+                continue
+            matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+            local = obj.mesh.positions[verts].astype("f8")
+            world = (matrix @ np.hstack([local, np.ones((len(local), 1))]).T).T[:, :3]
+            total += world.sum(axis=0)
+            count += len(world)
+        return None if count == 0 else total / count
 
     def world_bounds(self, doc: Any, *, selected_only: bool = False) -> tuple[Any, Any]:
         """The world AABB over visible objects, or ``(None, None)`` if there are none."""
@@ -387,20 +678,96 @@ class ClayView:
         Built here rather than in ``clay/pick.py`` because it is the only step
         that needs the camera; everything the picking rules actually decide is
         pure numpy over what this returns.
+
+        Cached per object on ``(id(mesh), transform, camera, rect)``, which is
+        every input the projection has. Hover runs on every mouse move, and a
+        200k-vertex import reprojected per move is the difference between a
+        viewport and a slideshow -- while a camera that has not moved makes the
+        key hit and the whole thing free.
         """
         from .clay import pick as bp
 
         obj = doc.by_uid(uid)
         width, height = int(max(self._rect[2], 1)), int(max(self._rect[3], 1))
         self.camera.aspect = width / max(height, 1)
-        return bp.project(
+        matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+        key = (
+            id(obj.mesh),
+            matrix.tobytes(),
+            (self.camera.theta, self.camera.phi, self.camera.distance),
+            tuple(self.camera.target),
+            (width, height),
+        )
+        cached = self._screens.get(uid)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        screen = bp.project(
             obj.mesh.positions,
-            m3.compose(obj.translation, obj.rotation, obj.scale),
+            matrix,
             self.camera.projection() @ self.camera.view(),
             self.camera.position,
             width,
             height,
         )
+        self._screens[uid] = (key, screen)
+        return screen
+
+    def pick_element(
+        self, doc: Any, local: tuple[float, float], hit: Any = None
+    ) -> tuple[int, int] | None:
+        """What element is under the cursor: ``(uid, index)``, read through the mode.
+
+        The *index* is a vertex index, an index into ``adjacency.edge_verts`` or
+        a face index, depending on ``doc.element_mode`` -- one shape for all
+        three, because every caller here does the same thing with it.
+
+        The surface hit is passed in rather than recast so the occlusion test
+        compares against the same ray the object pick used; recasting would let
+        the two disagree by an ulp and make a vertex on the near face flicker
+        in and out of pickability.
+        """
+        from .clay import pick as bp
+        from .clay.adjacency import adjacency
+
+        mode = doc.element_mode
+        if mode == "object":
+            return None
+        if hit is None:
+            hit = self.pick_face(doc, local)
+        depth = None if hit is None else hit.t
+
+        best: tuple[float, int, int] | None = None
+        for obj in doc.objects:
+            if not obj.visible:
+                continue
+            screen = self.screen_of(doc, obj.uid)
+            if mode == "vertex":
+                index = bp.nearest_vertex(screen, local, surface_depth=depth)
+            elif mode == "edge":
+                index = bp.nearest_edge(
+                    screen, adjacency(obj.mesh).edge_verts, local, surface_depth=depth
+                )
+            else:
+                index = hit.face if hit is not None and hit.uid == obj.uid else None
+                index = None if index is not None and index < 0 else index
+            if index is None:
+                continue
+            key = float(screen.depth[index]) if mode == "vertex" else 0.0
+            if best is None or key < best[0]:
+                best = (key, obj.uid, int(index))
+        return None if best is None else (best[1], best[2])
+
+    def element_sel_for(self, doc: Any, uid: int, index: int) -> Any:
+        """One picked element as an :class:`~.clay.elements.ElementSel`."""
+        from .clay import elements as el
+        from .clay.adjacency import adjacency
+
+        mode = doc.element_mode
+        if mode == "vertex":
+            return el.ElementSel(verts=[index])
+        if mode == "edge":
+            return el.ElementSel(edges=[adjacency(doc.by_uid(uid).mesh).edge_verts[index]])
+        return el.ElementSel(faces=[index])
 
     # -- input -------------------------------------------------------------
 
@@ -417,6 +784,8 @@ class ClayView:
         if event.type == pygame.MOUSEBUTTONDOWN and hovered:
             return self._press(doc, event.button, local)
         if event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 3:
+                return self._rmb_release(local)
             return self._release_drag(doc)
         if event.type == pygame.MOUSEMOTION:
             return self._motion(doc, local)
@@ -431,31 +800,123 @@ class ClayView:
             return self._last_mouse
         return (pos[0] - self._rect[0], pos[1] - self._rect[1])
 
+    def _mods(self) -> tuple[bool, bool, bool]:
+        """``(shift, ctrl, alt)`` at this instant. See the module docstring."""
+        try:
+            import pygame
+
+            mods = pygame.key.get_mods()
+            return (
+                bool(mods & pygame.KMOD_SHIFT),
+                bool(mods & pygame.KMOD_CTRL),
+                bool(mods & pygame.KMOD_ALT),
+            )
+        except Exception:  # pragma: no cover - headless pygame without a display
+            return (False, False, False)
+
     def _press(self, doc: Any, button: int, local: tuple[float, float]) -> bool:
         self._last_mouse = local
-        if button not in (1, 2, 3):
+        if button == 3:
+            self._rmb_at = local
+            return True
+        if button == 2:
+            self._grab = "pan"
+            return True
+        if button != 1:
             return False
-        if button == 1:
-            origin, direction = self._ray(local)
-            gizmo = self.active_gizmo(doc)
-            axis = gizmo.hit(origin, direction) if gizmo is not None else None
-            if axis is not None and gizmo.begin(axis, origin, direction):
-                # Every selected object's transform is recorded at the press,
-                # not read per frame: that is what ``set_transform``'s ``was``
-                # argument takes, and reading it live would compare a value
-                # against itself and record an empty step.
-                self._drag_uids = [o.uid for o in doc.objects if o.uid in doc.selection]
-                self._drag_start = {
-                    uid: tuple(np.array(v, copy=True) for v in doc.by_uid(uid).trs())
-                    for uid in self._drag_uids
-                }
-                self._grab = "gizmo"
-                return True
-            hit = self.pick(doc, local)
-            doc.select([hit] if hit is not None else [])
+
+        shift, ctrl, alt = self._mods()
+        if alt:
+            # Alt+drag always orbits, in every mode: it is the one gesture that
+            # must never be reinterpreted, because it is how a user looks at
+            # what they are about to click.
             self._grab = "orbit"
             return True
-        self._grab = "pan"
+
+        origin, direction = self._ray(local)
+        gizmo = self.active_gizmo(doc)
+        axis = gizmo.hit(origin, direction) if gizmo is not None else None
+        if axis is not None and gizmo.begin(axis, origin, direction):
+            self._begin_gizmo_drag(doc)
+            return True
+
+        if doc.element_mode != "object":
+            return self._press_element(doc, local, shift=shift, ctrl=ctrl)
+
+        hit = self.pick(doc, local)
+        doc.select([hit] if hit is not None else [])
+        self._grab = "orbit"
+        return True
+
+    def _begin_gizmo_drag(self, doc: Any) -> None:
+        """Record every selected object's transform at the press.
+
+        Not read per frame: that is what ``set_transform``'s ``was`` argument
+        takes, and reading it live would compare a value against itself and
+        record an empty step.
+        """
+        self._drag_uids = [o.uid for o in doc.objects if o.uid in doc.selection]
+        self._drag_start = {
+            uid: tuple(np.array(v, copy=True) for v in doc.by_uid(uid).trs())
+            for uid in self._drag_uids
+        }
+        self._grab = "gizmo"
+        if doc.element_mode != "object":
+            self._begin_element_drag(doc)
+
+    def _press_element(
+        self, doc: Any, local: tuple[float, float], *, shift: bool, ctrl: bool
+    ) -> bool:
+        """LMB in an element mode: pick, clear, or start a marquee.
+
+        The order is what makes it feel right. An element under the cursor
+        wins; failing that, a *surface* under the cursor means the user clicked
+        the object and missed everything on it, which clears that object rather
+        than the whole selection; failing that, they clicked empty space, and
+        what happens then is the tool's business -- Q starts a marquee, the
+        transform tools orbit, because dragging a gizmo tool over the void is
+        how a user looks around.
+        """
+        from .clay import elements as el
+
+        how = "add" if shift else ("subtract" if ctrl else "replace")
+        hit = self.pick_face(doc, local)
+        picked = self.pick_element(doc, local, hit)
+        if picked is not None:
+            uid, index = picked
+            one = self.element_sel_for(doc, uid, index)
+            if how == "replace":
+                doc.clear_element_sel()
+            doc.set_element_sel(
+                uid, el.combine(doc.element_sel_of(uid), one, how)
+            )
+            self._grab = "orbit"
+            return True
+        if hit is not None:
+            doc.set_element_sel(hit.uid, el.empty())
+            self._grab = "orbit"
+            return True
+        if getattr(self.state, "tool", "select") == "select":
+            self._grab = "marquee"
+            self._marquee_from = local
+            self._marquee_add = how
+            self.marquee = (local[0], local[1], local[0], local[1])
+        else:
+            self._grab = "orbit"
+        return True
+
+    def _rmb_release(self, local: tuple[float, float]) -> bool:
+        """The context menu, on a release that did not travel.
+
+        Four pixels rather than zero: a right-click on a trackpad routinely
+        moves one or two, and a menu that refuses to open because the finger
+        shifted reads as the app ignoring the click.
+        """
+        at, self._rmb_at = self._rmb_at, None
+        if at is None:
+            return False
+        if abs(local[0] - at[0]) < 4.0 and abs(local[1] - at[1]) < 4.0:
+            self.menu_request = local
         return True
 
     def _release_drag(self, doc: Any) -> bool:
@@ -466,8 +927,56 @@ class ClayView:
             gizmo = self.active_gizmo(doc)
             if gizmo is not None:
                 gizmo.end_drag()
-            self._commit_drag(doc)
+            if doc.element_mode != "object":
+                self._commit_element_drag(doc)
+            else:
+                self._commit_drag(doc)
+        elif was == "marquee":
+            self._commit_marquee(doc)
         return True
+
+    def _commit_marquee(self, doc: Any) -> None:
+        """Apply the swept rectangle, or clear the selection if it has no area.
+
+        A zero-area marquee is a click on empty space, and clicking empty space
+        deselects -- so the same gesture does both, with the area deciding
+        which, rather than the press having to guess in advance.
+        """
+        from .clay import elements as el
+        from .clay import pick as bp
+        from .clay.adjacency import adjacency
+
+        rect, self.marquee, self._marquee_from = self.marquee, None, None
+        if rect is None:
+            return
+        if abs(rect[2] - rect[0]) < 2.0 and abs(rect[3] - rect[1]) < 2.0:
+            if self._marquee_add == "replace":
+                doc.clear_element_sel()
+            return
+
+        mode = doc.element_mode
+        if self._marquee_add == "replace":
+            doc.clear_element_sel()
+        for obj in doc.objects:
+            if not obj.visible:
+                continue
+            screen = self.screen_of(doc, obj.uid)
+            if mode == "vertex":
+                swept = el.ElementSel(verts=bp.marquee_verts(screen, rect))
+            elif mode == "edge":
+                swept = el.ElementSel(
+                    edges=bp.marquee_edges(screen, adjacency(obj.mesh).edge_verts, rect)
+                )
+            else:
+                swept = el.ElementSel(
+                    faces=bp.marquee_faces(screen, obj.mesh.loops, obj.mesh.starts, rect)
+                )
+            if el.is_empty(swept):
+                continue
+            how = "subtract" if self._marquee_add == "subtract" else "add"
+            doc.set_element_sel(
+                obj.uid, el.combine(doc.element_sel_of(obj.uid), swept, how)
+            )
 
     def _commit_drag(self, doc: Any) -> None:
         """One history step per object, recorded against where the drag began."""
@@ -489,7 +998,14 @@ class ClayView:
             if gizmo is not None:
                 origin, direction = self._ray(local)
                 gizmo.hover = gizmo.hit(origin, direction)
+            self.hover_element = (
+                None if doc.element_mode == "object" else self.pick_element(doc, local)
+            )
             return False
+        if self._grab == "marquee":
+            start = self._marquee_from or local
+            self.marquee = (start[0], start[1], local[0], local[1])
+            return True
         if self._grab == "orbit":
             self.camera.orbit(dx, dy, height)
         elif self._grab == "pan":
@@ -497,6 +1013,131 @@ class ClayView:
         elif self._grab == "gizmo":
             self._drag_gizmo(doc, local)
         return True
+
+    def _begin_element_drag(self, doc: Any) -> None:
+        """Snapshot every selected object's affected vertices at the press."""
+        from .clay import elements as el
+
+        self._element_drags = {}
+        centre = self.element_centre(doc)
+        self._element_centre = np.zeros(3) if centre is None else centre
+        for uid, sel in doc.element_sel.items():
+            try:
+                obj = doc.by_uid(uid)
+            except KeyError:
+                continue
+            verts = el.affected_verts(obj.mesh, sel)
+            if not len(verts):
+                continue
+            matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+            try:
+                inverse = np.linalg.inv(matrix)
+            except np.linalg.LinAlgError:
+                continue
+            self._element_drags[uid] = _ElementDrag(
+                before=obj.mesh,
+                verts=verts,
+                local=obj.mesh.positions[verts].astype("f8"),
+                matrix=matrix,
+                inverse=inverse,
+            )
+
+    def _element_world_transform(self, delta: Any, state: Any) -> Any:
+        """The gizmo's delta as a world-space affine about the drag's centre.
+
+        One 4x4 for all three tools, so the per-vertex step downstream is a
+        single ``inverse @ W @ matrix`` and knows nothing about which gizmo the
+        user grabbed.
+        """
+        from .clay import ops
+
+        centre = self._element_centre
+        snap = bool(getattr(state, "snap", False))
+        world = m3.identity()
+        if isinstance(delta, np.ndarray) and delta.shape == (4,):
+            if snap:
+                delta = ops.snap_rotation(delta, getattr(state, "snap_rotate", 0.0))
+            rotation = m3.compose(m3.vec3(), delta, m3.vec3(1.0, 1.0, 1.0))
+            world = _about(centre, rotation)
+        elif self._is_scale(state):
+            factors = np.asarray(delta, dtype="f8").reshape(3)
+            scale = np.diag(np.append(factors, 1.0))
+            world = _about(centre, scale)
+        else:
+            target = np.asarray(delta, dtype="f8").reshape(3)
+            if snap:
+                target = ops.snap_translation(target, getattr(state, "snap_translate", 0.0))
+            world = m3.identity()
+            world[:3, 3] = target - centre
+        return world
+
+    def _preview_element_drag(self, doc: Any, delta: Any, state: Any) -> None:
+        """Move the affected vertices on the GPU only, without touching the document.
+
+        Nothing is pushed and no ``Mesh`` reaches the document: the drag writes
+        the moved vertices straight into the cached buffers, so ``rebuilds``
+        stays flat across a whole drag and there is exactly one history step at
+        the end rather than one per mouse-move.
+        """
+        world = self._element_world_transform(delta, state)
+        for uid, drag in self._element_drags.items():
+            moved = _apply_affine(drag.inverse @ world @ drag.matrix, drag.local)
+            positions = np.array(drag.before.positions, dtype="f4")
+            positions[drag.verts] = moved
+            drag.preview = positions
+            self._preview_positions(doc, uid, positions)
+        doc.touch()
+
+    def _preview_positions(self, doc: Any, uid: int, positions: Any) -> None:
+        """Rewrite one object's vertex buffers in place. No VAO is rebuilt."""
+        from dataclasses import replace
+
+        entry = self._cache.get(uid)
+        if entry is None:
+            return
+        obj = doc.by_uid(uid)
+        drag = self._element_drags.get(uid)
+        base = obj.mesh if drag is None else drag.before
+        preview = replace(obj, mesh=replace(base, positions=positions))
+        prims = bd.to_primitives(preview, doc.materials)
+        for (_node, gpu), primitive in zip(entry.gpu.draws, prims, strict=False):
+            try:
+                gpu.update_vertices(primitive)
+            except ValueError:  # pragma: no cover - topology changed under a drag
+                return
+        overlay = getattr(self, "_overlays", {}).get(uid)
+        if overlay is not None:
+            overlay.write_positions(positions)
+
+    def _commit_element_drag(self, doc: Any) -> None:
+        """One ``MeshEdit`` per object, against the mesh the drag began on.
+
+        A drag that moved nothing pushes nothing -- dirty is a comparison
+        against the history head, and a no-op step would make a saved document
+        ask to be saved again. It still has to evict the previewed entries: the
+        buffers hold whatever the last preview frame wrote, and the mesh
+        identity the cache keys on has not changed, so nothing else would ever
+        rebuild them.
+        """
+        from dataclasses import replace
+
+        drags, self._element_drags = self._element_drags, {}
+        for uid, drag in drags.items():
+            try:
+                doc.by_uid(uid)
+            except KeyError:
+                continue
+            final = drag.before.positions if drag.preview is None else drag.preview
+            if np.array_equal(final, drag.before.positions):
+                entry = self._cache.pop(uid, None)
+                if entry is not None:
+                    entry.gpu.release()
+                continue
+            doc.set_mesh(
+                uid,
+                replace(drag.before, positions=final),
+                select=doc.element_sel_of(uid),
+            )
 
     def _drag_gizmo(self, doc: Any, local: tuple[float, float]) -> None:
         """Apply a gizmo delta to every selected object, in place.
@@ -513,6 +1154,9 @@ class ClayView:
         origin, direction = self._ray(local)
         delta = gizmo.update(origin, direction)
         if delta is None:
+            return
+        if doc.element_mode != "object":
+            self._preview_element_drag(doc, delta, state)
             return
         for uid, was in self._drag_start.items():
             try:
@@ -555,6 +1199,7 @@ class ClayView:
 
     def release(self) -> None:
         self.clear()
+        self._release_overlays()
         self.translate_gizmo.release()
         self.rotate_gizmo.release()
         self.scale_gizmo.release()
@@ -564,3 +1209,32 @@ class ClayView:
         self._forget(self.viewport.texture)
         self.viewport.release()
         self.renderer.release()
+
+
+def _toward_eye(eye: Any) -> np.ndarray:
+    """A world matrix that shrinks everything a hair toward the eye.
+
+    Which pulls a selected face's translucent fill in front of the face it
+    covers. ``glPolygonOffset`` is the textbook answer and is deliberately not
+    used: it is global GL state that moderngl caches, so setting it here would
+    leak into the gizmo pass and the grid, and unsetting it is one more thing to
+    get wrong on an early return. Scaling about the eye is local to the draw and
+    needs no cleanup at all.
+    """
+    scale = 1.0 - FILL_BIAS
+    matrix = m3.identity()
+    matrix[:3, :3] = np.eye(3) * scale
+    matrix[:3, 3] = np.asarray(eye, dtype="f8") * FILL_BIAS
+    return matrix
+
+
+def _face_outline(mesh: Any, faces: Any) -> np.ndarray:
+    """The border of each face, as ``LINES`` pairs. Empty for no faces."""
+    faces = np.asarray(faces, dtype="i8").reshape(-1)
+    if len(faces) == 0:
+        return np.zeros((0, 2), dtype="u4")
+    starts = mesh.starts.astype("i8")
+    counts = starts[faces + 1] - starts[faces]
+    offsets, nxt, _ = _flat_next(counts)
+    corners = _corner_spans(starts, faces)
+    return np.stack([mesh.loops[corners], mesh.loops[corners[nxt]]], axis=1)

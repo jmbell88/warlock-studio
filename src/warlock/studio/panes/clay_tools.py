@@ -10,6 +10,12 @@ flight**, exactly as the layers panel is. Serialising reads the live document
 on a task thread, so a control that restructured it mid-encode would write a
 file describing a document that never existed. Disabling says so on screen
 rather than swallowing the click.
+
+**The action buttons come from the ops registry**, not from a list here. There
+were three lists of what Clay can do -- this pane, the key handler and now the
+context menu -- and this is the one that stopped being one. Duplicate, Bake,
+Mirror and Delete still look exactly as they did; they are just rows of
+``clay_ops.menu(mode)`` now, so a button cannot offer an op the menu greys out.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_state, icons, widgets
+from .. import clay_mode, clay_ops, clay_state, icons, widgets
 from ..clay import document as bd
 from ..clay import ops
 from ..clay import primitives as bp
@@ -48,6 +54,16 @@ PRIMITIVE_ICONS = {
 
 AXES = (("x", "X"), ("y", "Y"), ("z", "Z"))
 
+# The four element modes and the keys that switch them. Held as data beside
+# ``TOOL_ICONS`` so the row and ``clay_mode.ELEMENT_KEYS`` are one edit apart
+# rather than two files apart.
+MODE_BUTTONS = (
+    ("object", "Object", "4"),
+    ("vertex", "Verts", "1"),
+    ("edge", "Edges", "2"),
+    ("face", "Faces", "3"),
+)
+
 
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
@@ -60,10 +76,15 @@ def draw(ctx: Any) -> None:
         widgets.muted("Open or start a document to build in.")
         return
 
+    from . import clay_menu
+
     imgui.begin_disabled(tab.saving)
+    _mode_row(tab.doc)
+    imgui.dummy((0, 6))
     _add(ctx, state, tab.doc)
     imgui.dummy((0, 6))
-    _object_actions(ctx, state, tab.doc)
+    _actions(ctx, state, tab.doc)
+    clay_menu.params_popup(ctx, state, tab)
     imgui.end_disabled()
     imgui.dummy((0, 6))
     # Snapping and the display toggles change nothing about the document, so
@@ -88,6 +109,34 @@ def _tool_grid(state: Any) -> None:
             imgui.pop_style_color()
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"{label}  ({shortcut})")
+        if index % COLUMNS != COLUMNS - 1:
+            imgui.same_line()
+    imgui.new_line()
+
+
+def _mode_row(doc: Any) -> None:
+    """Object / Verts / Edges / Faces, highlighting the document's own mode.
+
+    The mode lives on the *document* rather than on ``ClayState``: it is the
+    interpretation key for a selection, and an app-level mode would reinterpret
+    every other tab's selection on a tab switch. So this reads ``doc`` and the
+    state is not involved at all.
+    """
+    widgets.field_label("mode")
+    width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
+    for index, (mode, label, key) in enumerate(MODE_BUTTONS):
+        selected = doc.element_mode == mode
+        if selected:
+            imgui.push_style_color(
+                imgui.Col_.button.value,
+                imgui.get_style().color_(imgui.Col_.button_active.value),
+            )
+        if imgui.button(f"{label}##claymode{mode}", (width, sp(26))):
+            doc.set_element_mode(mode)
+        if selected:
+            imgui.pop_style_color()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(f"{label} mode  ({key})")
         if index % COLUMNS != COLUMNS - 1:
             imgui.same_line()
     imgui.new_line()
@@ -145,54 +194,46 @@ def _unique_name(doc: Any, base: str) -> str:
     return ops._next_name(base, taken)
 
 
-def _object_actions(ctx: Any, state: Any, doc: Any) -> None:
-    widgets.field_label("selected")
-    has = bool(doc.selection)
-    if widgets.disabled_button(f"{icons.COPY} Duplicate", has):
-        clay_mode._duplicate_selection(ctx, state, doc)
-    imgui.same_line()
-    if widgets.disabled_button(f"{icons.MAXIMIZE} Bake", has):
-        _bake(doc)
+def _actions(ctx: Any, state: Any, doc: Any) -> None:
+    """One button per registry op that applies in the current mode.
 
-    widgets.field_label("mirror")
-    for index, (axis, label) in enumerate(AXES):
-        if widgets.disabled_button(f"{icons.FLIP_HORIZONTAL} {label}##mirror", has):
-            _mirror(doc, index)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                f"Mirror across {axis.upper()}. Baked into the mesh, never a negative "
-                "scale -- glTF readers disagree about whether that flips the winding."
-            )
-        if index < len(AXES) - 1:
-            imgui.same_line()
-
-    if widgets.destructive_button(f"{icons.TRASH} Delete") and has:
-        for uid in list(doc.selection):
-            doc.remove_object(uid)
-
-
-def _mirror(doc: Any, axis: int) -> None:
-    for uid in list(doc.selection):
-        doc.set_mesh(uid, ops.mirror(doc.by_uid(uid), axis).mesh)
-
-
-def _bake(doc: Any) -> None:
-    """Fold each selected object's transform into its geometry.
-
-    Two steps rather than one compound: the mesh and the transform are separate
-    edits in this document's vocabulary, and keeping them separate means an
-    undo of a bake is two presses rather than a compound type that exists for
-    one button.
+    Two columns, in registration order, with the same enablement predicate the
+    menu row uses -- so a greyed-out button and a greyed-out menu row are
+    literally the same call. Delete keeps its destructive styling because it is
+    the one row a misclick cannot be shrugged off.
     """
-    for uid in list(doc.selection):
-        baked = ops.bake_transform(doc.by_uid(uid))
-        doc.set_mesh(uid, baked.mesh)
-        doc.set_transform(
-            uid,
-            translation=baked.translation,
-            rotation=baked.rotation,
-            scale=baked.scale,
-        )
+    widgets.field_label("actions")
+    del state
+    ops_here = [op for op in clay_ops.menu(doc.element_mode) if not op.name.startswith("select-")]
+    for index, op in enumerate(ops_here):
+        enabled = op.enabled(doc)
+        label = op.label.rstrip(".")
+        if op.name == "delete":
+            imgui.new_line()
+            if widgets.destructive_button(f"{icons.TRASH} {label}") and enabled:
+                clay_ops.run(ctx, doc, op)
+            continue
+        if widgets.disabled_button(f"{label}##clayop{op.name}", enabled):
+            _invoke(ctx, doc, op)
+        if imgui.is_item_hovered() and op.key:
+            imgui.set_tooltip(op.key)
+        if index % 2 == 0:
+            imgui.same_line()
+        else:
+            imgui.new_line()
+
+
+def _invoke(ctx: Any, doc: Any, op: Any) -> None:
+    """Run an op, or hand a parameterised one to the popup the menu also uses."""
+    from . import clay_menu
+
+    if not op.params:
+        clay_ops.run(ctx, doc, op)
+        return
+    state = clay_mode.ensure(ctx)
+    state.pending_op = op.name
+    state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
+    imgui.open_popup(clay_menu.PARAM_POPUP)
 
 
 def _snapping(state: Any) -> None:

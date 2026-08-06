@@ -336,10 +336,17 @@ TOOL_KEYS = {
     "r": "scale",
 }
 
+# The element modes, on the number row. **Not Tab**, which imgui's keyboard
+# navigation owns and which would move focus out of the viewport as well as
+# changing the mode; and **not b**, because the hand that is about to press
+# Ctrl+Z is already on the number row. 4 is object mode rather than a separate
+# key, so the four modes are one contiguous run under four fingers.
+ELEMENT_KEYS = {"1": "vertex", "2": "edge", "3": "face", "4": "object"}
+
 # Ctrl-shortcuts that change the document. Serialising reads the live document
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
-_MUTATING_CTRL = frozenset({"z", "y", "d", "a"})
+_MUTATING_CTRL = frozenset({"z", "y", "d", "a", "i"})
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
@@ -372,21 +379,98 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, shift=shift)
 
-    if name in TOOL_KEYS and not shift:
+    if name in ELEMENT_KEYS and not shift:
+        if not tab.saving:
+            doc.set_element_mode(ELEMENT_KEYS[name])
+    elif not shift and _registry_key(ctx, tab, doc, name):
+        pass
+    elif name in TOOL_KEYS and not shift:
         state.tool = TOOL_KEYS[name]
     elif event.key == pygame.K_DELETE:
         if not tab.saving:
-            for uid in list(doc.selection):
-                doc.remove_object(uid)
+            _delete(ctx, doc)
     elif event.key == pygame.K_ESCAPE:
-        # Never leaves the mode: Esc means "drop what I am doing", and losing a
-        # workspace full of tabs to a stray keypress is not that.
-        if not tab.saving:
-            doc.select([])
-        # Always: abandoning a half-finished drag touches the pane's own state
-        # and never the document, so it is safe mid-save.
-        state.clear_drag()
+        _escape(state, tab, doc)
     return True
+
+
+def _registry_key(ctx: Any, tab: ClayTab, doc: Any, name: str) -> bool:
+    """Fire the registry op bound to a bare letter, if there is one.
+
+    Checked *before* the tool keys so an element mode can claim a letter the
+    transform tools also use -- E is Extrude with faces selected and Rotate
+    without -- and checked through ``clay_ops.menu`` so the binding shown in the
+    context menu and the binding that fires are one value.
+    """
+    from . import clay_ops
+
+    if tab.saving or doc.element_mode == "object":
+        return False
+    op = clay_ops.by_key(doc.element_mode, name.upper())
+    if op is None or not op.enabled(doc):
+        return False
+    state = ensure(ctx)
+    if op.params:
+        state.pending_op = op.name
+        state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
+        return True
+    return clay_ops.run(ctx, doc, op)
+
+
+def _delete(ctx: Any, doc: Any) -> None:
+    """Delete what is selected, in whatever sense the current mode means it.
+
+    In an element mode this **never** falls through to removing objects. A user
+    in face mode pressing Delete means "get rid of these faces", and quietly
+    deleting the whole object instead is the most destructive possible
+    misreading of one keystroke -- the more so because the object selection in
+    an element mode is derived from the element selection, so every object with
+    anything selected inside it would go.
+    """
+    from .clay import elements as el
+    from .clay import ops_topo
+
+    if doc.element_mode == "object":
+        for uid in list(doc.selection):
+            doc.remove_object(uid)
+        return
+    for uid in list(doc.element_sel):
+        obj = doc.by_uid(uid)
+        faces = el.convert(obj.mesh, doc.element_sel_of(uid), "face")
+        if el.is_empty(faces):
+            continue
+        try:
+            mesh, sel = ops_topo.delete_faces(obj.mesh, faces)
+        except el.OpError as error:
+            _toast(ctx, str(error))
+            continue
+        doc.set_mesh(uid, mesh, select=sel)
+
+
+def _escape(state: ClayState, tab: ClayTab, doc: Any) -> None:
+    """Esc, staged: the elements, then the mode, then the objects.
+
+    One key that undoes the last thing the user got into, in the order they got
+    into it. It **never leaves Clay mode**: Esc means "drop what I am doing",
+    and losing a workspace full of tabs to a stray keypress is not that.
+    """
+    if not tab.saving:
+        if doc.element_mode != "object":
+            if doc.element_sel:
+                doc.clear_element_sel()
+            else:
+                doc.set_element_mode("object")
+        else:
+            doc.select([])
+    # Always: abandoning a half-finished drag touches the pane's own state and
+    # never the document, so it is safe mid-save.
+    state.clear_drag()
+
+
+def _toast(ctx: Any, message: str) -> None:
+    toasts = getattr(ctx, "toasts", None)
+    if toasts is not None:
+        toasts.error(message)
 
 
 def _ctrl_key(
@@ -407,12 +491,45 @@ def _ctrl_key(
     elif name == "y":
         doc.redo()
     elif name == "a":
-        doc.select([obj.uid for obj in doc.objects])
-    elif name == "d":
+        _select_all(doc)
+    elif name == "i" and shift:
+        _invert(doc)
+    elif name == "d" and doc.element_mode == "object":
+        # Object mode only: duplicating a *face* selection is a different
+        # operation with a different name, and doing the object one instead
+        # would silently double a mesh the user is mid-edit on.
         _duplicate_selection(ctx, state, doc)
     elif name == "tab":
         state.cycle(-1 if shift else 1)
     return True
+
+
+def _select_all(doc: Any) -> None:
+    """Everything, in the current mode's sense of everything."""
+    from .clay import elements as el
+
+    if doc.element_mode == "object":
+        doc.select([obj.uid for obj in doc.objects])
+        return
+    for obj in doc.objects:
+        if obj.visible:
+            doc.set_element_sel(obj.uid, el.select_all(obj.mesh, doc.element_mode))
+
+
+def _invert(doc: Any) -> None:
+    """Ctrl+Shift+I. In object mode it inverts which objects are selected."""
+    from .clay import elements as el
+
+    if doc.element_mode == "object":
+        doc.select([o.uid for o in doc.objects if o.uid not in doc.selection])
+        return
+    for obj in doc.objects:
+        if not obj.visible:
+            continue
+        doc.set_element_sel(
+            obj.uid,
+            el.invert(obj.mesh, doc.element_sel_of(obj.uid), doc.element_mode),
+        )
 
 
 def _duplicate_selection(ctx: Any, state: ClayState, doc: Any) -> None:
