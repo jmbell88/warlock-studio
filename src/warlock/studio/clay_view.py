@@ -298,6 +298,14 @@ class ClayView:
         self._last_mouse = (0.0, 0.0)
         self._drag_uids: list[int] = []
         self._drag_start: dict[int, tuple[Any, Any, Any]] = {}
+        # The drag's *total* rotation, and the gizmo's origin at the press.
+        # ``RotateGizmo.update`` hands back the increment since the last call
+        # and ``TranslateGizmo.update`` the gizmo's new world position, so
+        # neither is usable against a transform recorded at the press without
+        # these two: the first has to be accumulated into a total, the second
+        # turned into a displacement.
+        self._drag_quat = np.array([0.0, 0.0, 0.0, 1.0])
+        self._drag_origin = np.zeros(3)
 
         # What the cursor is over in an element mode, as ``(uid, index)`` read
         # through the document's own mode. Updated only on motion with no grab
@@ -887,6 +895,10 @@ class ClayView:
             uid: tuple(np.array(v, copy=True) for v in doc.by_uid(uid).trs())
             for uid in self._drag_uids
         }
+        self._drag_quat = m3.quat_identity()
+        gizmo = self.active_gizmo(doc)
+        origin = None if gizmo is None else getattr(gizmo, "origin", None)
+        self._drag_origin = np.zeros(3) if origin is None else np.array(origin, dtype="f8")
         self._grab = "gizmo"
         if doc.element_mode != "object":
             self._begin_element_drag(doc)
@@ -1182,6 +1194,7 @@ class ClayView:
         delta = gizmo.update(origin, direction)
         if delta is None:
             return
+        delta = self._accumulate(delta)
         if doc.element_mode != "object":
             self._preview_element_drag(doc, delta, state)
             return
@@ -1192,6 +1205,32 @@ class ClayView:
                 continue
             self._apply(obj, was, delta, state)
         doc.touch()
+
+    def _accumulate(self, delta: Any) -> Any:
+        """Turn one ``update`` return into a quantity measured from the press.
+
+        The two gizmos that need it need it for opposite reasons and both were
+        wrong the same way. ``RotateGizmo.update`` documents its return as the
+        *increment since the last update* -- composing that against the
+        press-time rotation keeps only the last mouse-move, so a 90-degree
+        sweep landed at whatever the final frame happened to travel. It is
+        summed here instead, which is exact rather than approximate: every
+        increment of one drag is about the same local axis, so the products
+        commute and the total is the angle the cursor actually swept.
+
+        ``TranslateGizmo.update`` is the mirror image -- it returns the
+        gizmo's *new world position*, which is only an object's new position
+        for an object whose origin happened to sit under the gizmo. Measured
+        against the press-time gizmo origin it becomes a displacement, which
+        is what every selected object can be moved by.
+
+        ``ScaleGizmo`` already returns a factor relative to the drag's start
+        and passes straight through.
+        """
+        if isinstance(delta, np.ndarray) and delta.shape == (4,):
+            self._drag_quat = m3.quat_normalize(m3.quat_mul(delta, self._drag_quat))
+            return self._drag_quat
+        return delta
 
     def _apply(self, obj: Any, was: Any, delta: Any, state: Any) -> None:
         from .clay import ops
@@ -1204,7 +1243,8 @@ class ClayView:
             if snap:
                 obj.rotation = ops.snap_rotation(obj.rotation, state.snap_rotate)
         else:
-            obj.translation = np.array(delta, dtype="f8")
+            moved = np.asarray(delta, dtype="f8").reshape(3) - self._drag_origin
+            obj.translation = np.array(was[0], dtype="f8") + moved
             if snap:
                 obj.translation = ops.snap_translation(obj.translation, state.snap_translate)
 

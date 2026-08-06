@@ -389,6 +389,71 @@ def test_a_gizmo_drag_records_one_history_step_per_object(view) -> None:
     assert np.allclose(obj.translation, [0.0, 0.0, 0.0])
 
 
+def _drive(view, doc, gizmo, axis, rays) -> None:
+    """Run a real multi-event drag through ``_drag_gizmo``.
+
+    Through the gizmo's own ``update``, which is the whole point: a drag
+    driven by writing ``obj.translation`` directly -- the shape the step-count
+    test above uses -- cannot see what the gizmo actually hands back, and a
+    single-``update`` drag cannot tell an increment from a total.
+    """
+    assert gizmo.begin(axis, *rays[0])
+    view._begin_gizmo_drag(doc)
+    for i in range(1, len(rays)):
+        view._ray = lambda _local, _r=rays[i]: _r
+        view._drag_gizmo(doc, (0.0, 0.0))
+
+
+def _down_at(x: float, y: float):
+    """A ray straight down -Z from above the z=0 plane."""
+    return (np.array([x, y, 5.0]), np.array([0.0, 0.0, -1.0]))
+
+
+def test_a_rotate_drag_keeps_every_increment_not_just_the_last(view) -> None:
+    """``RotateGizmo.update`` returns the increment *since the last update*, so
+    composing it against the press-time rotation keeps only the final
+    mouse-move: a 90-degree sweep used to land wherever the last frame
+    travelled, and the commit then recorded a near-no-op undo step."""
+    import math
+
+    doc = _doc(count=1)
+    obj = doc.objects[0]
+    doc.select([obj.uid])
+    view.app_ctx.state.clay.tool = "rotate"
+    view._rect = RECT
+
+    gizmo = view.rotate_gizmo
+    gizmo.place(np.zeros(3), m3.identity(), view.camera, int(RECT[3]))
+    r = gizmo.scale
+    rays = [
+        _down_at(r * math.cos(math.radians(a)), r * math.sin(math.radians(a)))
+        for a in range(0, 91, 15)
+    ]
+    _drive(view, doc, gizmo, "z", rays)
+
+    swept = gizmo.drag.accumulated
+    assert abs(abs(swept) - math.radians(90.0)) < 1e-9
+    assert np.allclose(obj.rotation, m3.quat_from_axis_angle([0.0, 0.0, 1.0], swept))
+
+
+def test_a_translate_drag_displaces_each_object_rather_than_placing_it(view) -> None:
+    """``TranslateGizmo.update`` returns the *gizmo's* new world position.
+    Assigning it to every selected object collapsed a multi-selection onto one
+    point, and teleported any single object whose origin was not already under
+    the gizmo."""
+    doc = _doc(count=2)  # boxes at x=0 and x=3; the gizmo sits between them
+    doc.select([o.uid for o in doc.objects])
+    view.app_ctx.state.clay.tool = "move"
+    view._rect = RECT
+
+    gizmo = view.translate_gizmo
+    gizmo.place(np.array([1.5, 0.0, 0.0]), m3.identity(), view.camera, int(RECT[3]))
+    _drive(view, doc, gizmo, "x", [_down_at(1.5, 0.0), _down_at(2.5, 0.0), _down_at(3.5, 0.0)])
+
+    assert np.allclose(doc.objects[0].translation, [2.0, 0.0, 0.0])
+    assert np.allclose(doc.objects[1].translation, [5.0, 0.0, 0.0])
+
+
 def test_a_drag_on_an_object_deleted_midway_does_not_raise(view) -> None:
     import pygame
 
