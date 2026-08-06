@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 1
+ABI = 2
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -75,6 +75,8 @@ def _bind(lib: ctypes.CDLL) -> None:
     """Declare every prototype. ctypes defaults to int-returning and
     int-sized arguments, which silently truncates a 64-bit pointer."""
     d = ctypes.POINTER(ctypes.c_double)
+    f = ctypes.POINTER(ctypes.c_float)
+    i64 = ctypes.c_int64
 
     lib.warlockc_abi.restype = ctypes.c_int32
     lib.warlockc_abi.argtypes = []
@@ -85,6 +87,37 @@ def _bind(lib: ctypes.CDLL) -> None:
         ctypes.c_int64,  # n
         ctypes.c_int32,  # resolution
         ctypes.POINTER(ctypes.c_uint8),  # covered
+    ]
+
+    lib.warlockc_over_f32.restype = None
+    lib.warlockc_over_f32.argtypes = [
+        f, i64,  # backdrop, row stride in floats
+        f, i64,  # source
+        f, i64,  # out
+        i64, i64,  # h, w
+        ctypes.c_float,  # opacity
+        ctypes.c_int32,  # mode
+    ]
+
+    lib.warlockc_paint_colour_f32.restype = None
+    lib.warlockc_paint_colour_f32.argtypes = [
+        f, i64,  # before
+        f, i64,  # weight, one channel
+        f, i64,  # out
+        i64, i64,  # h, w
+        ctypes.c_float * 4,  # colour, 0..255
+    ]
+
+    lib.warlockc_stack_f32.restype = None
+    lib.warlockc_stack_f32.argtypes = [
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)),  # layer crops
+        ctypes.POINTER(i64),  # their row strides, in bytes
+        f,  # opacities
+        ctypes.POINTER(ctypes.c_int32),  # modes
+        i64,  # n
+        f, i64,  # out
+        i64, i64,  # h, w
+        f, i64,  # base, or NULL
     ]
 
 
@@ -186,6 +219,112 @@ def rasterise(
         ctypes.c_int64(len(ax)),
         ctypes.c_int32(covered.shape[0]),
         _ptr(covered, ctypes.c_uint8),
+    )
+
+
+def over_f32(
+    backdrop: Any,
+    backdrop_stride: int,
+    source: Any,
+    source_stride: int,
+    out: Any,
+    out_stride: int,
+    height: int,
+    width: int,
+    opacity: float,
+    mode: int,
+) -> None:
+    """Composite ``source`` onto ``backdrop`` into ``out``.
+
+    Every array is float32 with four channels last and rows ``*_stride`` floats
+    apart; ``mode`` indexes ``composite.BLEND_MODES``. The caller has already
+    established all of that -- see ``composite._over_native``, which is the
+    only one.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    c_float = ctypes.c_float
+    handle.warlockc_over_f32(
+        _ptr(backdrop, c_float),
+        ctypes.c_int64(backdrop_stride),
+        _ptr(source, c_float),
+        ctypes.c_int64(source_stride),
+        _ptr(out, c_float),
+        ctypes.c_int64(out_stride),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        ctypes.c_float(opacity),
+        ctypes.c_int32(mode),
+    )
+
+
+def paint_colour_f32(
+    before: Any,
+    before_stride: int,
+    weight: Any,
+    weight_stride: int,
+    out: Any,
+    out_stride: int,
+    height: int,
+    width: int,
+    colour: tuple[int, int, int, int],
+) -> None:
+    """Write ``colour`` over ``before`` at ``weight`` into ``out``, 0..255."""
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    c_float = ctypes.c_float
+    handle.warlockc_paint_colour_f32(
+        _ptr(before, c_float),
+        ctypes.c_int64(before_stride),
+        _ptr(weight, c_float),
+        ctypes.c_int64(weight_stride),
+        _ptr(out, c_float),
+        ctypes.c_int64(out_stride),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        (c_float * 4)(*(float(v) for v in colour)),
+    )
+
+
+def stack_f32(
+    crops: list[Any],
+    strides: list[int],
+    opacities: list[float],
+    modes: list[int],
+    out: Any,
+    out_stride: int,
+    height: int,
+    width: int,
+    base: Any | None,
+    base_stride: int,
+) -> None:
+    """Fold ``crops`` bottom-first onto ``base`` (or transparent black).
+
+    ``crops`` are uint8 (h, w, 4) *views* into the layers' full canvases and the
+    caller has to hold them alive across this call -- the pointer array below
+    is built from their data addresses and ctypes keeps no reference to the
+    arrays themselves.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    c_float = ctypes.c_float
+    u8_ptr = ctypes.POINTER(ctypes.c_uint8)
+    count = len(crops)
+    handle.warlockc_stack_f32(
+        (u8_ptr * count)(*(_ptr(crop, ctypes.c_uint8) for crop in crops)),
+        (ctypes.c_int64 * count)(*strides),
+        (c_float * count)(*opacities),
+        (ctypes.c_int32 * count)(*modes),
+        ctypes.c_int64(count),
+        _ptr(out, c_float),
+        ctypes.c_int64(out_stride),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        _ptr(base, c_float) if base is not None else None,
+        ctypes.c_int64(base_stride),
     )
 
 
