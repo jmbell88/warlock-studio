@@ -68,6 +68,37 @@ def test_higher_resolution_does_not_manufacture_holes(sphere_glb):
         )
 
 
+def test_the_two_resolutions_agree_closely_enough_to_share_a_threshold(tmp_path):
+    """The request path measures at 1024 and the corpus holds rows measured at
+    512, so the two have to be comparable -- not identical, but far closer than
+    the decisions taken against them.
+
+    ``Config.mesh_hole_max`` (0.07) sits in a band the baseline run found empty
+    from 0.0308 to 0.1010, and ``meshreport.HOLE_WARN`` is 0.02. A drift of a
+    few ten-thousandths cannot move a mesh across either; a drift of a few
+    hundredths could, and would silently reclassify meshes when the resolution
+    changed rather than when their geometry did.
+    """
+    sphere = trimesh.creation.icosphere(subdivisions=4, radius=0.5)
+    for cutoff in (0.97, 0.9, 0.6):
+        path = tmp_path / f"cut{cutoff}.glb"
+        keep = np.abs(sphere.face_normals[:, 2]) < cutoff
+        trimesh.Trimesh(vertices=sphere.vertices, faces=sphere.faces[keep]).export(path)
+
+        lo = hole_fraction(path, views=((0.0, 0.0, 1.0),), resolution=512)["worst"]
+        hi = hole_fraction(path, views=((0.0, 0.0, 1.0),), resolution=1024)["worst"]
+        assert abs(hi - lo) < 0.005, f"cut {cutoff}: {lo} vs {hi}"
+
+
+def test_the_request_path_measures_at_full_resolution():
+    """Pinned because it is a corpus decision rather than a tuning constant:
+    changing it changes what every stored hole fraction means, so it should
+    take a test edit and the measurement that justifies it."""
+    from warlock.meshaudit import REQUEST_PATH_RESOLUTION
+
+    assert REQUEST_PATH_RESOLUTION == 1024
+
+
 def test_reports_face_count_and_both_summary_statistics(sphere_glb):
     result = hole_fraction(sphere_glb, resolution=256)
     assert result["faces"] == 5120  # icosphere(subdivisions=4)

@@ -64,13 +64,21 @@ _BATCH_MAX_SPAN = 16
 # costs nothing when n is small (the common case is one chunk).
 _BATCH_MAX_CELLS = 4_000_000
 
-# What the worker measures every finished mesh at. Half the diagnostic default:
-# the cost of both fixpoint loops scales with resolution^3, so 512 is ~8x
-# cheaper than 1024 -- seconds rather than tens of seconds on a job that
-# already took minutes. Hole fractions stay comparable across resolutions
-# (test_meshaudit asserts a higher resolution does not manufacture holes);
-# only sub-pixel gaps are missed.
-REQUEST_PATH_RESOLUTION = 512
+# What the worker measures every finished mesh at.
+#
+# This was 512 for one reason: the two fixpoint loops cost ~resolution^3, so
+# full resolution meant tens of seconds per mesh. Connected components and the
+# native rasteriser removed that term -- a four-view audit at 1024 is ~0.13 s on
+# a test sphere and ~0.8 s on a 290k-face reconstruction -- so the halving buys
+# nothing now and costs the sub-pixel gaps 512 could not see.
+#
+# The reason it is safe to change a number the corpus is keyed on is measured,
+# not assumed: docs/measurements/2026-08-06-audit-resolution.md walks meshes
+# from 0.0 to 0.84 hole fraction at both resolutions and finds the largest
+# disagreement is 0.00045 -- two orders of magnitude below the empty band from
+# 0.0308 to 0.1010 that Config.mesh_hole_max sits in, and below the ~0.3% noise
+# floor the band sweep already established. Nothing reclassifies.
+REQUEST_PATH_RESOLUTION = 1024
 
 
 def hole_fraction(

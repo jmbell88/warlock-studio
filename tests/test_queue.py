@@ -629,13 +629,17 @@ async def test_mesh_audit_is_recorded_on_the_finished_job(worker, monkeypatch):
 
     glb = worker.config.job_dir(job_id) / "model.glb"
     assert [c[0] for c in calls] == [glb]
-    # Half the diagnostic default: the audit is superlinear in resolution and
-    # this runs on every job.
+    # Whatever the request path measures at -- which is the constant's job to
+    # decide, not this test's. test_meshaudit pins the value and the
+    # measurement document that justifies it.
     assert calls[0][2] == meshaudit_mod.REQUEST_PATH_RESOLUTION
     # Only the summary is stored -- per-view detail would ride on every row of
     # the job list.
     assert worker.store.get(job_id)["params"]["mesh_audit"] == {
-        "worst": 0.11, "mean": 0.05, "faces": 1234, "resolution": 512,
+        "worst": 0.11,
+        "mean": 0.05,
+        "faces": 1234,
+        "resolution": meshaudit_mod.REQUEST_PATH_RESOLUTION,
     }
 
 
