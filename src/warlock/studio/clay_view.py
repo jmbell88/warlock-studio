@@ -38,6 +38,7 @@ texture before that happens.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -51,6 +52,21 @@ from .viewer.gizmo import RotateGizmo, ScaleGizmo, TranslateGizmo
 from .viewer.render import Renderer
 
 log = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class Hit:
+    """What a viewport ray found: the object, the distance, and the face.
+
+    The distance is what element picking's occlusion test compares against --
+    "no further from the eye than the surface you can see there" -- so it has
+    to come back with the hit rather than being re-derived from a second ray
+    cast that could disagree with the first.
+    """
+
+    uid: int
+    t: float
+    face: int
+
 
 # Which gizmo each tool drives. Held as data so the dispatch is one lookup
 # rather than a chain that a fifth tool would have to be threaded through.
@@ -321,21 +337,28 @@ class ClayView:
         self.renderer.fit_grid(lo, hi)
         return self.radius
 
-    def pick(self, doc: Any, local: tuple[float, float]) -> int | None:
-        """Which object a click lands on, nearest first. -> its uid, or None.
+    def pick_face(self, doc: Any, local: tuple[float, float]) -> Hit | None:
+        """What a click lands on: which object, how far, and which *face*.
 
         Object space per object, with the AABB prefilter, so the ray goes
         through one inverse transform per object rather than every triangle
         going through the forward one.
+
+        The triangulation comes from ``adjacency.cached_triangulation``, keyed
+        weakly on the mesh -- not from the GPU cache entry, which is also keyed
+        on the palette and would therefore be rebuilt by a material edit that
+        cannot possibly have moved a triangle. That cache is finally what makes
+        ``tri_face`` earn its place: it maps the triangle the ray hit back to
+        the n-gon the user thinks they clicked.
         """
-        from .clay import mesh as bm
+        from .clay.adjacency import cached_triangulation
 
         origin, direction = self._ray(local)
-        best: tuple[float, int] | None = None
+        best: Hit | None = None
         for obj in doc.objects:
             if not obj.visible:
                 continue
-            tris, _face = bm.triangulate(obj.mesh)
+            tris, tri_face = cached_triangulation(obj.mesh)
             hit = picking.ray_object(
                 origin,
                 direction,
@@ -343,9 +366,41 @@ class ClayView:
                 obj.mesh.positions.astype("f8"),
                 tris,
             )
-            if hit is not None and (best is None or hit[0] < best[0]):
-                best = (hit[0], obj.uid)
-        return None if best is None else best[1]
+            if hit is not None and (best is None or hit[0] < best.t):
+                face = int(tri_face[hit[1]]) if len(tri_face) else -1
+                best = Hit(uid=obj.uid, t=float(hit[0]), face=face)
+        return best
+
+    def pick(self, doc: Any, local: tuple[float, float]) -> int | None:
+        """Which object a click lands on. -> its uid, or None.
+
+        Kept as the object-mode entry point, and kept returning a bare uid:
+        that is what selection in object mode is, and widening it would make
+        every caller unpack a record to ignore two thirds of it.
+        """
+        hit = self.pick_face(doc, local)
+        return None if hit is None else hit.uid
+
+    def screen_of(self, doc: Any, uid: int) -> Any:
+        """One object's vertices projected into the viewport, for element picking.
+
+        Built here rather than in ``clay/pick.py`` because it is the only step
+        that needs the camera; everything the picking rules actually decide is
+        pure numpy over what this returns.
+        """
+        from .clay import pick as bp
+
+        obj = doc.by_uid(uid)
+        width, height = int(max(self._rect[2], 1)), int(max(self._rect[3], 1))
+        self.camera.aspect = width / max(height, 1)
+        return bp.project(
+            obj.mesh.positions,
+            m3.compose(obj.translation, obj.rotation, obj.scale),
+            self.camera.projection() @ self.camera.view(),
+            self.camera.position,
+            width,
+            height,
+        )
 
     # -- input -------------------------------------------------------------
 

@@ -13,8 +13,12 @@ import numpy as np
 import pytest
 
 from warlock.studio.clay import document as bd
+from warlock.studio.clay import elements as el
 from warlock.studio.clay import mesh as bm
+from warlock.studio.clay import ops_topo
 from warlock.studio.clay import primitives as bp
+from warlock.studio.clay.edits import MeshEdit, TransformEdit
+from warlock.studio.undo import CompoundEdit
 
 
 def _obj(name: str, mesh: bm.Mesh | None = None, **kwargs: object) -> bd.Obj:
@@ -466,3 +470,141 @@ def test_submesh_gathers_the_uvs_alongside_the_corners() -> None:
 
 def test_submesh_of_an_untextured_mesh_stays_untextured() -> None:
     assert bd._submesh(bp.box(), np.array([0, 2])).uv is None
+
+
+# --- element mode and element selection (T13) -------------------------------
+
+
+def _one_box() -> tuple[bd.ClayDoc, int]:
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="Box", mesh=bp.box()))
+    return doc, obj.uid
+
+
+def test_a_new_document_is_in_object_mode_with_nothing_inside_selected() -> None:
+    doc, _ = _one_box()
+    assert doc.element_mode == "object"
+    assert doc.element_sel == {}
+
+
+def test_setting_an_element_selection_selects_the_object_that_holds_it() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0, 1]))
+    assert doc.selection == {uid}
+    assert doc.element_sel_of(uid).faces.tolist() == [0, 1]
+    assert len(doc.history) == 1, "selection pushes no step"
+
+
+def test_emptying_an_element_selection_deselects_the_object() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    doc.set_element_sel(uid, el.empty())
+    assert doc.selection == set()
+    assert uid not in doc.element_sel
+
+
+def test_switching_element_mode_converts_what_is_selected() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    doc.set_element_mode("vertex")
+    assert doc.element_mode == "vertex"
+    assert len(doc.element_sel_of(uid).verts) == 4
+    assert doc.selection == {uid}
+
+    doc.set_element_mode("object")
+    assert doc.element_sel == {}
+    with pytest.raises(ValueError, match="unknown element mode"):
+        doc.set_element_mode("nonsense")
+
+
+def test_entering_an_element_mode_from_object_mode_selects_nothing() -> None:
+    doc, uid = _one_box()
+    doc.select([uid])
+    doc.set_element_mode("vertex")
+    assert doc.selection == set(), "the invariant: no element selection, no object"
+
+
+def test_set_mesh_can_hand_the_ui_the_selection_the_op_wants_shown() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    mesh, sel = ops_topo.extrude_faces(doc.by_uid(uid).mesh, el.ElementSel(faces=[0]))
+    doc.set_mesh(uid, mesh, select=sel)
+    assert doc.element_sel_of(uid).faces.tolist() == [0]
+    assert doc.selection == {uid}
+    assert len(doc.history) == 2, "one step for the mesh, none for the selection"
+
+
+def test_undoing_a_mesh_edit_drops_the_element_selection_over_it() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    doc.set_mesh(uid, bp.cylinder(), select=el.ElementSel(faces=[1]))
+    assert doc.element_sel_of(uid).faces.tolist() == [1]
+
+    doc.undo()
+    assert uid not in doc.element_sel
+    assert doc.selection == set()
+
+    doc.set_element_sel(uid, el.ElementSel(faces=[2]))
+    doc.redo()
+    assert uid not in doc.element_sel
+
+
+def test_undoing_a_transform_or_a_rename_keeps_the_element_selection() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0, 3]))
+    doc.set_transform(uid, translation=(1.0, 0.0, 0.0))
+    doc.undo()
+    assert doc.element_sel_of(uid).faces.tolist() == [0, 3]
+
+    doc.set_props(uid, name="Crate")
+    doc.undo()
+    assert doc.element_sel_of(uid).faces.tolist() == [0, 3]
+    assert doc.selection == {uid}
+
+
+def test_an_undone_compound_edit_is_walked_for_the_uids_it_touched() -> None:
+    doc, uid = _one_box()
+    other = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.plane()))
+    doc.set_element_mode("face")
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    doc.set_element_sel(other.uid, el.ElementSel(faces=[0]))
+
+    doc.by_uid(uid).mesh = bp.cone()
+    doc.history.push(
+        CompoundEdit(
+            [
+                MeshEdit(uid, bp.box(), bp.cone()),
+                TransformEdit(
+                    other.uid,
+                    (other.translation, other.rotation, other.scale),
+                    (other.translation, other.rotation, other.scale),
+                ),
+            ]
+        )
+    )
+    doc.undo()
+    assert uid not in doc.element_sel, "the mesh half cleared its own uid"
+    assert other.uid in doc.element_sel, "the transform half cleared nothing"
+
+
+def test_removing_an_object_takes_its_element_selection_with_it() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("vertex")
+    doc.set_element_sel(uid, el.ElementSel(verts=[0]))
+    doc.remove_object(uid)
+    assert doc.element_sel == {}
+    assert doc.selection == set()
+
+
+def test_clearing_the_element_selection_clears_the_objects_too() -> None:
+    doc, uid = _one_box()
+    doc.set_element_mode("edge")
+    doc.set_element_sel(uid, el.ElementSel(edges=[[0, 1]]))
+    doc.clear_element_sel()
+    assert doc.element_sel == {}
+    assert doc.selection == set()

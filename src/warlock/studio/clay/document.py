@@ -38,6 +38,22 @@ unsaved forever. :attr:`ClayDoc.saved_head` records the head at save time and
 :attr:`ClayDoc.dirty` compares against it, which is the same rule the raster
 editor's tabs follow and for the same reason.
 
+**Element mode is per document, not per app.** ``element_mode`` and
+``element_sel`` live here rather than on ``ClayState`` because the mode is the
+*interpretation key* for the selection, and the selection is a property of the
+document. An app-level mode would reinterpret every open tab's selection the
+moment the user switched tabs -- a face selection in one document read as a
+vertex selection in another -- and neither half would have done anything wrong.
+Neither the mode nor the selection is serialized: a stored element selection
+would describe indices into a mesh the file might reopen with, and a stored mode
+would put the user in a mode they did not choose.
+
+In an element mode ``selection`` is **derived**: it holds exactly the uids with
+a non-empty ``element_sel``, which is Wings3D's model (a body selection *is* a
+selection of everything in it). That invariant is what keeps
+``frame_selection``, the properties pane and ``world_bounds`` working with no
+per-mode branch anywhere in them.
+
 **Selection is not undoable.** The raster editor makes a selection undoable
 because a lasso around a character's hand is minutes of work that a stray click
 destroys. Clicking an object in a 3D viewport is not that, and Blender's object
@@ -56,9 +72,10 @@ from typing import Any
 
 import numpy as np
 
-from ..undo import UndoStack
+from ..undo import CompoundEdit, Edit, UndoStack
 from ..viewer import gltf
 from ..viewer import math3d as m3
+from . import elements as el
 from . import mesh as bm
 from .edits import (
     MaterialEdit,
@@ -172,6 +189,11 @@ class ClayDoc:
             [default_material()] if materials is None else list(materials)
         )
         self.selection: set[int] = set()  # object uids
+        # Element mode and what is selected inside each object. See the module
+        # docstring: per document, derived-from rather than parallel-to
+        # ``selection``, and never written to a file.
+        self.element_mode: str = "object"
+        self.element_sel: dict[int, el.ElementSel] = {}
         self.history = UndoStack()
         # A change counter, for anything that caches off the document -- the
         # viewport's GPU upload, the outliner's row list. Deliberately *not*
@@ -205,10 +227,33 @@ class ClayDoc:
     # -- history -----------------------------------------------------------
 
     def undo(self) -> bool:
-        return self.history.undo(self)
+        """Reverse the newest step, dropping any element selection it invalidates.
+
+        The step is read *before* it is applied, because by the time ``undo``
+        returns the stack has already moved it out of reach. Only mesh and
+        object edits clear anything: a rename or a gizmo drag leaves the same
+        vertices selected on the same mesh, and clearing there would make every
+        Ctrl+Z in element mode feel like it deselected something at random.
+        """
+        edit = self.history.top
+        if not self.history.undo(self):
+            return False
+        self._forget_elements(edit)
+        return True
 
     def redo(self) -> bool:
-        return self.history.redo(self)
+        edit = self.history.redo_top
+        if not self.history.redo(self):
+            return False
+        self._forget_elements(edit)
+        return True
+
+    def _forget_elements(self, edit: Edit | None) -> None:
+        for uid in _geometry_uids(edit):
+            gone = self.element_sel.pop(uid, None) is not None
+            if gone and self.element_mode != "object":
+                self.selection.discard(uid)
+        self.touch()
 
     # -- objects -----------------------------------------------------------
 
@@ -225,22 +270,33 @@ class ClayDoc:
         index = self.index_of(uid)
         obj = self.objects.pop(index)
         self.selection.discard(uid)
+        self.element_sel.pop(uid, None)
         self.history.push(ObjectRemoveEdit(index, obj))
         self.touch()
         return True
 
-    def set_mesh(self, uid: int, mesh: bm.Mesh) -> bool:
+    def set_mesh(
+        self, uid: int, mesh: bm.Mesh, *, select: el.ElementSel | None = None
+    ) -> bool:
         """Replace one object's geometry as one step.
 
         Identity, not equality, decides whether anything happened: ``Mesh`` is
         ``eq=False`` because numpy arrays have no truthy ``==``, and every op
         is ``Mesh -> Mesh``, so the same object *is* the same geometry.
+
+        ``select`` is the selection the op wants shown next -- extrude hands
+        back its caps so the user can drag them straight away. It is applied
+        *after* the push and pushes nothing of its own, because selection is
+        not undoable; undoing the mesh edit then drops it, which is the right
+        answer for a selection describing geometry that no longer exists.
         """
         obj = self.by_uid(uid)
         if mesh is obj.mesh:
             return False
         before, obj.mesh = obj.mesh, mesh
         self.history.push(MeshEdit(uid, before, mesh))
+        if select is not None:
+            self.set_element_sel(uid, select)
         self.touch()
         return True
 
@@ -322,6 +378,83 @@ class ClayDoc:
         selected object's outline and has to know to redraw it."""
         self.selection = {int(u) for u in uids}
         self.touch()
+
+    # -- element mode (also not undoable) ----------------------------------
+
+    def set_element_mode(self, mode: str) -> None:
+        """Switch to object/vertex/edge/face mode, converting what is selected.
+
+        Leaving an element mode keeps the objects selected -- the user was
+        working on those objects and is still working on them. *Entering* one
+        from object mode selects nothing, because there is nothing to convert
+        and the invariant says the object selection in an element mode is the
+        set of objects with something selected inside them.
+        """
+        if mode not in el.MODES:
+            raise ValueError(f"unknown element mode {mode!r}")
+        if mode == self.element_mode:
+            return
+        if mode == "object":
+            self.element_sel = {}
+        else:
+            converted: dict[int, el.ElementSel] = {}
+            for uid, sel in self.element_sel.items():
+                out = el.convert(self.by_uid(uid).mesh, sel, mode)
+                if not el.is_empty(out):
+                    converted[uid] = out
+            self.element_sel = converted
+            self.selection = set(converted)
+        self.element_mode = mode
+        self.touch()
+
+    def set_element_sel(self, uid: int, sel: el.ElementSel | None) -> None:
+        """Replace what is selected inside one object, keeping the invariant.
+
+        An empty selection removes the entry *and* the object from
+        ``selection``: "selected with nothing selected inside it" is a state the
+        invariant does not allow, and letting it exist is how a gizmo ends up
+        drawn at the centroid of nothing.
+        """
+        if el.is_empty(sel):
+            self.element_sel.pop(uid, None)
+            if self.element_mode != "object":
+                self.selection.discard(uid)
+        else:
+            assert sel is not None
+            self.element_sel[uid] = sel
+            if self.element_mode != "object":
+                self.selection.add(uid)
+        self.touch()
+
+    def element_sel_of(self, uid: int) -> el.ElementSel:
+        """What is selected inside *uid* -- an empty selection when nothing is."""
+        return self.element_sel.get(uid) or el.empty()
+
+    def clear_element_sel(self) -> None:
+        self.element_sel = {}
+        if self.element_mode != "object":
+            self.selection = set()
+        self.touch()
+
+
+def _geometry_uids(edit: Edit | None) -> set[int]:
+    """The uids whose *geometry* an edit changes, walking compounds.
+
+    Deliberately narrow. A ``TransformEdit`` moves an object without changing a
+    single vertex index and a rename changes nothing at all -- an element
+    selection survives both, and clearing it there would make undo feel
+    arbitrary. Only a mesh replacement, an add or a remove can leave a stored
+    selection pointing at indices the mesh no longer has.
+    """
+    if edit is None:
+        return set()
+    if isinstance(edit, CompoundEdit):
+        return {uid for child in edit.edits for uid in _geometry_uids(child)}
+    if isinstance(edit, MeshEdit):
+        return {edit.obj_uid}
+    if isinstance(edit, ObjectAddEdit | ObjectRemoveEdit):
+        return {edit.obj.uid}
+    return set()
 
 
 # --- the one conversion to glTF ----------------------------------------------

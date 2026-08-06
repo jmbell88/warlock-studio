@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from warlock.studio.clay import document as bd
+from warlock.studio.clay import elements as el
 from warlock.studio.clay import primitives as bp
 from warlock.studio.clay import serialize as ser
 from warlock.studio.viewer import gltf
@@ -136,6 +137,21 @@ def test_a_restored_document_has_nothing_selected() -> None:
     doc = _doc()
     doc.select([o.uid for o in doc.objects])
     assert _roundtrip(doc).selection == set()
+
+
+def test_neither_element_mode_nor_element_selection_is_written_to_a_file() -> None:
+    """Both are transient by design -- see ``document``'s module docstring.
+
+    A stored element selection names indices into a mesh, and a stored mode
+    would drop the user into a mode they did not choose on the next open.
+    """
+    doc = _doc()
+    doc.set_element_mode("face")
+    doc.set_element_sel(doc.objects[0].uid, el.ElementSel(faces=[0]))
+    out = _roundtrip(doc)
+    assert out.element_mode == "object"
+    assert out.element_sel == {}
+    assert out.selection == set()
 
 
 def test_an_empty_scene_is_a_legal_thing_to_save() -> None:

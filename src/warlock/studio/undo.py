@@ -105,6 +105,22 @@ class UndoStack:
         return sum(e.cost for e in self._done) + sum(e.cost for e in self._undone)
 
     @property
+    def top(self) -> Edit | None:
+        """The step an ``undo`` would reverse, without reversing it.
+
+        A caller that has to reconcile *its own* non-undoable state against a
+        step -- Clay drops an element selection when the geometry under it
+        changes -- has to know what the step was, and asking afterwards is too
+        late because the stack has already moved it.
+        """
+        return self._done[-1] if self._done else None
+
+    @property
+    def redo_top(self) -> Edit | None:
+        """The step a ``redo`` would replay. The counterpart of :attr:`top`."""
+        return self._undone[-1] if self._undone else None
+
+    @property
     def head(self) -> int:
         """Identifies the current position in history.
 
