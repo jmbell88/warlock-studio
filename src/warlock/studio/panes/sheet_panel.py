@@ -68,6 +68,12 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
             "name": "",
         }
         ctx.state.preview["sheet_form"] = form
+        # The rendered strip belongs to the same rig the pose ids do. Left
+        # cached across a selection change it kept showing the *previous*
+        # asset's turnaround under the new asset's controls, with nothing in
+        # the panel to say the picture was stale.
+        ctx.state.preview.pop("sheet_strip", None)
+        release_strip_texture(ctx)
     return form
 
 

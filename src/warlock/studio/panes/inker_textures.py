@@ -147,13 +147,22 @@ def checker(ctx: Any) -> Any:
     return texture
 
 
+#: Everything else the panes cache per tab under ``state.preview``, as key
+#: prefixes. Textures are the entries that must be *released*; these merely
+#: have to go, or a long session accumulates one marching-ants trace and one
+#: resize form per tab that was ever opened.
+_PER_TAB_KEYS = ("paint_ants:", "inker_resize:")
+
+
 def release_doc(ctx: Any, uid: str) -> None:
-    """Drop every texture belonging to one closed tab."""
+    """Drop every texture belonging to one closed tab, and its cached state."""
     prefix = f"inker_tex:{uid}:"
     for key in [k for k in list(ctx.state.preview) if k.startswith(prefix)]:
         value = ctx.state.preview.pop(key, None)
         if value is not None and hasattr(value, "release"):
             _forget(ctx, value)
+    for name in _PER_TAB_KEYS:
+        ctx.state.preview.pop(f"{name}{uid}", None)
 
 
 def release_all(ctx: Any) -> None:
@@ -161,6 +170,10 @@ def release_all(ctx: Any) -> None:
         value = ctx.state.preview.pop(key, None)
         if value is not None and hasattr(value, "release"):
             _forget(ctx, value)
+    for key in [
+        k for k in list(ctx.state.preview) if k.startswith(_PER_TAB_KEYS)
+    ]:
+        ctx.state.preview.pop(key, None)
     checker_texture = ctx.state.preview.pop(_CHECKER_KEY, None)
     if checker_texture is not None:
         _forget(ctx, checker_texture)

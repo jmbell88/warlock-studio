@@ -858,6 +858,13 @@ class ClayView:
 
     def _press(self, doc: Any, button: int, local: tuple[float, float]) -> bool:
         self._last_mouse = local
+        # A gizmo drag owns the mouse until its button comes up. Without this,
+        # pressing the middle button mid-drag overwrote ``_grab`` with "pan",
+        # so releasing the left button found nothing to commit and the drag was
+        # stranded: the object stayed wherever the last motion put it, with no
+        # history step and the gizmo still holding a live drag.
+        if self._grab == "gizmo" and button != 1:
+            return True
         if button == 3:
             self._rmb_at = local
             return True

@@ -27,9 +27,6 @@ from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import inker_textures
 
-# Below this zoom a pixel grid is denser than the pixels it describes.
-GRID_MIN_ZOOM = 4.0
-
 
 def _u32(colour: int, alpha: float = 1.0) -> int:
     return imgui.get_color_u32(imgui.ImVec4(*theme.rgba(colour, alpha)))
@@ -163,7 +160,10 @@ def _recent_popup(ctx: Any, state: Any) -> None:
     if not state.recent:
         widgets.muted("Nothing opened yet.")
     for path in list(state.recent):
-        if imgui.selectable(Path(path).name, False)[0]:
+        # The full path in the id, not just the label: two files with the same
+        # basename in different directories are an ordinary thing to have open,
+        # and one imgui id between them is one row.
+        if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
             inker_mode.open_path(ctx, Path(path))
             imgui.close_current_popup()
         if imgui.is_item_hovered():
@@ -188,7 +188,7 @@ def _empty(ctx: Any, state: Any) -> None:
         imgui.dummy((0, 16))
         widgets.section("recent")
         for path in list(state.recent)[:6]:
-            if imgui.selectable(Path(path).name, False)[0]:
+            if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
                 inker_mode.open_path(ctx, Path(path))
 
 
@@ -553,9 +553,10 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
         else:
             doc.deselect()
     elif kind == "gradient":
-        end = (0, 0, 0, 0) if state.gradient_to_transparent else state.bg
-        if state.gradient_to_transparent:
-            end = (*state.fg[:3], 0)
+        # To transparent means the *foreground* colour at zero alpha, not the
+        # background one: fading to a transparent black leaves a dark fringe
+        # wherever the two are blended.
+        end = (*state.fg[:3], 0) if state.gradient_to_transparent else state.bg
         doc.gradient(anchor, point, state.fg, end, kind=state.gradient_kind)
     state.clear_drag()
 
@@ -628,8 +629,10 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
     a quarter of a million lines if it is drawn in full."""
     colour = _u32(theme.EDGE, 0.55)
     step = max(1, int(state.grid_size))
-    if view.zoom >= GRID_MIN_ZOOM:
-        step = min(step, max(1, int(step)))
+    # The line below the step is the real floor: six screen pixels between
+    # grid lines. (There was a ``GRID_MIN_ZOOM`` branch here that computed
+    # ``min(step, step)`` -- a no-op guarding a per-pixel grid that was never
+    # implemented.)
     if step * view.zoom < 6.0:
         return
     width, height = size

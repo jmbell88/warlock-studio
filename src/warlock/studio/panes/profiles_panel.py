@@ -207,17 +207,36 @@ def _anchor(ctx: Any, name: str) -> None:
         )
 
 
-def _pick_anchor(ctx: Any, name: str) -> None:
-    """Runs on a task thread: both the dialog and the read block."""
+def _pick_anchor(ctx: Any, name: str) -> dict[str, Any] | None:
+    """Runs on a task thread: both the dialog and the read block.
+
+    Only those two. The settings write and the toast are handed back for
+    ``adopt_anchor`` to do on the frame thread -- ``Settings`` is frame-thread
+    state and a toast is UI, and this was the one place doing both from a
+    worker.
+    """
     chosen = dialogs.open_file("Choose a style anchor", dialogs.IMAGE_FILTER)
     if chosen is None:
-        return
+        return None
     with Path(chosen).open("rb") as fh:
         data = fh.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
+        return {"name": name, "too_big": True}
+    return {"name": name, "png": data}
+
+
+def adopt_anchor(ctx: Any, result: Any) -> None:
+    """The frame-thread half of ``_pick_anchor``. Called from the task pump."""
+    if not isinstance(result, dict):
+        return
+    if result.get("too_big"):
         ctx.toast("That image is over 20 MB.", "error")
         return
-    profiles.set_anchor(ctx.settings, ctx.svc.config, name, data)
+    name = str(result.get("name") or "")
+    png = result.get("png")
+    if not name or not png:
+        return
+    profiles.set_anchor(ctx.settings, ctx.svc.config, name, png)
     ctx.toast(f"Anchor set for {name}.")
 
 

@@ -84,8 +84,12 @@ def draw(ctx: Any) -> None:
     _add(ctx, state, tab.doc)
     imgui.dummy((0, 6))
     _actions(ctx, state, tab.doc)
-    clay_menu.params_popup(ctx, state, tab)
     imgui.end_disabled()
+    # *Outside* the disabled block: the popup greys its own Apply against
+    # tab.saving and its Cancel must stay live, or a save that starts while it
+    # is open leaves a modal the user cannot dismiss -- the exact trap
+    # inker_bridge documents.
+    clay_menu.params_popup(ctx, state, tab)
     imgui.dummy((0, 6))
     # Snapping and the display toggles change nothing about the document, so
     # they stay live while a save runs.

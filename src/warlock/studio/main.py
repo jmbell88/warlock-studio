@@ -436,6 +436,13 @@ class App:
 
             settings_3d.upload(ctx, Path(done.result))
             return
+        if key == "anchor-pick":
+            # The picker and the file read happened on the task thread; the
+            # settings write and the toast are frame-thread work.
+            from .panes import profiles_panel
+
+            profiles_panel.adopt_anchor(ctx, done.result)
+            return
         if key == "ref-upload" and done.result is not None:
             # Only the path is kept here; the bytes are read in the submit
             # task, so picking a 20 MB image never touches the frame thread.
@@ -745,11 +752,15 @@ class App:
                 self._request_quit()
                 continue
             if event.type == pygame.VIDEORESIZE:
+                # The *clamped* size is persisted, not the requested one: the
+                # window that comes back is the clamped one, so storing the
+                # raw event meant next launch opened below the resize floor
+                # with no event to correct it.
+                sized = (max(event.w, self._min_size[0]), max(event.h, self._min_size[1]))
                 pygame.display.set_mode(
-                    (max(event.w, self._min_size[0]), max(event.h, self._min_size[1])),
-                    pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE,
+                    sized, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
                 )
-                ctx.settings.set("window_size", [event.w, event.h])
+                ctx.settings.set("window_size", list(sized))
                 continue
             if event.type == pygame.DROPFILE:
                 self._on_drop(Path(event.file))
@@ -1942,6 +1953,11 @@ class App:
         imgui.same_line()
         log_path = Path(ctx.runtime.config.data_dir) / "warlock.log"
         if widgets.disabled_button("Open the log", log_path.exists()):
+            # Deliberately outside the kill-on-close job, and deliberately not
+            # a subprocess spawn: startfile hands the path to the shell, which
+            # opens it in whatever the user's editor is. That editor is *not*
+            # ours to kill when Warlock closes -- which is also why the
+            # every-spawn-is-in-the-job scan does not see this line.
             ctx.submit("open-log", os.startfile, str(log_path))
         imgui.end_popup()
 
