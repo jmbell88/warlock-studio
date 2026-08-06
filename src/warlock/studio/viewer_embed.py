@@ -100,6 +100,14 @@ class Viewer:
         """
         gpu = scenelib.GpuModel(self.ctx, model)
         self._release_model()
+        # Whatever parse was in flight is no longer wanted: this *is* the
+        # viewport's content now. Without this, the blocking path -- entering
+        # the pose editor, loading a Review unit -- left ``pending`` naming a
+        # parse dispatched a moment earlier, which still matched when it landed
+        # and was adopted over the top. In the pose case that discarded the
+        # editor with unsaved rotations in it, bypassing ``pose_panel.guard``,
+        # the confirm every other way out of the editor goes through.
+        self.pending = None
         self.model, self.gpu, self.path = model, gpu, Path(path)
         self.placement = scenelib.placement(model)
         self.clear_reference()
@@ -121,6 +129,9 @@ class Viewer:
         self._release_model()
         self.exit_pose_mode()
         self.model = self.gpu = self.path = None
+        # See ``adopt_model``: an in-flight parse must not land on an emptied
+        # viewport either.
+        self.pending = None
 
     def _release_model(self) -> None:
         if self.gpu is not None:
