@@ -210,7 +210,11 @@ def _actions(ctx: Any, state: Any, doc: Any) -> None:
         label = op.label.rstrip(".")
         if op.name == "delete":
             imgui.new_line()
-            if widgets.destructive_button(f"{icons.TRASH} {label}") and enabled:
+            # Greyed like every other row here. Checking ``enabled`` *after* the
+            # click drew a live red button that did nothing -- and this is the
+            # one button where "nothing happened" is hardest to tell apart from
+            # "something irreversible happened".
+            if widgets.destructive_button(f"{icons.TRASH} {label}", enabled=enabled):
                 clay_ops.run(ctx, doc, op)
             continue
         if widgets.disabled_button(f"{label}##clayop{op.name}", enabled):

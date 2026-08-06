@@ -395,6 +395,86 @@ def test_prune_never_touches_a_running_job(svc):
     assert svc.store.get(ids[0]) is not None
 
 
+# --- deleting something another job is writing into --------------------------
+#
+# A rig or a sheet is a separate row whose artifacts land beside the model.glb
+# they were fitted to -- the rig belongs to the mesh. So the mesh's own status
+# says nothing: it is `done`, which is precisely why a rig could be queued for
+# it. Deleting it mid-rig let finalize_rig rename into a directory that was no
+# longer there and recreate it as an orphan.
+
+
+def _rig_job_for(svc, source_id, status="running"):
+    return svc.store.create(
+        "rig", "", {"source_job": source_id}, stage="model", status=status
+    )
+
+
+def test_a_mesh_cannot_be_deleted_while_a_rig_for_it_is_running(svc):
+    source = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(source, "done")
+    _rig_job_for(svc, source)
+
+    with pytest.raises(Conflict):
+        svc_jobs.delete_job(svc, source)
+    assert svc.store.get(source) is not None
+
+
+def test_a_queued_rig_counts_too(svc):
+    """It has not started writing yet, and it will: the worker picks it up on
+    the next poll, into a directory this call would have removed."""
+    source = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(source, "done")
+    _rig_job_for(svc, source, status="queued")
+
+    assert svc_jobs.dependent_jobs(svc, source)
+    with pytest.raises(Conflict):
+        svc_jobs.delete_job(svc, source)
+
+
+def test_a_finished_rig_is_no_obstacle(svc):
+    source = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(source, "done")
+    _rig_job_for(svc, source, status="done")
+
+    assert svc_jobs.dependent_jobs(svc, source) == []
+    assert svc_jobs.delete_job(svc, source)["ok"] is True
+
+
+def test_prune_skips_a_mesh_with_a_rig_in_flight_and_takes_the_rest(svc):
+    """Skipped rather than refused: pruning is a bulk reclaim, and one asset
+    with a rig running is no reason to keep the other two hundred."""
+    ids = [svc_jobs.create_job(svc, kind="text", prompt=str(i))["id"] for i in range(3)]
+    for job_id in ids:
+        svc.store.set_status(job_id, "done")
+    _rig_job_for(svc, ids[0])  # the oldest, which prune would otherwise take
+
+    # keep=1 leaves the newest; the rig row is itself queued/running so it is
+    # never a prune candidate either.
+    svc_jobs.prune_jobs(svc, keep=1)
+
+    assert svc.store.get(ids[0]) is not None
+    assert svc.store.get(ids[1]) is None
+
+
+def test_a_job_the_worker_is_still_inside_is_not_deleted_however_the_row_reads(svc):
+    """``cancel_job`` writes ``cancelled`` and only *asks* the worker to stop,
+    so between that write and the worker unwinding the status says the job is
+    over while the reconstruction is still writing into its directory."""
+    from types import SimpleNamespace
+
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "cancelled")
+    svc.worker = SimpleNamespace(current_job_id=job_id)
+
+    assert svc_jobs.worker_is_inside(svc, job_id) is True
+    with pytest.raises(Conflict):
+        svc_jobs.delete_job(svc, job_id)
+
+    svc.worker = SimpleNamespace(current_job_id=None)
+    assert svc_jobs.delete_job(svc, job_id)["ok"] is True
+
+
 # --- optimize ---------------------------------------------------------------
 
 

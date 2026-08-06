@@ -613,12 +613,6 @@ def test_a_write_that_changes_nothing_is_not_an_undo_step():
     assert not doc.history.can_undo
 
 
-def test_checkpoint_is_a_no_op_kept_for_the_old_pane():
-    doc = _doc()
-    doc.checkpoint()
-    assert not doc.history.can_undo
-
-
 # --- gradients --------------------------------------------------------------
 
 

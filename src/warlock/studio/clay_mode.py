@@ -512,6 +512,12 @@ def _registry_key(ctx: Any, tab: ClayTab, doc: Any, name: str) -> bool:
     if op.params:
         state.pending_op = op.name
         state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
+        # Asked for rather than opened: ``imgui.open_popup`` only takes effect
+        # inside the window whose id stack is current, and this runs in the
+        # event layer. Unreachable today (E is the only bare-letter binding and
+        # it takes no parameters), which is precisely why the next one to be
+        # added would have been a key that silently did nothing.
+        state.open_op_popup = True
         return True
     return clay_ops.run(ctx, doc, op)
 

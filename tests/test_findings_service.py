@@ -79,10 +79,9 @@ def test_a_verdict_credits_every_param_in_its_vector(svc):
         "n": 2,
         "accepts": 1,
         "accept_rate": 0.5,
+        "wilson_low": svc_findings.wilson_low(1, 2),
         "sources": {"human": {"accept": 1, "reject": 1}},
         "top_reasons": [["holes", 1]],
-        "mean_silhouette_iou": None,
-        "mean_dino_cosine": None,
     }
     assert doc["params"]["platform"]["pc"]["accepts"] == 1
     assert doc["params"]["platform"]["mobile"]["accepts"] == 0
@@ -134,9 +133,12 @@ def test_the_written_file_is_what_the_existing_readers_expect(svc):
     assert path == svc.config.bench_dir / "findings.json"
 
     doc = bench_findings.load(path)
-    assert bench_findings.hint(doc, "lora_weight", 0.9) == "accept 6/7"
+    assert bench_findings.hint(doc, "lora_weight", 0.9) == "accept 6/7 (49%+)"
     # A float32 slider value still finds the bucket.
-    assert bench_findings.hint(doc, "lora_weight", float(np.float32(0.9))) == "accept 6/7"
+    assert (
+        bench_findings.hint(doc, "lora_weight", float(np.float32(0.9)))
+        == "accept 6/7 (49%+)"
+    )
     # A thin bucket is noise, not a finding.
     assert bench_findings.hint(doc, "lora_weight", 0.6) is None
 
@@ -146,3 +148,31 @@ def test_refresh_is_written_even_with_nothing_recorded(svc):
     doc = bench_findings.load(path)
     assert doc["params"] == {}
     assert doc["vectors"] == []
+
+
+def test_the_machine_evidence_reaches_the_file_with_no_verdict_filed(svc):
+    """The end-to-end half of the observation corpus. Every other test here
+    goes through ``aggregate`` directly, which is exactly how a recompute that
+    nothing triggered survived review -- the aggregation was proven and the
+    file was never written. ``test_studio_frame`` pins the trigger; this pins
+    that a triggered refresh actually puts the measurements on disk.
+    """
+    for i in range(5):
+        svc.store.add_observation(
+            f"{i:012x}",
+            sweep_id=None,
+            sweep_unit="",
+            seed=42,
+            prompt_hash="p1",
+            vector={"platform": "pc", "stage": "model"},
+            metrics={"hole_worst": 0.03, "watertight": i > 0},
+        )
+
+    path = svc_findings.refresh(svc)
+    doc = bench_findings.load(path)
+
+    assert svc.store.latest_verdicts() == [], "no verdict was filed"
+    assert doc["params"]["platform"]["pc"]["metrics"]["n"] == 5
+    # And a value nobody has reviewed still says something true under the
+    # control it belongs to.
+    assert bench_findings.hint(doc, "platform", "pc") == "holes 3% · watertight 80% (5 meshes)"

@@ -42,6 +42,11 @@ class JobsCache:
         self._last_status: dict[str, str] = {}
         self._next_refresh = 0.0
         self._dirty = True
+        # {job_id: ((status, dir mtime), names)} for attach_files -- the frame
+        # loop's largest syscall cost, and the one that grew without limit as
+        # "load more" widened the window. Pruned to the page below, so it can
+        # never outgrow what is being shown.
+        self._files: dict[str, tuple[tuple[Any, int], list[str]]] = {}
 
     def invalidate(self) -> None:
         """Refresh on the next tick. Called after anything the UI did that
@@ -67,13 +72,18 @@ class JobsCache:
         self._dirty = False
         self._next_refresh = now + REFRESH_SECONDS
         try:
-            jobs = svc_jobs.list_jobs(self.svc, self.limit)
+            jobs = svc_jobs.list_jobs(self.svc, self.limit, files_cache=self._files)
         except Exception as exc:  # a locked DB, a vanished file
             log.exception("could not read the job list")
             self.error = str(exc)
             return False
         self.error = None
         self.jobs = jobs
+        # Whatever fell off the page cannot be asked for again without a
+        # re-read, so its entry is dead weight.
+        if len(self._files) > len(jobs):
+            live = {j["id"] for j in jobs}
+            self._files = {k: v for k, v in self._files.items() if k in live}
         try:
             self.total = self.svc.store.count()
         except Exception:  # a count is not worth failing the refresh over
@@ -114,9 +124,6 @@ class JobsCache:
 
     def visible(self, filters: Any) -> list[dict[str, Any]]:
         return filters.order([j for j in self.jobs if filters.matches(j)])
-
-    def children(self, job_id: str) -> list[dict[str, Any]]:
-        return [j for j in self.jobs if j.get("parent_id") == job_id]
 
     @property
     def active(self) -> dict[str, Any] | None:

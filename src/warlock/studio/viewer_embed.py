@@ -55,6 +55,9 @@ class Viewer:
 
         self.wireframe = False
         self.pose_mode = False
+        # Which job's rig the editor is bound to, so a write can never land on
+        # whichever asset happens to be selected. See enter_pose_mode.
+        self.pose_job_id: str | None = None
         self.editor = PoseEditor()
         self.markers = markerslib.JointMarkers(ctx, self.renderer.programs)
         self.rotate_gizmo = RotateGizmo(ctx, self.renderer.programs)
@@ -67,13 +70,34 @@ class Viewer:
         self._last_mouse = (0.0, 0.0)
         # A reference image is shown as a plain texture rather than as geometry.
         self.reference: Any = None
+        # The GLB a parse has been dispatched for but not yet adopted. Held so
+        # the timer that dispatched it does not dispatch it again on every tick
+        # until the result lands, and so nothing else decides the viewer is
+        # "showing the wrong thing" while a load is in flight.
+        self.pending: Path | None = None
+        # The direction strip being rendered a cell at a time, if any.
+        self._strip: Any = None
 
     # -- loading -----------------------------------------------------------
 
-    def load_model(self, path: Path) -> None:
-        """Show a GLB. Blocking (it decodes textures); call from a task thread
-        and hand the result over, or accept a frame hitch on a small mesh."""
-        model = gltf.load(path)
+    @staticmethod
+    def parse_model(path: Path) -> Any:
+        """The blocking half of a load: parse the glTF and decode its textures.
+
+        Touches no GL and no viewer state, so it is safe on a task thread --
+        which is the whole point. It is the expensive half by a wide margin (a
+        full accessor decode plus a PNG per texture slot), and it used to run
+        on the frame thread at the exact moment a job finished, which is when
+        the file is largest and coldest.
+        """
+        return gltf.load(path)
+
+    def adopt_model(self, model: Any, path: Path) -> None:
+        """The frame-thread half: upload, and take the parsed model as current.
+
+        Must stay on the frame thread -- ``GpuModel`` creates buffers and
+        textures on the one GL context, and so does releasing the old one.
+        """
         gpu = scenelib.GpuModel(self.ctx, model)
         self._release_model()
         self.model, self.gpu, self.path = model, gpu, Path(path)
@@ -81,6 +105,17 @@ class Viewer:
         self.clear_reference()
         self.exit_pose_mode()
         self.frame()
+
+    def load_model(self, path: Path) -> None:
+        """Show a GLB, both halves at once. Blocking -- it decodes textures.
+
+        Kept for the callers where the wait is the point: entering the pose
+        editor and loading a Review unit both happen because the user just
+        pressed something, and a hand-over there would flash an empty viewport
+        for a frame instead. ``_sync_viewer`` uses the split above, because it
+        fires on a *timer*, on the frame a job finishes.
+        """
+        self.adopt_model(self.parse_model(path), path)
 
     def clear(self) -> None:
         self._release_model()
@@ -181,17 +216,29 @@ class Viewer:
 
     # -- pose --------------------------------------------------------------
 
-    def enter_pose_mode(self, rig: dict[str, Any] | None = None) -> bool:
+    def enter_pose_mode(self, rig: dict[str, Any] | None = None, job_id: str | None = None) -> bool:
+        """Bind the editor to the loaded rig. ``job_id`` is *whose* rig it is.
+
+        Recorded because the editor outlives the selection: ``_sync_viewer``
+        deliberately does not reload while posing, so clicking another asset
+        leaves this rig on screen with the inspector pointing somewhere else.
+        Without a bound id the panel used the selected job for both, and Save
+        wrote one asset's rotations into another's pose directory while joints
+        mode re-skinned it against the wrong skeleton -- silently, because rig
+        validation checks bone *names* and two jobs on one template share them.
+        """
         if self.model is None or not self.model.skins:
             return False
         self.editor.bind(self.model)
         self.editor.mirror_pairs = list((rig or {}).get("mirror_pairs") or [])
         self.editor.fitted = list((rig or {}).get("bones") or [])
         self.pose_mode = True
+        self.pose_job_id = job_id
         return True
 
     def exit_pose_mode(self) -> None:
         self.pose_mode = False
+        self.pose_job_id = None
         self.rotate_gizmo.end_drag()
         self.translate_gizmo.end_drag()
         self.editor.clear()
@@ -329,6 +376,9 @@ class Viewer:
         return capture.png_bytes(self.viewport)
 
     def render_sheet_strip(self, yaws: list[float], elevation: float, flat: bool) -> Any:
+        """Every direction in one call. Blocking: a draw and a synchronous
+        GPU-to-CPU readback per cell, so sixteen of them is a visible freeze.
+        The pane drives ``begin_sheet_strip``/``step_sheet_strip`` instead."""
         if self.gpu is None or self.model is None:
             return None
         return sheetlib.strip(
@@ -340,6 +390,49 @@ class Viewer:
             flat=flat,
             model_matrix=self.placement,
         )
+
+    def begin_sheet_strip(self, yaws: list[float], elevation: float, flat: bool) -> bool:
+        """Start an incremental direction strip. -> whether there was a mesh.
+
+        Any strip already in progress is dropped: the user has changed what
+        they want, and finishing the old one would spend frames on an image
+        about to be replaced.
+        """
+        self.cancel_sheet_strip()
+        if self.gpu is None or self.model is None:
+            return False
+        self._strip = sheetlib.StripRender(
+            self.renderer,
+            self.gpu,
+            self.model,
+            yaws,
+            elevation=elevation,
+            flat=flat,
+            model_matrix=self.placement,
+        )
+        return True
+
+    def step_sheet_strip(self) -> Any:
+        """Render one more cell. -> the finished image, or None while it runs.
+
+        Frame thread only, like every other GL call here -- the point of the
+        split is *how much* of it happens per frame, not which thread it is on.
+        """
+        if self._strip is None:
+            return None
+        if not self._strip.step():
+            return None
+        image, self._strip = self._strip.image, None
+        return image
+
+    @property
+    def stripping(self) -> bool:
+        return self._strip is not None
+
+    def cancel_sheet_strip(self) -> None:
+        if self._strip is not None:
+            self._strip.release()
+            self._strip = None
 
     # -- input -------------------------------------------------------------
 
@@ -452,6 +545,7 @@ class Viewer:
     def release(self) -> None:
         self.clear_reference()
         self._release_model()
+        self.cancel_sheet_strip()
         self.exit_compare()
         self.markers.release()
         self.rotate_gizmo.release()

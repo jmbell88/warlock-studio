@@ -393,7 +393,10 @@ def test_the_generator_field_survives_a_regenerate() -> None:
         _obj("A", generator="cylinder", params={"radius": 0.5, "height": 1.0})
     )
     doc.set_props(a.uid, params={"radius": 1.0, "height": 1.0})
-    doc.set_mesh(a.uid, bp.cylinder(radius=1.0))
+    # ``keep_generator`` because this *is* the properties panel's rebuild: the
+    # new mesh is exactly what the generator makes from the edited parameters,
+    # which is the one case where the claim "cylinder, radius 1" stays true.
+    doc.set_mesh(a.uid, bp.cylinder(radius=1.0), keep_generator=True)
     assert doc.by_uid(a.uid).generator == "cylinder"
     assert doc.by_uid(a.uid).params == {"radius": 1.0, "height": 1.0}
 

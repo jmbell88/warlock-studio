@@ -138,6 +138,45 @@ def test_record_verdict_refuses_unknown_verdicts_reasons_and_jobs(svc):
     assert svc.store.latest_verdicts() == []
 
 
+def test_record_verdict_snapshots_the_sweep_context(svc):
+    """The matched-pair columns are denormalized at record time -- once the
+    sweep's job rows are deleted, the verdict row is the only place the
+    pairing context (sweep, seed, prompt) survives."""
+    from warlock import vectors
+
+    unit = svc.store.create(
+        "image", "a chest", {"lora_weight": 0.9, "seed": 42},
+        stage="model", status="done",
+        sweep_id="deadbeefcafe", sweep_unit="lora_weight=0.9 s42",
+    )
+    plain = svc.store.create(
+        "image", "another chest", {"seed": 7}, stage="model", status="done"
+    )
+    svc_verdicts.record_verdict(svc, unit, verdict="accept")
+    svc_verdicts.record_verdict(svc, plain, verdict="accept")
+    svc.store.delete(unit)
+
+    rows = {r["job_id"]: r for r in svc.store.latest_verdicts()}
+    assert rows[unit]["sweep_id"] == "deadbeefcafe"
+    assert rows[unit]["sweep_unit"] == "lora_weight=0.9 s42"
+    assert rows[unit]["seed"] == 42
+    assert rows[unit]["prompt_hash"] == vectors.prompt_hash("a chest")
+    # An ordinary job records the absence honestly rather than inventing one.
+    assert rows[plain]["sweep_id"] is None
+    assert rows[plain]["sweep_unit"] == ""
+    assert rows[plain]["seed"] == 7
+    assert rows[plain]["prompt_hash"] == vectors.prompt_hash("another chest")
+
+
+def test_record_verdict_tolerates_a_job_with_no_seed(svc):
+    job_id = svc.store.create("image", None, {}, stage="model", status="done")
+    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+
+    row = svc.store.latest_verdicts()[0]
+    assert row["seed"] is None
+    assert row["prompt_hash"] == ""
+
+
 def test_a_verdict_on_a_pruned_job_still_feeds_the_findings(svc):
     job_id = svc.store.create(
         "image", "a chest", {"lora_weight": 0.9}, stage="model", status="done"

@@ -188,3 +188,91 @@ When you are happy, press **Make 3D** on the card (or select the reference and s
 That carries the reference and everything it recorded into the mesh stage, where you can override
 the mesh-side settings before committing. The next chapter,
 [Generating meshes](03-generating-meshes.md), picks up from there.
+
+## 2D exports
+
+A finished reference is an asset in its own right, not only an input to the mesh stage. Its
+inspector's **Export** tab offers, alongside the source image:
+
+| Button | File | What it is |
+| --- | --- | --- |
+| Icon | `icon.png` | A 512-square transparent cutout, centred with a small margin. |
+| Sprite | `sprite.png` | The subject alone at native resolution, trimmed, with a recorded pivot. |
+| Pixel art | `pixel_32.png`, `pixel_64.png`, `pixel_128.png` | Nearest-neighbour reductions, optionally palette-limited. |
+| Manifest | `manifest.json` | What every artifact above is, measured — see below. |
+
+All of them are cut from the same `input.png` the mesh stage uses, and all are derived the first
+time you ask for one, then cached — the same rule the mesh exports follow. Editing the reference in
+Inker, or rerolling it, makes every derived file stale, and the next request rebuilds it.
+
+The icon is **fitted** inside its square rather than stretched to it, so a tall sword and a round
+shield keep their proportions and an icon set stays readable. The sprite is not resized at all: it
+records a bottom-centre pivot in the manifest, because that is where an engine puts a standing
+character's feet, and an importer that guesses is wrong for half a set.
+
+### Pixel art
+
+The **Pixel art** section of the inspector's Details tab is where the pixel exports are set up and
+previewed. **Size** picks which of the three artifacts you are looking at; **Colours** limits the
+palette to 8, 16, 32 or 64, or leaves it off.
+
+The preview is drawn crisp, at a whole multiple of the artifact's own size — a fractional scale
+samples some source pixels twice and others once, which reads as banding and is exactly what the
+export avoids. A line underneath says what the file on disk actually is, read from the manifest
+rather than from the controls, because the two can disagree: switching size shows a file cut under
+an earlier palette setting, and a **Rebuild with these colours** button appears when that is the
+case.
+
+Both settings are app preferences rather than properties of the job, so they persist across
+sessions and apply to whichever reference you are looking at. Changing them re-derives; it never
+touches `input.png`, so promoting the reference afterwards feeds the mesh engine the same pixels it
+always would have.
+
+The reduction is nearest-neighbour, never a smooth resample: a filtered downscale puts a ramp of
+in-between colours along every edge, and hard edges are the one property that makes the result read
+as pixel art rather than as a small photograph. Palette reduction runs on colour only, with
+transparency carried around it, so the cutout survives the quantization exactly.
+
+There is a matching **Pixel art** entry in the 2D pane's art-style select. It deliberately does not
+put the words "pixel art" into the prompt: at 512 or 1024 the image model draws fake chunky pixels
+that then alias under the real reduction. What it asks for is flat shading and a bold silhouette —
+the things that survive being made small.
+
+### The manifest
+
+`manifest.json` is the sidecar an importer reads. It records, per artifact, the size, the trim box,
+the pivot, the palette it was cut to, and which matte produced it — plus the recipe (seed, model,
+prompt) behind the image itself. Per artifact, because a file on disk was cut by whatever was
+installed when it was made, not by what is installed now.
+
+If the reference was hand-edited in Inker, the manifest says so beside the recipe: the recipe names
+a seed and a model, which after a hand edit is no longer the whole story of the pixels.
+
+## Seamless tiles
+
+The **Object / Seamless tile** control at the top of the 2D settings pane switches the whole pane
+between two kinds of output. A tile is a repeating texture rather than a subject: it is drawn with
+wrapping convolutions, so its left edge continues into its right and its top into its bottom.
+
+Choosing it changes what the pane offers. The object taxonomy — category, silhouette, rarity and
+the rest — describes a *thing*, and a tile has none, so those selects are hidden. What remains is
+the surface half: material, condition, palette, setting, genre and art style. The 3D pane's platform
+detail is hidden for the same reason.
+
+A tile cannot be made into a mesh, and the app does not offer to: there is no subject to
+reconstruct. It also cannot produce the cutout exports, because every one of them lifts a subject
+off its background and a tile *is* background — an icon of one would be the whole frame with a matte
+guessed over it.
+
+### Whether it actually tiles
+
+When a tile finishes, the app measures its own wrap seam and reports it in the inspector's **Seam**
+section. The number is a ratio: how much sharper the difference across the wrap edge is than the
+picture's own grain. Around 1 means the seam is indistinguishable from ordinary texture detail;
+above 2 the app calls it a visible seam and says so. Both directions are measured and reported
+separately, because an image that wraps one way and not the other is not a tile.
+
+A ratio is hard to calibrate against by eye, so the section also offers a wrapped view: the image
+rolled by half, which puts what was the wrap edge through the middle of the frame where a
+discontinuity is obvious. It is `wrap_preview.png`, a derived export like any other, and the
+Export tab offers it too.

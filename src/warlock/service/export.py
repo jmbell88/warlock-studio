@@ -47,7 +47,10 @@ def collect(svc: WarlockService, ids: list[str], names: list[str]) -> list[tuple
             # fresh_2d as well as ready: this is a serving path that never
             # derives, so without it a batch would zip an icon left over from
             # a reference the user has since edited. It answers True for every
-            # name that is not a 2D export, so nothing else changes.
+            # name that is not a 2D export, so nothing else changes. The pixel
+            # palette knob is deliberately not consulted here -- a palette
+            # mismatch is a preference, not staleness, so a batch ships the
+            # last-derived palette.
             if path.exists() and files.ready(job, job_dir, name) and files.fresh_2d(job_dir, name):
                 out.append((f"{job_id}/{name}", path))
     return out

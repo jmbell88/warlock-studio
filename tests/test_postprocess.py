@@ -273,6 +273,130 @@ def test_normalize_without_a_target_still_grounds(tmp_path):
     assert abs(float(trimesh.load(path).to_mesh().bounds[0][1])) < 1e-6
 
 
+# --- grounding against every root shape a GLB can arrive in ------------------
+#
+# trimesh's own exporter writes one identity root, which is the only shape the
+# tests above ever saw -- and the only shape the old grounding was right for.
+# Blender-authored uploads and Clay exports both put real TRS on root nodes,
+# and Clay puts *one root per object*: `import_mesh` grounded those wrong and
+# `meshreport` then filed a pivot complaint about a mesh the user had just
+# authored. These build the roots by hand for that reason.
+
+
+def _rooted(path, roots, extents=(1.0, 2.0, 3.0)):
+    """A GLB whose scene roots are the mesh nodes themselves, one per entry in
+    ``roots``, each updated with that entry's own transform keys."""
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    scene = trimesh.Scene()
+    for i in range(len(roots)):
+        scene.add_geometry(trimesh.creation.box(extents=extents), node_name=f"box{i}")
+    path.write_bytes(scene.export(file_type="glb"))
+
+    header, gltf, rest = postprocess._split_glb(path.read_bytes())
+    gltf_scene = gltf["scenes"][gltf.get("scene", 0)]
+    mesh_nodes = [i for i, node in enumerate(gltf["nodes"]) if "mesh" in node]
+    gltf_scene["nodes"] = mesh_nodes
+    for node in gltf["nodes"]:
+        node.pop("children", None)
+    for index, extra in zip(mesh_nodes, roots, strict=True):
+        gltf["nodes"][index].update(extra)
+    path.write_bytes(postprocess._rebuild_glb(header, gltf, rest))
+    return path
+
+
+def _grounded(path):
+    import trimesh
+
+    lo, hi = trimesh.load(path).bounds
+    return (
+        abs(float(lo[1])) < 1e-4
+        and abs(float(lo[0] + hi[0])) < 1e-4
+        and abs(float(lo[2] + hi[2])) < 1e-4
+    )
+
+
+# A quarter turn about X, which maps Y onto Z -- the case a Y-axis rotation
+# hides, because that one commutes with a Y-only grounding offset.
+_QUARTER_X = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+
+
+@pytest.mark.parametrize(
+    "label, roots",
+    [
+        ("identity", [{}]),
+        ("rotated", [{"rotation": _QUARTER_X}]),
+        ("rotated and translated", [{"rotation": _QUARTER_X, "translation": [1.0, 5.0, -2.0]}]),
+        ("non-uniformly scaled", [{"scale": [2.0, 0.5, 1.0], "translation": [1.0, 5.0, -2.0]}]),
+        # glTF allows a node to carry a matrix instead of TRS, and a general
+        # one need not decompose into TRS at all.
+        ("matrix", [{"matrix": [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 2, 5, -1, 1]}]),
+        ("multi-root", [{}, {"translation": [4.0, 0.0, 0.0]}, {"translation": [-4.0, 0.0, 0.0]}]),
+        (
+            "multi-root, each transformed",
+            [{"rotation": _QUARTER_X}, {"translation": [4.0, 1.0, 0.0], "scale": [1.5] * 3}],
+        ),
+    ],
+)
+def test_grounding_holds_whatever_the_roots_carry(tmp_path, label, roots):
+    """The regression: bounds are measured in world space but the transform was
+    applied *under* each root, composing as ``M_root . T . S`` instead of
+    ``T . S . M_root`` -- so a rotated root rotated the grounding offset."""
+    from warlock.pipelines import postprocess
+
+    path = _rooted(tmp_path / f"{label.replace(' ', '_').replace(',', '')}.glb", roots)
+
+    postprocess.normalize_glb(path, None)
+
+    assert _grounded(path), f"{label}: not grounded"
+
+
+@pytest.mark.parametrize(
+    "label, roots",
+    [
+        ("one root", [{"rotation": _QUARTER_X, "translation": [1.0, 5.0, -2.0]}]),
+        ("three roots", [{}, {"translation": [4.0, 0.0, 0.0]}, {"translation": [-4.0, 0.0, 0.0]}]),
+    ],
+)
+def test_a_size_target_is_met_however_many_roots_there_are(tmp_path, label, roots):
+    """The second half of the same bug, and the louder one: the transform was
+    inserted once *per root* carrying the same world-space translation, while
+    each root's own offset stayed unscaled above it. A three-object Clay export
+    asked for 2 m came out 8.2 m across -- and reported 2."""
+    import trimesh
+
+    from warlock.pipelines import postprocess
+
+    path = _rooted(tmp_path / f"{label.replace(' ', '_')}.glb", roots)
+
+    result = postprocess.normalize_glb(path, 2.0)
+
+    assert float(max(trimesh.load(path).extents)) == pytest.approx(2.0, abs=1e-3)
+    assert result["achieved_size_m"] == pytest.approx(2.0, abs=1e-3)
+    assert _grounded(path)
+
+
+def test_the_scene_roots_are_left_free_of_transforms(tmp_path):
+    """Why the composition happens here rather than in a node wrapped above the
+    roots: trimesh treats a scene root as the graph's base frame and discards
+    its transform, so a root that kept one would leave the GLB grounded and
+    every derived STL and OBJ where it started. Emptying the roots is what lets
+    one rule serve every root at once."""
+    from warlock.pipelines import postprocess
+
+    path = _rooted(tmp_path / "m.glb", [{"rotation": _QUARTER_X, "translation": [1.0, 5.0, 0.0]}])
+
+    postprocess.normalize_glb(path, None)
+
+    _header, gltf, _rest = postprocess._split_glb(path.read_bytes())
+    for root in gltf["scenes"][gltf.get("scene", 0)]["nodes"]:
+        node = gltf["nodes"][root]
+        assert not {"translation", "rotation", "scale", "matrix"} & set(node)
+        assert node["children"], "the root must still parent its content"
+
+
 def test_collision_hull_is_convex_and_small(tmp_path):
     import trimesh
 

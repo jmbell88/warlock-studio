@@ -330,6 +330,16 @@ def check_manifold(mesh: Mesh) -> ManifoldReport:
     A boundary is listed as a finding because the callers that ask are asking
     "is this closed", but an open sheet is a legitimate mesh -- ``clean`` is a
     strict reading, not a verdict on usability.
+
+    **No pane calls this, deliberately.** It builds a full adjacency, which is
+    O(corners) and not frame-thread work on a real model, and the question it
+    answers is already answered where it costs nothing extra: ``import_mesh``
+    runs ``meshreport.build`` on the exported GLB, so an asset built in Clay
+    arrives in the library with its watertightness measured. What this is for
+    is the callers that need the answer *about a mesh in hand* -- the topology
+    ops' own tests, and ``serialize.read_wblk``'s validation, which validates
+    rather than trusts because ``edges`` and ``_face_normals`` go quietly wrong
+    on a short face instead of raising.
     """
     a = adjacency(mesh)
     loops = mesh.loops.astype("i8")

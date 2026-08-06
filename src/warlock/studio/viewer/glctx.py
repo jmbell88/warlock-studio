@@ -9,8 +9,6 @@ preview cell and a golden-image test -- none of which is the screen.
 
 from __future__ import annotations
 
-from typing import Any
-
 import moderngl
 import numpy as np
 
@@ -104,19 +102,3 @@ class Viewport:
         self._msaa = self._resolve = self.texture = None
         self.size = (0, 0)
 
-
-def read_image(viewport: Viewport) -> Any:
-    """The viewport's current contents as a PIL image (RGBA)."""
-    from PIL import Image
-
-    return Image.fromarray(viewport.read_rgba(), "RGBA")
-
-
-def create_standalone(size: tuple[int, int] = (16, 16)) -> moderngl.Context:
-    """A context with no window, for tests and headless rendering.
-
-    ``ctx.screen`` on a standalone context refers to a default framebuffer that
-    does not exist; nothing in the viewer touches it, but the imgui backend
-    does, so anything that needs both wires its own.
-    """
-    return moderngl.create_context(standalone=True, require=330)

@@ -168,9 +168,19 @@ class Runtime:
         # store open rather than closed underneath it.
         # Bounded: a task parked in a never-dismissed native dialog would
         # otherwise hold the process open after the window has already gone.
-        self.tasks.shutdown(timeout=SHUTDOWN_TIMEOUT)
+        drained = self.tasks.shutdown(timeout=SHUTDOWN_TIMEOUT)
         if self.store is not None:
-            self.store.close()
+            if drained:
+                self.store.close()
+            else:
+                # The two comments above are only compatible while the pool
+                # actually drains. It did not, so something is still running --
+                # closing the connection under it turns a task that was going to
+                # finish into a ProgrammingError captured in a future nobody
+                # will poll. The process is exiting; sqlite releases the file
+                # either way, and leaking a handle for the last second of a
+                # shutdown costs less than corrupting the last write.
+                log.warning("tasks still running at shutdown; leaving the store open")
         self.worker = self.svc = self.store = None
         self._loop = self._thread = None
 

@@ -512,8 +512,19 @@ def primary_button(label: str, size: tuple[float, float] = (0, 0), *, enabled: b
     return clicked
 
 
-def destructive_button(label: str, size: tuple[float, float] = (0, 0)) -> bool:
-    """Red where it acts, not where it cancels."""
+def destructive_button(
+    label: str, size: tuple[float, float] = (0, 0), *, enabled: bool = True
+) -> bool:
+    """Red where it acts, not where it cancels.
+
+    ``enabled`` greys it exactly as ``disabled_button`` does. It takes the same
+    shape deliberately: a caller writing ``if destructive_button(...) and
+    enabled:`` draws a live red button that swallows the click, which is the
+    one button in the app where "nothing happened" is hardest to tell from
+    "something irreversible happened".
+    """
+    if not enabled:
+        imgui.begin_disabled()
     imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.85)))
     imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
     imgui.push_style_color(
@@ -522,7 +533,9 @@ def destructive_button(label: str, size: tuple[float, float] = (0, 0)) -> bool:
     with fonts.label(imgui):
         clicked = imgui.button(label, size)
     imgui.pop_style_color(3)
-    return clicked
+    if not enabled:
+        imgui.end_disabled()
+    return clicked and enabled
 
 
 @contextmanager

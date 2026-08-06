@@ -197,11 +197,25 @@ def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
 
     The measurement goes through trimesh but the write does not -- re-exporting
     would re-encode every texture. Only the JSON chunk is rewritten, inserting
-    one node below the scene root that carries both the scale and the
-    translation; buffers and images are copied through byte-for-byte. It goes
-    *below* the root and not on it because trimesh treats a scene root as the
-    graph's base frame and silently discards its transform, which would leave
-    the GLB transformed and the derived STL/OBJ exports not.
+    the scale and translation as *one* node above the whole scene; buffers and
+    images are copied through byte-for-byte.
+
+    **Above the roots, under a bare new one**, and both halves of that matter.
+    The transform cannot sit on a scene root, because trimesh treats one as the
+    graph's base frame and silently discards its transform -- the GLB would come
+    out transformed and the derived STL/OBJ exports would not. So the new root
+    carries nothing and exists only to be discarded, and the transform rides on
+    its single child, which is an ordinary node.
+
+    It used to go *below* each root instead, which was wrong twice over. The
+    bounds are measured in world space, after every node's TRS has composed, but
+    applying the result under a root composes as ``M_root . T . S`` rather than
+    ``S . M_root`` followed by ``T`` -- so any rotation on a root rotated the
+    grounding offset, and a mesh authored in Blender or exported from Clay came
+    back sunk and shifted. And it was applied once *per root* with the same
+    world-space translation, so a Clay export -- which emits one root per object
+    -- grounded every object as though it alone were the scene: three boxes
+    asked to be 2 m across came out 8.2 m and reported 2.
     """
     scene = trimesh.load(glb_path)
     extents = scene.extents
@@ -248,19 +262,72 @@ def scale_glb(glb_path: Path, target_max_m: float) -> float:
 def _insert_transform_below(
     nodes: list[dict], root: int, factor: float, translation: list[float]
 ) -> None:
-    """Push everything hanging off ``root`` into a new scaled+moved child node.
+    """Move everything hanging off ``root`` -- *including the root's own
+    transform* -- into a new child that carries the grounding as well.
 
-    Same reasoning as the scale-only version this replaces: the transform must
-    not go on the root itself, because trimesh discards a scene root's transform
-    and the derived exports would come out untransformed.
+    The transform still cannot go on the root: trimesh treats a scene root as
+    the graph's base frame and silently discards its transform, which would
+    leave the GLB grounded and every derived STL and OBJ not. Nor can a new
+    root be added above it, which is the shape this looks like it wants: the
+    node trimesh calls the base frame is named ``world``, and so is the root
+    its own exporter writes, so a wrapper produces two nodes with one name and
+    trimesh resolves the collision into a cycle that drops the transform again.
+
+    So the composition is fixed here instead. The bounds were measured in world
+    space, after every node's TRS composed, and the result must therefore apply
+    *outside* the root's own transform -- ``T . S . M_root``, never
+    ``M_root . T . S``. Sandwiching it under an untouched root was the latter,
+    so any rotation on a root rotated the grounding offset and a mesh authored
+    in Blender or exported from Clay came back sunk and shifted. It also meant
+    the same world-space translation was applied once per root while each
+    root's own offset stayed unscaled above it, so a Clay export -- one root
+    per object -- grounded every object as though it alone were the scene:
+    three boxes asked to be 2 m across came out 8.2 m and reported 2.
+
+    Emptying the root is what makes it correct for every root at once: with the
+    root left as a bare parent, the child's transform *is* the world transform,
+    and ``T . S . M_root`` is the same grounding applied to each.
     """
     node = nodes[root]
-    child: dict = {"scale": [factor] * 3, "translation": translation}
+    child: dict = {}
     for key in ("mesh", "children", "skin", "weights"):
         if key in node:
             child[key] = node.pop(key)
+    child.update(_composed(node, factor, translation))
     nodes.append(child)
     node["children"] = [len(nodes) - 1]
+
+
+def _composed(node: dict, factor: float, translation: list[float]) -> dict:
+    """``T . S . M_node`` as a node transform, consuming the node's own.
+
+    Stays in TRS whenever the node was in TRS, which is every exporter we meet:
+    the scale is uniform, so the product decomposes exactly -- rotation is
+    untouched, scale multiplies through, and the translation is the node's own
+    scaled and then offset. A node carrying an explicit ``matrix`` (glTF allows
+    either, never both) is composed as a matrix, because a general one need not
+    decompose into TRS at all.
+    """
+    if "matrix" in node:
+        # glTF matrices are column-major, which is the transpose of what numpy
+        # multiplies -- hence the round trip through .T at both ends.
+        import numpy as np
+
+        own = np.array(node.pop("matrix"), dtype=float).reshape(4, 4).T
+        outer = np.diag([factor, factor, factor, 1.0])
+        outer[:3, 3] = translation
+        return {"matrix": [float(v) for v in (outer @ own).T.reshape(16)]}
+
+    own_t = [float(v) for v in node.pop("translation", (0.0, 0.0, 0.0))]
+    own_s = [float(v) for v in node.pop("scale", (1.0, 1.0, 1.0))]
+    rotation = node.pop("rotation", None)
+    out = {
+        "translation": [translation[i] + factor * own_t[i] for i in range(3)],
+        "scale": [factor * own_s[i] for i in range(3)],
+    }
+    if rotation is not None:
+        out["rotation"] = rotation
+    return out
 
 
 def _load_merged(glb_path: Path) -> trimesh.Trimesh:

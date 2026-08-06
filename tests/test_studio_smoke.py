@@ -205,6 +205,15 @@ def test_the_pose_panel_builds_rigged_and_unrigged(app_ctx, imgui_ctx):
     app_ctx.state.preview["poses"] = [{"id": "abcdef012345", "name": "idle", "bones": {}}]
     _frame(imgui_ctx, lambda: pose_panel.draw(app_ctx, job))
 
+    # And the branch for "the editor is open on some other asset", which
+    # _sync_viewer's deliberate early-return while posing makes reachable by
+    # clicking any other card.
+    app_ctx.viewer.pose_mode = True
+    app_ctx.viewer.pose_job_id = "ffffffffffff"
+    _frame(imgui_ctx, lambda: pose_panel.draw(app_ctx, job))
+    app_ctx.viewer.pose_mode = False
+    app_ctx.viewer.pose_job_id = None
+
 
 def test_the_sheet_panel_builds_with_poses_and_a_clip(app_ctx, imgui_ctx):
     from warlock.studio.panes import sheet_panel
@@ -222,6 +231,53 @@ def test_the_sheet_panel_builds_with_poses_and_a_clip(app_ctx, imgui_ctx):
     form["clip_from"] = "abcdef012345"
     form["clip_to"] = "abcdef012346"
     _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
+
+
+def test_the_sheet_preview_advances_a_cell_per_frame(app_ctx, imgui_ctx):
+    """The preview draws and reads back per cell, so it is spread over frames
+    rather than done in the one the button was pressed. Drawn here with a
+    strip genuinely in progress, which is the branch a static frame misses."""
+    from PIL import Image
+
+    from warlock.studio.panes import sheet_panel
+
+    job_id = _seeded(app_ctx)
+    job = app_ctx.cache.get(job_id)
+    job["files"] = ["model.glb", "rig.glb"]
+
+    class _Strip:
+        def __init__(self) -> None:
+            self.steps = 0
+            self.released = False
+            self.image = Image.new("RGBA", (32, 8), (0, 0, 0, 0))
+            self.index = 0
+
+        def step(self) -> bool:
+            self.steps += 1
+            return self.steps >= 2
+
+        def release(self) -> None:
+            self.released = True
+
+    strip = _Strip()
+    app_ctx.viewer._strip = strip
+    # ``has_model`` gates the whole section and the fixture's viewer is empty;
+    # a stand-in is enough, since nothing in this path dereferences it.
+    app_ctx.viewer.gpu = object()
+
+    try:
+        assert app_ctx.viewer.stripping is True
+        _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
+        assert strip.steps == 1, "one cell per frame, not all of them"
+        assert app_ctx.viewer.stripping is True
+
+        _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
+        assert strip.steps == 2
+        assert app_ctx.viewer.stripping is False, "finished, and let go of"
+    finally:
+        app_ctx.viewer.gpu = None
+        app_ctx.viewer._strip = None
+        app_ctx.state.preview.pop("sheet_strip", None)
 
 
 def test_the_overlay_builds_with_a_toolbar_and_a_banner(app_ctx, imgui_ctx):
@@ -592,6 +648,45 @@ def test_the_clay_panes_build_while_a_save_is_in_flight(app_ctx, imgui_ctx):
         _frame(imgui_ctx, lambda pane=pane: pane.draw(app_ctx))
 
 
+def test_the_clay_context_menu_and_its_parameter_popup_build(app_ctx, imgui_ctx):
+    """``clay_menu`` was the one drawn pane named in no test at all, and it
+    owns the parameter popup: the pending-op lifecycle, the clamp to a param's
+    range, the stale-name recovery and the saving gate."""
+    from types import SimpleNamespace
+
+    from warlock.studio import clay_mode, clay_ops
+    from warlock.studio.panes import clay_menu
+
+    tab = _clay_tab(app_ctx)
+    tab.doc.select([tab.doc.objects[0].uid])
+    view = SimpleNamespace(menu_request=None)
+
+    _frame(imgui_ctx, lambda: clay_menu.draw(app_ctx, view))
+    view.menu_request = (10.0, 10.0)
+    _frame(imgui_ctx, lambda: clay_menu.draw(app_ctx, view))
+    assert view.menu_request is None, "the request is consumed by the frame that opens it"
+
+    # The parameter popup, including the keyboard path's open request.
+    state = clay_mode.ensure(app_ctx)
+    parameterised = next(op for op in clay_ops.OPS if op.params)
+    state.pending_op = parameterised.name
+    state.open_op_popup = True
+    _frame(imgui_ctx, lambda: clay_menu.draw(app_ctx, view))
+    assert state.open_op_popup is False, "a request must not outlive its frame"
+
+    # And a name from an op that no longer exists clears itself rather than
+    # leaving the mode holding a request it can never act on.
+    state.pending_op = "no-such-op"
+    state.open_op_popup = True
+    _frame(imgui_ctx, lambda: clay_menu.draw(app_ctx, view))
+    assert state.pending_op == ""
+    assert state.open_op_popup is False
+
+    # Saving greys every row rather than swallowing the click.
+    tab.saving = True
+    _frame(imgui_ctx, lambda: clay_menu.draw(app_ctx, view))
+
+
 def test_the_clay_properties_pane_builds_for_a_frozen_object(app_ctx, imgui_ctx):
     """Phase 2's state: no generator, so the panel shows counts instead of
     parameters. Unreachable from the UI today and drawn here anyway, because it
@@ -860,6 +955,16 @@ def test_the_2d_pane_builds_with_a_saved_vector_preset(app_ctx, imgui_ctx):
         app_ctx.settings, "chests", {"genre": "fantasy", "platform": "pc"}
     )
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+    # And the Forget branch, which only appears once one has been applied --
+    # presets could be saved and applied but never removed, and nothing capped
+    # the list.
+    app_ctx.state.preview["vector_preset"] = "chests"
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+    settings_2d._forget_vector_preset(app_ctx, "chests")
+    assert vector_presets.list_presets(app_ctx.settings) == {}
+    assert "vector_preset" not in app_ctx.state.preview
 
 
 def test_the_inspector_builds_its_verdict_section_armed_and_not(app_ctx, imgui_ctx):

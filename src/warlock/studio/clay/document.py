@@ -276,9 +276,14 @@ class ClayDoc:
         return True
 
     def set_mesh(
-        self, uid: int, mesh: bm.Mesh, *, select: el.ElementSel | None = None
+        self,
+        uid: int,
+        mesh: bm.Mesh,
+        *,
+        select: el.ElementSel | None = None,
+        keep_generator: bool = False,
     ) -> bool:
-        """Replace one object's geometry as one step.
+        """Replace one object's geometry as one step, and freeze its generator.
 
         Identity, not equality, decides whether anything happened: ``Mesh`` is
         ``eq=False`` because numpy arrays have no truthy ``==``, and every op
@@ -289,12 +294,28 @@ class ClayDoc:
         *after* the push and pushes nothing of its own, because selection is
         not undoable; undoing the mesh edit then drops it, which is the right
         answer for a selection describing geometry that no longer exists.
+
+        **The freeze lives here rather than in the op layer**, which is where
+        it was and where it was only half applied: ``clay_ops.run_mesh_op`` and
+        Smooth cleared ``generator``, while Delete, Bake Transform, Mirror and
+        an element drag did not. An object that still claims to be "box, size
+        1" keeps offering that size field, and touching it rebuilds a pristine
+        box -- so the deletion, the bake, the mirror or the drag vanished with
+        no warning. Geometry that is no longer what a generator would build is
+        a fact about ``set_mesh``, not about which caller remembered.
+
+        ``keep_generator`` is the single exception, for the properties panel's
+        own rebuild: there the new mesh *is* what the generator makes, which is
+        the one case where the claim is still true.
         """
         obj = self.by_uid(uid)
         if mesh is obj.mesh:
             return False
         before, obj.mesh = obj.mesh, mesh
         self.history.push(MeshEdit(uid, before, mesh))
+        if not keep_generator and obj.generator is not None:
+            # Through set_props, so it undoes with the edit it belongs to.
+            self.set_props(uid, generator=None, params={})
         if select is not None:
             self.set_element_sel(uid, select)
         self.touch()

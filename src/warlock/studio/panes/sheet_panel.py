@@ -8,6 +8,7 @@ part that has to agree with ``pipelines.sheet.plan``.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
@@ -18,6 +19,8 @@ from ...service import sheets as svc_sheets
 from .. import dialogs, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
+
+log = logging.getLogger(__name__)
 
 # 4/8/16: the direction counts every 2D engine's facing conventions already
 # use. Not free-form, because a count that does not divide 360 into the
@@ -69,20 +72,46 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
 
 
 def _preview(ctx: Any, form: dict[str, Any]) -> None:
+    """The direction strip, rendered one cell per frame.
+
+    Every cell is a draw *and* a synchronous GPU-to-CPU readback, and the
+    control offers up to sixteen -- so doing them all in the frame the button
+    was pressed was a visible freeze. Spread out it is a quarter of a second
+    nobody notices. It cannot leave the frame thread: this is the one GL
+    context, so what changes is how much happens per frame, not where.
+
+    (There used to be a ``ctx.busy("sheet-preview")`` here guarding exactly
+    this, against a key nothing ever submitted -- scaffolding for the version
+    that never arrived. The progress is real state on the viewer now.)
+    """
     viewer = ctx.viewer
     if viewer is None or not viewer.has_model:
         return
-    key = "sheet-preview"
-    if widgets.disabled_button("Refresh preview", not ctx.busy(key)):
+    if widgets.disabled_button("Refresh preview", not viewer.stripping):
         yaws = [i * 360.0 / form["yaws"] for i in range(form["yaws"])]
         try:
-            strip = viewer.render_sheet_strip(
+            viewer.begin_sheet_strip(
                 yaws, math.radians(form["elevation"]), form["lighting"] == "flat"
             )
         except Exception:
+            # Logged as well as toasted, like every comparable site: an
+            # offscreen render that fails leaves nothing in warlock.log
+            # otherwise, and "could not render" is not a diagnosis.
+            log.exception("could not render the sheet preview")
             ctx.toast("Could not render the preview.", "error")
-            return
-        ctx.state.preview["sheet_strip"] = strip
+            viewer.cancel_sheet_strip()
+    if viewer.stripping:
+        imgui.same_line()
+        widgets.spinner()
+        try:
+            finished = viewer.step_sheet_strip()
+        except Exception:
+            log.exception("could not render the sheet preview")
+            ctx.toast("Could not render the preview.", "error")
+            viewer.cancel_sheet_strip()
+            finished = None
+        if finished is not None:
+            ctx.state.preview["sheet_strip"] = finished
     strip = ctx.state.preview.get("sheet_strip")
     if strip is not None and ctx.textures is not None:
         texture = _strip_texture(ctx, strip)

@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 from warlock.service import derive as svc_derive
 from warlock.service import export as svc_export
 from warlock.service import files as svc_files
-from warlock.service.errors import NotFound, NotReady
+from warlock.service.errors import Invalid, NotFound, NotReady
 
 
 def _draw(job_dir, box):
@@ -355,6 +355,109 @@ def test_every_2d_artifact_has_a_derivation():
         "sprite.png",
         "wrap_preview.png",
     } | set(svc_files.PIXEL_ARTIFACTS)
+
+
+def _manifest_palette(svc, job_id, name):
+    manifest = json.loads((svc.job_dir(job_id) / "manifest.json").read_text("utf-8"))
+    return manifest["artifacts"][name].get("palette")
+
+
+def test_a_palette_request_re_derives_a_fresh_pixel_artifact(svc):
+    # The knob is derive-time state, not a job param, so the only record of
+    # which palette cut the file on disk is its manifest entry -- and a file
+    # cut with the wrong one is mtime-fresh. The compound test is the rule.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "pixel_32.png")
+    assert _manifest_palette(svc, job_id, "pixel_32.png") is None
+
+    path = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+
+    assert _manifest_palette(svc, job_id, "pixel_32.png") == 8
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+        colours = {c[:3] for _, c in rgba.getcolors(rgba.width * rgba.height) if c[3] > 0}
+    assert len(colours) <= 8
+
+
+def test_a_repeat_palette_request_serves_the_cached_file(svc):
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+    assert again == first and again.stat().st_mtime_ns == stamp
+
+
+def test_turning_the_palette_off_re_derives_full_colour(svc):
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+    svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    assert _manifest_palette(svc, job_id, "pixel_32.png") is None
+
+
+def test_a_plain_derived_artifact_is_current_under_no_palette_cap(svc):
+    # Every pixel artifact already on disk predates the knob and carries
+    # "palette": None. Asking for no cap must serve it untouched, or shipping
+    # the feature churns every existing asset directory once.
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png")
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    assert again.stat().st_mtime_ns == stamp
+
+
+def test_no_palette_preference_serves_whatever_is_on_disk(svc):
+    # pixel_colors=None is today's callers: bulk export and anyone who has no
+    # opinion. They take the file as last derived, whatever cut it.
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png")
+    assert again.stat().st_mtime_ns == stamp
+    assert _manifest_palette(svc, job_id, "pixel_32.png") == 8
+
+
+def test_a_missing_manifest_costs_one_re_derive_then_caches(svc):
+    # No manifest means no provenance: the artifact might have been cut with
+    # any palette, so a caller with a preference re-derives once and the
+    # rebuilt entry answers from then on.
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "pixel_32.png")
+    (svc.job_dir(job_id) / "manifest.json").unlink()
+
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    assert _manifest_palette(svc, job_id, "pixel_32.png") is None
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    assert again.stat().st_mtime_ns == stamp
+
+
+def test_an_unknown_palette_size_is_refused_before_any_disk_work(svc):
+    job_id = _reference(svc)
+    with pytest.raises(Invalid):
+        svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=7)
+    assert not (svc.job_dir(job_id) / "pixel_32.png").exists()
+
+
+def test_a_palette_preference_does_not_touch_non_pixel_artifacts(svc):
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "icon.png")
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "icon.png", pixel_colors=8)
+    assert again.stat().st_mtime_ns == stamp
+
+
+def test_a_hand_edit_and_a_palette_change_resolve_in_one_derive(svc):
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "pixel_32.png")
+    _hand_edit(svc, job_id, box=(8, 8, 40, 40))
+
+    path = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=8)
+
+    assert _manifest_palette(svc, job_id, "pixel_32.png") == 8
+    with Image.open(path) as im:
+        # The edited subject is square, so a re-derive against the old pixels
+        # would keep the old aspect.
+        assert im.size[0] == im.size[1]
 
 
 def test_a_tile_derives_a_wrapped_view_of_itself(svc):

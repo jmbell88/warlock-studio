@@ -326,6 +326,49 @@ def test_the_pose_panel_does_not_ask_for_a_rig_that_cannot_be_made():
     assert "ctx.rigging_available" in source
 
 
+def test_the_pose_panel_acts_only_on_the_asset_the_editor_is_bound_to():
+    """The regression: the editor kept no job id, so every write used whichever
+    asset was *selected*. Enter pose mode on A, click B, press Save, and A's
+    rotations were written into B's pose directory -- and joints mode re-skinned
+    B against A's skeleton. Nothing downstream could catch it: rig validation
+    checks bone names, and two jobs on one template have the same ones.
+    """
+    from warlock.studio.panes import pose_panel
+
+    bound = SimpleNamespace(pose_job_id="a" * 12)
+    assert pose_panel._is_bound_job(bound, {"id": "a" * 12}) is True
+    assert pose_panel._is_bound_job(bound, {"id": "b" * 12}) is False
+    # An editor opened without saying whose rig it is stays usable: that is the
+    # pre-binding behaviour, and every real entry point now passes the id.
+    assert pose_panel._is_bound_job(SimpleNamespace(), {"id": "b" * 12}) is True
+
+
+def test_the_bound_check_comes_before_anything_that_writes():
+    """A structural assertion, because the *withholding* is the fix: the
+    unbound branch must return before any control that names a job id."""
+    from warlock.studio.panes import pose_panel
+
+    source = inspect.getsource(pose_panel.draw)
+    guard_at = source.index("_is_bound_job")
+    for later in ("_banner(", "_joints(", "_pose("):
+        assert guard_at < source.index(later), f"{later} is drawn before the bound check"
+
+
+def test_leaving_pose_mode_forgets_which_job_it_was_bound_to():
+    from warlock.studio.viewer_embed import Viewer
+
+    viewer = Viewer.__new__(Viewer)
+    viewer.pose_mode = True
+    viewer.pose_job_id = "a" * 12
+    viewer.rotate_gizmo = SimpleNamespace(end_drag=lambda: None)
+    viewer.translate_gizmo = SimpleNamespace(end_drag=lambda: None)
+    viewer.editor = SimpleNamespace(clear=lambda: None)
+
+    Viewer.exit_pose_mode(viewer)
+
+    assert viewer.pose_job_id is None
+
+
 def test_the_pose_dirty_flag_is_cleared_when_the_save_lands():
     """Not when the save is *submitted*: clearing it there lets the user walk
     away from a pose that was never written."""

@@ -1,10 +1,10 @@
 """A GLB loader, in numpy and Pillow.
 
 Hand-rolled rather than delegated. trimesh discards a scene root's transform --
-which is exactly where ``normalize_glb`` puts the grounding transform, so a
-trimesh-loaded model would sit in the wrong place and at the wrong size -- and
-it has no notion of a skin at all. pygltflib parses the JSON but still leaves
-accessor decoding here. What is left after those two is small enough to own.
+the constraint ``normalize_glb`` writes around, and one this loader is under no
+obligation to inherit -- and it has no notion of a skin at all. pygltflib parses
+the JSON but still leaves accessor decoding here. What is left after those two
+is small enough to own.
 
 The node graph stays live after loading: posing a rig means setting a joint
 node's local rotation and recomputing world matrices, so nothing is baked.
@@ -178,13 +178,6 @@ class Model:
     def get_rotation(self, bone: str) -> np.ndarray | None:
         index = self.by_name.get(bone)
         return None if index is None else self.nodes[index].rotation.copy()
-
-    def reset_rotation(self, bone: str) -> bool:
-        index = self.by_name.get(bone)
-        if index is None:
-            return False
-        self.nodes[index].rotation = self.rest_rotations[index].copy()
-        return True
 
     def reset_all(self) -> None:
         for i, node in enumerate(self.nodes):

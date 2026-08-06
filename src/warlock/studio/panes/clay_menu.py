@@ -23,7 +23,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops
+from .. import clay_mode, clay_ops, widgets
 
 POPUP = "clay-context"
 PARAM_POPUP = "clay-op-params"
@@ -48,16 +48,27 @@ def draw(ctx: Any, view: Any) -> None:
 def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
     imgui.text_disabled(f"{doc.element_mode} mode")
     imgui.separator()
+    if tab.saving:
+        # The gate every other control in the app has, and the one this menu
+        # did not: ``enabled`` never consulted it, so every row stayed
+        # clickable during a save and the click was then swallowed by the
+        # ``or tab.saving`` below -- a live-looking menu that did nothing and
+        # said nothing. Told once, at the top, rather than as fifteen greyed
+        # rows with no reason attached.
+        imgui.text_disabled("Saving...")
+        imgui.separator()
     for op in clay_ops.menu(doc.element_mode):
         if op.separator_before:
             imgui.separator()
-        clicked, _ = imgui.menu_item(op.label, op.key, False, op.enabled(doc))
-        if not clicked or tab.saving:
+        clicked, _ = imgui.menu_item(op.label, op.key, False, op.enabled(doc) and not tab.saving)
+        if not clicked:
             continue
         if op.params:
             state.pending_op = op.name
             state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
             imgui.close_current_popup()
+            # Here the id stack *is* a window's, so this opens directly rather
+            # than going through open_op_popup.
             imgui.open_popup(PARAM_POPUP)
         else:
             clay_ops.run(ctx, doc, op)
@@ -80,23 +91,40 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
         op = clay_ops.get(state.pending_op)
     except KeyError:  # pragma: no cover - a stale name from a removed op
         state.pending_op = ""
+        state.open_op_popup = False
         return
 
+    if state.open_op_popup:
+        # A request from outside a window -- the keyboard path, which cannot
+        # call open_popup itself. Cleared here whether or not the popup ends up
+        # rendering, so a request can never outlive the frame that made it.
+        state.open_op_popup = False
+        imgui.open_popup(PARAM_POPUP)
     if not imgui.begin_popup(PARAM_POPUP):
         return
     values = state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
     imgui.text(op.label.rstrip("."))
     imgui.separator()
     for param in op.params:
-        current = float(values.get(param.name, param.default))
-        changed, value = imgui.input_float(
-            f"{param.label}##{op.name}-{param.name}", current, param.step
-        )
+        label = f"{param.label}##{op.name}-{param.name}"
+        if param.integer:
+            # Honoured rather than declared. Smooth's "levels" is the only
+            # integer parameter and it was drawn as a float field, so it
+            # accepted 1.5 and the op then truncated it -- a number the user
+            # typed, silently becoming a different one.
+            changed, value = imgui.input_int(label, int(values.get(param.name, param.default)))
+        else:
+            changed, value = imgui.input_float(
+                label, float(values.get(param.name, param.default)), param.step
+            )
         if changed:
-            values[param.name] = min(max(float(value), param.low), param.high)
+            clamped = min(max(float(value), param.low), param.high)
+            values[param.name] = int(clamped) if param.integer else clamped
         if param.warn:
             imgui.text_disabled(param.warn)
-    if imgui.button(f"Apply##{op.name}") and not tab.saving:
+    # Greyed rather than drawn live and ignored, which is what "and not
+    # tab.saving" after the click amounted to.
+    if widgets.disabled_button(f"Apply##{op.name}", not tab.saving):
         clay_ops.run(ctx, tab.doc, op, **values)
         state.pending_op = ""
         imgui.close_current_popup()

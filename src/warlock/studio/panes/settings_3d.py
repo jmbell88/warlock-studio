@@ -38,24 +38,26 @@ def draw(ctx: Any) -> None:
     form["platform"] = widgets.combo(
         "Detail", form["platform"], _platform_options(ctx)
     )
+    _hint(ctx, "platform", form["platform"])
     widgets.help_marker(
         "The geometry resolution sent to trellis. The 2D pane's platform is a "
         "separate thing -- a hint in the prompt."
     )
     form["profile"] = widgets.combo("Budget", form["profile"], PROFILES)
-    hint = _findings_hint(ctx, "profile", form["profile"])
-    if hint is not None:
-        imgui.same_line()
-        imgui.text_disabled(hint)
+    _hint(ctx, "profile", form["profile"])
 
     changed, size = imgui.input_float("Size (m)", float(form["size_m"]), 0.0, 0.0, "%.2f")
     if changed:
         form["size_m"] = max(0.0, size)
+    # Deliberately unhinted, unlike every other control here: size_m is
+    # continuous, so its buckets are keyed on "0.35" and "0.36" separately and
+    # a threshold of five would essentially never be met.
     widgets.help_marker("0 keeps whatever the reference recorded.")
 
     form["bg_removal"] = widgets.combo(
         "Background", form["bg_removal"], _bg_options(ctx)
     )
+    _hint(ctx, "bg_removal", form["bg_removal"])
 
     imgui.set_next_item_width(120)
     changed, seed = imgui.input_int("Mesh seed", int(form["mesh_seed"]), 0, 0)
@@ -68,6 +70,7 @@ def draw(ctx: Any) -> None:
     changed, prep = imgui.checkbox("Normalise the reference", bool(form["reference_prep"]))
     if changed:
         form["reference_prep"] = prep
+    _hint(ctx, "reference_prep", form["reference_prep"])
     widgets.help_marker(
         "Recentre the subject and scale it to fill the frame before the mesh "
         "engine sees it. Off by default: the engine does its own cropping, and "
@@ -85,6 +88,23 @@ def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
     """Same lookup as the 2D pane's -- see ``settings_2d._findings_hint``."""
     doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
     return findings_lib.hint(doc, param, value)
+
+
+def _hint(ctx: Any, param: str, value: Any) -> None:
+    """Draw the findings hint for the control just drawn, if there is one.
+
+    This pane used to hint one control out of five, which put the evidence
+    furthest from where it applies: an observation measures *geometry* -- hole
+    fraction, watertightness, triangle count -- so the settings it can speak
+    about most directly are exactly these, and they were the ones showing
+    nothing. Every param here is in ``vectors.VECTOR_PARAMS``, so every one of
+    them is something a verdict and an observation are already filed against.
+    """
+    hint = _findings_hint(ctx, param, value)
+    if hint is None:
+        return
+    imgui.same_line()
+    imgui.text_disabled(hint)
 
 
 def _platform_options(ctx: Any) -> list[tuple[str, str]]:

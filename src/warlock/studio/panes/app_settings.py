@@ -32,7 +32,6 @@ def draw(ctx: Any) -> None:
         _interface(ctx)
         _layout(ctx)
         _models(ctx)
-        _addons()
     imgui.end_child()
 
 
@@ -147,17 +146,15 @@ def _models(ctx: Any) -> None:
     else:
         widgets.muted("Rigging (bpy) not installed.")
     imgui.dummy((0, sp(tokens.SP_1)))
-    widgets.muted("Model management is coming in a future update.")
+    # What this list is, rather than what it is not yet. A promise about a
+    # future release is the one thing a UI string cannot keep, and this pane
+    # was the only place in the app making one.
+    widgets.muted(
+        "Read-only. Weights are one-time manual downloads; the startup "
+        "diagnostics give the exact command for a missing one."
+    )
 
 
 def _row(label: str) -> None:
     missing = "missing" in label
     widgets.text_colored(theme.WARN if missing else theme.MUTED, f"{icons.CIRCLE} {label}")
-
-
-# --- add-ons ----------------------------------------------------------------
-
-
-def _addons() -> None:
-    widgets.section("Add-ons")
-    widgets.muted("Nothing here yet.")

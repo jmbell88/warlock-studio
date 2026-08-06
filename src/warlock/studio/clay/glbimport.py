@@ -3,10 +3,10 @@
 The loop the rest of Clay was built to close: ``jobs.import_mesh`` turns a Clay
 document into an ordinary library asset, and this turns an ordinary asset back
 into a Clay document. It goes through :func:`~..viewer.gltf.load`, which already
-preserves a scene root's transform (where ``normalize_glb`` puts the grounding),
-already decodes textures, and already refuses sparse accessors and non-triangle
-modes -- so nothing here re-implements a loader, and an asset that will not open
-in the 3D viewport will not half-open here either.
+composes every node's transform (including the grounding ``normalize_glb``
+inserts under each root), already decodes textures, and already refuses sparse
+accessors and non-triangle modes -- so nothing here re-implements a loader, and
+an asset that will not open in the 3D viewport will not half-open here either.
 
 **One ``Obj`` per primitive, not per node.** A glTF primitive carries exactly
 one material, and Clay stores material per *face*, so the two are not the same

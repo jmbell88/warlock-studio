@@ -2023,3 +2023,110 @@ async def test_ensure_config_stops_only_a_running_server_with_a_different_config
     assert calls == [1]
     assert "--band" not in server._argv()
     server._proc = None
+
+
+# --- observations: machine evidence written at completion ---------------------
+
+
+def _fake_audit(monkeypatch):
+    import warlock.meshaudit as meshaudit_mod
+
+    monkeypatch.setattr(
+        meshaudit_mod,
+        "hole_fraction",
+        lambda path, views, resolution: {
+            "worst": 0.11, "mean": 0.05, "faces": 1234,
+            "resolution": resolution, "views": [],
+        },
+    )
+
+
+async def test_a_finished_model_job_leaves_one_observation_row(worker, monkeypatch):
+    """The evidence corpus accumulates on every generation, not every review:
+    a finished model job appends one observation carrying its config vector
+    and the machine measurements, keyed to survive the job row's deletion."""
+    _fake_audit(monkeypatch)
+    job_id = _make_image_job(worker)
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    rows = worker.store.latest_observations()
+    assert [r["job_id"] for r in rows] == [job_id]
+    row = rows[0]
+    assert row["seed"] == 1
+    assert row["vector"]["stage"] == "model"
+    assert row["vector"]["resolution"] == 512
+    assert row["metrics"]["hole_worst"] == 0.11
+    assert row["metrics"]["hole_mean"] == 0.05
+
+
+async def test_an_errored_job_leaves_no_observation(worker):
+    bad_id = _make_image_job(worker)
+    worker.trellis.should_raise = RuntimeError("boom")
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(bad_id)["status"] == "error")
+    await worker.shutdown()
+
+    assert worker.store.latest_observations() == []
+
+
+async def test_a_reference_job_leaves_no_observation(worker):
+    job_id = worker.store.create("text", "a chest", {"seed": 1}, stage="reference")
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.store.latest_observations() == []
+
+
+async def test_observe_finished_skips_a_job_with_no_measurements(worker):
+    """A mesh whose audit and report both failed says nothing measurable; an
+    empty metrics row would be a bucket that dilutes every mean it joins."""
+    from warlock.queue import _observe_finished
+
+    job_id = worker.store.create(
+        "image", None, {"seed": 1}, stage="model", status="done"
+    )
+    assert _observe_finished(worker.store, job_id) is False
+    assert worker.store.latest_observations() == []
+
+
+async def test_observe_finished_snapshots_the_sweep_context(worker):
+    from warlock.queue import _observe_finished
+
+    job_id = worker.store.create(
+        "image", "a chest", {"seed": 7, "mesh_audit": {"worst": 0.1, "mean": 0.05}},
+        stage="model", status="done",
+        sweep_id="deadbeefcafe", sweep_unit="baseline s7",
+    )
+    assert _observe_finished(worker.store, job_id) is True
+    row = worker.store.latest_observations()[0]
+    assert row["sweep_id"] == "deadbeefcafe"
+    assert row["sweep_unit"] == "baseline s7"
+    assert row["seed"] == 7
+    assert row["metrics"] == {"hole_worst": 0.1, "hole_mean": 0.05}
+
+
+async def test_a_failing_observation_write_does_not_fail_the_job(worker, monkeypatch):
+    """Same rule as _audit_mesh: a diagnostic must never fail a job whose mesh
+    is already on disk."""
+    _fake_audit(monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(worker.store, "add_observation", boom, raising=False)
+    job_id = _make_image_job(worker)
+
+    worker.start()
+    await _wait_until(
+        lambda: worker.store.get(job_id)["status"] in ("done", "error")
+    )
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+    assert worker.store.latest_observations() == []

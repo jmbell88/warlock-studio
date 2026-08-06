@@ -177,6 +177,11 @@ def _vector_presets(ctx: Any) -> None:
 
     It fills *both* forms -- a vector carries the mesh-side settings too -- which
     is why it takes ctx rather than the 2D form alone.
+
+    The last-applied name is remembered only so there is something for Forget
+    to name. Presets could be saved (from Review) and applied but never
+    removed, and nothing capped the list, so ``studio_settings.json`` grew
+    monotonically with no way back.
     """
     saved = vector_presets.list_presets(ctx.settings)
     if not saved:
@@ -187,7 +192,26 @@ def _vector_presets(ctx: Any) -> None:
     if chosen and chosen in saved:
         vector_presets.apply(ctx.state, saved[chosen])
         ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.preview["vector_preset"] = chosen
         ctx.toast(f"Applied {chosen} to the 2D and 3D forms.")
+    last = ctx.state.preview.get("vector_preset")
+    if last in saved:
+        imgui.same_line()
+        if widgets.disabled_button(f"Forget {last}", True):
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Forget this preset?",
+                    message=f"{last} will be removed from your saved settings.",
+                    on_confirm=lambda name=last: _forget_vector_preset(ctx, name),
+                )
+            )
+
+
+def _forget_vector_preset(ctx: Any, name: str) -> None:
+    vector_presets.delete_preset(ctx.settings, name)
+    if ctx.state.preview.get("vector_preset") == name:
+        ctx.state.preview.pop("vector_preset", None)
+    ctx.toast(f"Forgot the preset {name}.")
 
 
 def _output(ctx: Any, form: dict[str, Any]) -> None:

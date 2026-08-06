@@ -15,9 +15,11 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import derive as svc_derive
+from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
 from .. import theme, widgets
+from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
 from . import pose_panel, retarget_panel, sheet_panel
@@ -67,6 +69,7 @@ def draw(ctx: Any) -> None:
 def _details_tab(ctx: Any, job: Any) -> None:
     _settings(ctx, job)
     _reference(ctx, job)
+    _pixel(ctx, job)
     _seam(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)
@@ -304,6 +307,107 @@ def _seam(ctx: Any, job: Any) -> None:
     imgui.image(widgets.texture_ref(texture), (THUMB_SIZE * 2, THUMB_SIZE * 2))
 
 
+def pixel_provenance(manifest: Any, name: str) -> str | None:
+    """What actually cut the pixel artifact on disk, or None without an entry.
+
+    Read off the manifest rather than off the knob, because the two can
+    disagree -- switching sizes shows a file derived under an older palette
+    setting -- and the line exists to say what the file *is*. Pure for the
+    reason seam_verdict is: the wording is assertable without a GL context.
+    """
+    if not isinstance(manifest, dict):
+        return None
+    entry = (manifest.get("artifacts") or {}).get(name)
+    if not isinstance(entry, dict):
+        return None
+    size = svc_files.PIXEL_ARTIFACTS.get(name)
+    palette = entry.get("palette")
+    colours = f"{palette} colours" if palette else "full colour"
+    return f"{size} px - {colours}"
+
+
+def pixel_scale(size: tuple[int, int], avail: int) -> int:
+    """The integer factor a pixel artifact is drawn at.
+
+    A whole multiple or nothing: a fractional factor samples some source
+    pixels twice and others once, which reads as banding -- the thing NEAREST
+    sampling exists to avoid.
+    """
+    return max(1, avail // max(size[0], size[1], 1))
+
+
+def _pixel(ctx: Any, job: Any) -> None:
+    """The pixel-art cutout as it will actually export, crisp on screen.
+
+    The knob is derive-time state, not a job param: input.png stays at full
+    resolution (a promotion feeds trellis the same pixels it always did) and
+    changing it re-derives the artifact, exactly as a hand edit does. The
+    re-derive goes through ``derive.get_file`` under its own ``derive:`` key
+    and reports busy on either key, so this preview, its spinner and the
+    export button can never describe different files -- while the "Saved to"
+    toast the app hangs off every ``save:`` key stays with the one control
+    that actually opens a dialog.
+    """
+    if job.get("stage") != "reference" or job.get("status") != "done":
+        return
+    if "input.png" not in set(job.get("files") or []):
+        return
+    if not widgets.header("Pixel art", default_open=False):
+        return
+    job_id = job["id"]
+    size, colors = pixel_prefs(ctx.settings)
+
+    sizes = sorted(svc_files.PIXEL_ARTIFACTS.values())
+    chosen = int(widgets.labeled_combo("Size", str(size), [(str(s), f"{s} px") for s in sizes]))
+    if chosen != size:
+        ctx.settings.set("pixel_size", chosen)
+    # The name is always one of the three literals: ``chosen`` comes from
+    # PIXEL_ARTIFACTS itself, so the MEDIA allowlist property holds.
+    name = f"pixel_{chosen}.png"
+    key = derive_key(job_id, name)
+
+    picked = int(
+        widgets.labeled_combo(
+            "Colours",
+            str(colors),
+            [(str(n), "Off" if n == 0 else f"{n} colours") for n in svc_files.PIXEL_COLOR_CHOICES],
+        )
+    )
+    if picked != colors:
+        ctx.settings.set("pixel_colors", picked)
+        colors = picked
+        # Re-derive the size on screen straight away; the other sizes catch up
+        # when they are next asked for, which is what _pixel_current is for.
+        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+
+    if ctx.textures is None:
+        return
+    busy = ctx.artifact_busy(job_id, name)
+    texture = ctx.textures.get(f"{job_id}:{name}", ctx.job_dir(job_id) / name, nearest=True)
+    if texture is None:
+        if busy:
+            widgets.spinner()
+            imgui.same_line()
+        if widgets.disabled_button("Preview pixels", not busy):
+            ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+        return
+    factor = pixel_scale(texture.size, THUMB_SIZE * 2)
+    imgui.image(widgets.texture_ref(texture), (texture.size[0] * factor, texture.size[1] * factor))
+    if busy:
+        widgets.spinner()
+        return
+    manifest = _manifest(ctx, job_id)
+    line = pixel_provenance(manifest, name)
+    if line:
+        widgets.muted(line)
+    entry = ((manifest or {}).get("artifacts") or {}).get(name)
+    stale = isinstance(entry, dict) and entry.get("palette") != (colors or None)
+    # The file on screen was cut under a different palette setting -- switching
+    # sizes surfaces one derived before the knob changed.
+    if stale and imgui.button("Rebuild with these colours"):
+        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+
+
 def _quality(ctx: Any, job: Any) -> None:
     params = job.get("params") or {}
     report = params.get("mesh_report")
@@ -367,9 +471,9 @@ def record_verdict(ctx: Any, job_id: str, verdict: str, reasons: tuple[str, ...]
     store's lock. The recompute that follows reads every verdict and writes a
     file, so it is a task.
     """
-    from ...service import findings as svc_findings
     from ...service import verdicts as svc_verdicts
     from ...service.errors import ServiceError
+    from .. import review_mode
 
     try:
         svc_verdicts.record_verdict(ctx.svc, job_id, verdict=verdict, reasons=reasons)
@@ -377,7 +481,9 @@ def record_verdict(ctx: Any, job_id: str, verdict: str, reasons: tuple[str, ...]
         ctx.toast("Could not record that verdict.", "error")
         return False
     arm_verdict(ctx.state, None)
-    ctx.submit("review-findings", svc_findings.refresh, ctx.svc)
+    # Through Review's own request, not a second submit under a copy of its
+    # key: two spellings of one task key are two things to keep in step.
+    review_mode.refresh_findings(ctx)
     ctx.toast(f"Recorded: {verdict}.")
     return True
 
@@ -428,8 +534,9 @@ def _downloads(ctx: Any, job: Any) -> None:
         # to re-enable buttons the service would then refuse.
         ready = name in files
         blocked = _why_blocked(ctx, job, name, ready, _derivable(job, files, name))
-        key = f"save:{job_id}:{name}"
-        busy = ctx.busy(key)
+        # Either key: the pixel panel can have a derivation of this very name
+        # in flight, and it takes the same per-artifact lock this button would.
+        busy = ctx.artifact_busy(job_id, name)
         imgui.table_next_column()
         if busy:
             widgets.spinner()

@@ -12,9 +12,15 @@ from warlock.service.sweeps import Axis, SweepPlan
 
 
 def _plan(**kwargs) -> SweepPlan:
-    base = {"label": "lora", "prompt": "a wooden chest", "seeds": (1, 2)}
-    base.update(kwargs)
-    return SweepPlan(**base)
+    fields = {"label": "lora", "prompt": "a wooden chest", "seeds": (1, 2)}
+    fields.update(kwargs)
+    # A style LoRA in the base unless the caller set one, because most of these
+    # sweep ``lora_weight`` and ``guidance.normalize`` drops a weight with no
+    # LoRA to weight -- so without it every unit would normalize to the same
+    # job, which admission now refuses (and which was previously N identical
+    # GPU runs).
+    fields["base"] = {"style_lora": "render3d", **dict(fields.get("base") or {})}
+    return SweepPlan(**fields)
 
 
 def test_expansion_is_baseline_plus_every_differing_axis_value_per_seed():
@@ -98,7 +104,7 @@ def test_each_param_is_routed_to_the_tier_create_job_expects():
         base={"genre": "fantasy", "lora_weight": 0.9, "trellis_band": 8},
     )
     kwargs = svc_sweeps.unit_kwargs(plan, svc_sweeps.expand(plan)[0])
-    assert kwargs["guidance_fields"] == {"genre": "fantasy"}
+    assert kwargs["guidance_fields"] == {"genre": "fantasy", "style_lora": "render3d"}
     assert kwargs["lora_weight"] == 0.9
     assert kwargs["trellis_band"] == 8
     assert kwargs["seed"] == 7
@@ -195,6 +201,82 @@ def test_deleting_a_sweep_removes_its_jobs_and_keeps_its_verdicts(svc):
 
     with pytest.raises(NotFound):
         svc_sweeps.delete_sweep(svc, result["id"])
+
+
+def test_an_axis_that_changes_nothing_is_refused_rather_than_run_n_times(svc):
+    """The regression: ``expand`` compares each unit against the *base* only,
+    and ``guidance.normalize`` drops a scale with nothing to scale -- so an
+    ip_scale sweep with no adapter in the base produced baseline plus N units
+    with byte-identical params at the same seed. Up to MAX_UNITS runs of one
+    picture, and N bogus "distinct configs" in the verdict corpus."""
+    plan = _plan(seeds=(1,), axes=(Axis("ip_scale", (0.4, 0.6, 0.8)),))
+
+    with pytest.raises(Invalid) as caught:
+        svc_sweeps.create_sweep(svc, plan)
+
+    assert "same job" in str(caught.value)
+    assert svc_sweeps.list_sweeps(svc) == []
+
+
+def test_the_same_axis_is_fine_once_its_adapter_is_set(svc):
+    """Not a rule about ip_scale: it is a rule about units that submit the same
+    job. With something for the scale to apply to, the units differ."""
+    plan = _plan(
+        seeds=(1,),
+        base={"lora_weight": 0.6},
+        axes=(Axis("lora_weight", (0.4, 0.8)),),
+    )
+
+    result = svc_sweeps.create_sweep(svc, plan)
+
+    assert len(svc.store.sweep_jobs(result["id"])) == 3  # baseline + two values
+
+
+class _FakeWorker:
+    """Enough of ``Worker`` for the delete guards: which job it is inside, and
+    a cancel that can be awaited."""
+
+    def __init__(self, current_job_id: str | None) -> None:
+        self.current_job_id = current_job_id
+        self.cancelled: list[str] = []
+
+    async def request_cancel(self, job_id: str) -> None:
+        self.cancelled.append(job_id)
+
+
+def test_a_unit_the_worker_is_inside_is_cancelled_but_left_on_disk(svc):
+    """The regression: ``delete_sweep`` called the unguarded ``store.delete``
+    and then rmtree'd, where ``delete_job`` and ``prune_jobs`` both go through
+    ``delete_if_not_running``. A status check would not have been enough either
+    -- ``cancel_job`` writes ``cancelled`` and only *asks* the worker to stop,
+    so the row said the job was over while the run was still writing, and the
+    directory came back as an orphan nothing owned."""
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    busy = units[0]["id"]
+    svc.store.set_status(busy, "running")
+    # Stand in for the live reconstruction's output directory.
+    svc.job_dir(busy).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(busy) / "source.glb").write_bytes(b"partial")
+    svc.worker = _FakeWorker(busy)
+
+    outcome = svc_sweeps.delete_sweep(svc, result["id"])
+
+    assert outcome["remaining"] == 1
+    assert outcome["deleted"] == len(units) - 1
+    assert svc.store.get(busy) is not None
+    assert svc.job_dir(busy).exists(), "its directory is still being written to"
+    # And the sweep row survives, because it is what the second press deletes.
+    assert [s["id"] for s in svc_sweeps.list_sweeps(svc)] == [result["id"]]
+
+    # A moment later the worker has unwound, and the second press finishes it.
+    svc.worker = _FakeWorker(None)
+    again = svc_sweeps.delete_sweep(svc, result["id"])
+
+    assert (again["deleted"], again["remaining"]) == (1, 0)
+    assert svc_sweeps.list_sweeps(svc) == []
+    assert svc.store.get(busy) is None
 
 
 def test_sweep_units_are_hidden_from_the_library(svc):

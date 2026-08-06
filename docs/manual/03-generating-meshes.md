@@ -161,5 +161,9 @@ A button you cannot press keeps its place and explains itself in a tooltip: "nee
 without Blender installed, "not available for this asset" for a mesh export on a plain reference
 job. A missing button would be a mystery; a disabled one with a reason is information.
 
+This table is the *mesh* half. A finished reference has its own Export tab offering the cutouts,
+the pixel-art reductions and the manifest — see
+[2D exports](02-generating-references.md#2d-exports).
+
 For bulk export of several assets at once, and for the storage those files occupy, see
 [The library and jobs](08-library-and-jobs.md#storage-and-pruning).

@@ -333,6 +333,83 @@ def test_no_config_note_when_the_weights_are_installed(monkeypatch):
     assert _lines(monkeypatch, inspector._matte_note, _MatteCtx(), None) == []
 
 
+# -- the pixel-art preview's pure halves -----------------------------------
+
+
+def test_pixel_provenance_reads_the_palette_off_the_manifest():
+    manifest = {"artifacts": {"pixel_32.png": {"palette": 16}}}
+    assert inspector.pixel_provenance(manifest, "pixel_32.png") == "32 px - 16 colours"
+
+
+def test_pixel_provenance_calls_an_uncapped_artifact_full_colour():
+    manifest = {"artifacts": {"pixel_64.png": {"palette": None}}}
+    assert inspector.pixel_provenance(manifest, "pixel_64.png") == "64 px - full colour"
+
+
+def test_pixel_provenance_is_none_without_an_entry():
+    assert inspector.pixel_provenance(None, "pixel_64.png") is None
+    assert inspector.pixel_provenance({"artifacts": {}}, "pixel_64.png") is None
+    assert inspector.pixel_provenance({"artifacts": {"pixel_64.png": "junk"}}, "pixel_64.png") is (
+        None
+    )
+
+
+def test_pixel_scale_is_a_whole_multiple_and_at_least_one():
+    # Integer scaling is what keeps NEAREST crisp: a fractional factor samples
+    # some source pixels twice and others once, which reads as banding.
+    assert inspector.pixel_scale((32, 32), 192) == 6
+    assert inspector.pixel_scale((96, 64), 192) == 2
+    assert inspector.pixel_scale((256, 256), 192) == 1
+
+
+class _Prefs:
+    def __init__(self, values):
+        self._values = values
+
+    def get(self, key):
+        return self._values.get(key)
+
+
+def test_a_preview_derivation_never_claims_the_save_key():
+    """The regression: the pixel panel submitted ``derive.get_file`` under
+    ``save:<job>:<name>``, and the app toasts "Saved to <result>" for every
+    finished ``save:`` key. ``get_file`` returns the path *inside* the job
+    directory and is never None, so pressing "Preview pixels" told the user a
+    file had been saved to a path they never chose, with no dialog shown.
+    """
+    from warlock.studio import app_ctx
+
+    assert app_ctx.save_key("abc123abc123", "pixel_32.png").startswith("save:")
+    assert not app_ctx.derive_key("abc123abc123", "pixel_32.png").startswith("save:")
+
+
+def test_an_artifact_is_busy_under_either_of_its_two_keys():
+    """Separate keys, one answer: a preview and an export of one name run the
+    same ``get_file`` under the same per-artifact lock, so a control watching
+    only its own key would offer a button that then blocked invisibly."""
+    from warlock.studio import app_ctx
+
+    busy: set[str] = set()
+    ctx = types.SimpleNamespace(busy=lambda key: key in busy)
+    ctx.artifact_busy = types.MethodType(app_ctx.Ctx.artifact_busy, ctx)
+
+    assert ctx.artifact_busy("abc123abc123", "pixel_32.png") is False
+    busy.add(app_ctx.derive_key("abc123abc123", "pixel_32.png"))
+    assert ctx.artifact_busy("abc123abc123", "pixel_32.png") is True
+    busy.clear()
+    busy.add(app_ctx.save_key("abc123abc123", "pixel_32.png"))
+    assert ctx.artifact_busy("abc123abc123", "pixel_32.png") is True
+
+
+def test_pixel_prefs_defaults_and_survives_a_hand_mangled_settings_file():
+    # The settings JSON is user-editable, and the pane runs on the frame
+    # thread: a bad value must coerce to the default, never raise.
+    assert inspector.pixel_prefs(_Prefs({})) == (128, 0)
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": 64, "pixel_colors": 16})) == (64, 16)
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": "wide", "pixel_colors": "many"})) == (128, 0)
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": 48, "pixel_colors": 7})) == (128, 0)
+
+
 # -- why a button is disabled ----------------------------------------------
 
 

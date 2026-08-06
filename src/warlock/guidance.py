@@ -90,6 +90,14 @@ ART_STYLES = _table(
         "hand-painted texture style, painterly brushwork, baked lighting",
     ),
     Option("toon", "Toon", "cel-shaded toon look, clean flat colours, crisp outlines"),
+    # Deliberately no literal "pixel art" token: at 512/1024 SDXL renders fake
+    # chunky pixels that alias under the real NEAREST downscale in
+    # asset2d.pixel, and the same reference feeds trellis on promotion. What
+    # survives downscaling is flat shading and a bold silhouette.
+    Option(
+        "pixelart", "Pixel art",
+        "flat colour shading, bold readable silhouette, clean dark outlines",
+    ),
 )
 
 CATEGORIES = _table(

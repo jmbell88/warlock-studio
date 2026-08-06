@@ -280,8 +280,35 @@ def test_accept_writes_one_verdict_and_advances(ctx, svc):
     recorded = svc.store.latest_verdicts()
     assert [(r["job_id"], r["verdict"]) for r in recorded] == [(ids[0], "accept")]
     assert state.index == 1
-    # And the findings recompute is a task, not frame-thread work.
+    # And the findings recompute is asked for rather than done here: it reads
+    # every verdict and writes a file, neither of which belongs on the frame
+    # thread. ``pump_findings`` is what turns the request into the task.
+    assert ctx.state.findings_dirty is True
+    assert review_mode.FINDINGS_KEY not in ctx.submitted
+
+    review_mode.pump_findings(ctx)
+
     assert review_mode.FINDINGS_KEY in ctx.submitted
+    assert ctx.state.findings_dirty is False
+
+
+def test_a_burst_of_verdicts_is_not_swallowed_by_the_one_in_flight(ctx, svc):
+    """The regression: ``submit`` refuses a key already in flight and nothing
+    re-armed, so five presses in a second recomputed over the set as it stood
+    at the first and dropped the rest until the *next* verdict."""
+    sweep_id, _ = _sweep(svc)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    ctx.accept = False  # stand in for "a recompute is already running"
+    review_mode.record(ctx, "accept")
+    review_mode.pump_findings(ctx)
+    assert ctx.state.findings_dirty is True
+
+    ctx.accept = True
+    review_mode.pump_findings(ctx)
+    assert ctx.state.findings_dirty is False
+    assert ctx.submitted.count(review_mode.FINDINGS_KEY) == 2
 
 
 def test_a_verdict_carries_the_jobs_config_vector(ctx, svc):

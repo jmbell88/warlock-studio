@@ -9,6 +9,7 @@ window -- has to ask first.
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import Any
 
 from imgui_bundle import imgui
@@ -16,6 +17,8 @@ from imgui_bundle import imgui
 from ...service import rig as svc_rig
 from .. import dialogs, theme, widgets
 from ..manual import render as manual_render
+
+log = logging.getLogger(__name__)
 
 
 def draw(ctx: Any, job: Any) -> None:
@@ -48,6 +51,9 @@ def draw(ctx: Any, job: Any) -> None:
             _enter(ctx, job)
         _saved_list(ctx, job)
         return
+    if not _is_bound_job(viewer, job):
+        _elsewhere(ctx, viewer)
+        return
 
     _banner(ctx, viewer)
     if viewer.editor.mode == "joints":
@@ -60,6 +66,41 @@ def draw(ctx: Any, job: Any) -> None:
 # --- entering and leaving ---------------------------------------------------
 
 
+def _is_bound_job(viewer: Any, job: Any) -> bool:
+    """Whether this panel is looking at the asset the editor is editing.
+
+    A bound id of ``None`` means an editor opened by something that did not say
+    whose rig it was; treated as "this one", which is the pre-binding behaviour
+    and the only answer that keeps a test double working.
+    """
+    bound = getattr(viewer, "pose_job_id", None)
+    return bound is None or bound == job.get("id")
+
+
+def _elsewhere(ctx: Any, viewer: Any) -> None:
+    """The editor is open on a different asset than the one selected.
+
+    Reachable because ``_sync_viewer`` deliberately does not reload the viewer
+    while posing -- so clicking another asset in the library leaves this rig on
+    screen under that asset's inspector. Every control is withheld rather than
+    retargeted: Save wrote the rotations on screen into the *selected* job's
+    pose directory, and joints mode re-skinned it against a skeleton fitted to
+    something else, neither of which rig validation could catch (it checks bone
+    names, and two jobs on one template have the same ones).
+    """
+    widgets.text_colored(theme.ACCENT, "Pose editing - another asset")
+    widgets.muted(
+        "The pose editor is open on the asset in the viewport, not this one. "
+        "Select it again to carry on, or leave the editor."
+    )
+    if imgui.button("Leave pose mode"):
+        guard(ctx, "leave edit mode", lambda: leave(ctx))
+    imgui.same_line()
+    if imgui.button("Show the asset being posed"):
+        # No guard: nothing is discarded by looking at the rig again.
+        ctx.state.select(viewer.pose_job_id)
+
+
 def _enter(ctx: Any, job: Any) -> None:
     """Load the rig into the viewer and bind the editor to it."""
     job_id = job["id"]
@@ -70,6 +111,10 @@ def _enter(ctx: Any, job: Any) -> None:
     try:
         ctx.viewer.load_model(rig_path)
     except Exception:
+        # Logged as well as toasted: a rig GLB that will not open is a real
+        # failure with a real traceback, and every comparable site in the app
+        # writes one. Without it the only trace was a four-word toast.
+        log.exception("could not open the rig for job %s", job_id)
         ctx.toast("Could not open the rig.", "error")
         return
     rig = None
@@ -77,7 +122,7 @@ def _enter(ctx: Any, job: Any) -> None:
     # the joint editor need what it carries, and both hide themselves without it.
     with contextlib.suppress(Exception):
         rig = svc_rig.get_rig(ctx.svc, job_id)
-    if not ctx.viewer.enter_pose_mode(rig):
+    if not ctx.viewer.enter_pose_mode(rig, job_id):
         ctx.toast("That GLB carries no skeleton.", "error")
         return
     # The preset library follows the rig's skeleton, so it is fetched here

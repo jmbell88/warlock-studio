@@ -209,25 +209,57 @@ def delete(ctx: Any, sweep_id: str) -> bool:
 
 
 def refresh_findings(ctx: Any) -> None:
-    """Recompute findings.json after a verdict, off the frame thread.
+    """Ask for findings.json to be recomputed. Cheap, and safe to spam.
 
-    Fire-and-forget: the panes read the file through an mtime cache, so a
-    refresh that is refused because one is already in flight simply means the
-    next verdict's refresh picks up both.
+    Marks rather than submits, and the two halves are `pump_findings` below.
+    The old version submitted straight away and treated a refusal as harmless
+    on the grounds that "the next verdict's refresh picks up both" -- which is
+    only true while a *verdict* is the sole trigger. It is not: the worker
+    appends an observation on every finished model job, and the request that
+    matters most is the one following the last unit of a sweep, with nothing
+    after it to pick anything up.
+    """
+    ctx.state.findings_dirty = True
+
+
+def pump_findings(ctx: Any) -> None:
+    """Submit the pending recompute if there is one and nothing is in flight.
+
+    Called every frame from the app's refresh step. The flag is cleared only
+    when the submit is *accepted*, so a request arriving while a recompute runs
+    survives to the next frame rather than being dropped -- and because the
+    recompute reads the DB when it starts, one pass absorbs however many
+    requests piled up behind it.
     """
     from ..service import findings as findings_mod
 
-    ctx.submit(FINDINGS_KEY, findings_mod.refresh, ctx.svc)
+    if not ctx.state.findings_dirty:
+        return
+    if ctx.submit(FINDINGS_KEY, findings_mod.refresh, ctx.svc):
+        ctx.state.findings_dirty = False
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
     if done.key == DELETE_KEY:
-        removed = 0
+        removed = remaining = 0
         if isinstance(done.result, dict):
             removed = int(done.result.get("deleted") or 0)
-        ctx.toast(f"Deleted {removed} job(s). Verdicts and findings kept.")
+            remaining = int(done.result.get("remaining") or 0)
+        if remaining:
+            # A unit the worker is still inside is cancelled but not deleted --
+            # its directory is being written to. Say so and say what to do,
+            # rather than reporting a deletion that did not happen.
+            # Plain info: the toast vocabulary is info|error (widgets.py reads
+            # nothing else), and a partial delete is neither a failure nor a
+            # surprise -- it is what cancelling something mid-run looks like.
+            ctx.toast(
+                f"Deleted {removed} job(s); {remaining} still finishing. "
+                "Delete again in a moment."
+            )
+        else:
+            ctx.toast(f"Deleted {removed} job(s). Verdicts and findings kept.")
         # The counts are now wrong and the viewer may be showing a mesh that no
         # longer exists -- both are fixed by the rescan.
         if state.sweep_id is not None and state.sweep_id != RECENT_ID:
@@ -507,6 +539,11 @@ def preview_units(state: ReviewState) -> int:
     try:
         return len(sweeps_mod.expand(build_plan(state)))
     except Exception:
+        # -1 is "cannot be planned yet", which a half-filled form legitimately
+        # is -- but a *bug* in expand reads the same on screen, so it is logged
+        # at debug rather than dropped: this runs every frame the form is open,
+        # and an exception level would fill the log with the ordinary case.
+        log.debug("could not plan the sweep preview", exc_info=True)
         return -1
 
 

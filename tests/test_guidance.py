@@ -74,6 +74,17 @@ def test_compose_prompt_orders_fragments_after_the_user_text():
     assert positions == sorted(positions)
 
 
+def test_pixelart_style_normalizes_and_composes():
+    params = guidance.normalize({"art_style": "pixelart"})
+    assert params["art_style"] == "pixelart"
+    composed = guidance.compose_prompt("a knight", params)
+    assert guidance.ART_STYLES["pixelart"].prompt in composed
+    # The soft ceiling on guidance fragments: 2-4 words each, or the extra
+    # tokens dilute cross-attention rather than steering it.
+    for fragment in guidance.ART_STYLES["pixelart"].prompt.split(","):
+        assert len(fragment.split()) <= 4
+
+
 def test_compose_prompt_with_no_guidance_is_just_the_prompt():
     assert guidance.compose_prompt("  a barrel  ", {}) == "a barrel"
 

@@ -178,6 +178,94 @@ def test_a_db_without_metadata_columns_gains_them(tmp_path):
         store.close()
 
 
+def test_a_v4_db_gains_verdict_context_and_the_observations_table(tmp_path):
+    """Migration 5 is additive over a v4 database: the four context columns
+    land on ``verdicts`` defaulted to "not part of a sweep", the observations
+    table appears, and existing verdict rows survive untouched."""
+    path = tmp_path / "v4.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL,
+            prompt TEXT, params TEXT NOT NULL DEFAULT '{}', error TEXT,
+            created_at REAL NOT NULL, started_at REAL, finished_at REAL,
+            stage TEXT NOT NULL DEFAULT 'model', parent_id TEXT,
+            name TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
+            favorite INTEGER NOT NULL DEFAULT 0,
+            sweep_id TEXT, sweep_unit TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE sweeps (
+            id TEXT PRIMARY KEY, label TEXT NOT NULL DEFAULT '',
+            prompt TEXT NOT NULL DEFAULT '', spec TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL
+        );
+        CREATE TABLE verdicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL,
+            source TEXT NOT NULL, verdict TEXT NOT NULL,
+            reasons TEXT NOT NULL DEFAULT '[]', vector TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO verdicts (job_id, source, verdict, reasons, vector, created_at)"
+        " VALUES ('aaaaaaaaaaaa', 'human', 'accept', '[]', '{\"platform\": \"pc\"}', 1.0)"
+    )
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    store = JobStore(path)
+    try:
+        record = store.latest_verdicts()[0]
+        assert record["vector"] == {"platform": "pc"}
+        assert record["sweep_id"] is None
+        assert record["sweep_unit"] == ""
+        assert record["seed"] is None
+        assert record["prompt_hash"] == ""
+        # The new table is usable, not merely present.
+        store.add_observation(
+            "aaaaaaaaaaaa", sweep_id=None, sweep_unit="", seed=7,
+            prompt_hash="", vector={"platform": "pc"}, metrics={"hole_worst": 0.1},
+        )
+        assert store.latest_observations()[0]["metrics"] == {"hole_worst": 0.1}
+    finally:
+        store.close()
+
+    fresh_path = tmp_path / "fresh.sqlite"
+    fresh = JobStore(fresh_path)
+    fresh.close()
+
+    def shape(p):
+        c = sqlite3.connect(p)
+        info = {
+            table: c.execute(f"PRAGMA table_info({table})").fetchall()
+            for table in ("jobs", "sweeps", "verdicts", "observations")
+        }
+        version = c.execute("PRAGMA user_version").fetchone()[0]
+        indexes = {
+            r[0]
+            for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+                " AND name LIKE 'idx_observations%'"
+            )
+        }
+        c.close()
+        return info, version, indexes
+
+    migrated_shape, migrated_version, migrated_indexes = shape(path)
+    fresh_shape, fresh_version, fresh_indexes = shape(fresh_path)
+    assert migrated_shape == fresh_shape
+    assert migrated_version == fresh_version == len(MIGRATIONS)
+    # job_id only: it is the column the one read of the table groups by. There
+    # is deliberately no index on sweep_id -- nothing queries observations by
+    # sweep (the grouping happens in findings._comparisons, in Python, over the
+    # whole set), so it would be a B-tree maintained on every insert to answer
+    # a question nobody asks.
+    assert migrated_indexes == fresh_indexes == {"idx_observations_job"}
+
+
 def test_a_v3_db_gains_the_sweep_columns_and_the_new_tables(tmp_path):
     """Migration 4 is additive over a v3 database: the two sweep columns land
     on ``jobs`` defaulted to "not part of a sweep", and the sweeps/verdicts

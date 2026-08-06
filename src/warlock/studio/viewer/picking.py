@@ -23,8 +23,6 @@ import math
 
 import numpy as np
 
-from . import math3d as m3
-
 
 def ray_sphere(
     origin: np.ndarray, direction: np.ndarray, centre: np.ndarray, radius: float
@@ -285,16 +283,6 @@ def marker_radius(bounding_radius: float) -> float:
     return bounding_radius * 0.022
 
 
-def world_positions(model, bones: list[str]) -> dict[str, np.ndarray]:
-    """Where each named joint currently is, in the model's own space."""
-    out: dict[str, np.ndarray] = {}
-    for name in bones:
-        index = model.by_name.get(name)
-        if index is not None:
-            out[name] = model.nodes[index].world[:3, 3].copy()
-    return out
-
-
 def to_world(placement: np.ndarray, point: np.ndarray) -> np.ndarray:
     """Model space -> world, for a point. The placement transform is the
     centre-and-ground the viewer applies on top of the GLB's own."""
@@ -321,7 +309,3 @@ def signed_angle(a: np.ndarray, b: np.ndarray, axis: np.ndarray) -> float:
     a, b = a / na, b / nb
     return math.atan2(float(np.dot(np.cross(a, b), axis)), float(np.dot(a, b)))
 
-
-def rotation_between(a: np.ndarray, b: np.ndarray, axis: np.ndarray) -> np.ndarray:
-    """The quaternion for :func:`signed_angle`."""
-    return m3.quat_from_axis_angle(axis, signed_angle(a, b, axis))

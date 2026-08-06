@@ -449,6 +449,11 @@ def derived_2d_for(stage: str | None) -> tuple[str, ...]:
 # allowlist's sake; this is where they get their number back.
 PIXEL_ARTIFACTS = {"pixel_32.png": 32, "pixel_64.png": 64, "pixel_128.png": 128}
 
+# The palette caps a pixel artifact may be quantized to (0 = no cap). One
+# source for the service's validation and the inspector's combo, like
+# ALLOWED_RESOLUTIONS.
+PIXEL_COLOR_CHOICES = (0, 8, 16, 32, 64)
+
 # The order attach_files lists them in. Derived artifacts are deliberately
 # absent: they are produced on request, so listing them would claim a file that
 # usually isn't on disk.
@@ -546,5 +551,40 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
     return path.exists()
 
 
-def attach_files(job: dict[str, Any], job_dir: Path) -> None:
-    job["files"] = [n for n in LISTED if ready(job, job_dir, n)]
+def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = None) -> None:
+    """List which of ``LISTED`` this job actually has.
+
+    ``cache`` is an optional ``{job_id: (stamp, names)}`` the caller owns, and
+    it exists because this is the frame loop's single largest syscall cost:
+    ``LISTED`` is nine names and ``ready`` stats one or two files for each, so
+    a two-hundred row page costs upwards of two thousand ``stat`` calls -- twice
+    a second, on the thread that must not block, growing without limit as
+    "load more" widens the window.
+
+    The stamp is ``(status, the job directory's own mtime)``. Sound because
+    every name here is answered by *existence*: a file appearing or being
+    removed adds or removes a directory entry, which is exactly what moves a
+    directory's mtime -- and a status change is the other thing that can change
+    the answer (a queued job's ``model.glb`` is not servable). One stat per row
+    instead of ten. The names are copied out, because a caller that edits
+    ``job["files"]`` must not edit what the next tick will hand somebody else.
+    """
+    if cache is None:
+        job["files"] = [n for n in LISTED if ready(job, job_dir, n)]
+        return
+    try:
+        stamp: tuple[Any, int | None] = (job.get("status"), job_dir.stat().st_mtime_ns)
+    except OSError:
+        # No directory at all yet -- a text job has none until the worker
+        # writes into it. That is a perfectly good stamp of its own: the answer
+        # is "no files", and the moment a directory appears the stamp changes.
+        # Cached rather than fallen through, because a queued job is exactly
+        # the row that sits on screen being re-listed twice a second.
+        stamp = (job.get("status"), None)
+    hit = cache.get(job["id"])
+    if hit is not None and hit[0] == stamp:
+        job["files"] = list(hit[1])
+        return
+    names = [n for n in LISTED if ready(job, job_dir, n)]
+    cache[job["id"]] = (stamp, names)
+    job["files"] = list(names)

@@ -142,4 +142,10 @@ sections* re-opens every section that has been collapsed anywhere in the app.
 whose weights are missing, plus whether rigging is available. It is the same information the startup
 diagnostics report, in a place you can look at without opening the log. Weights are one-time manual
 downloads by design — see [Adding an image model](15-extending.md#adding-an-image-model) — so
-there is nothing to install from here. Model management is coming in a future update.
+there is nothing to install from here.
+
+Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
+saved profiles and settings presets, the pane sizes, and the pixel-art export preferences — the
+size and palette set in an asset's [Pixel art](02-generating-references.md#pixel-art) section, which
+are the app's preferences rather than any one job's and so apply to whichever asset you look at
+next.

@@ -31,6 +31,11 @@ WINDOW_TITLE = "Warlock Studio"
 # How often the frame loop samples host memory. Long enough to be free, short
 # enough that a 30-minute idle session yields 60 points to fit a slope through.
 MEMORY_TICK_SECONDS = 30.0
+# The task key the selection's GLB is parsed under. One key, so a selection
+# moving faster than the disk cannot pile up loads: a refused submit is simply
+# retried on the next tick, and a landed result is checked against
+# ``viewer.pending`` before it is adopted.
+VIEWER_KEY = "viewer-load"
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
 # Pane widths and the sidebar split now live in layout.Layout, persisted and
@@ -516,6 +521,9 @@ class App:
                 # cache invalidation above does not bring it back.
                 self._refresh_rig_side_data()
             return
+        if key == VIEWER_KEY:
+            self._adopt_model(done)
+            return
         if key.startswith("pose-"):
             if key.startswith("pose-save:") and self.viewer.pose_mode:
                 # Only now is the pose actually on disk. A failed save leaves
@@ -526,6 +534,7 @@ class App:
             ctx.cache.invalidate()
 
     def _refresh(self) -> None:
+        from . import review_mode
         from .jobs_cache import transition_message
 
         ctx = self.app_ctx
@@ -536,9 +545,23 @@ class App:
                 ctx.toast(*message)
             if job["status"] == "done":
                 self._request_storage()
+                # The worker has just appended an observation for this job
+                # (queue._observe_finished, same condition), and it has no way
+                # to ask for the recompute itself -- it runs on the asyncio
+                # thread and knows nothing about tasks or panes. This is the
+                # only place a finished generation is noticed, so it is where
+                # the machine half of the findings corpus enters the file:
+                # without it, evidence recorded on every run would reach
+                # findings.json only when somebody next filed a verdict.
+                if job.get("stage") == "model" and job.get("kind") in ("text", "image"):
+                    review_mode.refresh_findings(ctx)
 
         if ctx.cache.tick(announce):
             self._sync_viewer()
+        # Outside the tick: the request may have been made by a verdict on a
+        # frame the list did not re-read, and a refused submit has to be
+        # retried on some later frame rather than on the next list refresh.
+        review_mode.pump_findings(ctx)
         self._check_worker()
 
     def _check_worker(self) -> None:
@@ -581,8 +604,13 @@ class App:
         already loaded, which is right for a selection change and wrong after a
         retarget: model.glb was rewritten under the same name, so the file to
         reload is the one it is convinced is current.
+
+        ``pending`` is cleared for the same reason and one more: a parse of the
+        *pre*-retarget bytes may be in flight, and adopting it afterwards would
+        put the old mesh back. Clearing it makes that result unwanted.
         """
         self.viewer.path = None
+        self.viewer.pending = None
         self._sync_viewer()
 
     def _sync_viewer(self) -> None:
@@ -615,23 +643,58 @@ class App:
             wanted = job_dir / "model.glb"
         elif ctx.state.mode == "2d" and "input.png" in files:
             wanted = job_dir / "input.png"
-        if wanted is None or self.viewer.path == wanted:
+        if wanted is None or self.viewer.path == wanted or self.viewer.pending == wanted:
             return
-        try:
-            if wanted.suffix == ".png":
+        if wanted.suffix == ".png":
+            try:
                 self.viewer.clear()
                 self.viewer.load_reference(wanted)
                 self.viewer.path = wanted
-            else:
-                self.viewer.load_model(wanted)
-                # The thumbnail is free here: the model is loaded and framed,
-                # and a server-side render would need the serial GPU queue for
-                # something purely cosmetic.
-                if "thumb.png" not in files:
-                    ctx.capture_thumbnail(job["id"])
+            except Exception:
+                log.exception("could not open %s", wanted)
+                ctx.toast("Could not open that asset.", "error")
+            self._refresh_rig_side_data()
+            return
+        # A GLB is parsed off-thread and adopted when it lands. This runs on a
+        # *timer*, on the frame a job transitions to done -- which is when the
+        # file is largest and coldest -- so doing the parse and the texture
+        # decode here froze the frame that was meant to show the job finishing.
+        # The GPU upload stays on the frame thread; see ``_adopt_model``.
+        self.viewer.pending = wanted
+        if not ctx.submit(VIEWER_KEY, self.viewer.parse_model, wanted, tag=wanted):
+            # Another load is already in flight. Its result is checked against
+            # ``pending`` before it is adopted, so this one is simply retried
+            # on the next tick rather than queued.
+            self.viewer.pending = None
+
+    def _adopt_model(self, done: Any) -> None:
+        """Take a parsed GLB as the viewer's current model. Frame thread only.
+
+        The upload is what has to be here -- ``GpuModel`` creates buffers and
+        textures on the one GL context, and releasing the old one does too.
+
+        Checked against ``pending`` first: the selection can move while a parse
+        is in flight, and adopting a result nobody is waiting for any more
+        would put the previous asset back on screen.
+        """
+        ctx = self.app_ctx
+        wanted = done.tag
+        if wanted is None or self.viewer.pending != wanted:
+            self.viewer.pending = None
+            return
+        self.viewer.pending = None
+        try:
+            self.viewer.adopt_model(done.result, wanted)
         except Exception:
             log.exception("could not open %s", wanted)
             ctx.toast("Could not open that asset.", "error")
+            return
+        job = ctx.job()
+        # The thumbnail is free here: the model is loaded and framed, and a
+        # server-side render would need the serial GPU queue for something
+        # purely cosmetic.
+        if job is not None and "thumb.png" not in (job.get("files") or []):
+            ctx.capture_thumbnail(job["id"])
         self._refresh_rig_side_data()
 
     def _refresh_rig_side_data(self) -> None:
@@ -1579,10 +1642,12 @@ class App:
     def _review_findings(self, ctx: Any) -> None:
         """What the verdicts add up to, and the one-click way to reuse it.
 
-        A ranked config *vector* rather than a per-parameter marginal: the
-        marginals are confounded now (a verdict credits every setting in its
-        vector), and a whole configuration is the unconfounded answer -- as
-        well as being the thing a preset actually is.
+        Two answers, most conclusive first. Axis verdicts are matched pairs
+        recovered from sweep structure -- same prompt, same seed, one param
+        differing -- the only all-else-equal comparison in the pool. The
+        ranked vectors are whole configurations ordered by their Wilson lower
+        bound (the "floor" percentage), because the per-parameter marginals
+        are confounded and a raw rate lets a lucky 5/5 outrank a 19/20.
         """
         from imgui_bundle import imgui
 
@@ -1591,20 +1656,40 @@ class App:
         from . import dialogs, vector_presets, widgets
 
         doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
-        top = svc_findings.presets(doc or {})
         imgui.separator()
         if not widgets.header("What works", default_open=False):
             return
+        # Built after the header, not before it. ``load`` is mtime-cached but
+        # these are not: one line per contrast plus one per metric, formatted
+        # from scratch every frame, for a section that is closed by default.
+        top = svc_findings.presets(doc or {})
+        axis_lines = findings_lib.comparison_lines(doc)
+        if axis_lines:
+            widgets.muted("Axis verdicts (matched pairs, all else equal):")
+            for line in axis_lines:
+                if line.startswith("    "):
+                    widgets.muted(line)
+                else:
+                    imgui.text_wrapped(line)
+            imgui.separator()
         if not top:
             widgets.muted(
-                f"Nothing yet: a configuration needs {svc_findings.PRESET_MIN_N} "
-                "verdicts before it counts as a finding."
+                f"No whole configuration has {svc_findings.PRESET_MIN_N} "
+                "verdicts yet."
+                if axis_lines
+                else (
+                    f"Nothing yet: a configuration needs "
+                    f"{svc_findings.PRESET_MIN_N} verdicts to rank, and axis "
+                    "verdicts need matched pairs from sweeps sharing seeds."
+                )
             )
             return
         for entry in top[:5]:
-            rate = int(round(entry["accept_rate"] * 100))
             summary = vector_presets.describe(entry["vector"])
-            imgui.text_wrapped(f"{rate}% of {entry['n']}  -  {summary}")
+            imgui.text_wrapped(f"{findings_lib.vector_line(entry)}  -  {summary}")
+            measured = findings_lib.metrics_line(entry.get("metrics"))
+            if measured:
+                widgets.muted(measured)
             vector = entry["vector"]
             if widgets.disabled_button(f"Apply to forms##apply-{entry['key']}", True):
                 vector_presets.apply(ctx.state, vector)
@@ -1627,6 +1712,10 @@ class App:
 
         if vector_presets.save_preset(ctx.settings, name, vector):
             ctx.toast(f"Saved the preset {name}.")
+            return
+        # A name that is empty or only spaces is the one refusal, and it used to
+        # be silent: the modal closed and nothing was saved or said.
+        ctx.toast("A preset needs a name.", "error")
 
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.

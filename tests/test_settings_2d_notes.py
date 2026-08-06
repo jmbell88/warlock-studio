@@ -55,3 +55,33 @@ def test_the_structure_note_names_the_bases_that_can_run_one():
     assert note is not None
     for key in models.controlnet_bases():
         assert models.BASE_MODELS[key].label in note
+
+
+# --- where the evidence is shown ---------------------------------------------
+
+
+def test_every_mesh_setting_that_evidence_exists_for_shows_it():
+    """The 3D pane hinted one control out of five, which put the evidence
+    furthest from where it applies: an observation measures *geometry*, so the
+    settings it speaks about most directly are exactly this pane's. A source
+    scan rather than a rendered frame, for the reason the rest of this file is
+    pure -- the wording is assertable, the layout is not.
+
+    ``size_m`` is the deliberate omission: it is continuous, so "0.35" and
+    "0.36" are separate buckets and the five-verdict threshold would never be
+    met. ``custom_triangles`` is the same. Everything else the form submits and
+    ``VECTOR_PARAMS`` names must carry a hint.
+    """
+    import re
+    from pathlib import Path
+
+    from warlock import vectors
+    from warlock.studio.panes import settings_3d
+
+    source = Path(settings_3d.__file__).read_text(encoding="utf-8")
+    hinted = set(re.findall(r'_hint\(ctx, "(\w+)"', source))
+    owned = {"platform", "profile", "size_m", "bg_removal", "reference_prep",
+             "custom_triangles"}
+
+    assert owned <= set(vectors.VECTOR_PARAMS), "the form and the vocabulary must agree"
+    assert hinted == owned - {"size_m", "custom_triangles"}

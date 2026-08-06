@@ -36,6 +36,7 @@ mis-ordered sweep costs restarts, never a wrong config.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from dataclasses import dataclass, field
@@ -75,6 +76,22 @@ KWARG_AXES = (
     "size_m",
     "trellis_band",
     "trellis_tex_res",
+)
+
+# Which of the above ``guidance.normalize`` is handed, and whose output is
+# therefore authoritative for them -- including when it *drops* one, which is
+# what it does to a scale whose adapter was never selected. Kept beside
+# KWARG_AXES so the two are read together: an axis added to one and not the
+# other is a unit whose identity is computed from a value the job never keeps.
+NORMALIZED_KWARGS = (
+    "size_m",
+    "resolution",
+    "lora_weight",
+    "ip_scale",
+    "control_scale",
+    "control_end",
+    "bg_removal",
+    "negative_prompt",
 )
 
 # The two that decide how trellis-server is launched, and therefore the two
@@ -205,10 +222,15 @@ def unit_label(unit: UnitPlan) -> str:
 # --- admission ---------------------------------------------------------------
 
 
-def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
+def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
     """Everything ``create_job`` would refuse, refused before anything is
     written. Mirrors create_job's own order so the two cannot drift into
-    disagreeing about which unit is admissible."""
+    disagreeing about which unit is admissible.
+
+    -> a canonical key for the job this unit would actually submit, so
+    ``_validate`` can tell two units apart by what they *do* rather than by
+    what they were labelled.
+    """
     kwargs = unit_kwargs(plan, unit)
     check_seed("seed", kwargs["seed"])
     check_trellis_band(kwargs.get("trellis_band"))
@@ -248,6 +270,13 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
         # binary never applied poisons the verdict corpus.
         jobs_mod._resolve_profile(svc, {}, kwargs["profile"], kwargs.get("custom_triangles"))
     check_vram(svc, "text", plan.stage, params)
+    # What this unit would actually submit: ``normalize``'s output for
+    # everything it was handed -- so a setting it *dropped* is absent here too,
+    # which is the whole point -- plus the kwargs it never saw, plus the seed.
+    rest = {k: kwargs[k] for k in KWARG_AXES if k in kwargs and k not in NORMALIZED_KWARGS}
+    return json.dumps(
+        {**params, **rest, "seed": kwargs["seed"]}, sort_keys=True, default=str
+    )
 
 
 def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> None:
@@ -266,13 +295,30 @@ def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> No
         raise Invalid("that sweep plans no units; add an axis value that differs")
     if len(units) > MAX_UNITS:
         raise Invalid(f"that sweep plans {len(units)} units; the limit is {MAX_UNITS}")
+    # Two units that submit the same job are refused, not silently run twice.
+    # ``expand`` compares each unit against the *base* and nothing else, while
+    # guidance.normalize drops a setting with nothing to apply it to -- an
+    # ip_scale or control_scale axis with no adapter selected is the case, and
+    # it produced up to MAX_UNITS byte-identical jobs at the same seed. That is
+    # hours of GPU redrawing one picture, and N bogus "distinct configs" in the
+    # verdict corpus, from a sweep that looked like it was measuring something.
+    seen: dict[str, str] = {}
     for unit in units:
         try:
-            _check_unit(svc, plan, unit)
+            key = _check_unit(svc, plan, unit)
         except Invalid as exc:
             # Named, because "one of your twelve units is bad" is not something
             # anyone can act on.
             raise Invalid(f"{unit_label(unit)}: {exc}", field=exc.field) from exc
+        first = seen.get(key)
+        if first is not None:
+            raise Invalid(
+                f"{unit_label(unit)} would run exactly the same job as {first}. "
+                "A scale has nothing to scale unless its adapter is set in the "
+                "base, so varying it alone changes nothing.",
+                field="axes",
+            )
+        seen[key] = unit_label(unit)
 
 
 # --- the operations ----------------------------------------------------------
@@ -327,11 +373,23 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
     the config vector it was filed against, which is exactly the case this
     denormalization exists for -- the assets are disposable, what was learned
     from them is not.
+
+    **A unit the worker is still inside is left behind, and so is the sweep.**
+    This used to call the unguarded ``store.delete`` and then rmtree, where
+    ``delete_job`` and ``prune_jobs`` both go through ``delete_if_not_running``
+    -- and a status check would not have been enough anyway, because
+    ``cancel_job`` writes ``cancelled`` and only *asks* the worker to stop, so
+    the row says the job is over while the reconstruction is still writing.
+    The directory then came back as an orphan nothing owned. Cancelling is
+    still the first thing that happens, so the second press (a moment later,
+    once the worker has unwound) finishes the job -- and the count says how
+    many are left rather than reporting a deletion that did not happen.
     """
     sweep = svc.store.get_sweep(sweep_id)
     if sweep is None:
         raise NotFound("no such sweep")
     removed = 0
+    remaining = 0
     for job in svc.store.sweep_jobs(sweep_id):
         if job["status"] in ("queued", "running"):
             # Through the service, so a running job's worker is actually asked
@@ -340,8 +398,17 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
                 jobs_mod.cancel_job(svc, job["id"])
             except Exception:
                 log.exception("could not cancel sweep job %s", job["id"])
-        svc.store.delete(job["id"])
+        if jobs_mod.worker_is_inside(svc, job["id"]) or jobs_mod.dependent_jobs(svc, job["id"]):
+            remaining += 1
+            continue
+        if not svc.store.delete_if_not_running(job["id"]):
+            remaining += 1
+            continue
         shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
         removed += 1
+    if remaining:
+        # The sweep row outlives its last unit deliberately: it is what the
+        # Review list offers the second press against.
+        return {"ok": True, "deleted": removed, "remaining": remaining}
     svc.store.delete_sweep(sweep_id)
-    return {"ok": True, "deleted": removed}
+    return {"ok": True, "deleted": removed, "remaining": 0}

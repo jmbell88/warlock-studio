@@ -367,10 +367,6 @@ class Document:
         self._commit_patch(layer, box, stroke.before[y0:y1, x0:x1])
         return True
 
-    @property
-    def stroking(self) -> bool:
-        return self._stroke is not None
-
     # -- fill, shapes, gradients -------------------------------------------
 
     def fill(
@@ -476,14 +472,6 @@ class Document:
         return True
 
     # -- history ------------------------------------------------------------
-
-    def checkpoint(self) -> None:
-        """Kept as a no-op for callers written against the snapshot model.
-
-        History is per-operation now: every entry point pushes its own edit, so
-        a caller that "checkpoints" first would either double-count or, worse,
-        appear to work while recording nothing.
-        """
 
     def undo(self) -> bool:
         """One Ctrl+Z is one step -- and cancelling a float *is* that step.
@@ -998,57 +986,3 @@ class Document:
     def resize_canvas(self, size: tuple[int, int], offset: tuple[int, int] = (0, 0)) -> None:
         self.commit_floating()
         self._replay(lambda: self._map_planes(lambda plane: tf.resize_canvas(plane, size, offset)))
-
-    # -- compatibility with the flat editor ---------------------------------
-    #
-    # The 2D reference pane still speaks the old vocabulary. These go away with
-    # it; keeping them here rather than in the pane means the new API is the
-    # only one this module is written in.
-
-    @property
-    def selection(self) -> FloatingBuffer | None:
-        return self.floating
-
-    @property
-    def erase_color(self) -> RGBA:
-        return self.matte or TRANSPARENT
-
-    def stroke(
-        self,
-        p0: tuple[int, int],
-        p1: tuple[int, int],
-        colour: RGBA,
-        size: int,
-        *,
-        erase: bool = False,
-    ) -> None:
-        """One segment, opened and closed -- the old per-segment stroke call."""
-        if self._stroke is None:
-            self.begin_stroke(
-                p0, colour, size=size, hardness=1.0, mode="erase" if erase else "paint"
-            )
-        self.stroke_to(p1)
-
-    def lift_selection(self, rect: tuple[int, int, int, int]) -> bool:
-        box = self.clip(rect)
-        if box is None:
-            return False
-        self.select(SelectionMask.from_rect(self.size, box))
-        return self.lift()
-
-    def move_selection(self, dx: int, dy: int) -> None:
-        self.move_floating(dx, dy)
-
-    def commit_selection(self) -> bool:
-        self.end_stroke()
-        return self.commit_floating()
-
-    def cancel_selection(self) -> bool:
-        return self.cancel_floating()
-
-    def delete_rect(self, rect: tuple[int, int, int, int]) -> None:
-        box = self.clip(rect)
-        if box is None:
-            return
-        self.select(SelectionMask.from_rect(self.size, box))
-        self.delete_selection()

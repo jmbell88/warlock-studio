@@ -147,6 +147,13 @@ class ClayState:
     # retyping it is the whole reason a modeller keeps the last value.
     pending_op: str = ""
     op_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Set when something outside the pane wants that popup *opened*, because
+    # ``imgui.open_popup`` only takes effect inside the window whose id stack
+    # is current -- the keyboard path runs in the event layer, where there is
+    # no window at all. Without it a bare-letter key bound to a parameterised
+    # op set ``pending_op`` and nothing ever opened the popup, leaving the mode
+    # holding a request it could not act on. Cleared by the pane that opens it.
+    open_op_popup: bool = False
 
     # Where a Shift+click range in the outliner is measured from. A uid, for the
     # reason every address in this package is one: the list reorders, and an

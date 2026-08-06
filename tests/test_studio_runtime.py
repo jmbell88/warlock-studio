@@ -262,10 +262,15 @@ def test_a_bounded_shutdown_returns_while_a_task_is_still_parked():
     runner.submit("stuck", gate.wait)
     try:
         start = time.monotonic()
-        runner.shutdown(timeout=0.2)
+        drained = runner.shutdown(timeout=0.2)
         elapsed = time.monotonic() - start
         assert 0.15 < elapsed < 2.0
         assert runner.busy_keys == set()
+        # And it says so, because the caller's next move depends on it:
+        # Runtime.shutdown closes the store immediately afterwards, on the
+        # grounds that an in-flight task finds it open -- true only if the pool
+        # actually drained. It did not.
+        assert drained is False
         # And the stuck thread is no longer something interpreter exit joins on.
         assert not any(t in _threads_queues for t in runner._pool._threads)
     finally:
@@ -276,5 +281,36 @@ def test_a_bounded_shutdown_of_an_idle_pool_returns_at_once():
     runner = TaskRunner(workers=2)
     runner.submit("quick", lambda: 1)
     start = time.monotonic()
-    runner.shutdown(timeout=5.0)
+    drained = runner.shutdown(timeout=5.0)
     assert time.monotonic() - start < 1.0
+    assert drained is True
+
+
+def test_the_store_is_left_open_when_the_task_pool_did_not_drain(tmp_path):
+    """The regression: ``Runtime.shutdown`` closed the store unconditionally,
+    on the stated grounds that a task still calling into the service would find
+    it open -- which holds only while the pool drains. The very next comment
+    says the wait is *bounded*. A task outliving the grace period (the
+    documented case: parked in a never-dismissed native dialog) then resumed
+    against a closed connection and got a ProgrammingError captured into a
+    future nobody will ever poll."""
+    from types import SimpleNamespace
+
+    from warlock.studio import runtime as runtime_mod
+
+    closed: list[str] = []
+    rt = runtime_mod.Runtime.__new__(runtime_mod.Runtime)
+    rt.worker = None
+    rt._loop = None
+    rt._thread = None
+    rt.svc = None
+    rt.store = SimpleNamespace(close=lambda: closed.append("closed"))
+
+    rt.tasks = SimpleNamespace(shutdown=lambda timeout=None: False)
+    runtime_mod.Runtime.shutdown(rt)
+    assert closed == [], "something is still running; the connection stays up"
+
+    rt.store = SimpleNamespace(close=lambda: closed.append("closed"))
+    rt.tasks = SimpleNamespace(shutdown=lambda timeout=None: True)
+    runtime_mod.Runtime.shutdown(rt)
+    assert closed == ["closed"]

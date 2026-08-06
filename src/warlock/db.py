@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import threading
@@ -10,6 +11,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -48,19 +51,47 @@ CREATE TABLE IF NOT EXISTS verdicts (
     verdict     TEXT NOT NULL,                  -- accept | reject
     reasons     TEXT NOT NULL DEFAULT '[]',     -- JSON list
     vector      TEXT NOT NULL DEFAULT '{}',     -- JSON: the config vector, denormalized
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    sweep_id    TEXT,                           -- denormalized: pairs outlive delete_sweep
+    sweep_unit  TEXT NOT NULL DEFAULT '',       -- display label only; pairing never parses it
+    seed        INTEGER,                        -- params["seed"] at record time
+    prompt_hash TEXT NOT NULL DEFAULT ''        -- sha1[:12]; counts distinct prompts, nothing else
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id);
+
+CREATE TABLE IF NOT EXISTS observations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    sweep_id    TEXT,                           -- NULL for an ordinary job
+    sweep_unit  TEXT NOT NULL DEFAULT '',
+    seed        INTEGER,
+    prompt_hash TEXT NOT NULL DEFAULT '',
+    vector      TEXT NOT NULL DEFAULT '{}',     -- JSON: config vector, verdicts' canonical form
+    metrics     TEXT NOT NULL DEFAULT '{}',     -- JSON: vectors.observation_metrics output
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_observations_job ON observations(job_id);
 """
+# No index on observations(sweep_id), deliberately: the one read of this table
+# (latest_observations) has no WHERE at all -- it groups by job_id and the
+# sweep grouping happens in findings._comparisons, in Python, over the whole
+# set. An index nothing can use is a B-tree maintained on every insert to
+# answer a query nobody asks.
 # idx_jobs_parent is created by the migration below, not here: _SCHEMA's
 # CREATE TABLE IF NOT EXISTS is a no-op against a pre-existing table that
 # predates the parent_id column, and an index on a column that doesn't exist
 # yet would fail before _migrate ever runs.
 
-# Append-only. Each entry is a list of SQL statements applied in one
-# transaction, bumping PRAGMA user_version by one. Never edit an entry once
-# it has shipped — only append. A fresh DB gets _SCHEMA then replays every
-# entry here, so fresh and pre-existing DBs converge on the same shape.
+# Append-only. Each entry is a list of SQL statements, applied in order and
+# followed by bumping PRAGMA user_version. Never edit an entry once it has
+# shipped — only append. A fresh DB gets _SCHEMA then replays every entry here,
+# so fresh and pre-existing DBs converge on the same shape.
+#
+# Not one transaction, whatever the ordering suggests: Python 3.12's sqlite3
+# runs DDL and PRAGMA in autocommit, so an entry that fails part-way leaves the
+# statements before it applied and the version unbumped, and the next open
+# replays the whole entry. What makes that safe is the per-statement ADD COLUMN
+# guard below, not atomicity.
 MIGRATIONS: list[list[str]] = [
     # 1 -- approve-reference-first. A row that predates the split was a
     # single-stage generate, which is what stage='model' means.
@@ -117,30 +148,75 @@ MIGRATIONS: list[list[str]] = [
         " created_at REAL NOT NULL)",
         "CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id)",
     ],
+    # 5 -- machine evidence and matched pairs. Verdicts gain a denormalized
+    # sweep context (sweep_id/sweep_unit/seed/prompt_hash) so findings can pair
+    # a baseline verdict against an axis verdict -- same prompt, same seed, one
+    # param differing -- *after* delete_sweep has removed the job rows, which
+    # is the designed cleanup path. Observations are the verdict table's
+    # pattern applied to what the worker measures on every finished model job
+    # (hole fraction, watertight, triangles): one append-only row per
+    # generation, carrying its own vector snapshot, deleted by nothing.
+    #
+    # The observations table is also in _SCHEMA (executed on every open), so
+    # replaying it here is a no-op; it is repeated for the append-only
+    # contract's sake. Its index can live in both places -- unlike
+    # idx_jobs_sweep, the table either pre-exists with all its columns or was
+    # just created whole by _SCHEMA. The verdict ALTERs are the statements the
+    # _ADD_COLUMN_RE guard exists for: on a fresh DB the columns came from
+    # _SCHEMA and the replay must skip them.
+    #
+    # sweep_unit is carried on both tables and read by nothing, on purpose: it
+    # is the forensic half of the denormalization. Pairing is computed from the
+    # vectors and must never parse a label (findings._one_key_diff), but after
+    # delete_sweep has taken the job rows, the label is the only thing left
+    # that says which unit of which sweep a surviving row came from -- for
+    # somebody reading the table, not for the code.
+    [
+        "ALTER TABLE verdicts ADD COLUMN sweep_id TEXT",
+        "ALTER TABLE verdicts ADD COLUMN sweep_unit TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE verdicts ADD COLUMN seed INTEGER",
+        "ALTER TABLE verdicts ADD COLUMN prompt_hash TEXT NOT NULL DEFAULT ''",
+        "CREATE TABLE IF NOT EXISTS observations ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " job_id TEXT NOT NULL,"
+        " sweep_id TEXT,"
+        " sweep_unit TEXT NOT NULL DEFAULT '',"
+        " seed INTEGER,"
+        " prompt_hash TEXT NOT NULL DEFAULT '',"
+        " vector TEXT NOT NULL DEFAULT '{}',"
+        " metrics TEXT NOT NULL DEFAULT '{}',"
+        " created_at REAL NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_observations_job ON observations(job_id)",
+    ],
 ]
 
 
-# Matches any legal SQLite "ALTER TABLE jobs ADD [COLUMN] <name> ...": the
-# COLUMN keyword is optional, whitespace is free-form, and the name may be
+# Matches any legal SQLite "ALTER TABLE <table> ADD [COLUMN] <name> ...": the
+# COLUMN keyword is optional, whitespace is free-form, and both names may be
 # quoted or bracketed. MIGRATIONS[0] was written to match a literal
 # ``.startswith("ALTER TABLE jobs ADD COLUMN")`` + ``split()`` template; that
 # template is correct for the one statement it was copied from but wrong for
 # anything a future migration might legally write, and a miss means a fresh
 # database tries to re-add an existing column and fails to start. This regex
 # removes the class rather than the instance -- match _check_job_id in
-# app.py for the same reasoning applied to job ids.
+# app.py for the same reasoning applied to job ids. It hardened again for
+# migration 5, which is the first to ALTER a table other than jobs: a
+# jobs-only pattern would have let a fresh DB replay the verdicts ALTERs
+# against columns _SCHEMA already created.
 _ADD_COLUMN_RE = re.compile(
-    r"^ALTER\s+TABLE\s+jobs\s+ADD\s+(?:COLUMN\s+)?[\"'\[]?(\w+)", re.IGNORECASE
+    r"^ALTER\s+TABLE\s+[\"'\[]?(\w+)[\"'\]]?\s+ADD\s+(?:COLUMN\s+)?[\"'\[]?(\w+)",
+    re.IGNORECASE,
 )
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    # Snapshotted once, before any migration runs. Safe because no migration
-    # in this loop removes a column: a snapshot can only go stale by missing
-    # a column a later entry adds, which just means that entry's own ADD
-    # COLUMN runs instead of being skipped -- never a false skip.
-    columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    # Each table's columns are snapshotted once, on the first ALTER that names
+    # it. Safe because no migration in this loop removes a column: a snapshot
+    # can only go stale by missing a column a later entry adds, which just
+    # means that entry's own ADD COLUMN runs instead of being skipped -- never
+    # a false skip.
+    columns: dict[str, set[str]] = {}
     for i in range(version, len(MIGRATIONS)):
         for stmt in MIGRATIONS[i]:
             # A fresh DB got these columns from _SCHEMA; replaying the ALTER
@@ -148,8 +224,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             # entry keeps fresh and migrated DBs converging, which is the
             # property the append-only contract exists to protect.
             match = _ADD_COLUMN_RE.match(stmt)
-            if match and match.group(1) in columns:
-                continue
+            if match:
+                table, column = match.group(1), match.group(2)
+                if table not in columns:
+                    columns[table] = {
+                        r[1] for r in conn.execute(f"PRAGMA table_info({table})")
+                    }
+                if column in columns[table]:
+                    continue
             conn.execute(stmt)
         conn.execute(f"PRAGMA user_version = {i + 1}")
     conn.commit()
@@ -469,6 +551,21 @@ class JobStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def active_jobs(self) -> list[dict[str, Any]]:
+        """Every queued or running row, oldest first.
+
+        Unbounded on purpose and cheap in practice: one job runs at a time and
+        a queue is a handful of rows, so the caller that has to ask "is anything
+        unfinished going to write into this directory" can filter these in
+        Python rather than the store learning to search inside the params blob.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE status IN ('queued', 'running')"
+                " ORDER BY created_at, id"
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
     # --- sweeps ---------------------------------------------------------------
 
     def create_sweep(self, label: str, prompt: str, spec: dict[str, Any]) -> str:
@@ -551,14 +648,25 @@ class JobStore:
         verdict: str,
         reasons: list[str],
         vector: dict[str, Any],
+        sweep_id: str | None = None,
+        sweep_unit: str = "",
+        seed: int | None = None,
+        prompt_hash: str = "",
     ) -> int:
         """Append one verdict. Append-only: a changed mind is a new row, and
         ``latest_verdicts`` takes the highest id per (job, source), so the
-        history of what a reviewer thought survives the correction."""
+        history of what a reviewer thought survives the correction.
+
+        The sweep context is denormalized for the same reason the vector is:
+        matched-pair comparisons must survive ``delete_sweep`` taking the job
+        rows. Rows recorded before migration 5 have no context and simply
+        never enter a comparison.
+        """
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO verdicts (job_id, source, verdict, reasons, vector, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO verdicts (job_id, source, verdict, reasons, vector,"
+                " created_at, sweep_id, sweep_unit, seed, prompt_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     source,
@@ -566,6 +674,10 @@ class JobStore:
                     json.dumps(list(reasons)),
                     json.dumps(vector),
                     time.time(),
+                    sweep_id,
+                    sweep_unit,
+                    seed,
+                    prompt_hash,
                 ),
             )
             self._conn.commit()
@@ -637,11 +749,89 @@ class JobStore:
             ).fetchall()
         return [self._to_dict(r) for r in rows]
 
+    # --- observations ---------------------------------------------------------
+
+    def add_observation(
+        self,
+        job_id: str,
+        *,
+        sweep_id: str | None,
+        sweep_unit: str,
+        seed: int | None,
+        prompt_hash: str,
+        vector: dict[str, Any],
+        metrics: dict[str, Any],
+    ) -> int:
+        """Append one machine-evidence row -- what the worker measured about a
+        finished model job, snapshotted with its config vector so it outlives
+        the job row. Nothing deletes these; that is the point."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO observations (job_id, sweep_id, sweep_unit, seed,"
+                " prompt_hash, vector, metrics, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    sweep_id,
+                    sweep_unit,
+                    seed,
+                    prompt_hash,
+                    json.dumps(vector),
+                    json.dumps(metrics),
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def latest_observations(self) -> list[dict[str, Any]]:
+        """One row per job -- the newest, by id, matching ``latest_verdicts``:
+        a retarget that re-audits a mesh may someday append a second row, and
+        the newest is the one describing the artifact that exists."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM observations WHERE id IN ("
+                " SELECT MAX(id) FROM observations GROUP BY job_id)"
+                " ORDER BY id"
+            ).fetchall()
+        return [self._observation_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _blob(text: Any, empty: Any) -> Any:
+        """A JSON column: its value, ``empty`` if the column is blank, or
+        ``None`` if it will not parse at all.
+
+        ``aggregate`` is careful to skip a row whose payload is the wrong
+        *type*, but that check never ran on a payload that was not JSON at all:
+        the decode happens here, and an unparseable blob raised out of the
+        store, taking the whole findings recompute -- and ``verdicts_for``, and
+        so Review's own list -- down with it. ``None`` rather than an empty
+        container on purpose: every reader already treats a non-dict vector as
+        a row to skip and a falsy ``reasons`` as none, whereas ``{}`` would be
+        a *readable* row describing the empty configuration and would rank as
+        one. A row nobody can read is one row of evidence lost; it is not a
+        reason to lose the rest.
+        """
+        if not text:
+            return empty
+        try:
+            return json.loads(text)
+        except ValueError:
+            log.warning("unreadable JSON column; that row is being skipped")
+            return None
+
+    @staticmethod
+    def _observation_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["vector"] = JobStore._blob(d["vector"], {})
+        d["metrics"] = JobStore._blob(d["metrics"], {})
+        return d
+
     @staticmethod
     def _verdict_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
-        d["reasons"] = json.loads(d["reasons"] or "[]")
-        d["vector"] = json.loads(d["vector"] or "{}")
+        d["reasons"] = JobStore._blob(d["reasons"], [])
+        d["vector"] = JobStore._blob(d["vector"], {})
         return d
 
     @staticmethod

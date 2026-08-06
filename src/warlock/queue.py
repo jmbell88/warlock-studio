@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, guidance, memlog, models, provenance, rigging, vram
+from . import errors, guidance, memlog, models, provenance, rigging, vectors, vram
 from .config import Config
 from .db import JobStore
 from .pipelines import control, reference, seam
@@ -141,6 +141,41 @@ something a job can fail on, so the only useful place to stand is *before* the
 next allocation. It needs no watchdog thread: the stage boundaries _log_mem
 already runs at are exactly the moments the number can be acted on.
 """
+
+
+def _observe_finished(store: JobStore, job_id: str) -> bool:
+    """Append the machine-evidence row for a finished model job. -> whether a
+    row was written.
+
+    Reads the row fresh rather than trusting an in-memory job dict: the audit
+    and report were committed via ``set_params``/``merge_params`` and the
+    remesh-restore path rebinds params, so the row is the record. A job whose
+    audit *and* report both failed writes nothing -- an empty metrics row
+    would be a bucket diluting every mean it joins. ``import_mesh`` and the
+    retarget re-audit deliberately have no call site here: the corpus is
+    about what generation settings produce, and a hand-imported or rewritten
+    mesh measures neither.
+    """
+    job = store.get(job_id)
+    if job is None:
+        return False
+    if job.get("stage") != "model" or job.get("kind") not in ("text", "image"):
+        return False
+    params = job.get("params") or {}
+    metrics = vectors.observation_metrics(params)
+    if not metrics:
+        return False
+    seed = params.get("seed")
+    store.add_observation(
+        job_id,
+        sweep_id=job.get("sweep_id"),
+        sweep_unit=job.get("sweep_unit") or "",
+        seed=seed if isinstance(seed, int) and not isinstance(seed, bool) else None,
+        prompt_hash=vectors.prompt_hash(job.get("prompt")),
+        vector=vectors.config_vector(job),
+        metrics=metrics,
+    )
+    return True
 
 
 def commit_fraction() -> float | None:
@@ -482,7 +517,16 @@ class Worker:
                         # don't leave a viewable artifact behind.
                         self._discard_artifacts(job)
                     elif status == "done":
+                        # The rig first: it is work the user asked for, and
+                        # recording the observation introduced the only await
+                        # between the terminal write and this call. A shutdown
+                        # landing on that await raises CancelledError -- which
+                        # _record_observation deliberately does not catch --
+                        # and would have skipped the auto-rig for a job already
+                        # marked done. A diagnostic must not be able to cost
+                        # that; in this order the worst it can cost is itself.
                         await self._maybe_queue_rig(job)
+                        await self._record_observation(job_id)
             finally:
                 # Unconditionally, and in a nest of its own: the terminal write
                 # can raise (`database is locked`, a full disk) and these four
@@ -495,6 +539,20 @@ class Worker:
                 self._cancel = None
                 self._blender = None
                 self.progress.end(job_id)
+
+    async def _record_observation(self, job_id: str) -> None:
+        """Machine evidence for the findings corpus, recorded at completion.
+
+        Same rule as ``_audit_mesh``: a diagnostic must never fail a job whose
+        mesh is already on disk, so any failure is logged and swallowed. The
+        "did it write a row" answer is ignored here on purpose -- a job with
+        neither measurement is a job there is nothing to record about, which is
+        an outcome rather than an event; the tests are what read it.
+        """
+        try:
+            await asyncio.to_thread(_observe_finished, self.store, job_id)
+        except Exception:
+            log.exception("could not record observation for job %s", job_id)
 
     async def _maybe_queue_rig(self, job: dict[str, Any]) -> None:
         """Honour the generate form's "rig this" checkbox, once the mesh exists.

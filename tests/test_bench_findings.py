@@ -187,3 +187,247 @@ def test_hint_matches_a_float32_slider_value_against_a_string_key(tmp_path):
     doc = _doc({"lora_weight": {"0.6": {"n": 8, "accepts": 6}}})
 
     assert findings_mod.hint(doc, "lora_weight", 0.6000000238418579) == "accept 6/8"
+
+
+# --- hint v2: the bound, and machine evidence -----------------------------------
+
+
+def test_hint_appends_the_confidence_floor_when_the_writer_provides_it(tmp_path):
+    doc = _doc({"lora_weight": {"0.6": {"n": 8, "accepts": 6, "wilson_low": 0.409}}})
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "accept 6/8 (41%+)"
+
+
+def test_hint_falls_back_to_the_bare_count_on_a_v1_file(tmp_path):
+    """A findings.json written before the bound existed still hints -- the
+    reader never requires what an older writer could not have known."""
+    doc = _doc({"lora_weight": {"0.6": {"n": 8, "accepts": 6}}})
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "accept 6/8"
+
+
+def test_hint_shows_machine_evidence_below_the_verdict_threshold(tmp_path):
+    """The inline face of evidence accumulating on every generation: a value
+    generated with twenty-one times but reviewed twice still says something
+    true."""
+    doc = _doc({
+        "lora_weight": {"0.6": {
+            "n": 2, "accepts": 2,
+            "metrics": {"n": 21, "hole_worst": 0.034, "watertight_rate": 0.71},
+        }},
+    })
+
+    assert (
+        findings_mod.hint(doc, "lora_weight", 0.6)
+        == "holes 3% \u00b7 watertight 71% (21 meshes)"
+    )
+
+
+def test_a_thin_measurement_is_dropped_rather_than_carried_by_a_fat_one(tmp_path):
+    """The regression: ``n`` is the bucket size and every mean was printed
+    beside it, so one watertight reading among twenty-one observations was
+    advertised as twenty-one. The threshold is per measurement."""
+    doc = _doc({
+        "lora_weight": {"0.6": {
+            "n": 0, "accepts": 0,
+            "metrics": {
+                "n": 21, "hole_worst": 0.034, "watertight_rate": 1.0,
+                "counts": {"hole_worst": 21, "watertight_rate": 1},
+            },
+        }},
+    })
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "holes 3% (21 meshes)"
+
+
+def test_a_ranked_recipe_states_its_rate_and_its_floor():
+    assert findings_mod.vector_line(
+        {"n": 20, "accept_rate": 0.8, "wilson_low": 0.607}
+    ) == "80% of 20 (61%+)"
+
+
+def test_a_v1_recipe_states_no_floor_rather_than_a_floor_of_zero():
+    """The regression: the pane defaulted a missing bound to 0.0, so every
+    recipe in an existing user's Review pane read "(0%+)" -- under a heading
+    claiming the Wilson ranking -- until some verdict rewrote the file."""
+    assert findings_mod.vector_line({"n": 20, "accept_rate": 0.8}) == "80% of 20"
+    assert findings_mod.vector_line({}) == "0% of 0"
+    assert findings_mod.vector_line(None) == ""
+
+
+def test_measurements_of_different_weight_each_say_their_own(tmp_path):
+    """Both above the threshold but not equally supported: one trailing count
+    would be a claim about whichever the reader assumed it belonged to."""
+    line = findings_mod.metrics_line(
+        {"n": 21, "hole_worst": 0.034, "watertight_rate": 0.71,
+         "counts": {"hole_worst": 21, "watertight_rate": 18}}
+    )
+    assert line == "holes 3% worst (21 meshes) · watertight 71% (18 meshes)"
+
+
+def test_hint_prefers_verdicts_once_they_reach_the_threshold(tmp_path):
+    doc = _doc({
+        "lora_weight": {"0.6": {
+            "n": 8, "accepts": 6, "wilson_low": 0.409,
+            "metrics": {"n": 21, "hole_worst": 0.034},
+        }},
+    })
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "accept 6/8 (41%+)"
+
+
+def test_hint_with_malformed_metrics_never_raises(tmp_path):
+    doc = _doc({
+        "lora_weight": {
+            "0.6": {"n": 1, "accepts": 1, "metrics": {"n": "x", "hole_worst": 0.1}},
+            "0.7": {"n": 1, "accepts": 1, "metrics": "broken"},
+            "0.8": {"n": 1, "accepts": 1, "metrics": {"n": 21, "hole_worst": "bad"}},
+        },
+    })
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) is None
+    assert findings_mod.hint(doc, "lora_weight", 0.7) is None
+    # A well-formed count with no readable measurement is still nothing to say.
+    assert findings_mod.hint(doc, "lora_weight", 0.8) is None
+
+
+# --- comparison_lines -----------------------------------------------------------
+
+
+def _comparison_doc(entries):
+    return {"version": 2, "generated": "x", "params": {}, "vectors": [],
+            "comparisons": entries}
+
+
+def test_comparison_lines_lead_with_the_winner(tmp_path):
+    doc = _comparison_doc({
+        "lora_weight": [{
+            "a": "0.9", "b": "unset", "pairs": 8, "a_wins": 1, "b_wins": 7,
+            "ties": 0, "sweeps": 2, "prompts": 2, "deltas": {},
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        "lora_weight: unset beat 0.9 in 7 of 8 matched pairs (2 sweeps, 2 prompts)",
+    ]
+
+
+def test_comparison_lines_append_metric_deltas(tmp_path):
+    doc = _comparison_doc({
+        "lora_weight": [{
+            "a": "0.6", "b": "0.9", "pairs": 8, "a_wins": 7, "b_wins": 1,
+            "ties": 0, "sweeps": 2, "prompts": 2,
+            "deltas": {
+                "hole_worst": {"mean": -0.041, "pairs": 12},
+                "watertight": {"mean": 0.25, "pairs": 12},
+                "triangles": {"mean": -12400.0, "pairs": 2},
+            },
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        "lora_weight: 0.6 beat 0.9 in 7 of 8 matched pairs (2 sweeps, 2 prompts)",
+        "    worst-hole -4.1% over 12 paired runs",
+        "    watertight +25.0% over 12 paired runs",
+        # triangles is below min_pairs and stays quiet
+    ]
+
+
+def test_comparison_lines_report_a_tie_honestly(tmp_path):
+    doc = _comparison_doc({
+        "platform": [{
+            "a": "desktop", "b": "mobile", "pairs": 6, "a_wins": 3, "b_wins": 3,
+            "ties": 0, "sweeps": 1, "prompts": 1, "deltas": {},
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        "platform: desktop vs mobile - tied over 6 matched pairs (1 sweep, 1 prompt)",
+    ]
+
+
+def test_comparison_lines_show_machine_evidence_before_any_review(tmp_path):
+    doc = _comparison_doc({
+        "trellis_band": [{
+            "a": "8", "b": "unset", "pairs": 0, "a_wins": 0, "b_wins": 0,
+            "ties": 0, "sweeps": 1, "prompts": 1,
+            "deltas": {"hole_worst": {"mean": 0.012, "pairs": 6}},
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        "trellis_band: 8 vs unset - machine evidence only",
+        "    worst-hole +1.2% over 6 paired runs",
+    ]
+
+
+def test_comparison_lines_stay_quiet_below_the_pair_threshold(tmp_path):
+    doc = _comparison_doc({
+        "lora_weight": [{
+            "a": "0.6", "b": "0.9", "pairs": 2, "a_wins": 2, "b_wins": 0,
+            "ties": 0, "sweeps": 1, "prompts": 1,
+            "deltas": {"hole_worst": {"mean": -0.04, "pairs": 2}},
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == []
+    assert findings_mod.comparison_lines(doc, min_pairs=2) == [
+        "lora_weight: 0.6 beat 0.9 in 2 of 2 matched pairs (1 sweep, 1 prompt)",
+        "    worst-hole -4.0% over 2 paired runs",
+    ]
+
+
+def test_comparison_lines_tolerate_a_doc_without_the_section(tmp_path):
+    assert findings_mod.comparison_lines(None) == []
+    assert findings_mod.comparison_lines({"params": {}}) == []
+
+
+def test_metrics_line_renders_what_a_recipe_measured(tmp_path):
+    line = findings_mod.metrics_line(
+        {"n": 21, "hole_worst": 0.034, "watertight_rate": 0.71, "triangles": 24120}
+    )
+    assert line == "holes 3% worst \u00b7 watertight 71% \u00b7 24,120 tri (21 meshes)"
+
+
+def test_metrics_line_skips_what_was_not_measured(tmp_path):
+    assert findings_mod.metrics_line({"n": 3, "hole_worst": 0.1}) == "holes 10% worst (3 meshes)"
+    assert findings_mod.metrics_line({"n": 3}) is None
+    assert findings_mod.metrics_line(None) is None
+    assert findings_mod.metrics_line({"n": "x", "hole_worst": 0.1}) is None
+
+
+def test_comparison_lines_orient_deltas_to_the_winner(tmp_path):
+    """The stored delta is a-minus-b, but the header leads with the winner --
+    an unattributed delta line under "0.9 beat 0.6" must describe the winner,
+    or the sign silently flips meaning on a lexicographic accident."""
+    doc = _comparison_doc({
+        "lora_weight": [{
+            "a": "0.6", "b": "0.9", "pairs": 8, "a_wins": 1, "b_wins": 7,
+            "ties": 0, "sweeps": 2, "prompts": 2,
+            "deltas": {"hole_worst": {"mean": 0.041, "pairs": 12}},
+        }],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        "lora_weight: 0.9 beat 0.6 in 7 of 8 matched pairs (2 sweeps, 2 prompts)",
+        "    worst-hole -4.1% over 12 paired runs",
+    ]
+
+
+def test_comparison_lines_never_raise_on_malformed_entries(tmp_path):
+    """This renders every frame; a hand-corrupted findings.json must cost the
+    entry, never the frame thread."""
+    doc = _comparison_doc({
+        "lora_weight": [
+            {"a": "0.6", "b": "0.9", "pairs": "8", "a_wins": 7, "b_wins": 1,
+             "ties": 0, "sweeps": 1, "prompts": 1, "deltas": {}},
+            {"a": "0.6", "b": "0.9", "pairs": 8, "a_wins": "x", "b_wins": 1,
+             "ties": 0, "sweeps": 1, "prompts": 1, "deltas": []},
+            "not-a-dict",
+        ],
+    })
+
+    assert findings_mod.comparison_lines(doc) == [
+        # The one salvageable half: entry 2's counts collapse to 0-vs-1.
+        "lora_weight: 0.9 beat 0.6 in 1 of 8 matched pairs (1 sweep, 1 prompt)",
+    ]

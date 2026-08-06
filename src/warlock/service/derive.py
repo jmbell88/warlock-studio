@@ -17,20 +17,32 @@ from pathlib import Path
 from .. import rigging
 from . import files
 from .core import WarlockService
-from .errors import Failed, NotFound, NotReady
+from .errors import Failed, Invalid, NotFound, NotReady
 from .files import MEDIA
 
 log = logging.getLogger(__name__)
 
 
-def get_file(svc: WarlockService, job_id: str, name: str) -> Path:
+def get_file(
+    svc: WarlockService, job_id: str, name: str, *, pixel_colors: int | None = None
+) -> Path:
     """The path of one artifact, deriving it first if that is possible.
 
     Blocking: a cold STL of a 300k-face mesh is seconds and an FBX is a Blender
     subprocess, so this must never be called from the frame thread.
+
+    ``pixel_colors`` is the derive-time palette preference for the pixel-art
+    artifacts: ``None`` means no opinion (serve whatever is on disk if fresh,
+    which is every pre-knob caller verbatim), an int means the served file must
+    have been quantized to that cap (0 = full colour) and a mismatch re-derives
+    an otherwise-fresh file. It is validated against a literal tuple and never
+    becomes part of a path.
     """
     if name not in MEDIA:
         raise NotFound("unknown file")
+    if pixel_colors is not None and pixel_colors not in files.PIXEL_COLOR_CHOICES:
+        choices = ", ".join(str(n) for n in files.PIXEL_COLOR_CHOICES)
+        raise Invalid(f"pixel_colors must be one of {choices}")
     # The row is fetched, not just the id checked: readiness is a fact about
     # the job (a mesh is only servable once it is *done*), and an orphaned
     # directory used to serve files for a job that no longer exists.
@@ -85,8 +97,10 @@ def get_file(svc: WarlockService, job_id: str, name: str) -> Path:
     # input.png in place, and an artifact older than it is a picture of pixels
     # that are gone. files.fresh_2d answers "missing" and "stale" the same way
     # on purpose -- both mean derive it again.
-    if name in files.DERIVED_2D and not files.fresh_2d(job_dir, name):
-        _derive_2d(svc, job, job_id, job_dir, name)
+    if name in files.DERIVED_2D and not (
+        files.fresh_2d(job_dir, name) and _pixel_current(job_dir, name, pixel_colors)
+    ):
+        _derive_2d(svc, job, job_id, job_dir, name, pixel_colors=pixel_colors)
     if not path.exists():
         raise NotReady("file not ready")
     return path
@@ -123,7 +137,42 @@ def derivable_2d(name: str, stage: str | None) -> bool:
 MANIFEST = "manifest.json"
 
 
-def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name: str) -> None:
+def _pixel_current(job_dir: Path, name: str, pixel_colors: int | None) -> bool:
+    """Whether the on-disk pixel artifact was cut with the requested palette.
+
+    Freshness (fresh_2d) answers "does this file describe the input.png on
+    disk"; this answers "was it quantized the way the caller wants" -- a knob
+    change leaves the file mtime-fresh, so mtime alone would serve the old
+    palette forever. The record is the manifest entry asset2d.pixel already
+    writes (``palette``: int or None), read lock-free: _write_manifest only
+    ever lands via tmp + os.replace, so a reader sees a whole old or whole new
+    file, never a torn one. A missing or mangled manifest returns False --
+    one re-derive rebuilds the entry, the same self-healing rule the manifest
+    itself follows.
+    """
+    if pixel_colors is None or name not in files.PIXEL_ARTIFACTS:
+        return True
+    import json
+
+    try:
+        manifest = json.loads((job_dir / MANIFEST).read_text("utf-8"))
+        entry = manifest["artifacts"][name]
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    if not isinstance(entry, dict):
+        return False
+    return entry.get("palette") == (pixel_colors or None)
+
+
+def _derive_2d(
+    svc: WarlockService,
+    job: dict,
+    job_id: str,
+    job_dir: Path,
+    name: str,
+    *,
+    pixel_colors: int | None = None,
+) -> None:
     """Produce one 2D export from the reference's input.png.
 
     Blocking, like every other derivation here: the matte is a model or a
@@ -150,10 +199,12 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
         return
     with svc.convert_lock(job_id, name):
         # Re-checked inside the lock, for the reason the mesh exports give:
-        # whoever waited here was waiting for exactly this file. Freshness
-        # again, not existence -- a stale artifact is one the waiter wants
-        # rebuilt, not one it can be handed.
-        if files.fresh_2d(job_dir, name):
+        # whoever waited here was waiting for exactly this file. The same
+        # compound test as the gate outside, not existence and not bare
+        # freshness -- after a palette-knob change the file is mtime-fresh, so
+        # a fresh_2d-only recheck would return the old palette to the caller
+        # who asked for a new one.
+        if files.fresh_2d(job_dir, name) and _pixel_current(job_dir, name, pixel_colors):
             return
         if name == "wrap_preview.png":
             # The one 2D export that is not a cutout, and so the one that runs
@@ -187,7 +238,11 @@ def _derive_2d(svc: WarlockService, job: dict, job_id: str, job_dir: Path, name:
                 elif name == "sprite.png":
                     out, meta = asset2d.sprite(image, mask)
                 elif name in files.PIXEL_ARTIFACTS:
-                    out, meta = asset2d.pixel(image, mask, size=files.PIXEL_ARTIFACTS[name])
+                    out, meta = asset2d.pixel(
+                        image, mask,
+                        size=files.PIXEL_ARTIFACTS[name],
+                        colors=pixel_colors or 0,
+                    )
                 else:
                     # Unreachable while DERIVED_2D and the branches above agree,
                     # which test_every_2d_artifact_has_a_derivation asserts at

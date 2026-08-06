@@ -22,8 +22,12 @@ exists.
 **An op that changes geometry freezes the object's generator.** A box whose
 faces have been extruded is no longer describable by "box, size 1" -- the
 properties panel would offer a size field that silently discards the edit the
-moment it was touched. :func:`run` clears ``generator`` in one place, for every
-op, rather than each op remembering to.
+moment it was touched. The freeze is ``Document.set_mesh``'s, not any op's:
+saying "``run`` clears it in one place, for every op" was not true of ``run``
+at all -- only ``run_mesh_op`` and Smooth did it, while Delete, Bake Transform
+and Mirror went straight to ``set_mesh`` and kept a generator that would
+rebuild over them. Putting it where the geometry actually changes is what
+makes the sentence true for ops that do not exist yet.
 
 **A refusal is a toast, not an exception.** Every op raises
 :class:`~.clay.elements.OpError` with a sentence naming what it refused and what
@@ -191,22 +195,8 @@ def run_mesh_op(
             toast(ctx, str(error))
             continue
         doc.set_mesh(uid, mesh, select=sel)
-        _freeze(doc, uid)
         ran = True
     return ran
-
-
-def _freeze(doc: Any, uid: int) -> None:
-    """Clear ``generator`` on an object whose topology has been edited.
-
-    One place, for every op: see the module docstring. It goes through
-    ``set_props`` so it is undoable with the edit it belongs to, and does
-    nothing at all to an object that was already frozen -- ``set_props`` pushes
-    no step for a no-op change.
-    """
-    obj = doc.by_uid(uid)
-    if obj.generator is not None:
-        doc.set_props(uid, generator=None, params={})
 
 
 # --- predicates -------------------------------------------------------------
@@ -289,7 +279,6 @@ def _smooth(ctx: Any, doc: Any, levels: float = 1.0, **_: Any) -> None:
             toast(ctx, str(error))
             continue
         doc.set_mesh(uid, mesh, select=sel)
-        _freeze(doc, uid)
 
 
 def _duplicate(ctx: Any, doc: Any, **_: Any) -> None:

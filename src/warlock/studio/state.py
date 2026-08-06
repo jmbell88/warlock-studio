@@ -307,6 +307,15 @@ class AppState:
     # Nothing in it is persisted: a stored run directory would outlive the
     # sweep it names.
     review: Any = None
+    # Whether ``findings.json`` is behind the evidence in the DB. A flag rather
+    # than a submit, because ``TaskRunner.submit`` *refuses* a key already in
+    # flight and nothing re-arms it: five verdicts in a second used to run one
+    # recompute over the set as it stood at the first press and silently drop
+    # the rest until the next verdict. It is also what lets the worker's
+    # observations reach the file at all -- they are appended off the frame
+    # thread by a component that cannot submit anything, so the frame loop
+    # notices the job finishing and marks this instead.
+    findings_dirty: bool = False
     manual: ManualState = field(default_factory=ManualState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
     # so the Export tab reads and parses it once per version of the file rather

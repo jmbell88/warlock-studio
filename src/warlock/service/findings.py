@@ -1,140 +1,113 @@
-"""Turning recorded verdicts into ``findings.json``.
+"""Turning recorded verdicts and observations into ``findings.json``.
 
-What this replaces. The old ``bench/report.py`` aggregated verdicts written
-beside a sweep run directory, grouped strictly on the one axis that sweep
-varied. Verdicts now live in the job DB keyed by job id, every one of them
-carrying a snapshot of the *whole* config vector it was filed against -- so
-the same aggregation can be done over ordinary daily-use verdicts as well as
-sweep units, and a "vector" is a first-class result rather than something a
-one-factor-at-a-time sweep could never express.
+Three sections, three kinds of answer. ``params`` is the confounded marginal:
+a verdict credits every ``param: value`` pair in its vector, so "lora_weight
+0.9 accepts 6/8" means "of the eight judged assets whose lora_weight was 0.9,
+six were accepted", everything else free to vary. That is deliberate -- the
+price of letting ordinary daily-use verdicts feed the hints at all -- and the
+machine ``metrics`` sub-objects share exactly those semantics: an observation
+(hole fraction, watertight, triangles, recorded by the worker on every
+finished model job) credits every pair in *its* vector too, which is what
+lets a value the user has generated with twenty times but never reviewed
+still say something true.
 
-**The semantics of the marginals changed, and it is deliberate.** A verdict now
-credits every ``param: value`` pair in its vector, not just the single axis a
-sweep varied. Those marginals are therefore *confounded*: "lora_weight 0.9
-accepts 6/8" now means "of the eight judged assets whose lora_weight was 0.9,
-six were accepted", with everything else free to vary, rather than "six of
-eight, all else held equal". That is the price of letting ordinary verdicts
-feed the hints at all, and it is the right trade -- a confounded number over a
-hundred real assets beats a clean one over eight sweep units. The ``vectors``
-section is where the unconfounded answer lives: a whole configuration, ranked.
+Two consequences of that being the *same* rule for both, neither of which is
+an oversight. An observation is only ever written for a model-stage job, but
+a model job's vector carries the whole 2D taxonomy it was promoted with -- so
+"art_style toon" accumulates the hole fraction of the meshes reconstructed
+from toon references, and the hint appears under a prompt control in the 2D
+pane. That is a real finding (whether a style reconstructs badly is exactly
+what someone choosing it wants to know), which is why the reader says
+"(21 meshes)" rather than "(21 runs)": the number has to name what it
+measured, since the control it sits beside does not. And a reference that was
+never promoted contributes nothing, so these marginals describe the meshes
+that were made, not the images that were drawn.
 
-The output shape is unchanged for every existing reader. ``params`` is exactly
-what ``bench/report.write_findings`` wrote, so ``bench.findings.load``/``hint``
-and both settings panes keep working with no edit; ``vectors`` is additive.
+``vectors`` is the whole-configuration ranking --
+verdict-driven, because a recipe nobody judged is evidence but not a
+recommendation -- ordered by the Wilson score lower bound rather than the raw
+rate, so a 19/20 outranks a 5/5 instead of the other way round.
+
+``comparisons`` is the unconfounded answer, recovered from sweep structure.
+Two rows form a matched pair iff they share a sweep, a source and a seed and
+their vectors differ in exactly one key -- the diff is computed on the
+vectors themselves, never parsed out of a unit label, and an absent key is a
+side of the contrast ("unset"), which is how a baseline pairs with an axis
+unit. Win counts come from human verdict pairs; per-metric deltas come from
+observation pairs, so an axis shows machine evidence the moment its sweep
+finishes, before anyone reviews a thing. The pairing context (sweep_id, seed,
+prompt_hash) is denormalized onto both row kinds precisely so these pairs
+survive ``delete_sweep`` and ``prune_jobs``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-FINDINGS_VERSION = 1
+# The vector vocabulary lives in ``warlock.vectors`` so the worker can import
+# it without importing ``service``; re-exported here because this module is
+# where every service-side caller (and test) learned the names.
+from ..vectors import VECTOR_PARAMS, config_vector, vector_key
+
+__all__ = [
+    "VECTOR_PARAMS",
+    "config_vector",
+    "vector_key",
+    "aggregate",
+    "presets",
+    "refresh",
+]
+
+# 2: vectors rank by wilson_low, the dead mean_* nulls are gone, and the
+# metrics / comparisons sections exist. Readers tolerate v1 files (hint falls
+# back to the bare "accept 6/8" when wilson_low is absent).
+FINDINGS_VERSION = 2
 JSON_FILENAME = "findings.json"
-
-# The only two metrics the old report ever emitted. Kept in the output as
-# nulls rather than dropped: anything reading findings.json (the generate
-# panes through ``bench.findings.load``) expects the keys to exist. Nothing computes them any
-# more -- they were joined from a sweep run's scores.json, which the run-dir
-# path took with it.
-METRIC_NAMES = ("silhouette_iou", "dino_cosine")
-
-# What a config vector is made of: every param that is an *input* to a
-# generation and could plausibly be varied. An allowlist rather than "params
-# minus DERIVED_PARAMS" because the interesting property is that adding a
-# derived value to queue.py can never silently widen it.
-#
-# Deliberately absent, each for its own reason: ``prompt`` (a property of the
-# subject, not of the settings -- grouping on it would make every bucket n=1),
-# every seed (the thing a repeat is *for*), everything in
-# ``validation.DERIVED_PARAMS`` (measurements of one run's artifacts), the rig
-# and pose keys (they describe a follow-up job, not this one's settings), and
-# ``hand_edited``/``imported``/``built``/``rerun_of`` (provenance, not config).
-VECTOR_PARAMS = (
-    "category",
-    "silhouette",
-    "material",
-    "condition",
-    "rarity",
-    "emissive",
-    "setting",
-    "genre",
-    "mood",
-    "art_style",
-    "palette",
-    "platform",
-    "base_model",
-    "style_lora",
-    "lora_weight",
-    "negative_prompt",
-    "ip_adapter",
-    "ip_scale",
-    "control",
-    "control_scale",
-    "control_end",
-    "resolution",
-    "size_m",
-    "bg_removal",
-    "reference_prep",
-    "profile",
-    "custom_triangles",
-    "trellis_band",
-    "trellis_tex_res",
-)
 
 # How many verdicts a whole vector needs before it is offered as a preset. The
 # same threshold ``bench.findings.hint`` applies to a single param value, and
 # for the same reason: a thin bucket is noise, not a finding.
 PRESET_MIN_N = 5
 
+# 95% score interval. Used for *ordering* and as a "floor of confidence" in
+# display; the raw rate is always shown beside it, and PRESET_MIN_N keeps
+# gating, so the conservatism costs nothing where it is not needed.
+WILSON_Z = 1.96
 
-def config_vector(job: dict[str, Any]) -> dict[str, Any]:
-    """The settings that produced this job, canonicalized.
 
-    Canonical in three ways, all of which exist so two runs of the same
-    configuration land in the same bucket. Unset is *absent* rather than
-    ``None``/``""`` -- a form sends empty strings for every taxonomy field the
-    user left alone, and keeping them would make "no style chosen" a distinct
-    value from "the key was never there". Floats are rounded to six decimals,
-    because an imgui float32 slider hands back ``0.6000000238418579`` for the
-    0.6 a spec file wrote. And ``stage`` comes along, because a reference and a
-    mesh judged under the same settings are not the same thing.
+def wilson_low(accepts: int, n: int, z: float = WILSON_Z) -> float:
+    """Lower bound of the Wilson score interval for ``accepts``/``n``.
+
+    The recognisable "how not to sort by average rating" bound: harsh exactly
+    where the raw rate misleads -- thin buckets -- which is what fixes a 5/5
+    outranking a 19/20 (lower bounds 0.566 and 0.764).
     """
-    params = job.get("params") or {}
-    out: dict[str, Any] = {}
-    for key in VECTOR_PARAMS:
-        if key not in params:
-            continue
-        value = params[key]
-        if value is None or value == "":
-            continue
-        if isinstance(value, float):
-            value = round(value, 6)
-        out[key] = value
-    out["stage"] = job.get("stage") or "model"
-    return out
-
-
-def vector_key(vector: dict[str, Any]) -> str:
-    """A short stable id for a vector -- the same settings always hash the
-    same, whatever order the dict was built in."""
-    blob = json.dumps(vector, sort_keys=True, default=str)
-    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+    if n <= 0:
+        return 0.0
+    p = accepts / n
+    z2 = z * z
+    centre = p + z2 / (2 * n)
+    spread = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
+    return round(max(0.0, (centre - spread) / (1 + z2 / n)), 3)
 
 
 def aggregate(store: Any) -> dict[str, Any]:
-    """The whole findings document, over every source's latest verdicts."""
-    records = store.latest_verdicts()
+    """The whole findings document, over every source's latest verdicts and
+    every job's latest observation."""
+    records = [r for r in store.latest_verdicts() if isinstance(r.get("vector"), dict)]
+    observations = [
+        o for o in store.latest_observations() if isinstance(o.get("vector"), dict)
+    ]
 
     params: dict[str, dict[str, list[dict[str, Any]]]] = {}
     vectors: dict[str, dict[str, Any]] = {}
     for record in records:
-        vector = record.get("vector") or {}
-        if not isinstance(vector, dict):
-            continue
+        vector = record["vector"]
         for param, value in vector.items():
             if param == "stage":
                 continue
@@ -143,34 +116,60 @@ def aggregate(store: Any) -> dict[str, Any]:
         bucket = vectors.setdefault(key, {"key": key, "vector": vector, "records": []})
         bucket["records"].append(record)
 
+    # The machine-evidence twin of the two structures above: the same
+    # confounded-marginal crediting for params, an exact-configuration join
+    # for vectors.
+    params_metrics: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    vector_metrics: dict[str, list[dict[str, Any]]] = {}
+    for obs in observations:
+        metrics = obs.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        for param, value in obs["vector"].items():
+            if param == "stage":
+                continue
+            params_metrics.setdefault(param, {}).setdefault(str(value), []).append(metrics)
+        vector_metrics.setdefault(vector_key(obs["vector"]), []).append(metrics)
+
+    # Sorted so the written file is stable and diffable across refreshes --
+    # set-union order would churn with hash randomization on every launch.
     out_params: dict[str, dict[str, Any]] = {}
-    for param, values in params.items():
-        out_params[param] = {v: _summarise(rows) for v, rows in values.items()}
+    for param in sorted(set(params) | set(params_metrics)):
+        judged = params.get(param, {})
+        measured = params_metrics.get(param, {})
+        out_params[param] = {}
+        for value in sorted(set(judged) | set(measured)):
+            entry = _summarise(judged.get(value, []))
+            if value in measured:
+                entry["metrics"] = _metric_summary(measured[value])
+            out_params[param][value] = entry
 
     out_vectors = []
     for bucket in vectors.values():
         summary = _summarise(bucket["records"])
-        out_vectors.append(
-            {
-                "key": bucket["key"],
-                "vector": bucket["vector"],
-                "n": summary["n"],
-                "accepts": summary["accepts"],
-                "accept_rate": summary["accept_rate"],
-                "top_reasons": summary["top_reasons"],
-                "jobs": [r["job_id"] for r in bucket["records"]],
-            }
-        )
-    # Best first, and a tie broken by sample size: two vectors both at 1.0 are
-    # not equally believable, and the one judged more often is the one worth
-    # offering as a preset.
-    out_vectors.sort(key=lambda v: (-v["accept_rate"], -v["n"], v["key"]))
+        entry = {
+            "key": bucket["key"],
+            "vector": bucket["vector"],
+            "n": summary["n"],
+            "accepts": summary["accepts"],
+            "accept_rate": summary["accept_rate"],
+            "wilson_low": summary["wilson_low"],
+            "top_reasons": summary["top_reasons"],
+            "jobs": [r["job_id"] for r in bucket["records"]],
+        }
+        if bucket["key"] in vector_metrics:
+            entry["metrics"] = _metric_summary(vector_metrics[bucket["key"]])
+        out_vectors.append(entry)
+    # Best first by the lower bound, not the raw rate -- the ordering the
+    # bound exists for -- with sample size breaking exact ties.
+    out_vectors.sort(key=lambda v: (-v["wilson_low"], -v["n"], v["key"]))
 
     return {
         "version": FINDINGS_VERSION,
         "generated": datetime.now(UTC).isoformat(timespec="seconds"),
         "params": out_params,
         "vectors": out_vectors,
+        "comparisons": _comparisons(records, observations),
     }
 
 
@@ -189,21 +188,217 @@ def _summarise(records: list[dict[str, Any]]) -> dict[str, Any]:
     for record in records:
         if record.get("verdict") == "reject":
             reasons.update(record.get("reasons") or ())
-    entry: dict[str, Any] = {
+    return {
         "n": n,
         "accepts": accepts,
         "accept_rate": round(accepts / n, 3) if n else 0.0,
+        "wilson_low": wilson_low(accepts, n),
         "sources": sources,
         "top_reasons": [
             [reason, count]
             for reason, count in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))
         ],
     }
-    # Kept as nulls for the readers that expect the keys. Nothing measures them
-    # now that the run directory (and its scores.json) is gone.
-    for metric in METRIC_NAMES:
-        entry[f"mean_{metric}"] = None
-    return entry
+
+
+def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Means over the observations where each metric was present -- the audit
+    can succeed while the report fails, so per-metric counts genuinely differ
+    and an absent reading must not drag a mean toward zero.
+
+    Which is exactly why every mean is accompanied by its own count in
+    ``counts``. ``n`` is the size of the *bucket*, and a reader that printed it
+    beside a mean was making a claim about the wrong number: one job in
+    twenty-one whose ``meshreport.build`` failed (logged and swallowed,
+    queue.py) or came back ``status: "invalid"`` carries no ``watertight`` at
+    all, so a single reading would be advertised as twenty-one.
+    """
+    counts: dict[str, int] = {}
+    out: dict[str, Any] = {"n": len(rows), "counts": counts}
+
+    def numbers(key: str) -> list[float]:
+        return [
+            float(r[key])
+            for r in rows
+            if isinstance(r.get(key), (int, float)) and not isinstance(r.get(key), bool)
+        ]
+
+    def flags(key: str) -> list[bool]:
+        return [r[key] for r in rows if isinstance(r.get(key), bool)]
+
+    for key in ("hole_worst", "hole_mean"):
+        values = numbers(key)
+        if values:
+            out[key] = round(sum(values) / len(values), 4)
+            counts[key] = len(values)
+    for key, name in (("watertight", "watertight_rate"), ("ready", "ready_rate")):
+        values = flags(key)
+        if values:
+            out[name] = round(sum(values) / len(values), 3)
+            counts[name] = len(values)
+    values = numbers("triangles")
+    if values:
+        out["triangles"] = int(round(sum(values) / len(values)))
+        counts["triangles"] = len(values)
+    return out
+
+
+_MISSING = object()
+
+
+def _one_key_diff(a: dict[str, Any], b: dict[str, Any]) -> str | None:
+    """The param two vectors disagree on, iff they disagree on exactly one.
+
+    Absence is a value: the baseline never set the axis param, so the diff
+    against an axis unit is one *absent* key. ``stage`` alone is not a
+    contrast anyone chose. This -- never the sweep_unit label -- is what makes
+    two rows a matched pair, so hand-picked ``vectors`` units pair whenever
+    they happen to be one-key neighbours and mislabeled units cannot lie.
+    """
+    diff = [k for k in a.keys() | b.keys() if a.get(k, _MISSING) != b.get(k, _MISSING)]
+    if len(diff) == 1 and diff[0] != "stage":
+        return diff[0]
+    return None
+
+
+def _comparisons(
+    records: list[dict[str, Any]], observations: list[dict[str, Any]]
+) -> dict[str, list[dict[str, Any]]]:
+    """Matched-pair contrasts, accumulated across sweeps.
+
+    Win counts come from verdict pairs grouped by (sweep, source) -- a human
+    and an AI judge disagreeing is not an axis finding -- and metric deltas
+    from observation pairs grouped by sweep alone. Both bucket by seed within
+    the group: same prompt (same sweep), same seed, one param differing is
+    the whole definition of all-else-equal here.
+
+    Sign convention the reader must honour: every delta is *a-side minus
+    b-side*, where ``a`` is the lexicographically lower value string. The
+    winner of the human pairs is unrelated to that ordering, so a display
+    that leads with the winner has to re-orient the sign
+    (``bench.findings._entry_lines`` does).
+    """
+    stats: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def entry_for(param: str, low: str, high: str) -> dict[str, Any]:
+        return stats.setdefault(
+            (param, low, high),
+            {
+                "pairs": 0, "a_wins": 0, "b_wins": 0, "ties": 0,
+                "sweeps": set(), "prompts": set(),
+                "obs_sweeps": set(), "obs_prompts": set(),
+                "deltas": {},
+            },
+        )
+
+    def oriented(param: str, row_a: dict[str, Any], row_b: dict[str, Any]):
+        def side(row: dict[str, Any]) -> str:
+            vector = row["vector"]
+            return str(vector[param]) if param in vector else "unset"
+
+        a_val, b_val = side(row_a), side(row_b)
+        if a_val == b_val:
+            # The one-key diff compares values, this compares their spellings,
+            # and 0.6 against "0.6" passes the first and collapses under the
+            # second -- which would print "0.6 beat 0.6 in 3 of 4 matched
+            # pairs". Not reachable through the sweep builder (guidance
+            # coerces), and a contrast with one side is not a contrast.
+            return None
+        if a_val > b_val:
+            return b_val, a_val, row_b, row_a
+        return a_val, b_val, row_a, row_b
+
+    def grouped(rows: list[dict[str, Any]], with_source: bool):
+        groups: dict[Any, dict[Any, list[dict[str, Any]]]] = {}
+        for row in rows:
+            if not row.get("sweep_id") or row.get("seed") is None:
+                continue
+            key = (row["sweep_id"], row["source"]) if with_source else row["sweep_id"]
+            groups.setdefault(key, {}).setdefault(row["seed"], []).append(row)
+        return groups
+
+    for group in grouped(records, with_source=True).values():
+        for rows in group.values():
+            for i in range(len(rows)):
+                for j in range(i + 1, len(rows)):
+                    param = _one_key_diff(rows[i]["vector"], rows[j]["vector"])
+                    if param is None:
+                        continue
+                    sides = oriented(param, rows[i], rows[j])
+                    if sides is None:
+                        continue
+                    low_val, high_val, low, high = sides
+                    entry = entry_for(param, low_val, high_val)
+                    entry["pairs"] += 1
+                    low_accept = low.get("verdict") == "accept"
+                    high_accept = high.get("verdict") == "accept"
+                    if low_accept and not high_accept:
+                        entry["a_wins"] += 1
+                    elif high_accept and not low_accept:
+                        entry["b_wins"] += 1
+                    else:
+                        entry["ties"] += 1
+                    entry["sweeps"].add(low["sweep_id"])
+                    if low.get("prompt_hash"):
+                        entry["prompts"].add(low["prompt_hash"])
+
+    for group in grouped(observations, with_source=False).values():
+        for rows in group.values():
+            for i in range(len(rows)):
+                for j in range(i + 1, len(rows)):
+                    param = _one_key_diff(rows[i]["vector"], rows[j]["vector"])
+                    if param is None:
+                        continue
+                    sides = oriented(param, rows[i], rows[j])
+                    if sides is None:
+                        continue
+                    low_val, high_val, low, high = sides
+                    low_m = low.get("metrics")
+                    high_m = high.get("metrics")
+                    if not isinstance(low_m, dict) or not isinstance(high_m, dict):
+                        continue
+                    deltas = {}
+                    for metric in low_m.keys() & high_m.keys():
+                        a_val, b_val = low_m[metric], high_m[metric]
+                        if isinstance(a_val, (int, float)) and isinstance(b_val, (int, float)):
+                            deltas[metric] = float(a_val) - float(b_val)
+                    if not deltas:
+                        continue
+                    entry = entry_for(param, low_val, high_val)
+                    for metric, delta in deltas.items():
+                        entry["deltas"].setdefault(metric, []).append(delta)
+                    entry["obs_sweeps"].add(low["sweep_id"])
+                    if low.get("prompt_hash"):
+                        entry["obs_prompts"].add(low["prompt_hash"])
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for (param, low_val, high_val), e in stats.items():
+        # Breadth counts describe the human pairs when there are any; a
+        # delta-only entry honestly describes its observation pairs instead.
+        sweeps = e["sweeps"] or e["obs_sweeps"]
+        prompts = e["prompts"] or e["obs_prompts"]
+        out.setdefault(param, []).append(
+            {
+                "a": low_val,
+                "b": high_val,
+                "pairs": e["pairs"],
+                "a_wins": e["a_wins"],
+                "b_wins": e["b_wins"],
+                "ties": e["ties"],
+                "sweeps": len(sweeps),
+                "prompts": len(prompts),
+                "deltas": {
+                    metric: {
+                        "mean": round(sum(values) / len(values), 4),
+                        "pairs": len(values),
+                    }
+                    for metric, values in sorted(e["deltas"].items())
+                },
+            }
+        )
+    for param in out:
+        out[param].sort(key=lambda item: (-item["pairs"], item["a"], item["b"]))
+    return dict(sorted(out.items()))
 
 
 def presets(doc: dict[str, Any], *, min_n: int = PRESET_MIN_N) -> list[dict[str, Any]]:

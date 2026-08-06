@@ -169,7 +169,9 @@ def _generator(doc: Any, obj: Any) -> None:
         # keeps the number the user typed, so they can correct it.
         return
     doc.set_props(obj.uid, params=edited, was={"params": params})
-    doc.set_mesh(obj.uid, mesh)
+    # The one place a new mesh does *not* invalidate the generator: this mesh
+    # is precisely what the generator builds from the edited parameters.
+    doc.set_mesh(obj.uid, mesh, keep_generator=True)
 
 
 def _widget(key: str, value: Any, default: Any) -> tuple[Any, bool]:

@@ -50,9 +50,11 @@ def test_recording_writes_a_verdict_disarms_and_queues_the_findings(svc):
     assert (row["job_id"], row["verdict"], row["reasons"]) == (job_id, "reject", ["holes"])
     assert row["vector"] == {"lora_weight": 0.9, "stage": "model"}
     assert ctx.state.inspector_reject_armed is None
-    # The recompute reads every verdict and writes a file: a task, not frame
-    # work -- and under the key Review already claims.
-    assert ctx.submitted == ["review-findings"]
+    # The recompute reads every verdict and writes a file, so it is asked for
+    # rather than done here -- through Review's own request, so the inspector
+    # keeps no second spelling of Review's task key.
+    assert ctx.state.findings_dirty is True
+    assert ctx.submitted == []
 
 
 def test_a_refused_verdict_toasts_and_writes_nothing(svc):
@@ -72,7 +74,8 @@ def test_an_inspector_verdict_feeds_the_same_findings_a_sweep_does(svc):
     doc = svc_findings.aggregate(svc.store)
     assert doc["params"]["platform"]["pc"] == {
         "n": 5, "accepts": 5, "accept_rate": 1.0,
+        "wilson_low": svc_findings.wilson_low(5, 5),
         "sources": {"human": {"accept": 5, "reject": 0}},
-        "top_reasons": [], "mean_silhouette_iou": None, "mean_dino_cosine": None,
+        "top_reasons": [],
     }
     assert len(svc_findings.presets(doc)) == 1

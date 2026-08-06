@@ -109,3 +109,18 @@ def test_a_pinned_server_config_is_what_the_recipe_records():
         config.trellis_band,
         config.trellis_tex_res,
     )
+
+
+def test_the_recipe_records_the_tier_the_job_actually_asked_for():
+    """The regression: it read ``params["mesh_profile"]``, which nothing
+    writes -- a job stores the tier as ``params["profile"]`` -- so every recipe
+    recorded the config default and a bench recipe carrying "standard"
+    recorded "raw"."""
+    config = Config()
+    recipe = provenance.trellis_recipe(config, {"profile": "standard"}, mesh_seed=42)
+    assert recipe["mesh_profile"] == "standard"
+
+    # And a job that pinned nothing still falls back to the config.
+    assert provenance.trellis_recipe(config, {}, mesh_seed=42)["mesh_profile"] == (
+        config.mesh_profile
+    )

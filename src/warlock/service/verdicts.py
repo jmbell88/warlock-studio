@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from ..vectors import prompt_hash
 from . import findings
 from .core import WarlockService
 from .errors import Invalid
@@ -66,11 +67,20 @@ def record_verdict(
         # queued or failed unit poisons the corpus with accepts for meshes
         # that never existed.
         raise Invalid(f"job is {job['status']}; a verdict needs a finished asset")
+    # The sweep context rides along denormalized, like the vector: a matched
+    # pair (same sweep, same seed, one param differing) must still be pairable
+    # after delete_sweep has taken the job rows.
+    params = job.get("params") or {}
+    seed = params.get("seed")
     row_id = svc.store.add_verdict(
         job_id,
         source=source,
         verdict=verdict,
         reasons=reason_list,
         vector=findings.config_vector(job),
+        sweep_id=job.get("sweep_id"),
+        sweep_unit=job.get("sweep_unit") or "",
+        seed=seed if isinstance(seed, int) and not isinstance(seed, bool) else None,
+        prompt_hash=prompt_hash(job.get("prompt")),
     )
     return {"id": row_id, "job": job_id, "verdict": verdict, "reasons": reason_list}

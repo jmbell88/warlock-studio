@@ -164,10 +164,17 @@ def _module_version(name: str) -> str | None:
 def trellis_recipe(config: Any, params: Mapping[str, Any], *, mesh_seed: int) -> dict[str, Any]:
     """Everything that decided the mesh, in one json.dumps-able dict.
 
-    The two server settings are read from the job's own params when it pinned
+    The server settings are read from the job's own params when it pinned
     them, and only otherwise from the config: a sweep unit that restarts
     trellis-server with ``--band 8`` and then recorded the config's ``None``
     would describe a server that did not run.
+
+    The optimise tier is one of those, and it read the wrong key: a job stores
+    it as ``params["profile"]`` (``jobs.create_job``, and what ``queue`` itself
+    reads), so ``params["mesh_profile"]`` was never present and every recipe
+    recorded the *config default* -- a bench recipe carrying "standard"
+    recorded "raw". The two keys beside it were right, which is what made it
+    look like a name rather than a bug.
     """
     return {
         "version": RECIPE_VERSION,
@@ -175,7 +182,7 @@ def trellis_recipe(config: Any, params: Mapping[str, Any], *, mesh_seed: int) ->
         "band": params.get("trellis_band", config.trellis_band),
         "tex_res": params.get("trellis_tex_res", config.trellis_tex_res),
         "webp": config.trellis_webp,
-        "mesh_profile": params.get("mesh_profile", config.mesh_profile),
+        "mesh_profile": params.get("profile") or config.mesh_profile,
         "platform": params.get("platform"),
         "size_m": params.get("size_m"),
         "models": model_fingerprints(

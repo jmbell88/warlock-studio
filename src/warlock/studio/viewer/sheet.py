@@ -77,6 +77,96 @@ class OrthoCamera:
         return m3.orthographic(-half, half, -half, half, self.near, self.far)
 
 
+class StripRender:
+    """A direction strip, one cell per :meth:`step`.
+
+    Incremental because every cell is a draw *and* a ``read_rgba`` -- a
+    synchronous GPU-to-CPU readback, which stalls the pipeline. Sixteen of them
+    in one frame is a visible freeze on the frame the user pressed the button;
+    sixteen frames of one is a quarter of a second nobody notices. All of it
+    has to stay on the frame thread regardless: it is the one GL context.
+
+    Cleared to alpha zero and drawn with no grid: the sheet must contain the
+    subject and nothing else, which is what the browser's beginPreviewScene
+    arranged by hiding the grid, the markers and the background.
+
+    The camera is framed once, from the bounds as they are now -- the same rule
+    the sheet worker follows, and for the same reason: reframing per cell makes
+    the subject jump between directions.
+    """
+
+    def __init__(
+        self,
+        renderer: Any,
+        gpu: Any,
+        model: Any,
+        yaws: list[float],
+        *,
+        elevation: float = 0.0,
+        flat: bool = True,
+        model_matrix: np.ndarray | None = None,
+        cell: int = CELL,
+    ) -> None:
+        from PIL import Image
+
+        self._renderer = renderer
+        self._gpu = gpu
+        self._yaws = list(yaws)
+        self._flat = flat
+        self._elevation = elevation
+        self._cell = cell
+        self.index = 0
+
+        lo, hi = model.bounds()
+        self._placement = m3.identity() if model_matrix is None else model_matrix
+        lo = (self._placement @ np.append(lo, 1.0))[:3]
+        hi = (self._placement @ np.append(hi, 1.0))[:3]
+        size, self._centre = hi - lo, (lo + hi) * 0.5
+        extent = extent_of(size)
+        self._distance = extent * 2.0
+
+        self._camera = OrthoCamera()
+        self._camera.extent = extent
+        self._camera.target = self._centre
+        self._camera.near = 0.001
+        self._camera.far = self._distance * 4.0
+
+        self._viewport = Viewport(renderer.ctx, (cell, cell))
+        self.image = Image.new("RGBA", (cell * max(len(self._yaws), 1), cell), (0, 0, 0, 0))
+
+    @property
+    def done(self) -> bool:
+        return self.index >= len(self._yaws)
+
+    def step(self) -> bool:
+        """Render the next cell. -> whether the strip is now finished."""
+        from PIL import Image
+
+        if self.done:
+            return True
+        i, yaw = self.index, self._yaws[self.index]
+        self._camera.position = camera_position(
+            self._centre, yaw, self._elevation, self._distance
+        )
+        self._renderer.draw(
+            self._viewport,
+            self._camera,
+            self._gpu,
+            model_matrix=self._placement,
+            flat=self._flat,
+            show_grid=False,
+            background=(0.0, 0.0, 0.0, 0.0),
+        )
+        self.image.paste(
+            Image.fromarray(self._viewport.read_rgba(), "RGBA"), (i * self._cell, 0)
+        )
+        self.index += 1
+        return self.done
+
+    def release(self) -> None:
+        self._viewport.release()
+
+
 def strip(
     renderer: Any,
     gpu: Any,
@@ -88,46 +178,22 @@ def strip(
     model_matrix: np.ndarray | None = None,
     cell: int = CELL,
 ) -> Any:
-    """Render one cell per yaw and composite them left to right. -> PIL image.
+    """Every cell at once. -> PIL image.
 
-    Cleared to alpha zero and drawn with no grid: the sheet must contain the
-    subject and nothing else, which is what the browser's beginPreviewScene
-    arranged by hiding the grid, the markers and the background.
+    The whole-strip form, kept for callers with no frame to spread the work
+    over -- the tests, and anything headless. The interactive preview drives
+    :class:`StripRender` a cell at a time instead.
     """
-    from PIL import Image
-
-    lo, hi = model.bounds()
-    placement = m3.identity() if model_matrix is None else model_matrix
-    lo = (placement @ np.append(lo, 1.0))[:3]
-    hi = (placement @ np.append(hi, 1.0))[:3]
-    size, centre = hi - lo, (lo + hi) * 0.5
-    extent = extent_of(size)
-    distance = extent * 2.0
-
-    camera = OrthoCamera()
-    camera.extent = extent
-    camera.target = centre
-    camera.near = 0.001
-    camera.far = distance * 4.0
-
-    viewport = Viewport(renderer.ctx, (cell, cell))
-    out = Image.new("RGBA", (cell * len(yaws), cell), (0, 0, 0, 0))
+    render = StripRender(
+        renderer, gpu, model, yaws,
+        elevation=elevation, flat=flat, model_matrix=model_matrix, cell=cell,
+    )
     try:
-        for i, yaw in enumerate(yaws):
-            camera.position = camera_position(centre, yaw, elevation, distance)
-            renderer.draw(
-                viewport,
-                camera,
-                gpu,
-                model_matrix=placement,
-                flat=flat,
-                show_grid=False,
-                background=(0.0, 0.0, 0.0, 0.0),
-            )
-            out.paste(Image.fromarray(viewport.read_rgba(), "RGBA"), (i * cell, 0))
+        while not render.step():
+            pass
+        return render.image
     finally:
-        viewport.release()
-    return out
+        render.release()
 
 
 def summary(rows: int, yaws: int, frame_size: int, clip: bool = False) -> str:

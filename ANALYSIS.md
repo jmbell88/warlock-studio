@@ -1,190 +1,208 @@
-# QA Audit — 2026-08-06 (post-v0.0.9)
+# QA Audit — 2026-08-06 (second pass)
 
-Six parallel audit passes over the whole codebase: concurrency/DB/queue, the service
-layer, studio UI/modes/viewer, inker+clay+undo, pipelines/offline, and
-docs/tests/config. Baseline before any change: **2612 passed, 7 skipped, ruff clean.**
-Every finding below was verified in source (several reproduced empirically) before
-being acted on. Known-deliberate behaviours (reference_prep pinning, the band default,
-single-image conditioning, the missing gltfpack binary) were excluded up front.
+Four passes over the codebase: a line-by-line audit of the uncommitted evidence and
+pixel-art features, a re-verification of everything the first audit deferred, a
+repo-wide sweep for half-wired features, and a manual trace of the diff. Baseline
+before any change: **2680 passed, 7 skipped, ruff clean**. After: **2736 passed, 7
+skipped, ruff clean**.
 
-## Fixed in this audit
+The explicit-marker sweep came back empty — no `TODO`/`FIXME`/`XXX`/`HACK` anywhere in
+`src/`, no `NotImplementedError` outside the two abstract `Edit` hooks in
+`studio/undo.py`, no bare `...` bodies, and every `pass` a commented deliberate swallow.
+Every defect below is a boundary mismatch or a dead half, not unfinished code.
 
-### Correctness bugs
+The first audit's own record is in git (`git show d6fd407:ANALYSIS.md`); everything it
+deferred is resolved here.
 
-- **`flatten_layers` stranded a floating buffer** (`studio/inker/document.py`). Every
-  other canvas-level op commits the float first; flatten replaced the whole stack, so a
-  lifted selection's undo record named a layer that no longer existed — the next Ctrl+Z
-  raised `KeyError` out of `by_uid` and the lifted pixels were gone. Now commits first;
-  regression test added.
-- **`.wblk` with objects but no `materials` array** (`studio/clay/serialize.py`) got an
-  empty palette instead of the default one — everything rendered and exported magenta,
-  and the properties panel raised `IndexError`. The reader now substitutes the default
-  palette (an empty *scene* still round-trips its empty palette); regression test added.
-- **Verdicts could be filed against unfinished jobs** (`service/verdicts.py`). Review
-  lists queued/running/failed units, and pressing A recorded a permanent, denormalized
-  accept for a mesh that never existed — poisoning the findings corpus forever.
-  `record_verdict` now refuses any job that is not `done`; the Review UI already
-  catches the error and toasts.
-- **Sweep admission wasn't all-or-nothing** (`service/sweeps.py`). `_check_unit` missed
-  two of `create_job`'s refusals (resolution allowlist; conditioning-needs-a-reference),
-  so a sweep over `ip_adapter`/`control` or a bad resolution minted the sweep row and
-  died on the first unit with an unnamed error. Both checks now mirrored.
-- **Remesh skipped VRAM admission** (`service/jobs.py`). `rerun_job` in remesh mode
-  promotes a reference (admitted against SDXL cost only) to a model job without
-  `check_vram` — the exact path the refusal message itself recommends. On a card where
-  promote correctly refuses, remesh queued the same reconstruction and failed minutes
-  later (or overcommitted, which on Windows is the host-commit crash). Now checked.
-- **`prune_jobs`/`delete_job` raced the worker's claim** (`service/jobs.py`, `db.py`).
-  The running-check was against a page snapshot; a queued job claimed in the gap had
-  its row and directory deleted under a live reconstruction. Added
-  `JobStore.delete_if_not_running` (status check and delete in one statement under the
-  lock, the same shape as `claim`) and routed both callers through it.
-- **`normalize_glb` grounding transform** — see *Deferred*, this one is real and
-  reproduced but needs a decision.
+## Fixed
 
-### Races and thread-safety
+### The uncommitted features, before committing them
 
-- **`TrellisServer.running` / `_reap_if_dead` check-then-act** (`pipelines/trellis.py`):
-  re-read `self._proc` after the None test while `stop()` nulls it from another thread
-  — a cancel during remesh could die with `AttributeError` instead of unwinding. Both
-  now read `_proc` once.
-- **`TrellisServer.generate` blocked the event loop** writing the returned GLB (tens of
-  MB) inline — during which cancellation and every `call_on_loop` stalled. Validation
-  and the atomic write now run through `asyncio.to_thread`.
-- **Worker poll loop had no backoff on persistent errors** (`queue.py`): a corrupt DB
-  page or full disk spun the loop flat out, writing a traceback per pass to the disk
-  that caused it. Error branch now sleeps `POLL_INTERVAL`.
-- **`winjob._ensure_job` was unlocked** while genuinely called from four threads — two
-  overlapping first calls could mint two job objects and leak one, with `armed()`
-  reporting on a handle some children weren't in. Now under a lock. Also
-  `CreateJobObject`'s failure log always printed `(0)` (`ctypes.get_last_error` with
-  `windll`'s `use_last_error=False`); now calls `GetLastError` directly.
+- **Machine evidence never reached `findings.json`.** `service.findings.refresh` had two
+  call sites, both inside a verdict path, so the observations the worker appends on every
+  finished model job arrived only when somebody next pressed A or R — and on an install
+  with no verdict ever filed, the file did not exist and the whole observation hint tier
+  was unreachable. Both claims to the contrary shipped in the same diff (`CLAUDE.md` and
+  `docs/manual/16-review.md`). The frame loop's `announce` callback now marks
+  `AppState.findings_dirty` for a finished model-stage job, mirroring
+  `_observe_finished`'s own condition, and `review_mode.pump_findings` submits it. **A
+  flag pumped every frame, never a direct submit**: `TaskRunner.submit` refuses a key
+  already in flight and nothing re-armed it, so a burst of verdicts recomputed over the
+  set as it stood at the first press and the request following the *last unit of a sweep*
+  was dropped for good. The tests missed it because every one of them called `aggregate`
+  directly; the new one asserts the file carries an observation with no verdict filed.
+- **The pixel preview claimed to save a file.** It submitted `derive.get_file` under
+  `save:<job>:<name>`, and the app toasts `"Saved to <result>"` for every finished `save:`
+  key — while `get_file` returns the path *inside* the job directory and is never None. So
+  "Preview pixels" reported a save to a path the user never chose, with no dialog shown.
+  `app_ctx.derive_key` is a namespace of its own now, and `Ctx.artifact_busy` checks both
+  so a preview and an export of one artifact still cannot describe different files.
+- **An existing v1 `findings.json` rendered every recipe as "(0%+)"** — the pane defaulted
+  a missing `wilson_low` to 0.0, under a heading claiming the Wilson ranking.
+  `bench.findings.vector_line` omits the bound instead, which is what `hint` already did.
+- **Every mean was printed beside the bucket's `n`, not its own.** A `meshreport` that
+  failed or returned `status: "invalid"` leaves an observation with holes and no watertight
+  flag, so one reading in twenty-one was advertised as twenty-one. `_metric_summary` emits
+  `counts` per metric; the reader thresholds and labels per measurement, and drops a thin
+  one rather than letting a fat one carry it.
+- **A payload that was not JSON took down the whole refresh.** The type checks in
+  `aggregate` never ran, because the decode is in the store: `JobStore._blob` returns
+  `None` for an unparseable blob, which every reader already treats as a row to skip.
+- **The machine-evidence hints were absent from the pane they were made for.** The 3D pane
+  hinted one control out of five while observations measure *geometry*; `platform`,
+  `bg_removal` and `reference_prep` now carry hints (`size_m` and `custom_triangles`
+  deliberately do not — continuous values never meet the threshold). The reader says
+  "(21 meshes)" rather than "runs", because a model-stage observation credits the whole 2D
+  taxonomy its job was promoted with, so these lines appear under prompt controls where
+  the number has to name what it measured.
+- Smaller: `ThumbnailCache` retires the superseded *version* of a key instead of leaving
+  it to LRU (a palette-tuning session evicted library thumbnails to make room for its own
+  dead textures) and takes the sampling filter into the key; `_record_observation` moved
+  after `_maybe_queue_rig`, so the new await cannot cost a job its auto-rig on shutdown;
+  `comparison_lines` is built after the collapsing header rather than every frame with the
+  section closed; `oriented()` refuses a contrast whose two sides render identically;
+  `idx_observations_sweep` is gone (nothing queries that table by sweep); the `sweep_unit`
+  columns and the migration's "one transaction" comment now say what is actually true.
 
-### UI state and GPU-resource lifetime
+### Correctness
 
-- **Applying a saved pose (and picking a preset) bypassed the discard-confirm**
-  (`panes/pose_panel.py`): both overwrite hand-made rotations, and Apply also cleared
-  the dirty flag so the loss was silent and permanent. Both now go through `guard`,
-  like every other exit route.
-- **Selection change mid-compare leaked the split's GPU half** (`state.py` clears the
-  flag but can't reach the viewer): the stale mesh kept rendering a full second scene
-  draw every frame, invisibly, forever. `_draw_viewport_image` now reconciles.
-- **Two forget-before-release violations**: `viewer_embed.clear_reference` and the
-  sheet panel's strip texture both released registered textures without
-  `forget_texture`, leaving the imgui backend holding dead objects under GL names the
-  driver reuses — the exact "unrelated image renders here" / use-after-release hazard
-  the rule exists to prevent. Both fixed; the strip texture is also now released at
-  teardown (it leaked on every exit).
-- **Inker toolbar Undo/Redo weren't gated on `saving`** (the keyboard path and every
-  other control are): an undo of a replay-edit mid-save could rebind the stack while
-  `write_ora` was between `stack.xml` and the layer PNGs — a torn archive. Gated.
-- **Save/Save-as/Export were enabled mid-free-transform**: saving committed the
-  transform with no confirm and left the transform mode stuck pointing at nothing.
-  Gated on `state.transforming`.
-- **Clay's viewport accepted new drags while a save was in flight**, contrary to the
-  rule every panel follows (and to `clay_mode`'s own docstring). New presses are now
-  refused while saving; an in-flight drag keeps its release (the save's bytes were
-  captured before it started, and swallowing the release would strand `_grab`).
+- **`normalize_glb` grounded in the wrong frame, and once per root.** Bounds are measured
+  in *world* space but the transform was applied under each root, composing as
+  `M_root · T · S` instead of `T · S · M_root` — so a rotated root rotated the grounding
+  offset. And the same world-space translation was applied once per root while each root's
+  own offset stayed unscaled above it, so a Clay export (**one root per object**) grounded
+  every object as though it alone were the scene: three boxes asked for 2 m came out 8.2 m
+  and reported 2. trellis output hid both, because trimesh writes one identity root.
+  `_insert_transform_below` now empties the root and folds its TRS into the inserted child.
+  A wrapper node above the roots does not work — trimesh's base frame is named `world` and
+  so is the root its own exporter writes, and the collision resolves into a cycle that
+  drops the transform again. Pinned across identity / rotated / translated / non-uniformly
+  scaled / matrix / multi-root, with and without `size_m`.
+- **The pose editor wrote one job's rotations into another.** `_enter` used the job id and
+  discarded it, and `_sync_viewer` deliberately does not reload while posing — so clicking
+  another asset left the rig on screen under that asset's inspector, and Save wrote there.
+  Nothing downstream could catch it: rig validation checks bone *names*, and two jobs on
+  one template have the same ones. The editor records `viewer.pose_job_id`, and the panel
+  withholds every control (rather than retargeting them) when the selection has moved.
+- **`delete_sweep` deleted running units.** It called the unguarded `store.delete` and then
+  rmtree'd, where `delete_job` and `prune_jobs` both use `delete_if_not_running` — and a
+  status check would not have been enough anyway, because `cancel_job` writes `cancelled`
+  and only *asks* the worker to stop. `worker_is_inside` reads `current_job_id`, which the
+  worker clears in its own `finally`, after the last write. A unit still being written is
+  cancelled and left, and so is the sweep row, so the second press finishes the job.
+- **Deleting an asset while a rig or sheet for it ran** recreated its directory as an
+  orphan: those are separate job rows whose artifacts land beside the `model.glb` they were
+  fitted to, and the target's own status says nothing (it is `done`, which is why a rig
+  could be queued for it). `dependent_jobs` refuses in `delete_job` and skips in
+  `prune_jobs`.
+- **Three Clay paths edited geometry without freezing the generator.** `clay_ops.run`'s
+  docstring claimed it cleared `generator` "in one place, for every op"; only
+  `run_mesh_op` and Smooth did, so Delete, Bake Transform, Mirror — and an element drag,
+  which nobody had listed — left the object still claiming to be "box, size 1". The
+  properties panel kept offering that size field, and touching it rebuilt a pristine box
+  over the edit, with no warning. The freeze is `Document.set_mesh`'s now, with
+  `keep_generator=True` for the one caller whose new mesh *is* what the generator makes.
+- **A sweep whose units are all the same job is refused.** `expand` compares each unit
+  against the base only, and `guidance.normalize` drops a setting with nothing to apply it
+  to — so an `ip_scale` axis with no adapter in the base (or a `lora_weight` axis with no
+  style LoRA) produced up to 64 byte-identical jobs at one seed. Hours of GPU redrawing one
+  picture, and N bogus "distinct configs" in the verdict corpus.
+- **`provenance.trellis_recipe` recorded the wrong optimise tier.** It read
+  `params["mesh_profile"]`, which nothing writes — a job stores it as `params["profile"]` —
+  so every recipe recorded the config default and a bench recipe carrying "standard"
+  recorded "raw". The two keys beside it were right, which is what made it look like a name.
 
-### Hardening and hygiene
+### Frame-thread stalls
 
-- `optimize_job` now iterates `files.DERIVED` instead of a duplicated literal tuple
-  (a sixth export added to one and not the other would serve stale pre-retarget copies).
-- `save_clay_source` now calls `check_job_id` like every other path-building entry
-  point (was defended only by the DB lookup).
-- All five pre-row asset writers (`create_job`, `import_reference`, `import_mesh`,
-  `rerun_job`, `promote_to_model`) now clean up their directory when the *payload
-  write* fails, not just the DB insert — a disk-full mid-write no longer leaves a
-  truncated orphan directory.
-- `load_lora_weights` (both call sites) and `load_ip_adapter` now pass
-  `local_files_only=True`, closing the last three weight loads that would be free to
-  touch the hub on a host with `HF_HUB_OFFLINE=0` in the environment.
-- Stale comment in `models.py` pointing at a `_SCHEDULERS` table that doesn't exist.
+All three measured, all fixed by doing less per frame rather than by moving GL work:
 
-### Docs, tests, config
+- `attach_files` takes a caller-owned cache stamped `(status, job-dir mtime)` — one stat
+  per row instead of ten, on a two-hundred-row page, twice a second, unbounded after "load
+  more".
+- `_sync_viewer` parses the GLB off-thread (`Viewer.parse_model`) and adopts it on the
+  frame thread (`_adopt_model`), where the GPU upload must stay. It used to run the whole
+  load inline on the frame a job transitioned to done. `load_model` survives for the
+  callers where the wait *is* the response.
+- `viewer/sheet.StripRender` renders one cell per `step()`. Sixteen draws each followed by
+  a synchronous `read_rgba` was a visible freeze; sixteen frames of one is not. The
+  `ctx.busy("sheet-preview")` guard that stood there was scaffolding against a key nothing
+  ever submitted.
 
-- **The documented setup command failed outright**: `dev` moved to
-  `[dependency-groups]` but README, CLAUDE.md, and the installation chapter (three
-  places) all still said `uv sync --extra dev …`, which errors on a fresh clone. All
-  fixed; the extras table now explains dev is a default group.
-- **Manual TOC dropped chapters 15–16**: `loader.PARTS` stopped at 14, so *Extending*
-  and *Review* rendered as bare "Contents" entries. Ranges now cover 1–16 (and
-  Troubleshooting moved from "Architecture" to "Setup & operations"); a test now
-  asserts every real chapter lands in a part.
-- CLAUDE.md pointed forward-planning at `docs/TODO.md`, which v0.0.9 deleted; the
-  `docs/` inventory sentence also missed `docs/REPORT.md`. Both corrected.
-- Six live env vars were missing from the configuration manual's "every variable"
-  table (`WARLOCK_RANK`, `WARLOCK_REFERENCE_RETRIES`, `WARLOCK_MESH_RETRIES`,
-  `WARLOCK_MESH_HOLE_MAX`, `WARLOCK_VRAM_BUDGET`, `WARLOCK_VRAM_TOTAL`); added. The
-  README's "Everything is env-overridable" overclaim now defers to that table.
-- A bench-suite fixture note cited the deleted `docs/NEXT.md`; reworded.
-- `pyproject.toml`: the `rig` extra's explanatory comment was stranded above the
-  `studio` extra; moved home.
-- `tests/inker/test_document.py` renamed to `test_inker_document.py` — it collided
-  with `tests/clay/test_document.py` and collection survived only because of an
-  undocumented `__init__.py` asymmetry.
-- `.gitignore`: `assets/`, `models/`, `sweep/`, `scratch/` root-anchored (matching
-  `/bench/`, `/vendor/`) so a future same-named package directory can't silently
-  vanish from the index.
+### Controls that did nothing, and dead halves
 
-## Deferred — needs your input
+- The Clay context menu never consulted `tab.saving`, so every row stayed clickable during
+  a save and the click was swallowed silently; the parameter popup's Apply did the same.
+  Both are greyed now, and the menu says why once at the top.
+- `clay_tools`' Delete checked its predicate *after* the click, drawing a live red button
+  that did nothing — the one button where "nothing happened" is hardest to tell from
+  "something irreversible happened". `widgets.destructive_button` takes `enabled` now.
+- `clay_ops.Param.integer` was declared, set on Smooth's `levels`, and never read, so the
+  field accepted 1.5 and the op truncated it.
+- A blank vector-preset name was refused silently: the modal closed and nothing was said.
+- Vector presets could be saved and applied but never deleted, and nothing capped the list.
+- A bare-letter key bound to a *parameterised* op set `pending_op` and could not open the
+  popup from the event layer, leaving the mode holding a request it could not act on.
+  Unreachable today; `open_op_popup` is the request the pane acts on.
+- `pose_panel`, `sheet_panel` and `review_mode.preview_units` swallowed exceptions with no
+  log, where every comparable site writes one.
+- **`Runtime.shutdown` closed the store after a *timed-out* pool shutdown.** The comment
+  said the ordering means "a task still calling into the service finds the store open" and
+  the next one said the wait is bounded; the two are only compatible while the pool
+  drains. `TaskRunner.shutdown` returns whether it did (it was discarding
+  `concurrent.futures.wait`'s `not_done`), and the connection is left open when it did
+  not — the process is exiting either way, and leaking a handle for the last second of a
+  shutdown costs less than a `ProgrammingError` captured into a future nobody will poll.
+- Deleted: `glctx.read_image`, `glctx.create_standalone`, `picking.world_positions`,
+  `picking.rotation_between`, `gltf.Model.reset_rotation`, `inker.Document.stroking`,
+  `Document.checkpoint`, the eight-member "compatibility with the flat editor" block (the
+  pane it served is gone), `JobsCache.children`, and the empty "Add-ons" settings section.
+- Kept with the reason written down: `service.system.health` (each half has a cheaper
+  reader now; it survives as the one "state of everything" answer),
+  `clay.adjacency.check_manifold` (O(corners), and `import_mesh` already measures the
+  exported GLB through `meshreport`), `JobStore.children` and its index.
+- `panes/app_settings.py` no longer promises a future release.
 
-1. **`normalize_glb` grounds in the wrong frame for GLBs whose roots carry a
-   transform** (`pipelines/postprocess.py`, `_insert_transform_below`). Reproduced: a
-   unit box under a rotated, translated root comes back sunk half its height and
-   offset. Trellis output is safe (trimesh emits an identity root), but **Clay exports
-   and Blender-authored uploads put real TRS on root nodes**, so `import_mesh` grounds
-   them wrong and `meshreport` immediately files a pivot complaint against a mesh the
-   user just authored. Proposed fix: insert the grounding node *above* the scene roots
-   (one new root wrapping them) instead of below each root; needs care because
-   `optimize_job` reapplies the transform after gltfpack rewrites the node graph, and
-   the viewer/`stale_rig_artifacts` both read the node structure. Say the word and
-   I'll implement it with a regression test matrix (identity root / rotated root /
-   multi-root / size_m).
+### Documentation
 
-2. **The pose editor can bind one job's rig while the panel targets another**
-   (`panes/pose_panel.py` + `inspector.py`). Enter pose mode on job A, click job B in
-   the library: Save writes A's rotations into B's poses, and joints mode re-skins B
-   against A's skeleton — cross-job data corruption. Fix direction: bind the editor to
-   the job id it was opened on (or guard selection changes out of pose mode). Both
-   change UI flow, so choose: **(a)** panel follows the editor's bound job regardless
-   of selection, or **(b)** selection change guards/exits pose mode.
+- **The 2D export family had no manual coverage at all** — `icon.png`, `sprite.png`, the
+  three pixel artifacts, `manifest.json`, `wrap_preview.png`. The overview tells the reader
+  2D mode has an Export tab; nothing said what was in it. New `## 2D exports` section in
+  `02-generating-references.md`, including the pixel size/colours knob and the manifest.
+- **The seamless-tile stage had none either** — the words *tile* and *seamless* appeared
+  nowhere in `docs/manual/`, for a first-class output with its own library filter, its own
+  seam measurement and its own export. New `## Seamless tiles` section.
+- `11-configuration.md` now mentions what `studio_settings.json` holds beyond the pane.
+- `CLAUDE.md` gained the findings-refresh seam, the grounding composition rule, the
+  set_mesh freeze, the derive-vs-save key split and the frame-thread costs.
 
-3. **`delete_sweep` deletes running units** (`service/sweeps.py`) — `cancel_job`
-   returns before the worker stops writing, so the rmtree'd directory can be
-   resurrected as an orphan (reproducible when cancelling during the t2i phase).
-   Options: refuse while any unit is running (mirror `delete_job`'s `Conflict`), or
-   cancel-and-wait. Related: deleting a *done* mesh job while a rig/sheet job for it
-   is running recreates its directory the same way (`finalize_rig` renames into a
-   deleted dir). Both want the same decision about dependent/running work.
+## Deferred — needs a deliberate decision
 
-4. **Three frame-thread stalls** the audit measured as real but whose fixes are
-   architectural: `_sync_viewer` runs `load_model` (full GLB + texture decode) on the
-   frame thread at the exact moment a job finishes; `jobs_cache.tick` re-stats 9 files
-   × every listed row twice a second (unbounded after "load more"); the sheet panel's
-   "Refresh preview" does N offscreen renders + GPU readbacks inline (16 directions =
-   a visible freeze). All three need a load-off-thread/hand-over pattern (the GL
-   upload must stay on the frame thread) or caching; worth one focused pass.
+Both of these change generated output, so they must ride a `pipelines/prompt.PROMPT_VERSION`
+bump in the same change or `provenance.versions()` will call two incomparable runs
+comparable. Do them together or not at all.
 
-5. **`runtime.shutdown` closes the store after a *timed-out* task-pool shutdown** —
-   a task that survives the 30 s grace and then touches the DB gets
-   `ProgrammingError` swallowed into a dead future. Either skip `store.close()` when
-   the pool timed out, or correct the comment that claims the ordering is sufficient.
+1. **`prompt.chunk` canonicalizes comma spacing** (`pipelines/prompt.py:136-165`) — it
+   strips around commas and drops empty phrases — but `queue.py:801` records the
+   *pre-chunk* string. Provenance fidelity only: `chunk` is deterministic and idempotent,
+   so re-running the recorded string reproduces the encoding exactly.
+2. **`guidance.py`'s `consumable` fragment is five words** where the module's own rule is
+   2–4, and it is the only over-length phrase in the file. Trimming changes output for
+   every `category=consumable` job.
 
-6. **Smaller judgement calls**, cheap to do on a nod: `_sync_viewer` never clears a
-   mesh left by Review when the 3D selection has nothing to show (stale sweep mesh
-   under another job's inspector); sweeping `ip_scale`/`control_scale` with no adapter
-   in the base produces N byte-identical units (guidance.normalize drops the orphan
-   scales) — `expand` could refuse or collapse them; `prompt.chunk` canonicalizes
-   comma spacing so the recorded prompt can differ from the encoded one
-   (provenance/recipe mismatch on re-run); `guidance.py`'s `consumable` fragment is
-   5 words against the module's own 2–4-word rule (trimming changes generated output,
-   so it should ride a deliberate prompt-version change); deleting a source asset
-   isn't blocked while a rig for it runs (subset of #3); `inker_colors` is the one
-   drawn pane with no help button, invisible to the help-coverage test.
+Also noted and left: **Clay's snap applies to rotation and translation but not scale**
+(`clay_view.py`). There is no scale-increment field in the tools pane, so this is almost
+certainly intended — it just says so nowhere.
 
 ## Verification
 
-- Full suite after all fixes: see commit — run was green (`uv run pytest`), ruff clean.
-- New regression tests: flatten-with-floating-buffer, objects-without-materials
-  palette, every-manual-chapter-has-a-part.
+- `uv run pytest` — 2736 passed, 7 skipped. `uv run ruff check .` — clean.
+- New regression tests, each failing before its fix: the findings refresh reaching the file
+  with no verdict filed and its re-arm after a refused submit; the derive/save key split;
+  per-metric counts and the thin-measurement drop; a non-JSON payload costing one row; the
+  six-case grounding matrix and the size-target-per-root-count pair; the pose editor's
+  bound job; a rig in flight blocking a delete and a busy unit surviving `delete_sweep`;
+  the generator freeze on `_delete`/`_bake`/`mirror`; a degenerate sweep refused; the
+  recipe's optimise tier; the file-list cache and its pruning; the viewer parse/adopt
+  hand-over and its stale-result drop; `StripRender` matching `strip` cell for cell; the store staying open after a
+  timed-out pool shutdown.
+- `tests/manual/test_docs.py` gates the manual edits.

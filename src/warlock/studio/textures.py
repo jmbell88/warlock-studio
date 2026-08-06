@@ -26,14 +26,16 @@ class ThumbnailCache:
     def __init__(self, ctx: Any, limit: int = MAX_TEXTURES) -> None:
         self.ctx = ctx
         self.limit = limit
-        self._entries: OrderedDict[tuple[str, float], Any] = OrderedDict()
-        self._missing: set[tuple[str, float]] = set()
+        # Keyed (key string, mtime, unfiltered): the file's version, and the
+        # sampling baked into the decoded texture.
+        self._entries: OrderedDict[tuple[str, float, bool], Any] = OrderedDict()
+        self._missing: set[tuple[str, float, bool]] = set()
         # Which frame each entry was last handed out on, and the textures whose
         # release is waiting for the frame that drew them to finish. Both exist
         # for the same reason: a card asks for its texture during the UI build
         # and the pixels are not fetched until the backend draws, so releasing
         # inside that window frees something the draw list still points at.
-        self._touched: dict[tuple[str, float], int] = {}
+        self._touched: dict[tuple[str, float, bool], int] = {}
         self._retired: list[Any] = []
         self._frame = 0
 
@@ -48,18 +50,25 @@ class ThumbnailCache:
         for texture in retired:
             self._release_one(texture)
 
-    def get(self, job_id: str, path: Path) -> Any | None:
+    def get(self, job_id: str, path: Path, *, nearest: bool = False) -> Any | None:
         """-> a texture for the job's thumb.png, or None if there isn't one.
 
         Decoding happens on the frame thread on purpose: it is one small PNG,
         it happens once per thumbnail for the life of the process, and the
         alternative is a placeholder that flickers for a frame.
+
+        ``nearest`` samples the texture unfiltered -- what keeps a 32 px pixel
+        artifact crisp when drawn at an integer multiple. It is part of the key
+        because the filter is baked into the texture object at decode time: it
+        held only by convention that a given key string was requested with one
+        filter, and the failure -- a blurry pixel preview, or a crisp thumbnail
+        somewhere else -- is silent and depends on which was decoded first.
         """
         try:
             mtime = path.stat().st_mtime
         except OSError:
             return None
-        key = (job_id, mtime)
+        key = (job_id, mtime, nearest)
         entry = self._entries.get(key)
         if entry is not None:
             self._entries.move_to_end(key)
@@ -67,16 +76,41 @@ class ThumbnailCache:
             return entry
         if key in self._missing:
             return None
-        texture = self._load(path)
+        texture = self._load(path, nearest)
         if texture is None:
             self._missing.add(key)
             return None
+        self._supersede(job_id, mtime)
         self._entries[key] = texture
         self._touched[key] = self._frame
         self._evict()
         return texture
 
-    def _load(self, path: Path) -> Any | None:
+    def _supersede(self, job_id: str, mtime: float) -> None:
+        """Retire the *older versions* of one key string.
+
+        The docstring's promise -- "a re-rendered thumbnail replaces itself
+        without anyone having to invalidate anything" -- was only half true:
+        the new mtime minted a new entry and the old one sat in ``_entries``
+        until ordinary LRU pressure reached it. Harmless for a thumbnail
+        rendered once, and not harmless for the pixel preview, where every turn
+        of the palette knob left another dead 128x128 behind and evicted
+        library thumbnails to make room for them.
+
+        Version, not filter: two entries differing only in ``nearest`` describe
+        the same bytes and both are live, so retiring by key string alone would
+        make two panes drawing one file at two samplings evict each other every
+        frame.
+        """
+        stale = [k for k in self._entries if k[0] == job_id and k[1] != mtime]
+        for key in stale:
+            self._retired.append(self._entries.pop(key))
+            self._touched.pop(key, None)
+        self._missing.difference_update(
+            {k for k in self._missing if k[0] == job_id and k[1] != mtime}
+        )
+
+    def _load(self, path: Path, nearest: bool = False) -> Any | None:
         from PIL import Image
 
         try:
@@ -87,7 +121,8 @@ class ThumbnailCache:
         except Exception:
             log.debug("could not decode %s", path, exc_info=True)
             return None
-        texture.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
+        mode = self.ctx.NEAREST if nearest else self.ctx.LINEAR
+        texture.filter = (mode, mode)
         texture.repeat_x = texture.repeat_y = False
         return texture
 

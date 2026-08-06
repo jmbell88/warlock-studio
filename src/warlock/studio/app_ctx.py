@@ -21,6 +21,49 @@ from .state import AppState
 log = logging.getLogger(__name__)
 
 
+def pixel_prefs(settings: Any) -> tuple[int, int]:
+    """The pixel-art (size, colours) preference, defensively coerced.
+
+    The settings JSON is user-editable and every reader runs on the frame
+    thread, so a bad value falls back to the default rather than raising --
+    the same posture restore_form takes. Clamped against the literal choice
+    tuples, which is also what keeps the size from ever composing a filename
+    outside the MEDIA allowlist.
+    """
+    try:
+        size = int(settings.get("pixel_size") or 128)
+    except (TypeError, ValueError):
+        size = 128
+    if size not in svc_files.PIXEL_ARTIFACTS.values():
+        size = 128
+    try:
+        colors = int(settings.get("pixel_colors") or 0)
+    except (TypeError, ValueError):
+        colors = 0
+    if colors not in svc_files.PIXEL_COLOR_CHOICES:
+        colors = 0
+    return size, colors
+
+
+def save_key(job_id: str, name: str) -> str:
+    """The task key for "derive this artifact and ask where to put it"."""
+    return f"save:{job_id}:{name}"
+
+
+def derive_key(job_id: str, name: str) -> str:
+    """The task key for "derive this artifact and leave it where it lands".
+
+    A namespace of its own rather than a borrowed ``save:``, because the app
+    claims a finished save *by prefix* and toasts "Saved to <result>"
+    (``main._on_task_done``). A derivation returns the path inside the job
+    directory and is never None, so a preview submitted under the save key told
+    the user a file had been saved -- naming an internal path, with no dialog
+    ever shown. Callers that offer both check both (``Ctx.artifact_busy``), so
+    the two still cannot describe different files.
+    """
+    return f"derive:{job_id}:{name}"
+
+
 @dataclass
 class Ctx:
     svc: Any
@@ -74,6 +117,16 @@ class Ctx:
     def submit(self, key: str, fn: Any, *args: Any, tag: Any = None, **kwargs: Any) -> bool:
         return self.tasks.submit(key, fn, *args, tag=tag, **kwargs)
 
+    def artifact_busy(self, job_id: str, name: str) -> bool:
+        """Whether *either* half is working on this artifact.
+
+        Both keys, always: a preview derivation and an export of one name run
+        the same ``get_file`` under the same per-artifact lock, so a control
+        that watched only its own key would offer a button that then blocked
+        invisibly on the other one.
+        """
+        return self.busy(save_key(job_id, name)) or self.busy(derive_key(job_id, name))
+
     # -- common actions ----------------------------------------------------
 
     def save_artifact(self, job_id: str, name: str) -> None:
@@ -83,10 +136,15 @@ class Ctx:
         that opens before the two-second export has run would make the user
         wait with a modal in front of them for no reason.
         """
-        key = f"save:{job_id}:{name}"
+        key = save_key(job_id, name)
+        # Captured on the frame thread and closed over: the task thread never
+        # touches Settings. For a pixel artifact this is what makes the export
+        # button and the inspector preview produce the same file under the
+        # same lock.
+        pixel_colors = pixel_prefs(self.settings)[1] if name in svc_files.PIXEL_ARTIFACTS else None
 
         def run() -> Path | None:
-            source = svc_derive.get_file(self.svc, job_id, name)
+            source = svc_derive.get_file(self.svc, job_id, name, pixel_colors=pixel_colors)
             dest = dialogs.save_file(f"Save {name}", f"{job_id}_{name}", dialogs.filters_for(name))
             if dest is None:
                 return None

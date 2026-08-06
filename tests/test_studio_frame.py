@@ -31,22 +31,29 @@ def test_measuring_storage_is_reachable_without_touching_the_cache(svc):
     assert cache.storage is before  # unchanged: measuring does not publish
 
 
-def test_a_finished_job_asks_for_storage_off_the_frame_thread(svc):
-    """The regression: ``_refresh`` called the blocking walk inline, freezing
-    the frame that should have shown the job finishing."""
+def _fake_app(svc, cache, *, accept_submits: bool = True):
+    """An App stand-in with just enough of ``app_ctx`` for ``_refresh``."""
     from types import SimpleNamespace
 
-    from warlock.studio import main
-    from warlock.studio.jobs_cache import JobsCache
+    from warlock.studio.state import AppState
 
-    cache = JobsCache(svc)
-    measured: list[str] = []
-    cache.refresh_storage = lambda: measured.append("blocking walk")  # type: ignore[method-assign]
+    submitted: list[str] = []
+
+    def submit(key: str, _run: Any, *_args: Any) -> bool:
+        submitted.append(key)
+        return accept_submits
 
     class FakeApp:
         def __init__(self) -> None:
             self.calls: list[str] = []
-            self.app_ctx = SimpleNamespace(cache=cache, toast=lambda *a, **k: None)
+            self.submitted = submitted
+            self.app_ctx = SimpleNamespace(
+                svc=svc,
+                cache=cache,
+                state=AppState(),
+                submit=submit,
+                toast=lambda *a, **k: None,
+            )
 
         def _request_storage(self) -> None:
             self.calls.append("_request_storage")
@@ -57,17 +64,108 @@ def test_a_finished_job_asks_for_storage_off_the_frame_thread(svc):
         def _check_worker(self) -> None:
             pass
 
-    app = FakeApp()
+    return FakeApp()
+
+
+def _tick_with(cache, job: dict[str, Any], previous: str = "running") -> None:
+    """Drive ``tick``'s announce callback with one transition."""
+    cache.tick = lambda announce: bool(announce(job, previous))  # type: ignore[method-assign]
+
+
+def test_a_finished_job_asks_for_storage_off_the_frame_thread(svc):
+    """The regression: ``_refresh`` called the blocking walk inline, freezing
+    the frame that should have shown the job finishing."""
+    from warlock.studio import main
+    from warlock.studio.jobs_cache import JobsCache
+
+    cache = JobsCache(svc)
+    measured: list[str] = []
+    cache.refresh_storage = lambda: measured.append("blocking walk")  # type: ignore[method-assign]
+
+    app = _fake_app(svc, cache)
     # tick() drives the announce callback; a job reaching "done" is the moment
     # the old code did the walk inline.
-    cache.tick = lambda announce: bool(  # type: ignore[method-assign]
-        announce({"id": "a" * 12, "status": "done"}, "running")
-    )
+    _tick_with(cache, {"id": "a" * 12, "status": "done"})
 
     main.App._refresh(app)
 
     assert app.calls == ["_request_storage"]
     assert measured == [], "the blocking walk must not run on the frame thread"
+
+
+# --- the findings recompute --------------------------------------------------
+#
+# The worker appends an observation for every finished model job, but it runs on
+# the asyncio thread and cannot submit a task. The frame loop noticing the job
+# finish is the only place that evidence can enter findings.json, so these pin
+# the seam rather than the aggregation (which test_findings_comparisons covers).
+
+
+def test_a_finished_mesh_recomputes_the_findings_without_any_verdict(svc):
+    """The regression: observations were recorded on every generation and
+    reached the file only when somebody next filed a verdict."""
+    from warlock.studio import main, review_mode
+    from warlock.studio.jobs_cache import JobsCache
+
+    cache = JobsCache(svc)
+    app = _fake_app(svc, cache)
+    _tick_with(cache, {"id": "a" * 12, "status": "done", "stage": "model", "kind": "text"})
+
+    main.App._refresh(app)
+
+    assert review_mode.FINDINGS_KEY in app.submitted
+    assert app.app_ctx.state.findings_dirty is False  # accepted, so cleared
+
+
+def test_a_finished_reference_recomputes_nothing(svc):
+    """``_observe_finished`` writes no row for a reference, so there is nothing
+    new to aggregate -- the condition is mirrored rather than approximated."""
+    from warlock.studio import main, review_mode
+    from warlock.studio.jobs_cache import JobsCache
+
+    cache = JobsCache(svc)
+    app = _fake_app(svc, cache)
+    _tick_with(cache, {"id": "a" * 12, "status": "done", "stage": "reference", "kind": "text"})
+
+    main.App._refresh(app)
+
+    assert review_mode.FINDINGS_KEY not in app.submitted
+
+
+def test_a_refused_recompute_is_retried_on_the_next_frame(svc):
+    """The re-arm. ``submit`` refuses a key already in flight and nothing used
+    to reschedule, so the last unit of a sweep -- with no verdict after it to
+    pick anything up -- left the file behind for good."""
+    from warlock.studio import main, review_mode
+    from warlock.studio.jobs_cache import JobsCache
+
+    cache = JobsCache(svc)
+    app = _fake_app(svc, cache, accept_submits=False)
+    _tick_with(cache, {"id": "a" * 12, "status": "done", "stage": "model", "kind": "text"})
+
+    main.App._refresh(app)
+    assert app.app_ctx.state.findings_dirty is True, "a refused submit must stay pending"
+
+    # Nothing finishes on this frame; the pending request is what drives it.
+    cache.tick = lambda announce: False  # type: ignore[method-assign]
+    main.App._refresh(app)
+
+    assert app.submitted.count(review_mode.FINDINGS_KEY) == 2
+
+
+def test_requesting_a_recompute_does_no_work_on_the_frame_thread(svc):
+    """``refresh_findings`` is called from the verdict path *and* from the
+    frame loop's announce callback, so it must be a flag rather than a read of
+    every verdict in the store."""
+    from types import SimpleNamespace
+
+    from warlock.studio import review_mode
+    from warlock.studio.state import AppState
+
+    ctx = SimpleNamespace(state=AppState())
+    review_mode.refresh_findings(ctx)  # no svc, no submit: it must need neither
+
+    assert ctx.state.findings_dirty is True
 
 
 def test_requesting_storage_submits_the_non_publishing_measurement(svc):
@@ -90,6 +188,210 @@ def test_requesting_storage_submits_the_non_publishing_measurement(svc):
     # The same key every time, so a burst of jobs finishing coalesces into one
     # walk -- submit refuses a key already in flight.
     assert submitted == [("storage", cache.measure)]
+
+
+def test_the_job_list_does_not_re_stat_every_artifact_on_every_tick(svc, monkeypatch):
+    """The regression: ``LISTED`` is nine names and ``ready`` stats one or two
+    files for each, so a two-hundred row page cost upwards of two thousand
+    ``stat`` calls -- twice a second, on the frame thread, growing without limit
+    as "load more" widened the window."""
+    from pathlib import Path
+
+    from warlock.service import jobs as svc_jobs
+    from warlock.studio.jobs_cache import JobsCache
+
+    for i in range(5):
+        svc_jobs.create_job(svc, kind="text", prompt=str(i))
+
+    calls: list[Path] = []
+    real = Path.exists
+
+    def counting_exists(self):
+        calls.append(self)
+        return real(self)
+
+    monkeypatch.setattr(Path, "exists", counting_exists)
+
+    cache = JobsCache(svc)
+    assert cache.tick() is True
+    cold = len(calls)
+    assert cold >= 5, "the first pass really does look at the disk"
+
+    calls.clear()
+    cache.invalidate()
+    assert cache.tick() is True
+
+    assert calls == [], "an unchanged page must answer from the cache"
+    # And it still answers correctly.
+    assert all("files" in job for job in cache.jobs)
+
+
+def test_a_new_artifact_on_disk_is_noticed_without_a_status_change(svc):
+    """The stamp is (status, the job directory's mtime), and the second half is
+    load-bearing: a rig lands in the *source* job's directory while that job
+    stays ``done``, so a status-only key would hide it forever."""
+    from warlock.service import jobs as svc_jobs
+    from warlock.studio.jobs_cache import JobsCache
+
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    cache = JobsCache(svc)
+    cache.tick()
+    assert "thumb.png" not in cache.by_id[job_id]["files"]
+
+    (job_dir / "thumb.png").write_bytes(b"x")
+    cache.invalidate()
+    cache.tick()
+
+    assert "thumb.png" in cache.by_id[job_id]["files"]
+
+
+def test_the_files_cache_never_outgrows_the_page(svc):
+    from warlock.service import jobs as svc_jobs
+    from warlock.studio.jobs_cache import JobsCache
+
+    ids = [svc_jobs.create_job(svc, kind="text", prompt=str(i))["id"] for i in range(4)]
+    cache = JobsCache(svc)
+    cache.tick()
+    assert len(cache._files) == 4
+
+    for job_id in ids[:2]:
+        svc_jobs.delete_job(svc, job_id)
+    cache.invalidate()
+    cache.tick()
+
+    assert set(cache._files) == set(ids[2:])
+
+
+# --- loading the selected mesh ------------------------------------------------
+
+
+def _viewer_app(svc, *, mode="3d", job=None, accept=True):
+    """An App stand-in with just enough for ``_sync_viewer``/``_adopt_model``."""
+    from types import SimpleNamespace
+
+    from warlock.studio.state import AppState
+
+    submitted: list[tuple[str, Any]] = []
+
+    class FakeViewer:
+        def __init__(self) -> None:
+            self.path = None
+            self.pending = None
+            self.pose_mode = False
+            self.adopted: list[Any] = []
+            self.parsed: list[Any] = []
+
+        def parse_model(self, path):
+            self.parsed.append(path)
+            return f"model:{path.name}"
+
+        def adopt_model(self, model, path):
+            self.adopted.append((model, path))
+            self.path = path
+
+    state = AppState()
+    state.mode = mode
+
+    class FakeApp:
+        def __init__(self) -> None:
+            self.viewer = FakeViewer()
+            self.submitted = submitted
+            self.app_ctx = SimpleNamespace(
+                state=state,
+                job=lambda: job,
+                job_dir=lambda job_id: svc.job_dir(job_id),
+                submit=lambda key, fn, *a, tag=None: (
+                    submitted.append((key, tag)) or accept
+                ),
+                capture_thumbnail=lambda job_id: None,
+                toast=lambda *a, **k: None,
+            )
+
+        def _refresh_rig_side_data(self) -> None:
+            pass
+
+    return FakeApp()
+
+
+def test_the_selected_mesh_is_parsed_off_the_frame_thread(svc):
+    """The regression: ``_sync_viewer`` ran the whole load -- a full accessor
+    decode plus a PNG per texture slot -- inline, on the frame a job
+    transitioned to done, which is when the file is largest and coldest."""
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb", "thumb.png"]}
+    app = _viewer_app(svc, job=job)
+
+    main.App._sync_viewer(app)
+
+    assert app.viewer.parsed == [], "no parse may happen on the frame thread"
+    assert [key for key, _ in app.submitted] == [main.VIEWER_KEY]
+    assert app.viewer.pending == svc.job_dir(job["id"]) / "model.glb"
+
+
+def test_a_load_in_flight_is_not_dispatched_again_every_tick(svc):
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb"]}
+    app = _viewer_app(svc, job=job)
+
+    main.App._sync_viewer(app)
+    main.App._sync_viewer(app)
+    main.App._sync_viewer(app)
+
+    assert len(app.submitted) == 1
+
+
+def test_a_parsed_model_is_adopted_on_the_frame_thread(svc):
+    from types import SimpleNamespace
+
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb", "thumb.png"]}
+    app = _viewer_app(svc, job=job)
+    main.App._sync_viewer(app)
+    wanted = app.viewer.pending
+
+    main.App._adopt_model(app, SimpleNamespace(tag=wanted, result="parsed"))
+
+    assert app.viewer.adopted == [("parsed", wanted)]
+    assert app.viewer.pending is None
+
+
+def test_a_result_the_selection_moved_past_is_dropped(svc):
+    """The selection can move while a parse is in flight, and adopting a result
+    nobody is waiting for would put the previous asset back on screen."""
+    from types import SimpleNamespace
+
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb"]}
+    app = _viewer_app(svc, job=job)
+    main.App._sync_viewer(app)
+    stale = app.viewer.pending
+    app.viewer.pending = svc.job_dir("b" * 12) / "model.glb"  # the user clicked away
+
+    main.App._adopt_model(app, SimpleNamespace(tag=stale, result="parsed"))
+
+    assert app.viewer.adopted == []
+
+
+def test_a_refused_dispatch_leaves_nothing_pending(svc):
+    """One key, so a selection moving faster than the disk cannot pile up
+    loads -- but a refused submit must not leave the viewer believing a load is
+    coming, or it would never retry."""
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb"]}
+    app = _viewer_app(svc, job=job, accept=False)
+
+    main.App._sync_viewer(app)
+
+    assert app.viewer.pending is None
 
 
 def test_the_blocking_measurement_says_so():
@@ -128,7 +430,7 @@ class FakeGL:
 def cache(monkeypatch, tmp_path):
     gl = FakeGL()
     cache = textures.ThumbnailCache(gl, limit=2)
-    monkeypatch.setattr(cache, "_load", lambda path: gl.texture((8, 8), 4, b""))
+    monkeypatch.setattr(cache, "_load", lambda path, nearest=False: gl.texture((8, 8), 4, b""))
     return cache
 
 

@@ -125,25 +125,34 @@ class TaskRunner:
                 )
         return finished
 
-    def shutdown(self, wait: bool = True, timeout: float | None = None) -> None:
+    def shutdown(self, wait: bool = True, timeout: float | None = None) -> bool:
         """Stop the pool, optionally giving running tasks only ``timeout`` s.
 
-        Bounded because a task can be parked on something that never returns:
-        the native file dialogs block until the user dismisses them, and by the
-        time this runs the window they belong to has already been destroyed. An
-        unbounded wait there is a process that never exits.
+        -> whether everything actually finished. Bounded because a task can be
+        parked on something that never returns: the native file dialogs block
+        until the user dismisses them, and by the time this runs the window they
+        belong to has already been destroyed. An unbounded wait there is a
+        process that never exits.
+
+        The answer is returned rather than discarded because the caller's next
+        move depends on it. ``Runtime.shutdown`` closes the store immediately
+        afterwards, on the stated grounds that "a task still calling into the
+        service finds the store open rather than closed underneath it" -- which
+        is true only when the pool drained. A task that outlives the grace
+        period resumes against a closed sqlite connection and gets a
+        ``ProgrammingError`` captured into a future nobody will ever poll.
         """
         if timeout is None:
             self._pool.shutdown(wait=wait, cancel_futures=not wait)
             with self._lock:
                 self._pending.clear()
-            return
+            return True
 
         with self._lock:
             futures = [p.future for p in self._pending.values()]
         # ThreadPoolExecutor.shutdown takes no timeout, so the wait happens on
         # the futures and the pool is then told not to wait at all.
-        concurrent.futures.wait(futures, timeout=timeout)
+        _done, not_done = concurrent.futures.wait(futures, timeout=timeout)
         self._pool.shutdown(wait=False, cancel_futures=True)
         # A task still parked in a never-dismissed dialog keeps its worker
         # thread alive, and concurrent.futures' atexit hook joins every live
@@ -155,3 +164,4 @@ class TaskRunner:
             _threads_queues.pop(thread, None)
         with self._lock:
             self._pending.clear()
+        return not not_done

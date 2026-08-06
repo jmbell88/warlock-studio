@@ -445,16 +445,24 @@ def import_mesh(
 
 
 def list_jobs(
-    svc: WarlockService, limit: int = 100, before: tuple[float, str] | None = None
+    svc: WarlockService,
+    limit: int = 100,
+    before: tuple[float, str] | None = None,
+    *,
+    files_cache: dict | None = None,
 ) -> list[dict[str, Any]]:
     """One page of history, newest first. ``before`` is the (created_at, id) of
     the last row of the previous page; MAX_LIST_LIMIT stays the ceiling on a
     single read, so a longer history is reached by paging rather than by asking
-    for more at once."""
+    for more at once.
+
+    ``files_cache`` is handed straight to ``attach_files`` and is what makes
+    this affordable to call twice a second from the frame loop -- see there.
+    """
     limit = max(1, min(limit, MAX_LIST_LIMIT))
     jobs = svc.store.list(limit, before)
     for job in jobs:
-        attach_files(job, svc.job_dir(job["id"]))
+        attach_files(job, svc.job_dir(job["id"]), cache=files_cache)
         svc.attach_progress(job)
     return jobs
 
@@ -495,6 +503,11 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
             seen += 1
             if seen <= keep or job["status"] == "running":
                 continue
+            # Skipped rather than refused, unlike delete_job: pruning is a bulk
+            # reclaim, and one asset with a rig in flight is no reason to keep
+            # the other two hundred.
+            if worker_is_inside(svc, job["id"]) or dependent_jobs(svc, job["id"]):
+                continue
             # Conditional in the DB, not against this page's snapshot: a
             # queued job can be claimed in the gap, and deleting it then
             # rmtrees a directory a live reconstruction is writing into.
@@ -527,10 +540,50 @@ def update_job(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dic
     return get_job(svc, job_id)
 
 
+def worker_is_inside(svc: WarlockService, job_id: str) -> bool:
+    """Whether the GPU worker is still running this job, whatever the row says.
+
+    The row is not enough. ``cancel_job`` writes ``cancelled`` immediately and
+    only *asks* the worker to stop, so between that write and the worker
+    unwinding there is a window in which the status says the job is over and
+    the reconstruction is still writing into its directory. ``current_job_id``
+    is cleared in the worker's own ``finally``, after the last write, which
+    makes it the only honest answer to "is it safe to rmtree this".
+    """
+    worker = getattr(svc, "worker", None)
+    return worker is not None and worker.current_job_id == job_id
+
+
+def dependent_jobs(svc: WarlockService, job_id: str) -> list[str]:
+    """Unfinished jobs that write into ``job_id``'s directory.
+
+    A rig or a sheet is a *separate* job row whose artifacts land beside the
+    ``model.glb`` they were made from -- the rig belongs to the mesh -- so
+    deleting the mesh while one runs lets ``finalize_rig`` rename into a
+    directory that no longer exists, and recreates it as an orphan. The target
+    job's own status says nothing about this: it is ``done``, which is exactly
+    why a rig could be queued for it.
+    """
+    return [
+        job["id"]
+        for job in svc.store.active_jobs()
+        if (job.get("params") or {}).get("source_job") == job_id
+    ]
+
+
+def _refuse_if_busy(svc: WarlockService, job_id: str) -> None:
+    """Raise ``Conflict`` if anything is still writing into this job's dir."""
+    if worker_is_inside(svc, job_id):
+        raise Conflict("cancel the job before deleting it")
+    if dependent_jobs(svc, job_id):
+        raise Conflict("a rig or sprite sheet for this asset is still running")
+
+
 def delete_job(svc: WarlockService, job_id: str) -> dict[str, Any]:
     job = svc.require_job(job_id)
     if job["status"] == "running":
         raise Conflict("cancel the job before deleting it")
+    _refuse_if_busy(svc, job_id)
     # Re-checked inside the delete statement: the status read above is a
     # snapshot, and the worker's claim() can land in the gap.
     if not svc.store.delete_if_not_running(job_id):

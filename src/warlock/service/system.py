@@ -59,6 +59,16 @@ def current_checks(svc: WarlockService) -> list[doctor.Check]:
 
 
 def health(svc: WarlockService) -> dict[str, Any]:
+    """Everything about the process's state in one dict.
+
+    **The app does not call this**, and that is not an oversight left over from
+    the HTTP layer: each half of it has a cheaper reader now. The header dot
+    polls ``current_checks``, a dead worker is read straight off
+    ``runtime.fatal``, and ``export_dir`` is handed to panes on ``Ctx``, so
+    going through here would rebuild all four to show one. It survives as the
+    single "what is the state of everything" answer -- what a diagnostics dump
+    or a future headless probe wants, and what the API tests assert against.
+    """
     worker = svc.worker
     running = bool(worker is not None and worker.trellis.running)
     checks = cached_checks(svc, running)
@@ -67,8 +77,8 @@ def health(svc: WarlockService) -> dict[str, Any]:
         "worker_alive": bool(worker is not None and worker.alive),
         "fatal": str(worker.fatal) if worker is not None and worker.fatal else None,
         "trellis_running": running,
-        # The UI reveals its "save to project" action off this alone -- the
-        # feature is off unless WARLOCK_EXPORT_DIR is set.
+        # Off unless WARLOCK_EXPORT_DIR is set. The library pane reads the same
+        # answer from ``ctx.export_dir``, which the runtime fills at startup.
         "export_dir": str(svc.config.export_dir) if svc.config.export_dir else None,
         "checks": [asdict(c) for c in checks],
     }

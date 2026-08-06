@@ -16,6 +16,7 @@ from warlock.studio import clay_ops
 from warlock.studio.clay import document as bd
 from warlock.studio.clay import elements as el
 from warlock.studio.clay import mesh as bm
+from warlock.studio.clay import ops_topo
 from warlock.studio.clay import primitives as bp
 
 
@@ -163,6 +164,48 @@ def test_a_topology_op_freezes_the_generator_exactly_once() -> None:
     assert len(doc.history) == depth + 1, "already frozen: one mesh step, no props step"
 
 
+@pytest.mark.parametrize("key", ["bake", "mirror-x", "mirror-y", "mirror-z"])
+def test_every_op_that_changes_geometry_freezes_it(key: str) -> None:
+    """The regression: the freeze lived in ``run_mesh_op`` and Smooth, so Bake
+    Transform and Mirror went straight to ``set_mesh`` and left the object
+    still claiming to be "box, size 1". The properties panel keeps offering
+    that size field, and touching it rebuilds a pristine box -- so the bake or
+    the mirror vanished with no warning.
+    """
+    doc, uid = _doc()
+    doc.select([uid])
+    doc.set_transform(uid, translation=[1.0, 2.0, 3.0])
+
+    clay_ops.run(_Ctx(), doc, clay_ops.get(key))
+
+    assert doc.by_uid(uid).generator is None
+    assert doc.by_uid(uid).params == {}
+
+
+def test_deleting_elements_freezes_the_generator() -> None:
+    """The same hole reached from ``clay_mode._delete`` rather than an op: it
+    calls ``doc.set_mesh`` directly, and nothing there used to freeze."""
+    doc, uid = _doc()
+    _faces(doc, uid, 0)
+    before = bm.face_count(doc.by_uid(uid).mesh)
+
+    mesh, sel = ops_topo.delete_faces(doc.by_uid(uid).mesh, doc.element_sel_of(uid))
+    doc.set_mesh(uid, mesh, select=sel)
+
+    assert bm.face_count(doc.by_uid(uid).mesh) < before
+    assert doc.by_uid(uid).generator is None
+
+
+def test_a_rebuild_from_the_generator_is_the_one_thing_that_keeps_it() -> None:
+    """Otherwise editing a box's size would freeze it on the first keystroke
+    and the field would disappear under the user's hands."""
+    doc, uid = _doc()
+
+    doc.set_mesh(uid, bp.box(size=(2.0, 2.0, 2.0)), keep_generator=True)
+
+    assert doc.by_uid(uid).generator == "box"
+
+
 def test_a_refusal_becomes_a_toast_and_records_no_edit() -> None:
     doc, uid = _doc()
     doc.set_element_mode("edge")
@@ -240,4 +283,6 @@ def test_mirror_bakes_into_the_mesh_and_leaves_the_scale_positive() -> None:
     doc.select([uid])
     clay_ops.run(_Ctx(), doc, clay_ops.get("mirror-x"))
     assert np.allclose(doc.by_uid(uid).scale, [1.0, 1.0, 1.0])
-    assert len(doc.history) == 2
+    # Mesh, transform, and the freeze the mesh change now carries with it.
+    assert len(doc.history) == 3
+    assert doc.by_uid(uid).generator is None

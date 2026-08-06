@@ -141,3 +141,38 @@ def test_saving_a_capture_creates_its_directory(gl, tmp_path):
     finally:
         viewport.release()
     assert out.exists() and out.read_bytes().startswith(b"\x89PNG")
+
+
+def test_a_strip_renders_one_cell_per_step(gl, box_model):
+    """The regression: every cell is a draw *and* a synchronous GPU-to-CPU
+    readback, and the control offers up to sixteen -- so doing them all in the
+    frame the button was pressed was a visible freeze. Spread over frames it is
+    a quarter of a second nobody notices, and the pixels are the same."""
+    model, gpu = box_model
+    renderer = Renderer(gl)
+    try:
+        yaws = [0.0, 90.0, 180.0, 270.0]
+        render = sheetlib.StripRender(
+            renderer, gpu, model, yaws, model_matrix=scenelib.placement(model)
+        )
+        try:
+            assert render.done is False
+            for expected in range(1, len(yaws) + 1):
+                finished = render.step()
+                assert render.index == expected
+                assert finished is (expected == len(yaws))
+            # And stepping past the end is a no-op rather than an error.
+            assert render.step() is True
+            assert render.index == len(yaws)
+            stepped = render.image.copy()
+        finally:
+            render.release()
+
+        at_once = sheetlib.strip(
+            renderer, gpu, model, yaws, model_matrix=scenelib.placement(model)
+        )
+    finally:
+        renderer.release()
+
+    assert stepped.size == at_once.size
+    assert np.array_equal(np.array(stepped), np.array(at_once))
