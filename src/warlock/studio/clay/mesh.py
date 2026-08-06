@@ -50,6 +50,8 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 
+from .earclip import corner_triangles, fan_corners
+
 _DTYPES = {
     "positions": "f4",
     "loops": "i4",
@@ -173,6 +175,25 @@ def _next_corner(mesh: Mesh) -> np.ndarray:
     return nxt
 
 
+def reversed_corner_perm(starts: np.ndarray) -> np.ndarray:
+    """A permutation of the corners that reverses every face's loop in place.
+
+    ``loops[perm]`` is the same CSR with every face traversed the other way --
+    the operation a mirroring transform needs, and the one a flip-normals op is
+    made of. Vectorised because it runs on imported meshes: a face's corners
+    span ``[s, e)``, so corner *i* maps to ``s + e - 1 - i``, which is the whole
+    formula once ``s`` and ``e`` are broadcast per corner.
+    """
+    starts = starts.astype("i8")
+    n_faces = len(starts) - 1
+    if n_faces <= 0:
+        return np.zeros(0, dtype="i8")
+    counts = np.diff(starts)
+    lo = np.repeat(starts[:-1], counts)
+    hi = np.repeat(starts[1:], counts)
+    return lo + hi - 1 - np.arange(int(starts[-1]), dtype="i8")
+
+
 def edges(mesh: Mesh) -> np.ndarray:
     """Unique undirected edges as an ``(E, 2)`` i4 array, low index first.
 
@@ -193,39 +214,40 @@ def edges(mesh: Mesh) -> np.ndarray:
 def _fan_corners(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     """``(tri_corners, tri_face)`` where tri_corners index *loops*, not vertices.
 
-    Shared by :func:`triangulate` and :func:`render_arrays`: the first maps
-    the corners through ``loops``, the second through its own split-or-share
-    corner table, and neither should reimplement the fan.
+    The fan alone, with no concavity screen -- kept for the callers that know
+    their faces are convex and want to skip the check. Everything user-facing
+    goes through :func:`_corner_triangles` instead.
     """
-    counts = np.diff(mesh.starts).astype("i8")
-    per_face = np.maximum(counts - 2, 0)
-    total = int(per_face.sum())
-    if total == 0:
-        return np.zeros((0, 3), dtype="i8"), np.zeros(0, dtype="i4")
-    tri_face = np.repeat(np.arange(len(counts), dtype="i8"), per_face)
-    offsets = np.concatenate([[0], np.cumsum(per_face)[:-1]])
-    local = np.arange(total, dtype="i8") - offsets[tri_face]
-    first = mesh.starts[:-1].astype("i8")[tri_face]
-    corners = np.stack([first, first + local + 1, first + local + 2], axis=1)
-    return corners, tri_face.astype("i4")
+    return fan_corners(mesh.starts)
+
+
+def _corner_triangles(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
+    """The dispatcher: fans for convex faces, ears for the rest.
+
+    Shared by :func:`triangulate` and :func:`render_arrays` -- the first maps
+    the corners through ``loops``, the second through its own split-or-share
+    corner table -- so shading, picking and export can never disagree about
+    where a concave face's triangles are.
+    """
+    return corner_triangles(mesh.positions, mesh.loops, mesh.starts, _face_normals(mesh))
 
 
 def triangulate(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     """``(tris, tri_face)``: an ``(T, 3)`` i4 index array and its face owners.
 
-    A **fan from each face's first corner**. That is correct for convex faces
-    and wrong for concave ones -- a fan across a reflex vertex puts a triangle
-    outside the polygon -- and it is chosen knowingly: every primitive
-    generator here produces convex faces, and so do Phase 2's extrude and
-    inset. If a face-level tool ever produces a concave n-gon, this is the
-    function that has to grow an ear-clipping path, not its callers.
+    A **fan from each face's first corner where that is correct, ear-clipping
+    where it is not**. :mod:`.earclip` screens every face for a reflex corner in
+    one vectorised pass; a mesh with none -- every primitive here, and every
+    triangle-or-quad soup an exporter writes -- comes back byte-identical to the
+    plain fan, and only the faces that fail pay for the search. The count is
+    ``n - 2`` triangles per face either way.
 
     ``tri_face`` is returned rather than left to be derived because both its
     consumers would otherwise derive it differently: face picking maps a hit
     triangle back to the face the user selected, and the renderer groups
     triangles by ``material[tri_face]`` into draw ranges.
     """
-    corners, tri_face = _fan_corners(mesh)
+    corners, tri_face = _corner_triangles(mesh)
     if len(corners) == 0:
         return np.zeros((0, 3), dtype="i4"), tri_face
     return mesh.loops[corners].astype("i4"), tri_face
@@ -347,7 +369,7 @@ def render_arrays(
     corner_vertex[smooth_corner] = remap[smooth_loops]
     corner_vertex[flat_corners] = n_shared + np.arange(n_flat, dtype="i8")
 
-    corners, _ = _fan_corners(mesh)
+    corners, _ = corner_triangles(mesh.positions, mesh.loops, mesh.starts, raw)
     indices = corner_vertex[corners].reshape(-1).astype("u4")
     return positions, normals, None, indices
 
@@ -374,7 +396,7 @@ def _render_arrays_per_corner(
     normals = unit[face_of_corner]
     normals[smooth_corner] = _normalize(accum[smooth_loops])
 
-    corners, _ = _fan_corners(mesh)
+    corners, _ = corner_triangles(mesh.positions, mesh.loops, mesh.starts, raw)
     return (
         mesh.positions[mesh.loops].astype("f4"),
         normals.astype("f4"),
@@ -415,13 +437,7 @@ def transformed(mesh: Mesh, matrix: np.ndarray) -> Mesh:
         # The UV travels with its corner, so the same permutation reverses it:
         # a mirrored face's corners keep the texture coordinates they had, in
         # the order the reversed loop reads them.
-        perm = np.concatenate(
-            [
-                np.arange(mesh.starts[i], mesh.starts[i + 1], dtype="i8")[::-1]
-                for i in range(face_count(mesh))
-            ]
-            or [np.zeros(0, dtype="i8")]
-        )
+        perm = reversed_corner_perm(mesh.starts)
         loops = mesh.loops[perm]
         if uv is not None:
             uv = uv[perm]

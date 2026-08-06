@@ -91,7 +91,7 @@ draw.
 
 ## Phase 1 — Topology substrate
 
-- [ ] **T2 — `clay/adjacency.py`.** Corner-based half-edge over CSR, all
+- [x] **T2 — `clay/adjacency.py`.** Corner-based half-edge over CSR, all
   vectorized (one O(L log L) sort): `next_corner`, `prev_corner`, `corner_face`,
   `edge_verts`, `corner_edge`, `edge_uses` (1=boundary / 2=interior /
   ≥3=non-manifold), `twin` (−1 on boundary/non-manifold/flipped),
@@ -101,14 +101,14 @@ draw.
   (same idiom) — `ClayView.pick` and the overlays consume it. Tests: table
   correctness on box/plane/cylinder, cache identity (same mesh → same object,
   dead mesh → collected via `gc`).
-- [ ] **T3 — `boundary_loops` + `check_manifold`.** Boundary rings as ordered
+- [x] **T3 — `boundary_loops` + `check_manifold`.** Boundary rings as ordered
   vertex arrays oriented in the hole direction (a cap wound with the returned
   order is consistent); pinched vertices (two outgoing boundary edges) reported
   and refused by fill-hole. `ManifoldReport(boundary_edges, nonmanifold_edges,
   flipped_edges, repeated_corner_faces, duplicate_faces, unused_verts, .clean)`
   — a report, not a gate; ops read `Adjacency` flags directly, UI and tests read
   the report.
-- [ ] **T4 — `clay/earclip.py` + `triangulate` dispatch.** Vectorized concavity
+- [x] **T4 — `clay/earclip.py` + `triangulate` dispatch.** Vectorized concavity
   screen (corner cross · Newell normal, `reduceat`-min per face); non-suspect
   faces keep the fan fast path (imported tri/quad soup never leaves it, and
   convex output stays byte-identical, so the existing tests pass). Suspect
@@ -117,7 +117,7 @@ draw.
   raises. `render_arrays` uses the same dispatcher so shading and picking agree.
   Retrofit `transformed`'s per-face Python loop-reversal with a vectorized
   `reversed_corner_perm(starts)`.
-- [ ] **T5 — `clay/elements.py` + `clay/topo.py` + the first ops.**
+- [x] **T5 — `clay/elements.py` + `clay/topo.py` + the first ops.**
   `ElementSel`/`convert`/`combine`/`affected_verts`/`OpError` (see contracts).
   `topo.py`: `rebuild` (every op funnels through it, so rewriting loops forces
   an explicit uv decision), `take_faces`, `compact_vertices`, `splice_corners`
@@ -133,7 +133,7 @@ draw.
 
 T6–T8 are independent after T5. Order is easy → hard.
 
-- [ ] **T6 — `extrude_faces` + `inset_faces`** (`ops_topo.py`). Extrude is
+- [x] **T6 — `extrude_faces` + `inset_faces`** (`ops_topo.py`). Extrude is
   region-aware: caps keep their face indices, arity, material, smooth flag and
   uv verbatim; a new vertex block for the used verts; wall quads
   `[a, b, new_b, new_a]` per region-boundary corner (winding per

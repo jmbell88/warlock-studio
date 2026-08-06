@@ -29,6 +29,8 @@ import pytest
 from warlock.studio.clay import mesh as bm
 from warlock.studio.clay import primitives as bp
 
+from .topo_asserts import directed_edge_counts, edge_use_counts
+
 # ``plane`` is the one generator that is deliberately not a closed shell: it is
 # a single face, so it has a boundary, no volume and no meaningful "outward".
 # Naming it here rather than scattering ``if name == "plane"`` through the
@@ -98,28 +100,20 @@ def _centroid(mesh: bm.Mesh, i: int) -> np.ndarray:
     return mesh.positions[bm.face(mesh, i)].astype("f8").mean(axis=0)
 
 
-def _directed_edge_counts(mesh: bm.Mesh) -> Counter[tuple[int, int]]:
-    """How many faces traverse each *ordered* corner pair."""
-    counts: Counter[tuple[int, int]] = Counter()
-    for i in range(bm.face_count(mesh)):
-        loop = [int(v) for v in bm.face(mesh, i)]
-        for a, b in zip(loop, loop[1:] + loop[:1], strict=True):
-            counts[(a, b)] += 1
-    return counts
+# Both live in ``topo_asserts`` now, so the op tests assert the same two things
+# these do -- and are re-exported here under their original names because the
+# argument this module makes reads as one piece.
+_directed_edge_counts = directed_edge_counts
+"""How many faces traverse each *ordered* corner pair."""
 
+_edge_use_counts = edge_use_counts
+"""How many faces use each *undirected* edge -- orientation-blind by design.
 
-def _edge_use_counts(mesh: bm.Mesh) -> Counter[tuple[int, int]]:
-    """How many faces use each *undirected* edge -- orientation-blind by design.
-
-    This one answers "is the shell closed" and cannot answer anything about
-    winding: it sorts each pair, so a reversed face uses exactly the same
-    undirected edges it used before. That is why
-    :func:`_directed_edge_counts` exists beside it.
-    """
-    counts: Counter[tuple[int, int]] = Counter()
-    for (a, b), n in _directed_edge_counts(mesh).items():
-        counts[(min(a, b), max(a, b))] += n
-    return counts
+This one answers "is the shell closed" and cannot answer anything about
+winding: it sorts each pair, so a reversed face uses exactly the same
+undirected edges it used before. That is why :func:`_directed_edge_counts`
+exists beside it.
+"""
 
 
 # --- parametrised over the registry -----------------------------------------
