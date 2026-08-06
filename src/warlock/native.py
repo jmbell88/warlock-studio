@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 3
+ABI = 4
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -125,6 +125,18 @@ def _bind(lib: ctypes.CDLL) -> None:
         f,  # pixels
         ctypes.POINTER(ctypes.c_uint8),  # out
         i64,  # count
+    ]
+
+    u8 = ctypes.POINTER(ctypes.c_uint8)
+    i32 = ctypes.POINTER(ctypes.c_int32)
+    lib.warlockc_contours.restype = i64
+    lib.warlockc_contours.argtypes = [
+        u8, i64,  # mask, row stride in bytes
+        i64, i64,  # h, w
+        ctypes.c_uint8,  # threshold
+        u8,  # scratch, one zeroed byte per lattice edge
+        i32, i64,  # points, capacity in vertices
+        i32, i64,  # loop lengths, capacity in loops
     ]
 
 
@@ -348,6 +360,41 @@ def to_uint8_f32(pixels: Any, out: Any, count: int) -> None:
         _ptr(pixels, ctypes.c_float),
         _ptr(out, ctypes.c_uint8),
         ctypes.c_int64(count),
+    )
+
+
+def contours(
+    mask: Any,
+    threshold: int,
+    scratch: Any,
+    points: Any,
+    loop_lens: Any,
+) -> int:
+    """Trace the closed boundary loops of ``mask >= threshold``.
+
+    ``mask`` is a C-contiguous 2-D uint8 plane; ``scratch`` is a zeroed uint8
+    buffer of ``w * (h + 1) + (w + 1) * h`` bytes; ``points`` is int32 with room
+    for two values per vertex and ``loop_lens`` int32 with room for one per
+    loop. Returns the number of loops, or -1 if either buffer was too small --
+    the caller falls back to numpy rather than guessing a bigger one.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    height, width = mask.shape
+    return int(
+        handle.warlockc_contours(
+            _ptr(mask, ctypes.c_uint8),
+            ctypes.c_int64(mask.strides[0]),
+            ctypes.c_int64(height),
+            ctypes.c_int64(width),
+            ctypes.c_uint8(threshold),
+            _ptr(scratch, ctypes.c_uint8),
+            _ptr(points, ctypes.c_int32),
+            ctypes.c_int64(points.size // 2),
+            _ptr(loop_lens, ctypes.c_int32),
+            ctypes.c_int64(loop_lens.size),
+        )
     )
 
 

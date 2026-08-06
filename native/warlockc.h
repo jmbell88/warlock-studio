@@ -36,7 +36,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 3
+#define WARLOCKC_ABI 4
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -145,6 +145,37 @@ WARLOCKC_API void warlockc_stack_f32(const uint8_t **layers,
  * uint8 layer -- and defining it here would be a divergence, not a fix. */
 WARLOCKC_API void warlockc_to_uint8_f32(const float *pixels, uint8_t *out,
                                         int64_t count);
+
+/* Closed boundary loops around `mask >= threshold` --
+ * warlock.studio.inker.selection.SelectionMask.contours, which is the one true
+ * per-pixel Python loop left in the package and runs on the frame thread every
+ * time the selection changes.
+ *
+ * Emits loops of (x, y) int32 lattice points in image coordinates: unit steps,
+ * vertices in 0..w and 0..h inclusive, the first point *not* repeated at the
+ * end, and no loop shorter than three points -- the reference's contract, and
+ * pixel-edge accurate rather than smoothed because the ants have to sit on the
+ * boundary the fill used.
+ *
+ * `stride` counts bytes between the mask's row starts. `scratch` is
+ * w * (h + 1) + (w + 1) * h bytes of *zeroed* caller memory, one flag per
+ * lattice edge -- this file allocates nothing, and a retry after -1 has to zero
+ * it again. `points_out` holds cap_pts pairs and `loop_lens_out` cap_loops
+ * counts; the exact requirement is the number of boundary edges, which the
+ * caller already counts in numpy.
+ *
+ * Returns the number of loops, or -1 if either capacity was too small -- in
+ * which case the Python side answers, as it does when the DLL is absent.
+ *
+ * Loop order, starting vertex and winding are unspecified here exactly as they
+ * are in the reference (_chain starts from next(iter(set))), and the two
+ * genuinely differ at a checkerboard corner: see the turn rule in contours.c.
+ * The invariant both hold to is the set of unit edges. */
+WARLOCKC_API int64_t warlockc_contours(const uint8_t *mask, int64_t stride,
+                                       int64_t h, int64_t w, uint8_t threshold,
+                                       uint8_t *scratch, int32_t *points_out,
+                                       int64_t cap_pts, int32_t *loop_lens_out,
+                                       int64_t cap_loops);
 
 #ifdef __cplusplus
 }

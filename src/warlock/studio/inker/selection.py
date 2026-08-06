@@ -22,6 +22,8 @@ from typing import Any
 
 import numpy as np
 
+from ... import native
+
 # Anything at or above this counts as "in" for hit-tests and for the boundary
 # the ants are drawn along. The mask itself stays continuous.
 INSIDE = 128
@@ -172,7 +174,19 @@ class SelectionMask:
         Pixel-edge accurate rather than smoothed: the ants have to sit on the
         boundary the fill actually used, or a one-pixel selection looks like it
         selected its neighbour.
+
+        The loop below is the reference and the fallback; the kernel traces the
+        same boundary on the lattice instead of collecting unit segments and
+        hashing them back together. What the two agree on is the *set* of unit
+        edges -- loop order, starting vertex and winding are unspecified by this
+        contract, and at a checkerboard corner the two legitimately partition
+        the same edges into different loops.
         """
+        if native.available():
+            traced = _contours_native(self.mask)
+            if traced is not None:
+                return traced
+
         inside = np.pad(self.mask >= INSIDE, 1)
         ys, xs = np.nonzero(inside)
         if ys.size == 0:
@@ -191,6 +205,57 @@ class SelectionMask:
                 px, py = int(x) - 1, int(y) - 1
                 segments.append(((px + a[0], py + a[1]), (px + b[0], py + b[1])))
         return _chain(segments)
+
+
+def _contours_native(mask: np.ndarray) -> list[list[tuple[int, int]]] | None:
+    """The traced loops, or None if the kernel could not answer.
+
+    Every buffer is allocated here because the kernel allocates nothing, and
+    the sizes are exact rather than guessed: the vertex count *is* the boundary
+    edge count, which four vectorised comparisons produce far more cheaply than
+    the loop they are replacing, and the shortest possible loop is four edges.
+    """
+    inside = mask >= INSIDE
+    edges = _boundary_edges(inside)
+    if edges == 0:
+        return []
+
+    height, width = mask.shape
+    scratch = np.zeros(width * (height + 1) + (width + 1) * height, dtype=np.uint8)
+    points = np.empty(edges * 2, dtype=np.int32)
+    lengths = np.empty(edges // 4 + 1, dtype=np.int32)
+    found = native.contours(
+        np.ascontiguousarray(mask), INSIDE, scratch, points, lengths
+    )
+    if found < 0:  # pragma: no cover - the capacities above are exact
+        return None
+
+    loops: list[list[tuple[int, int]]] = []
+    at = 0
+    for count in lengths[:found].tolist():
+        chunk = points[at * 2 : (at + count) * 2].reshape(count, 2)
+        loops.append(
+            list(zip(chunk[:, 0].tolist(), chunk[:, 1].tolist(), strict=True))
+        )
+        at += count
+    return loops
+
+
+def _boundary_edges(inside: np.ndarray) -> int:
+    """How many pixel edges separate an inside pixel from an outside one.
+
+    Exactly the number of lattice points the tracer will emit, so it sizes the
+    buffer rather than estimating it. A single-row mask counts its top and its
+    bottom in the same term, which is why the two borders are added rather than
+    special-cased.
+    """
+    total = int(np.count_nonzero(inside[0])) + int(np.count_nonzero(inside[-1]))
+    total += int(np.count_nonzero(inside[:, 0])) + int(np.count_nonzero(inside[:, -1]))
+    if inside.shape[0] > 1:
+        total += int(np.count_nonzero(inside[1:] != inside[:-1]))
+    if inside.shape[1] > 1:
+        total += int(np.count_nonzero(inside[:, 1:] != inside[:, :-1]))
+    return total
 
 
 def _chain(
