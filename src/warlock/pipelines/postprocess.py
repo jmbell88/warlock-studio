@@ -200,22 +200,25 @@ def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
     the scale and translation as *one* node above the whole scene; buffers and
     images are copied through byte-for-byte.
 
-    **Above the roots, under a bare new one**, and both halves of that matter.
-    The transform cannot sit on a scene root, because trimesh treats one as the
-    graph's base frame and silently discards its transform -- the GLB would come
-    out transformed and the derived STL/OBJ exports would not. So the new root
-    carries nothing and exists only to be discarded, and the transform rides on
-    its single child, which is an ordinary node.
+    **The composition is ``T . S . M_root``, never ``M_root . T . S``.** The
+    bounds are measured in *world* space, after every node's TRS has composed,
+    so the transform has to apply outside each root's own. That is what
+    ``_insert_transform_below`` does by **emptying** the root and folding its
+    TRS down into the inserted child (``_composed``). Sandwiching the grounding
+    under an untouched root was wrong twice over: a rotated root rotated the
+    grounding offset, and the same world-space translation applied once per
+    root -- with each root's offset left unscaled above it -- meant a Clay
+    export, which emits one root per object, grounded every object as though it
+    alone were the scene. Three boxes asked to be 2 m across came out 8.2 m and
+    reported 2. trellis output hid both, because trimesh writes one identity
+    root.
 
-    It used to go *below* each root instead, which was wrong twice over. The
-    bounds are measured in world space, after every node's TRS has composed, but
-    applying the result under a root composes as ``M_root . T . S`` rather than
-    ``S . M_root`` followed by ``T`` -- so any rotation on a root rotated the
-    grounding offset, and a mesh authored in Blender or exported from Clay came
-    back sunk and shifted. And it was applied once *per root* with the same
-    world-space translation, so a Clay export -- which emits one root per object
-    -- grounded every object as though it alone were the scene: three boxes
-    asked to be 2 m across came out 8.2 m and reported 2.
+    The transform still may not sit *on* a root: trimesh treats one as the
+    graph's base frame and silently discards its transform, which would leave
+    the GLB grounded and the derived STL/OBJ exports not. A bare wrapper node
+    above the roots does not work either -- trimesh's base frame is named
+    ``world`` and so is the root its own exporter writes, so the collision
+    resolves into a cycle that drops the transform again.
     """
     scene = trimesh.load(glb_path)
     extents = scene.extents

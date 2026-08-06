@@ -26,9 +26,9 @@ else:  # pragma: no cover - runtime alias
 DEFAULT_LOW = 100
 DEFAULT_HIGH = 200
 
-# Kinds control.hint() itself can produce. "depth" is a separate module
-# (pipelines/depth.py) because it needs a torch model, and this one must stay
-# torch-free -- test_offline.py asserts exactly that.
+# Kinds control.hint() itself can produce. A depth hint would need a torch
+# model and so would have to be a module of its own: this one must stay
+# torch-free, which test_offline.py asserts exactly. No such module exists yet.
 PREPROCESSORS = ("canny",)
 
 

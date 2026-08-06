@@ -129,8 +129,10 @@ class ControlNet:
     key: str
     label: str
     dir_name: str
-    # Which preprocessor turns the reference into a hint image. "canny" is
-    # pipelines/control; "depth" is pipelines/depth, which needs torch.
+    # Which preprocessor turns the reference into a hint image. Only "canny"
+    # exists today (``pipelines/control.PREPROCESSORS``); a depth hint would
+    # need a torch model and therefore a module of its own, since control.py
+    # must stay torch-free.
     preprocessor: str
     variant: str | None = "fp16"
     default_scale: float = 0.65

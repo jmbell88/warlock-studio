@@ -16,8 +16,10 @@ mesh it cannot open a hole (measured: 4-35 px out of ~45,000), so including it
 would only add a second explanation for a number that has one.
 
 Used two ways: the worker measures every finished mesh at REQUEST_PATH_RESOLUTION
-and stores the result on the job, and the band sweep (sweep.py) measures at full
-resolution offline.
+and stores the result on the job, and an offline measurement can call it at full
+resolution directly. (The band sweep that did the latter lived in the deleted
+``bench/sweep.py``; ``service/sweeps.py`` is its replacement and goes through the
+worker, so it takes the request-path resolution like everything else.)
 
 The reachability half is one ``cv2.connectedComponents`` pass. It used to be two
 iterative fixpoints -- grow a boolean plane by four shifted ORs until it stops

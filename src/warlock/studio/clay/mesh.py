@@ -206,9 +206,10 @@ def edges(mesh: Mesh) -> np.ndarray:
 def _fan_corners(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     """``(tri_corners, tri_face)`` where tri_corners index *loops*, not vertices.
 
-    The fan alone, with no concavity screen -- kept for the callers that know
-    their faces are convex and want to skip the check. Everything user-facing
-    goes through :func:`_corner_triangles` instead.
+    The fan alone, with no concavity screen. Nothing in the package calls it:
+    it survives as the *reference* the ear-clipping tests measure against, the
+    same role the numpy fallbacks play beside the native kernels. Everything
+    that actually triangulates goes through :func:`_corner_triangles`.
     """
     return fan_corners(mesh.starts)
 

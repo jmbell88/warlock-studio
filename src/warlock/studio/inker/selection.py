@@ -457,20 +457,6 @@ class FloatingBuffer:
     def moved(self, dx: int, dy: int) -> None:
         self.offset = (self.offset[0] + int(dx), self.offset[1] + int(dy))
 
-    # Compatibility with the flat editor's ``Selection``: the old pane says
-    # ``origin`` and hands ``chunk`` straight to a GL upload. Both go away with
-    # the pane; neither is worth a second representation until then.
-
-    @property
-    def origin(self) -> tuple[int, int]:
-        return self.offset
-
-    @property
-    def chunk(self) -> Any:
-        from PIL import Image
-
-        return Image.fromarray(self.pixels, "RGBA")
-
     def contains(self, xy: tuple[int, int]) -> bool:
         x, y = int(xy[0]), int(xy[1])
         ox, oy = self.offset

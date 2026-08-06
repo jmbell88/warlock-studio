@@ -61,7 +61,9 @@ matte — is a property of the document, applied once when the image is flattene
 you erase through is genuinely a hole until the moment you export, and changing the document's
 matte changes what every erased area exports onto without touching a single stroke.
 
-Undo is unlimited within a memory budget and is addressed by layer identity rather than by position
+Undo keeps up to 64 steps, and fewer than that when they are large — the stack is bounded by bytes
+(192 MB) first and by that depth ceiling second, so a document of small dabs gets all 64 and a
+document of full-canvas crops gets a handful. Steps are addressed by layer identity rather than by position
 in the stack — an undo issued after you reorder layers still lands on the layer the edit was
 actually made to. The document is "dirty" when it differs from the last save, which means undoing
 back to the saved state marks it clean again rather than leaving it unsaved forever.

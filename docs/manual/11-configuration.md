@@ -28,7 +28,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_T2I_ROOT` | `models/` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |
 | `WARLOCK_T2I_MODEL` | `turbo` | The base model key used when a job does not name one. |
-| `WARLOCK_VRAM_EXCLUSIVE` | `off` | Restores the sequential VRAM handoff for text jobs. See [VRAM modes](#vram-modes). |
+| `WARLOCK_VRAM_EXCLUSIVE` | auto | Restores the sequential VRAM handoff for text jobs. Unset, the mode is chosen from the card's size; set, it is honoured verbatim. See [VRAM modes](#vram-modes). |
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
 | `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |
 | `WARLOCK_RANK` | `on` | Whether a finished reference is scored against its composition report (and its style anchor when one exists). |
@@ -50,7 +50,13 @@ against every job behind it — which is what the ceiling exists to prevent.
 The reconstruction engine is about 16 GB resident and an SDXL-class image model about 7 GB. How
 those two share a card is the one setting most worth understanding.
 
-**Coexist (the default).** The engine subprocess starts on the first 3D job and stays resident in
+Left unset, the mode is **chosen from the card** at startup: a budget (the device total minus a
+headroom margin) that cannot hold the engine and an image model together selects exclusive, and
+anything larger selects coexist. A 32 GB card gets coexist. Set the variable explicitly and that
+choice is honoured verbatim — auto-detection never overrules it. `warlock doctor` prints which mode
+was chosen and why.
+
+**Coexist.** The engine subprocess starts on the first 3D job and stays resident in
 VRAM alongside the image model. Neither is stopped for the other, and both are evicted after the
 idle timeout (`WARLOCK_TRELLIS_IDLE`, ten minutes). On a 32 GB card this is simply faster: a text
 job does not pay to restart the engine, and a mesh job does not pay to reload it.

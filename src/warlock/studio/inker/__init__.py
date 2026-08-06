@@ -47,7 +47,6 @@ from .gradient import KINDS as GRADIENT_KINDS
 from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
 from .selection import COMBINE_OPS, Clipboard, FloatingBuffer, SelectionMask, magic_wand
-from .session import EditorSession
 from .undo import UNDO_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
 
 __all__ = [
@@ -56,7 +55,6 @@ __all__ = [
     "Clipboard",
     "DEFAULT_SPACING",
     "Document",
-    "EditorSession",
     "FloatingBuffer",
     "GRADIENT_KINDS",
     "Layer",
