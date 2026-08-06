@@ -46,9 +46,12 @@ class FakeApp:
         self.app_ctx = SimpleNamespace(
             state=state,
             cache=FakeCache(),
+            svc=None,
             toast=lambda message, level="info": self.toasts.append((message, level)),
-            submit=lambda key, run: self.calls.append(f"submit:{key}") or True,
+            submit=lambda key, run, *args: self.calls.append(f"submit:{key}") or True,
         )
+        self.runtime = SimpleNamespace(checks=["startup-snapshot"])
+        self._last_health_poll = 0.0
         self.viewer = SimpleNamespace(
             pose_mode=pose_mode,
             path="model.glb",
@@ -73,6 +76,24 @@ class FakeApp:
 
 
 # --- results that had no branch ----------------------------------------------
+
+
+def test_a_health_poll_replaces_the_startup_checks():
+    """The header dot reads runtime.checks; before the poller it showed the
+    startup snapshot forever."""
+    app = FakeApp()
+    fresh = [SimpleNamespace(name="disk space", ok=False, fatal=False)]
+    app.dispatch("health", fresh)
+    assert app.runtime.checks == fresh
+
+
+def test_the_health_ticker_polls_on_the_ttl_and_not_every_frame():
+    app = FakeApp()
+    main.App._health_ticker(app, 100.0)
+    main.App._health_ticker(app, 100.1)
+    assert app.calls == ["submit:health"]
+    main.App._health_ticker(app, 200.0)
+    assert app.calls == ["submit:health", "submit:health"]
 
 
 def test_the_trellis_log_result_is_stored_where_the_inspector_reads_it():

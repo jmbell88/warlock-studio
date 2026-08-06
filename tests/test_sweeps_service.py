@@ -66,6 +66,32 @@ def test_units_are_grouped_by_server_config_with_the_base_group_first():
     ]
 
 
+def test_admission_refuses_a_named_tier_while_gltfpack_is_absent(svc):
+    # Admission validated only the profile *name*, so a sweep could finish
+    # wearing profile="standard" over meshes the missing binary never touched
+    # -- and the verdict corpus would credit the tier. Refused naming the unit,
+    # like every other admission failure.
+    plan = _plan(seeds=(1,), base={"profile": "standard"})
+    with pytest.raises(Invalid, match="baseline s1.*gltfpack"):
+        svc_sweeps.create_sweep(svc, plan)
+
+
+def test_an_overlong_prompt_is_refused_before_the_sweep_row_exists(svc, monkeypatch):
+    # create_job would refuse it anyway, but only after the sweep row was
+    # minted and the rollback path ran; all-or-nothing admission means the
+    # refusal happens before anything exists.
+    minted: list[str] = []
+    real = svc.store.create_sweep
+    monkeypatch.setattr(
+        svc.store,
+        "create_sweep",
+        lambda *args, **kwargs: minted.append("row") or real(*args, **kwargs),
+    )
+    with pytest.raises(Invalid):
+        svc_sweeps.create_sweep(svc, _plan(seeds=(1,), prompt="x" * 1001))
+    assert minted == []
+
+
 def test_each_param_is_routed_to_the_tier_create_job_expects():
     plan = _plan(
         seeds=(7,),

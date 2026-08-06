@@ -42,7 +42,7 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A switch at the top of the window chooses between seven modes, and that switch is the single thing
+A switch at the top of the window chooses between eight modes, and that switch is the single thing
 that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
 
 - **Home.** The chooser the app opens on: start a 2D reference, start a 3D asset, open something
@@ -60,6 +60,8 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
   [Inker](06-inker.md).
 - **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
   export a `.glb` or import the document as an asset. Covered in [Clay](07-clay.md).
+- **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
+  works" findings the verdicts add up to. Covered in [Review](16-review.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and a
   read-only list of the models it loaded. See
   [In-app settings](11-configuration.md#in-app-settings).

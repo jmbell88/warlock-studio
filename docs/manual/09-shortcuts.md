@@ -3,10 +3,10 @@
 A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
 is a condensed subset — the tables below are the full list.
 
-One rule explains an apparent overlap between the tables below. While an Inker or Clay document is
-open, that mode takes every key — so in Inker `W` picks the wand rather than toggling wireframe, and
-in Clay `W` is the move tool. Those viewport bindings would otherwise act on a viewport that is not
-on screen.
+One rule explains an apparent overlap between the tables below. Inker, Clay and Review each take
+every key while they are on screen — so in Inker `W` picks the wand rather than toggling wireframe,
+in Clay `W` is the move tool, and in Review `S` skips a unit. The 2D / 3D viewport bindings would
+otherwise act on a viewport that is not on screen.
 
 ## Everywhere
 
@@ -14,11 +14,26 @@ on screen.
 | --- | --- |
 | F1 | Switch to the Manual |
 | F10 | Toggle the frame-rate readout |
+
+## 2D and 3D
+
+| Keys | Action |
+| --- | --- |
 | Ctrl+Enter | Generate / Make 3D |
 | F | Frame the model |
 | W | Toggle wireframe |
 | S | Toggle turntable |
 | Esc | Exit comparison / pose edit |
+
+## Review
+
+| Keys | Action |
+| --- | --- |
+| A | Accept the unit on screen |
+| R | Reject — then `1`–`5` picks the reason |
+| S | Skip to the next unverdicted unit |
+| Left / Right | Previous / next unit |
+| Esc | Cancel a pending reject |
 
 ## Clay
 

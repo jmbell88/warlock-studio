@@ -43,18 +43,38 @@ def _normalize_guidance(raw: dict[str, Any]) -> dict[str, Any]:
         raise Invalid(str(exc)) from exc
 
 
-def _resolve_profile(params: dict[str, Any], profile: str | None, custom_triangles: int | None):
+def _resolve_profile(
+    svc: WarlockService,
+    params: dict[str, Any],
+    profile: str | None,
+    custom_triangles: int | None,
+):
     """Validate a triangle budget and record it. Validated at submit time for
     the same reason a rig template is: an unusable budget should cost the
-    request, not the two minutes of GPU that precede the optimize step."""
+    request, not the two minutes of GPU that precede the optimize step.
+
+    A tier that needs gltfpack is refused outright while the binary is absent,
+    not just downgraded: the worker's fallback ships the raw copy silently, so
+    the job would finish ``done`` wearing a profile param the mesh never saw --
+    and ``profile`` is in ``findings.VECTOR_PARAMS``, so every verdict on it
+    would credit a tier that never ran. The UI never offers these tiers
+    without the binary; this closes the API and sweep doors too.
+    """
     if profile is None:
         return
     from ..pipelines import optimize
 
     try:
-        optimize.resolve(profile, custom_triangles)
+        target = optimize.resolve(profile, custom_triangles)
     except ValueError as exc:
         raise Invalid(str(exc), field="profile") from exc
+    if target is not None and not svc.config.gltfpack_exe.exists():
+        raise Invalid(
+            f"the '{profile}' budget needs gltfpack, which is not installed "
+            f"(expected at {svc.config.gltfpack_exe}); use profile 'raw', or "
+            "vendor the binary and retry",
+            field="profile",
+        )
     params["profile"] = profile
     if custom_triangles is not None:
         params["custom_triangles"] = custom_triangles
@@ -169,11 +189,14 @@ def create_job(
     params["seed"] = seed
     params["reference_seed"] = seed if reference_seed is None else reference_seed
     params["mesh_seed"] = seed if mesh_seed is None else mesh_seed
-    _resolve_profile(params, profile, custom_triangles)
+    _resolve_profile(svc, params, profile, custom_triangles)
     if reference_prep is not None:
         # Written only when asked for, so an un-set job keeps following
         # queue.DEFAULT_REFERENCE_PREP rather than being pinned to whatever
-        # today's default happens to be.
+        # today's default happens to be. The 3D pane *always* asks -- its
+        # checkbox is on screen, and pinning what the user can see is the
+        # deliberate choice there (settings_3d.promote_kwargs) -- so the
+        # follow-the-default path is the API's and the sweeps', not the UI's.
         params["reference_prep"] = bool(reference_prep)
     for key, value in (
         ("trellis_band", trellis_band),
@@ -741,7 +764,7 @@ def promote_to_model(
         if "platform" in overrides:
             raw.pop("resolution", None)
         params.update(_normalize_guidance(raw))
-    _resolve_profile(params, profile, custom_triangles)
+    _resolve_profile(svc, params, profile, custom_triangles)
     if reference_prep is not None:
         params["reference_prep"] = bool(reference_prep)
     if rig is not None:

@@ -27,6 +27,7 @@ EXPECTED_KEYS = [
     "13-architecture",
     "14-pipelines",
     "15-extending",
+    "16-review",
 ]
 
 
@@ -130,9 +131,12 @@ def test_help_button_call_sites_match_help_targets():
     """
     from warlock.studio.manual.targets import HELP_TARGETS
 
-    panes_dir = Path(__file__).resolve().parents[2] / "src/warlock/studio/panes"
+    studio_dir = Path(__file__).resolve().parents[2] / "src/warlock/studio"
     pattern = re.compile(r'help_button\(\s*ctx\s*,\s*"([^"]+)"\s*\)')
     found: set[str] = set()
-    for path in panes_dir.glob("*.py"):
+    # main.py joins the scan because Review's workspace panes are drawn there
+    # rather than in panes/ -- its (?) would otherwise be invisible to this
+    # test in both directions.
+    for path in [*(studio_dir / "panes").glob("*.py"), studio_dir / "main.py"]:
         found.update(pattern.findall(path.read_text(encoding="utf-8")))
     assert found == HELP_TARGETS.keys()

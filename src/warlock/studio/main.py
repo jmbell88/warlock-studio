@@ -83,6 +83,7 @@ class App:
         # Seeded to 0.0, not to now: the first tick fires immediately and puts
         # a startup baseline in the log to measure every later sample against.
         self._last_memory_log = 0.0
+        self._last_health_poll = 0.0
         # A dead worker is reported once. The banner is dismissible, and
         # re-raising it every frame would make it impossible to dismiss.
         self._fatal_reported = False
@@ -302,6 +303,7 @@ class App:
         self._last_frame = now
         self.fps.record(dt)
         self._memory_ticker(now)
+        self._health_ticker(now)
         return dt
 
     def _memory_ticker(self, now: float) -> None:
@@ -325,6 +327,23 @@ class App:
             # smoothness are the two things worth reading against each other.
             rate = f" | {self.fps.fps:.1f} fps" if self.fps.frames else ""
             log.info("host idle-tick: %s%s", summary, rate)
+
+    def _health_ticker(self, now: float) -> None:
+        """Keep the header health dot honest after startup.
+
+        The dot reads ``runtime.checks``; before this poller it showed the
+        startup snapshot forever -- unplug the disk or orphan the trellis port
+        mid-session and the dot stayed green. The probe runs on a task thread
+        (it binds a socket and stats a disk), and the submit is paced here so
+        a task is not queued sixty times a second; ``cached_checks``' own TTL
+        makes a stray extra call cheap rather than harmful.
+        """
+        from warlock.service import system as svc_system
+
+        if now - self._last_health_poll < svc_system.HEALTH_TTL:
+            return
+        self._last_health_poll = now
+        self.app_ctx.submit("health", svc_system.current_checks, self.app_ctx.svc)
 
     def frame(self, dt: float) -> None:
         from imgui_bundle import imgui
@@ -385,6 +404,12 @@ class App:
         key = done.key
         if key == "preview" and isinstance(done.result, dict):
             ctx.state.preview.update(done.result)
+            return
+        if key == "health":
+            # The dot and the diagnostics popup read runtime.checks each
+            # frame; replacing the list wholesale is atomic enough for both.
+            if isinstance(done.result, list):
+                self.runtime.checks = done.result
             return
         # The side data the pose and sheet panels read. Keyed by job so a
         # result that arrives after the selection moved on can be dropped
@@ -1293,8 +1318,10 @@ class App:
         from imgui_bundle import imgui
 
         from . import icons, widgets
+        from .manual import render as manual_render
 
         widgets.section("Sweeps")
+        manual_render.help_button(ctx, "review")
         if widgets.disabled_button(f"{icons.REFRESH} Rescan", not state.scanning):
             review_mode.scan(ctx)
         if state.scanning:

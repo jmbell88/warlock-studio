@@ -80,6 +80,9 @@ class SweepForm:
     seeds: str = "42"
     axes: list[dict[str, str]] = field(default_factory=lambda: [{"param": "", "values": ""}])
     label: str = ""
+    # Fixed at "model" with no widget on purpose: a sweep exists to judge
+    # meshes, and service.sweeps keeps "reference" expressible for a future
+    # cheap-stage form rather than for this one.
     stage: str = "model"
     # The settings the units start from, captured from the 2D/3D forms the user
     # has already tuned. Empty until "start from current settings" is pressed --

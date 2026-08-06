@@ -2,9 +2,9 @@
 
 > **Active plan:** [`CLAY_ELEMENTS.md`](CLAY_ELEMENTS.md) — Clay element editing (vertex/edge/face modes, the full op set, GLB import). 26 tasks in 6 phases, executing on `master`; Phase 0 is done.
 
-The 30-task plan in `UPDATE.md` is **complete** on branch `update-plan`, and **not merged**. This
-file is the hand-off: what shipped, what is genuinely open, and what a follow-up session should pick
-up first.
+The 30-task plan in `UPDATE.md` is **complete** and was **merged to `master` on 2026-08-05** (the
+branch is deleted). This file is the hand-off: what shipped, what is genuinely open, and what a
+follow-up session should pick up first. The tables below describe the branch as it was handed off.
 
 The authoritative record is `../.superpowers/sdd/UPDATE/progress.md` — a per-task note for all 30
 tasks, every corrected brief literal, and every controller ruling. It is git-ignored, so
@@ -86,13 +86,10 @@ at review) and monkeypatched tests. Whether BiRefNet's remote modelling code nee
 `torchvision` was not confirmable offline, so the doctor row was made honest rather than guessed at.
 First run with real weights is the test.
 
-### 5. `viewer_embed` does not forget its viewport texture before releasing it  *(pre-existing)*
+### 5. ~~`viewer_embed` does not forget its viewport texture before releasing it~~  *(fixed 2026-08-06)*
 
-`Viewport.resize` releases its texture and allocates a new one, and the imgui backend maps GL names
-to moderngl objects — so releasing without `forget_texture` leaves it holding a dead object under a
-name the driver is free to reissue, which is how an unrelated image starts rendering as this one.
-`textures.py` documents exactly this and `clay_view.py` now implements and tests it on both halves
-(resize and release). The asset viewer should get the same treatment.
+Done: `viewer_embed._resize`/`_forget` now mirror `clay_view` on both halves (resize and release),
+pinned by `tests/test_viewer_embed_textures.py`.
 
 ### 6. Task A9 stays unbuilt unless the A8 sweep is redone
 

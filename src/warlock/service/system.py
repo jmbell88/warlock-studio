@@ -46,6 +46,18 @@ def cached_checks(svc: WarlockService, trellis_running: bool) -> list[doctor.Che
     return checks
 
 
+def current_checks(svc: WarlockService) -> list[doctor.Check]:
+    """The doctor's rows as of now, through the TTL cache.
+
+    What the header health dot polls from a task thread: the trellis flag is
+    sampled at call time (two attribute reads, safe from any thread), and
+    ``cached_checks`` keeps the re-probe down to once per ``HEALTH_TTL``.
+    """
+    worker = svc.worker
+    running = bool(worker is not None and worker.trellis.running)
+    return cached_checks(svc, running)
+
+
 def health(svc: WarlockService) -> dict[str, Any]:
     worker = svc.worker
     running = bool(worker is not None and worker.trellis.running)

@@ -16,6 +16,7 @@ it running and keeping it running, and Part III explains how it is built.
 - [Inker](06-inker.md) — the layered raster editor and the two directions it connects to the pipeline.
 - [Clay](07-clay.md) — modelling from primitives, and the two ways a built document leaves the mode.
 - [The library and jobs](08-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
+- [Review](16-review.md) — judging finished meshes, parameter sweeps, and the findings the verdicts add up to.
 - [Keyboard shortcuts](09-shortcuts.md) — every binding the app answers to.
 
 ## Setup & operations

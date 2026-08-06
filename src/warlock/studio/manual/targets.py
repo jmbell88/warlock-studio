@@ -22,5 +22,6 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "clay-outliner": ("07-clay", "adding-a-primitive"),
     "clay-bridge": ("07-clay", "the-two-ways-out"),
     "profiles": ("08-library-and-jobs", "profiles"),
+    "review": ("16-review", None),
     "app-settings": ("11-configuration", "in-app-settings"),
 }

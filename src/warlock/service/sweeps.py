@@ -45,7 +45,13 @@ from .. import guidance
 from . import jobs as jobs_mod
 from .core import WarlockService
 from .errors import Invalid, NotFound
-from .validation import check_seed, check_trellis_band, check_trellis_tex_res, check_vram
+from .validation import (
+    MAX_PROMPT,
+    check_seed,
+    check_trellis_band,
+    check_trellis_tex_res,
+    check_vram,
+)
 
 log = logging.getLogger(__name__)
 
@@ -223,18 +229,21 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
     if "profile" in kwargs:
-        from ..pipelines import optimize
-
-        try:
-            optimize.resolve(kwargs["profile"], kwargs.get("custom_triangles"))
-        except ValueError as exc:
-            raise Invalid(str(exc), field="profile") from exc
+        # The same check create_job runs, including the gltfpack-presence
+        # gate: a sweep unit that would finish wearing a tier the missing
+        # binary never applied poisons the verdict corpus.
+        jobs_mod._resolve_profile(svc, {}, kwargs["profile"], kwargs.get("custom_triangles"))
     check_vram(svc, "text", plan.stage, params)
 
 
 def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> None:
     if not plan.prompt.strip():
         raise Invalid("a sweep needs a prompt", field="prompt")
+    if len(plan.prompt) > MAX_PROMPT:
+        # create_job would refuse it too, but only after the sweep row was
+        # minted and the rollback ran; all-or-nothing admission means the
+        # refusal happens before anything exists.
+        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
     if plan.stage not in ("reference", "model"):
         raise Invalid("stage must be 'reference' or 'model'", field="stage")
     if not plan.seeds:

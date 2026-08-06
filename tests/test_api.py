@@ -366,6 +366,15 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     )
 
 
+def test_current_checks_answers_without_a_worker_and_through_the_cache(svc):
+    # What the header health dot polls: no worker at all (the studio before
+    # the runtime finishes, or a headless caller) must still get rows, and a
+    # second call inside the TTL must be the cached list, not a re-probe.
+    first = svc_system.current_checks(svc)
+    assert first and all(hasattr(c, "ok") for c in first)
+    assert svc_system.current_checks(svc) is first
+
+
 def test_health_does_not_rerun_the_doctor_suite_on_every_call(svc, worker, monkeypatch):
     """The suite binds a socket, stats the disk and probes a dozen paths, and
     the UI asks continuously. None of those answers changes second to second."""
@@ -1096,9 +1105,25 @@ def test_a_submit_rejects_an_unknown_profile(svc):
         svc_jobs.create_job(svc, kind="text", prompt="x", profile="nonsense")
 
 
-def test_a_submit_stores_a_valid_profile(svc):
+def test_a_submit_stores_a_valid_profile(svc, tmp_path):
+    exe = tmp_path / "gltfpack.exe"
+    exe.write_bytes(b"")
+    svc.config.gltfpack_exe = exe
     job_id = svc_jobs.create_job(svc, kind="text", prompt="x", profile="draft")["id"]
     assert _params(svc, job_id)["profile"] == "draft"
+
+
+def test_a_named_tier_is_refused_while_gltfpack_is_absent(svc):
+    # Without the binary the worker falls back to the raw copy silently, so a
+    # job finishing "done" wearing profile="standard" would file every verdict
+    # against a tier that never ran. Refusing at the door is the fix.
+    with pytest.raises(Invalid, match="gltfpack"):
+        svc_jobs.create_job(svc, kind="text", prompt="x", profile="standard")
+
+
+def test_the_raw_profile_needs_no_binary(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x", profile="raw")["id"]
+    assert _params(svc, job_id)["profile"] == "raw"
 
 
 # --- derived artifacts ------------------------------------------------------
