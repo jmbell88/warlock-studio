@@ -22,14 +22,11 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker_mode, inker_state, theme, widgets
+from .. import ants, icons, inker_mode, inker_state, theme, widgets
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import inker_textures
 
-# Marching ants: dash length in screen pixels and how fast the pattern crawls.
-DASH = 6.0
-ANT_SPEED = 12.0
 # Below this zoom a pixel grid is denser than the pixels it describes.
 GRID_MIN_ZOOM = 4.0
 
@@ -668,13 +665,18 @@ def _contours(ctx: Any, tab: Any):
     and it has to be one, because the document's revision ticks on every dab
     and tracing the boundary per stroke frame would be the most expensive thing
     on screen.
+
+    What is cached is what :mod:`~warlock.studio.ants` prepared rather than the
+    raw lattice points: the vertex arrays and the cumulative arc lengths are a
+    pure function of the mask too, so measuring the perimeter belongs on the
+    same side of this cache as tracing the boundary does.
     """
     key = f"paint_ants:{tab.uid}"
     cached = ctx.state.preview.get(key)
     mask = tab.doc.mask
     if cached is not None and cached[0] is mask:
         return cached[1]
-    loops = mask.contours() if mask is not None else []
+    loops = ants.prepare(mask.contours() if mask is not None else [])
     ctx.state.preview[key] = (mask, loops)
     return loops
 
@@ -684,28 +686,21 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     if not loops:
         return
     view = tab.view
-    phase = (time.monotonic() * ANT_SPEED) % (DASH * 2)
+    # Canvas (0, 0) on screen, from the same function every other overlay uses:
+    # ``to_screen`` is a uniform scale plus this offset, and a second spelling
+    # of it is how the ants end up one pixel off the mask they describe.
+    offset = inker_state.to_screen(view, origin, 0.0, 0.0)
+    phase = (time.monotonic() * ants.ANT_SPEED) % (ants.DASH * 2)
     light, dark = _u32(theme.TEXT), _u32(theme.BG)
-    for loop in loops:
-        points = [inker_state.to_screen(view, origin, x, y) for x, y in loop]
-        points.append(points[0])
-        walked = -phase
-        for a, b in zip(points, points[1:], strict=False):
-            length = math.dist(a, b)
-            if length <= 0:
-                continue
-            travelled = 0.0
-            while travelled < length:
-                end = min(travelled + DASH, length)
-                on = int((walked + travelled) // DASH) % 2 == 0
-                t0, t1 = travelled / length, end / length
-                draw_list.add_line(
-                    (a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0),
-                    (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1),
-                    light if on else dark,
-                )
-                travelled = end
-            walked += length
+    for verts, cum in loops:
+        starts, ends, on = ants.dash_segments(verts, cum, view.zoom, offset, phase)
+        # One call per dash. imgui has no batched per-segment-colour API, so
+        # this loop is irreducible -- but it is over dashes now rather than over
+        # every unit lattice step, which at zoom 1 is six times fewer.
+        for (ax, ay), (bx, by), lit in zip(
+            starts.tolist(), ends.tolist(), on.tolist(), strict=True
+        ):
+            draw_list.add_line((ax, ay), (bx, by), light if lit else dark)
 
 
 def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
