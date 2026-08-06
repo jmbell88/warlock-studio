@@ -112,7 +112,10 @@ def _ring_corners(mesh: Mesh, group: np.ndarray) -> np.ndarray:
     while cursor != int(mesh.loops[start]):
         nxt = succ.get(cursor)
         if nxt is None:  # pragma: no cover - a fork is caught above
-            raise OpError(f"The outline of that selection breaks at vertex {cursor}.")
+            raise OpError(
+                f"The outline of that selection breaks at vertex {cursor}, so it "
+                "cannot be merged into one face. Dissolve a smaller region."
+            )
         ring.append(nxt)
         cursor = int(mesh.loops[a.next_corner[nxt]])
 
@@ -134,7 +137,10 @@ def merge_groups(mesh: Mesh, groups: list[np.ndarray]) -> tuple[Mesh, ElementSel
     """
     real = [np.asarray(g, dtype="i8") for g in groups if len(g) > 1]
     if not real:
-        raise OpError("Nothing there to dissolve.")
+        raise OpError(
+            "Nothing there to dissolve: a dissolve merges neighbours, so it "
+            "needs at least two of them touching."
+        )
 
     rings = [_ring_corners(mesh, g) for g in real]
     consumed = np.concatenate(real)

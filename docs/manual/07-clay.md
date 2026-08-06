@@ -23,6 +23,71 @@ kept, so the properties panel offers those parameters — a cylinder's radius, h
 count — and changing one rebuilds the mesh. That is a single undo step, so `Ctrl+Z` takes the
 object back to the shape it had rather than to some intermediate state.
 
+## Element modes
+
+Every object starts as one thing you can move about. Press `1`, `2` or `3` and it becomes a mesh you
+can take apart: vertices, edges, faces. `4` goes back to object mode. The buttons above the add row
+say the same thing, and highlight whichever mode the document is in.
+
+| Key | Mode | What clicking selects |
+| --- | --- | --- |
+| `1` | Verts | One vertex |
+| `2` | Edges | One edge |
+| `3` | Faces | One face |
+| `4` | Object | The whole object |
+
+The mode belongs to the *document*, not to the app, so switching tabs does not reinterpret what you
+had selected in the other one.
+
+Clicking replaces the selection, `Shift`+click adds to it and `Ctrl`+click removes from it. Clicking
+the object but missing everything on it clears that object; clicking empty space with the **Select**
+tool (`Q`) starts a marquee, and a marquee that ends where it started clears everything. A marquee
+takes a vertex inside the rectangle, an edge only when *both* ends are inside, and a face only when
+*all* its corners are — and it selects through the mesh, back face included, because that is what a
+rectangle dragged over a blockout means.
+
+`Alt`+drag always orbits, in every mode. That is the one gesture that is never reinterpreted, since
+it is how you look at what you are about to click.
+
+Right-click opens the context menu, listing exactly the operations that apply in the current mode
+with the ones that cannot run greyed out. The same list drives the buttons in the tools column, so
+neither can offer something the other refuses. Operations that take a number — bevel, inset, weld,
+loop cut, smooth — open a small dialog with the fields and an **Apply** button, and remember what you
+last used.
+
+`Ctrl+A` selects everything in the current mode's sense of everything, `Ctrl+Shift+I` inverts it, and
+`Esc` steps back: first it drops the element selection, then it leaves the element mode, then it
+clears the object selection. `Delete` in an element mode deletes *faces*, never the object.
+
+**Element selection is transient.** It is not saved with the document, and an undo that changes
+geometry drops it — the indices it named describe a mesh that no longer exists. An undo that only
+moves or renames something keeps it, because those cannot invalidate it.
+
+### The operations
+
+| Mode | Operation | What it does |
+| --- | --- | --- |
+| Faces | Extrude (`E`) | Pulls the selected faces off the surface and walls in the gap. It moves nothing — drag the returned faces with `W`. |
+| Faces | Inset | Shrinks each face in place and rings it with the rim it vacated. |
+| Faces | Subdivide | Splits each face into quads without changing the shape. |
+| Faces | Flip Normals | Reverses the winding of the selected faces. |
+| Edges | Bevel | Replaces each edge with a flat quad, mitring the corners where several meet. |
+| Edges | Loop Cut | Rings a strip of quads with a new edge loop. |
+| Edges | Fill Hole | Caps the boundary ring the selected edge belongs to. |
+| Edges, Faces | Collapse | Pulls the selection down to a single point. |
+| Verts | Weld | Merges vertices closer together than a distance you give. |
+| Any | Dissolve | Removes the selection and merges what it separated, rather than leaving a hole. |
+| Any | Smooth | Catmull-Clark subdivision over the whole object. Each level multiplies the face count by four. |
+
+An operation that cannot do what you asked says so in a toast naming the element and what to do
+instead, and changes nothing. Bevel refuses a boundary edge; dissolve refuses a selection that rings
+a face it does not include; fill hole refuses a pinched boundary. Those are refusals, not failures:
+the alternative is geometry that looks right and is not.
+
+The first operation that changes an object's topology **freezes** it. A box that has been extruded is
+no longer describable as "box, size 1", so the properties panel switches from the generator's
+parameters to a vertex and face count.
+
 ## Transforming
 
 Four tools, on `Q`, `W`, `E` and `R`:
@@ -36,6 +101,12 @@ Four tools, on `Q`, `W`, `E` and `R`:
 
 A drag is one undo step, recorded when you let go — not one step per frame of the drag, which would
 bury everything else in the history.
+
+The gizmos work on elements too. In an element mode they sit at the centre of what is selected
+*inside* the objects rather than at the object's own centre, and dragging one moves those vertices.
+That is one undo step per object per drag, and a drag that ends where it started records nothing at
+all. **Select** (`Q`) shows no gizmo in an element mode, which is what leaves the left button free
+for the marquee.
 
 The **Move**, **Rotate** and **Scale** values are also typed directly in the properties panel, which
 is the better way to place something exactly. Rotation is shown as a quaternion in `XYZW` order,
@@ -68,9 +139,15 @@ The slot's **base colour**, **metallic** and **roughness** are edited there too,
 reaches every object using that slot at once — which is the point of a palette rather than a
 material per object.
 
-Clay Phase 1 has no textures. The material factors are what the exported asset carries, and they
-are enough for a blockout: what the pipeline is for is turning that blockout into something with a
-surface.
+Clay paints no textures — but it **carries** them. A material that arrived with an imported asset
+keeps its baked maps: they render in the viewport, they are stored in the `.wblk`, and they are
+written back into an exported GLB. The properties panel shows which slots a material carries as a
+read-only line, because there is nothing here that could replace one and offering a control that
+looked like it could would be promising a feature that does not exist.
+
+For an asset modelled here from scratch, the material factors are what the exported asset carries,
+and they are enough for a blockout: what the pipeline is for is turning that blockout into something
+with a surface.
 
 ## Saving
 
@@ -101,6 +178,32 @@ A built asset cannot be rerolled or remeshed. There is no generator behind it: a
 change nothing, and there is no reference image to reconstruct from. The way to get a different mesh
 is to open the document and change it.
 
+## Importing an asset
+
+Dropping a `.glb` on the window while Clay is on screen imports it, and the library card's overflow
+menu has **Edit in Clay** for any finished model.
+
+**Edit in Clay** prefers the document you authored. If the asset was exported from Clay, its
+`build.wblk` sidecar is reopened — objects, names, generator parameters and all. If it was not, the
+served `model.glb` is imported instead: that is the optimized, grounded mesh, not the raw
+reconstruction.
+
+An imported mesh comes in as one object per material, with its vertices merged back together
+bitwise. An exporter splits a vertex wherever a normal or a texture coordinate disagrees, and those
+split copies are bit-identical in position, so merging them is exact — there is no tolerance to
+choose and no chance of welding two features that are a hair apart. If you *want* tolerance welding,
+that is what **Weld** is for.
+
+Texture coordinates survive, because Clay stores them per face corner: a seam is two corners at one
+vertex, which is exactly what the exporter split produced. Smoothing is a heuristic — a face whose
+corner normals agree with its own geometric normal was flat-shaded, and one where they do not was
+smooth.
+
+Two things are refused rather than half-done. A **rigged** GLB, because Clay has no skinning and
+editing it would drop the rig; open it in 3D mode instead. And a mesh past two million triangles,
+because the editor holds every mesh twice per undo step. Past two hundred thousand it asks first,
+since every edit rebuilds the whole mesh and you should know that before you press Extrude.
+
 ## Where the files go
 
 An exported asset is an ordinary job directory, and the document that produced it is stored beside
@@ -108,8 +211,7 @@ the mesh as `build.wblk` (the on-disk name predates the rename). That copy is ne
 downloadable — it exists so that reopening a built asset brings its objects back instead of one
 frozen mesh — and it goes away with the job when the job is deleted.
 
-Dropping a `.wblk` on the window while Clay is on screen opens it. Dropping a `.glb` does not:
-reading a mesh back into editable objects is not something Clay does yet, and quietly making a
-frozen single-object document out of it would be a different feature wearing this one's name.
+Dropping a `.wblk` on the window while Clay is on screen opens it, and dropping a `.glb` imports it
+— see [Importing an asset](#importing-an-asset).
 
 Every binding is listed in [Keyboard shortcuts](09-shortcuts.md).

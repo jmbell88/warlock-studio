@@ -21,8 +21,8 @@ centred too: it lies *in* the XZ plane at y = 0, not on top of it.
 **Caps are n-gons, not fans.** The CSR storage exists precisely so a cylinder's
 lid can be one face with sixteen corners, and it matters twice over: a fan cap
 is sixteen faces where one will do, which the triangle budget notices, and a
-user who clicks a cap in Phase 2's face select expects to select *the cap*, not
-one wedge of it. It is also why a cylinder at sixteen segments has thirty-two
+user who clicks a cap in face mode expects to select *the cap*, not one wedge
+of it. It is also why a cylinder at sixteen segments has thirty-two
 vertices and not thirty-four -- there is no cap-centre vertex, because there is
 no fan to radiate from one.
 

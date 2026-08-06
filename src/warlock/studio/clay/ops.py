@@ -4,10 +4,14 @@ These sit beside :mod:`~warlock.studio.clay.document` rather than inside it
 because they are *geometry*, not bookkeeping: each one takes an :class:`Obj`
 and hands back a new one, and none of them knows that a document, a history or
 a selection exists. The document layer is what turns a returned object into a
-:class:`~.edits.MeshEdit` or a :class:`~.edits.TransformEdit`. Phase 2's
-``extrude`` and ``inset`` belong here too, for the same reason and with the
-same shape, which is why the module exists at four functions rather than being
-folded into ``document.py``.
+:class:`~.edits.MeshEdit` or a :class:`~.edits.TransformEdit`.
+
+**Object-level, and that is the whole boundary.** The element ops -- extrude,
+inset, bevel, dissolve, subdivide and the rest -- live in :mod:`.ops_topo`,
+:mod:`.ops_dissolve`, :mod:`.ops_subdiv` and :mod:`.ops_bevel`, because they
+take a mesh and a *selection* rather than an object, and they hand back the
+selection the UI should show next. An op here moves or rebuilds a whole
+object; an op there rewrites what is inside one.
 
 **Mirror bakes into the mesh; it never sets a negative scale on the node.**
 Writing ``scale.x = -1`` is one line and looks equivalent, and it is the single

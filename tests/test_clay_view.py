@@ -703,3 +703,45 @@ def test_element_overlays_are_built_and_released_with_the_mode(view) -> None:
     doc.set_element_mode("object")
     view.draw(doc, RECT, 0.0)
     assert view._overlays == {}, "object mode releases them"
+
+
+# --- textured documents reach the GPU unchanged (T23) ------------------------
+
+
+def test_a_textured_document_uploads_its_uvs_and_its_maps(view) -> None:
+    """Verification, not construction: ``_build`` -> ``to_primitives`` ->
+    ``GpuPrimitive``/``GpuMaterial`` already carried both. What this pins is
+    that an imported asset actually reaches the GPU with them rather than
+    silently losing one on the way through the Clay-specific half."""
+    import numpy as np
+
+    from warlock.studio.clay import mesh as cm
+    from warlock.studio.viewer import gltf
+
+    plane = bp.plane(size=(2.0, 2.0))
+    n = len(plane.loops)
+    textured = cm.Mesh(
+        positions=plane.positions,
+        loops=plane.loops,
+        starts=plane.starts,
+        material=plane.material,
+        smooth=plane.smooth,
+        uv=np.stack(
+            [np.arange(n, dtype="f4") / n, np.zeros(n, dtype="f4")], axis=1
+        ),
+    )
+    image = (2, 2, bytes(range(16)))
+    doc = bd.ClayDoc(materials=[gltf.Material(name="baked", base_color=image)])
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="P", mesh=textured))
+
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    entry = view._cache[doc.objects[0].uid]
+    _node, gpu = entry.gpu.draws[0]
+    assert gpu.primitive.uvs is not None
+    assert "HAS_BASE_COLOR_MAP" in gpu.defines
+    assert "base_color" in gpu.material.textures
+
+    pixels = np.asarray(view.screenshot().convert("RGB"), dtype="i4")
+    assert pixels.reshape(-1, 3).std(axis=0).max() > 2.0

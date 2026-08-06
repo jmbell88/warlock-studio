@@ -257,6 +257,14 @@ def _overflow(ctx: Any, job: Any) -> None:
         if _remeshable(job) and imgui.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
     if "model.glb" in files:
+        # Clay prefers the ``build.wblk`` sidecar when the asset was authored
+        # here, and imports ``model.glb`` -- the optimized, grounded, served
+        # mesh -- when it was not. Never ``source.glb``: that is the raw
+        # reconstruction, and nothing downstream of the pipeline uses it.
+        if imgui.menu_item("Edit in Clay", "", False)[0]:
+            from .. import clay_mode
+
+            clay_mode.edit_asset_in_clay(ctx, job)
         if imgui.menu_item("Compare with selected", "", False)[0]:
             compare(ctx, job_id)
         if ctx.rigging_available and imgui.menu_item("Rig", "", False)[0]:

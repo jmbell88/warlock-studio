@@ -10,9 +10,9 @@ parameters.
 
 A change to a parameter regenerates the mesh as **one** ``MeshEdit`` plus the
 props edit that recorded the new parameters, so a Ctrl+Z takes the object back
-to the shape it had. That only works while ``generator`` is not None; Phase 2's
-first topology edit sets it to None and this panel switches to a vertex and
-face count with a "frozen" note. Phase 1 never freezes anything.
+to the shape it had. That only works while ``generator`` is not None; the first
+topology edit clears it and this panel switches to a vertex and face count with
+a "frozen" note -- which is the state an *imported* object arrives in too.
 
 Every control here is disabled while a save is in flight, for the reason the
 tool panel states.
@@ -134,9 +134,9 @@ def _transform(doc: Any, obj: Any) -> None:
 
 def _generator(doc: Any, obj: Any) -> None:
     if obj.generator is None:
-        # Phase 2's state, reachable only once a topology edit exists. The
-        # panel says what the object is rather than pretending it still has
-        # parameters that would silently discard the edit if changed.
+        # A frozen object: edited topology, or imported. The panel says what
+        # the object is rather than pretending it still has parameters that
+        # would silently discard the edit if changed.
         widgets.field_label("mesh")
         widgets.muted(
             f"frozen -- {len(obj.mesh.positions)} vertices, "
@@ -208,6 +208,7 @@ def _material(doc: Any, obj: Any) -> None:
 
     index = min(max(int(obj.material), 0), len(doc.materials) - 1)
     material = doc.materials[index]
+    _texture_chip(material)
     changed, colour = imgui.color_edit4("base colour##bm", list(material.base_color_factor))
     metal_changed, metallic = imgui.slider_float(
         "metallic##bm", float(material.metallic_factor), 0.0, 1.0
@@ -222,6 +223,9 @@ def _material(doc: Any, obj: Any) -> None:
         # values with nothing in the data to say why.
         from dataclasses import replace
 
+        # ``replace`` rather than a fresh ``Material``: the five texture slots
+        # are fields on it, and building a new one from the three the panel
+        # shows would silently delete a baked map an import carried in.
         fresh = replace(
             material,
             base_color_factor=tuple(float(c) for c in colour),
@@ -229,3 +233,21 @@ def _material(doc: Any, obj: Any) -> None:
             roughness_factor=float(roughness),
         )
         doc.set_material(index, fresh)
+
+
+TEXTURE_SLOTS = ("base_color", "metallic_roughness", "normal", "emissive", "occlusion")
+
+
+def _texture_chip(material: Any) -> None:
+    """A read-only line naming the baked maps this material carries.
+
+    Read-only on purpose: Clay paints no textures, and a control that offered
+    to replace one would be promising an import/export path that does not
+    exist. What it *does* promise is that the maps are still there -- which is
+    the thing a user editing an imported asset most needs to know before they
+    export it again.
+    """
+    present = [slot for slot in TEXTURE_SLOTS if getattr(material, slot, None) is not None]
+    if not present:
+        return
+    widgets.muted("baked: " + ", ".join(s.replace("_", " ") for s in present))

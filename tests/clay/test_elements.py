@@ -117,3 +117,52 @@ def test_restrict_drops_what_a_shrunken_mesh_no_longer_has() -> None:
 
 def test_op_error_is_a_value_error_so_a_forgotten_catch_still_fails_loudly() -> None:
     assert issubclass(el.OpError, ValueError)
+
+
+def test_every_refusal_reads_like_a_sentence() -> None:
+    """A refusal is the whole user interface for an op that cannot run.
+
+    It is shown as a toast and nothing else happens, so the message has to say
+    what was refused and -- wherever there is one -- what to do instead. The
+    static half of that is checkable: every ``raise OpError`` site's literal
+    text starts a sentence and ends one.
+    """
+    import ast
+    from pathlib import Path
+
+    import warlock.studio.clay as package
+
+    root = Path(package.__file__).parent
+    checked = 0
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+                continue
+            name = getattr(node.exc.func, "id", "")
+            if name != "OpError" or not node.exc.args:
+                continue
+            text = _literal_text(node.exc.args[0])
+            if not text:
+                continue
+            checked += 1
+            where = f"{path.name}:{node.lineno}"
+            assert text[0].isupper() or text[0] == "{", f"{where}: {text!r}"
+            # A trailing hole is a message that ends in an interpolated value
+            # -- a wrapped exception's own text, which brings its own full stop.
+            assert text.rstrip().endswith((".", "?", "{}")), f"{where}: {text!r}"
+    assert checked > 20, "the sweep found suspiciously few refusals"
+
+
+def _literal_text(node: object) -> str:
+    """The constant text of a string or f-string expression, holes elided."""
+    import ast
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value if isinstance(part, ast.Constant) else "{}"
+            for part in node.values
+        )
+    return ""

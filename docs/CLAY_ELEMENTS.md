@@ -1,9 +1,11 @@
 # Clay → Wings3D-class modeler
 
-The plan being executed. Element editing (vertex/edge/face modes and a full op
-set), GLB import with passive UV/texture carriage, and a Wings3D-style RMB
-context menu. Status is tracked by the checkboxes; a task is done when its
-implementation *and* its tests are in and the suite is green.
+**Complete.** Every task below is implemented, tested and green. Element editing
+(vertex/edge/face modes and a full op set), GLB import with passive UV/texture
+carriage, and a Wings3D-style RMB context menu.
+
+Kept as the record of *why* each piece is shaped the way it is — the module
+docstrings carry the same arguments, and this is the index over them.
 
 **Deferred, out of scope:** magnets/soft selection, tweak mode, edge loop/ring
 selection, virtual mirror, UV editing/unwrap, non-destructive smooth preview,
@@ -297,12 +299,12 @@ Starts after T5; runs in parallel with Phase 2.
   encode on the frame thread is accepted for v1 — saves are explicit.
   **Note:** `_MESH_FIELDS` currently drops `uv` silently on save. This task must
   land before T22 creates any.
-- [ ] **T21 — `write_glb` textures.** `_Buffer.view_bytes`; `images` and
+- [x] **T21 — `write_glb` textures.** `_Buffer.view_bytes`; `images` and
   `textures` arrays plus `baseColorTexture`/`metallicRoughnessTexture` under
   pbr, and normal/emissive/occlusion at material level; dedupe shared textures
   by tuple identity; correct the docstring's "Textures are not written at all".
   Round-trip test via `gltf.load`.
-- [ ] **T22 — `clay/glbimport.py`.** `glb_to_claydoc(bytes, name) -> ClayDoc`
+- [x] **T22 — `clay/glbimport.py`.** `glb_to_claydoc(bytes, name) -> ClayDoc`
   via `gltf.load` (which preserves root and grounding transforms, decodes
   textures, and already refuses sparse and non-triangle modes). Refusals: skins
   ("This GLB is rigged…"), >2M triangles, no meshes. Per primitive → one `Obj`:
@@ -314,7 +316,7 @@ Starts after T5; runs in parallel with Phase 2.
   the `Obj` (so the grounding transform survives the round-trip),
   `generator=None`, names deduped `.001`-style. Clean history, nothing selected.
   Tests built with `test_glbwrite`'s helpers plus `write_glb`.
-- [ ] **T23 — round-trip + viewport verification.** The viewport pipeline
+- [x] **T23 — round-trip + viewport verification.** The viewport pipeline
   (`_build` → `to_primitives` → `GpuPrimitive`/`GpuMaterial`) already uploads
   uvs and texture slots — verify with a GL smoke test, do not build. Fix
   `panes/clay_props.py` palette edits to copy the five texture slots into the
@@ -322,7 +324,7 @@ Starts after T5; runs in parallel with Phase 2.
   a baked texture). End-to-end test: an authored textured model → `write_glb` →
   `glb_to_claydoc` → `to_model` → `write_glb` → `gltf.load`, with uvs, texture
   pixels and world transforms equal.
-- [ ] **T24 — entry wiring.** `clay_mode.import_glb_path(ctx, path)` /
+- [x] **T24 — entry wiring.** `clay_mode.import_glb_path(ctx, path)` /
   `edit_asset_in_clay(ctx, job)`; parse and merge on a task thread
   (`ctx.submit("clay-import:…")`); an `on_task_done` branch: >200k triangles →
   a confirm dialog ("Editing will be slow"), else adopt and switch to clay mode.
@@ -334,7 +336,7 @@ Starts after T5; runs in parallel with Phase 2.
 
 ## Phase 6 — Docs and polish
 
-- [ ] **T25 — manual + help.** `07-clay.md`: a new "Element modes" section
+- [x] **T25 — manual + help.** `07-clay.md`: a new "Element modes" section
   (modes and keys, click and marquee modifiers, Alt-orbit, the RMB menu, and
   "element selection is transient — not saved, and an undo that changes geometry
   drops it"), a Transforming update (gizmos on elements, one step per object per
@@ -345,7 +347,7 @@ Starts after T5; runs in parallel with Phase 2.
   orbit/Alt-orbit/marquee, MMB pans, RMB context menu), and delete the "1/2/3
   reserved" sentence. `main._shortcuts_popup` Clay rows;
   `studio/manual/targets.py` anchors. Gated by `tests/manual/test_docs.py`.
-- [ ] **T26 — scale + polish pass.** Timing on a 100k-tri synthetic soup:
+- [x] **T26 — scale + polish pass.** Timing on a 100k-tri synthetic soup:
   adjacency build, triangulate, subdivide, and a marquee over 150k verts —
   assert no per-face Python path trips. A refusal-message wording sweep. A
   docstring truth pass (`mesh.py`'s `triangulate` promise fulfilled; `ops.py`'s
@@ -366,22 +368,45 @@ Starts after T5; runs in parallel with Phase 2.
 
 ## Verification
 
-- `uv run pytest` and `uv run ruff check .`. The suite stood at **2339 passed,
-  7 skipped** before T1 and **2352 / 7** after it. (Worktrees show fewer without
-  the three `WARLOCK_*` env vars for the vendored paths — see the
-  `warlock-worktree-setup` memory. This plan is being executed on `master`.)
+- `uv run pytest` and `uv run ruff check .` both green. The suite stood at
+  **2339 passed, 7 skipped** before T1, **2352 / 7** after it, and **2598 / 7**
+  at the end. (Worktrees show fewer without the three `WARLOCK_*` env vars for
+  the vendored paths — see the `warlock-worktree-setup` memory. This plan was
+  executed on `master`.)
 - New test files: `tests/clay/test_adjacency.py`, `test_earclip.py`,
   `test_elements.py`, `test_ops_topo.py`, `test_ops_dissolve.py`,
   `test_ops_subdiv.py`, `test_ops_bevel.py`, `test_pick_elements.py`,
-  `test_glbimport.py`, `tests/test_clay_ops.py`, plus
-  `tests/clay/topo_asserts.py` helpers; extensions to `test_mesh`,
-  `test_document`, `test_serialize`, `test_clay_view`, `test_clay_mode`,
-  `test_glbwrite`.
-- Manual gate: `tests/manual/test_docs.py` must pass after the 07/09 edits.
-- Interactive check (end of Phase 4 and Phase 5): `uv run warlock` → Clay → box:
-  press 3, select faces, RMB → Extrude, drag with W; bevel an edge with a width
-  popup; Ctrl+Z restores and drops the selection. Import check: drop a library
-  `model.glb`, confirm the textures render, weld and fill-hole, Export to
-  library, and open the exported asset in 3D mode with the textures intact.
+  `test_glbimport.py`, `test_scale.py`, `test_workflow.py`,
+  `tests/test_clay_ops.py`, plus `tests/clay/topo_asserts.py` helpers;
+  extensions to `test_mesh`, `test_document`, `test_serialize`,
+  `test_clay_view`, `test_clay_mode`, `test_studio_plumbing`.
+- Manual gate: `tests/manual/test_docs.py` passes after the 07/09 edits.
+- The interactive check has a headless counterpart in
+  `tests/clay/test_workflow.py`, which walks the same call sequence a user's
+  clicks produce: box → face mode → extrude → drag → undo; bevel with a width;
+  and import a `model.glb` → weld → fill hole → export → reopen the sidecar,
+  with the textures and uvs asserted at both ends. It does not replace sitting
+  in front of the app, but it fails when a *join* between two layers breaks,
+  which is what the manual pass was really for.
 - Commits follow the `Warlock v0.0.8` subject convention (no version bump unless
   asked).
+
+## What was learned along the way
+
+Four things the plan did not predict, each recorded where it bites:
+
+- **A live element drag cannot read the object's mesh back.** The preview writes
+  only GPU buffers, so at release the document still holds the press-time
+  geometry; the drag has to carry its own last previewed positions
+  (`_ElementDrag.preview`). Reading the object back committed nothing at all.
+- **The Catmull-Clark corner rule needs a valence test, not just a boundary
+  count.** A boundary vertex with exactly two edges *in total* is a corner of
+  the border and must be kept; without that a square sheet rounds into a lozenge
+  one level at a time.
+- **A bowtie ring is not reachable through face-dissolve**, because that op
+  groups by shared *edges* and a bowtie shares only a vertex. It is reachable
+  through a region with two diagonally-touching holes, which is what the test
+  builds.
+- **An imgui popup only renders inside the window whose id stack opened it**, so
+  the op-parameter dialog is drawn from both the viewport and the tools pane.
+  One call site left whichever half did not make it silently doing nothing.

@@ -168,8 +168,8 @@ def add_primitive(ctx: Any, doc: Any, name: str) -> Any:
 
     The generator name and the parameters it was built with are recorded on the
     object, so the properties panel can offer them and a change regenerates the
-    mesh as one step. Phase 1 never freezes an object; the field exists from day
-    one so Phase 2 adds a line rather than a migration.
+    mesh as one step -- until the first element op edits its topology, at which
+    point ``clay_ops`` clears the field and the panel switches to counts.
     """
     defaults, build = bp.GENERATORS[name]
     obj = bd.Obj(

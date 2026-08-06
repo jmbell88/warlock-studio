@@ -51,6 +51,18 @@ _USHORT = 5123
 _UINT = 5125
 
 
+def _png(image: tuple[int, int, bytes]) -> bytes:
+    """A decoded ``(width, height, rgba)`` slot back to PNG bytes."""
+    import io
+
+    from PIL import Image
+
+    width, height, data = image
+    out = io.BytesIO()
+    Image.frombytes("RGBA", (int(width), int(height)), bytes(data)).save(out, "PNG")
+    return out.getvalue()
+
+
 class _Buffer:
     """The BIN chunk under construction, and the views into it.
 
@@ -63,7 +75,16 @@ class _Buffer:
         self.views: list[dict[str, Any]] = []
 
     def view(self, array: np.ndarray) -> int:
-        blob = np.ascontiguousarray(array).tobytes()
+        return self.view_bytes(np.ascontiguousarray(array).tobytes())
+
+    def view_bytes(self, blob: bytes) -> int:
+        """A view over bytes that are already encoded -- a PNG, for instance.
+
+        An image is not an array, and going through one to reach the same
+        ``tobytes`` would mean deciding a dtype for something whose bytes are a
+        file format. Same alignment rule: every blob starts on a four-byte
+        boundary and pads up to one.
+        """
         offset = len(self.data)
         self.views.append({"buffer": 0, "byteOffset": offset, "byteLength": len(blob)})
         self.data += blob
@@ -82,6 +103,14 @@ class _Writer:
         # ``GpuMaterial`` de-duplicates on, so the file and the GPU agree.
         self._material_index: dict[int, int] = {}
         self._material_keep: list[gltf.Material] = []
+        # Images and textures, deduplicated by the identity of the
+        # ``(width, height, rgba)`` tuple -- the same rule the palette follows,
+        # and the reason a document whose eight objects share one baked
+        # base-colour map writes one PNG rather than eight.
+        self.images: list[dict[str, Any]] = []
+        self.textures: list[dict[str, Any]] = []
+        self._texture_index: dict[int, int] = {}
+        self._texture_keep: list[Any] = []
 
     # -- accessors ---------------------------------------------------------
 
@@ -120,6 +149,31 @@ class _Writer:
             np.asarray(indices, dtype=dtype).reshape(-1), "SCALAR", component
         )
 
+    # -- textures ----------------------------------------------------------
+
+    def texture(self, image: tuple[int, int, bytes]) -> int:
+        """One decoded image slot as a texture index, encoding it once.
+
+        The image goes into the BIN chunk as a PNG buffer view, which is what
+        makes the file self-contained -- a URI would point at something the
+        recipient does not have. PNG rather than JPEG because a normal map or a
+        metallic-roughness map is not photographic data and JPEG artefacts in
+        one are visible as shading noise, not as softness.
+        """
+        key = id(image)
+        if key in self._texture_index:
+            return self._texture_index[key]
+        index = len(self.textures)
+        self.images.append(
+            {"bufferView": self.buffer.view_bytes(_png(image)), "mimeType": "image/png"}
+        )
+        self.textures.append({"source": len(self.images) - 1})
+        self._texture_index[key] = index
+        # Alive for the length of the call, for the reason ``material`` states:
+        # an ``id`` key is only sound while nothing it names can be collected.
+        self._texture_keep.append(image)
+        return index
+
     # -- materials ---------------------------------------------------------
 
     def material(self, material: gltf.Material) -> int:
@@ -135,6 +189,7 @@ class _Writer:
         }
         if material.name:
             doc["name"] = material.name
+        self._material_textures(material, doc)
         if any(material.emissive_factor):
             doc["emissiveFactor"] = [float(v) for v in material.emissive_factor]
         if material.double_sided:
@@ -154,6 +209,26 @@ class _Writer:
         # than leaving it resting on a caller's object graph.
         self._material_keep.append(material)
         return index
+
+    def _material_textures(self, material: gltf.Material, doc: dict[str, Any]) -> None:
+        """Attach whichever of the five slots this material carries.
+
+        Base colour and metallic-roughness live under ``pbrMetallicRoughness``
+        and the other three at material level -- which is the spec's layout and
+        not a choice, and is the one part of this that a reader will silently
+        ignore if it is put in the wrong place.
+        """
+        pbr = doc["pbrMetallicRoughness"]
+        for slot, where, name in (
+            ("base_color", pbr, "baseColorTexture"),
+            ("metallic_roughness", pbr, "metallicRoughnessTexture"),
+            ("normal", doc, "normalTexture"),
+            ("emissive", doc, "emissiveTexture"),
+            ("occlusion", doc, "occlusionTexture"),
+        ):
+            image = getattr(material, slot, None)
+            if image is not None:
+                where[name] = {"index": self.texture(image)}
 
     # -- primitives --------------------------------------------------------
 
@@ -219,11 +294,12 @@ class _Writer:
 def write_glb(model: gltf.Model) -> bytes:
     """``model`` as the bytes of a self-contained binary glTF.
 
-    Self-contained: one buffer, no URIs, nothing outside the file. Textures are
-    not written at all -- ``Material``'s image slots survive a load so that the
-    viewer can draw an imported asset, but nothing in Clay produces one,
-    and a writer that silently dropped them would be worse than one that never
-    claimed to.
+    Self-contained: one buffer, no URIs, nothing outside the file -- **textures
+    included**, PNG-encoded into the BIN chunk as buffer views. Clay still
+    paints none, but it imports them now, and an asset that lost its baked maps
+    on the way back out would be a round trip that quietly destroys work.
+    Images are deduplicated by identity, so a palette sharing one map writes it
+    once.
 
     Skins are refused rather than dropped, for the same reason stated the other
     way round: dropping one produces a rig-shaped file with no rig in it, and
@@ -248,6 +324,9 @@ def write_glb(model: gltf.Model) -> bytes:
         doc["meshes"] = meshes
     if writer.materials:
         doc["materials"] = writer.materials
+    if writer.textures:
+        doc["images"] = writer.images
+        doc["textures"] = writer.textures
     if writer.accessors:
         doc["accessors"] = writer.accessors
         doc["bufferViews"] = writer.buffer.views

@@ -10,9 +10,9 @@ reasons that both bite later rather than now:
   face with thirty-two corners, and a user who selects it should get one face,
   not thirty fans. Triangles are a *rendering* concern, produced on the way to
   the GPU by :func:`triangulate` and never written back.
-* **Phase 2 adds faces by concatenation.** Extrude and inset append corners to
-  ``loops`` and offsets to ``starts``; nothing has to decide an arity up front
-  or rebuild an index when a quad becomes a pentagon.
+* **The element ops add faces by concatenation.** Extrude and inset append
+  corners to ``loops`` and offsets to ``starts``; nothing has to decide an
+  arity up front or rebuild an index when a quad becomes a pentagon.
 
 The cost is that ``starts`` has to be kept honest -- hence :func:`validate`,
 which every op that builds a mesh by hand should be tested against. Nothing
@@ -21,8 +21,10 @@ else here re-checks it: :func:`edges`, :func:`_next_corner` and
 invalid one they do not raise, they quietly produce wrong answers -- a face
 with fewer than three corners makes ``np.add.reduceat`` hand back a bare row
 instead of a sum, and makes ``_next_corner`` write its wrap index into the
-previous face's span. A primitive generator or a Phase 2 op that builds a
-``Mesh`` by hand should therefore run :func:`validate` in its tests.
+previous face's span. A primitive generator or an element op that builds a
+``Mesh`` by hand should therefore run :func:`validate` in its tests -- and
+every one of them funnels through :func:`~.topo.rebuild` for exactly that
+reason.
 
 **Every array is a copy, and every copy is read-only.** ``Mesh`` is a frozen
 dataclass, but ``frozen=True`` only stops the *fields* being reassigned; a

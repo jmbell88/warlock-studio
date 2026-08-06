@@ -26,11 +26,11 @@ this project and this is not the place to introduce one.
 **``generator`` is the live-until-frozen field.** An object placed from the
 primitive registry keeps the generator's name and the parameters it was built
 with, so the properties panel shows "Cylinder: radius, height, segments" and a
-change regenerates the mesh as one :class:`~.edits.MeshEdit`. Phase 2's first
-topology edit will set ``generator = None`` and the panel switches to a vertex
-and face count with a "frozen" note. **Phase 1 never freezes anything** -- but
-the field exists from day one, so Phase 2 adds a line rather than a migration
-of every document already saved.
+change regenerates the mesh as one :class:`~.edits.MeshEdit`. The first
+topology edit clears it -- an extruded box is not describable as "box, size 1",
+and a panel still offering a size field would discard the edit the moment it
+was touched. ``clay_ops`` does that in one place for every op, so no op has to
+remember to.
 
 **Dirty is a comparison against ``history.head``, not a flag.** ``rev`` counts
 changes and an undo is a change, so a rev-based check calls an undone document

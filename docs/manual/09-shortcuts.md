@@ -25,20 +25,26 @@ on screen.
 | Keys | Action |
 | --- | --- |
 | Q / W / E / R | Select / move / rotate / scale |
+| 1 / 2 / 3 / 4 | Vertex / edge / face / object mode |
+| E | Extrude, with faces selected |
 | F | Frame the selection |
-| Delete | Delete the selected objects |
-| Ctrl+D | Duplicate the selection |
-| Ctrl+A | Select every object |
+| Delete | Delete the selection — faces in an element mode, objects in object mode |
+| Ctrl+D | Duplicate the selection (object mode only) |
+| Ctrl+A | Select everything, in the current mode's sense |
+| Ctrl+Shift+I | Invert the selection |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+N / Ctrl+O | New / open a document |
 | Ctrl+E | Export to the library |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous document |
-| Esc | Clear the selection |
+| Esc | Step back: element selection, then element mode, then object selection |
 
-Left-drag in empty space orbits, right-drag or middle-drag pans, and the wheel dollies — the same
-as the asset viewport. `1`, `2` and `3` are deliberately unbound: they are reserved for Clay Phase
-2's vertex, edge and face modes.
+**The mouse.** Left-drag in empty space orbits, and `Alt`+left-drag always orbits whatever mode you
+are in. Middle-drag pans and the wheel dollies. Right-click opens the context menu — right-drag does
+nothing, so grabbing the wrong button mid-orbit costs you nothing.
+
+In an element mode, left-click selects an element, `Shift`+click adds and `Ctrl`+click removes;
+left-drag in empty space with `Q` selected sweeps a marquee.
 
 ## Inker
 

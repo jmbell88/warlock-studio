@@ -534,3 +534,123 @@ def test_paths_are_pathlib_objects_not_strings(svc, tmp_path) -> None:
     tab = _tab(ctx)
     _save(ctx, tab, tmp_path / "scene.wblk")
     assert isinstance(tab.path, Path)
+
+
+# --- importing a mesh (T24) --------------------------------------------------
+
+
+def _glb_bytes() -> bytes:
+    from warlock.studio.viewer import glbwrite
+
+    doc = bd.ClayDoc()
+    doc.objects.append(bd.Obj(uid=bd.new_uid(), name="Box", mesh=bp.box()))
+    return glbwrite.write_glb(bd.to_model(doc))
+
+
+class _ImportSvc:
+    """Just enough service for ``clay_source_path`` and ``config.job_dir``."""
+
+    def __init__(self, root: Path) -> None:
+        self.config = _ImportConfig(root)
+
+    def job_dir(self, job_id: str) -> Path:
+        return self.config.job_dir(job_id)
+
+
+class _ImportConfig:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def job_dir(self, job_id: str) -> Path:
+        return self.root / job_id
+
+
+def test_importing_a_glb_parses_off_the_frame_thread(tmp_path: Path) -> None:
+    ctx = FakeCtx()
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+
+    clay_mode.import_glb_path(ctx, path)
+    assert ctx.submitted[-1].startswith("clay-import:")
+    assert ctx.result["title"] == "thing"
+    assert len(ctx.result["doc"].objects) == 1
+    assert ctx.result["triangles"] == 12
+
+
+def test_a_parsed_import_is_adopted_and_switches_mode(tmp_path: Path) -> None:
+    ctx = FakeCtx()
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+    clay_mode.import_glb_path(ctx, path)
+    clay_mode.on_task_done(ctx, _Done("clay-import:1", ctx.result))
+
+    state = clay_mode.ensure(ctx)
+    assert len(state.docs) == 1
+    assert state.docs[0].path is None, "an import has no file of its own to save over"
+    assert ctx.state.mode == "clay"
+
+
+def test_a_big_import_asks_before_adopting(tmp_path: Path) -> None:
+    ctx = FakeCtx()
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+    clay_mode.import_glb_path(ctx, path)
+    result = dict(ctx.result, triangles=clay_mode.SLOW_TRIANGLES + 1)
+
+    clay_mode.on_task_done(ctx, _Done("clay-import:1", result))
+    state = clay_mode.ensure(ctx)
+    assert state.docs == [], "nothing is adopted until the user says so"
+    assert ctx.confirms.pending is not None
+
+    ctx.confirms.pending.on_confirm()
+    assert len(state.docs) == 1
+    assert ctx.state.mode == "clay"
+
+
+def test_editing_an_asset_prefers_the_authored_document_over_the_mesh(
+    tmp_path: Path,
+) -> None:
+    """The ``build.wblk`` sidecar was written and never read back until now.
+
+    It is the document the user authored -- objects, names, generator
+    parameters -- and importing the GLB instead would hand them back a single
+    frozen triangle soup of their own work.
+    """
+    from warlock.studio.clay import serialize
+
+    job_dir = tmp_path / "0123456789ab"
+    job_dir.mkdir(parents=True)
+    (job_dir / "model.glb").write_bytes(_glb_bytes())
+    authored = bd.ClayDoc()
+    authored.objects.append(
+        bd.Obj(uid=bd.new_uid(), name="Authored", mesh=bp.cone(), generator="cone")
+    )
+    (job_dir / "build.wblk").write_bytes(serialize.wblk_bytes(authored))
+
+    ctx = FakeCtx(_ImportSvc(tmp_path))
+    clay_mode.edit_asset_in_clay(ctx, {"id": "0123456789ab", "name": "Job One"})
+    assert ctx.result["doc"].objects[0].name == "Authored"
+    assert ctx.result["doc"].objects[0].generator == "cone", "still parametric"
+
+
+def test_editing_an_asset_without_a_sidecar_imports_the_served_mesh(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "0123456789cd"
+    job_dir.mkdir(parents=True)
+    (job_dir / "model.glb").write_bytes(_glb_bytes())
+    (job_dir / "source.glb").write_bytes(b"never read")
+
+    ctx = FakeCtx(_ImportSvc(tmp_path))
+    clay_mode.edit_asset_in_clay(ctx, {"id": "0123456789cd", "name": "Job Two"})
+    assert ctx.result["title"] == "Job Two"
+    assert ctx.result["doc"].objects[0].generator is None, "an imported mesh is frozen"
+
+
+def test_editing_an_asset_with_no_mesh_raises_rather_than_opening_nothing(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "0123456789ef").mkdir(parents=True)
+    ctx = FakeCtx(_ImportSvc(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        clay_mode.edit_asset_in_clay(ctx, {"id": "0123456789ef", "name": "Empty"})

@@ -4,7 +4,7 @@ A zip of ``scene.json`` plus one ``meshes/<uid>.npz`` per object, mirroring the
 raster editor's ``.ora`` in shape and for the same reason: the small,
 human-meaningful half of the document is text that a person can read and a diff
 can show, and the large numeric half is stored in a form that does not swell by
-a factor of ten on the way through JSON. A Phase 3 subdivided mesh written as
+a factor of ten on the way through JSON. A subdivided mesh written as
 nested float lists would be a megabyte of ``0.7071067811865476``; the same
 arrays in an npz are their own bytes.
 

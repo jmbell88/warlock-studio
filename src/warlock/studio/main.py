@@ -793,12 +793,10 @@ class App:
 
             if path.suffix.lower() == clay_state.WBLK_SUFFIX:
                 clay_mode.open_path(ctx, path)
+            elif path.suffix.lower() == ".glb":
+                clay_mode.import_glb_path(ctx, path)
             else:
-                # A .glb is refused rather than imported: reading one back into
-                # editable objects is not Clay Phase 1, and quietly making a
-                # frozen one-object document out of it would be a feature
-                # nobody asked for wearing the name of one they did.
-                ctx.toast("Clay opens .wblk documents. Drop one of those.", "error")
+                ctx.toast("Clay opens .wblk documents and .glb meshes.", "error")
             return
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
             ctx.toast("Drop an image to start a mesh from it.", "error")
@@ -1729,10 +1727,15 @@ class App:
                     " / ".join(k.upper() for k in CLAY_KEYS),
                     " / ".join(CLAY_KEYS.values()),
                 ),
+                ("1 / 2 / 3 / 4", "Vertex / edge / face / object mode"),
+                ("E", "Extrude (with faces selected)"),
                 ("F", "Frame the selection"),
-                ("Delete", "Delete the selected objects"),
-                ("Ctrl+D", "Duplicate"),
-                ("Ctrl+A", "Select all"),
+                ("Delete", "Delete -- faces in an element mode, objects otherwise"),
+                ("Ctrl+D", "Duplicate (object mode)"),
+                ("Ctrl+A", "Select all, in the current mode"),
+                ("Ctrl+Shift+I", "Invert the selection"),
+                ("Right-click", "Context menu"),
+                ("Alt+drag", "Orbit, in any mode"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
                 ("Ctrl+N / O", "New / open"),

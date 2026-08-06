@@ -122,6 +122,98 @@ def open_path(ctx: Any, path: Path) -> None:
     ctx.submit(f"clay-open:{abs(hash(str(path)))}", _load, path)
 
 
+# --- importing --------------------------------------------------------------
+
+# Above this an import gets a confirm dialog first. Not a refusal -- Clay can
+# edit it, and a user who has just asked to edit their own asset should be
+# allowed to -- but a rebuild-per-edit at this scale is a visible pause, and
+# finding that out by pressing Extrude is worse than being told.
+SLOW_TRIANGLES = 200_000
+
+
+def import_glb_path(ctx: Any, path: Path) -> None:
+    """Parse a GLB on a task thread and adopt it as a document.
+
+    The parse and the merge are both O(triangles) and a ``model.glb`` is
+    routinely a hundred thousand of them, so neither runs on the frame thread --
+    the same rule every dialog and every encode in this module follows.
+    """
+    ensure(ctx)
+    path = Path(path)
+
+    def run() -> dict[str, Any]:
+        return _parse_glb(path.read_bytes(), path.stem)
+
+    ctx.submit(f"clay-import:{abs(hash(str(path)))}", run)
+
+
+def edit_asset_in_clay(ctx: Any, job: Any) -> None:
+    """Open a library asset in Clay: its authored document if it has one.
+
+    The ``build.wblk`` sidecar is preferred whenever it is there, and that is
+    the point of the whole feature -- it is the document the user actually
+    authored, with its objects, its names and its generator parameters intact,
+    and until now it was a file written and never read back. Failing that, the
+    *optimized* ``model.glb`` is imported: it is the mesh that is served,
+    grounded and exported, and ``source.glb`` is the raw reconstruction that
+    nothing downstream uses.
+    """
+    ensure(ctx)
+    job_id = job["id"] if isinstance(job, dict) else str(job)
+    name = (job.get("name") if isinstance(job, dict) else "") or "Asset"
+
+    def run() -> dict[str, Any]:
+        from ..service import files as svc_files
+
+        sidecar = svc_files.clay_source_path(ctx.svc, job_id)
+        if sidecar.exists():
+            return _load(sidecar)
+        mesh = ctx.svc.config.job_dir(job_id) / "model.glb"
+        if not mesh.exists():
+            raise FileNotFoundError(f"{job_id} has no mesh to edit")
+        return _parse_glb(mesh.read_bytes(), name)
+
+    ctx.submit(f"clay-import:{job_id}", run)
+
+
+def _parse_glb(data: bytes, name: str) -> dict[str, Any]:
+    """Blocking; task thread only. Raises rather than returning a broken tab."""
+    from .clay import glbimport
+
+    doc = glbimport.glb_to_claydoc(data, name=name)
+    triangles = sum(
+        max(len(obj.mesh.starts) - 1, 0) for obj in doc.objects
+    )
+    return {"doc": doc, "title": name, "triangles": triangles}
+
+
+def _adopt_import(ctx: Any, result: dict[str, Any]) -> None:
+    """Adopt a parsed import, asking first when it is big enough to be slow."""
+    doc, title = result["doc"], result.get("title") or "Imported"
+    if int(result.get("triangles", 0)) <= SLOW_TRIANGLES:
+        adopt(ctx, doc, title=title)
+        ctx.state.mode = "clay"
+        return
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Edit this mesh in Clay?",
+            message=(
+                f"{int(result['triangles']):,} faces. Editing will be slow -- "
+                "every edit rebuilds the whole mesh, and the undo history holds "
+                "two copies per step."
+            ),
+            confirm_label="Edit anyway",
+            cancel_label="Cancel",
+            on_confirm=lambda: _adopt_now(ctx, doc, title),
+        )
+    )
+
+
+def _adopt_now(ctx: Any, doc: Any, title: str) -> None:
+    adopt(ctx, doc, title=title)
+    ctx.state.mode = "clay"
+
+
 # --- saving -----------------------------------------------------------------
 
 
@@ -256,6 +348,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(result, dict):
             adopt(ctx, result["doc"], path=Path(result["path"]), title=result.get("title"))
             ctx.state.mode = "clay"
+        return
+
+    if name == "clay-import":
+        # No path: an imported document has no file of its own, so Ctrl+S asks
+        # where to put it rather than overwriting the asset it came from.
+        if isinstance(result, dict):
+            _adopt_import(ctx, result)
         return
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None
