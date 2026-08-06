@@ -1,5 +1,7 @@
 # TODO — after the UPDATE.md plan
 
+> **Active plan:** [`CLAY_ELEMENTS.md`](CLAY_ELEMENTS.md) — Clay element editing (vertex/edge/face modes, the full op set, GLB import). 26 tasks in 6 phases, executing on `master`; Phase 0 is done.
+
 The 30-task plan in `UPDATE.md` is **complete** on branch `update-plan`, and **not merged**. This
 file is the hand-off: what shipped, what is genuinely open, and what a follow-up session should pick
 up first.
