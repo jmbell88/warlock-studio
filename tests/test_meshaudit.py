@@ -73,6 +73,113 @@ def test_reports_face_count_and_both_summary_statistics(sphere_glb):
     assert result["mean"] <= result["worst"]
 
 
+# --- the reachability half ---------------------------------------------------
+#
+# ``_enclosed_gaps`` used to be two iterative fixpoints, each O(image diameter)
+# full-array passes. Connected components answer the same question in one linear
+# pass, and "the same question" is the claim worth pinning: the fixpoints are
+# kept here as the oracle so the replacement is checked against the code it
+# replaced rather than against an idea of what it did.
+
+
+def _fixpoint_gaps(covered: np.ndarray) -> np.ndarray:
+    """The original flood fill: grow from the border until it stops changing."""
+    free = ~covered
+    reached = np.zeros_like(free)
+    reached[0] |= free[0]
+    reached[-1] |= free[-1]
+    reached[:, 0] |= free[:, 0]
+    reached[:, -1] |= free[:, -1]
+    while True:
+        grown = reached.copy()
+        grown[1:] |= reached[:-1]
+        grown[:-1] |= reached[1:]
+        grown[:, 1:] |= reached[:, :-1]
+        grown[:, :-1] |= reached[:, 1:]
+        grown &= free
+        if grown.sum() == reached.sum():
+            break
+        reached = grown
+    return free & ~reached
+
+
+def _fixpoint_blobs(mask: np.ndarray) -> int:
+    """The original blob count: iterative label propagation to a fixpoint."""
+    if not mask.any():
+        return 0
+    labels = np.zeros(mask.shape, dtype=np.int64)
+    labels[mask] = np.arange(1, int(mask.sum()) + 1)
+    while True:
+        grown = labels.copy()
+        grown[1:] = np.maximum(grown[1:], labels[:-1])
+        grown[:-1] = np.maximum(grown[:-1], labels[1:])
+        grown[:, 1:] = np.maximum(grown[:, 1:], labels[:, :-1])
+        grown[:, :-1] = np.maximum(grown[:, :-1], labels[:, 1:])
+        grown[~mask] = 0
+        if np.array_equal(grown, labels):
+            break
+        labels = grown
+    return len(np.unique(labels)) - 1
+
+
+def _assert_matches_the_fixpoints(covered: np.ndarray) -> None:
+    from warlock.meshaudit import _enclosed_gaps
+
+    holes, blobs = _enclosed_gaps(covered)
+    assert np.array_equal(holes, _fixpoint_gaps(covered))
+    assert blobs == _fixpoint_blobs(_fixpoint_gaps(covered))
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_connected_components_match_the_fixpoint_oracle_on_noise(seed):
+    rng = np.random.default_rng(seed)
+    # Dense enough to enclose gaps, sparse enough to leave background reachable.
+    _assert_matches_the_fixpoints(rng.random((64, 64)) < 0.55)
+
+
+def test_a_ring_encloses_exactly_one_hole():
+    covered = np.zeros((32, 32), dtype=bool)
+    covered[8:24, 8:24] = True
+    covered[12:20, 12:20] = False
+    _assert_matches_the_fixpoints(covered)
+    from warlock.meshaudit import _enclosed_gaps
+
+    holes, blobs = _enclosed_gaps(covered)
+    assert blobs == 1
+    assert int(holes.sum()) == 64
+
+
+def test_two_holes_touching_only_at_a_corner_stay_two():
+    """Four-connectivity is the contract the fixpoints had -- eight would merge
+    these into one blob and silently halve every count in the corpus."""
+    covered = np.ones((16, 16), dtype=bool)
+    covered[0, :] = covered[-1, :] = covered[:, 0] = covered[:, -1] = False
+    covered[6, 6] = covered[7, 7] = False
+    _assert_matches_the_fixpoints(covered)
+    from warlock.meshaudit import _enclosed_gaps
+
+    assert _enclosed_gaps(covered)[1] == 2
+
+
+def test_a_fully_covered_view_has_no_gaps_and_no_blobs():
+    _assert_matches_the_fixpoints(np.ones((16, 16), dtype=bool))
+
+
+def test_a_fully_empty_view_is_all_background():
+    _assert_matches_the_fixpoints(np.zeros((16, 16), dtype=bool))
+
+
+def test_a_gap_touching_the_border_is_background_not_a_hole():
+    covered = np.ones((16, 16), dtype=bool)
+    covered[0:4, 7] = False  # a slot cut in from the top edge
+    _assert_matches_the_fixpoints(covered)
+    from warlock.meshaudit import _enclosed_gaps
+
+    holes, blobs = _enclosed_gaps(covered)
+    assert blobs == 0
+    assert not holes.any()
+
+
 def test_chunking_the_rasteriser_is_bit_identical_to_one_pass(sphere_glb, monkeypatch):
     """The (n, k, k) working set is chunked to bound a commit spike on a
     500k-triangle mesh. `covered` is written in place, so the chunk size must

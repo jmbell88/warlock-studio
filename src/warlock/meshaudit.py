@@ -17,9 +17,17 @@ would only add a second explanation for a number that has one.
 
 Used two ways: the worker measures every finished mesh at REQUEST_PATH_RESOLUTION
 and stores the result on the job, and the band sweep (sweep.py) measures at full
-resolution offline. Cost is superlinear in resolution -- the flood fill and blob
-count both iterate ~O(resolution) times over a resolution^2 array -- which is
-why the request path uses the lower one.
+resolution offline.
+
+The reachability half is one ``cv2.connectedComponents`` pass. It used to be two
+iterative fixpoints -- grow a boolean plane by four shifted ORs until it stops
+changing, then propagate integer labels the same way to count blobs -- each of
+which is O(image diameter) full-array passes, i.e. a cost scaling with
+resolution^3 and the whole reason the request path measures at half resolution.
+Connected components answer both questions exactly and in one linear pass, so
+the result is identical rather than merely close: a hole is a component of the
+uncovered pixels that does not touch the border, which is precisely what the
+flood fill could not reach.
 """
 
 from __future__ import annotations
@@ -78,7 +86,7 @@ def hole_fraction(
     per_view = []
     for direction in views:
         covered = _coverage(positions, faces, direction, resolution)
-        holes = _enclosed_gaps(covered)
+        holes, blobs = _enclosed_gaps(covered)
         hole_px = int(holes.sum())
         silhouette_px = int(covered.sum()) + hole_px
         per_view.append(
@@ -87,7 +95,7 @@ def hole_fraction(
                 "silhouette_px": silhouette_px,
                 "hole_px": hole_px,
                 "hole_fraction": hole_px / silhouette_px if silhouette_px else 0.0,
-                "blobs": _count_blobs(holes),
+                "blobs": blobs,
             }
         )
     fractions = [v["hole_fraction"] for v in per_view]
@@ -237,43 +245,30 @@ def _rasterise_batch(
     covered.reshape(-1)[flat[inside]] = True
 
 
-def _enclosed_gaps(covered: np.ndarray) -> np.ndarray:
-    """Uncovered pixels that the background cannot reach -- i.e. real holes."""
-    free = ~covered
-    reached = np.zeros_like(free)
-    reached[0] |= free[0]
-    reached[-1] |= free[-1]
-    reached[:, 0] |= free[:, 0]
-    reached[:, -1] |= free[:, -1]
-    while True:
-        grown = reached.copy()
-        grown[1:] |= reached[:-1]
-        grown[:-1] |= reached[1:]
-        grown[:, 1:] |= reached[:, :-1]
-        grown[:, :-1] |= reached[:, 1:]
-        grown &= free
-        if grown.sum() == reached.sum():
-            break
-        reached = grown
-    return free & ~reached
+def _enclosed_gaps(covered: np.ndarray) -> tuple[np.ndarray, int]:
+    """-> (holes, blob count). Uncovered pixels the background cannot reach.
 
+    One labelling answers both: a component of the uncovered pixels is either
+    the background -- which is exactly the set of components touching the image
+    border, since the fill used to start from all four edges -- or a hole. The
+    count of the rest is the blob count, with no second pass.
 
-def _count_blobs(mask: np.ndarray) -> int:
-    """Number of 4-connected regions, by iterative label propagation."""
-    if not mask.any():
-        return 0
-    labels = np.zeros(mask.shape, dtype=np.int64)
-    labels[mask] = np.arange(1, int(mask.sum()) + 1)
-    while True:
-        grown = labels.copy()
-        grown[1:] = np.maximum(grown[1:], labels[:-1])
-        grown[:-1] = np.maximum(grown[:-1], labels[1:])
-        grown[:, 1:] = np.maximum(grown[:, 1:], labels[:, :-1])
-        grown[:, :-1] = np.maximum(grown[:, :-1], labels[:, 1:])
-        grown[~mask] = 0
-        if np.array_equal(grown, labels):
-            break
-        labels = grown
-    return len(np.unique(labels)) - 1
+    ``connectivity=4`` is not a default worth taking silently: both fixpoints
+    this replaces grew by four shifted ORs, so eight-connectivity would merge
+    holes that touch only at a corner and change the count.
+    """
+    import cv2
+
+    free = (~covered).astype(np.uint8)
+    count, labels = cv2.connectedComponents(free, connectivity=4)
+    if count <= 1:  # nothing uncovered at all
+        return np.zeros(covered.shape, dtype=bool), 0
+
+    outside = np.zeros(count, dtype=bool)
+    border = np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])
+    outside[np.unique(border)] = True
+    outside[0] = True  # label 0 is the covered pixels, not a gap
+    holes = ~outside[labels]
+    return holes, int(count - int(outside.sum()))
 
 
