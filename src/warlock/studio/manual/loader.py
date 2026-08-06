@@ -15,8 +15,8 @@ from pathlib import Path
 
 PARTS: tuple[tuple[str, range], ...] = (
     ("Using Warlock Studio", range(1, 9)),
-    ("Setup & operations", range(9, 12)),
-    ("Architecture", range(12, 15)),
+    ("Setup & operations", range(9, 13)),
+    ("Architecture", range(13, 17)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

@@ -105,6 +105,9 @@ class Viewer:
 
     def clear_reference(self) -> None:
         if self.reference is not None:
+            # Registered via widgets.texture_ref in main._draw_reference, so
+            # the backend must drop the name before the driver can reuse it.
+            self._forget(self.reference)
             self.reference.release()
             self.reference = None
 

@@ -29,6 +29,12 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |
 | `WARLOCK_T2I_MODEL` | `turbo` | The base model key used when a job does not name one. |
 | `WARLOCK_VRAM_EXCLUSIVE` | `off` | Restores the sequential VRAM handoff for text jobs. See [VRAM modes](#vram-modes). |
+| `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
+| `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |
+| `WARLOCK_RANK` | `on` | Whether a finished reference is scored against its composition report (and its style anchor when one exists). |
+| `WARLOCK_REFERENCE_RETRIES` | `0` | Extra redraws a text job may spend when the composition report refuses its reference. `1` is the setting that pays for itself. |
+| `WARLOCK_MESH_RETRIES` | `0` | Extra trellis runs when the finished mesh audits worse than `WARLOCK_MESH_HOLE_MAX`. The best attempt is kept, not the last. |
+| `WARLOCK_MESH_HOLE_MAX` | `0.07` | The worst-view see-through fraction past which a mesh is worth redoing. Measured, not guessed — see the hole-rate baseline in `docs/measurements/`. |
 | `WARLOCK_RIG_TEMPLATE` | `humanoid` | Skeleton template a rig request falls back to when it does not name one. |
 | `WARLOCK_RIG_TIMEOUT` | `1800` | Seconds a single Blender rigging subprocess may run before it is treated as hung. |
 | `WARLOCK_POSE_TIMEOUT` | `300` | Seconds for one pose bake. Much tighter, because a bake runs inline rather than on the job queue. |

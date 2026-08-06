@@ -349,7 +349,13 @@ def read_wblk(data: bytes) -> ClayDoc:
                 )
             )
 
-    return ClayDoc(
-        objects=objects,
-        materials=[_material_from(m, textures) for m in scene.get("materials", [])],
-    )
+    # A scene with objects but no materials is a hand-edited or truncated
+    # file: every face's material index would fall off the empty palette,
+    # rendering and exporting magenta and crashing the properties panel.
+    # ClayDoc substitutes the default palette for None, so hand it None --
+    # but only when there are objects, because an empty scene legitimately
+    # round-trips its empty palette.
+    materials = [_material_from(m, textures) for m in scene.get("materials", [])]
+    if objects and not materials:
+        materials = None
+    return ClayDoc(objects=objects, materials=materials)

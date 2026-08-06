@@ -232,6 +232,7 @@ class Text2Image:
                 str(path.parent),
                 weight_name=path.name,
                 adapter_name=models.BASE_LORA_ADAPTER,
+                local_files_only=True,
             )
             self._base_adapter = models.BASE_LORA_ADAPTER
         for lora in models.STYLE_LORAS.values():
@@ -240,7 +241,10 @@ class Text2Image:
                 log.info("style LoRA %s not downloaded (%s); skipping", lora.key, path)
                 continue
             self._pipe.load_lora_weights(
-                str(path.parent), weight_name=path.name, adapter_name=lora.key
+                str(path.parent),
+                weight_name=path.name,
+                adapter_name=lora.key,
+                local_files_only=True,
             )
             self._adapters.add(lora.key)
         log.info(
@@ -407,6 +411,7 @@ class Text2Image:
                     subfolder=spec.subfolder,
                     weight_name=spec.weight_name,
                     image_encoder_folder=spec.encoder_folder,
+                    local_files_only=True,
                 )
                 teardown_ip = True
                 target.set_ip_adapter_scale(float(cond.ip_scale))

@@ -456,6 +456,20 @@ def test_flattening_collapses_the_stack_and_undoes_as_one_step():
     assert len(doc.stack) == 2
 
 
+def test_flattening_commits_a_floating_buffer_rather_than_stranding_it():
+    """A live float names a layer uid; flatten replaces the whole stack, so an
+    uncommitted buffer left the next undo raising KeyError out of by_uid and
+    dropped the lifted pixels."""
+    doc = _doc((16, 16), RED)
+    doc.add_layer()
+    doc.select(inker.SelectionMask.from_rect((16, 16), (0, 0, 4, 4)))
+    doc.lift()
+    doc.flatten_layers()
+    assert doc.floating is None
+    assert len(doc.stack) == 1
+    assert doc.undo()  # must not raise; reverses the flatten
+
+
 # --- geometry ---------------------------------------------------------------
 
 

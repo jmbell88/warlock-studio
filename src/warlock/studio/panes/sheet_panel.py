@@ -91,11 +91,26 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
             imgui.image(widgets.texture_ref(texture), (width, width * strip.height / strip.width))
 
 
+def release_strip_texture(ctx: Any) -> None:
+    """Forget-then-release the cached strip texture. Also called at teardown."""
+    cached = ctx.state.preview.pop("sheet_texture", None)
+    if cached is None:
+        return
+    from .. import imgui_backend
+
+    renderer = imgui_backend.current()
+    if renderer is not None:
+        renderer.forget_texture(cached)
+    cached.release()
+
+
 def _strip_texture(ctx: Any, strip: Any) -> Any:
     """One reusable texture for the strip, replaced when its size changes."""
     cached = ctx.state.preview.get("sheet_texture")
     if cached is not None and cached.size != strip.size:
-        cached.release()
+        # Registered with the imgui backend by texture_ref, so it must be
+        # forgotten before the driver can reuse its GL name.
+        release_strip_texture(ctx)
         cached = None
     if cached is None:
         cached = ctx.viewer.ctx.texture(strip.size, 4, strip.tobytes())

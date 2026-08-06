@@ -147,7 +147,9 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
         if chosen:
             preset = next((p for p in presets if p["name"] == chosen), None)
             if preset:
-                viewer.apply_preset(preset)
+                # apply_preset resets every joint first, so hand-made
+                # rotations need the same confirm as any other discard.
+                guard(ctx, "apply a preset", lambda p=preset: viewer.apply_preset(p))
 
     if imgui.button("Save pose...", (-1, 0)):
         _save(ctx, job, viewer)
@@ -217,9 +219,14 @@ def _saved_list(ctx: Any, job: Any) -> None:
         imgui.text(pose.get("name") or pose_id)
         imgui.same_line()
         if imgui.small_button("Apply") and ctx.viewer is not None:
-            if not ctx.viewer.pose_mode:
-                _enter(ctx, job)
-            ctx.viewer.set_pose(pose.get("bones") or {}, pose_id=pose_id, dirty=False)
+            # Overwrites the editor's rotations and clears dirty, so it is an
+            # exit route like Done/Escape and takes the same confirm.
+            def _apply(pose=pose, pose_id=pose_id):
+                if not ctx.viewer.pose_mode:
+                    _enter(ctx, job)
+                ctx.viewer.set_pose(pose.get("bones") or {}, pose_id=pose_id, dirty=False)
+
+            guard(ctx, "apply a saved pose", _apply)
         imgui.same_line()
         key = f"bake:{job_id}:{pose_id}"
         if widgets.disabled_button("Save GLB...", not ctx.busy(key)):

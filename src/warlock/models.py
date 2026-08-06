@@ -67,8 +67,8 @@ class BaseModel:
     steps: int
     guidance_scale: float
     variant: str | None = "fp16"
-    # Key into _SCHEDULERS in pipelines/text2image; None keeps whatever the
-    # checkpoint's own scheduler_config.json specifies.
+    # A name pipelines/text2image._scheduler knows (it raises on any other);
+    # None keeps whatever the checkpoint's own scheduler_config.json specifies.
     scheduler: str | None = None
     # A step-distillation LoRA fused on at load, never user-facing.
     base_lora: str | None = None

@@ -46,6 +46,7 @@ from . import jobs as jobs_mod
 from .core import WarlockService
 from .errors import Invalid, NotFound
 from .validation import (
+    ALLOWED_RESOLUTIONS,
     MAX_PROMPT,
     check_seed,
     check_trellis_band,
@@ -212,6 +213,11 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
     check_seed("seed", kwargs["seed"])
     check_trellis_band(kwargs.get("trellis_band"))
     check_trellis_tex_res(kwargs.get("trellis_tex_res"))
+    resolution = kwargs.get("resolution")
+    if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
+        raise Invalid(
+            f"resolution must be one of {sorted(ALLOWED_RESOLUTIONS)}", field="resolution"
+        )
     try:
         params = guidance.normalize(
             {
@@ -228,6 +234,14 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> None:
         )
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
+    # A sweep unit is submitted with no reference upload, so a conditioning
+    # selection can never have an image to condition on -- create_job would
+    # refuse it, but only after the sweep row was minted.
+    if params.get("ip_adapter") or params.get("control"):
+        raise Invalid(
+            "conditioning needs a reference image, which a sweep cannot carry",
+            field="reference",
+        )
     if "profile" in kwargs:
         # The same check create_job runs, including the gltfpack-presence
         # gate: a sweep unit that would finish wearing a tier the missing

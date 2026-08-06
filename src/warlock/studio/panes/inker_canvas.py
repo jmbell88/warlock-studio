@@ -58,13 +58,16 @@ def _file_row(ctx: Any, state: Any) -> None:
     # Undo and redo live beside the canvas they act on; the bridge panel's
     # pair was three panels away from the stroke it reversed.
     doc = tab.doc if tab is not None else None
+    # Undo can rebind the stack mid-write; the saving gate here matches the
+    # keyboard path (_MUTATING_CTRL) and the bridge panel's own pair.
+    idle = tab is not None and not tab.saving
     if widgets.icon_button(
-        icons.UNDO, "Undo (Ctrl+Z)", enabled=doc is not None and doc.history.can_undo
+        icons.UNDO, "Undo (Ctrl+Z)", enabled=idle and doc.history.can_undo
     ):
         doc.undo()
     imgui.same_line()
     if widgets.icon_button(
-        icons.REDO, "Redo (Ctrl+Y)", enabled=doc is not None and doc.history.can_redo
+        icons.REDO, "Redo (Ctrl+Y)", enabled=idle and doc.history.can_redo
     ):
         doc.redo()
     imgui.same_line()
@@ -79,7 +82,9 @@ def _file_row(ctx: Any, state: Any) -> None:
         imgui.open_popup("inker-recent")
     _recent_popup(ctx, state)
     imgui.same_line()
-    busy = tab is not None and tab.saving
+    # A save commits the floating buffer, so saving mid-transform would land
+    # the transform with no confirm and leave the mode pointing at nothing.
+    busy = tab is not None and (tab.saving or state.transforming)
     if widgets.disabled_button("Save", tab is not None and not busy):
         inker_mode.save(ctx, tab)
     imgui.same_line()

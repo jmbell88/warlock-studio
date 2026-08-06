@@ -30,6 +30,14 @@ def test_chapters_sorted_titled_and_grouped(tree: Path):
     assert by_key["13-architecture"].part == "Architecture"
 
 
+def test_every_real_chapter_lands_in_a_part():
+    """Against the real manual, not the synthetic tree: a chapter outside
+    every PARTS range renders in the TOC as a bare "Contents" entry, which is
+    the fallback meant only for 00-index."""
+    orphans = [c.key for c in loader.chapters() if c.number > 0 and not c.part]
+    assert orphans == []
+
+
 def test_load_reads_the_file(tree: Path):
     assert "Hello." in loader.load("01-overview", root=tree)
 

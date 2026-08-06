@@ -60,6 +60,12 @@ def record_verdict(
         raise Invalid("source must be non-empty", field="source")
 
     job = svc.require_job(job_id)
+    if job["status"] != "done":
+        # A verdict is a judgement about artifacts, and the vector snapshot is
+        # permanent -- it outlives the job on purpose. Filing one against a
+        # queued or failed unit poisons the corpus with accepts for meshes
+        # that never existed.
+        raise Invalid(f"job is {job['status']}; a verdict needs a finished asset")
     row_id = svc.store.add_verdict(
         job_id,
         source=source,

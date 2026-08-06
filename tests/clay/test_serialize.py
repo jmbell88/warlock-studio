@@ -223,6 +223,19 @@ def test_a_scene_naming_a_mesh_the_archive_does_not_carry_is_refused() -> None:
         ser.read_wblk(stripped.getvalue())
 
 
+def test_a_scene_with_objects_but_no_materials_gets_the_default_palette() -> None:
+    """A hand-edited file can drop the materials array. Every face index would
+    fall off the empty palette -- magenta everywhere and an IndexError in the
+    properties panel -- so the reader substitutes the default palette. An empty
+    *scene* keeps its empty palette (see the empty-scene test above)."""
+
+    def strip(scene: dict) -> None:
+        scene.pop("materials", None)
+
+    out = ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), strip))
+    assert len(out.materials) >= 1
+
+
 def test_bytes_that_are_not_a_zip_are_refused() -> None:
     with pytest.raises(ValueError, match="not a Warlock Clay document"):
         ser.read_wblk(b"this is not a zip file at all")

@@ -17,8 +17,9 @@ A local, self-hosted alternative to Meshy.ai for generating game-ready 3D assets
 
 ```powershell
 # 1. Python deps. --extra studio is the app's window and renderer; add
-#    --extra text2image for text-to-3D (pulls torch cu128).
-uv sync --extra dev --extra studio
+#    --extra text2image for text-to-3D (pulls torch cu128). The dev tools
+#    (pytest, ruff) are uv's default dependency group and come along free.
+uv sync --extra studio
 
 # 2. trellis.cpp CUDA server binary -> vendor/trellis/
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
@@ -128,7 +129,8 @@ space-drag or middle-drag pans, `Ctrl+T` transforms, `Ctrl+0` fits and `Ctrl+1` 
 
 The trellis server subprocess starts on the first 3D job and by default stays resident in VRAM alongside SDXL-Turbo (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle (configurable). Set `WARLOCK_VRAM_EXCLUSIVE=1` to restore sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident Flux.
 
-Everything is env-overridable: `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLIS_EXE`, `WARLOCK_TRELLIS_MODELS`, `WARLOCK_TRELLIS_PORT`, `WARLOCK_TRELLIS_IDLE`, `WARLOCK_T2I_ROOT` (where image models and `loras/` live), `WARLOCK_T2I_MODEL` (default base model key), `WARLOCK_T2I_DIR` (redirects the `turbo` entry only), `WARLOCK_VRAM_EXCLUSIVE`, `WARLOCK_RIG_TEMPLATE`, `WARLOCK_RIG_TIMEOUT`, `WARLOCK_POSE_TIMEOUT`, `WARLOCK_SHEET_TIMEOUT`, `WARLOCK_TRELLIS_WEBP` (WebP rather than PNG for trellis textures), `WARLOCK_TRELLIS_TEX_RES` (texture resolution), `WARLOCK_TRELLIS_BAND` (mesh extraction band; unset by default, and measurement says leave it that way).
+The main knobs are env-overridable (the full table lives in
+[docs/manual/11-configuration.md](docs/manual/11-configuration.md)): `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLIS_EXE`, `WARLOCK_TRELLIS_MODELS`, `WARLOCK_TRELLIS_PORT`, `WARLOCK_TRELLIS_IDLE`, `WARLOCK_T2I_ROOT` (where image models and `loras/` live), `WARLOCK_T2I_MODEL` (default base model key), `WARLOCK_T2I_DIR` (redirects the `turbo` entry only), `WARLOCK_VRAM_EXCLUSIVE`, `WARLOCK_RIG_TEMPLATE`, `WARLOCK_RIG_TIMEOUT`, `WARLOCK_POSE_TIMEOUT`, `WARLOCK_SHEET_TIMEOUT`, `WARLOCK_TRELLIS_WEBP` (WebP rather than PNG for trellis textures), `WARLOCK_TRELLIS_TEX_RES` (texture resolution), `WARLOCK_TRELLIS_BAND` (mesh extraction band; unset by default, and measurement says leave it that way).
 
 ## Development
 

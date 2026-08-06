@@ -272,13 +272,15 @@ def create_job(
             if normalized is not None or normalized_ref is not None:
                 job_dir = config.job_dir(job_id)
                 job_dir.mkdir(parents=True, exist_ok=True)
+                # Recorded before the payload writes, not after: a write that
+                # dies mid-file (disk full) must still get its dir removed.
+                made_dirs.append(job_dir)
                 if normalized is not None:
                     (job_dir / "input.png").write_bytes(normalized)
                 if normalized_ref is not None:
                     # Every candidate gets its own copy: they are independent
                     # rows, and prune deletes one dir without touching another.
                     (job_dir / "ref.png").write_bytes(normalized_ref)
-                made_dirs.append(job_dir)
             svc.store.create(
                 kind,
                 prompt,
@@ -344,10 +346,10 @@ def import_reference(
     job_dir = svc.config.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     dest = job_dir / "input.png"
-    # Written before the row, and cleaned up if the insert fails: the same
-    # ordering create_job uses, for the same reason.
-    dest.write_bytes(normalized)
+    # Written before the row, and cleaned up if the write or the insert fails:
+    # the same ordering create_job uses, for the same reason.
     try:
+        dest.write_bytes(normalized)
         params["reference_report"] = reference.measure_file(dest).as_dict()
         svc.store.create(
             "image", prompt or "", params, job_id, stage="reference", status="done"
@@ -410,11 +412,12 @@ def import_mesh(
     job_dir.mkdir(parents=True, exist_ok=True)
     source = job_dir / "source.glb"
     model = job_dir / "model.glb"
-    # Written before the row, and cleaned up if the insert fails: the same
-    # ordering create_job and import_reference use, for the same reason.
-    source.write_bytes(glb)
-    shutil.copyfile(source, model)
+    # Written before the row, and cleaned up if the write or the insert fails:
+    # the same ordering create_job and import_reference use, for the same
+    # reason -- a disk-full mid-write must not leave a truncated orphan.
     try:
+        source.write_bytes(glb)
+        shutil.copyfile(source, model)
         try:
             params["transform"] = postprocess.normalize_glb(
                 model, float(size_m) if size_m else None
@@ -492,7 +495,11 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
             seen += 1
             if seen <= keep or job["status"] == "running":
                 continue
-            svc.store.delete(job["id"])
+            # Conditional in the DB, not against this page's snapshot: a
+            # queued job can be claimed in the gap, and deleting it then
+            # rmtrees a directory a live reconstruction is writing into.
+            if not svc.store.delete_if_not_running(job["id"]):
+                continue
             shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
             deleted += 1
     return {"deleted": deleted}
@@ -524,7 +531,10 @@ def delete_job(svc: WarlockService, job_id: str) -> dict[str, Any]:
     job = svc.require_job(job_id)
     if job["status"] == "running":
         raise Conflict("cancel the job before deleting it")
-    svc.store.delete(job_id)
+    # Re-checked inside the delete statement: the status read above is a
+    # snapshot, and the worker's claim() can land in the gap.
+    if not svc.store.delete_if_not_running(job_id):
+        raise Conflict("cancel the job before deleting it")
     shutil.rmtree(svc.job_dir(job_id), ignore_errors=True)
     return {"ok": True}
 
@@ -655,6 +665,12 @@ def rerun_job(
     # finishes at a mesh, so it keeps the default.
     stage = source["stage"] if mode == "reroll" else "model"
 
+    # A remesh of a reference is the third door onto a mesh job (create_job
+    # and promote_to_model are the other two), and the only one that used to
+    # skip admission: the reference was admitted against the SDXL cost alone,
+    # and the trellis cost was never checked against the plan.
+    check_vram(svc, kind, stage, params)
+
     new_id = uuid.uuid4().hex[:12]
     new_dir = None
     # A reroll reruns SDXL, so its conditioning reference has to come with it
@@ -662,21 +678,22 @@ def rerun_job(
     # is why the except below now covers a case it never did.
     src_ref = svc.job_dir(job_id) / "ref.png"
     carry_ref = mode == "reroll" and src_ref.exists()
-    if kind == "image" or carry_ref:
-        # Before the row exists, for the same reason create_job does it:
-        # next_queued can otherwise claim the job in the gap and find no
-        # input.png on disk.
-        new_dir = svc.job_dir(new_id)
-        new_dir.mkdir(parents=True, exist_ok=True)
-        if kind == "image":
-            shutil.copyfile(src_png, new_dir / "input.png")
-        if carry_ref:
-            shutil.copyfile(src_ref, new_dir / "ref.png")
     try:
+        if kind == "image" or carry_ref:
+            # Before the row exists, for the same reason create_job does it:
+            # next_queued can otherwise claim the job in the gap and find no
+            # input.png on disk.
+            new_dir = svc.job_dir(new_id)
+            new_dir.mkdir(parents=True, exist_ok=True)
+            if kind == "image":
+                shutil.copyfile(src_png, new_dir / "input.png")
+            if carry_ref:
+                shutil.copyfile(src_ref, new_dir / "ref.png")
         svc.store.create(kind, source["prompt"], params, new_id, stage=stage)
     except Exception:
         # The other half of writing the dir first: a row that exists owns its
-        # directory, so only an insert that never landed cleans up after itself.
+        # directory, so only an insert (or copy) that never landed cleans up
+        # after itself.
         if new_dir is not None:
             shutil.rmtree(new_dir, ignore_errors=True)
         raise
@@ -788,14 +805,15 @@ def promote_to_model(
     new_id = uuid.uuid4().hex[:12]
     new_dir = svc.job_dir(new_id)
     new_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src_png, new_dir / "input.png")
     try:
+        shutil.copyfile(src_png, new_dir / "input.png")
         svc.store.create(
             "image", source["prompt"], params, new_id, stage="model", parent_id=job_id
         )
     except Exception:
         # As in create_job: the dir is written first so the worker can never
-        # claim a job with no input.png, so a failed insert has to remove it.
+        # claim a job with no input.png, so a failed insert (or a copy that
+        # died mid-file) has to remove it.
         shutil.rmtree(new_dir, ignore_errors=True)
         raise
     svc.wake_worker()
@@ -824,6 +842,7 @@ def optimize_job(
     import contextlib
 
     from ..pipelines import optimize, postprocess
+    from . import files
 
     job = svc.require_job(job_id)
     if job["status"] in ("queued", "running"):
@@ -854,7 +873,7 @@ def optimize_job(
         # model.glb lands, and under each artifact's own lock so an in-flight
         # conversion of the old mesh can't rename a stale copy into place after
         # the unlink.
-        for name in ("model.stl", "model_obj.zip", "model.fbx", "collision.glb", "textures.zip"):
+        for name in files.DERIVED:
             with svc.convert_lock(job_id, name), contextlib.suppress(OSError):
                 (job_dir / name).unlink()
         # The optimizer rewrote the node graph, so the grounding transform went

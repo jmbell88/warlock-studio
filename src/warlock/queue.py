@@ -297,6 +297,10 @@ class Worker:
                 # silently -- next_queued or a DB hiccup would strand every
                 # future job in 'queued' forever with no error surfaced.
                 log.exception("worker loop iteration failed")
+                # Bounded, or a *persistent* failure (disk full, corrupt DB
+                # page) spins this loop flat out, writing a traceback per
+                # pass to the disk that caused it.
+                await asyncio.sleep(POLL_INTERVAL)
             if self._stop.is_set():
                 break
 

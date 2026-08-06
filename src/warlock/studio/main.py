@@ -719,6 +719,15 @@ class App:
         tab = clay_mode.active(self.app_ctx)
         if tab is None or self.clay_view is None:
             return
+        # Every panel refuses edits while a save is in flight; a gizmo or
+        # element drag pushes history steps too, so the viewport must as well.
+        # Only new presses are refused: a drag already in progress keeps its
+        # release (the bytes were captured before the save started), and
+        # swallowing it would strand _grab.
+        import pygame
+
+        if tab.saving and event.type == pygame.MOUSEBUTTONDOWN:
+            return
         hovered = self._build_hovered
         if hovered or self.clay_view._grab is not None:
             self.clay_view.handle_event(tab.doc, event, hovered)
@@ -1885,6 +1894,12 @@ class App:
         from . import widgets
 
         ctx = self.app_ctx
+        # AppState.select clears the flag but cannot reach the viewer, so the
+        # split's GPU half is reconciled here -- otherwise a selection change
+        # mid-compare leaves the stale mesh rendering a full second scene draw
+        # every frame with nothing on screen showing it.
+        if not ctx.state.comparing and self.viewer.comparing:
+            self.viewer.exit_compare()
         halves = 2 if ctx.state.comparing else 1
         cell = (width - (8 if halves == 2 else 0)) / halves
         texture = self.viewer.render((pos.x, pos.y, cell, height), imgui.get_io().delta_time)
@@ -1932,6 +1947,9 @@ class App:
             _step("persist build", lambda: self._persist_clay(ctx))
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
+            from .panes import sheet_panel
+
+            _step("release sheet strip", lambda: sheet_panel.release_strip_texture(ctx))
         if self.viewer is not None:
             _step("release viewer", self.viewer.release)
         # ``getattr``, not an attribute access: teardown runs after a *failed*

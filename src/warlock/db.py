@@ -454,6 +454,21 @@ class JobStore:
             self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             self._conn.commit()
 
+    def delete_if_not_running(self, job_id: str) -> bool:
+        """Delete unless the worker owns the row. -> whether the row went.
+
+        The status check and the delete are one statement under the lock --
+        the same shape as ``claim`` -- because a caller that checks a snapshot
+        and then calls ``delete`` races the worker's claim() in the gap, and
+        loses a live reconstruction's row while the run keeps writing.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM jobs WHERE id = ? AND status != 'running'", (job_id,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
     # --- sweeps ---------------------------------------------------------------
 
     def create_sweep(self, label: str, prompt: str, spec: dict[str, Any]) -> str:

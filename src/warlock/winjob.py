@@ -26,6 +26,7 @@ import ctypes
 import logging
 import subprocess
 import sys
+import threading
 from ctypes import wintypes
 from typing import Any
 
@@ -73,6 +74,10 @@ if sys.platform == "win32":
 
 
 _job: int | None = None
+# Callers genuinely span threads (warlock-loop, TaskRunner workers, the main
+# thread's doctor probe); an unlocked create-and-store can mint two jobs and
+# leak one, leaving armed() reporting on a handle some children are not in.
+_job_lock = threading.Lock()
 
 
 def _ensure_job() -> int | None:
@@ -82,6 +87,11 @@ def _ensure_job() -> int | None:
     "everything Warlock spawned dies with Warlock", and a single handle cannot
     get out of sync with itself.
     """
+    with _job_lock:
+        return _ensure_job_locked()
+
+
+def _ensure_job_locked() -> int | None:
     global _job
     if _job is not None:
         return _job
@@ -95,7 +105,9 @@ def _ensure_job() -> int | None:
         kernel32.OpenProcess.restype = wintypes.HANDLE
         handle = kernel32.CreateJobObjectW(None, None)
         if not handle:
-            log.warning("CreateJobObject failed (%s)", ctypes.get_last_error())
+            # GetLastError directly: windll builds functions with
+            # use_last_error=False, so ctypes.get_last_error() always reads 0.
+            log.warning("CreateJobObject failed (%s)", kernel32.GetLastError())
             return None
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE

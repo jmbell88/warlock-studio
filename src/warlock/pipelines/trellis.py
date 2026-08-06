@@ -102,7 +102,10 @@ class TrellisServer:
 
     @property
     def running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        # One read: stop() nulls _proc from another thread, and re-reading
+        # self._proc after the None test races an AttributeError with it.
+        proc = self._proc
+        return proc is not None and proc.poll() is None
 
     def _argv(self) -> list[str]:
         argv = [
@@ -157,7 +160,8 @@ class TrellisServer:
     def _reap_if_dead(self) -> None:
         """A self-crashed server otherwise leaks the old log handle and
         reader thread the next time _proc/_reader/_logfh are overwritten."""
-        if self._proc is not None and self._proc.poll() is not None:
+        proc = self._proc  # one read; stop() nulls it from another thread
+        if proc is not None and proc.poll() is not None:
             lifetime = (
                 time.monotonic() - self._spawned_at
                 if self._spawned_at is not None
@@ -165,8 +169,8 @@ class TrellisServer:
             )
             log.warning(
                 "trellis-server pid %s exited with code %s after %.1f s; reaping",
-                self._proc.pid,
-                self._proc.returncode,
+                proc.pid,
+                proc.returncode,
                 lifetime,
             )
             self.stop()
@@ -410,9 +414,15 @@ class TrellisServer:
         if r.status_code >= 400:
             detail = r.text[:500] if r.text else "(no body; see trellis.log)"
             raise RuntimeError(f"trellis-server {r.status_code}: {detail}")
-        _validate_glb(r.content)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(output_path, r.content)
+        # Off the loop thread: parsing and flushing a multi-megabyte GLB
+        # inline would block cancellation and every call_on_loop for its
+        # duration.
+        def _finish(content: bytes = r.content) -> None:
+            _validate_glb(content)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(output_path, content)
+
+        await asyncio.to_thread(_finish)
         self.last_used = time.monotonic()
         return output_path
 

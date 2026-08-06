@@ -125,7 +125,7 @@
       "tags": [
         "boxy"
       ],
-      "notes": "the mesh_profile qualification subject named in docs/NEXT.md"
+      "notes": "one of the three mesh_profile qualification subjects (chest, sword, rock)"
     },
     {
       "id": "weapon-01",

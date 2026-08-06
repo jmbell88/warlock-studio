@@ -925,6 +925,7 @@ class Document:
         """Collapse the stack to one layer. Undoable as a canvas-level op."""
         if len(self.stack) == 1:
             return
+        self.commit_floating()
         # Replay must be a pure function of the document, and minting a uid is
         # the one part of this op that is not: a redo would produce a layer
         # with a new identity, stranding every patch recorded above it. The uid

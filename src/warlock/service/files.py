@@ -239,6 +239,7 @@ def save_clay_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     the two leaves the sidecar absent rather than lying about a mesh it did not
     produce.
     """
+    check_job_id(job_id)
     if svc.store.get(job_id) is None:
         raise NotFound("no such job")
     if len(data) > MAX_CLAY_SOURCE_BYTES:

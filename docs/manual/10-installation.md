@@ -20,14 +20,15 @@ Python 3.12 or newer. Rigging is the one part that wants a specific version — 
 The base install is the app and its renderer:
 
 ```powershell
-uv sync --extra dev --extra studio
+uv sync --extra studio
 ```
 
-The extras are separable on purpose, and each one buys a different capability:
+The `dev` tooling (pytest, pytest-asyncio, ruff) is a dependency *group*, not an extra, and uv
+installs it by default — no flag needed. The extras are separable on purpose, and each one buys a
+different capability:
 
 | Extra | What it adds | Skipping it costs |
 | --- | --- | --- |
-| `dev` | pytest, pytest-asyncio, ruff | Running the tests and the linter. |
 | `studio` | moderngl, pygame-ce, imgui-bundle | The window itself. Without it only `warlock doctor` and `warlock sweep` run. |
 | `text2image` | torch cu128, diffusers, transformers, accelerate, peft | Text-to-3D. Image-to-3D from an upload still works. |
 | `rig` | bpy | Rigging, posing and sprite sheets. |
@@ -67,7 +68,7 @@ uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --excl
   --local-dir models/trellis2-gguf
 
 # SDXL-Turbo weights (fp16 variant, ~7 GB) -> models/sdxl-turbo/  (text-to-3D only,
-# needs `uv sync --extra dev --extra studio --extra text2image` to pull torch cu128)
+# needs `uv sync --extra studio --extra text2image` to pull torch cu128)
 uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
   --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
 ```
