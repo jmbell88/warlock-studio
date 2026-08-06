@@ -922,13 +922,6 @@ def optimize_job(
             )
         except optimize.OptimizeError as exc:
             raise Failed(str(exc)) from exc
-        # Derived artifacts describe the old mesh; drop them the moment the new
-        # model.glb lands, and under each artifact's own lock so an in-flight
-        # conversion of the old mesh can't rename a stale copy into place after
-        # the unlink.
-        for name in files.DERIVED:
-            with svc.convert_lock(job_id, name), contextlib.suppress(OSError):
-                (job_dir / name).unlink()
         # The optimizer rewrote the node graph, so the grounding transform went
         # with it and has to be reapplied. Failure is logged and swallowed,
         # same rule as the queue path (_apply_scale): the new GLB is already on
@@ -942,6 +935,16 @@ def optimize_job(
             )
         except Exception:
             log.exception("normalize failed after optimize for job %s", job_id)
+        # Derived artifacts describe the old mesh; drop them once model.glb is
+        # *finished*, and under each artifact's own lock so an in-flight
+        # conversion of the old mesh can't rename a stale copy into place after
+        # the unlink. Deleting before the normalize left a multi-second window
+        # in which an STL or OBJ export -- which takes only its own artifact's
+        # lock, never this one -- rebuilt itself from the ungrounded mesh and
+        # cached that answer indefinitely.
+        for name in files.DERIVED:
+            with svc.convert_lock(job_id, name), contextlib.suppress(OSError):
+                (job_dir / name).unlink()
 
     changes: dict[str, Any] = {"profile": profile, "optimize": result}
     if custom_triangles is not None:

@@ -98,6 +98,40 @@ def test_an_overlong_prompt_is_refused_before_the_sweep_row_exists(svc, monkeypa
     assert minted == []
 
 
+def test_a_rollback_leaves_a_unit_the_worker_is_inside_alone(svc, monkeypatch):
+    """create_job wakes the worker after *every* unit, so by the time a later
+    one fails the first is routinely mid-trellis. The rollback used to write a
+    status with store.cancel -- which waits for nothing -- and then hard-delete
+    the row and rmtree the directory out from under the reconstruction, the
+    exact pattern delete_sweep documents as fixed."""
+    real = svc_jobs.create_job
+    made: list[str] = []
+
+    def create(*args, **kwargs):
+        if len(made) >= 2:
+            raise OSError("disk full")
+        job = real(*args, **kwargs)
+        made.append(job["id"])
+        # A text job writes no input.png, so give it the directory a
+        # reconstruction would be writing into.
+        svc.job_dir(job["id"]).mkdir(parents=True, exist_ok=True)
+        return job
+
+    monkeypatch.setattr(svc_jobs, "create_job", create)
+    # The first unit is the one the worker is inside when the third fails.
+    monkeypatch.setattr(
+        svc_sweeps.jobs_mod, "worker_is_inside", lambda _svc, job_id: job_id == made[0]
+    )
+
+    with pytest.raises(OSError):
+        svc_sweeps.create_sweep(svc, _plan(seeds=(1, 2, 3)))
+
+    assert svc.store.get(made[0]) is not None, "a live reconstruction was deleted"
+    assert svc.job_dir(made[0]).exists()
+    assert svc.store.get(made[1]) is None, "an idle unit is still rolled back"
+    assert not svc.job_dir(made[1]).exists()
+
+
 def test_each_param_is_routed_to_the_tier_create_job_expects():
     plan = _plan(
         seeds=(7,),

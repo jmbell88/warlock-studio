@@ -352,12 +352,21 @@ def create_sweep(svc: WarlockService, plan: SweepPlan) -> dict[str, Any]:
         # validation pass makes this unreachable for a *bad* unit, so anything
         # arriving here is a genuine failure (a full disk, a DB error) and a
         # half-queued sweep is worse than none.
+        #
+        # Through ``delete_sweep`` rather than a bare cancel-delete-rmtree.
+        # ``create_job`` wakes the worker after *every* unit, so by the time
+        # unit twelve fails unit one is routinely mid-trellis -- and
+        # ``store.cancel`` writes a status without waiting for anything, so the
+        # hard delete that followed it tore the directory out from under a
+        # running reconstruction and left an orphan nothing owned. That is the
+        # exact pattern ``delete_sweep`` documents as fixed; it survived here.
+        # A unit the worker is still inside keeps its row and its sweep, which
+        # the Review list offers a second press against.
         log.exception("sweep %s failed partway through; rolling back", sweep_id)
-        for job_id in created:
-            svc.store.cancel(job_id)
-            svc.store.delete(job_id)
-            shutil.rmtree(svc.job_dir(job_id), ignore_errors=True)
-        svc.store.delete_sweep(sweep_id)
+        try:
+            delete_sweep(svc, sweep_id)
+        except Exception:
+            log.exception("could not roll back sweep %s", sweep_id)
         raise
     return {"id": sweep_id, "units": len(created), "jobs": created}
 

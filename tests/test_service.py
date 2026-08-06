@@ -512,6 +512,43 @@ def test_a_retarget_reports_the_rig_artifacts_it_made_stale(svc):
     assert (job_dir / "rig.glb").exists()
 
 
+def test_derived_artifacts_outlive_the_normalize_that_finishes_the_new_mesh(svc, monkeypatch):
+    """Deleted *after* grounding is reapplied, not before.
+
+    ``derive.get_file`` takes only its own artifact's lock, never this one, so
+    an STL or OBJ export landing between the unlink and the normalize rebuilt
+    itself from the ungrounded mesh -- and cached that answer indefinitely.
+    """
+    from warlock.pipelines import optimize, postprocess
+    from warlock.service import files as svc_files
+
+    job_id = _finished_job(svc)
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "source.glb").write_bytes(b"glb")
+    (job_dir / "model.glb").write_bytes(b"glb")
+    derived = next(iter(svc_files.DERIVED))
+    (job_dir / derived).write_bytes(b"stale")
+
+    order: list[str] = []
+
+    def fake_run(source, out, **_kwargs):
+        out.write_bytes(b"optimized")
+        return {"ok": True}
+
+    def fake_normalize(path, size_m=None):
+        # The window: whatever a concurrent export sees here is what it caches.
+        order.append(f"normalize:{(job_dir / derived).exists()}")
+        return {"scale": 1.0}
+
+    monkeypatch.setattr(optimize, "run", fake_run)
+    monkeypatch.setattr(postprocess, "normalize_glb", fake_normalize)
+    svc_jobs.optimize_job(svc, job_id, profile="raw")
+
+    assert order == ["normalize:True"]
+    assert not (job_dir / derived).exists()
+
+
 # --- tags -------------------------------------------------------------------
 
 
