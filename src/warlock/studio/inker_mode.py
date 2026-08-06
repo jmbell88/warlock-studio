@@ -399,7 +399,12 @@ def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
             ctx.svc, kind="image", output="model", image=doc.png_bytes()
         )
 
-    if ctx.submit("inker-send", run):
+    # Gated like every other encode: ``png_bytes`` walks the layer stack on a
+    # task thread, and an undo, a crop or a rotate landing mid-walk restructures
+    # it underneath. Keyed by tab so ``on_task_done``/``on_task_failed`` can
+    # find the document to unlock, the same shape the saves use.
+    _start(ctx, tab, f"inker-send:{tab.uid}", run)
+    if tab.saving:
         ctx.toast("Queued a mesh from the drawn image.")
 
 
@@ -492,6 +497,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     if name in ("inker-send", "inker-promote"):
         ctx.cache.invalidate()
+        # ``inker-send`` locks its tab while the flatten runs off-thread;
+        # ``inker-promote`` has no tab of its own to unlock.
+        sent = state.get(key.split(":", 1)[1]) if name == "inker-send" and ":" in key else None
+        if sent is not None:
+            sent.saving = False
         return
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None
@@ -516,12 +526,18 @@ def on_task_done(ctx: Any, done: Any) -> None:
         tab.file_format = result.get("format", "ora")
         state.remember(tab.path)
         persist(ctx)
-    if result.get("link"):
+    linked_just_now = bool(result.get("link"))
+    if linked_just_now:
         tab.job_id = result["job_id"]
         tab.link_kind = "reference-edit"
-        tab.has_original = False
     if tab.linked:
-        tab.has_original = True
+        # "Save as reference" mints a brand-new reference from the drawn
+        # pixels, so there is no input.orig.png behind it and Revert has
+        # nothing to revert to. The unconditional True here overwrote the
+        # False set a line earlier and offered a button that could only fail.
+        # Every *other* linked save goes through save_edited_image, which
+        # writes the backup.
+        tab.has_original = not linked_just_now
         ctx.cache.invalidate()
         _nudge_viewer(ctx, tab)
     ctx.toast("Saved.")

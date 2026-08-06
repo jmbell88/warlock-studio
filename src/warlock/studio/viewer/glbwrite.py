@@ -310,15 +310,34 @@ def write_glb(model: gltf.Model) -> bytes:
 
     writer = _Writer()
     meshes = []
-    for prims in model.meshes:
+    # ``primitives`` has a minimum length of one in the spec, so a mesh that
+    # wrote nothing -- an object whose geometry is empty, or whose every
+    # primitive was refused -- is dropped rather than emitted as
+    # ``{"primitives": []}``, which strict importers reject outright. Dropping
+    # renumbers the survivors, so the nodes that referenced them are remapped
+    # and a node whose mesh has gone simply carries no mesh.
+    remap: dict[int, int] = {}
+    for index, prims in enumerate(model.meshes):
         written = [w for w in (writer.primitive(p) for p in prims) if w is not None]
+        if not written:
+            continue
+        remap[index] = len(meshes)
         meshes.append({"primitives": written})
+
+    nodes = [writer.node(n) for n in model.nodes]
+    for node in nodes:
+        if "mesh" in node:
+            moved = remap.get(node["mesh"])
+            if moved is None:
+                del node["mesh"]
+            else:
+                node["mesh"] = moved
 
     doc: dict[str, Any] = {
         "asset": {"version": "2.0", "generator": "Warlock Studio"},
         "scene": 0,
         "scenes": [{"nodes": [int(r) for r in model.roots]}],
-        "nodes": [writer.node(n) for n in model.nodes],
+        "nodes": nodes,
     }
     if meshes:
         doc["meshes"] = meshes

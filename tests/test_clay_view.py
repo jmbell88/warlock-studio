@@ -793,6 +793,40 @@ def test_repeated_element_draws_reuse_the_overlays_gl_objects(view) -> None:
     assert len(overlay._vaos) == count
 
 
+def test_an_object_with_nothing_selected_keeps_its_overlay_across_frames(view) -> None:
+    """The key held ``id(sel)``, and ``element_sel_of`` synthesises a fresh
+    ``empty()`` for an object with nothing selected -- a temporary nothing
+    keeps alive. So the key changed every frame (a full re-upload per
+    unselected object, forever) or, once the allocator reissued the address,
+    matched a stale overlay and left a new selection invisible."""
+    doc = _doc(count=1)
+    _face_mode(doc)  # nothing selected inside it
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    overlay = next(iter(view._overlays.values()))
+    view.draw(doc, RECT, 0.0)
+    view.draw(doc, RECT, 0.0)
+
+    assert next(iter(view._overlays.values())) is overlay
+
+
+def test_selecting_inside_that_object_does_change_the_key(view) -> None:
+    """The other half: the cache must still notice a real change."""
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    before = next(iter(view._overlays.values()))
+
+    doc.set_element_sel(doc.objects[0].uid, el.ElementSel(faces=[0]))
+    view.draw(doc, RECT, 0.0)
+
+    assert next(iter(view._overlays.values())) is not before
+
+
 # --- textured documents reach the GPU unchanged (T23) ------------------------
 
 

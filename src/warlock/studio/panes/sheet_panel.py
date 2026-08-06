@@ -181,7 +181,11 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
         imgui.text("Rows")
         for pose in poses:
             checked = pose["id"] in form["poses"]
-            hit, value = imgui.checkbox(f"{pose.get('name') or pose['id']}##row", checked)
+            # The pose id, not a fixed "##row": two poses may share a name, and
+            # two checkboxes with one imgui id are one checkbox.
+            hit, value = imgui.checkbox(
+                f"{pose.get('name') or pose['id']}##row-{pose['id']}", checked
+            )
             if hit:
                 form["poses"].symmetric_difference_update({pose["id"]})
                 del value

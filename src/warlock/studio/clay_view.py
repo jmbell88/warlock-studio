@@ -453,9 +453,16 @@ class ClayView:
             if not obj.visible or len(obj.mesh.positions) == 0:
                 continue
             live.add(obj.uid)
+            # Keyed on what the *document* holds, not on what the accessor
+            # hands back: ``element_sel_of`` synthesises a fresh ``empty()``
+            # for an object with nothing selected, and nothing keeps it alive
+            # -- so the key changed every frame (a full VBO re-upload per
+            # unselected object) or, once the allocator reissued the address,
+            # matched a stale overlay and left a new selection invisible.
+            stored = doc.element_sel.get(obj.uid)
             sel = doc.element_sel_of(obj.uid)
             hover_index = hover[1] if hover is not None and hover[0] == obj.uid else -1
-            key = (id(obj.mesh), id(sel), mode, hover_index)
+            key = (id(obj.mesh), id(stored), mode, hover_index)
             overlay = self._overlays.get(obj.uid)
             if overlay is None or overlay.key != key:
                 if overlay is not None:

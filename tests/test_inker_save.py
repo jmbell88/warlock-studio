@@ -220,6 +220,85 @@ def test_an_unlinked_save_writes_the_floating_pixels(svc, tmp_path):
     assert int(reopened.flatten()[8, 8, 3]) == 255
 
 
+def _wired(svc, tab) -> Any:
+    """A ctx with the pieces ``on_task_done`` reaches for."""
+    from types import SimpleNamespace
+
+    from warlock.studio.inker_state import InkerState
+
+    ctx = FakeCtx(svc)
+    state = InkerState()
+    state.add(tab)
+    ctx.state = SimpleNamespace(inker=state, mode="inker")
+    ctx.cache = SimpleNamespace(invalidate=lambda: None)
+    ctx.toast = lambda *a, **k: None
+    ctx.viewer = SimpleNamespace(path=None)
+    return ctx
+
+
+def test_saving_a_drawing_as_a_new_reference_offers_no_revert(svc):
+    """"Save as reference" mints the reference from the drawn pixels, so there
+    is no ``input.orig.png`` behind it. ``has_original = False`` was set and
+    then immediately overwritten by an unconditional True in the ``tab.linked``
+    branch below it -- offering a Revert button that could only fail."""
+    from types import SimpleNamespace
+
+    tab = _tab("")
+    tab.link_kind = ""
+    ctx = _wired(svc, tab)
+    job_id = _reference(svc)
+
+    inker_mode.on_task_done(
+        ctx,
+        SimpleNamespace(
+            key=f"inker-save:{tab.uid}", result={"link": True, "job_id": job_id, "rev": 0}
+        ),
+    )
+
+    assert tab.linked
+    assert tab.has_original is False
+
+
+def test_an_ordinary_linked_save_still_has_an_original_to_revert_to(svc):
+    from types import SimpleNamespace
+
+    job_id = _reference(svc)
+    tab = _tab(job_id)
+    ctx = _wired(svc, tab)
+
+    inker_mode.on_task_done(
+        ctx, SimpleNamespace(key=f"inker-save:{tab.uid}", result={"rev": 0})
+    )
+
+    assert tab.has_original is True
+
+
+def test_sending_an_unlinked_drawing_to_3d_locks_the_document_while_it_encodes(svc):
+    """``png_bytes`` walks the layer stack on a task thread, so an undo, a crop
+    or a rotate landing mid-walk restructures it underneath. Every other encode
+    path sets ``saving``; this one did not."""
+    from types import SimpleNamespace
+
+    tab = _tab("")
+    tab.link_kind = ""
+    tab.job_id = ""
+    ctx = _wired(svc, tab)
+    locked: list[bool] = []
+    ctx.submit = lambda key, run: (
+        ctx.submitted.append(key) or locked.append(tab.saving) or True
+    )
+
+    inker_mode.send_to_3d(ctx, tab)
+
+    assert ctx.submitted == [f"inker-send:{tab.uid}"]
+    assert locked == [True], "the encode ran with the document unlocked"
+
+    inker_mode.on_task_done(
+        ctx, SimpleNamespace(key=f"inker-send:{tab.uid}", result={"id": "a" * 12})
+    )
+    assert tab.saving is False
+
+
 # --- the gate ---------------------------------------------------------------
 
 

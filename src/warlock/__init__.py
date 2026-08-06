@@ -9,4 +9,4 @@ import os
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"

@@ -324,18 +324,44 @@ def test_an_empty_model_writes_no_buffer_at_all() -> None:
     assert out.meshes == []
 
 
-def test_a_primitive_with_no_geometry_is_written_without_accessors() -> None:
+def test_a_mesh_with_no_geometry_is_dropped_rather_than_written_empty() -> None:
     """An object in the outliner with nothing in it yet is a state the document
-    can be in, and it must not produce a zero-count accessor: the spec requires
-    a count of at least one, so a strict reader rejects the whole file."""
+    can be in, and neither half of it may reach the file: an accessor's count
+    and a mesh's ``primitives`` both have a minimum of one in the spec, so a
+    strict reader rejects the whole file over either. The node survives -- it
+    is a real object with a real transform -- carrying no mesh."""
     prim = gltf.Primitive(
         positions=np.zeros((0, 3), dtype="f4"), indices=np.zeros(0, dtype="u4")
     )
     model = gltf.Model([gltf.Node(name="n", mesh=0)], [0], [[prim]], [])
 
     doc, _ = read_glb(glbwrite.write_glb(model))
-    assert doc["meshes"][0]["primitives"] == []
-    assert gltf.load(glbwrite.write_glb(model)).meshes == [[]]
+    assert "meshes" not in doc
+    assert "mesh" not in doc["nodes"][0]
+    assert gltf.load(glbwrite.write_glb(model)).meshes == []
+
+
+def test_dropping_an_empty_mesh_renumbers_the_ones_that_survive() -> None:
+    """The drop shifts every later index, so a node pointing past it would
+    otherwise render a different object's geometry."""
+    empty = gltf.Primitive(
+        positions=np.zeros((0, 3), dtype="f4"), indices=np.zeros(0, dtype="u4")
+    )
+    real = gltf.Primitive(
+        positions=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype="f4"),
+        indices=np.array([0, 1, 2], dtype="u4"),
+    )
+    model = gltf.Model(
+        [gltf.Node(name="gone", mesh=0), gltf.Node(name="kept", mesh=1)],
+        [0, 1],
+        [[empty], [real]],
+        [],
+    )
+
+    doc, _ = read_glb(glbwrite.write_glb(model))
+    assert len(doc["meshes"]) == 1
+    assert "mesh" not in doc["nodes"][0]
+    assert doc["nodes"][1]["mesh"] == 0
 
 
 def test_a_model_with_a_skin_is_refused_rather_than_silently_flattened() -> None:
