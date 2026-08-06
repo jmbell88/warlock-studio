@@ -142,7 +142,7 @@ T6–T8 are independent after T5. Order is easy → hard.
   per-face (no shared ring verts between faces; inner corners lerp toward the
   face centroid in position *and* uv) and region (extrude@0 + a rim pull toward
   local centroids — a documented approximation). Best-effort on non-manifold.
-- [ ] **T7 — `weld` + `collapse` + `fill_hole`.** Weld: eps-grid quantize +
+- [x] **T7 — `weld` + `collapse` + `fill_hole`.** Weld: eps-grid quantize +
   27-neighbour union-find (selection-sized Python is acceptable; the all-verts
   path stays gridded); representative at the cluster centroid; the aftermath is
   shared with collapse — remap loops, drop consecutive-duplicate corners, drop
@@ -152,7 +152,7 @@ T6–T8 are independent after T5. Order is easy → hard.
   must be a boundary; the ring comes from `boundary_loops`; one n-gon wound in
   the hole direction; refuses pinched and figure-eight rings; uv copied from the
   adjacent boundary corners (a documented placeholder).
-- [ ] **T8 — the dissolve family** (`ops_dissolve.py`). Component-merge core:
+- [x] **T8 — the dissolve family** (`ops_dissolve.py`). Component-merge core:
   removable interior edges → flood-fill components over `twin` → boundary ring
   chained head-to-tail → one n-gon per component (boundary corners keep their
   uv, interior corners are dropped). Refuse: an annulus (a face with a hole is
@@ -160,12 +160,12 @@ T6–T8 are independent after T5. Order is easy → hard.
   (for edge-dissolve), boundary- or non-manifold-touching verts (for
   vert-dissolve). Results may be concave — the first real ear-clip consumer.
   Kept 2-valence collinear verts are a stated limitation.
-- [ ] **T9 — `subdivide` (linear)** (`ops_subdiv.py`). Catmull-Clark topology
+- [x] **T9 — `subdivide` (linear)** (`ops_subdiv.py`). Catmull-Clark topology
   with no smoothing: midpoint and face-centre verts, n quads per n-gon assembled
   vectorized; unselected neighbours of subdivided edges get midpoints spliced in
   (a pentagon, so no T-junction cracks) via `splice_corners`; material and
   smooth inherited; uv per-face means. Selection out: the child faces.
-- [ ] **T10 — `catmull_clark`.** T9's topology plus CC positions, all
+- [x] **T10 — `catmull_clark`.** T9's topology plus CC positions, all
   scatter-adds (`np.add.at`/`bincount`/`reduceat`, no per-face work). Face points
   are means; edge points interior `(a+b+F1+F2)/4`, with **boundary and
   non-manifold edges taking the midpoint** (the crease rule); vertex points
@@ -173,12 +173,12 @@ T6–T8 are independent after T5. Order is easy → hard.
   `(prev+6P+next)/8` (B-spline), corner and irregular kept. UV linear per face
   (not CC-smoothed, so seams stay exact — stated). Never refuses. Test the
   closed forms by hand on a cube, a torus and a plane grid.
-- [ ] **T11 — `loop_cut`** (`ops_bevel.py`). Quad-strip walk from the seed edge
+- [x] **T11 — `loop_cut`** (`ops_bevel.py`). Quad-strip walk from the seed edge
   via `twin`, both directions; stop on a non-quad, a boundary, `edge_uses ≥ 3`
   or a closed ring. Cut verts lerped walk-oriented (so `t=0.25` stays on one
   side all the way round); crossed quads split in two; end faces spliced (no
   cracks); uv lerped per face. Selection out: the new ring edges as vertex pairs.
-- [ ] **T12 — `bevel_edges`** (`ops_bevel.py`) — the hard one, last.
+- [x] **T12 — `bevel_edges`** (`ops_bevel.py`) — the hard one, last.
   Slide-vertex fan reconstruction: per unbeveled incident edge a slide vert at
   `clamp(width/len, 0, .5)`, shared by both flanking faces so it is crack-free
   by construction; per both-beveled face corner a miter vert at

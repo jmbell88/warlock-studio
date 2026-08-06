@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from warlock.studio.clay import adjacency as adj
 from warlock.studio.clay import elements as el
 from warlock.studio.clay import mesh as bm
 from warlock.studio.clay import ops_topo as ops
@@ -331,7 +332,7 @@ def test_an_insets_uvs_are_lerped_within_the_face_that_made_them() -> None:
         d = inner[i] - face_uv[i]
         to_centre = centroid - face_uv[i]
         assert abs(d[0] * to_centre[1] - d[1] * to_centre[0]) < 1e-3
-        assert 0.0 < float(d @ to_centre)
+        assert float(d @ to_centre) > 0.0
 
 
 def test_insetting_two_adjacent_faces_gives_each_its_own_rim() -> None:
@@ -344,9 +345,7 @@ def test_insetting_two_adjacent_faces_gives_each_its_own_rim() -> None:
 
 def test_a_region_inset_shares_its_ring_between_the_faces() -> None:
     m = prim.box()
-    out, sel = ops.inset_faces(
-        m, el.ElementSel(faces=[0, 2]), thickness=0.05, region=True
-    )
+    out, sel = ops.inset_faces(m, el.ElementSel(faces=[0, 2]), thickness=0.05, region=True)
     bm.validate(out)
     # Extrude@0 of the two-face region: six faces plus six border walls, and no
     # doubled edge down the middle.
@@ -371,3 +370,198 @@ def test_a_region_inset_pulls_each_corner_toward_its_local_centroid() -> None:
 def test_inset_refuses_an_empty_selection() -> None:
     with pytest.raises(el.OpError, match="at least one face"):
         ops.inset_faces(prim.box(), el.empty())
+
+
+# --- weld -------------------------------------------------------------------
+
+
+def _split_box() -> bm.Mesh:
+    """A box whose -Y face uses its own four coincident copies of the corners."""
+    m = prim.box()
+    extra = m.positions[m.loops[0:4]]
+    loops = m.loops.astype("i8").copy()
+    loops[0:4] = len(m.positions) + np.arange(4)
+    return bm.Mesh(
+        positions=np.concatenate([m.positions, extra]),
+        loops=loops,
+        starts=m.starts,
+        material=m.material,
+        smooth=m.smooth,
+    )
+
+
+def test_weld_closes_a_split_seam_and_leaves_the_shell_closed() -> None:
+    m = _split_box()
+    assert len(m.positions) == 12
+    assert not adj.check_manifold(m).clean, "the split face has a boundary"
+    out, sel = ops.weld(m, el.empty())
+    bm.validate(out)
+    assert len(out.positions) == 8
+    assert bm.face_count(out) == 6
+    assert adj.check_manifold(out).clean
+    assert el.is_empty(sel)
+
+
+def test_weld_puts_the_representative_at_the_cluster_centroid() -> None:
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [0.02, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype="f4",
+    )
+    m = bm.Mesh(
+        positions=positions,
+        loops=np.array([0, 2, 3, 1, 2, 3], dtype="i4"),
+        starts=np.array([0, 3, 6], dtype="i4"),
+        material=np.zeros(2, dtype="i4"),
+        smooth=np.zeros(2, dtype=bool),
+    )
+    out, _ = ops.weld(m, el.empty(), eps=0.1)
+    assert len(out.positions) == 3
+    assert out.positions[0].tolist() == pytest.approx([0.01, 0.0, 0.0])
+
+
+def test_weld_only_touches_the_selection() -> None:
+    m = _split_box()
+    out, _ = ops.weld(m, el.ElementSel(verts=[0, 8]), eps=1e-3)
+    assert len(out.positions) == 11, "one pair merged, the other three left split"
+
+
+def test_weld_drops_the_faces_it_degenerates() -> None:
+    # A quad whose corners merge in pairs is a line, and goes away.
+    positions = np.array([[0.0, 0, 0], [1.0, 0, 0], [1.0, 0, 1e-6], [0.0, 0, 1e-6]], dtype="f4")
+    m = bm.Mesh(
+        positions=positions,
+        loops=np.array([0, 1, 2, 3], dtype="i4"),
+        starts=np.array([0, 4], dtype="i4"),
+        material=np.zeros(1, dtype="i4"),
+        smooth=np.zeros(1, dtype=bool),
+    )
+    out, _ = ops.weld(m, el.empty(), eps=1e-3)
+    bm.validate(out)
+    assert bm.face_count(out) == 0
+
+
+def test_weld_preserves_each_surviving_corners_own_uv() -> None:
+    m = _uvd(_split_box())
+    out, _ = ops.weld(m, el.empty())
+    assert out.uv.tolist() == m.uv.tolist(), "a seam in UV survives a weld in space"
+
+
+def test_weld_refuses_a_nonsense_distance_or_a_single_vertex() -> None:
+    m = prim.box()
+    with pytest.raises(el.OpError, match="greater than zero"):
+        ops.weld(m, el.empty(), eps=0.0)
+    with pytest.raises(el.OpError, match="at least two"):
+        ops.weld(m, el.ElementSel(verts=[0]))
+
+
+def test_the_gridded_path_agrees_with_the_search_on_ordinary_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m = _split_box()
+    want, _ = ops.weld(m, el.empty())
+    monkeypatch.setattr(ops, "WELD_SEARCH_LIMIT", 0)
+    got, _ = ops.weld(m, el.empty())
+    assert len(got.positions) == len(want.positions)
+
+
+# --- collapse ---------------------------------------------------------------
+
+
+def test_collapsing_an_edge_merges_its_ends_at_the_midpoint() -> None:
+    m = prim.box()
+    edge = [int(m.loops[0]), int(m.loops[1])]
+    midpoint = m.positions[edge].astype("f8").mean(axis=0)
+    out, sel = ops.collapse(m, el.ElementSel(edges=[edge]))
+    bm.validate(out)
+    assert len(out.positions) == 7
+    assert any(np.allclose(p, midpoint, atol=1e-6) for p in out.positions)
+    assert el.is_empty(sel)
+
+
+def test_collapsing_a_chain_of_edges_gives_one_vertex_not_three() -> None:
+    m = prim.cylinder(segments=6)
+    ring = [[i, (i + 1) % 6] for i in range(3)]
+    out, _ = ops.collapse(m, el.ElementSel(edges=ring))
+    bm.validate(out)
+    assert len(out.positions) == 12 - 3, "four vertices became one"
+
+
+def test_collapsing_a_face_pulls_it_to_a_point() -> None:
+    m = prim.box()
+    out, _ = ops.collapse(m, el.ElementSel(faces=[0]))
+    bm.validate(out)
+    assert len(out.positions) == 5
+    assert bm.face_count(out) == 5, "the collapsed face itself is gone"
+
+
+def test_collapse_points_a_vertex_selection_at_weld() -> None:
+    with pytest.raises(el.OpError, match="use Weld"):
+        ops.collapse(prim.box(), el.ElementSel(verts=[0, 1]))
+    with pytest.raises(el.OpError, match="Select an edge"):
+        ops.collapse(prim.box(), el.empty())
+
+
+# --- fill_hole --------------------------------------------------------------
+
+
+def _open_tube(segments: int = 6) -> bm.Mesh:
+    m = prim.cylinder(segments=segments)
+    return topo.take_faces(m, np.arange(segments))
+
+
+def test_filling_a_hole_caps_it_with_one_n_gon_wound_the_right_way() -> None:
+    m = _open_tube()
+    boundary = adj.check_manifold(m).boundary_edges
+    out, sel = ops.fill_hole(m, el.ElementSel(edges=boundary[:1]))
+    bm.validate(out)
+    assert bm.face_count(out) == 7, "one cap, not a fan of six triangles"
+    assert np.diff(out.starts)[-1] == 6
+    assert sel.faces.tolist() == [6]
+    assert_consistently_oriented(out)
+
+
+def test_filling_both_ends_of_a_tube_closes_it() -> None:
+    m = _open_tube()
+    boundary = adj.check_manifold(m).boundary_edges
+    out, sel = ops.fill_hole(m, el.ElementSel(edges=boundary))
+    bm.validate(out)
+    assert len(sel.faces) == 2
+    assert_closed(out)
+    assert_consistently_oriented(out)
+    assert adj.check_manifold(out).clean
+
+
+def test_fill_hole_refuses_an_interior_edge() -> None:
+    m = prim.box()
+    with pytest.raises(el.OpError, match="not on a boundary"):
+        ops.fill_hole(m, el.ElementSel(edges=[[int(m.loops[0]), int(m.loops[1])]]))
+
+
+def test_fill_hole_refuses_a_pinched_boundary() -> None:
+    positions = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 1], [-1, 0, 0], [-1, 0, -1]], dtype="f4")
+    m = bm.Mesh(
+        positions=positions,
+        loops=np.array([0, 1, 2, 0, 3, 4], dtype="i4"),
+        starts=np.array([0, 3, 6], dtype="i4"),
+        material=np.zeros(2, dtype="i4"),
+        smooth=np.zeros(2, dtype=bool),
+    )
+    with pytest.raises(el.OpError, match="two boundary edges"):
+        ops.fill_hole(m, el.ElementSel(edges=[[0, 1]]))
+
+
+def test_fill_hole_refuses_an_empty_selection_and_a_foreign_edge() -> None:
+    m = _open_tube()
+    with pytest.raises(el.OpError, match="Select an edge"):
+        ops.fill_hole(m, el.empty())
+    with pytest.raises(el.OpError, match="not part of this mesh"):
+        ops.fill_hole(m, el.ElementSel(edges=[[0, 3]]))
+
+
+def test_a_filled_caps_uvs_come_from_the_surface_around_it() -> None:
+    m = _uvd(_open_tube())
+    boundary = adj.check_manifold(m).boundary_edges
+    out, _ = ops.fill_hole(m, el.ElementSel(edges=boundary[:1]))
+    cap = out.uv[len(m.uv) :]
+    assert len(cap) == 6
+    assert all(row.tolist() in m.uv.tolist() for row in cap)

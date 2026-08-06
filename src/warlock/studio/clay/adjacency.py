@@ -176,9 +176,7 @@ def _build(mesh: Mesh) -> Adjacency:
     # Vertex -> corners, as CSR. Stable so a vertex's corners come back in
     # corner order, which makes a fan walk deterministic.
     vc_corners = np.argsort(loops, kind="stable")
-    vc_starts = np.concatenate(
-        [[0], np.cumsum(np.bincount(loops, minlength=n_verts))]
-    ).astype("i8")
+    vc_starts = np.concatenate([[0], np.cumsum(np.bincount(loops, minlength=n_verts))]).astype("i8")
 
     out = Adjacency(
         next_corner=nxt.astype("i4"),
@@ -224,9 +222,7 @@ def adjacency(mesh: Mesh) -> Adjacency:
     return got
 
 
-_TRIS: weakref.WeakKeyDictionary[Mesh, tuple[np.ndarray, np.ndarray]] = (
-    weakref.WeakKeyDictionary()
-)
+_TRIS: weakref.WeakKeyDictionary[Mesh, tuple[np.ndarray, np.ndarray]] = weakref.WeakKeyDictionary()
 
 
 def cached_triangulation(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
@@ -280,9 +276,7 @@ def boundary_loops(mesh: Mesh) -> tuple[list[np.ndarray], np.ndarray]:
 
     src = mesh.loops[a.next_corner[corners]].astype("i8")
     dst = mesh.loops[corners].astype("i8")
-    pinched = np.flatnonzero(
-        np.bincount(src, minlength=len(mesh.positions)) > 1
-    ).astype("i4")
+    pinched = np.flatnonzero(np.bincount(src, minlength=len(mesh.positions)) > 1).astype("i4")
 
     pool: dict[int, list[int]] = defaultdict(list)
     for i, s in enumerate(src.tolist()):
@@ -366,9 +360,7 @@ def check_manifold(mesh: Mesh) -> ManifoldReport:
         for arity in np.unique(counts):
             which = np.flatnonzero(counts == arity)
             rows = sorted_loops[_row_spans(counts, which, int(arity))]
-            _, inv, cnt = np.unique(
-                rows, axis=0, return_inverse=True, return_counts=True
-            )
+            _, inv, cnt = np.unique(rows, axis=0, return_inverse=True, return_counts=True)
             duplicate.extend(which[cnt[inv.reshape(-1)] > 1].tolist())
 
     used = np.zeros(len(mesh.positions), dtype=bool)

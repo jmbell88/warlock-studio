@@ -33,6 +33,7 @@ from .mesh import Mesh, reversed_corner_perm
 __all__ = [
     "compact_vertices",
     "corner_spans",
+    "flat_next",
     "rebuild",
     "region_boundary_corners",
     "reversed_corner_perm",
@@ -89,6 +90,26 @@ def corner_spans(starts: np.ndarray, faces: np.ndarray) -> np.ndarray:
     which = np.repeat(np.arange(len(faces), dtype="i8"), counts)
     offs = np.concatenate([[0], np.cumsum(counts)[:-1]])
     return starts[faces][which] + (np.arange(total, dtype="i8") - offs[which])
+
+
+def flat_next(counts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(offsets, next, prev)`` for corners gathered face by face.
+
+    The same wrap-within-a-face trick :mod:`.adjacency` applies to ``loops``,
+    applied instead to a *gathered* corner array -- which is what an op working
+    on a subset of faces needs, since the subset's corners are contiguous in the
+    gather but not in the mesh.
+    """
+    counts = np.asarray(counts, dtype="i8").reshape(-1)
+    offsets = np.concatenate([[0], np.cumsum(counts)])
+    total = int(offsets[-1])
+    nxt = np.arange(1, total + 1, dtype="i8")
+    if len(counts):
+        nxt[offsets[1:] - 1] = offsets[:-1]
+    prv = np.empty(total, dtype="i8")
+    if total:
+        prv[nxt] = np.arange(total, dtype="i8")
+    return offsets, nxt, prv
 
 
 def take_faces(mesh: Mesh, faces: np.ndarray) -> Mesh:
@@ -177,9 +198,10 @@ def splice_corners(
     order = np.argsort(after, kind="stable")
     after, counts, src = after[order], counts[order], src[order]
     which = np.repeat(np.arange(len(after), dtype="i8"), counts)
-    local = np.arange(int(counts.sum()), dtype="i8") - np.concatenate(
-        [[0], np.cumsum(counts)[:-1]]
-    )[which]
+    local = (
+        np.arange(int(counts.sum()), dtype="i8")
+        - np.concatenate([[0], np.cumsum(counts)[:-1]])[which]
+    )
     take = src[which] + local
     # np.insert places values *before* the given index, so "after corner c" is
     # "before c + 1".
@@ -193,9 +215,7 @@ def splice_corners(
 
     new_uv = uv
     if uv is not None:
-        rows = (
-            np.zeros((len(values), 2), dtype="f4") if value_uv is None else value_uv
-        )
+        rows = np.zeros((len(values), 2), dtype="f4") if value_uv is None else value_uv
         new_uv = np.insert(uv, at, np.asarray(rows, dtype="f4")[take], axis=0)
     return new_loops.astype("i4"), new_starts, new_uv
 

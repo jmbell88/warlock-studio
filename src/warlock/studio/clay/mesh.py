@@ -120,8 +120,7 @@ def validate(mesh: Mesh) -> None:
         raise ValueError(f"starts must start at 0, got {int(mesh.starts[0])}")
     if mesh.starts[-1] != len(mesh.loops):
         raise ValueError(
-            f"starts must end at len(loops)={len(mesh.loops)}, "
-            f"got {int(mesh.starts[-1])}"
+            f"starts must end at len(loops)={len(mesh.loops)}, got {int(mesh.starts[-1])}"
         )
     counts = np.diff(mesh.starts)
     if counts.size and counts.min() < 0:
@@ -130,24 +129,15 @@ def validate(mesh: Mesh) -> None:
         bad = int(np.argmin(counts))
         raise ValueError(f"face {bad} has fewer than 3 corners")
     n_faces = len(mesh.starts) - 1
-    if len(mesh.loops) and (
-        mesh.loops.min() < 0 or mesh.loops.max() >= len(mesh.positions)
-    ):
-        raise ValueError(
-            f"a loop index is out of range for {len(mesh.positions)} positions"
-        )
+    if len(mesh.loops) and (mesh.loops.min() < 0 or mesh.loops.max() >= len(mesh.positions)):
+        raise ValueError(f"a loop index is out of range for {len(mesh.positions)} positions")
     if len(mesh.material) != n_faces:
-        raise ValueError(
-            f"material must be one per face ({n_faces}), got {len(mesh.material)}"
-        )
+        raise ValueError(f"material must be one per face ({n_faces}), got {len(mesh.material)}")
     if len(mesh.smooth) != n_faces:
-        raise ValueError(
-            f"smooth must be one per face ({n_faces}), got {len(mesh.smooth)}"
-        )
+        raise ValueError(f"smooth must be one per face ({n_faces}), got {len(mesh.smooth)}")
     if mesh.uv is not None and mesh.uv.shape != (len(mesh.loops), 2):
         raise ValueError(
-            f"uv must be one (u, v) per face corner ({len(mesh.loops)}, 2), "
-            f"got {mesh.uv.shape}"
+            f"uv must be one (u, v) per face corner ({len(mesh.loops)}, 2), got {mesh.uv.shape}"
         )
 
 
@@ -361,9 +351,9 @@ def render_arrays(
     positions = np.concatenate(
         [mesh.positions[used], mesh.positions[mesh.loops[flat_corners]]]
     ).astype("f4")
-    normals = np.concatenate(
-        [_normalize(accum[used]), unit[face_of_corner[flat_corners]]]
-    ).astype("f4")
+    normals = np.concatenate([_normalize(accum[used]), unit[face_of_corner[flat_corners]]]).astype(
+        "f4"
+    )
 
     corner_vertex = np.zeros(len(mesh.loops), dtype="i8")
     corner_vertex[smooth_corner] = remap[smooth_loops]

@@ -69,9 +69,9 @@ def test_converting_a_partial_vertex_set_selects_no_face() -> None:
     m = prim.box()
     two = el.ElementSel(verts=m.loops[:2])
     assert el.convert(m, two, "face").faces.tolist() == []
-    assert el.convert(m, two, "edge").edges.tolist() == [
-        sorted(m.loops[:2].tolist())
-    ], "two adjacent verts imply the edge between them"
+    assert el.convert(m, two, "edge").edges.tolist() == [sorted(m.loops[:2].tolist())], (
+        "two adjacent verts imply the edge between them"
+    )
 
 
 def test_combine_replaces_adds_and_subtracts() -> None:

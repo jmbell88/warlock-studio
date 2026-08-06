@@ -82,9 +82,7 @@ def test_an_l_shape_is_triangulated_inside_itself() -> None:
     # Every corner used, no repeats within a triangle, and the areas add up to
     # the polygon's -- which a fan across the reflex corner would overshoot.
     assert set(tris.reshape(-1).tolist()) == set(range(6))
-    assert _tri_area_sum(m.positions, tris) == pytest.approx(
-        _polygon_area(m.positions), rel=1e-5
-    )
+    assert _tri_area_sum(m.positions, tris) == pytest.approx(_polygon_area(m.positions), rel=1e-5)
 
 
 def test_the_triangle_count_is_n_minus_2_even_on_a_degenerate_face() -> None:
@@ -131,9 +129,7 @@ def test_a_face_pointing_down_a_negative_axis_still_clips() -> None:
     m = _one_face(flipped)
     assert bm._face_normals(m)[0][1] < 0
     tris, _ = bm.triangulate(m)
-    assert _tri_area_sum(m.positions, tris) == pytest.approx(
-        _polygon_area(m.positions), rel=1e-5
-    )
+    assert _tri_area_sum(m.positions, tris) == pytest.approx(_polygon_area(m.positions), rel=1e-5)
 
 
 def test_reversed_corner_perm_reverses_each_face_in_place() -> None:

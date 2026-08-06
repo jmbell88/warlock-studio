@@ -88,9 +88,7 @@ def test_a_flipped_neighbour_is_reported_and_denied_a_twin() -> None:
 
 def test_a_non_manifold_edge_gets_three_uses_and_no_twin() -> None:
     # Three triangles hinged on the edge (0, 1).
-    positions = np.array(
-        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, -1, -1]], dtype="f4"
-    )
+    positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, -1, -1]], dtype="f4")
     m = bm.Mesh(
         positions=positions,
         loops=np.array([0, 1, 2, 0, 1, 3, 0, 1, 4], dtype="i4"),
@@ -215,9 +213,7 @@ def test_a_tube_has_two_rings() -> None:
 def test_a_pinched_boundary_is_named() -> None:
     # Two triangles meeting at vertex 0 only: an hourglass, so two boundary
     # edges leave vertex 0 and the ring through it is ambiguous.
-    positions = np.array(
-        [[0, 0, 0], [1, 0, 0], [1, 0, 1], [-1, 0, 0], [-1, 0, -1]], dtype="f4"
-    )
+    positions = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 1], [-1, 0, 0], [-1, 0, -1]], dtype="f4")
     m = bm.Mesh(
         positions=positions,
         loops=np.array([0, 1, 2, 0, 3, 4], dtype="i4"),
@@ -242,9 +238,7 @@ def test_the_report_names_a_boundary_without_calling_it_broken() -> None:
 
 
 def test_the_report_finds_duplicates_repeats_strays_and_flips() -> None:
-    positions = np.array(
-        [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1], [9, 9, 9]], dtype="f4"
-    )
+    positions = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1], [9, 9, 9]], dtype="f4")
     m = bm.Mesh(
         positions=positions,
         # Two copies of the same quad (opposite windings, so also flipped), and
