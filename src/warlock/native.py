@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 2
+ABI = 3
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -118,6 +118,13 @@ def _bind(lib: ctypes.CDLL) -> None:
         f, i64,  # out
         i64, i64,  # h, w
         f, i64,  # base, or NULL
+    ]
+
+    lib.warlockc_to_uint8_f32.restype = None
+    lib.warlockc_to_uint8_f32.argtypes = [
+        f,  # pixels
+        ctypes.POINTER(ctypes.c_uint8),  # out
+        i64,  # count
     ]
 
 
@@ -325,6 +332,22 @@ def stack_f32(
         ctypes.c_int64(width),
         _ptr(base, c_float) if base is not None else None,
         ctypes.c_int64(base_stride),
+    )
+
+
+def to_uint8_f32(pixels: Any, out: Any, count: int) -> None:
+    """Scale, round, clamp and narrow ``count`` floats into ``out``.
+
+    Both arrays are C-contiguous and the shape is the caller's business -- this
+    one is elementwise, so it sees a flat run.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    handle.warlockc_to_uint8_f32(
+        _ptr(pixels, ctypes.c_float),
+        _ptr(out, ctypes.c_uint8),
+        ctypes.c_int64(count),
     )
 
 

@@ -182,3 +182,17 @@ void warlockc_stack_f32(const uint8_t **layers, const int64_t *strides, const fl
         }
     }
 }
+
+void warlockc_to_uint8_f32(const float *pixels, uint8_t *out, int64_t count) {
+    for (int64_t i = 0; i < count; ++i) {
+        const float scaled = pixels[i] * 255.0f + 0.5f;
+        /* np.clip is min(max(a, 0), 255), and the comparisons are written in
+         * the direction that leaves NaN alone for the same reason the `add`
+         * blend's clamp is: both of numpy's are NaN-propagating. */
+        const float clipped = scaled < 0.0f ? 0.0f : (scaled > 255.0f ? 255.0f : scaled);
+        /* .astype truncates toward zero rather than rounding -- the +0.5f
+         * above is what makes that a round, and doing it in one step here
+         * would move every value by half a level. */
+        out[i] = (uint8_t)clipped;
+    }
+}

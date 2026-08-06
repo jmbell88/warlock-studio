@@ -261,6 +261,52 @@ def test_a_whole_editing_session_produces_identical_pixels(monkeypatch):
     assert np.array_equal(fast[0], fast[1])
 
 
+# --- the narrowing ------------------------------------------------------------
+
+
+@needs_dll
+def test_to_uint8_is_bit_identical_on_both_paths(monkeypatch):
+    """Rounding, clamping and truncation in one pass rather than three arrays.
+
+    The values that matter are the ones either side of a level boundary: the
+    reference adds 0.5 and then *truncates*, so getting the two steps in the
+    wrong order in C shifts every pixel by half a level -- which is invisible
+    on a gradient and is a different file on disk.
+    """
+    rng = np.random.default_rng(31337)
+    pixels = rng.random((23, 47, 4), dtype=np.float32)
+    # Exact level boundaries, the two ends, and just outside both.
+    pixels[0] = np.float32(0.0)
+    pixels[1] = np.float32(1.0)
+    pixels[2] = (np.arange(47 * 4, dtype=np.float32) / np.float32(255.0)).reshape(47, 4)
+    pixels[3] = ((np.arange(47 * 4, dtype=np.float32) + 0.5) / np.float32(255.0)).reshape(47, 4)
+    pixels[4] = np.float32(-0.004)
+    pixels[5] = np.float32(1.004)
+
+    fast, slow = _both(lambda: cp.to_uint8(pixels), monkeypatch)
+    assert fast.dtype == slow.dtype == np.uint8
+    assert np.array_equal(fast, slow)
+
+
+@needs_dll
+def test_to_uint8_round_trips_every_level_on_both_paths(monkeypatch):
+    """The property ``test_uint8_survives_a_round_trip_through_float`` already
+    asserts, run against the kernel: all 256 levels come back unchanged."""
+    values = np.arange(256, dtype=np.uint8).reshape(1, 256, 1).repeat(4, axis=2)
+    fast, slow = _both(lambda: cp.to_uint8(cp.to_float(values)), monkeypatch)
+    assert np.array_equal(fast, values)
+    assert np.array_equal(fast, slow)
+
+
+@needs_dll
+def test_to_uint8_refuses_what_it_cannot_index_and_numpy_answers(monkeypatch):
+    monkeypatch.setattr(native, "available", lambda: True)
+    strided = np.zeros((8, 8, 4), dtype=np.float32)[:, ::2]
+    assert cp._to_uint8_native(strided) is None
+    assert cp._to_uint8_native(np.zeros((2, 2), dtype=np.float64)) is None
+    assert cp.to_uint8(strided).shape == (8, 4, 4)
+
+
 # --- the refusals -------------------------------------------------------------
 #
 # ``_over_native`` returning None is not an error path, it is the whole design:

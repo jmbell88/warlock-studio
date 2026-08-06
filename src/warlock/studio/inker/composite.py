@@ -319,7 +319,26 @@ def to_float(pixels: np.ndarray) -> np.ndarray:
     return pixels.astype(np.float32) / 255.0
 
 
+def _to_uint8_native(pixels: np.ndarray) -> np.ndarray | None:
+    """Elementwise, so the kernel wants a flat contiguous run and nothing else.
+
+    Every caller hands it a fresh array out of ``over`` or ``stack_region``, so
+    the contiguity test is a formality that costs nothing and keeps the kernel
+    free of a stride it would never use.
+    """
+    if not native.available() or pixels.dtype != np.float32:
+        return None
+    if pixels.size == 0 or not pixels.flags["C_CONTIGUOUS"]:
+        return None
+    out = np.empty(pixels.shape, dtype=np.uint8)
+    native.to_uint8_f32(pixels, out, pixels.size)
+    return out
+
+
 def to_uint8(pixels: np.ndarray) -> np.ndarray:
+    fast = _to_uint8_native(pixels)
+    if fast is not None:
+        return fast
     return np.clip(pixels * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
 
 

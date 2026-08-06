@@ -36,7 +36,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 2
+#define WARLOCKC_ABI 3
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -130,6 +130,21 @@ WARLOCKC_API void warlockc_stack_f32(const uint8_t **layers,
                                      float *out, int64_t out_stride, int64_t h,
                                      int64_t w, const float *base,
                                      int64_t base_stride);
+
+/* float32 0..1 -> uint8, `count` elements of each, both C-contiguous --
+ * composite.to_uint8, which is what every composite crosses on its way to the
+ * texture upload, the flatten and every export.
+ *
+ * A four-line expression that costs three full-size float32 temporaries: at
+ * 2048 square the reference reads and writes about 260 MB to produce 16, and
+ * it runs on the frame thread once per invalidate. Here it is one pass.
+ *
+ * NaN is out of contract on both sides rather than handled: numpy's clip
+ * propagates it and .astype(uint8) of a NaN is undefined, exactly as the cast
+ * below is. Nothing upstream can produce one -- every input traces back to a
+ * uint8 layer -- and defining it here would be a divergence, not a fix. */
+WARLOCKC_API void warlockc_to_uint8_f32(const float *pixels, uint8_t *out,
+                                        int64_t count);
 
 #ifdef __cplusplus
 }
