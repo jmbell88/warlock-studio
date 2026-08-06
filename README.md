@@ -74,6 +74,18 @@ Blender runs as a subprocess, never inside the app — `bpy` is process-global a
 
 Once a job is rigged the inspector gains a **Pose** panel: click **Edit pose** to swap the preview to the rig, click a joint to attach a rotation gizmo, and save the result under a name. Poses are forward-kinematic only — each joint's local rotation, nothing else — and each one can be downloaded as its own posed GLB, baked by Blender on first request and cached afterwards. Saving under an existing name replaces that pose rather than adding a near-duplicate.
 
+### Optional: native kernels
+
+```powershell
+pwsh native\build.ps1
+```
+
+Builds `vendor/warlockc/warlockc.dll` from the C in `native/`. Entirely optional — every kernel has a numpy implementation it falls back to, and `warlock doctor` shows a **warlockc (native kernels)** row saying which is in use.
+
+What it buys today is the mesh audit. Rasterising a silhouette is one flop per pixel of each triangle's bounding box and a dozen full-size float64 temporaries in numpy, so the kernel is 9× faster at resolution 512 and 45× at 1024 — a whole four-view audit drops from seconds to ~0.13 s. The masks are compared bit for bit against the numpy path in the tests, not approximately: the stored hole fractions feed the observation corpus, so a rounding difference would quietly make old and new entries incomparable.
+
+Needs any one of MSVC Build Tools (the "Desktop development with C++" workload), LLVM/clang, or zig; the script finds whichever is present. `WARLOCK_NATIVE=0` forces the numpy path, and `WARLOCK_NATIVE_DLL` relocates the library the way `WARLOCK_GLTFPACK` relocates gltfpack — a git worktree has no `vendor/` of its own.
+
 ### Sprite sheets
 
 Any finished mesh can be baked to a 2D sprite sheet: **poses down, eight compass directions across**. The panel previews the eight views live in the viewport so the framing, camera elevation and flat/lit choice can be judged before committing; the sheet that ships is rendered in Blender's EEVEE with a transparent film, queued like any other job.

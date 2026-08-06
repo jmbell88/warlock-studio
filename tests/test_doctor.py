@@ -74,10 +74,10 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 
 
 def test_run_checks_returns_every_check(tmp_path):
-    # Ten fixed checks plus one row per registry entry -- derived rather than
-    # hardcoded so adding a model doesn't fail an unrelated assertion.
+    # Eleven fixed checks plus one row per registry entry -- derived rather
+    # than hardcoded so adding a model doesn't fail an unrelated assertion.
     expected = (
-        10
+        11
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)

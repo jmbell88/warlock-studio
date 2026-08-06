@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import models, rigging, vram, winjob
+from . import models, native, rigging, vram, winjob
 from .config import Config
 
 MIN_FREE_DISK_GB = 5.0
@@ -39,6 +39,7 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _gguf_check(config),
         _birefnet_check(config),
         _gltfpack_check(config),
+        _warlockc_check(),
         _cuda_check(),
         _vram_check(config),
         _job_object_check(),
@@ -130,6 +131,18 @@ def _gltfpack_check(config: Config) -> Check:
         else f"not found at {config.gltfpack_exe} -- meshes ship at full reconstruction density"
     )
     return Check("gltfpack (mesh optimizer)", ok, detail, fatal=False)
+
+
+def _warlockc_check() -> Check:
+    """The native kernels: built locally, optional, and *visibly* optional.
+
+    Non-fatal for the reason gltfpack is: what it buys is speed, and every
+    caller has a numpy path it falls back to. Worth a row anyway -- vendor/ is
+    gitignored, so "the audit got slower after I moved machines" has exactly
+    one cause and no other way to see it.
+    """
+    ok, detail = native.status()
+    return Check("warlockc (native kernels)", ok, detail, fatal=False)
 
 
 def _cuda_check() -> Check:

@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import trimesh
 
+from warlock import native
 from warlock.meshaudit import DEFAULT_VIEWS, hole_fraction
 
 
@@ -180,7 +181,20 @@ def test_a_gap_touching_the_border_is_background_not_a_hole():
     assert not holes.any()
 
 
-def test_chunking_the_rasteriser_is_bit_identical_to_one_pass(sphere_glb, monkeypatch):
+@pytest.fixture
+def numpy_only(monkeypatch):
+    """Force the numpy rasteriser regardless of whether the DLL is built.
+
+    Every behavioural test above runs on whichever path this machine has; the
+    ones that are *about* the numpy path have to pin it, or they quietly stop
+    testing anything the day a DLL appears.
+    """
+    monkeypatch.setattr(native, "available", lambda: False)
+
+
+def test_chunking_the_rasteriser_is_bit_identical_to_one_pass(
+    sphere_glb, monkeypatch, numpy_only
+):
     """The (n, k, k) working set is chunked to bound a commit spike on a
     500k-triangle mesh. `covered` is written in place, so the chunk size must
     be invisible in the result -- forcing it down to one triangle per pass is
@@ -191,3 +205,93 @@ def test_chunking_the_rasteriser_is_bit_identical_to_one_pass(sphere_glb, monkey
     monkeypatch.setattr(meshaudit, "_BATCH_MAX_CELLS", 1)
     chunked = hole_fraction(sphere_glb, resolution=256)
     assert chunked == unchunked
+
+
+# --- the native rasteriser ---------------------------------------------------
+#
+# The bar is a bit-identical coverage mask, not a similar one. Anything looser
+# would let a rounding difference move a triangle edge by a pixel, which is
+# invisible on a sphere and is exactly what the hole measurement is made of --
+# and the stored numbers feed observations and findings, so a drift would
+# quietly make old and new corpus entries incomparable.
+
+needs_dll = pytest.mark.skipif(not native.available(), reason="warlockc.dll not built")
+
+
+def _both_paths(positions, faces, direction, resolution, monkeypatch):
+    import warlock.meshaudit as meshaudit
+
+    monkeypatch.setattr(native, "available", lambda: True)
+    fast = meshaudit._coverage(positions, faces, direction, resolution)
+    monkeypatch.setattr(native, "available", lambda: False)
+    slow = meshaudit._coverage(positions, faces, direction, resolution)
+    return fast, slow
+
+
+@needs_dll
+@pytest.mark.parametrize("resolution", [64, 256, 512])
+def test_the_native_rasteriser_matches_numpy_bit_for_bit(sphere_glb, monkeypatch, resolution):
+    from warlock.meshaudit import load_mesh
+
+    positions, faces = load_mesh(sphere_glb)
+    fast, slow = _both_paths(positions, faces, (0.3, 0.7, 1.0), resolution, monkeypatch)
+    assert np.array_equal(fast, slow)
+
+
+@needs_dll
+def test_the_two_rasterisers_agree_on_a_pierced_mesh(tmp_path, monkeypatch):
+    """The mesh the measurement exists for: the disagreement that matters is
+    one at a hole boundary, and a solid sphere has no boundaries to disagree at."""
+    from warlock.meshaudit import load_mesh
+
+    sphere = trimesh.creation.icosphere(subdivisions=4, radius=0.5)
+    keep = np.abs(sphere.face_normals[:, 2]) < 0.9
+    path = tmp_path / "pierced.glb"
+    trimesh.Trimesh(vertices=sphere.vertices, faces=sphere.faces[keep]).export(path)
+
+    positions, faces = load_mesh(path)
+    for direction in DEFAULT_VIEWS:
+        fast, slow = _both_paths(positions, faces, direction, 256, monkeypatch)
+        assert np.array_equal(fast, slow), f"disagreement from {direction}"
+
+
+@needs_dll
+@pytest.mark.parametrize("seed", range(6))
+def test_random_triangle_soup_rasterises_identically(monkeypatch, seed):
+    """Slivers, huge triangles, and triangles hanging off every edge.
+
+    A real mesh exercises neither the clamp on the write coordinate nor the
+    sub-pixel splat much; random soup spanning well outside the frame is what
+    reaches the branches the two implementations could differ on.
+    """
+    rng = np.random.default_rng(seed)
+    positions = rng.uniform(-1.5, 1.5, size=(300, 3))
+    # Deliberately squash one axis on half the triangles: near-degenerate
+    # slivers are where an edge function's sign is decided in the last bits.
+    positions[::2, 1] *= 1e-3
+    faces = rng.integers(0, len(positions), size=(400, 3))
+    faces = faces[(faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2])]
+
+    fast, slow = _both_paths(positions, faces, (0.0, 0.0, 1.0), 128, monkeypatch)
+    assert np.array_equal(fast, slow)
+
+
+@needs_dll
+def test_a_mesh_with_no_faces_is_empty_on_both_paths(monkeypatch):
+    positions = np.zeros((0, 3))
+    faces = np.zeros((0, 3), dtype=np.int64)
+    fast, slow = _both_paths(positions, faces, (0.0, 0.0, 1.0), 32, monkeypatch)
+    assert not fast.any()
+    assert np.array_equal(fast, slow)
+
+
+@needs_dll
+def test_the_whole_measurement_agrees_end_to_end(sphere_glb, monkeypatch):
+    """Not just the mask: the dict that gets stored on the job."""
+    import warlock.meshaudit as meshaudit
+
+    monkeypatch.setattr(native, "available", lambda: True)
+    fast = meshaudit.hole_fraction(sphere_glb, resolution=256)
+    monkeypatch.setattr(native, "available", lambda: False)
+    slow = meshaudit.hole_fraction(sphere_glb, resolution=256)
+    assert fast == slow

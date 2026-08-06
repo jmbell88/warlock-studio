@@ -38,6 +38,8 @@ from typing import Any
 import numpy as np
 import trimesh
 
+from . import native
+
 # Front, two three-quarter views, and one from below. The underside is
 # consistently the worst case: it is the least constrained by the reference
 # image, so it is where the shape flow hallucinates most.
@@ -138,8 +140,46 @@ def _coverage(
     means the result cannot depend on a near/far choice.
     """
     covered = np.zeros((resolution, resolution), dtype=bool)
-    if len(faces) == 0:
+    projected = _project(positions, faces, direction, resolution)
+    if projected is None:
         return covered
+    a, b, c, area2 = projected
+
+    if native.available():
+        # The kernel takes one column per coordinate, so the (n, 2) stacks are
+        # split here rather than in C. ``ascontiguousarray`` is not decoration:
+        # ``a[:, 0]`` is a strided view over interleaved pairs, and a pointer
+        # to it would read every other value.
+        native.rasterise(
+            *(
+                np.ascontiguousarray(col)
+                for col in (a[:, 0], a[:, 1], b[:, 0], b[:, 1], c[:, 0], c[:, 1])
+            ),
+            np.ascontiguousarray(area2),
+            # bool and uint8 are the same byte; the view shares the buffer, so
+            # the kernel writes into ``covered`` itself.
+            covered.view(np.uint8),
+        )
+        return covered
+
+    _fill(covered, a, b, c, area2, resolution)
+    return covered
+
+
+def _project(
+    positions: np.ndarray,
+    faces: np.ndarray,
+    direction: tuple[float, float, float],
+    resolution: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Triangles in pixel space, degenerates dropped. None if there are none.
+
+    Cheap and vectorised, so it stays in numpy whichever fill runs: this is a
+    few passes over the vertex array, against a rasteriser that touches every
+    pixel of every triangle's bounding box.
+    """
+    if len(faces) == 0:
+        return None
 
     right, up = _screen_basis(direction)
     sx, sy = positions @ right, positions @ up
@@ -147,7 +187,7 @@ def _coverage(
     hi = np.array([sx.max(), sy.max()])
     span = float((hi - lo).max())
     if span <= 0:
-        return covered
+        return None
     pad = span * 0.06
     scale = (resolution - 1) / (span + 2 * pad)
     px = (sx - (lo[0] - pad)) * scale
@@ -159,9 +199,24 @@ def _coverage(
     area2 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
     keep = area2 != 0
     a, b, c, area2 = a[keep], b[keep], c[keep], area2[keep]
-    if len(a) == 0:
-        return covered
+    return None if len(a) == 0 else (a, b, c, area2)
 
+
+def _fill(
+    covered: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    c: np.ndarray,
+    area2: np.ndarray,
+    resolution: int,
+) -> None:
+    """The numpy rasteriser: the reference the kernel is measured against.
+
+    Kept whole rather than deleted once ``warlockc`` existed. It is the
+    fallback on a machine with no compiler, and it is what
+    ``test_the_native_rasteriser_matches_numpy_bit_for_bit`` compares to --
+    a native path with no reference is a native path nobody can check.
+    """
     last = resolution - 1
     x0 = np.clip(np.floor(np.minimum(np.minimum(a[:, 0], b[:, 0]), c[:, 0])), 0, last).astype(int)
     x1 = np.clip(np.ceil(np.maximum(np.maximum(a[:, 0], b[:, 0]), c[:, 0])), 0, last).astype(int)
@@ -181,7 +236,7 @@ def _coverage(
 
     rest = np.flatnonzero(~subpixel)
     if len(rest) == 0:
-        return covered
+        return
 
     spans = np.maximum(span_x[rest], span_y[rest]) + 1
     batched = rest[spans <= _BATCH_MAX_SPAN]
@@ -199,7 +254,6 @@ def _coverage(
             y0[i : i + 1],
             int(max(span_x[i], span_y[i]) + 1),
         )
-    return covered
 
 
 def _rasterise_batch(
