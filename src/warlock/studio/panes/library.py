@@ -30,12 +30,12 @@ def draw(ctx: Any) -> None:
     # select-all acts on exactly this list and computing it twice a frame to
     # keep the old order would be paying for the same filter pass twice.
     jobs = ctx.cache.visible(ctx.state.filters)
+    # Draws the (?) too, on the sort row that reserves the width for it --
+    # ``render.help_button`` right-aligns with an unconditional ``same_line``,
+    # so where it lands is a property of the row above it and belongs with the
+    # code that lays that row out. Chapter 08's body has no other way in from
+    # here: the Profiles panel's marker anchors at #profiles.
     _filters(ctx, jobs)
-    # Its own row, because ``render.help_button`` right-aligns itself with
-    # ``same_line(cursor + avail - 26)`` and that only computes where a line
-    # starts. Chapter 08's body has no other way in from here: the Profiles
-    # panel's marker anchors at #profiles.
-    manual_render.help_button(ctx, "library")
     imgui.separator()
     if ctx.cache.error:
         widgets.text_colored(theme.ERR, "Could not read the job list.")
@@ -118,9 +118,13 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
         ],
         width=half,
     )
-    # The two square buttons share the sort row, so what is left for the combo
-    # is what they and their gaps do not take.
-    buttons = 2 * (imgui.get_frame_height() + spacing)
+    # The three square buttons share the sort row, so what is left for the
+    # combo is what they and their gaps do not take. Three, not two: the (?)
+    # right-aligns itself onto whatever line is current, so a row that reserved
+    # room for only the star and the tick put it exactly on top of the tick --
+    # same pixels, and the later item takes the click, so the select-all opened
+    # the manual instead.
+    buttons = 3 * (imgui.get_frame_height() + spacing)
     filters.sort = widgets.combo(
         "##sort",
         filters.sort,
@@ -139,6 +143,10 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
         imgui.pop_style_color(2)
     imgui.same_line()
     _select_all(ctx, jobs)
+    # Before ``_failures``, which starts a line of its own: the (?) joins the
+    # line that is current when it is called, and joining that one would put it
+    # on a row that is not always there.
+    manual_render.help_button(ctx, "library")
     _failures(ctx)
 
 

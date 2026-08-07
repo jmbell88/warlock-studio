@@ -1277,3 +1277,62 @@ def test_the_bulk_bar_says_how_much_of_the_selection_is_off_screen(app_ctx, imgu
     assert "1 of them are not in the list you can see." in library._delete_message(2, 1)
     # And with nothing hidden it stays the sentence it always was.
     assert library._delete_message(2, 0) == "2 jobs and everything derived from them."
+
+
+def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
+    app_ctx, imgui_ctx
+):
+    """The other half of the overflow guard, and the half that misses.
+
+    ``same_line`` past the edge draws a control where it cannot be seen;
+    ``same_line`` onto a spot another control already holds draws it where it
+    cannot be *told apart*, and the later item takes the click. The library's
+    (?) landed exactly on its select-all tick -- restored as a pair (the
+    manual integrity test enforces the entry and the call site) but never
+    looked at, because ``render.help_button`` right-aligns with an
+    unconditional ``same_line`` and the filter row had already put the tick at
+    the right edge. So the tick's clicks opened the manual.
+
+    Icon buttons only: they are square, unlabelled and interchangeable at a
+    glance, which is what makes an overlap between two of them invisible.
+    """
+    imgui, _renderer = imgui_ctx
+
+    from warlock.studio import layout as layout_mod
+    from warlock.studio import widgets as widgets_mod
+    from warlock.studio.manual import render as manual_render
+    from warlock.studio.panes import library
+    from warlock.studio.tokens import sp
+
+    _seeded(app_ctx)
+    rects: list[tuple[str, tuple[float, float, float, float]]] = []
+    real = widgets_mod.icon_button
+
+    def spy(label, *args, **kwargs):
+        result = real(label, *args, **kwargs)
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        rects.append((label.split("##")[-1], (lo.x, lo.y, hi.x, hi.y)))
+        return result
+
+    widgets_mod.icon_button = spy
+    manual_render.widgets.icon_button = spy
+    try:
+        imgui.new_frame()
+        imgui.set_next_window_size((sp(layout_mod.SIDEBAR_W) + 24, 900))
+        imgui.begin("##host")
+        if layout_mod.pane_child("library", (sp(layout_mod.SIDEBAR_W), 0)):
+            library.draw(app_ctx)
+        imgui.end_child()
+        imgui.end()
+        imgui.render()
+    finally:
+        widgets_mod.icon_button = real
+        manual_render.widgets.icon_button = real
+
+    for i, (name_a, a) in enumerate(rects):
+        for name_b, b in rects[i + 1 :]:
+            overlaps = a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+            assert not overlaps, (
+                f"{name_a} at {a} and {name_b} at {b} occupy the same pixels; "
+                "the one drawn second takes the click"
+            )

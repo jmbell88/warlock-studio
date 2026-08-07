@@ -243,8 +243,40 @@ performs.
 start). Every new test was run against the unfixed code first and confirmed to fail for the stated
 reason. The previously flaky cache test passed 20/20.
 
-One step is left for you, because it needs eyes rather than assertions: open the app and confirm the
-Clay merge dialog reads `0.0001` rather than `0.000`; that `Ctrl+A` in object mode leaves a hidden
-object unselected and greys **Merge Objects...**; that the library shows its (?) again and its star
-and tick are on screen; and that ticking select-all then switching the status filter makes the bulk
-bar report how many are no longer shown.
+## The eyes-on pass — done, and it found one
+
+The four remaining checks needed eyes rather than assertions, so each UI state was driven through
+the real panes and the real backend and rendered to a PNG off the smoke fixtures' framebuffer. Three
+passed as described:
+
+- The Clay merge dialog reads **`0.0001`**, with its warn line and Apply/Cancel intact. (The snap
+  grid field picks up the same derived format and reads `0.1250`.)
+- `Ctrl+A` in object mode leaves the hidden object out — asserted, not just looked at:
+  `uids[2] not in doc.selection` and `len(selection) == 2` — and **Merge Objects** draws visibly
+  greyed while Duplicate, Bake Transform, Mirror X/Y/Z and Smooth beside it stay live.
+- Ticking select-all and switching the status filter to *failed* makes the bulk bar read
+  **`4 selected (2 not shown)`**, and the delete confirm repeats it.
+
+**The library's (?) did not.** Item D restored the pair the manual integrity test enforces — the
+`HELP_TARGETS` entry and the call site — and that test only asks whether both exist, so nothing
+noticed *where* the button landed. `render.help_button` right-aligns with an unconditional
+`same_line(cursor + avail - 26)`, and the filter row reserved width for two square buttons and had
+already put the select-all tick at the right edge. Measured: tick at `(342, 166)-(367, 191)`, (?) at
+`(341, 166)-(366, 191)`. The same pixels. The (?) was drawn second, so it took the tick's clicks —
+pressing select-all opened the manual.
+
+Fixed where the row is laid out rather than in `help_button`, which every other pane calls against a
+line that has room: the sort row now reserves three squares and `_filters` draws the (?) itself,
+before `_failures` (whose row is not always there). All three are now distinct and inside the
+sidebar's edge.
+
+This is the same bug shape as Pass 1 and it escaped Pass 1's guard, because
+`test_no_pane_continues_a_line_that_has_no_room_left` asks whether a control is drawn past the right
+edge and this one was drawn *on top of* another, and because
+`test_the_library_filter_row_fits_the_sidebar` exercises `_filters` while the (?) was called from
+`draw`. So the guard has a second half now:
+`test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other` collects every icon button's
+rect through a real frame and fails on any overlapping pair — confirmed red against the unfixed
+code with exactly the rects above.
+
+Nothing in this document is outstanding.
