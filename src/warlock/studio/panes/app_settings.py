@@ -108,8 +108,6 @@ def _layout(ctx: Any) -> None:
         widgets.muted("No layout to reset.")
         return
     if imgui.button("Reset pane sizes"):
-        lay.sidebar_w = 340.0
-        lay.inspector_w = 340.0
         lay.settings_share = 0.55
         lay.save()
         ctx.toast("Pane sizes reset.")
@@ -119,9 +117,7 @@ def _layout(ctx: Any) -> None:
         # default-open when it finds nothing stored.
         ctx.settings.set("panels_open", {})
         ctx.toast("Section states reset.")
-    widgets.muted(
-        f"Sidebars are clamped to {int(layout_mod.SIDEBAR_MIN)}-{int(layout_mod.SIDEBAR_MAX)}px."
-    )
+    widgets.muted(f"Sidebars are fixed at {int(layout_mod.SIDEBAR_W)} px.")
 
 
 # --- models -----------------------------------------------------------------

@@ -19,8 +19,8 @@ raises the other side.
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
 job and buys back roughly 7 GB of headroom. See [VRAM modes](11-configuration.md#vram-modes).
 
-If it still fails, drop the geometry resolution: **Detail** in the 3D pane, choosing "Indie desktop"
-or "Mobile / VR" rather than "Hero asset" — see
+If it still fails, drop the geometry resolution: **Detail** in the 3D pane, choosing "2D" rather
+than "3D" — see
 [the mapping](03-generating-meshes.md#mesh-parameters).
 
 **Afterwards.** A hard crash inside CUDA or the allocator never reaches a Python handler, so it will

@@ -115,7 +115,7 @@ async def test_guidance_is_folded_into_the_image_prompt(worker):
     job_id = worker.store.create(
         "text",
         "a plasma rifle",
-        {"seed": 1, "resolution": 512, "genre": "scifi", "art_style": "lowpoly"},
+        {"seed": 1, "resolution": 512, "genre": "scifi", "art_style": "ps1"},
     )
     worker.start()
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
@@ -126,7 +126,7 @@ async def test_guidance_is_folded_into_the_image_prompt(worker):
     prompt = worker._text2image.prompts[0]
     assert prompt.startswith("a plasma rifle, ")
     assert guidance.GENRES["scifi"].prompt in prompt
-    assert guidance.ART_STYLES["lowpoly"].prompt in prompt
+    assert guidance.ART_STYLES["ps1"].prompt in prompt
     # Recorded on the job so a finished asset can explain how it was made.
     assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
 

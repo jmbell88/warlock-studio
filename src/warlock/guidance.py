@@ -34,7 +34,7 @@ SIZE_MAX_M = 100.0
 
 # Fallback when no category is chosen and so no default size applies.
 DEFAULT_SIZE_M = 1.0
-DEFAULT_PLATFORM = "desktop"
+DEFAULT_PLATFORM = "3d"
 
 # How trellis-server mattes the input image. Not an Option table: these are
 # server capabilities, not prompt fragments, so they never reach compose_prompt.
@@ -78,25 +78,30 @@ GENRES = _table(
     Option("cartoon", "Cartoon", "playful cartoon design, exaggerated friendly proportions"),
 )
 
+# Console eras rather than abstract style names: "PS1 era" tells a user what
+# the result will look like in a way "Low-poly" does not, and the ladder from
+# NES to PS5 is itself the fidelity axis.
+#
+# Deliberately no literal "pixel art" token in any fragment -- this binds the
+# nes and snes entries in particular. At 512/1024 SDXL renders fake chunky
+# pixels that alias under the real NEAREST downscale in asset2d.pixel, and the
+# same reference feeds trellis on promotion. What survives downscaling is flat
+# shading and a bold silhouette.
 ART_STYLES = _table(
     Option(
-        "realistic", "Realistic PBR",
-        "photorealistic PBR materials, physically accurate surfaces",
+        "nes", "NES era",
+        "flat colour shading, bold readable silhouette, clean dark outlines",
     ),
-    Option("stylized", "Stylized", "stylized game art, bold shapes, slightly exaggerated forms"),
-    Option("lowpoly", "Low-poly", "low-poly, flat-shaded faceted surfaces, minimal detail"),
+    Option("snes", "SNES era", "vivid saturated colours, bold simple shapes"),
+    Option("ps1", "PS1 era", "low-poly, flat-shaded faceted surfaces, minimal detail"),
     Option(
-        "handpainted", "Hand-painted",
+        "ps2", "PS2 era",
         "hand-painted texture style, painterly brushwork, baked lighting",
     ),
-    Option("toon", "Toon", "cel-shaded toon look, clean flat colours, crisp outlines"),
-    # Deliberately no literal "pixel art" token: at 512/1024 SDXL renders fake
-    # chunky pixels that alias under the real NEAREST downscale in
-    # asset2d.pixel, and the same reference feeds trellis on promotion. What
-    # survives downscaling is flat shading and a bold silhouette.
+    Option("ps3", "PS3/360 era", "stylized realistic game art, strong surface detail"),
     Option(
-        "pixelart", "Pixel art",
-        "flat colour shading, bold readable silhouette, clean dark outlines",
+        "ps5", "PS5 era",
+        "photorealistic PBR materials, physically accurate surfaces",
     ),
 )
 
@@ -113,21 +118,20 @@ CATEGORIES = _table(
     Option("consumable", "Consumable", "a small consumable pickup item", default_size_m=0.15),
 )
 
+# What the asset is *for*, which is the only thing the user actually knows at
+# the point of asking: a 2D asset is going to be seen flat and small, a 3D one
+# in a scene. The geometry resolution follows from that rather than from a
+# hardware tier the user has to translate.
 PLATFORMS = _table(
     Option(
-        "mobile", "Mobile / VR",
-        "clean readable silhouette, simple forms, minimal fine detail",
+        "2d", "2D",
+        "clean readable silhouette, simple flat forms",
         resolution=512,
     ),
     Option(
-        "desktop", "Indie desktop",
+        "3d", "3D",
         "moderate surface detail, clear material separation",
         resolution=1024,
-    ),
-    Option(
-        "hero", "Hero asset",
-        "intricate fine surface detail, rich material variation, high fidelity",
-        resolution=1536,
     ),
 )
 
@@ -230,6 +234,32 @@ _OPTION_TABLES: dict[str, dict[str, Option]] = {
     "mood": MOODS,
 }
 
+# Keys that used to exist, mapped onto the ones that replaced them. Every job
+# row already on disk carries the old spellings, and rerun/promotion re-run
+# normalize() over stored params -- without this a stored ``platform: "hero"``
+# would 400 rather than reroll. normalize() writes the canonical key back, so
+# params migrate the first time a job is touched.
+#
+# The one accepted cost: findings and verdict buckets split between the old and
+# the new key, because a vector recorded before the rename is a different
+# string. Evidence gathered under the old names simply stops accumulating.
+_LEGACY_ALIASES: dict[str, dict[str, str]] = {
+    "platform": {"mobile": "2d", "desktop": "3d", "hero": "3d"},
+    "art_style": {
+        "realistic": "ps5",
+        "stylized": "ps3",
+        "lowpoly": "ps1",
+        "handpainted": "ps2",
+        "toon": "snes",
+        "pixelart": "nes",
+    },
+}
+
+
+def _canonical(field: str, value: str) -> str:
+    """The current key for a value, which for anything current is itself."""
+    return _LEGACY_ALIASES.get(field, {}).get(value, value)
+
 # The model-selection fields are validated and stored here so the API gets its
 # 400-on-unknown from the same place as everything else, but they are owned by
 # models.py and are deliberately absent from _PROMPT_FIELDS: a checkpoint is
@@ -267,7 +297,7 @@ def _lookup(field: str, value: Any) -> Any | None:
     if value is None or value == "":
         return None
     table = _TABLES[field]
-    option = table.get(str(value))
+    option = table.get(_canonical(field, str(value)))
     if option is None:
         raise ValueError(f"unknown {field} {value!r}; expected one of {sorted(table)}")
     return option
@@ -428,7 +458,7 @@ def compose_prompt(
     for field in _PROMPT_FIELDS:
         if fields is not None and field not in fields:
             continue
-        option = _TABLES[field].get(str(params.get(field, "")))
+        option = _TABLES[field].get(_canonical(field, str(params.get(field, ""))))
         if option is not None:
             parts.append(option.prompt)
     return ", ".join(p for p in parts if p)
@@ -447,8 +477,8 @@ PRESETS: tuple[dict[str, Any], ...] = (
         "fields": {
             "category": "prop",
             "genre": "fantasy",
-            "art_style": "handpainted",
-            "platform": "desktop",
+            "art_style": "ps2",
+            "platform": "3d",
             "base_model": "sdxl",
             "style_lora": "render3d",
             "material": "wood",
@@ -464,8 +494,8 @@ PRESETS: tuple[dict[str, Any], ...] = (
         "fields": {
             "category": "character",
             "genre": "fantasy",
-            "art_style": "lowpoly",
-            "platform": "mobile",
+            "art_style": "ps1",
+            "platform": "2d",
             "base_model": "sdxl",
             "style_lora": "ps1",
             "silhouette": "slender",
@@ -481,8 +511,8 @@ PRESETS: tuple[dict[str, Any], ...] = (
         "fields": {
             "category": "weapon",
             "genre": "scifi",
-            "art_style": "realistic",
-            "platform": "hero",
+            "art_style": "ps5",
+            "platform": "3d",
             "base_model": "playground",
             "material": "steel",
             "condition": "pristine",
@@ -497,8 +527,8 @@ PRESETS: tuple[dict[str, Any], ...] = (
         "fields": {
             "category": "consumable",
             "genre": "modern",
-            "art_style": "stylized",
-            "platform": "mobile",
+            "art_style": "ps3",
+            "platform": "2d",
             "base_model": "turbo",
             "material": "fabric",
             "condition": "pristine",

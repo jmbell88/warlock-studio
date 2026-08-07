@@ -309,25 +309,31 @@ def test_toasts_and_dialogs_build(app_ctx, imgui_ctx):
 
 
 def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
-    """The real layout: three panes side by side, as main.py assembles them."""
+    """The real layout: three panes side by side, as main.py assembles them.
+
+    Through ``layout.pane_child`` rather than ``begin_child``, because that is
+    what main.py calls now and a style var pushed and popped around begin is
+    exactly the kind of thing that only fails inside a real frame.
+    """
+    from warlock.studio import layout as layout_mod
     from warlock.studio.panes import inspector, library, overlay, settings_2d
 
     _seeded(app_ctx)
     imgui, renderer = imgui_ctx
 
     def build():
-        imgui.begin_child("settings", (340, 0), imgui.ChildFlags_.borders.value)
+        layout_mod.pane_child("settings", (340, 0))
         settings_2d.draw(app_ctx)
         imgui.separator()
         library.draw(app_ctx)
         imgui.end_child()
         imgui.same_line()
-        imgui.begin_child("viewport", (400, 0), imgui.ChildFlags_.borders.value)
+        layout_mod.pane_child("viewport", (400, 0))
         overlay.toolbar(app_ctx)
         overlay.placeholder(app_ctx)
         imgui.end_child()
         imgui.same_line()
-        imgui.begin_child("inspector", (340, 0), imgui.ChildFlags_.borders.value)
+        layout_mod.pane_child("inspector", (340, 0))
         inspector.draw(app_ctx)
         imgui.end_child()
 

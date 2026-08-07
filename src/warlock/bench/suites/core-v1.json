@@ -254,7 +254,7 @@
       "guidance": {
         "category": "character",
         "genre": "fantasy",
-        "art_style": "stylized"
+        "art_style": "ps3"
       },
       "tags": [
         "humanoid",
@@ -314,7 +314,7 @@
       "guidance": {
         "category": "character",
         "genre": "scifi",
-        "art_style": "realistic"
+        "art_style": "ps5"
       },
       "tags": [
         "humanoid",
@@ -342,7 +342,7 @@
       "guidance": {
         "category": "character",
         "genre": "cartoon",
-        "art_style": "toon"
+        "art_style": "snes"
       },
       "tags": [
         "humanoid",

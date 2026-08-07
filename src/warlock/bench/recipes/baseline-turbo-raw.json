@@ -4,7 +4,7 @@
   "notes": "The control. Every other recipe is read as a difference from this one.",
   "guidance": {
     "base_model": "turbo",
-    "platform": "desktop"
+    "platform": "3d"
   },
   "profile": "raw"
 }

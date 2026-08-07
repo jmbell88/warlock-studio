@@ -241,7 +241,7 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         ),
     ),
     StyleLora(
-        # Pairs with the existing lowpoly art style: chunky untextured geometry
+        # Pairs with the PS1-era art style: chunky untextured geometry
         # is exactly what TRELLIS reconstructs most cleanly.
         "ps1",
         "PS1 / low-poly game",

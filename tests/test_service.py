@@ -251,11 +251,11 @@ def test_a_promotion_is_a_child_of_its_reference(svc):
 def test_a_platform_override_drops_the_resolution_it_implied(svc):
     ref = _reference(svc, resolution=512)
     assert svc.store.get(ref)["params"]["resolution"] == 512
-    out = svc_jobs.promote_to_model(svc, ref, platform="hero")
+    out = svc_jobs.promote_to_model(svc, ref, platform="3d")
     params = svc.store.get(out["id"])["params"]
     # Re-derived from the new platform, never left contradicting it.
-    assert params["platform"] == "hero"
-    assert params["resolution"] == 1536
+    assert params["platform"] == "3d"
+    assert params["resolution"] == 1024
 
 
 def test_an_explicit_false_clears_an_inherited_rig_request(svc):

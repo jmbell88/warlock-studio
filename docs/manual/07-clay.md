@@ -13,6 +13,17 @@ The layout follows the rest of the app: tools and the selected object's properti
 viewport in the middle, the outliner and the document panel on the right. Several documents stay
 open at once.
 
+## Starting a document
+
+With nothing open, the middle column offers **New model** and **Open a file...**, and lists the
+documents you had open recently — clicking one reopens it, and hovering it shows the full path. The
+document panel on the right offers the same two buttons. Once a document is open, `Ctrl+N` and
+`Ctrl+O` do the same two things from the keyboard.
+
+Choosing **Clay** from the Home screen opens an empty document for you when there is nothing open
+already. When there is, it leaves your documents exactly as they were — the documents *are* the
+work, and entering the mode is not a reason to disturb them.
+
 ## Adding a primitive
 
 The **add** row has one button per primitive: box, plane, cylinder, cone, UV sphere and torus.

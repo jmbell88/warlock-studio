@@ -140,9 +140,10 @@ apply. It takes effect as you drag it, but the font atlas is baked once at start
 text only becomes properly crisp at the new size after a restart — everything is drawn at the right
 size immediately either way. *Show frame rate* is the same toggle as `F10`.
 
-**Layout.** *Reset pane sizes* puts the sidebar, the inspector and the split between the form and
-the library back to their defaults, undoing any dragging of the pane dividers. *Reset collapsed
-sections* re-opens every section that has been collapsed anywhere in the app.
+**Layout.** *Reset pane sizes* puts the split between the form and the library back to its
+default, undoing any dragging of that divider. The sidebars themselves are a fixed 300 px and are
+not draggable. *Reset collapsed sections* re-opens every section that has been collapsed anywhere in
+the app.
 
 **Models.** A read-only list of the image models and style LoRAs the app knows about, marking any
 whose weights are missing, plus whether rigging is available. It is the same information the startup
@@ -151,7 +152,8 @@ downloads by design — see [Adding an image model](15-extending.md#adding-an-im
 there is nothing to install from here.
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
-saved profiles and settings presets, the pane sizes, and the pixel-art export preferences — the
+saved profiles and settings presets, the sidebar's internal split, and the pixel-art export
+preferences — the
 size and palette set in an asset's [Pixel art](02-generating-references.md#pixel-art) section, which
 are the app's preferences rather than any one job's and so apply to whichever asset you look at
 next.

@@ -85,8 +85,8 @@ Once you are in the workspace, the window is three columns:
 
 - **The left sidebar** is two stacked panels, not one scrolling column. The upper panel is the
   settings form for the current mode; the lower panel is the asset library — every job you have
-  ever run, with its filters. The divider between them can be dragged, as can the divider between
-  the sidebar and the middle column.
+  ever run, with its filters. The divider between them can be dragged; the sidebars themselves are
+  a fixed width.
 - **The middle column** is the viewport: the interactive 3D preview, or the reference image in 2D
   mode, or the canvas in Inker mode. A small toolbar sits over it with the framing, wireframe and
   turntable toggles, and — on a finished reference in 2D mode — the **Open in Inker** button.

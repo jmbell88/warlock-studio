@@ -1,13 +1,15 @@
-"""Resizable pane widths, persisted between runs.
+"""The three-column skeleton's measurements.
 
-The three-column skeleton stays the product's shape -- there is no docking and
-imgui's own ini file stays disabled -- but the two sidebars and the sidebar's
-internal split are draggable, and what the user drags is remembered through
-the same debounced :class:`Settings` machinery every other preference uses.
+There is no docking and imgui's own ini file stays disabled. The two sidebars
+are a **fixed** ``SIDEBAR_W`` wide rather than draggable: they hold forms, and
+a form has one width that reads well -- what a drag bought was a way to make
+the app look broken. The one split that survives is the sidebar's *internal*
+horizontal one (``settings_share``), because the two stacked scrollers there
+genuinely trade against each other, and that is remembered through the same
+debounced :class:`Settings` machinery every other preference uses.
 
-Widths are stored in *design* pixels (divided by ``tokens.SCALE`` on save,
-multiplied on load), so a settings file carried between a 100% and a 150%
-monitor keeps meaning "a sidebar this wide" rather than drifting.
+Sizes are in *design* pixels, multiplied by ``tokens.SCALE`` at use, so they
+keep meaning "a sidebar this wide" on a 150% monitor rather than drifting.
 """
 
 from __future__ import annotations
@@ -19,27 +21,18 @@ from imgui_bundle import imgui
 from . import theme, tokens
 from .tokens import sp
 
-SIDEBAR_MIN, SIDEBAR_MAX = 280.0, 480.0
+SIDEBAR_W = 300.0
+PANE_PADDING = 5.0  # between a pane's border and its content
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
 
 
 class Layout:
-    """The user's pane sizes, in design pixels."""
+    """The one pane proportion the user still controls."""
 
     def __init__(self, settings: Any) -> None:
         self._settings = settings
         stored = settings.get("layout") or {}
-
-        def width(key: str) -> float:
-            try:
-                value = float(stored.get(key, 340.0))
-            except (TypeError, ValueError):
-                value = 340.0
-            return min(max(value, SIDEBAR_MIN), SIDEBAR_MAX)
-
-        self.sidebar_w = width("sidebar_w")
-        self.inspector_w = width("inspector_w")
         try:
             share = float(stored.get("settings_share", 0.55))
         except (TypeError, ValueError):
@@ -47,14 +40,37 @@ class Layout:
         self.settings_share = min(max(share, SHARE_MIN), SHARE_MAX)
 
     def save(self) -> None:
-        self._settings.set(
-            "layout",
-            {
-                "sidebar_w": round(self.sidebar_w, 1),
-                "inspector_w": round(self.inspector_w, 1),
-                "settings_share": round(self.settings_share, 3),
-            },
-        )
+        # Only the surviving key: Settings.set replaces the whole dict, so the
+        # stale sidebar_w/inspector_w a settings file may still carry are gone
+        # the first time anything saves.
+        self._settings.set("layout", {"settings_share": round(self.settings_share, 3)})
+
+
+def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -> bool:
+    """A bordered pane child with ``PANE_PADDING`` between its edge and content.
+
+    The padding is pushed and popped around ``begin_child`` alone: window
+    padding latches at begin, so a popup or tooltip opened *inside* the pane
+    keeps the theme's own padding rather than inheriting this one. Pushing it
+    globally in theme.py would shrink every modal in the app.
+    """
+    pad = sp(PANE_PADDING)
+    imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
+    open_ = imgui.begin_child(pane_id, size, imgui.ChildFlags_.borders.value, window_flags)
+    imgui.pop_style_var()
+    return open_
+
+
+def centre_width() -> float:
+    """What is left for the centre pane once the right sidebar is reserved.
+
+    Called with the cursor between the left sidebar and the centre, so the
+    available width still contains the centre, one item spacing and the right
+    sidebar. The right sidebar itself is then sized ``(0, h)`` and resolves to
+    ``SIDEBAR_W`` because this reserved exactly that.
+    """
+    spacing = imgui.get_style().item_spacing.x
+    return max(imgui.get_content_region_avail().x - (sp(SIDEBAR_W) + spacing), sp(300))
 
 
 def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> float:

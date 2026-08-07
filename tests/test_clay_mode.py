@@ -654,3 +654,32 @@ def test_editing_an_asset_with_no_mesh_raises_rather_than_opening_nothing(
     ctx = FakeCtx(_ImportSvc(tmp_path))
     with pytest.raises(FileNotFoundError):
         clay_mode.edit_asset_in_clay(ctx, {"id": "0123456789ef", "name": "Empty"})
+
+
+# --- the way in -------------------------------------------------------------
+
+
+def test_the_home_tile_mints_a_document_when_clay_is_empty() -> None:
+    """The tile says "model something", so arriving with nothing open and no
+    obvious way to begin is a dead end."""
+    from warlock.studio.panes import landing
+
+    ctx = FakeCtx()
+    landing.start_clay(ctx)
+    assert ctx.state.mode == "clay"
+    state = clay_mode.ensure(ctx)
+    assert len(state.docs) == 1
+    assert state.active is not None
+    assert state.active.title == "Untitled"
+
+
+def test_the_home_tile_opens_nothing_over_work_already_there() -> None:
+    """The other half of the contract Inker and Clay share: the documents *are*
+    the work, so entering the mode must leave them exactly as they were."""
+    from warlock.studio.panes import landing
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    landing.start_clay(ctx)
+    state = clay_mode.ensure(ctx)
+    assert [doc.uid for doc in state.docs] == [tab.uid]

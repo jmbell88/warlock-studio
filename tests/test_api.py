@@ -223,16 +223,16 @@ def test_guidance_is_stored_on_the_job(svc):
         prompt="a plasma rifle",
         guidance_fields={
             "genre": "scifi",
-            "art_style": "lowpoly",
+            "art_style": "ps1",
             "category": "weapon",
-            "platform": "mobile",
+            "platform": "2d",
         },
     )["id"]
     params = _params(svc, job_id)
     assert params["genre"] == "scifi"
-    assert params["art_style"] == "lowpoly"
+    assert params["art_style"] == "ps1"
     assert params["category"] == "weapon"
-    assert params["resolution"] == 512  # derived from the mobile platform preset
+    assert params["resolution"] == 512  # derived from the 2D platform preset
     assert params["size_m"] == 1.0  # derived from the weapon category default
 
 
@@ -773,11 +773,11 @@ def test_promote_records_the_mesh_overrides_it_was_given(svc):
     # The 3D pane owns the mesh-side decisions, and the reference was made
     # without any of them being asked -- so promotion has to be able to say
     # what they are, not just inherit whatever the reference happened to store.
-    ref_id = _done_reference(svc, size_m=0.4, guidance_fields={"platform": "mobile"})
+    ref_id = _done_reference(svc, size_m=0.4, guidance_fields={"platform": "2d"})
     out = svc_jobs.promote_to_model(
         svc,
         ref_id,
-        platform="hero",
+        platform="3d",
         size_m=2.5,
         bg_removal="threshold",
         profile="raw",
@@ -785,7 +785,7 @@ def test_promote_records_the_mesh_overrides_it_was_given(svc):
         rig_template="quadruped",
     )
     params = _params(svc, out["id"])
-    assert params["platform"] == "hero"
+    assert params["platform"] == "3d"
     assert params["size_m"] == 2.5
     assert params["bg_removal"] == "threshold"
     assert params["profile"] == "raw"
@@ -793,19 +793,31 @@ def test_promote_records_the_mesh_overrides_it_was_given(svc):
     assert params["rig_template"] == "quadruped"
     # The resolution the worker actually sends trellis follows the new
     # platform; the reference's stored one must not survive to contradict it.
-    assert params["resolution"] == guidance.PLATFORMS["hero"].resolution
+    assert params["resolution"] == guidance.PLATFORMS["3d"].resolution
 
 
 def test_promote_without_overrides_inherits_the_reference(svc):
     # The whole point of the overrides being optional: omitting them all must
     # leave the reference's own settings entirely alone.
     ref_id = _done_reference(
-        svc, size_m=0.4, bg_removal="birefnet", guidance_fields={"platform": "mobile"}
+        svc, size_m=0.4, bg_removal="birefnet", guidance_fields={"platform": "2d"}
     )
     params = _params(svc, svc_jobs.promote_to_model(svc, ref_id)["id"])
-    assert params["platform"] == "mobile"
+    assert params["platform"] == "2d"
     assert params["size_m"] == 0.4
     assert params["bg_removal"] == "birefnet"
+
+
+def test_promote_migrates_a_reference_carrying_legacy_guidance(svc):
+    # Every reference on disk from before the platform and art-style tables
+    # were renamed carries the old keys, and an override re-normalizes the
+    # whole stored dict -- so without the alias table this is a 400 on an
+    # otherwise valid asset, and the user has no way to edit it.
+    ref_id = _done_reference(svc)
+    svc.store.merge_params(ref_id, {"platform": "hero", "art_style": "handpainted"})
+    params = _params(svc, svc_jobs.promote_to_model(svc, ref_id, size_m=2.0)["id"])
+    assert params["platform"] == "3d"
+    assert params["art_style"] == "ps2"
 
 
 def test_promote_does_not_claim_to_be_a_rerun(svc):

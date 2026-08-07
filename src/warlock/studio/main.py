@@ -1024,12 +1024,11 @@ class App:
         from .tokens import sp
 
         lay = self.layout
-        sidebar_w = sp(lay.sidebar_w)
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
         imgui.begin_group()
         avail_y = imgui.get_content_region_avail().y
         form_height = avail_y * lay.settings_share
-        borders = imgui.ChildFlags_.borders.value
-        if imgui.begin_child("settings", (sidebar_w, form_height), borders):
+        if layout_mod.pane_child("settings", (sidebar_w, form_height)):
             if ctx.state.mode == "2d":
                 settings_2d.draw(ctx)
             else:
@@ -1042,30 +1041,16 @@ class App:
                 layout_mod.SHARE_MAX,
             )
             lay.save()
-        if imgui.begin_child("library", (sidebar_w, 0), borders):
+        if layout_mod.pane_child("library", (sidebar_w, 0)):
             library.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("left-split")
-        if drag:
-            lay.sidebar_w = min(
-                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
         self._viewport_pane()
         imgui.same_line()
-        drag = layout_mod.splitter("right-split")
-        if drag:
-            lay.inspector_w = min(
-                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
 
-        if imgui.begin_child("inspector", (0, 0), borders):
+        if layout_mod.pane_child("inspector", (0, 0)):
             inspector.draw(ctx)
         imgui.end_child()
         imgui.end()
@@ -1169,50 +1154,32 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(lay.sidebar_w)
-        inspector_w = sp(lay.inspector_w)
-        style = imgui.get_style()
-        borders = imgui.ChildFlags_.borders.value
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("clay-tools", (sidebar_w, tools_height), borders):
+        if layout_mod.pane_child("clay-tools", (sidebar_w, tools_height)):
             clay_tools.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("clay-props", (sidebar_w, 0), borders):
+        if layout_mod.pane_child("clay-props", (sidebar_w, 0)):
             clay_props.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("clay-left-split")
-        if drag:
-            lay.sidebar_w = min(
-                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
-        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
-        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if imgui.begin_child("clay-centre", (width, 0), borders, flags):
+        if layout_mod.pane_child("clay-centre", (width, 0), flags):
             self._clay_viewport(ctx, clay_mode, widgets)
         imgui.end_child()
 
         imgui.same_line()
-        drag = layout_mod.splitter("clay-right-split")
-        if drag:
-            lay.inspector_w = min(
-                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
         imgui.begin_group()
         outliner_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("clay-outliner", (0, outliner_height), borders):
+        if layout_mod.pane_child("clay-outliner", (0, outliner_height)):
             clay_outliner.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("clay-bridge", (0, 0), borders):
+        if layout_mod.pane_child("clay-bridge", (0, 0)):
             clay_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
@@ -1220,16 +1187,11 @@ class App:
     def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
         from imgui_bundle import imgui
 
-        from . import icons
         from .panes import clay_menu
 
         tab = clay_mode.active(ctx)
         if tab is None:
-            widgets.empty_state(
-                icons.RULER,
-                "Nothing open",
-                "Start a document, or drop a .wblk on the window.",
-            )
+            self._clay_empty(ctx, clay_mode)
             return
         avail = imgui.get_content_region_avail()
         rect = (
@@ -1247,6 +1209,40 @@ class App:
         self._build_hovered = imgui.is_item_hovered()
         self._clay_marquee(imgui, view, rect)
         clay_menu.draw(ctx, view)
+
+    def _clay_empty(self, ctx: Any, clay_mode: Any) -> None:
+        """What Clay shows with nothing open, mirroring the raster editor's.
+
+        Buttons rather than a sentence: ``new_document`` was reachable only
+        through Ctrl+N, so the empty state told the user to "start a document"
+        and offered no way to.
+        """
+        from pathlib import Path
+
+        from imgui_bundle import imgui
+
+        from . import widgets
+
+        imgui.dummy((0, 40))
+        imgui.text("Nothing open")
+        widgets.muted("Start a model, open a document, or drop a .wblk on the window.")
+        imgui.dummy((0, 16))
+        if imgui.button("New model", (240, 0)):
+            clay_mode.new_document(ctx)
+        imgui.dummy((0, 8))
+        if imgui.button("Open a file...", (240, 0)):
+            clay_mode.ask_open(ctx)
+        state = clay_mode.ensure(ctx)
+        if state.recent:
+            imgui.dummy((0, 16))
+            widgets.section("recent")
+            for path in list(state.recent)[:6]:
+                # The path is in the id, not just the label: two documents can
+                # share a basename and one imgui id between them is one row.
+                if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
+                    clay_mode.open_path(ctx, Path(path))
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(path)
 
     def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:
         """The selection rectangle, drawn in imgui rather than in GL.
@@ -1286,49 +1282,31 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(lay.sidebar_w)
-        inspector_w = sp(lay.inspector_w)
-        style = imgui.get_style()
-        borders = imgui.ChildFlags_.borders.value
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("inker-tools", (sidebar_w, tools_height), borders):
+        if layout_mod.pane_child("inker-tools", (sidebar_w, tools_height)):
             inker_tools.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("inker-colors", (sidebar_w, 0), borders):
+        if layout_mod.pane_child("inker-colors", (sidebar_w, 0)):
             inker_colors.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("inker-left-split")
-        if drag:
-            lay.sidebar_w = min(
-                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
-        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
-        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if imgui.begin_child("inker-centre", (width, 0), borders, flags):
+        if layout_mod.pane_child("inker-centre", (width, 0), flags):
             inker_canvas.draw(ctx)
         imgui.end_child()
 
         imgui.same_line()
-        drag = layout_mod.splitter("inker-right-split")
-        if drag:
-            lay.inspector_w = min(
-                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
         imgui.begin_group()
         layers_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("inker-layers", (0, layers_height), borders):
+        if layout_mod.pane_child("inker-layers", (0, layers_height)):
             inker_layers.draw(ctx)
         imgui.end_child()
-        if imgui.begin_child("inker-bridge", (0, 0), borders):
+        if layout_mod.pane_child("inker-bridge", (0, 0)):
             inker_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
@@ -1354,45 +1332,27 @@ class App:
         ctx = self.app_ctx
         state = review_mode.ensure(ctx)
         lay = self.layout
-        sidebar_w = sp(lay.sidebar_w)
-        inspector_w = sp(lay.inspector_w)
-        style = imgui.get_style()
-        borders = imgui.ChildFlags_.borders.value
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
 
         imgui.begin_group()
         runs_height = imgui.get_content_region_avail().y * lay.settings_share
-        if imgui.begin_child("review-runs", (sidebar_w, runs_height), borders):
+        if layout_mod.pane_child("review-runs", (sidebar_w, runs_height)):
             self._review_runs(ctx, state, review_mode)
         imgui.end_child()
-        if imgui.begin_child("review-units", (sidebar_w, 0), borders):
+        if layout_mod.pane_child("review-units", (sidebar_w, 0)):
             self._review_units(state, review_mode)
         imgui.end_child()
         imgui.end_group()
 
         imgui.same_line()
-        drag = layout_mod.splitter("review-left-split")
-        if drag:
-            lay.sidebar_w = min(
-                max(lay.sidebar_w + drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
-        reserved = inspector_w + sp(layout_mod.GRIP) + style.item_spacing.x * 2
-        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if imgui.begin_child("review-centre", (width, 0), borders, flags):
+        if layout_mod.pane_child("review-centre", (width, 0), flags):
             self._review_viewport(state, review_mode, width)
         imgui.end_child()
 
         imgui.same_line()
-        drag = layout_mod.splitter("review-right-split")
-        if drag:
-            lay.inspector_w = min(
-                max(lay.inspector_w - drag, layout_mod.SIDEBAR_MIN), layout_mod.SIDEBAR_MAX
-            )
-            lay.save()
-        imgui.same_line()
-        if imgui.begin_child("review-verdict", (0, 0), borders):
+        if layout_mod.pane_child("review-verdict", (0, 0)):
             self._review_verdict(ctx, state, review_mode)
         imgui.end_child()
 
@@ -1966,20 +1926,14 @@ class App:
 
         from . import layout as layout_mod
         from .panes import overlay
-        from .tokens import sp
 
         ctx = self.app_ctx
-        style = imgui.get_style()
-        # Leave room for the right splitter and the inspector; the progress
-        # card floats over the image now, so the full height is the image's.
-        reserved = sp(self.layout.inspector_w) + sp(layout_mod.GRIP) + style.item_spacing.x * 2
-        width = max(imgui.get_content_region_avail().x - reserved, sp(300))
+        # Leave room for the inspector; the progress card floats over the image
+        # now, so the full height is the image's.
+        width = layout_mod.centre_width()
         # no_scroll_with_mouse: over the viewport the wheel can only mean dolly.
-        if imgui.begin_child(
-            "viewport",
-            (width, 0),
-            imgui.ChildFlags_.borders.value,
-            imgui.WindowFlags_.no_scroll_with_mouse.value,
+        if layout_mod.pane_child(
+            "viewport", (width, 0), imgui.WindowFlags_.no_scroll_with_mouse.value
         ):
             overlay.toolbar(ctx)
             image_pos = imgui.get_cursor_screen_pos()

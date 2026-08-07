@@ -59,13 +59,14 @@ The **Mesh** section holds the reconstruction settings.
 
 | Platform | Resolution |
 | --- | --- |
-| Mobile / VR | 512 |
-| Indie desktop | 1024 |
-| Hero asset | 1536 |
+| 2D | 512 |
+| 3D | 1024 |
 
-This is a different control from the 2D pane's platform, which is a phrase in the prompt. Higher
-resolutions cost more VRAM and more time; 1536 in particular may need the exclusive VRAM mode
-(`WARLOCK_VRAM_EXCLUSIVE=1`), which stops the reconstruction engine while the image model runs.
+The question the select is asking is what the asset is *for*: a 2D asset is going to be seen flat
+and small, a 3D one in a scene. This is a different control from the 2D pane's platform, which is a
+phrase in the prompt. Higher resolutions cost more VRAM and more time, and on a card that cannot
+hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
+stops the reconstruction engine while the image model runs.
 
 **Budget** picks the triangle-reduction tier. Only "Raw (no decimation)" is offered here — see
 [Triangle budget](#triangle-budget) for why, and for where a budget can actually be chosen today.

@@ -35,6 +35,13 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "clay-bridge")
     if tab is None:
         widgets.muted("Nothing open.")
+        # The Save/Open row below is hidden with no tab, so without these two
+        # the whole right-hand column offers no way to start one.
+        if imgui.button(f"{icons.PLUS} New model"):
+            clay_mode.new_document(ctx)
+        imgui.same_line()
+        if imgui.button(f"{icons.FOLDER_OPEN} Open"):
+            clay_mode.ask_open(ctx)
         return
 
     _facts(tab)

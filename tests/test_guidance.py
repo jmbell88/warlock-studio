@@ -17,14 +17,14 @@ def test_defaults_fill_in_when_nothing_is_chosen():
 
 
 def test_platform_supplies_the_geometry_resolution():
-    assert guidance.normalize({"platform": "mobile"})["resolution"] == 512
-    assert guidance.normalize({"platform": "hero"})["resolution"] == 1536
+    assert guidance.normalize({"platform": "2d"})["resolution"] == 512
+    assert guidance.normalize({"platform": "3d"})["resolution"] == 1024
 
 
 def test_explicit_resolution_overrides_the_platform_preset():
-    params = guidance.normalize({"platform": "mobile", "resolution": 1536})
+    params = guidance.normalize({"platform": "2d", "resolution": 1536})
     assert params["resolution"] == 1536
-    assert params["platform"] == "mobile"
+    assert params["platform"] == "2d"
 
 
 def test_category_supplies_a_default_size():
@@ -61,28 +61,68 @@ def test_non_numeric_size_is_rejected():
 
 def test_compose_prompt_orders_fragments_after_the_user_text():
     params = guidance.normalize(
-        {"genre": "scifi", "art_style": "lowpoly", "category": "weapon", "platform": "mobile"}
+        {"genre": "scifi", "art_style": "ps1", "category": "weapon", "platform": "2d"}
     )
     composed = guidance.compose_prompt("a plasma rifle", params)
     assert composed.startswith("a plasma rifle, ")
     positions = [
         composed.index(guidance.CATEGORIES["weapon"].prompt),
         composed.index(guidance.GENRES["scifi"].prompt),
-        composed.index(guidance.ART_STYLES["lowpoly"].prompt),
-        composed.index(guidance.PLATFORMS["mobile"].prompt),
+        composed.index(guidance.ART_STYLES["ps1"].prompt),
+        composed.index(guidance.PLATFORMS["2d"].prompt),
     ]
     assert positions == sorted(positions)
 
 
-def test_pixelart_style_normalizes_and_composes():
-    params = guidance.normalize({"art_style": "pixelart"})
-    assert params["art_style"] == "pixelart"
+def test_retro_era_styles_normalize_and_compose():
+    params = guidance.normalize({"art_style": "nes"})
+    assert params["art_style"] == "nes"
     composed = guidance.compose_prompt("a knight", params)
-    assert guidance.ART_STYLES["pixelart"].prompt in composed
+    assert guidance.ART_STYLES["nes"].prompt in composed
     # The soft ceiling on guidance fragments: 2-4 words each, or the extra
     # tokens dilute cross-attention rather than steering it.
-    for fragment in guidance.ART_STYLES["pixelart"].prompt.split(","):
+    for fragment in guidance.ART_STYLES["nes"].prompt.split(","):
         assert len(fragment.split()) <= 4
+
+
+@pytest.mark.parametrize("style", ["nes", "snes"])
+def test_no_retro_era_style_ever_says_pixel(style):
+    # At 512/1024 SDXL renders fake chunky pixels for that token, and they
+    # alias under the real NEAREST downscale in asset2d.pixel.
+    composed = guidance.compose_prompt("a knight", guidance.normalize({"art_style": style}))
+    assert "pixel" not in composed
+
+
+@pytest.mark.parametrize(
+    ("stored", "canonical"),
+    [("mobile", "2d"), ("desktop", "3d"), ("hero", "3d")],
+)
+def test_legacy_platform_keys_normalize_to_the_new_ones(stored, canonical):
+    params = guidance.normalize({"platform": stored})
+    assert params["platform"] == canonical
+    assert params["resolution"] == guidance.PLATFORMS[canonical].resolution
+
+
+@pytest.mark.parametrize(
+    ("stored", "canonical"),
+    [
+        ("realistic", "ps5"), ("stylized", "ps3"), ("lowpoly", "ps1"),
+        ("handpainted", "ps2"), ("toon", "snes"), ("pixelart", "nes"),
+    ],
+)
+def test_legacy_art_style_keys_normalize_to_the_new_ones(stored, canonical):
+    assert guidance.normalize({"art_style": stored})["art_style"] == canonical
+
+
+def test_compose_honours_a_legacy_key_a_stored_job_never_migrated():
+    # compose_prompt reads params directly, so a job row that has not been
+    # through normalize() since the rename still composes the right fragment
+    # rather than silently dropping it.
+    composed = guidance.compose_prompt(
+        "a knight", {"art_style": "lowpoly", "platform": "hero"}
+    )
+    assert guidance.ART_STYLES["ps1"].prompt in composed
+    assert guidance.PLATFORMS["3d"].prompt in composed
 
 
 def test_compose_prompt_with_no_guidance_is_just_the_prompt():
@@ -249,7 +289,7 @@ def test_a_chosen_new_field_value_survives_into_params():
 def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
     params = guidance.normalize(
         {"category": "weapon", "silhouette": "angular", "material": "steel",
-         "genre": "scifi", "platform": "hero"}
+         "genre": "scifi", "platform": "3d"}
     )
     composed = guidance.compose_prompt("a rifle", params)
     positions = [
@@ -257,7 +297,7 @@ def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
         composed.index(guidance.SILHOUETTES["angular"].prompt),
         composed.index(guidance.MATERIALS["steel"].prompt),
         composed.index(guidance.GENRES["scifi"].prompt),
-        composed.index(guidance.PLATFORMS["hero"].prompt),
+        composed.index(guidance.PLATFORMS["3d"].prompt),
     ]
     assert positions == sorted(positions)
 

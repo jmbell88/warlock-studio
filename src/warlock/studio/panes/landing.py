@@ -158,8 +158,18 @@ def start_inker(ctx: Any) -> None:
 
 def start_clay(ctx: Any) -> None:
     """Clay keeps whatever was open, as Inker does: the documents *are* the
-    work, and there is no form to reset."""
+    work, and there is no form to reset.
+
+    The one addition is an empty Clay: the tile says "model something", so
+    arriving at a mode with nothing in it and no obvious way to begin is a dead
+    end. A document is minted only when there are none -- opening one over
+    existing work would break the keeps-whatever-was-open contract.
+    """
+    from .. import clay_mode
+
     ctx.state.mode = "clay"
+    if not clay_mode.ensure(ctx).docs:
+        clay_mode.new_document(ctx)
     _leave(ctx)
 
 

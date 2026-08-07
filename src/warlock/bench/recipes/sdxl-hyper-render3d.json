@@ -5,7 +5,7 @@
   "guidance": {
     "base_model": "sdxl",
     "style_lora": "render3d",
-    "platform": "desktop"
+    "platform": "3d"
   },
   "lora_weight": 0.9,
   "profile": "raw"

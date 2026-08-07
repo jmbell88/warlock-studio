@@ -14,8 +14,8 @@ still say something true.
 Two consequences of that being the *same* rule for both, neither of which is
 an oversight. An observation is only ever written for a model-stage job, but
 a model job's vector carries the whole 2D taxonomy it was promoted with -- so
-"art_style toon" accumulates the hole fraction of the meshes reconstructed
-from toon references, and the hint appears under a prompt control in the 2D
+"art_style snes" accumulates the hole fraction of the meshes reconstructed
+from SNES-era references, and the hint appears under a prompt control in the 2D
 pane. That is a real finding (whether a style reconstructs badly is exactly
 what someone choosing it wants to know), which is why the reader says
 "(21 meshes)" rather than "(21 runs)": the number has to name what it
