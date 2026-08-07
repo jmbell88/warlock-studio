@@ -152,6 +152,29 @@ def defaults_for(op: Op) -> dict[str, float]:
     return {param.name: param.default for param in op.params}
 
 
+def format_for(param: Param) -> str:
+    """The printf format ``input_float`` should draw this parameter with.
+
+    imgui's own default is ``"%.3f"``, and both weld distances in this registry
+    default to 1e-4 -- so the field read ``0.000``, the step arrows moved it by
+    an amount no digit shown could express, and the number a user typed came
+    back as a different one. A control whose value cannot be read is not a
+    control.
+
+    **Derived from the parameter rather than declared on it.** A ``format``
+    field would be one more thing to remember, and the next sub-millimetre
+    parameter would arrive without it and land in exactly the same hole; the
+    step and the default already say what precision the number is kept at.
+    Widened only downwards, so every parameter that was legible at three
+    decimals still reads exactly as it did.
+    """
+    scale = min(abs(param.step) or 1.0, abs(param.default) or 1.0)
+    decimals = 3
+    while decimals < 9 and scale < 10.0**-decimals:
+        decimals += 1
+    return f"%.{decimals}f"
+
+
 def run(ctx: Any, doc: Any, op: Op, **params: Any) -> bool:
     """Invoke an op, turning a refusal into a toast. -> whether it ran.
 
@@ -213,6 +236,12 @@ def has_objects(doc: Any) -> bool:
 
 def has_elements(doc: Any) -> bool:
     return bool(doc.element_sel)
+
+
+def has_two_visible(doc: Any) -> bool:
+    """Two selected objects the user can actually see. Merge's predicate, and
+    the only one that has to look past ``selection`` at what is in it."""
+    return sum(1 for obj in doc.objects if obj.uid in doc.selection and obj.visible) >= 2
 
 
 def in_mode(*modes: str) -> Callable[[Any], bool]:
@@ -314,6 +343,37 @@ def _bake(ctx: Any, doc: Any, **_: Any) -> None:
         )
 
 
+def _join(ctx: Any, doc: Any, weld: float = 1e-4, **_: Any) -> None:
+    """Merge every selected object into the topmost one in the outliner.
+
+    Document order rather than "the one clicked last": ``doc.selection`` is a
+    set and carries no order at all, so a target read out of it would be
+    whichever object the hash happened to put first -- and the name, transform
+    and material default that the merge keeps are the *target's*, which makes
+    that an arbitrary answer to a question the user can see the answer to.
+
+    The geometry is ``clay.ops.join``'s and the bookkeeping is
+    ``ClayDoc.join_objects``'s, which is this module's usual boundary; the one
+    thing that happens here is the selection afterwards, and it is deliberately
+    the survivor rather than nothing -- the user has one shape now and the
+    gizmo should be on it.
+
+    **Visible objects only**, matching ``visible=False``'s documented meaning
+    that an object does not render, does not export and cannot be picked. A
+    merge is the one op where absorbing an unseen object is not merely odd but
+    invisible in its result too: the geometry arrives inside the survivor, which
+    *is* shown. ``_select_all`` no longer hands over hidden objects, so this is
+    the second half -- an object hidden after it was selected.
+    """
+    from .clay import ops as clay_ops_geom
+
+    del ctx
+    uids = [obj.uid for obj in doc.objects if obj.uid in doc.selection and obj.visible]
+    mesh = clay_ops_geom.join([doc.by_uid(uid) for uid in uids], eps=float(weld))
+    doc.join_objects(uids[0], mesh, uids[1:])
+    doc.select([uids[0]])
+
+
 def mirror(ctx: Any, doc: Any, axis: int, **_: Any) -> None:
     from .clay import ops as clay_ops_geom
 
@@ -410,6 +470,31 @@ def _register_defaults() -> None:
             modes=("object",),
             run=_bake,
             enabled=has_objects,
+        )
+    )
+    register(
+        Op(
+            name="join",
+            label="Merge Objects...",
+            modes=("object",),
+            run=_join,
+            # Two, not one: merging a single object is the identity, and an
+            # enabled button that does nothing is worse than a greyed one.
+            # Counted over the *visible* selection for that same reason, since
+            # that is what ``_join`` will actually merge -- a row enabled by an
+            # object the merge then skips is the greyed one's problem again.
+            enabled=has_two_visible,
+            key="Ctrl+J",
+            params=(
+                Param(
+                    "weld",
+                    "weld distance (m)",
+                    1e-4,
+                    1e-4,
+                    low=0.0,
+                    warn="0 keeps the shapes as separate shells inside one object.",
+                ),
+            ),
         )
     )
     for axis, label in enumerate(("X", "Y", "Z")):

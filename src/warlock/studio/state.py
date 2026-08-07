@@ -11,7 +11,7 @@ were driven by a script.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # The prompt history the 2D pane offers. Twenty is what the browser kept: long
@@ -172,6 +172,20 @@ class Filters:
                 return False
         return True
 
+    def failures(self, jobs: list[dict[str, Any]]) -> int:
+        """How many rows switching the status filter to "error" would reveal.
+
+        Derived by re-running :meth:`matches` under that one substitution
+        rather than by counting ``status == "error"``, so the number is exactly
+        what the click produces: the kind, text and favourites filters still
+        apply afterwards, and a count that ignored them would offer a jump to
+        an empty list. Sweep units stay excluded for the same reason they are
+        excluded from the list -- one failed sweep is dozens of rows nobody
+        can see.
+        """
+        probe = replace(self, status="error")
+        return sum(1 for job in jobs if probe.matches(job))
+
     def order(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """The list in the order the bar asks for.
 
@@ -220,6 +234,12 @@ class Toast:
     text: str
     level: str = "info"  # info | error
     born: float = field(default_factory=time.monotonic)
+    # A route the toast offers alongside its text. Only "log" today: an
+    # unexpected exception's toast says "see the log for details" and the one
+    # button that opens it lives inside the diagnostics popup, which is further
+    # away than eight seconds. Named rather than a bool so the widget's label
+    # is a function of the toast; an unrecognised name simply draws nothing.
+    action: str | None = None
 
     @property
     def ttl(self) -> float:
@@ -284,7 +304,12 @@ class AppState:
     wireframe: bool = False
     turntable: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
-    last_error: str | None = None
+    # Every outstanding failure the banner is showing, oldest first. A list
+    # rather than the single ``last_error`` slot it replaces: three writers
+    # (a failed doctor check, a dead worker, a worker that never started) all
+    # assigned to that slot, so a launch that failed two checks reported
+    # whichever wrote last and lost the other with nothing to say it had.
+    errors: list[str] = field(default_factory=list)
     # The Home screen's sub-view. Not persisted: Home always opens on the
     # chooser rather than on whichever list was last being browsed.
     landing_view: str = "choose"  # choose | open | profiles
@@ -333,12 +358,33 @@ class AppState:
 
     # -- toasts ------------------------------------------------------------
 
-    def toast(self, text: str, level: str = "info") -> None:
-        self.toasts.append(Toast(text=text, level=level))
+    def toast(self, text: str, level: str = "info", action: str | None = None) -> None:
+        self.toasts.append(Toast(text=text, level=level, action=action))
 
     def expire_toasts(self) -> None:
         now = time.monotonic()
         self.toasts = [t for t in self.toasts if not t.expired(now)]
+
+    # -- the error banner --------------------------------------------------
+
+    def note_error(self, text: str | None) -> None:
+        """Add a failure to the banner, once.
+
+        Deduplicated because the conditions are re-derived rather than edged:
+        a doctor check that is still failing is reported again on the next
+        refresh, and a banner that grew a line each time would bury the first.
+        """
+        text = (text or "").strip()
+        if text and text not in self.errors:
+            self.errors.append(text)
+
+    def dismiss_errors(self) -> None:
+        self.errors.clear()
+
+    @property
+    def error_text(self) -> str:
+        """Every outstanding failure as one block -- what Copy details copies."""
+        return "\n".join(self.errors)
 
     # -- history -----------------------------------------------------------
 

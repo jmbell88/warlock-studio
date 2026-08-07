@@ -445,7 +445,7 @@ ELEMENT_KEYS = {"1": "vertex", "2": "edge", "3": "face", "4": "object"}
 # Ctrl-shortcuts that change the document. Serialising reads the live document
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
-_MUTATING_CTRL = frozenset({"z", "y", "d", "a", "i"})
+_MUTATING_CTRL = frozenset({"z", "y", "d", "a", "i", "j"})
 
 
 def handle_key(ctx: Any, event: Any) -> bool:
@@ -508,15 +508,24 @@ def _registry_key(ctx: Any, tab: ClayTab, doc: Any, name: str) -> bool:
     op = clay_ops.by_key(doc.element_mode, name.upper())
     if op is None or not op.enabled(doc):
         return False
+    return _fire_op(ctx, doc, op)
+
+
+def _fire_op(ctx: Any, doc: Any, op: Any) -> bool:
+    """Run a registry op from the event layer, popping its dialog if it has one.
+
+    Shared by the bare-letter path and the Ctrl-shortcut path so a
+    parameterised op bound to either kind of key behaves the same way.
+    """
+    from . import clay_ops
+
     state = ensure(ctx)
     if op.params:
         state.pending_op = op.name
         state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
         # Asked for rather than opened: ``imgui.open_popup`` only takes effect
         # inside the window whose id stack is current, and this runs in the
-        # event layer. Unreachable today (E is the only bare-letter binding and
-        # it takes no parameters), which is precisely why the next one to be
-        # added would have been a key that silently did nothing.
+        # event layer.
         state.open_op_popup = True
         return True
     return clay_ops.run(ctx, doc, op)
@@ -598,6 +607,14 @@ def _ctrl_key(
         _select_all(doc)
     elif name == "i" and shift:
         _invert(doc)
+    elif name == "j" and doc.element_mode == "object":
+        # Object mode only, for the reason Ctrl+D is: a merge is about whole
+        # objects, and there is no element-mode reading of it to fall back on.
+        from . import clay_ops
+
+        op = clay_ops.get("join")
+        if op.enabled(doc):
+            _fire_op(ctx, doc, op)
     elif name == "d" and doc.element_mode == "object":
         # Object mode only: duplicating a *face* selection is a different
         # operation with a different name, and doing the object one instead
@@ -609,11 +626,20 @@ def _ctrl_key(
 
 
 def _select_all(doc: Any) -> None:
-    """Everything, in the current mode's sense of everything."""
+    """Everything *visible*, in the current mode's sense of everything.
+
+    The object branch used to take every object and the element branch below it
+    has always skipped the invisible ones, which is the asymmetry rather than a
+    choice: ``visible=False`` is documented to mean an object does not render,
+    does not export and **cannot be picked**, and Ctrl+A was picking them. It
+    only showed once merge existed -- Ctrl+A then Ctrl+J pulled geometry the
+    user could not see into the survivor -- but Delete and Ctrl+D were reading
+    the same selection all along.
+    """
     from .clay import elements as el
 
     if doc.element_mode == "object":
-        doc.select([obj.uid for obj in doc.objects])
+        doc.select([obj.uid for obj in doc.objects if obj.visible])
         return
     for obj in doc.objects:
         if obj.visible:
@@ -625,7 +651,9 @@ def _invert(doc: Any) -> None:
     from .clay import elements as el
 
     if doc.element_mode == "object":
-        doc.select([o.uid for o in doc.objects if o.uid not in doc.selection])
+        # Visible only, for ``_select_all``'s reason: inverting into a hidden
+        # object selects something the user cannot see or click back off.
+        doc.select([o.uid for o in doc.objects if o.visible and o.uid not in doc.selection])
         return
     for obj in doc.objects:
         if not obj.visible:

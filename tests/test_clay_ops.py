@@ -312,3 +312,146 @@ def test_mirror_bakes_into_the_mesh_and_leaves_the_scale_positive() -> None:
     # claim back over the mirrored mesh.
     assert len(doc.history) == 2
     assert doc.by_uid(uid).generator is None
+
+
+# --- merge ------------------------------------------------------------------
+
+
+def _two_boxes(apart: float = 5.0) -> tuple[bd.ClayDoc, int, int]:
+    doc, first = _doc()
+    second = doc.add_object(
+        bd.Obj(uid=bd.new_uid(), name="Box.001", mesh=bp.box(), translation=[apart, 0.0, 0.0])
+    )
+    doc.select([first, second.uid])
+    return doc, first, second.uid
+
+
+def test_merge_is_disabled_below_two_objects() -> None:
+    """Merging one object is the identity, and an enabled button that does
+    nothing is worse than a greyed one."""
+    doc, uid = _doc()
+    op = clay_ops.get("join")
+    assert not op.enabled(doc)
+    doc.select([uid])
+    assert not op.enabled(doc)
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    doc.select([o.uid for o in doc.objects])
+    assert op.enabled(doc)
+
+
+def test_merge_keeps_the_topmost_object_and_absorbs_the_rest() -> None:
+    doc, first, second = _two_boxes()
+    assert clay_ops.run(_Ctx(), doc, clay_ops.get("join"))
+    assert [o.uid for o in doc.objects] == [first]
+    assert doc.by_uid(first).name == "Box"
+    assert doc.selection == {first}
+    assert second not in {o.uid for o in doc.objects}
+
+
+def test_merge_takes_the_geometry_of_everything_it_absorbed() -> None:
+    doc, first, _ = _two_boxes()
+    faces = bm.face_count(doc.by_uid(first).mesh)
+    clay_ops.run(_Ctx(), doc, clay_ops.get("join"))
+    merged = doc.by_uid(first).mesh
+    bm.validate(merged)
+    assert bm.face_count(merged) == faces * 2
+    lo, hi = bm.bounds(merged)
+    assert np.allclose(lo, [-0.5, -0.5, -0.5]) and np.allclose(hi, [5.5, 0.5, 0.5])
+
+
+def test_merge_freezes_the_generator_and_undoes_in_one_press() -> None:
+    doc, first, _ = _two_boxes()
+    depth = len(doc.history)
+    clay_ops.run(_Ctx(), doc, clay_ops.get("join"))
+    assert doc.by_uid(first).generator is None
+    assert len(doc.history) == depth + 1
+
+    assert doc.undo()
+    assert [o.name for o in doc.objects] == ["Box", "Box.001"]
+    assert doc.by_uid(first).generator == "box"
+
+
+def test_merge_welds_at_the_distance_it_is_given() -> None:
+    """The parameter is what turns two shells into one surface; at zero it is
+    a group, which is a legitimate thing to ask for."""
+    doc, first, _ = _two_boxes(apart=0.0)
+    verts = len(doc.by_uid(first).mesh.positions)
+    clay_ops.run(_Ctx(), doc, clay_ops.get("join"), weld=0.0)
+    assert len(doc.by_uid(first).mesh.positions) == 2 * verts
+
+    doc, first, _ = _two_boxes(apart=0.0)
+    clay_ops.run(_Ctx(), doc, clay_ops.get("join"), weld=1e-4)
+    assert len(doc.by_uid(first).mesh.positions) == verts
+
+
+def test_merge_refuses_a_zero_scaled_target_as_a_toast() -> None:
+    doc, first, _ = _two_boxes()
+    doc.set_transform(first, scale=[0.0, 1.0, 1.0])
+    depth = len(doc.history)
+    ctx = _Ctx()
+    assert not clay_ops.run(ctx, doc, clay_ops.get("join"))
+    assert ctx.toasts.errors
+    assert len(doc.objects) == 2
+    assert len(doc.history) == depth
+
+
+# --- parameter formatting ---------------------------------------------------
+
+
+def test_a_sub_millimetre_parameter_is_drawn_with_enough_decimals():
+    """imgui's default "%.3f" printed both weld distances as 0.000 -- a field
+    whose value cannot be read, whose step arrows appear to do nothing, and
+    which hands back a different number than the one it was showing."""
+    for name in ("weld", "join"):
+        param = next(p for p in clay_ops.get(name).params if "distance" in p.label)
+        assert param.default < 1e-3
+        shown = clay_ops.format_for(param) % param.default
+        assert float(shown) == pytest.approx(param.default), shown
+
+
+def test_every_parameter_can_be_read_back_from_what_it_is_drawn_as():
+    """The property, for the whole registry rather than for the one that was
+    wrong: what the field shows must round-trip to what the op will be given."""
+    for op in clay_ops.OPS:
+        for param in op.params:
+            if param.integer:
+                continue
+            shown = clay_ops.format_for(param) % param.default
+            assert float(shown) == pytest.approx(param.default), f"{op.name}.{param.name}={shown}"
+
+
+def test_an_ordinary_parameter_still_reads_at_three_decimals():
+    """Widened only downwards: a parameter that was legible before must not
+    grow a tail of zeros because of the parameter that was not."""
+    assert clay_ops.format_for(clay_ops.Param("w", "width (m)", 0.05, 0.01)) == "%.3f"
+    assert clay_ops.format_for(clay_ops.Param("t", "position", 0.5, 0.05)) == "%.3f"
+
+
+def _one_hidden() -> tuple[bd.ClayDoc, int, int]:
+    """Two selected objects, the second hidden after the fact."""
+    doc, first, second = _two_boxes()
+    doc.set_props(second, visible=False)
+    return doc, first, second
+
+
+def test_merge_is_disabled_when_only_one_selected_object_is_visible():
+    """Greyed rather than refused: the op would skip the hidden one, so a row
+    enabled by an object the merge ignores is the enabled-button-that-does-
+    nothing problem again."""
+    doc, _first, _second = _one_hidden()
+    assert not clay_ops.get("join").enabled(doc)
+
+
+def test_merge_never_absorbs_a_hidden_object():
+    """``_select_all`` no longer hands one over; this is the other half, an
+    object hidden after it was selected. Forced past ``enabled`` because that is
+    exactly what a stale predicate would do."""
+    doc, first, second = _one_hidden()
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="C", mesh=bp.box(), translation=[0.0, 5.0, 0.0]))
+    doc.select([o.uid for o in doc.objects])
+    faces = bm.face_count(doc.by_uid(first).mesh)
+
+    assert clay_ops.run(_Ctx(), doc, clay_ops.get("join"))
+
+    assert second in {o.uid for o in doc.objects}, "the hidden object survives untouched"
+    assert bm.face_count(doc.by_uid(first).mesh) == faces * 2, "A and C, not A, B and C"

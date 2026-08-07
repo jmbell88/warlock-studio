@@ -314,3 +314,33 @@ def test_the_store_is_left_open_when_the_task_pool_did_not_drain(tmp_path):
     rt.tasks = SimpleNamespace(shutdown=lambda timeout=None: True)
     runtime_mod.Runtime.shutdown(rt)
     assert closed == ["closed"]
+
+
+def test_an_unexpected_failure_offers_the_log_it_was_written_to(tasks):
+    """The generic toast says "see the log for details" and, before this,
+    offered no way to reach it -- the only Open-the-log button in the app is
+    inside the diagnostics popup, three clicks from a toast that lasts eight
+    seconds."""
+
+    def boom():
+        raise ValueError("weird")
+
+    tasks.submit("odd", boom)
+    done = _wait(tasks, "odd")
+    assert done.action == "log"
+
+
+def test_a_service_error_needs_no_log_route(tasks):
+    """Its message was written for a person and names the remedy; a button to
+    a log file is noise beside it, and the log has nothing extra to say."""
+
+    def boom():
+        raise Invalid("size must be between 0.01 and 100 m", field="size_m")
+
+    tasks.submit("bad-size", boom)
+    assert _wait(tasks, "bad-size").action is None
+
+
+def test_a_successful_task_carries_no_action(tasks):
+    tasks.submit("fine", lambda: 1)
+    assert _wait(tasks, "fine").action is None

@@ -111,8 +111,28 @@ class Ctx:
 
     # -- shorthands --------------------------------------------------------
 
-    def toast(self, text: str, level: str = "info") -> None:
-        self.state.toast(text, level)
+    def toast(self, text: str, level: str = "info", action: str | None = None) -> None:
+        self.state.toast(text, level, action)
+
+    def open_log(self) -> None:
+        """Hand ``warlock.log`` to whatever the user reads text files in.
+
+        One owner, because two callers want it: the diagnostics popup's button
+        and the toast for a failure whose message defers to the log. Silent
+        when there is no log yet -- it is written on the first line logged, so
+        its absence means there is nothing to show rather than a fault.
+
+        Deliberately outside the kill-on-close job, and deliberately not a
+        subprocess spawn: ``startfile`` hands the path to the shell, which
+        opens it in the user's own editor, and that editor is not ours to kill
+        when Warlock closes. Which is also why the every-spawn-is-in-the-job
+        scan does not see this line.
+        """
+        import os
+
+        log_path = Path(self.runtime.config.data_dir) / "warlock.log"
+        if log_path.exists():
+            self.submit("open-log", os.startfile, str(log_path))
 
     def job(self, job_id: str | None = None) -> dict[str, Any] | None:
         return self.cache.get(self.state.selected if job_id is None else job_id)

@@ -26,10 +26,17 @@ THUMB_SIZE = 72.0
 
 
 def draw(ctx: Any) -> None:
-    _filters(ctx)
+    # Resolved before the filter row rather than after it, because the row's
+    # select-all acts on exactly this list and computing it twice a frame to
+    # keep the old order would be paying for the same filter pass twice.
+    jobs = ctx.cache.visible(ctx.state.filters)
+    _filters(ctx, jobs)
+    # Its own row, because ``render.help_button`` right-aligns itself with
+    # ``same_line(cursor + avail - 26)`` and that only computes where a line
+    # starts. Chapter 08's body has no other way in from here: the Profiles
+    # panel's marker anchors at #profiles.
     manual_render.help_button(ctx, "library")
     imgui.separator()
-    jobs = ctx.cache.visible(ctx.state.filters)
     if ctx.cache.error:
         widgets.text_colored(theme.ERR, "Could not read the job list.")
     # Leave room for the footer below: the bulk bar only exists when something
@@ -49,7 +56,7 @@ def draw(ctx: Any) -> None:
             _card(ctx, job)
         _load_more(ctx)
     imgui.end_child()
-    _bulk(ctx)
+    _bulk(ctx, jobs)
     _storage(ctx)
 
 
@@ -69,10 +76,23 @@ def _load_more(ctx: Any) -> None:
 # --- filters ----------------------------------------------------------------
 
 
-def _filters(ctx: Any) -> None:
+def _filters(ctx: Any, jobs: list[Any]) -> None:
+    """The three selects, the star and the tick, on two rows rather than one.
+
+    Measured, not guessed: three 110 px combos plus two square buttons come to
+    417 px, and the sidebar this pane lives in is a fixed 300 (``layout.
+    SIDEBAR_W``), which leaves 290 inside the padding. A child window *clips*
+    rather than wraps, so the star spent its whole life drawn past the right
+    edge -- neither visible nor clickable -- and the tick would have joined it.
+    Widths come off the live content region for the same reason a constant was
+    the bug: ``sp`` scales the sidebar with the monitor and 110 did not scale
+    with anything.
+    """
     filters = ctx.state.filters
     imgui.set_next_item_width(-1)
     filters.text = widgets.input_text("##filter", filters.text, max_length=120, hint="Filter...")
+    spacing = imgui.get_style().item_spacing.x
+    half = (imgui.get_content_region_avail().x - spacing) * 0.5
     filters.status = widgets.combo(
         "##status",
         filters.status,
@@ -82,7 +102,7 @@ def _filters(ctx: Any) -> None:
             ("running", "running"),
             ("error", "failed"),
         ],
-        width=110,
+        width=half,
     )
     imgui.same_line()
     filters.kind = widgets.combo(
@@ -96,14 +116,16 @@ def _filters(ctx: Any) -> None:
             ("rig", "rigs"),
             ("sheet", "sheets"),
         ],
-        width=110,
+        width=half,
     )
-    imgui.same_line()
+    # The two square buttons share the sort row, so what is left for the combo
+    # is what they and their gaps do not take.
+    buttons = 2 * (imgui.get_frame_height() + spacing)
     filters.sort = widgets.combo(
         "##sort",
         filters.sort,
         [("newest", "newest first"), ("best", "best first")],
-        width=110,
+        width=imgui.get_content_region_avail().x - buttons,
     )
     imgui.same_line()
     # A star that lights up, not a checkbox labelled "*".
@@ -115,6 +137,54 @@ def _filters(ctx: Any) -> None:
         filters.favorites_only = not filters.favorites_only
     if lit:
         imgui.pop_style_color(2)
+    imgui.same_line()
+    _select_all(ctx, jobs)
+    _failures(ctx)
+
+
+def _failures(ctx: Any) -> None:
+    """A way to the failed jobs, when there are any and they are not shown.
+
+    A failed job says why it failed in the inspector and nowhere else, so
+    before this the only route to the reason was to already know which card to
+    click -- and after a sweep or an overnight batch that is the one thing the
+    user does not know. Its own full-width row rather than a fourth control on
+    the filter rows: three combos and two square buttons already overrun the
+    fixed 300 px sidebar, and a child window clips rather than wraps.
+    """
+    filters = ctx.state.filters
+    if filters.status == "error":
+        return
+    count = filters.failures(ctx.cache.jobs)
+    if not count:
+        return
+    label = "1 job failed" if count == 1 else f"{count} jobs failed"
+    imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+    clicked = imgui.small_button(f"{label} - show##library-failures")
+    imgui.pop_style_color()
+    if clicked:
+        filters.status = "error"
+
+
+def _select_all(ctx: Any, jobs: list[Any]) -> None:
+    """Tick every card the filters are showing -- the bulk bar's other half.
+
+    Deliberately *shown*, not "every job": the list is a window onto the newest
+    N of M (see ``_load_more``), so a control claiming to select everything
+    would silently leave the older ones out of the delete that follows. It
+    flips to Deselect once the shown set is fully ticked, so the same button
+    undoes it rather than leaving Clear as the only way back.
+    """
+    shown = [job["id"] for job in jobs]
+    checked = ctx.state.checked
+    picked = bool(shown) and all(job_id in checked for job_id in shown)
+    icon = icons.SQUARE_DASHED if picked else icons.CHECK
+    tip = "Deselect the assets shown" if picked else "Select every asset shown, for bulk actions"
+    if widgets.icon_button(icon, tip, enabled=bool(shown)):
+        if picked:
+            checked.difference_update(shown)
+        else:
+            checked.update(shown)
 
 
 # --- cards ------------------------------------------------------------------
@@ -164,8 +234,7 @@ def _card_body(ctx: Any, job: Any) -> None:
     name = job.get("name") or job.get("prompt") or job_id
     imgui.text_wrapped(name if len(name) <= 46 else name[:43] + "...")
     widgets.status_pill(job["status"])
-    imgui.same_line()
-    widgets.quality_badge(job)
+    widgets.quality_badge(job, inline=True)
     rank = (job.get("params") or {}).get("rank")
     if isinstance(rank, dict) and rank.get("score") is not None:
         imgui.same_line()
@@ -391,12 +460,28 @@ def _delete(ctx: Any, job_id: str) -> None:
 # --- bulk and storage -------------------------------------------------------
 
 
-def _bulk(ctx: Any) -> None:
+def _bulk(ctx: Any, jobs: list[Any]) -> None:
+    """The actions for what is ticked, and how much of it is off screen.
+
+    ``state.checked`` is not pruned when the filters change, and that is worth
+    keeping -- ticking a few meshes, then switching to references to tick a few
+    more, is a real way to use this. What is not defensible is doing it
+    silently: tick everything shown, narrow the filter, press Delete, and the
+    wider set goes while the confirm names only a count. So the count says how
+    much of itself is no longer on screen, and the confirm repeats it, because
+    the destructive path must never describe a smaller act than it performs.
+
+    *Not shown* rather than *filtered out*: an id can also be here because its
+    job fell off the newest-N window or was deleted from somewhere else, and
+    the honest word covers all three.
+    """
     picked = sorted(ctx.state.checked)
     if not picked:
         return
+    shown = {job["id"] for job in jobs}
+    hidden = sum(1 for job_id in picked if job_id not in shown)
     imgui.separator()
-    imgui.text(f"{len(picked)} selected")
+    imgui.text(f"{len(picked)} selected" + (f" ({hidden} not shown)" if hidden else ""))
     imgui.same_line()
     if imgui.small_button("Clear"):
         ctx.state.checked.clear()
@@ -416,12 +501,21 @@ def _bulk(ctx: Any) -> None:
         ctx.confirms.ask(
             dialogs.Confirm(
                 title="Delete these assets?",
-                message=f"{len(picked)} jobs and everything derived from them.",
+                message=_delete_message(len(picked), hidden),
                 confirm_label="Delete",
                 cancel_label="Keep",
                 on_confirm=lambda: [_delete(ctx, j) for j in picked],
             )
         )
+
+
+def _delete_message(total: int, hidden: int) -> str:
+    """What the confirm says, as a function rather than inline so the wording
+    the destructive path uses is something a test can read."""
+    message = f"{total} jobs and everything derived from them."
+    if hidden:
+        message += f" {hidden} of them are not in the list you can see."
+    return message
 
 
 def _export_zip(ctx: Any, ids: list[str]) -> None:
@@ -440,7 +534,12 @@ def _storage(ctx: Any) -> None:
         from ..state import format_bytes
 
         widgets.muted(f"{storage['job_dirs']} jobs - {format_bytes(storage['bytes'])}")
-    imgui.same_line()
+        # Inside the branch: the measurement arrives on a task thread, so
+        # ``storage`` is empty for every frame between launch and the first
+        # reply -- and a ``same_line`` there attached to the *list child* above,
+        # which is full width, putting Prune 82 px past the panel's right edge.
+        # Unclickable exactly while a new install has nothing else on screen.
+        imgui.same_line()
     if imgui.small_button("Prune..."):
         ctx.confirms.ask(
             dialogs.Confirm(

@@ -9,13 +9,16 @@ the app, and there are eight panels.
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from warlock.service import jobs as svc_jobs
 from warlock.studio.app_ctx import Ctx
 from warlock.studio.jobs_cache import JobsCache
 from warlock.studio.settings import Settings
-from warlock.studio.state import AppState, Eta
+from warlock.studio.state import AppState, Eta, Filters
 
 
 @pytest.fixture(scope="session")
@@ -155,6 +158,257 @@ def test_the_library_builds_empty_and_populated(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: library.draw(app_ctx))
 
 
+def test_the_library_offers_a_way_to_the_failed_jobs(app_ctx, imgui_ctx):
+    """A failed job says why it failed in the inspector and nowhere else, so
+    the only route to the reason was to already know which card to click."""
+    from warlock.studio.panes import library
+
+    job_id = _seeded(app_ctx)
+    app_ctx.svc.store.set_status(job_id, "error", error="it broke")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    assert app_ctx.state.filters.failures(app_ctx.cache.jobs) == 1
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+
+
+def test_the_failure_affordance_is_absent_once_the_filter_is_already_on_errors():
+    """It exists to *reach* the failed jobs. Left on screen while they are the
+    only thing showing, it is a button whose click changes nothing.
+
+    Needs no imgui frame precisely because it draws nothing: the cache here
+    raises if the count is ever computed, which is what proves the guard runs
+    before the work rather than merely before the button.
+    """
+    from warlock.studio.panes import library
+
+    class Detonating:
+        @property
+        def jobs(self):
+            raise AssertionError("counted the failures after the early return")
+
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(filters=Filters(status="error")), cache=Detonating()
+    )
+    library._failures(ctx)
+
+
+def test_the_library_filter_row_fits_the_sidebar(app_ctx, imgui_ctx):
+    """Not "it builds" -- where it builds *to*.
+
+    The sidebar is a fixed 300 design px and a child window clips rather than
+    wraps, so a row of controls wider than that is drawn past the right edge
+    and can be neither seen nor clicked. Three 110 px combos and two square
+    buttons came to 417 into 290, which is how the favourites star spent its
+    whole life invisible. Asserted against the content region rather than
+    against an arrangement, so the row is free to be laid out any way that
+    fits.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import layout as layout_mod
+    from warlock.studio.panes import library
+    from warlock.studio.tokens import sp
+
+    measured: list[float] = []
+
+    def build() -> None:
+        if layout_mod.pane_child("library", (sp(layout_mod.SIDEBAR_W), 0)):
+            right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+            library._filters(app_ctx, [])
+            measured.append(imgui.get_item_rect_max().x - right)
+        imgui.end_child()
+
+    _frame(imgui_ctx, build)
+    assert measured and measured[0] <= 1.0, f"the filter row overflows by {measured[0]:.0f} px"
+
+
+def test_a_library_cards_action_row_stays_inside_the_card(app_ctx, imgui_ctx):
+    """A reference has no mesh report, so ``quality_badge`` draws nothing --
+    and the ``same_line`` in front of it was then inherited by the action row,
+    which started 73 px to the right on the status pill's line and put the
+    favourite star off the edge of the card, where it could not be clicked."""
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import layout as layout_mod
+    from warlock.studio.panes import library
+    from warlock.studio.tokens import sp
+
+    app_ctx.rigging_available = True
+    _seeded(app_ctx)  # no mesh_report and no mesh_audit: an ordinary reference
+    measured: list[float] = []
+    real = library._card_actions
+
+    def spy(ctx, job):
+        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        real(ctx, job)
+        measured.append(imgui.get_item_rect_max().x - right)
+
+    library._card_actions = spy
+    try:
+        _frame(
+            imgui_ctx,
+            lambda: (
+                layout_mod.pane_child("library", (sp(layout_mod.SIDEBAR_W), 0))
+                and library.draw(app_ctx),
+                imgui.end_child(),
+            ),
+        )
+    finally:
+        library._card_actions = real
+    assert measured and measured[0] <= 0.0, f"the action row overflows by {measured[0]:.0f} px"
+
+
+def _seed_findings(ctx, param, value):
+    """A findings.json with one bucket deep enough to hint."""
+    import json
+    from pathlib import Path
+
+    bench = Path(ctx.svc.config.bench_dir)
+    bench.mkdir(parents=True, exist_ok=True)
+    (bench / "findings.json").write_text(
+        json.dumps(
+            {"params": {param: {str(value): {"n": 8, "accepts": 6, "wilson_low": 0.41}}}}
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    ("pane", "param", "value"),
+    [("settings_2d", "art_style", "nes"), ("settings_3d", "platform", "pc")],
+)
+def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param, value):
+    """The hints are the whole visible payoff of the observation corpus, and
+    both panes drew them with a bare ``same_line`` after a control that had
+    taken the full width -- which puts the cursor *on* the right edge, so the
+    text went past it and was clipped away entirely. 147 px past, on the 3D
+    pane; 63 px past the column, in the 2D pane's guidance grid."""
+    imgui, _renderer = imgui_ctx
+    import importlib
+
+    from warlock.studio import layout as layout_mod
+    from warlock.studio import widgets
+    from warlock.studio.tokens import sp
+
+    module = importlib.import_module(f"warlock.studio.panes.{pane}")
+    _seed_findings(app_ctx, param, value)
+    (app_ctx.state.form_2d if pane == "settings_2d" else app_ctx.state.form_3d)[param] = value
+
+    measured: list[float] = []
+    real = widgets.hint_text
+
+    def spy(text):
+        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        real(text)
+        measured.append(imgui.get_item_rect_max().x - right)
+
+    widgets.hint_text = spy
+    try:
+        _frame(
+            imgui_ctx,
+            lambda: (
+                layout_mod.pane_child(pane, (sp(layout_mod.SIDEBAR_W), 0))
+                and module.draw(app_ctx),
+                imgui.end_child(),
+            ),
+        )
+    finally:
+        widgets.hint_text = real
+    assert measured, "the hint never drew -- the fixture no longer produces one"
+    assert max(measured) <= 1.0, f"a hint overflows by {max(measured):.0f} px"
+
+
+def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
+    """The class of bug the panes kept hitting, guarded once for all of them.
+
+    ``same_line`` after an item drawn at full width leaves the cursor *on* the
+    content region's right edge, and a child window clips rather than wraps --
+    so whatever is drawn next is not squeezed, it is gone. Four controls were
+    living out there when this was written: the library's favourites star, its
+    select-all tick, its Prune button, and every evidence hint and ``(?)`` in
+    the two generate panes. None of them raised anything, and each looked
+    exactly like a feature nobody had built.
+
+    The threshold is "no room at all", not "not much room": a tight row is a
+    judgement call, and a control drawn past the edge is not. The one exempt
+    caller is ``widgets.same_line_or_wrap``, which asks this same question
+    itself and starts a new line when the answer is no.
+    """
+    imgui, _renderer = imgui_ctx
+    import traceback
+
+    from warlock.studio import layout as layout_mod
+    from warlock.studio.panes import (
+        clay_bridge,
+        clay_outliner,
+        clay_props,
+        clay_tools,
+        inker_bridge,
+        inker_colors,
+        inker_layers,
+        inker_tools,
+        inspector,
+        library,
+        pose_panel,
+        profiles_panel,
+        retarget_panel,
+        settings_2d,
+        settings_3d,
+        sheet_panel,
+    )
+    from warlock.studio.tokens import sp
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "3d"
+    app_ctx.rigging_available = True
+    app_ctx.state.form_3d["rig"] = True
+    job = app_ctx.cache.get(job_id)
+    panes = [
+        ("settings-2d", lambda: settings_2d.draw(app_ctx)),
+        ("settings-3d", lambda: settings_3d.draw(app_ctx)),
+        ("library", lambda: library.draw(app_ctx)),
+        ("inspector", lambda: inspector.draw(app_ctx)),
+        ("retarget", lambda: retarget_panel.draw(app_ctx, job)),
+        ("pose", lambda: pose_panel.draw(app_ctx, job)),
+        ("sheet", lambda: sheet_panel.draw(app_ctx, job)),
+        ("profiles", lambda: profiles_panel.draw(app_ctx)),
+        ("clay-tools", lambda: clay_tools.draw(app_ctx)),
+        ("clay-props", lambda: clay_props.draw(app_ctx)),
+        ("clay-outliner", lambda: clay_outliner.draw(app_ctx)),
+        ("clay-bridge", lambda: clay_bridge.draw(app_ctx)),
+        ("inker-tools", lambda: inker_tools.draw(app_ctx)),
+        ("inker-layers", lambda: inker_layers.draw(app_ctx)),
+        ("inker-colors", lambda: inker_colors.draw(app_ctx)),
+        ("inker-bridge", lambda: inker_bridge.draw(app_ctx)),
+    ]
+
+    offenders: dict[str, float] = {}
+    real = imgui.same_line
+
+    def spy(*args, **kwargs):
+        real(*args, **kwargs)
+        avail = imgui.get_content_region_avail().x
+        if avail >= 1.0:
+            return
+        caller = traceback.extract_stack()[-2]
+        if caller.name == "same_line_or_wrap":
+            return
+        where = f"{Path(caller.filename).name}:{caller.lineno}"
+        offenders[where] = min(offenders.get(where, avail), avail)
+
+    imgui.same_line = spy
+    try:
+        for pane_id, build in panes:
+            _frame(
+                imgui_ctx,
+                lambda pane_id=pane_id, build=build: (
+                    layout_mod.pane_child(pane_id, (sp(layout_mod.SIDEBAR_W), 0)) and build(),
+                    imgui.end_child(),
+                ),
+            )
+    finally:
+        imgui.same_line = real
+    assert not offenders, f"drawn past the right edge: {offenders}"
+
+
 def test_the_inspector_builds_for_every_status(app_ctx, imgui_ctx):
     from warlock.studio.panes import inspector
 
@@ -284,7 +538,8 @@ def test_the_overlay_builds_with_a_toolbar_and_a_banner(app_ctx, imgui_ctx):
     from warlock.studio.panes import overlay
 
     eta = Eta()
-    app_ctx.state.last_error = "trellis: the exe is missing"
+    app_ctx.state.note_error("trellis: the exe is missing")
+    app_ctx.state.note_error("The GPU worker is not running. Restart Warlock.")
     _frame(
         imgui_ctx,
         lambda: (overlay.doctor_banner(app_ctx), overlay.toolbar(app_ctx),
@@ -297,11 +552,13 @@ def test_toasts_and_dialogs_build(app_ctx, imgui_ctx):
 
     app_ctx.state.toast("finished", "info")
     app_ctx.state.toast("it broke", "error")
+    app_ctx.state.toast("Something went wrong; see the log.", "error", action="log")
+    app_ctx.state.toast("an action nothing draws", "error", action="teleport")
     app_ctx.confirms.ask(dialogs.Confirm(title="Sure?", message="Really?"))
     app_ctx.prompts.ask(dialogs.Prompt(title="Name it", label="Name"))
     imgui, renderer = imgui_ctx
     imgui.new_frame()
-    widgets.toasts(app_ctx.state, (1600, 950))
+    widgets.toasts(app_ctx.state, (1600, 950), on_action=lambda _name: None)
     app_ctx.confirms.draw()
     app_ctx.prompts.draw()
     imgui.render()
@@ -986,3 +1243,37 @@ def test_the_inspector_builds_its_verdict_section_armed_and_not(app_ctx, imgui_c
     _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))
     inspector.arm_verdict(app_ctx.state, job_id)
     _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))
+
+
+def test_the_bulk_bar_says_how_much_of_the_selection_is_off_screen(app_ctx, imgui_ctx):
+    """``state.checked`` is not pruned when the filters change -- deliberately,
+    because ticking across two filters is a real way to use this. What is not
+    defensible is the destructive path describing a smaller act than it
+    performs, so the count and the confirm both name what is no longer shown."""
+    imgui, _renderer = imgui_ctx
+    from warlock.studio.panes import library
+
+    kept = _seeded(app_ctx)
+    gone = _seeded(app_ctx)
+    app_ctx.svc.store.set_status(gone, "error", "it broke")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.checked.update({kept, gone})
+    # A filter the second job no longer matches, exactly as narrowing one by
+    # hand after a select-all would leave it.
+    app_ctx.state.filters.status = "done"
+    shown = app_ctx.cache.visible(app_ctx.state.filters)
+    assert {j["id"] for j in shown} == {kept}
+
+    drawn: list[str] = []
+    real = imgui.text
+    imgui.text = lambda s: (drawn.append(s), real(s))[1]
+    try:
+        _frame(imgui_ctx, lambda: library._bulk(app_ctx, shown))
+    finally:
+        imgui.text = real
+
+    assert "2 selected (1 not shown)" in drawn
+    assert "1 of them are not in the list you can see." in library._delete_message(2, 1)
+    # And with nothing hidden it stays the sentence it always was.
+    assert library._delete_message(2, 0) == "2 jobs and everything derived from them."

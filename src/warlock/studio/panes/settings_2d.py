@@ -68,6 +68,31 @@ GUIDANCE_GROUPS = (
     ("Surface", ("material", "condition", "emissive")),
 )
 
+# What a field is *called* on screen, where that is not its key with the
+# underscores taken out. The key stays ``art_style`` deliberately: it is what
+# every job on disk recorded, what ``guidance._lookup`` re-normalizes a rerun
+# through, and what the findings and verdict buckets are keyed on -- renaming
+# it would need a ``_LEGACY_ALIASES`` entry and would still split the corpus in
+# two, because a vector recorded under the old spelling is a different string.
+FIELD_LABELS = {"art_style": "era style"}
+
+
+def field_label(field: str) -> str:
+    return FIELD_LABELS.get(field, field.replace("_", " "))
+
+
+def _field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
+    """``widgets.field_options`` with this pane's own name for the blank entry.
+
+    The empty option is the one that names the *question* -- it is what the
+    combo shows until something is chosen -- so a renamed label that stopped at
+    the heading would leave the control itself still saying "art style...".
+    """
+    options = widgets.field_options(ctx, field)
+    if options and options[0][0] == "":
+        options[0] = ("", f"{field_label(field)}...")
+    return options
+
 
 def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """The taxonomy groups this form should draw.
@@ -106,13 +131,13 @@ def _guidance(ctx: Any, form: dict[str, Any]) -> None:
         if imgui.begin_table(f"guidance/{title}", 2):
             for field in fields:
                 imgui.table_next_column()
-                widgets.field_label(field.replace("_", " "))
+                widgets.field_label(field_label(field))
                 imgui.set_next_item_width(-1)
-                form[field] = widgets.combo(f"##{field}", form[field], _options(ctx, field), 0)
+                options = _field_options(ctx, field)
+                form[field] = widgets.combo(f"##{field}", form[field], options, 0)
                 hint = _findings_hint(ctx, field, form[field])
                 if hint is not None:
-                    imgui.same_line()
-                    imgui.text_disabled(hint)
+                    widgets.hint_text(hint)
             imgui.end_table()
     if form.get("output") == "tile":
         # platform is a hint about how much detail to draw an *object* with,
@@ -272,6 +297,38 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
                 on_accept=lambda name: _save_profile(ctx, form, name),
             )
         )
+    imgui.same_line()
+    if imgui.button("Reset..."):
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Reset the image settings?",
+                message=(
+                    "The prompt, the negative prompt, every guidance select, "
+                    "the model, the LoRA, the reference and the run controls go "
+                    "back to their defaults. Saved profiles and presets are "
+                    "kept, and the 3D form is untouched."
+                ),
+                confirm_label="Reset",
+                cancel_label="Cancel",
+                on_confirm=lambda: _reset(ctx),
+            )
+        )
+
+
+def _reset(ctx: Any) -> None:
+    """The 2D form back to first-launch defaults.
+
+    A fresh ``default_form_2d`` rather than a field-by-field clear, so a field
+    added later is reset by having been added rather than by somebody
+    remembering this function -- and so the seed is *rerolled* rather than
+    zeroed, which is what that default does and why it is a function.
+    """
+    from ..state import default_form_2d
+
+    ctx.state.form_2d = default_form_2d()
+    ctx.state.preview = {}
+    ctx.state.preview_dirty_at = time.monotonic()
+    ctx.toast("The image settings are back to their defaults.")
 
 
 def _save_profile(ctx: Any, form: dict[str, Any], name: str) -> None:
@@ -503,8 +560,12 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         # field holds text the user typed under another base, and hiding it
         # would make that text vanish without saying why.
         imgui.begin_disabled()
+    # Above the box, not beside it: imgui draws a multiline's label to the
+    # *right* of the field, and this one is -1 wide, so the word "Negative" was
+    # clipped off the edge of the panel and the box was unlabelled.
+    widgets.field_label("negative prompt")
     before = form["negative_prompt"]
-    form["negative_prompt"] = widgets.multiline("Negative", before, 54, MAX_PROMPT)
+    form["negative_prompt"] = widgets.multiline("##negative", before, 54, MAX_PROMPT)
     if form["negative_prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
     if inert is not None:

@@ -125,9 +125,10 @@ def _choose(ctx: Any) -> None:
     if _tile(ctx, "profiles", icons.SLIDERS, "Profiles", caption):
         ctx.state.landing_view = "profiles"
 
-    if ctx.state.last_error:
+    if ctx.state.errors:
         imgui.dummy((0, sp(16)))
-        centred(ctx.state.last_error, theme.ERR)
+        for message in ctx.state.errors:
+            centred(message, theme.ERR)
 
 
 def start_2d(ctx: Any) -> None:

@@ -683,3 +683,40 @@ def test_the_home_tile_opens_nothing_over_work_already_there() -> None:
     landing.start_clay(ctx)
     state = clay_mode.ensure(ctx)
     assert [doc.uid for doc in state.docs] == [tab.uid]
+
+
+# --- what "hidden" means to a selection -------------------------------------
+#
+# ``visible=False`` is documented to mean an object does not render, does not
+# export and *cannot be picked*. The object branch of select-all took every
+# object anyway, while the element branch three lines below it had always
+# skipped the invisible ones -- an asymmetry nobody saw until merge arrived and
+# Ctrl+A then Ctrl+J pulled unseen geometry into a shape that is on screen.
+
+
+def _two_objects(*, second_visible: bool = True) -> tuple[bd.ClayDoc, int, int]:
+    doc = bd.ClayDoc()
+    first = doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=bp.box()))
+    second = doc.add_object(
+        bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box(), visible=second_visible)
+    )
+    return doc, first.uid, second.uid
+
+
+def test_select_all_in_object_mode_skips_hidden_objects():
+    doc, first, _hidden = _two_objects(second_visible=False)
+    clay_mode._select_all(doc)
+    assert doc.selection == {first}
+
+
+def test_invert_in_object_mode_never_selects_a_hidden_object():
+    doc, first, _hidden = _two_objects(second_visible=False)
+    doc.select([first])
+    clay_mode._invert(doc)
+    assert doc.selection == set()
+
+
+def test_select_all_still_takes_every_visible_object():
+    doc, first, second = _two_objects()
+    clay_mode._select_all(doc)
+    assert doc.selection == {first, second}

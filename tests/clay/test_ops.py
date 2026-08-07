@@ -259,3 +259,156 @@ def test_a_duplicates_params_are_its_own() -> None:
     copy.params["radius"] = 1.0
     assert obj.params == {"radius": 0.5}
     assert copy.generator == "cylinder"
+
+
+# --- join -------------------------------------------------------------------
+#
+# The property that matters is not "the arrays got longer" -- it is that the
+# result is a *valid* CSR mesh and that every piece is where it was drawn.
+# Concatenating CSR arrays is exactly the operation whose off-by-one lands in
+# ``starts``, where it does not raise: ``validate`` is what catches it.
+
+
+def test_join_concatenates_into_one_valid_mesh() -> None:
+    a, b = _obj("A"), _obj("B", translation=(5.0, 0.0, 0.0))
+    merged = ops.join([a, b], eps=0.0)
+    bm.validate(merged)
+    assert bm.face_count(merged) == bm.face_count(a.mesh) + bm.face_count(b.mesh)
+    assert len(merged.positions) == len(a.mesh.positions) + len(b.mesh.positions)
+    assert len(merged.loops) == len(a.mesh.loops) + len(b.mesh.loops)
+
+
+def test_join_lands_every_piece_where_it_was_drawn() -> None:
+    """The merged mesh is in the *target's* frame, so the second object's
+    geometry has to arrive carrying its own transform relative to the first."""
+    a = _obj("A", translation=(1.0, 2.0, 3.0))
+    b = _obj("B", translation=(6.0, 2.0, 3.0))
+    merged = ops.join([a, b], eps=0.0)
+    lo, hi = bm.bounds(merged)
+    # a is a unit box at the origin of its own frame; b sits five along +X.
+    assert lo == pytest.approx([-0.5, -0.5, -0.5])
+    assert hi == pytest.approx([5.5, 0.5, 0.5])
+
+
+def test_join_leaves_the_targets_own_vertices_untouched() -> None:
+    """Not "close to" -- exactly. The target keeps its transform, so nothing
+    about it moves, and ``inv(M) @ M`` is only identity to a rounding error."""
+    a = _obj("A", translation=(1.0, 2.0, 3.0), scale=(0.3, 7.0, 0.1))
+    b = _obj("B", translation=(6.0, 0.0, 0.0))
+    merged = ops.join([a, b], eps=0.0)
+    n = len(a.mesh.positions)
+    assert np.array_equal(merged.positions[:n], a.mesh.positions)
+
+
+def test_join_welds_coincident_vertices_into_one_surface() -> None:
+    """Two boxes in the same place are one box afterwards, which is what a
+    user means by merging rather than by grouping."""
+    a, b = _obj("A"), _obj("B")
+    assert len(ops.join([a, b], eps=0.0).positions) == 2 * len(a.mesh.positions)
+    welded = ops.join([a, b], eps=1e-4)
+    bm.validate(welded)
+    assert len(welded.positions) == len(a.mesh.positions)
+
+
+def test_join_keeps_uvs_when_only_one_side_has_them() -> None:
+    """Dropping them would lose coordinates one half already had; the side
+    without gets zeros, which is what "this mesh has no UVs" already means."""
+    a = _obj("A")
+    textured = bm.Mesh(
+        positions=a.mesh.positions,
+        loops=a.mesh.loops,
+        starts=a.mesh.starts,
+        material=a.mesh.material,
+        smooth=a.mesh.smooth,
+        uv=np.zeros((len(a.mesh.loops), 2), dtype="f4") + 0.25,
+    )
+    merged = ops.join([_obj("A", mesh=textured), a], eps=0.0)
+    bm.validate(merged)
+    assert merged.uv is not None
+    assert merged.uv.shape == (len(merged.loops), 2)
+    assert merged.uv[: len(textured.loops)] == pytest.approx(0.25)
+    assert merged.uv[len(textured.loops) :] == pytest.approx(0.0)
+
+
+def test_join_keeps_no_uvs_when_neither_side_has_them() -> None:
+    assert ops.join([_obj("A"), _obj("B")], eps=0.0).uv is None
+
+
+def test_join_carries_per_face_materials_through_unchanged() -> None:
+    """The palette is the document's, so an index means the same thing in
+    every object in it and needs no remapping."""
+    a = _obj("A")
+    other = bm.Mesh(
+        positions=a.mesh.positions,
+        loops=a.mesh.loops,
+        starts=a.mesh.starts,
+        material=np.full(bm.face_count(a.mesh), 3, dtype="i4"),
+        smooth=a.mesh.smooth,
+    )
+    merged = ops.join([a, _obj("B", mesh=other)], eps=0.0)
+    assert set(merged.material[: bm.face_count(a.mesh)]) == {0}
+    assert set(merged.material[bm.face_count(a.mesh) :]) == {3}
+
+
+def test_join_refuses_fewer_than_two_objects() -> None:
+    from warlock.studio.clay.elements import OpError
+
+    with pytest.raises(OpError):
+        ops.join([_obj("A")])
+
+
+def test_join_refuses_a_target_with_a_zero_scale() -> None:
+    """np.linalg.inv would raise LinAlgError out of the frame loop; a refusal
+    is a toast."""
+    from warlock.studio.clay.elements import OpError
+
+    with pytest.raises(OpError):
+        ops.join([_obj("A", scale=(0.0, 1.0, 1.0)), _obj("B")], eps=0.0)
+
+
+# --- the weld distance's units ----------------------------------------------
+#
+# The dialog says "weld distance (m)", and the weld runs in the *target's local
+# frame* -- so handing the number straight through made a target at scale 2 weld
+# at twice what was asked and one at 0.01 at a hundredth, with the field still
+# saying metres. The property below is the one that makes the label true: the
+# same world-space gap decides the same way whatever the target is scaled to.
+
+
+def _faces_apart(gap: float, scale: tuple[float, float, float]) -> bm.Mesh:
+    """Two equally-sized boxes whose facing sides are ``gap`` metres apart in
+    *world*, both carrying ``scale`` so their corners genuinely coincide."""
+    a = _obj("A", scale=scale)
+    b = _obj("B", translation=(scale[0] + gap, 0.0, 0.0), scale=scale)
+    return ops.join([a, b], eps=0.002)
+
+
+def test_the_weld_distance_is_world_metres_whatever_the_target_is_scaled_to():
+    verts = len(bp.box().positions)
+    for s in (0.05, 1.0, 20.0):
+        scale = (s, s, s)
+        # A gap well inside the 2 mm asked for: the touching faces fuse, so
+        # four of the eight vertices on each side become shared.
+        assert len(_faces_apart(0.0005, scale).positions) == 2 * verts - 4, s
+        # And well outside it: nothing fuses. Both answers at every scale, which
+        # is the whole claim -- handed straight through, the small scale welds
+        # nothing and the large one welds everything.
+        assert len(_faces_apart(0.05, scale).positions) == 2 * verts, s
+
+
+def test_a_non_uniform_scale_never_welds_further_than_it_was_asked_to():
+    """``max`` of the scale components, not a mean: the bound has to hold on the
+    axis that stretches local space the most, or that axis welds wider than the
+    number on the dialog. 5 mm apart, asked for 2 -- ``max`` leaves it alone,
+    ``mean`` (3.4 here) would fuse it, and no conversion at all fuses it twice
+    over."""
+    merged = _faces_apart(0.005, (10.0, 0.1, 0.1))
+    assert len(merged.positions) == 2 * len(bp.box().positions)
+
+
+def test_the_weld_still_closes_a_seam_under_an_unscaled_target():
+    """The behaviour the units fix must not cost: two coincident boxes are one
+    box afterwards, which is the whole point of a non-zero weld."""
+    merged = ops.join([_obj("A"), _obj("B")], eps=1e-4)
+    bm.validate(merged)
+    assert len(merged.positions) == len(bp.box().positions)

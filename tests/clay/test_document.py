@@ -611,3 +611,101 @@ def test_clearing_the_element_selection_clears_the_objects_too() -> None:
     doc.clear_element_sel()
     assert doc.element_sel == {}
     assert doc.selection == set()
+
+
+# --- join_objects -----------------------------------------------------------
+#
+# The decision pinned here is that a merge is *one* step. Split across a
+# set_mesh and N remove_objects, a single Ctrl+Z would put one absorbed object
+# back while the target still carried the merged geometry -- the shape existing
+# twice, a state that never happened.
+
+
+def _merged(doc: bd.ClayDoc, target: int, others: list[int]) -> bm.Mesh:
+    from warlock.studio.clay import ops as clay_ops_geom
+
+    return clay_ops_geom.join([doc.by_uid(u) for u in [target, *others]], eps=0.0)
+
+
+def test_join_objects_absorbs_the_others_and_pushes_one_step() -> None:
+    a, b, c = _obj("A"), _obj("B"), _obj("C")
+    doc = bd.ClayDoc([a, b, c])
+    before = len(doc.history)
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid, c.uid]), [b.uid, c.uid])
+    assert [o.name for o in doc.objects] == ["A"]
+    assert len(doc.history) == before + 1
+    assert isinstance(_last_edit(doc), CompoundEdit)
+
+
+def test_one_undo_restores_both_the_geometry_and_the_absorbed_objects() -> None:
+    a, b = _obj("A"), _obj("B")
+    original = a.mesh
+    doc = bd.ClayDoc([a, b])
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid]), [b.uid])
+    assert doc.undo()
+    assert [o.name for o in doc.objects] == ["A", "B"]
+    assert doc.by_uid(a.uid).mesh is original
+
+
+def test_undoing_a_merge_puts_every_object_back_at_its_own_index() -> None:
+    """The removals are recorded descending so the reversed replay re-inserts
+    ascending; recorded ascending, the second insert lands one place late."""
+    a, b, c, d = _obj("A"), _obj("B"), _obj("C"), _obj("D")
+    doc = bd.ClayDoc([a, b, c, d])
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid, d.uid]), [b.uid, d.uid])
+    assert [o.name for o in doc.objects] == ["A", "C"]
+    assert doc.undo()
+    assert [o.name for o in doc.objects] == ["A", "B", "C", "D"]
+
+
+def test_redoing_a_merge_removes_the_same_objects_again() -> None:
+    a, b, c = _obj("A"), _obj("B"), _obj("C")
+    doc = bd.ClayDoc([a, b, c])
+    doc.join_objects(a.uid, _merged(doc, a.uid, [c.uid]), [c.uid])
+    doc.undo()
+    assert doc.redo()
+    assert [o.name for o in doc.objects] == ["A", "B"]
+
+
+def test_a_merge_freezes_the_targets_generator() -> None:
+    """A box merged with a sphere is not a box, and leaving the claim lets the
+    properties panel rebuild a pristine box over the merge."""
+    a = _obj("A", generator="box", params={"size": 1.0})
+    b = _obj("B")
+    doc = bd.ClayDoc([a, b])
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid]), [b.uid])
+    assert doc.by_uid(a.uid).generator is None
+    assert doc.by_uid(a.uid).params == {}
+    # And one press gets both back, because the freeze is in the same step.
+    doc.undo()
+    assert doc.by_uid(a.uid).generator == "box"
+    assert doc.by_uid(a.uid).params == {"size": 1.0}
+
+
+def test_a_merge_drops_the_element_selection_it_invalidates() -> None:
+    a, b = _obj("A"), _obj("B")
+    doc = bd.ClayDoc([a, b])
+    doc.set_element_mode("vertex")
+    doc.set_element_sel(a.uid, el.select_all(a.mesh, "vertex"))
+    doc.set_element_sel(b.uid, el.select_all(b.mesh, "vertex"))
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid]), [b.uid])
+    assert doc.element_sel == {}
+
+
+def test_join_objects_never_removes_the_target_itself() -> None:
+    """The op passes the whole selection through in more than one place; a
+    target that appeared in ``others`` too would delete the survivor."""
+    a, b = _obj("A"), _obj("B")
+    doc = bd.ClayDoc([a, b])
+    doc.join_objects(a.uid, _merged(doc, a.uid, [b.uid]), [a.uid, b.uid])
+    assert [o.name for o in doc.objects] == ["A"]
+
+
+def test_a_merge_that_absorbs_nothing_and_changes_nothing_pushes_no_step() -> None:
+    """Dirty is a comparison against the head, so a no-op step makes a saved
+    document ask to be saved again."""
+    a = _obj("A")
+    doc = bd.ClayDoc([a])
+    doc.mark_saved()
+    assert not doc.join_objects(a.uid, a.mesh, [])
+    assert not doc.dirty

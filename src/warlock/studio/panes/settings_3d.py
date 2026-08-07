@@ -35,15 +35,19 @@ def draw(ctx: Any) -> None:
     _source(ctx)
 
     widgets.section("Mesh")
-    form["platform"] = widgets.combo(
-        "Detail", form["platform"], _platform_options(ctx)
-    )
+    # Labels above rather than beside: a combo here is drawn at -1 width, and
+    # imgui puts a widget's label to its *right* -- so every one of these was
+    # a full-width select with its name clipped off the edge of the panel, and
+    # "Detail", "Budget" and "Background" were invisible. ``labeled_combo`` is
+    # the widget that already answers this, and the 2D pane's guidance grid
+    # uses the same small-caps line above each control.
+    form["platform"] = widgets.labeled_combo("Detail", form["platform"], _platform_options(ctx))
     _hint(ctx, "platform", form["platform"])
     widgets.help_marker(
         "The geometry resolution sent to trellis. The 2D pane's platform is a "
         "separate thing -- a hint in the prompt."
     )
-    form["profile"] = widgets.combo("Budget", form["profile"], PROFILES)
+    form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
     _hint(ctx, "profile", form["profile"])
 
     changed, size = imgui.input_float("Size (m)", float(form["size_m"]), 0.0, 0.0, "%.2f")
@@ -54,9 +58,7 @@ def draw(ctx: Any) -> None:
     # a threshold of five would essentially never be met.
     widgets.help_marker("0 keeps whatever the reference recorded.")
 
-    form["bg_removal"] = widgets.combo(
-        "Background", form["bg_removal"], _bg_options(ctx)
-    )
+    form["bg_removal"] = widgets.labeled_combo("Background", form["bg_removal"], _bg_options(ctx))
     _hint(ctx, "bg_removal", form["bg_removal"])
 
     imgui.set_next_item_width(120)
@@ -103,8 +105,7 @@ def _hint(ctx: Any, param: str, value: Any) -> None:
     hint = _findings_hint(ctx, param, value)
     if hint is None:
         return
-    imgui.same_line()
-    imgui.text_disabled(hint)
+    widgets.hint_text(hint)
 
 
 def _platform_options(ctx: Any) -> list[tuple[str, str]]:
@@ -147,7 +148,7 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
     if form["rig"]:
         options = [(t["key"], t["label"]) for t in ctx.rig_templates]
         if options:
-            form["rig_template"] = widgets.combo(
+            form["rig_template"] = widgets.labeled_combo(
                 "Skeleton", form["rig_template"] or ctx.rig_default, options
             )
 

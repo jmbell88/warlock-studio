@@ -261,8 +261,8 @@ class App:
             for c in self.runtime.checks
             if not c.ok and (c.fatal or c.name == "trellis port")
         ]
-        if failed:
-            ctx.state.last_error = "; ".join(f"{c.name}: {c.detail}" for c in failed)
+        for check in failed:
+            ctx.state.note_error(f"{check.name}: {check.detail}")
 
     # -- the loop ----------------------------------------------------------
 
@@ -382,7 +382,7 @@ class App:
         ctx = self.app_ctx
         for done in ctx.tasks.poll():
             if not done.ok:
-                ctx.toast(done.message or "That did not work.", "error")
+                ctx.toast(done.message or "That did not work.", "error", done.action)
                 # A failed save must not leave the document locked: saving
                 # disables every editing control, so without this one bad
                 # write makes the tab read-only until it is closed. Each
@@ -585,11 +585,11 @@ class App:
         fatal = self.runtime.fatal
         if fatal is not None:
             self._fatal_reported = True
-            ctx.state.last_error = f"The GPU worker stopped: {fatal}. Restart Warlock."
+            ctx.state.note_error(f"The GPU worker stopped: {fatal}. Restart Warlock.")
             ctx.toast("The GPU worker stopped. Nothing new will run.", "error")
         elif not self.runtime.alive:
             self._fatal_reported = True
-            ctx.state.last_error = "The GPU worker is not running. Restart Warlock."
+            ctx.state.note_error("The GPU worker is not running. Restart Warlock.")
             ctx.toast("The GPU worker is not running.", "error")
 
     def _request_storage(self) -> None:
@@ -1702,9 +1702,23 @@ class App:
         overlay.fps_meter(ctx, self.fps)
         if ctx.state.mode != "home":
             overlay.progress_card(ctx, self.eta)
-        widgets.toasts(ctx.state, (viewport.work_size.x, viewport.work_size.y))
+        widgets.toasts(
+            ctx.state,
+            (viewport.work_size.x, viewport.work_size.y),
+            on_action=self._toast_action,
+        )
         ctx.confirms.draw()
         ctx.prompts.draw()
+
+    def _toast_action(self, name: str) -> None:
+        """What a toast's action button does, kept out of the widget.
+
+        ``widgets.toasts`` knows what to *draw* for an action and nothing about
+        what it means, which is what lets state.py carry the name with no
+        import of the App and lets a pane raise a toast without either.
+        """
+        if name == "log":
+            self.app_ctx.open_log()
 
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
@@ -1754,7 +1768,7 @@ class App:
         from .tokens import sp
 
         checks = list(getattr(ctx.runtime, "checks", []) or [])
-        if state.last_error is not None or any(c.fatal and not c.ok for c in checks):
+        if state.errors or any(c.fatal and not c.ok for c in checks):
             colour = theme.ERR
         elif any(not c.ok for c in checks):
             colour = theme.WARN
@@ -1843,6 +1857,7 @@ class App:
                 ("F", "Frame the selection"),
                 ("Delete", "Delete -- faces in an element mode, objects otherwise"),
                 ("Ctrl+D", "Duplicate (object mode)"),
+                ("Ctrl+J", "Merge the selected objects (object mode)"),
                 ("Ctrl+A", "Select all, in the current mode"),
                 ("Ctrl+Shift+I", "Invert the selection"),
                 ("Right-click", "Context menu"),
@@ -1913,12 +1928,7 @@ class App:
         imgui.same_line()
         log_path = Path(ctx.runtime.config.data_dir) / "warlock.log"
         if widgets.disabled_button("Open the log", log_path.exists()):
-            # Deliberately outside the kill-on-close job, and deliberately not
-            # a subprocess spawn: startfile hands the path to the shell, which
-            # opens it in whatever the user's editor is. That editor is *not*
-            # ours to kill when Warlock closes -- which is also why the
-            # every-spawn-is-in-the-job scan does not see this line.
-            ctx.submit("open-log", os.startfile, str(log_path))
+            ctx.open_log()
         imgui.end_popup()
 
     def _viewport_pane(self) -> None:

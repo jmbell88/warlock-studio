@@ -45,6 +45,7 @@ otherwise act on a viewport that is not on screen.
 | F | Frame the selection |
 | Delete | Delete the selection — faces in an element mode, objects in object mode |
 | Ctrl+D | Duplicate the selection (object mode only) |
+| Ctrl+J | Merge the selected objects into one (object mode only) |
 | Ctrl+A | Select everything, in the current mode's sense |
 | Ctrl+Shift+I | Invert the selection |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |

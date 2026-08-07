@@ -196,20 +196,24 @@ def doctor_banner(ctx: Any) -> None:
 
     Drawn from the top strip so it is visible in every mode -- it used to live
     inside the viewport child, which made a dead worker invisible from Paint.
-    The text wraps: multiple failures are a paragraph, not one clipped line.
+    Each failure gets its own wrapped line, because they are separate
+    conditions with separate remedies: a held trellis port and a dead worker
+    read as one confused sentence when joined, and the slot this replaced
+    showed only whichever was reported last.
     """
-    if ctx.state.last_error is None:
+    if not ctx.state.errors:
         return
     imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.25)))
     flags = imgui.ChildFlags_.borders.value | imgui.ChildFlags_.auto_resize_y.value
     if imgui.begin_child("doctor", (-1, 0), flags):
         if imgui.small_button("Dismiss"):
-            ctx.state.last_error = None
+            ctx.state.dismiss_errors()
         imgui.same_line()
         if imgui.small_button("Copy details"):
-            imgui.set_clipboard_text(str(ctx.state.last_error))
+            imgui.set_clipboard_text(ctx.state.error_text)
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-        imgui.text_wrapped(str(ctx.state.last_error))
+        for message in ctx.state.errors:
+            imgui.text_wrapped(message)
         imgui.pop_style_color()
     imgui.end_child()
     imgui.pop_style_color()

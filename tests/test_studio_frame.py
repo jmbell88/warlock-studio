@@ -249,6 +249,71 @@ def test_a_new_artifact_on_disk_is_noticed_without_a_status_change(svc):
     assert "thumb.png" in cache.by_id[job_id]["files"]
 
 
+# --- the racily-clean guard -------------------------------------------------
+#
+# A directory's mtime has a resolution, and on Windows it is the system clock's
+# 15.6 ms tick: measured, adding a file left the mtime unchanged 155 times in
+# 200 (docs/measurements/2026-08-07-directory-mtime-granularity.md). The test
+# above used to fail about one run in ten for exactly that reason, and the
+# product bug behind it was worse than a flake -- a stamp that matches a stale
+# answer matches it *forever*. ``os.utime`` is what makes the timing a decision
+# here rather than a coin toss.
+
+
+def _dir_job(svc):
+    from warlock.service import jobs as svc_jobs
+
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return {"id": job_id, "status": "done"}, job_dir
+
+
+def test_a_directory_touched_moments_ago_is_answered_but_not_remembered(svc):
+    import os
+    import time
+
+    from warlock.service import files as svc_files
+
+    job, job_dir = _dir_job(svc)
+    cache: dict = {}
+
+    now = time.time_ns()
+    os.utime(job_dir, ns=(now, now))
+    svc_files.attach_files(job, job_dir, cache=cache)
+    assert job["files"] == [], "the answer itself is still correct"
+    assert cache == {}, "a directory this fresh may still be written in its own mtime tick"
+
+    settled = now - 10 * svc_files.MTIME_RACE_NS
+    os.utime(job_dir, ns=(settled, settled))
+    svc_files.attach_files(job, job_dir, cache=cache)
+    assert job["id"] in cache, "an mtime safely in the past is a sound key"
+
+
+def test_a_write_that_never_moved_the_mtime_is_still_noticed(svc):
+    """The real failure, made deterministic. Both calls see the same mtime --
+    which is what Windows does three times in four -- so the only thing that
+    can save the second one is the first having declined to cache."""
+    import os
+    import time
+
+    from warlock.service import files as svc_files
+
+    job, job_dir = _dir_job(svc)
+    cache: dict = {}
+    now = time.time_ns()
+
+    os.utime(job_dir, ns=(now, now))
+    svc_files.attach_files(job, job_dir, cache=cache)
+    assert "thumb.png" not in job["files"]
+
+    (job_dir / "thumb.png").write_bytes(b"x")
+    os.utime(job_dir, ns=(now, now))
+    svc_files.attach_files(job, job_dir, cache=cache)
+    assert "thumb.png" in job["files"]
+
+
 def test_the_files_cache_never_outgrows_the_page(svc):
     from warlock.service import jobs as svc_jobs
     from warlock.studio.jobs_cache import JobsCache
@@ -626,7 +691,7 @@ def test_a_dead_worker_is_reported_to_the_user():
     source = inspect.getsource(main.App._check_worker)
     assert "runtime.fatal" in source
     assert "runtime.alive" in source
-    assert "last_error" in source
+    assert "note_error" in source
     assert "_fatal_reported" in source
     # And something actually calls it every frame.
     assert "_check_worker" in inspect.getsource(main.App._refresh)

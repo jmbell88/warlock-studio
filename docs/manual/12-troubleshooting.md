@@ -4,6 +4,12 @@ Most things that go wrong here announce themselves: the health dot turns amber o
 appears across the top of the window, and the diagnostics popup names the check that failed. This
 chapter is the other half — what each of those means and what to do about it.
 
+The banner holds every outstanding failure, one line each, rather than only the most recent — a
+launch that both failed a check and lost its worker says so twice. **Dismiss** clears all of them
+and **Copy details** copies all of them. Separately, a toast for a failure with no message of its
+own carries an **Open log** button, so the log it tells you to read is one press away rather than
+inside the diagnostics popup.
+
 ## Out of memory
 
 **What you see.** A job fails partway through, or the app dies outright with nothing useful on

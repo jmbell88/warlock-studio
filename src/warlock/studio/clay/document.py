@@ -332,6 +332,50 @@ class ClayDoc:
         self.touch()
         return True
 
+    def join_objects(self, target_uid: int, mesh: bm.Mesh, others: Iterable[int]) -> bool:
+        """Adopt a merged mesh and drop the objects it absorbed, as **one** step.
+
+        One ``CompoundEdit`` and not a ``set_mesh`` followed by N
+        ``remove_object`` calls, for the reason ``set_mesh``'s own freeze is one
+        step: a Ctrl+Z that put back one of the absorbed objects while the
+        target still carried the merged geometry would show the user a document
+        in which that shape exists twice -- a state that never happened, and one
+        it takes another N presses to leave.
+
+        The removals are recorded in *descending* index order so each
+        ``ObjectRemoveEdit`` names the index the object actually sat at when it
+        was popped; ``CompoundEdit`` undoes in reverse, which re-inserts them
+        ascending, which is the only order in which those indices are all still
+        correct.
+
+        The generator freeze applies here exactly as it does in ``set_mesh``:
+        a box merged with a sphere is not a box, and leaving the claim would let
+        the properties panel rebuild a pristine box over the merge.
+        """
+        obj = self.by_uid(target_uid)
+        doomed = sorted({int(u) for u in others} - {target_uid}, key=self.index_of, reverse=True)
+        if mesh is obj.mesh and not doomed:
+            return False
+        before, obj.mesh = obj.mesh, mesh
+        edits: list[Any] = [MeshEdit(target_uid, before, mesh)]
+        if obj.generator is not None:
+            was = {"generator": obj.generator, "params": obj.params}
+            obj.generator, obj.params = None, {}
+            edits.append(ObjectPropsEdit(target_uid, was, {"generator": None, "params": {}}))
+        for uid in doomed:
+            index = self.index_of(uid)
+            gone = self.objects.pop(index)
+            self.selection.discard(uid)
+            self.element_sel.pop(uid, None)
+            edits.append(ObjectRemoveEdit(index, gone))
+        # The target's own element selection names vertices of the mesh that
+        # has just been replaced, so it describes geometry that is no longer
+        # there -- the same reason ``_forget_elements`` drops one after an undo.
+        self.element_sel.pop(target_uid, None)
+        self.history.push(CompoundEdit(edits))
+        self.touch()
+        return True
+
     def set_transform(
         self,
         uid: int,

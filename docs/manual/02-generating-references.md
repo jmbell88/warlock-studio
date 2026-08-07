@@ -46,14 +46,14 @@ Under the prompt are eleven optional selects, grouped by what they describe:
 | Group | Fields |
 | --- | --- |
 | Subject | category, genre, setting, silhouette |
-| Style | art style, palette, mood, rarity |
+| Style | era style, palette, mood, rarity |
 | Surface | material, condition, emissive |
 
 Each one is a small closed vocabulary — genre offers Fantasy, Sci-fi, Modern, Post-apocalyptic,
 Horror and Cartoon; condition offers Pristine, Worn, Damaged, Ancient, Rusted, Overgrown and Burned;
 and so on. Every entry maps to a short prompt fragment of two to four words, and the fragments are
 appended to your prompt in a fixed order that reads like a sentence: category, silhouette,
-material, condition, rarity, emissive, setting, genre, mood, art style, palette, platform.
+material, condition, rarity, emissive, setting, genre, mood, era style, palette, platform.
 
 Leaving a field unset simply omits its fragment. Nothing is filled in for you except the platform
 default.
@@ -69,6 +69,11 @@ Below the guidance groups you will also find **preset**, a picker of four comple
 Choosing one fills in the prompt and every field it names and then gets out of the way — everything
 it set stays visible and editable, and the picker shows "Custom" the moment you change anything. A
 preset is a starting point, not a mode.
+
+Beside **Save as...** at the top of the pane is **Reset...**, which puts the whole 2D form back to
+its first-launch defaults after a confirm — the prompt, the negative prompt, every guidance select,
+the model and LoRA, the reference and the run controls, with a freshly rolled seed. It touches
+nothing outside this pane: saved profiles and presets are kept, and the 3D form is left alone.
 
 The composed prompt has no hard length ceiling. CLIP's text encoders stop at 77 tokens, but the app
 splits a longer prompt into several chunks on comma boundaries — never mid-phrase — encodes each
@@ -287,7 +292,7 @@ wrapping convolutions, so its left edge continues into its right and its top int
 
 Choosing it changes what the pane offers. The object taxonomy — category, silhouette, rarity and
 the rest — describes a *thing*, and a tile has none, so those selects are hidden. What remains is
-the surface half: material, condition, palette, setting, genre and art style. The 3D pane's platform
+the surface half: material, condition, palette, setting, genre and era style. The 3D pane's platform
 detail is hidden for the same reason.
 
 A tile cannot be made into a mesh, and the app does not offer to: there is no subject to

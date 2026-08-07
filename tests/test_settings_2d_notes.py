@@ -85,3 +85,33 @@ def test_every_mesh_setting_that_evidence_exists_for_shows_it():
 
     assert owned <= set(vectors.VECTOR_PARAMS), "the form and the vocabulary must agree"
     assert hinted == owned - {"size_m", "custom_triangles"}
+
+
+def test_the_era_style_control_is_renamed_without_renaming_its_key():
+    """A relabel, not a rename. ``art_style`` is what every job on disk
+    recorded and what the findings and verdict buckets are keyed on, so
+    renaming the key would need a ``_LEGACY_ALIASES`` entry *and* would still
+    split the corpus -- a vector recorded under the old spelling is a different
+    string, and evidence under it would simply stop accumulating.
+    """
+    assert settings_2d.field_label("art_style") == "era style"
+    assert "art_style" in guidance.form_fields()
+    assert "era_style" not in guidance.form_fields()
+    # And the group still names the key, because that is what the form holds.
+    style = dict(settings_2d.GUIDANCE_GROUPS)["Style"]
+    assert "art_style" in style
+
+
+def test_every_other_field_still_reads_as_its_key():
+    for field in guidance.form_fields():
+        if field != "art_style":
+            assert settings_2d.field_label(field) == field.replace("_", " ")
+
+
+def test_the_blank_option_is_named_by_the_pane_not_by_the_key():
+    """The empty entry is what the combo shows until something is chosen, so a
+    relabel that stopped at the heading would leave it saying "art style...".
+    """
+    options = settings_2d._field_options(_ctx(), "art_style")
+    assert options[0] == ("", "era style...")
+    assert settings_2d._field_options(_ctx(), "palette")[0] == ("", "palette...")

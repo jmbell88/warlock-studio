@@ -56,7 +56,11 @@ def draw(ctx: Any) -> None:
 
 def _swatches(ctx: Any, state: Any) -> None:
     avail = imgui.get_content_region_avail().x
-    per_row = max(1, int(avail // (SWATCH[0] + 6)))
+    # The gap between two swatches is the style's, not 6: a row of n costs
+    # n * SWATCH + (n - 1) * spacing, and pricing the gap two pixels under the
+    # real one bought a swatch that did not fit and was clipped at the edge.
+    gap = imgui.get_style().item_spacing.x
+    per_row = max(1, int((avail + gap) // (SWATCH[0] + gap)))
     for index, colour in enumerate(list(state.swatches)):
         imgui.push_id(f"swatch{index}")
         if imgui.color_button("##swatch", _vec(colour), 0, SWATCH):

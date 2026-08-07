@@ -142,25 +142,37 @@ def status_pill(status: str) -> None:
         imgui.dummy((size.x + pad_x * 2, size.y + pad_y * 2))
 
 
-def quality_badge(job: dict[str, Any]) -> None:
+def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     """The mesh's verdict, from mesh_report if there is one.
 
     mesh_report wins over mesh_audit because they answer different questions
     and only the report's answer is about whether an importer will accept it;
     the audit is a silhouette check and its thresholds are what the badge falls
     back to when no report exists.
+
+    **``inline`` belongs here and not to the caller**, because this draws
+    nothing at all for a job with neither -- and a ``same_line`` issued before a
+    call that turns out to draw nothing is not spent, it is inherited by
+    whatever is drawn next. On a library card that was the entire action row,
+    pulled up onto the status pill's line and 73 px to the right, which pushed
+    the favourite star clean off the card. Every reference in the library has
+    neither a report nor an audit, so that was most of them.
     """
     params = job.get("params") or {}
     report = params.get("mesh_report")
     if isinstance(report, dict) and report.get("verdict"):
         verdict = str(report["verdict"])
         colour = {"good": theme.OK, "usable": theme.WARN}.get(verdict, theme.ERR)
+        if inline:
+            imgui.same_line()
         text_colored(colour, verdict)
         return
     audit = params.get("mesh_audit")
     if isinstance(audit, dict) and audit.get("worst") is not None:
         ratio = float(audit["worst"])
         colour = theme.OK if ratio < 0.02 else theme.WARN if ratio < 0.08 else theme.ERR
+        if inline:
+            imgui.same_line()
         text_colored(colour, f"{ratio * 100:.1f}% open")
 
 
@@ -359,11 +371,42 @@ def disabled_button(label: str, enabled: bool, size: tuple[float, float] = (0, 0
     return clicked and enabled
 
 
-def help_marker(text: str) -> None:
+def same_line_or_wrap(width: float) -> None:
+    """Continue on this line if ``width`` still fits, otherwise start the next.
+
+    ``same_line`` after an item drawn at ``-1`` leaves the cursor *exactly* on
+    the content region's right edge, so whatever comes next is drawn past it
+    and clipped away -- which is where every findings hint in both generate
+    panes, and every ``(?)`` in the 3D pane's Mesh section, was going. The
+    panes already knew this in one place (the 2D platform combo is narrowed by
+    30 px "to leave room for the marker"); this asks the layout instead of
+    remembering it per call site, which is what a full-width control one pane
+    over cannot be relied on to do.
+    """
     imgui.same_line()
+    if imgui.get_content_region_avail().x < width:
+        imgui.new_line()
+
+
+def help_marker(text: str) -> None:
+    same_line_or_wrap(imgui.calc_text_size("(?)").x)
     text_colored(theme.MUTED, "(?)")
     if imgui.is_item_hovered():
         imgui.set_tooltip(text)
+
+
+def hint_text(text: str) -> None:
+    """A muted note after a control -- beside it if it fits, under it if not.
+
+    Wrapped as well as placed: an evidence line reads
+    ``"holes 3% * watertight 71% (21 meshes)"``, which is wider than a cell of
+    the 2D pane's two-column guidance grid, so a hint that only moved down a
+    line would still be cut off at the column edge rather than at the panel's.
+    """
+    same_line_or_wrap(imgui.calc_text_size(text).x)
+    imgui.push_text_wrap_pos(0.0)
+    imgui.text_disabled(text)
+    imgui.pop_text_wrap_pos()
 
 
 def segmented_control(seg_id: str, options: list[tuple[str, str]], current: str) -> str:
@@ -429,9 +472,16 @@ def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bo
     ``tag`` keys the animation when the visible label alone would collide.
     """
     key = tag or label
-    height = sp(18)
+    track = sp(18)
     width = sp(32)
+    # The *item* is a full frame tall even though the switch drawn inside it is
+    # not, and the track is centred in that. ``same_line`` aligns items by their
+    # top edge, so an 18px switch between frame-height buttons rides high and
+    # drags the whole row out of line -- which is what made the viewport
+    # toolbar's Frame and Screenshot icons read as sitting off-centre.
+    height = max(track, imgui.get_frame_height())
     origin = imgui.get_cursor_screen_pos()
+    top = origin.y + (height - track) * 0.5
     text_w = imgui.calc_text_size(label).x if label else 0.0
     clicked = imgui.invisible_button(
         f"##toggle/{key}", (width + (sp(6) + text_w if label else 0), height)
@@ -442,18 +492,18 @@ def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bo
     draw = imgui.get_window_draw_list()
     on = theme.rgba(theme.ACCENT)
     off = theme.rgba(theme.EDGE)
-    track = tuple(off[i] + (on[i] - off[i]) * t for i in range(3)) + (1.0,)
+    fill = tuple(off[i] + (on[i] - off[i]) * t for i in range(3)) + (1.0,)
     draw.add_rect_filled(
-        origin, (origin.x + width, origin.y + height), imgui.get_color_u32(track), height * 0.5
+        (origin.x, top), (origin.x + width, top + track), imgui.get_color_u32(fill), track * 0.5
     )
-    radius = height * 0.5 - sp(2)
-    knob_x = origin.x + height * 0.5 + (width - height) * t
+    radius = track * 0.5 - sp(2)
+    knob_x = origin.x + track * 0.5 + (width - track) * t
     draw.add_circle_filled(
-        (knob_x, origin.y + height * 0.5), radius, imgui.get_color_u32(theme.rgba(0xFFFFFF)), 24
+        (knob_x, top + track * 0.5), radius, imgui.get_color_u32(theme.rgba(0xFFFFFF)), 24
     )
     if label:
         draw.add_text(
-            (origin.x + width + sp(6), origin.y + (height - imgui.get_text_line_height()) * 0.5),
+            (origin.x + width + sp(6), top + (track - imgui.get_text_line_height()) * 0.5),
             imgui.get_color_u32(theme.rgba(theme.TEXT)),
             label,
         )
@@ -592,12 +642,22 @@ def empty_state(icon: str, title: str, hint: str = "") -> None:
             centred(hint)
 
 
-def toasts(state: Any, viewport_size: tuple[float, float]) -> None:
+# What a toast's ``action`` draws as. A name with no entry here draws nothing,
+# so an action the UI has not learned yet degrades to a plain toast rather than
+# to a button that does something unexpected.
+TOAST_ACTIONS = {"log": "Open log"}
+
+
+def toasts(
+    state: Any, viewport_size: tuple[float, float], on_action: Any = None
+) -> None:
     """Stacked bottom-right, newest lowest; born sliding up, dying fading out.
 
-    Info toasts stay ``no_inputs`` -- they never mattered enough to click.
-    Error toasts take input so their close button works: eight seconds is
-    enough to read a sentence, not always enough to act on one.
+    Info toasts stay ``no_inputs`` -- they never mattered enough to click --
+    unless they carry an action, which would otherwise be a button the mouse
+    passes straight through. Error toasts always take input so their close
+    button works: eight seconds is enough to read a sentence, not always
+    enough to act on one.
     """
     state.expire_toasts()
     if not state.toasts:
@@ -627,7 +687,8 @@ def toasts(state: Any, viewport_size: tuple[float, float]) -> None:
             | imgui.WindowFlags_.always_auto_resize.value
             | imgui.WindowFlags_.no_focus_on_appearing.value
         )
-        if not error:
+        label = TOAST_ACTIONS.get(toast.action or "") if on_action is not None else None
+        if not error and not label:
             flags |= imgui.WindowFlags_.no_inputs.value
         if imgui.begin(f"##toast{id(toast)}", None, flags)[0]:
             if error:
@@ -635,6 +696,13 @@ def toasts(state: Any, viewport_size: tuple[float, float]) -> None:
                     dismissed.append(toast)
                 imgui.same_line()
             imgui.text_wrapped(toast.text)
+            # Its own line: the text above it wraps to the toast's full width,
+            # so a same_line here would start past the right edge.
+            if label and imgui.small_button(f"{label}##toast-action{id(toast)}"):
+                on_action(toast.action)
+                # Acted on, so done with: leaving it up invites a second click
+                # that opens a second copy of the same file.
+                dismissed.append(toast)
         height = imgui.get_window_height()
         imgui.end()
         imgui.pop_style_var()

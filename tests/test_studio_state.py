@@ -732,3 +732,107 @@ def test_a_finished_tile_opens_rather_than_offering_nothing():
 def test_a_tile_with_no_image_offers_nothing():
     job = {"status": "done", "stage": "tile", "kind": "text", "files": []}
     assert statelib.primary_action(job) is None
+
+
+# --- the error banner --------------------------------------------------------
+
+
+def test_two_different_failures_both_survive():
+    """``last_error`` was one slot with three writers (a failed doctor check, a
+    dead worker, a worker that never started). The second silently overwrote
+    the first, so a launch that failed two checks reported one of them."""
+    state = AppState()
+    state.note_error("trellis port: 17971 is already held")
+    state.note_error("The GPU worker stopped. Restart Warlock.")
+    assert state.errors == [
+        "trellis port: 17971 is already held",
+        "The GPU worker stopped. Restart Warlock.",
+    ]
+
+
+def test_the_same_failure_reported_twice_appears_once():
+    """The doctor's failures are re-derived on a refresh, so a condition that
+    is still true is re-reported; without dedupe the banner grows every time."""
+    state = AppState()
+    state.note_error("trellis port: 17971 is already held")
+    state.note_error("trellis port: 17971 is already held")
+    assert state.errors == ["trellis port: 17971 is already held"]
+
+
+def test_an_empty_failure_is_not_recorded():
+    state = AppState()
+    state.note_error("")
+    state.note_error(None)
+    assert state.errors == []
+
+
+def test_dismiss_clears_every_error_not_just_the_newest():
+    state = AppState()
+    state.note_error("one")
+    state.note_error("two")
+    state.dismiss_errors()
+    assert state.errors == []
+
+
+def test_the_banner_text_joins_every_outstanding_failure():
+    """One "Copy details" has to carry all of them, or the copy button reports
+    less than the banner shows."""
+    state = AppState()
+    state.note_error("one")
+    state.note_error("two")
+    assert state.error_text == "one\ntwo"
+
+
+def test_there_is_no_error_text_when_nothing_failed():
+    assert AppState().error_text == ""
+
+
+# --- the failure count -------------------------------------------------------
+
+
+def _job(job_id, **kw):
+    job = {"id": job_id, "status": "done", "stage": "reference", "kind": "text"}
+    job.update(kw)
+    return job
+
+
+def test_failures_counts_only_failed_rows():
+    jobs = [_job("a", status="error"), _job("b"), _job("c", status="error")]
+    assert Filters().failures(jobs) == 2
+
+
+def test_failures_is_unaffected_by_the_status_filter_it_would_replace():
+    """It is the affordance for *leaving* the current status filter, so
+    counting under it would report zero exactly when it is needed."""
+    jobs = [_job("a", status="error"), _job("b")]
+    assert Filters(status="done").failures(jobs) == 1
+
+
+def test_failures_respects_the_other_filters_so_the_count_matches_the_click():
+    """Clicking it only changes the status filter -- a kind filter left on
+    'rigs' still applies, so a count that ignored it would promise three rows
+    and reveal none."""
+    jobs = [
+        _job("a", status="error", kind="rig"),
+        _job("b", status="error", stage="reference"),
+    ]
+    assert Filters(kind="rig").failures(jobs) == 1
+
+
+def test_failures_ignores_sweep_units_exactly_as_the_list_does():
+    """One launched sweep can fail dozens of units; the library deliberately
+    does not show them, so counting them would offer a jump to nothing."""
+    jobs = [_job("a", status="error", sweep_id="s1"), _job("b", status="error")]
+    assert Filters().failures(jobs) == 1
+
+
+def test_a_toast_can_carry_an_action():
+    state = AppState()
+    state.toast("Something went wrong; see the log for details.", "error", action="log")
+    assert state.toasts[0].action == "log"
+
+
+def test_a_toast_carries_no_action_by_default():
+    state = AppState()
+    state.toast("saved")
+    assert state.toasts[0].action is None

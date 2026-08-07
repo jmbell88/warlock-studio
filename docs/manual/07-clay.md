@@ -68,7 +68,9 @@ last used.
 
 `Ctrl+A` selects everything in the current mode's sense of everything, `Ctrl+Shift+I` inverts it, and
 `Esc` steps back: first it drops the element selection, then it leaves the element mode, then it
-clears the object selection. `Delete` in an element mode deletes *faces*, never the object.
+clears the object selection. `Delete` in an element mode deletes *faces*, never the object. Neither
+`Ctrl+A` nor `Ctrl+Shift+I` reaches a **hidden** object, in either sense of everything: hiding
+something takes it out of what you are working on, so nothing you select can act on it by accident.
 
 **Element selection is transient.** It is not saved with the document, and an undo that changes
 geometry drops it — the indices it named describe a mesh that no longer exists. An undo that only
@@ -127,6 +129,43 @@ Two operations act on the whole selection. **Duplicate** (`Ctrl+D`) makes a copy
 counting up — `Box`, `Box.001`, `Box.002`. **Bake** folds an object's position, rotation and scale
 into its geometry and resets the transform to identity, which is what you want before measuring
 something or exporting it into a frame that has to match.
+
+## Merging objects
+
+**Merge Objects...** (`Ctrl+J`, object mode, two or more selected) turns several shapes into one.
+The survivor is the **topmost selected object in the outliner** — it keeps its name, its transform
+and its default material — and everything else is carried into its frame, appended to its geometry
+and removed from the document. That is one undo step: a `Ctrl+Z` that put one absorbed object back
+while the survivor still carried the merged geometry would show you a shape existing twice.
+
+Only objects you can see are merged. A hidden object stays hidden and untouched even when it is
+selected, and **Merge Objects...** greys out unless two visible objects are selected — hiding
+something means it is not part of what you are working on, and a merge is the one operation where
+absorbing an unseen object would leave no trace of having done so.
+
+The dialog asks for a **weld distance**, in metres of world space. Vertices closer together than
+that are merged into one at their centroid, which is what makes two shapes that *touch* come out as
+a single continuous surface rather than as two shells sharing a plane. Setting it to zero keeps
+every vertex, which is the honest answer for parts that are meant to stay separate inside one
+object. The distance means the same thing whatever the survivor is scaled to: 1 mm is 1 mm on the
+ruler, not 1 mm in whatever units the survivor's own transform happens to work in.
+
+The weld is applied to the **whole merged result**, not only where the shapes meet. That is what
+lets three objects touching at one point come out joined, and it costs nothing for ordinary work —
+texture coordinates are stored per face corner, so a weld carries UV seams through untouched, and
+nothing else in Clay leaves two vertices sitting at one position. The exception worth knowing:
+merge at zero to keep two parts as separate shells, then merge *that* object with a third at a
+non-zero distance, and the shells you kept apart are welded together. Merge the third one first, or
+keep the parts as separate objects until last.
+
+It is a weld and not a solid union. Geometry inside an overlap is kept rather than cut away,
+because deciding which faces are inside another solid means classifying every face against every
+other one, and a wrong classification quietly deletes a surface you can see. If you want the
+interior gone, delete those faces in face mode before merging.
+
+A merged object is no longer what a generator would build, so its generator claim is dropped along
+with the merge — the properties panel stops offering the size field that would have rebuilt a
+pristine box over your work. That drop is part of the same undo step.
 
 **Mirror X / Y / Z** reflects the object across a plane through its own origin. It is baked into the
 mesh rather than expressed as a negative scale, and that is deliberate: glTF readers disagree about

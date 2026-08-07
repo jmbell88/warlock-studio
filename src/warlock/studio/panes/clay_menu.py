@@ -115,7 +115,11 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
             changed, value = imgui.input_int(label, int(values.get(param.name, param.default)))
         else:
             changed, value = imgui.input_float(
-                label, float(values.get(param.name, param.default)), param.step
+                label,
+                float(values.get(param.name, param.default)),
+                param.step,
+                0.0,
+                clay_ops.format_for(param),
             )
         if changed:
             clamped = min(max(float(value), param.low), param.high)

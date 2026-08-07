@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -551,6 +552,13 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
     return path.exists()
 
 
+# How old a job directory's mtime must be before that mtime is trusted as a
+# cache key. Above Windows' 15.6 ms default system-clock tick with room to
+# spare, and a tenth of the 500 ms list refresh, so at most one extra listing
+# per write. See the racily-clean paragraph in ``attach_files``.
+MTIME_RACE_NS = 50_000_000
+
+
 def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = None) -> None:
     """List which of ``LISTED`` this job actually has.
 
@@ -563,11 +571,30 @@ def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = Non
 
     The stamp is ``(status, the job directory's own mtime)``. Sound because
     every name here is answered by *existence*: a file appearing or being
-    removed adds or removes a directory entry, which is exactly what moves a
+    removed adds or removes a directory entry, which is what moves a
     directory's mtime -- and a status change is the other thing that can change
     the answer (a queued job's ``model.glb`` is not servable). One stat per row
     instead of ten. The names are copied out, because a caller that edits
     ``job["files"]`` must not edit what the next tick will hand somebody else.
+
+    **But a directory's mtime has a resolution, and it is coarse.** Windows
+    updates it from the system clock, whose tick is 15.6 ms unless something has
+    asked for better; measured here, adding a file left the mtime *unchanged*
+    155 times out of 200 (see ``docs/measurements/2026-08-07-directory-mtime-
+    granularity.md``). So a write that lands after this listing but still inside
+    the stamped mtime's tick is invisible to the stamp -- and not for one tick,
+    but **forever**, because every later comparison keeps matching. That is
+    exactly the case the second half of the stamp exists for: a rig lands in the
+    *source* job's directory while that job stays ``done``.
+
+    The answer is git's racily-clean rule. A stamp is only stored once its mtime
+    is comfortably in the past; a directory touched moments ago is answered
+    correctly and simply not remembered, so the next tick asks the disk again.
+    **The clock is read after the listing, not before, and that ordering is the
+    proof**: the hazard needs a write later than our listing yet still in the
+    mtime's tick, so if the listing itself already finished more than one tick
+    after the mtime, no such write exists. Costs one extra listing per write, on
+    one row, since ticks are 500 ms apart and the window is 50.
     """
     if cache is None:
         job["files"] = [n for n in LISTED if ready(job, job_dir, n)]
@@ -586,5 +613,10 @@ def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = Non
         job["files"] = list(hit[1])
         return
     names = [n for n in LISTED if ready(job, job_dir, n)]
-    cache[job["id"]] = (stamp, names)
     job["files"] = list(names)
+    # None races with nothing: a directory appearing changes the stamp from
+    # None to a number whatever the clock did, so that one is always storable.
+    # A backwards clock step makes the difference negative, which declines to
+    # cache -- slower, never wrong, which is the right way round.
+    if stamp[1] is None or time.time_ns() - stamp[1] > MTIME_RACE_NS:
+        cache[job["id"]] = (stamp, names)

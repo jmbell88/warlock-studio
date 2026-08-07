@@ -52,7 +52,7 @@ reference also makes it the 3D pane's promotion source, so switching to 3D mode 
 it; selecting anything else leaves that source alone, so browsing your meshes never silently changes
 what **Make 3D** would submit.
 
-Above the list are four filters:
+Above the list are four filters and a select-all:
 
 - A free-text box, matched against the job's name, prompt, tags and id.
 - **Status**: any status, done, running, or failed.
@@ -60,9 +60,19 @@ Above the list are four filters:
   about what the job *produced*, not what was submitted — a text job that stopped at a reference and
   one that went on to a mesh are the same kind of job and two different things to look for.
 - A star toggle for favourites only.
+- A tick that selects every asset the filters are showing, for the bulk bar below. It says *shown*
+  rather than *all* deliberately: the list is a window onto the newest N (see below), so a control
+  claiming everything would leave the older jobs out of the delete that usually follows. Pressing it
+  again once everything shown is ticked clears them.
 
 The filters are remembered between sessions, because a workshop tends to be filtered the same way
 every time.
+
+Below them, when anything has failed and you are not already looking at the failures, a red
+**N jobs failed - show** appears. Pressing it sets the status filter to *failed*. The count is what
+the press will actually reveal, not how many failed overall: the other filters still apply
+afterwards, so with **Kind** on *rigs* it counts failed rigs only. Sweep units are left out, exactly
+as they are left out of the list — one failed sweep is dozens of rows the library never shows.
 
 The library holds a window on your history — the newest 200 jobs by default. When there are more, a
 line at the bottom says "Showing the newest N of M" and a **Load older** button widens the window.
@@ -72,6 +82,12 @@ window will tell you rather than quietly missing what it never read.
 Ticking cards enables the bulk bar: **Export zip...** writes the selected meshes to a single archive,
 **Save to project** copies them into a configured export folder (shown only when one is configured),
 and **Delete** removes them after a confirm.
+
+**Ticks survive a filter change**, on purpose — ticking a few meshes, switching to references and
+ticking a few more is a normal way to build up a selection. The count says so when it happens: it
+reads "12 selected (4 not shown)" once some of what is ticked has scrolled past the newest-N window
+or been filtered away, and the delete confirm repeats the number, so the bulk actions never describe
+less than they are about to do. **Clear** empties the whole selection, shown or not.
 
 A job's name and tags are editable at the top of the inspector, and **Rename...** is in the overflow
 menu too. Tags are normalised on the way in — trimmed, lowercased, deduplicated and sorted — so
@@ -124,7 +140,7 @@ A profile stores exactly nine fields:
 | negative prompt | Part of the house style, not of one image. |
 | platform | The prompt-side detail hint. |
 | genre | A style choice. |
-| art style | A style choice. |
+| era style | A style choice. |
 | setting | A style choice. |
 | palette | A style choice. |
 

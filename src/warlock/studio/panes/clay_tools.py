@@ -250,8 +250,12 @@ def _snapping(state: Any) -> None:
     if changed:
         state.snap = value
     imgui.begin_disabled(not state.snap)
-    _, state.snap_translate = imgui.input_float("grid (m)##snapt", state.snap_translate, 0.0625)
-    _, state.snap_rotate = imgui.input_float("angle (deg)##snapr", state.snap_rotate, 5.0)
+    # "%.4f", because the grid steps by 1/16 m and imgui's default "%.3f" drew
+    # that as 0.063 -- a field that disagrees with its own step button.
+    _, state.snap_translate = imgui.input_float(
+        "grid (m)##snapt", state.snap_translate, 0.0625, 0.0, "%.4f"
+    )
+    _, state.snap_rotate = imgui.input_float("angle (deg)##snapr", state.snap_rotate, 5.0, 0.0)
     imgui.end_disabled()
     # Clamped rather than validated: zero is the off switch every snap function
     # already treats as the identity, and a negative grid is meaningless.

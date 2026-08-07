@@ -45,6 +45,11 @@ class Done:
     # for a person; an unexpected exception gets a generic line and a log entry
     # instead, because its str() is usually a traceback fragment.
     message: str | None = None
+    # What the toast should offer besides its text -- see ``state.Toast``. Set
+    # to "log" for exactly the failures whose message defers to the log file,
+    # which is to say the unexpected ones: a ServiceError names its own remedy
+    # and the log has nothing to add to it.
+    action: str | None = None
     tag: Any = None
 
     @property
@@ -120,6 +125,7 @@ class TaskRunner:
                         key=key,
                         error=error,
                         message="Something went wrong; see the log for details.",
+                        action="log",
                         tag=pending.tag,
                     )
                 )

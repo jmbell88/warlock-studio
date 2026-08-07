@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
 import numpy as np
@@ -193,3 +193,110 @@ def duplicate(obj: Obj, uid: int, *, taken: Iterable[str] = ()) -> Obj:
         name=_next_name(obj.name, taken),
         params=dict(obj.params),
     )
+
+
+def join(objs: Sequence[Obj], *, eps: float = 1e-4) -> bm.Mesh:
+    """Several objects' geometry as one mesh, in the **first** one's frame.
+
+    Every object after the first is carried through ``inv(first) @ own`` so it
+    lands where it was drawn -- a join is the one op here that is about more
+    than one object, so it is the one that has to leave a local frame at all.
+    The first object's own mesh is passed through untouched rather than
+    multiplied by an ``inv(M) @ M`` that is only identity to within a rounding
+    error: the target keeps its transform, so nothing about it should move.
+
+    ``eps`` then welds the result, which is what makes two shapes that *touch*
+    come out as one surface rather than as two shells sharing a plane -- the
+    difference a user means by "merge". It is a weld and not a boolean union:
+    geometry inside the overlap is kept, because removing it means classifying
+    every face against every other solid, and a wrong classification deletes a
+    surface the user can see. ``eps=0`` skips the weld entirely, which is the
+    honest answer for shapes that are meant to stay separate shells.
+
+    **``eps`` is metres of world space, and the weld does not happen there.**
+    Everything above has just been carried into the target's *local* frame, so a
+    distance handed straight to ``weld`` would be scaled by whatever the target's
+    transform does -- a target at scale 2 welding at twice the number on the
+    dialog, one at 0.01 at a hundredth of it, with the field still labelled (m).
+    So it is divided by the largest absolute scale component: ``max`` rather than
+    a mean because it is the bound that holds per axis, guaranteeing a
+    non-uniform scale never fuses points further apart than asked in *any*
+    direction. The target is known non-degenerate by here, because ``_into`` has
+    already refused a singular world matrix.
+
+    **And the weld is applied to the whole merged result, not only across the
+    seam.** That is deliberate -- a seam is not identifiable without deciding
+    which vertices "belong" to which side, and three objects meeting at a point
+    have no seam in the pairwise sense -- and it is harmless for the geometry
+    Clay can currently author: UVs are per face corner, so ``merge_vertices``
+    carries a texture seam through a weld untouched, and no op here produces two
+    vertices at one position. The one case it does bite is worth knowing: merge
+    at 0 (documented as keeping separate shells inside one object) and then merge
+    *that* object with a third, and the shells kept apart on purpose are welded.
+
+    The document palette is shared by every object in it, so ``material`` is an
+    index that means the same thing in all of them and concatenates as-is. UVs
+    do not: a mesh either has them or does not, so a set that disagrees is
+    filled with zeros rather than dropped -- losing the coordinates one half
+    already had would be the more destructive of the two answers.
+    """
+    from .elements import OpError, empty
+    from .ops_topo import weld
+
+    if len(objs) < 2:
+        raise OpError("Select at least two objects to merge.")
+    meshes = [objs[0].mesh] + [bm.transformed(o.mesh, _into(objs[0], o)) for o in objs[1:]]
+
+    offsets = np.cumsum([0] + [len(m.positions) for m in meshes[:-1]])
+    corners = np.cumsum([0] + [len(m.loops) for m in meshes[:-1]])
+    keep_uv = any(m.uv is not None for m in meshes)
+    merged = bm.Mesh(
+        positions=np.concatenate([m.positions for m in meshes]),
+        loops=np.concatenate([m.loops + off for m, off in zip(meshes, offsets, strict=True)]),
+        # Each mesh's ``starts`` ends where the next begins, so the shared
+        # boundary offset appears once: every mesh contributes its interior
+        # offsets and the last contributes the final total.
+        starts=np.concatenate(
+            [m.starts[:-1] + off for m, off in zip(meshes, corners, strict=True)]
+            + [[len(meshes[-1].loops) + corners[-1]]]
+        ),
+        material=np.concatenate([m.material for m in meshes]),
+        smooth=np.concatenate([m.smooth for m in meshes]),
+        uv=(
+            np.concatenate(
+                [
+                    m.uv if m.uv is not None else np.zeros((len(m.loops), 2), dtype="f4")
+                    for m in meshes
+                ]
+            )
+            if keep_uv
+            else None
+        ),
+    )
+    if eps <= 0.0:
+        return merged
+    return weld(merged, empty(), eps=_local_eps(objs[0], eps))[0]
+
+
+def _local_eps(target: Obj, eps: float) -> float:
+    """*eps* metres of world space, in *target*'s local units."""
+    scale = float(np.max(np.abs(np.asarray(target.scale, dtype="f8"))))
+    return float(eps) / scale if scale > 0.0 else float(eps)
+
+
+def _into(target: Obj, other: Obj) -> np.ndarray:
+    """*other*'s world matrix expressed in *target*'s local frame.
+
+    A degenerate target -- a scale someone typed a zero into -- has no inverse,
+    and ``np.linalg.inv`` raises out of the frame loop rather than refusing.
+    """
+    world = m3.compose(target.translation, target.rotation, target.scale)
+    try:
+        inverse = np.linalg.inv(world)
+    except np.linalg.LinAlgError as error:
+        from .elements import OpError
+
+        raise OpError(
+            f"{target.name} has a zero scale, so nothing can be merged into it."
+        ) from error
+    return inverse @ m3.compose(other.translation, other.rotation, other.scale)
