@@ -22,8 +22,10 @@ Adding one means adding an entry. The fields worth thinking about:
 - `dir_name` — resolved under `WARLOCK_T2I_ROOT`, so the model is found by name rather than by path.
 - `image_size`, `steps`, `guidance_scale` — the sampler settings the checkpoint was distilled or
   trained for.
-- `scheduler` — a key into the scheduler table in `pipelines/text2image.py`, or left unset to keep
-  whatever the checkpoint's own config specifies.
+- `scheduler` — a key into the scheduler table in `pipelines/text2image.py` (`ddim_trailing` for
+  Hyper-SD, `lcm` for a consistency adapter), or left unset to keep whatever the checkpoint's own
+  config specifies. A name that table does not know raises — with the weights already in VRAM,
+  which is why every shipped entry's name is covered by a test.
 - `base_lora` — a step-distillation adapter loaded under a reserved adapter name, so it can never
   collide with a style LoRA key.
 - `controlnet` — stated explicitly rather than inferred from the guidance scale, so a future
@@ -65,6 +67,18 @@ text is byte-identical with and without any of them.
 A missing LoRA file is skipped at load time rather than failing the job, and the diagnostics name it.
 See [Models and style LoRAs](02-generating-references.md#models-and-style-loras) and
 [Optional image models and style LoRAs](10-installation.md#optional-image-models-and-style-loras).
+
+## Adding a palette
+
+There is nothing to add. A palette is a file in the palette directory (`palettes/`, or wherever
+`WARLOCK_PALETTE_DIR` points), in Lospec's `.hex` or GIMP's `.gpl` format, and the export's palette
+control lists whatever is there — no registry entry, no code, no restart. That is deliberate: a
+palette is art direction, and the registry pattern the models use exists for things that have to be
+downloaded, checked for and reported on.
+
+The one rule worth knowing is that freshness is keyed on a palette's *contents* and not its
+filename, so editing one in place re-derives every export that used it, which is what makes working
+on a palette feel like working on a file.
 
 ## Adding a skeleton
 

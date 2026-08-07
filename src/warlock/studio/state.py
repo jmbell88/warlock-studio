@@ -324,6 +324,12 @@ class AppState:
     # half, and a derivation rewrites the manifest under a tab that is open.
     # One slot, because one asset is inspected at a time.
     manifest: Any = None
+    # The palette directory's listing, held as (mtime, [names]) for exactly the
+    # reason above: the combo is drawn every frame and a directory walk per
+    # frame is a syscall storm for a folder that changes when a user drops a
+    # file in it. A palette added while the app runs appears on the next frame,
+    # because dropping a file moves the directory's own mtime.
+    palettes: Any = None
 
     # -- toasts ------------------------------------------------------------
 

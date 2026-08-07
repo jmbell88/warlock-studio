@@ -197,19 +197,15 @@ def sprite(
     )
 
 
-def pixel(
-    image: PILImage, mask: Any, *, size: int, colors: int = 0
-) -> tuple[PILImage, dict[str, Any]]:
-    """A downsampled, optionally palette-limited cutout.
+def _legacy_pixel(
+    image: PILImage, mask: Any, size: int, colors: int
+) -> tuple[PILImage, tuple[int, int, int, int], int | None]:
+    """Crop to the subject, then scale by an arbitrary ratio.
 
-    Nearest neighbour, never a filter: a resample that blends puts a ramp of
-    in-between colours along every edge, and hard edges are the one property
-    that makes the result read as pixel art rather than as a small photograph.
-
-    The quantization runs on RGB with alpha carried around it, because Pillow's
-    median cut treats alpha as a fourth channel to spend palette entries on --
-    which on a cutout means most of the palette describing the transparent
-    background.
+    What every pixel export did before a generator that draws on a real grid
+    existed, and still what happens to an image that has no grid to detect: a
+    smooth SDXL render has no lattice to preserve, so there is nothing better to
+    do than reduce it and take hard edges.
     """
     from PIL import Image
 
@@ -232,6 +228,133 @@ def pixel(
         # the resample produced survives the palette reduction exactly.
         small = flat.convert("RGBA")
         small.putalpha(alpha)
+    return (small, box, palette)
+
+
+def _grid_pixel(
+    image: PILImage, mask: Any, size: int, grid: dict[str, Any]
+) -> tuple[PILImage, tuple[int, int, int, int]]:
+    """Reduce on the lattice the generator drew, *then* crop.
+
+    This ordering is the whole point of detecting a grid at all. Cropping first
+    moves the origin off the lattice by whatever the subject's bounding box
+    happens to be, and the cell-centre sampling below then reads a different
+    part of every cell -- which is a shear, not a reduction. So the full frame
+    is reduced (each cell becoming one pixel, and its alpha decided by whether
+    the cell was mostly subject), and the crop is taken afterwards in logical
+    coordinates.
+
+    ``meta["trim"]`` is still reported in *source* pixels, so every existing
+    consumer of that field is unaffected by which branch ran.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from . import pixel as pixelmod
+
+    scale = int(grid["scale"])
+    phase = (int(grid["phase"][0]), int(grid["phase"][1]))
+    small = pixelmod.downscale_grid(cutout(image, mask), scale, phase)
+
+    # A cell's alpha by majority coverage rather than by its centre sample: the
+    # centre of an edge cell is as likely to fall just outside the subject as
+    # just inside, and one wrong cell on a 32px sprite is a visible bite.
+    solid = np.asarray(mask, dtype=bool)
+    py, px = phase
+    rows, cols = small.height, small.width
+    # Zero-padded to a whole number of cells: the last row or column of cells
+    # can legitimately run off the frame, and the part that is missing is not
+    # subject.
+    aligned = np.zeros((rows * scale, cols * scale), dtype=np.float64)
+    usable = solid[py : py + rows * scale, px : px + cols * scale]
+    aligned[: usable.shape[0], : usable.shape[1]] = usable
+    coverage = aligned.reshape(rows, scale, cols, scale).mean(axis=(1, 3))
+    rgba = np.asarray(small.convert("RGBA")).copy()
+    rgba[:, :, 3] = np.where(coverage >= 0.5, 255, 0).astype(np.uint8)
+    small = Image.fromarray(rgba, "RGBA")
+
+    box = trim_box(rgba[:, :, 3] > 0)
+    if box is None:
+        raise NoSubject("the matte found no subject in this image")
+    small = small.crop(box)
+    if max(small.size) > size:
+        # Only ever an integer stride: any other ratio resamples across cells
+        # and undoes the alignment this branch exists to keep.
+        stride = -(-max(small.size) // size)
+        small = small.resize(
+            (max(1, small.width // stride), max(1, small.height // stride)),
+            Image.NEAREST,
+        )
+    # Back into source coordinates, so meta["trim"] means what it always meant.
+    left, top, right, bottom = box
+    source_box = (
+        px + left * scale,
+        py + top * scale,
+        min(image.width, px + right * scale),
+        min(image.height, py + bottom * scale),
+    )
+    return (small, source_box)
+
+
+def pixel(
+    image: PILImage,
+    mask: Any,
+    *,
+    size: int,
+    colors: int = 0,
+    opts: Any = None,
+) -> tuple[PILImage, dict[str, Any]]:
+    """A downsampled, optionally palette-limited cutout.
+
+    Nearest neighbour, never a filter: a resample that blends puts a ramp of
+    in-between colours along every edge, and hard edges are the one property
+    that makes the result read as pixel art rather than as a small photograph.
+
+    Two branches, decided by the *image* rather than by a setting. An image a
+    pixel-art model drew carries a block lattice with a period and a phase, and
+    reducing it on that lattice recovers the pixels the model actually authored;
+    an ordinary render carries none and takes the legacy path unchanged. With
+    ``opts`` left at its default the result is byte-identical to what this
+    function produced before either existed, which is pinned by a test --
+    every asset already on disk was cut that way.
+
+    ``colors`` is kept as a parameter rather than folded into ``opts`` because
+    it is the one pixel setting that predates the dataclass; when both are
+    given, ``opts.colors`` wins.
+    """
+    from . import pixel as pixelmod
+
+    if opts is None:
+        opts = pixelmod.PixelOpts(colors=int(colors or 0))
+    grid = pixelmod.detect_grid(image)
+    palette_cap: int | None = None
+    if grid["scale"]:
+        small, box = _grid_pixel(image, mask, size, grid)
+    else:
+        small, box, palette_cap = _legacy_pixel(
+            image, mask, size, 0 if opts.palette else opts.colors
+        )
+    if opts.palette:
+        small = pixelmod.map_palette(small, opts.palette, dither=opts.dither)
+    elif grid["scale"] and opts.colors:
+        # The grid branch does its own quantize, since _legacy_pixel's is
+        # entangled with the resample it did not run.
+        from PIL import Image
+
+        palette_cap = int(opts.colors)
+        alpha = small.getchannel("A")
+        flat = small.convert("RGB").quantize(
+            colors=palette_cap, method=Image.Quantize.MEDIANCUT
+        )
+        small = flat.convert("RGBA")
+        small.putalpha(alpha)
+    cleaned = 0
+    if opts.cleanup:
+        small, cleaned = pixelmod.clean_orphans(small)
+    if grid["scale"] or opts.palette or opts.cleanup:
+        # Only on the new branches: the legacy export's partial-alpha rim is
+        # part of what "byte-identical" means above.
+        small = pixelmod.snap_alpha(small)
     return (
         small,
         {
@@ -240,7 +363,18 @@ def pixel(
             "canvas": [small.width, small.height],
             "trim": list(box),
             "source": [image.width, image.height],
-            "palette": palette,
+            "palette": palette_cap,
+            "palette_file": opts.palette_name,
+            "palette_hash": opts.palette_hash,
+            "dither": bool(opts.dither),
+            "grid": (
+                {"scale": grid["scale"], "phase": grid["phase"],
+                 "residual": grid["residual"]}
+                if grid["scale"]
+                else None
+            ),
+            "cleanup": int(cleaned),
+            "qa": pixelmod.report(small, palette=opts.palette, grid=grid),
         },
     )
 

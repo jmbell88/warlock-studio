@@ -536,6 +536,29 @@ PRESETS: tuple[dict[str, Any], ...] = (
             "rarity": "common",
         },
     },
+    {
+        # art_style "nes" and not a new taxonomy option: its fragment is
+        # already what survives a real downscale, and the word "pixel" belongs
+        # to the LoRA's trigger (models.STYLE_LORAS) rather than to any prompt
+        # fragment. The base is the LCM arm because that is the pixel-art-xl
+        # author's documented recipe -- the null hypothesis a bench run over
+        # bench/suites/pixel-v1 is there to overturn or keep.
+        "key": "pixel_sprite",
+        "label": "Pixel-art sprite",
+        "prompt": "a hooded adventurer standing in a neutral pose",
+        "fields": {
+            "category": "character",
+            "genre": "fantasy",
+            "art_style": "nes",
+            "platform": "2d",
+            "base_model": "pixel",
+            # No lora_weight: normalize() fills the LoRA's own default (1.2),
+            # so the author's recipe lives in one place.
+            "style_lora": "pixelxl",
+            "silhouette": "slender",
+            "palette": "vibrant",
+        },
+    },
 )
 
 

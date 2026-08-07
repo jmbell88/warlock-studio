@@ -257,6 +257,21 @@ def test_every_shipped_preset_normalizes():
         assert preset["label"]
 
 
+def test_no_guidance_fragment_ever_says_pixel():
+    """The pixel-art profile is a LoRA trigger, not taxonomy.
+
+    "pixel" in a prompt fragment would fire on every job carrying the field
+    that owns it, whether or not the pixel LoRA is loaded -- and the fragments
+    that actually survive a downscale (flat shading, bold silhouette) already
+    exist under the console-era art styles.
+    """
+    from warlock import guidance
+
+    for field, table in guidance._OPTION_TABLES.items():
+        for option in table.values():
+            assert "pixel" not in option.prompt.lower(), f"{field}/{option.key}"
+
+
 def test_presets_appear_in_the_catalog():
     from warlock import guidance
 

@@ -80,6 +80,27 @@ def test_sdxl_cfg_reuses_sdxl_weights_without_the_distillation_lora():
     assert cfg.steps >= 20
 
 
+def test_pixel_base_reuses_sdxl_weights_with_lcm_not_hyper():
+    """Same weights as the other SDXL 1.0 entries -- it exists for a sampler
+    contract (LCM at 8 steps, guidance 1.0), which is the pixel-art-xl author's
+    documented recipe and the arm the preset names until a bench says otherwise.
+    """
+    pixel, hyper = models.BASE_MODELS["pixel"], models.BASE_MODELS["sdxl"]
+    assert pixel.dir_name == hyper.dir_name
+    assert pixel.scheduler == "lcm"
+    assert pixel.base_lora is not None and "lcm" in pixel.base_lora.lower()
+    # <= 1.0 keeps it out of cfg_bases(): there is no negative branch to steer.
+    assert pixel.guidance_scale <= 1.0
+    assert "pixel" not in models.cfg_bases()
+    assert not pixel.controlnet
+
+
+def test_pixel_lora_weight_matches_the_author_recipe():
+    lora = models.STYLE_LORAS["pixelxl"]
+    assert lora.default_weight == 1.2
+    assert lora.default_weight != models.DEFAULT_LORA_WEIGHT
+
+
 @pytest.mark.parametrize("key", sorted(models.BASE_MODELS))
 def test_a_controlnet_capable_base_runs_with_real_guidance(key):
     spec = models.BASE_MODELS[key]
@@ -141,3 +162,23 @@ def test_catalog_stays_json_safe():
     import json
 
     json.dumps(models.catalog())
+
+
+def test_every_named_scheduler_is_one_text2image_can_build():
+    """A BaseModel naming a scheduler _scheduler() does not know fails at load
+    time with the weights already in VRAM, which is the most expensive place to
+    find out. diffusers is an optional extra, so build the ones that are
+    nameable and only assert the name is known when it is absent."""
+    pytest.importorskip("diffusers")
+    from diffusers import DDIMScheduler, LCMScheduler
+
+    from warlock.pipelines import text2image
+
+    base = DDIMScheduler()
+    built = {
+        m.scheduler: text2image._scheduler(m.scheduler, base)
+        for m in models.BASE_MODELS.values()
+        if m.scheduler
+    }
+    assert isinstance(built["lcm"], LCMScheduler)
+    assert built["ddim_trailing"].config.timestep_spacing == "trailing"

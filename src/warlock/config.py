@@ -144,6 +144,16 @@ class Config:
     bench_dir: Path = field(
         default_factory=lambda: _env_path("WARLOCK_BENCH_DIR", PROJECT_ROOT / "bench")
     )
+    # Where pixel-art palette files live (.hex from Lospec, .gpl from GIMP).
+    # Ships empty: a palette is the user's own art direction, and a bundled one
+    # would be a default nobody chose. Absent or empty simply means the palette
+    # control offers nothing, never an error -- the same rule every optional
+    # model directory follows.
+    palette_dir: Path = field(
+        default_factory=lambda: _env_path(
+            "WARLOCK_PALETTE_DIR", PROJECT_ROOT / "palettes"
+        )
+    )
     trellis_models_dir: Path = field(
         default_factory=lambda: _env_path(
             "WARLOCK_TRELLIS_MODELS", PROJECT_ROOT / "models" / "trellis2-gguf"

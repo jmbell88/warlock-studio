@@ -353,8 +353,24 @@ def pixel_provenance(manifest: Any, name: str) -> str | None:
         return None
     size = svc_files.PIXEL_ARTIFACTS.get(name)
     palette = entry.get("palette")
-    colours = f"{palette} colours" if palette else "full colour"
-    return f"{size} px - {colours}"
+    if entry.get("palette_file"):
+        colours = str(entry["palette_file"])
+        if entry.get("dither"):
+            colours += " (dithered)"
+    else:
+        colours = f"{palette} colours" if palette else "full colour"
+    parts = [f"{size} px", colours]
+    grid = entry.get("grid")
+    if isinstance(grid, dict) and grid.get("scale"):
+        # Only said when it happened: an ordinary render has no lattice, and
+        # claiming one would be a claim about the generator, not the file.
+        parts.append(f"{grid['scale']}px source grid")
+    from ...pipelines import pixel as pixelmod
+
+    sentence = pixelmod.verdict(entry.get("qa") or {})
+    if sentence:
+        parts.append(sentence)
+    return " - ".join(parts)
 
 
 def pixel_scale(size: tuple[int, int], avail: int) -> int:
@@ -365,6 +381,31 @@ def pixel_scale(size: tuple[int, int], avail: int) -> int:
     sampling exists to avoid.
     """
     return max(1, avail // max(size[0], size[1], 1))
+
+
+def _palette_names(ctx: Any) -> list[str]:
+    """The palette directory's stems, listed once per version of the directory.
+
+    One stat per frame rather than one walk: this is drawn on the frame thread,
+    and a directory that changes when a user drops a file into it moves its own
+    mtime, so a file added while the app runs still appears on the next frame.
+    A missing directory is an empty list, never an error -- palettes are opt-in
+    and there is nothing to report about not having any.
+    """
+    from ...service import palettes as svc_palettes
+
+    directory = ctx.svc.config.palette_dir
+    try:
+        key = directory.stat().st_mtime_ns
+    except OSError:
+        ctx.state.palettes = None
+        return []
+    cached = ctx.state.palettes
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    names = svc_palettes.available(ctx.svc.config)
+    ctx.state.palettes = (key, names)
+    return names
 
 
 def _pixel(ctx: Any, job: Any) -> None:
@@ -386,7 +427,12 @@ def _pixel(ctx: Any, job: Any) -> None:
     if not widgets.header("Pixel art", default_open=False):
         return
     job_id = job["id"]
-    size, colors = pixel_prefs(ctx.settings)
+    size, colors, palette_name, dither = pixel_prefs(ctx.settings)
+    submit_kwargs = {
+        "pixel_colors": colors,
+        "pixel_palette": palette_name,
+        "pixel_dither": dither,
+    }
 
     sizes = sorted(svc_files.PIXEL_ARTIFACTS.values())
     chosen = int(widgets.labeled_combo("Size", str(size), [(str(s), f"{s} px") for s in sizes]))
@@ -406,10 +452,28 @@ def _pixel(ctx: Any, job: Any) -> None:
     )
     if picked != colors:
         ctx.settings.set("pixel_colors", picked)
-        colors = picked
+        colors = submit_kwargs["pixel_colors"] = picked
         # Re-derive the size on screen straight away; the other sizes catch up
         # when they are next asked for, which is what _pixel_current is for.
-        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
+
+    names = _palette_names(ctx)
+    if names:
+        options = [("", "None")] + [(n, n) for n in names]
+        chosen_palette = widgets.labeled_combo("Palette", palette_name or "", options)
+        chosen_palette = chosen_palette or None
+        changed = chosen_palette != palette_name
+        if changed:
+            ctx.settings.set("pixel_palette", chosen_palette or "")
+            palette_name = submit_kwargs["pixel_palette"] = chosen_palette
+        if palette_name:
+            toggled, dither = imgui.checkbox("Dither", dither)
+            if toggled:
+                ctx.settings.set("pixel_dither", dither)
+                submit_kwargs["pixel_dither"] = dither
+                changed = True
+        if changed:
+            ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
 
     if ctx.textures is None:
         return
@@ -420,7 +484,7 @@ def _pixel(ctx: Any, job: Any) -> None:
             widgets.spinner()
             imgui.same_line()
         if widgets.disabled_button("Preview pixels", not busy):
-            ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+            ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
         return
     factor = pixel_scale(texture.size, THUMB_SIZE * 2)
     imgui.image(widgets.texture_ref(texture), (texture.size[0] * factor, texture.size[1] * factor))
@@ -432,11 +496,19 @@ def _pixel(ctx: Any, job: Any) -> None:
     if line:
         widgets.muted(line)
     entry = ((manifest or {}).get("artifacts") or {}).get(name)
-    stale = isinstance(entry, dict) and entry.get("palette") != (colors or None)
+    stale = isinstance(entry, dict) and (
+        (entry.get("palette_file") or None) != palette_name
+        or bool(entry.get("dither")) != dither
+        or (
+            # The median-cut cap only means anything while no palette file is
+            # in play; with one, the entry records ``palette: None`` by design.
+            not palette_name and entry.get("palette") != (colors or None)
+        )
+    )
     # The file on screen was cut under a different palette setting -- switching
     # sizes surfaces one derived before the knob changed.
     if stale and imgui.button("Rebuild with these colours"):
-        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, pixel_colors=colors)
+        ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
 
 
 def _quality(ctx: Any, job: Any) -> None:

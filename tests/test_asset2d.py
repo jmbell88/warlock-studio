@@ -228,6 +228,77 @@ def test_no_palette_cap_is_recorded_as_none():
     assert meta["palette"] is None
 
 
+def _pixel_art_subject(scale=8, phase=(5, 3), cells=16):
+    """Authored pixel art, blown up the way a pixel-art model draws it, with a
+    subject that does *not* start on a cell boundary in the blown-up frame."""
+    rng = np.random.default_rng(11)
+    palette = np.array(
+        [[20, 20, 30], [200, 60, 60], [60, 180, 90], [240, 220, 130]], np.uint8
+    )
+    art = palette[rng.integers(0, len(palette), size=(cells, cells))]
+    big = Image.fromarray(art, "RGB").resize(
+        (cells * scale, cells * scale), Image.NEAREST
+    )
+    py, px = phase
+    canvas = Image.new(
+        "RGB", (cells * scale + 2 * scale, cells * scale + 2 * scale), (128, 128, 128)
+    )
+    canvas.paste(big, (px, py))
+    mask = np.zeros(canvas.size[::-1], dtype=bool)
+    mask[py : py + big.height, px : px + big.width] = True
+    return canvas, mask, art
+
+
+def test_pixel_with_default_opts_is_byte_identical_to_the_legacy_path():
+    """Every 2D asset already on disk was cut by the old crop-then-scale path,
+    and a manifest that says it was is only true while this holds."""
+    im, mask = _subject()
+    legacy, _box, _cap = asset2d._legacy_pixel(im, mask, 32, 0)
+    out, _meta = asset2d.pixel(im, mask, size=32)
+    assert np.array_equal(np.asarray(out), np.asarray(legacy))
+
+
+def test_pixel_grid_branch_recovers_the_authored_cells():
+    """The load-bearing ordering: reduce on the lattice, *then* crop. Cropping
+    first moves the origin off the phase by whatever the subject's bounding box
+    happens to be, which shears the reduction instead of reducing it."""
+    im, mask, art = _pixel_art_subject()
+    out, meta = asset2d.pixel(im, mask, size=64)
+    assert meta["grid"] is not None
+    assert meta["grid"]["scale"] == 8
+    assert np.array_equal(np.asarray(out.convert("RGB")), art)
+    # Reported in source coordinates, as it always was.
+    assert meta["trim"] == [3, 5, 3 + art.shape[1] * 8, 5 + art.shape[0] * 8]
+
+
+def test_the_grid_branch_snaps_alpha_and_records_its_qa():
+    im, mask, _art = _pixel_art_subject()
+    out, meta = asset2d.pixel(im, mask, size=64)
+    assert set(np.unique(np.asarray(out)[:, :, 3])) <= {0, 255}
+    assert meta["qa"]["colors"] == 4
+    assert meta["cleanup"] == 0
+
+
+def test_a_palette_file_replaces_the_median_cut_cap():
+    from warlock.pipelines import pixel as pixelmod
+
+    im, mask = _subject()
+    palette = ((0, 0, 0), (255, 255, 255))
+    opts = pixelmod.PixelOpts(
+        colors=8, palette_name="two", palette=palette, palette_hash="abc"
+    )
+    out, meta = asset2d.pixel(im, mask, size=32, opts=opts)
+    rgb = np.asarray(out.convert("RGBA"))
+    assert {tuple(int(c) for c in p) for p in rgb[rgb[:, :, 3] > 0][:, :3]} <= set(
+        palette
+    )
+    # The int cap is what median cut used; a palette file is a different thing
+    # and the manifest says so rather than conflating the two.
+    assert meta["palette"] is None
+    assert meta["palette_file"] == "two"
+    assert meta["palette_hash"] == "abc"
+
+
 def test_an_empty_mask_is_refused_rather_than_producing_a_blank_file():
     im = Image.new("RGB", (32, 32), (200, 200, 200))
     empty = np.zeros((32, 32), dtype=bool)

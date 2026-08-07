@@ -404,10 +404,27 @@ def test_an_artifact_is_busy_under_either_of_its_two_keys():
 def test_pixel_prefs_defaults_and_survives_a_hand_mangled_settings_file():
     # The settings JSON is user-editable, and the pane runs on the frame
     # thread: a bad value must coerce to the default, never raise.
-    assert inspector.pixel_prefs(_Prefs({})) == (128, 0)
-    assert inspector.pixel_prefs(_Prefs({"pixel_size": 64, "pixel_colors": 16})) == (64, 16)
-    assert inspector.pixel_prefs(_Prefs({"pixel_size": "wide", "pixel_colors": "many"})) == (128, 0)
-    assert inspector.pixel_prefs(_Prefs({"pixel_size": 48, "pixel_colors": 7})) == (128, 0)
+    assert inspector.pixel_prefs(_Prefs({})) == (128, 0, None, False)
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": 64, "pixel_colors": 16})) == (
+        64, 16, None, False,
+    )
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": "wide", "pixel_colors": "many"})) == (
+        128, 0, None, False,
+    )
+    assert inspector.pixel_prefs(_Prefs({"pixel_size": 48, "pixel_colors": 7})) == (
+        128, 0, None, False,
+    )
+
+
+def test_pixel_prefs_coerces_a_mangled_palette_to_no_palette():
+    # A palette name is a string the user can hand-edit, and the pane cannot
+    # stat the directory per frame to check it -- so the frame thread coerces
+    # and service.palettes is what refuses an unknown one, on the task thread.
+    assert inspector.pixel_prefs(_Prefs({"pixel_palette": 7}))[2] is None
+    assert inspector.pixel_prefs(_Prefs({"pixel_palette": "  "}))[2] is None
+    assert inspector.pixel_prefs(_Prefs({"pixel_palette": "nord", "pixel_dither": 1})) == (
+        128, 0, "nord", True,
+    )
 
 
 # -- why a button is disabled ----------------------------------------------

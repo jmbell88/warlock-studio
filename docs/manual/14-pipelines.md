@@ -96,6 +96,25 @@ delete the rig — it reports that the rig is now stale, and the retarget contro
 button rather than after. Destroying a rig that took minutes to solve, in order to change a triangle
 count, is not a trade the app makes on your behalf.
 
+## Pixel-art exports
+
+The pixel exports are derived like everything above, but their processing is its own pure module
+(`pipelines/pixel.py`) rather than part of the export code, because the bench measures with exactly
+the same functions the export runs. Two implementations of "is this image on a pixel grid" would
+drift, and the metric would then be measuring something the export does not do.
+
+Three things happen there and the order is load-bearing. A grid is detected on the *whole frame* —
+its cell size and its phase — because the lattice belongs to the generated image and any crop moves
+the phase before it can be measured. If one is found, the frame is reduced at cell centres and only
+then cropped to the subject; a cell's transparency is decided by majority coverage rather than by
+its centre sample, since the centre of an edge cell is as likely to land just outside the subject as
+just inside, and one wrong cell on a 32-pixel sprite is a visible bite. Palette mapping, if a
+palette file was chosen, runs afterwards in Oklab, with alpha carried around it untouched.
+
+Everything about that is off by default and byte-identical to the export that existed before it,
+which is what a test in `tests/test_asset2d.py` pins: every asset already on disk was cut by the
+crop-then-scale path, and a manifest claiming so is only true while that holds.
+
 ## Blender out of process
 
 Rigging, pose baking and sprite-sheet rendering all need Blender, and Blender's Python module never

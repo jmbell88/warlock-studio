@@ -21,8 +21,9 @@ from .state import AppState
 log = logging.getLogger(__name__)
 
 
-def pixel_prefs(settings: Any) -> tuple[int, int]:
-    """The pixel-art (size, colours) preference, defensively coerced.
+def pixel_prefs(settings: Any) -> tuple[int, int, str | None, bool]:
+    """The pixel-art (size, colours, palette, dither) preference, defensively
+    coerced.
 
     The settings JSON is user-editable and every reader runs on the frame
     thread, so a bad value falls back to the default rather than raising --
@@ -42,7 +43,15 @@ def pixel_prefs(settings: Any) -> tuple[int, int]:
         colors = 0
     if colors not in svc_files.PIXEL_COLOR_CHOICES:
         colors = 0
-    return size, colors
+    # The palette is *not* validated against the directory here: this runs on
+    # the frame thread and a directory listing is a syscall per frame. A name
+    # whose file has since been deleted is refused by service.palettes on the
+    # task thread, which is where the user can be told about it.
+    palette = settings.get("pixel_palette") or None
+    if not isinstance(palette, str) or not palette.strip():
+        palette = None
+    dither = bool(settings.get("pixel_dither"))
+    return size, colors, palette, dither
 
 
 def save_key(job_id: str, name: str) -> str:
@@ -141,10 +150,22 @@ class Ctx:
         # touches Settings. For a pixel artifact this is what makes the export
         # button and the inspector preview produce the same file under the
         # same lock.
-        pixel_colors = pixel_prefs(self.settings)[1] if name in svc_files.PIXEL_ARTIFACTS else None
+        pixel = (
+            pixel_prefs(self.settings)
+            if name in svc_files.PIXEL_ARTIFACTS
+            else (0, None, None, False)
+        )
+        pixel_colors, palette, dither = pixel[1], pixel[2], pixel[3]
 
         def run() -> Path | None:
-            source = svc_derive.get_file(self.svc, job_id, name, pixel_colors=pixel_colors)
+            source = svc_derive.get_file(
+                self.svc,
+                job_id,
+                name,
+                pixel_colors=pixel_colors,
+                pixel_palette=palette,
+                pixel_dither=dither,
+            )
             dest = dialogs.save_file(f"Save {name}", f"{job_id}_{name}", dialogs.filters_for(name))
             if dest is None:
                 return None

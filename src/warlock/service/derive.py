@@ -24,7 +24,13 @@ log = logging.getLogger(__name__)
 
 
 def get_file(
-    svc: WarlockService, job_id: str, name: str, *, pixel_colors: int | None = None
+    svc: WarlockService,
+    job_id: str,
+    name: str,
+    *,
+    pixel_colors: int | None = None,
+    pixel_palette: str | None = None,
+    pixel_dither: bool | None = None,
 ) -> Path:
     """The path of one artifact, deriving it first if that is possible.
 
@@ -97,10 +103,13 @@ def get_file(
     # input.png in place, and an artifact older than it is a picture of pixels
     # that are gone. files.fresh_2d answers "missing" and "stale" the same way
     # on purpose -- both mean derive it again.
+    opts = _pixel_opts(svc, name, pixel_colors, pixel_palette, pixel_dither)
     if name in files.DERIVED_2D and not (
-        files.fresh_2d(job_dir, name) and _pixel_current(job_dir, name, pixel_colors)
+        files.fresh_2d(job_dir, name) and _pixel_current(job_dir, name, pixel_colors, opts)
     ):
-        _derive_2d(svc, job, job_id, job_dir, name, pixel_colors=pixel_colors)
+        _derive_2d(
+            svc, job, job_id, job_dir, name, pixel_colors=pixel_colors, opts=opts
+        )
     if not path.exists():
         raise NotReady("file not ready")
     return path
@@ -137,7 +146,43 @@ def derivable_2d(name: str, stage: str | None) -> bool:
 MANIFEST = "manifest.json"
 
 
-def _pixel_current(job_dir: Path, name: str, pixel_colors: int | None) -> bool:
+def _pixel_opts(
+    svc: WarlockService,
+    name: str,
+    pixel_colors: int | None,
+    pixel_palette: str | None,
+    pixel_dither: bool | None,
+):
+    """One PixelOpts describing what the caller asked for, or None.
+
+    None for every artifact that is not a pixel export and for the caller that
+    expressed no opinion at all -- which is every pre-upgrade call site, and is
+    what keeps them serving the file already on disk.
+    """
+    from ..pipelines import pixel as pixelmod
+
+    if name not in files.PIXEL_ARTIFACTS:
+        return None
+    if pixel_colors is None and pixel_palette is None and not pixel_dither:
+        return None
+    colors = tuple()
+    digest = None
+    if pixel_palette:
+        from . import palettes
+
+        _name, colors, digest = palettes.load(svc.config, pixel_palette)
+    return pixelmod.PixelOpts(
+        colors=int(pixel_colors or 0),
+        palette_name=pixel_palette or None,
+        palette=tuple(colors) or None,
+        palette_hash=digest,
+        dither=bool(pixel_dither),
+    )
+
+
+def _pixel_current(
+    job_dir: Path, name: str, pixel_colors: int | None, opts=None
+) -> bool:
     """Whether the on-disk pixel artifact was cut with the requested palette.
 
     Freshness (fresh_2d) answers "does this file describe the input.png on
@@ -150,7 +195,9 @@ def _pixel_current(job_dir: Path, name: str, pixel_colors: int | None) -> bool:
     one re-derive rebuilds the entry, the same self-healing rule the manifest
     itself follows.
     """
-    if pixel_colors is None or name not in files.PIXEL_ARTIFACTS:
+    if name not in files.PIXEL_ARTIFACTS:
+        return True
+    if pixel_colors is None and opts is None:
         return True
     import json
 
@@ -161,6 +208,23 @@ def _pixel_current(job_dir: Path, name: str, pixel_colors: int | None) -> bool:
         return False
     if not isinstance(entry, dict):
         return False
+    if opts is not None and opts.palette:
+        # A palette file supersedes the median-cut cap entirely, so the cap is
+        # not compared: the entry records ``palette: None`` whenever one is in
+        # use. ``.get`` defaults throughout, so a manifest written before any of
+        # these keys existed reads as current for a caller asking for none of
+        # them, and stale the moment one is asked for.
+        return (
+            entry.get("palette_file") == opts.palette_name
+            and entry.get("palette_hash") == opts.palette_hash
+            and bool(entry.get("dither")) == opts.dither
+        )
+    if entry.get("palette_file") or entry.get("dither"):
+        # On disk is a palette-mapped export and the caller asked for a plain
+        # one. That is a different picture, whatever the cap says.
+        return False
+    if pixel_colors is None:
+        return True
     return entry.get("palette") == (pixel_colors or None)
 
 
@@ -172,6 +236,7 @@ def _derive_2d(
     name: str,
     *,
     pixel_colors: int | None = None,
+    opts=None,
 ) -> None:
     """Produce one 2D export from the reference's input.png.
 
@@ -204,7 +269,9 @@ def _derive_2d(
         # freshness -- after a palette-knob change the file is mtime-fresh, so
         # a fresh_2d-only recheck would return the old palette to the caller
         # who asked for a new one.
-        if files.fresh_2d(job_dir, name) and _pixel_current(job_dir, name, pixel_colors):
+        if files.fresh_2d(job_dir, name) and _pixel_current(
+            job_dir, name, pixel_colors, opts
+        ):
             return
         if name == "wrap_preview.png":
             # The one 2D export that is not a cutout, and so the one that runs
@@ -242,6 +309,7 @@ def _derive_2d(
                         image, mask,
                         size=files.PIXEL_ARTIFACTS[name],
                         colors=pixel_colors or 0,
+                        opts=opts,
                     )
                 else:
                     # Unreachable while DERIVED_2D and the branches above agree,

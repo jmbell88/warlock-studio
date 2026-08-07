@@ -79,7 +79,7 @@ kept to a few words and your own prompt is best kept to a sentence.
 
 ## Models and style LoRAs
 
-The **Advanced** section holds the model choice. Four base models ship in the registry:
+The **Advanced** section holds the model choice. Five base models ship in the registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
@@ -87,6 +87,7 @@ The **Advanced** section holds the model choice. Four base models ship in the re
 | SDXL 1.0 + Hyper-SD (best LoRA response) | Full SDXL weights with a step-distillation LoRA fused on. | 1024 px, 4 steps, guidance 0 |
 | Playground v2.5 (highest fidelity, slow) | The best-looking output, and correspondingly slow. | 1024 px, 25 steps, guidance 3.0 |
 | SDXL 1.0 (full CFG, structural control) | The same weights as the Hyper-SD entry, run the way the checkpoint was trained. | 1024 px, 30 steps, guidance 7.0 |
+| SDXL 1.0 + LCM (pixel art) | The same weights again, under a consistency adapter — the recipe the pixel-art LoRA was trained against. | 1024 px, 8 steps, guidance 1.0 |
 
 The sampler settings travel with the checkpoint and are not yours to set. They are part of the
 model's identity: a four-step distilled model run at 25 steps with guidance produces mush, and
@@ -105,12 +106,17 @@ reload of several seconds. Any model whose weights are not on disk is still list
 time. Run `warlock doctor` for the exact download command.
 
 **Style LoRAs** are the opposite: they are adapters on whatever pipeline is already resident and
-switch for free, with no reload. Three ship:
+switch for free, with no reload. Four ship:
 
 - **3D render** — a general 3D-render look.
 - **3D render (Redmond)** — a second, differently trained take on the same idea.
 - **PS1 / low-poly game** — chunky untextured geometry, which pairs naturally with the PS1-era art
   style and is among the easiest things to reconstruct cleanly.
+- **Pixel art (pixel-art-xl)** — generates on a pixel grid rather than producing a smooth image that
+  is later downscaled into one. It defaults to a strength of 1.2 rather than the usual 0.9: below
+  that the output keeps SDXL's anti-aliased gradients, and no downscale recovers a clean grid from
+  them. The **Pixel-art sprite** preset picks it together with the LCM base and the NES-era art
+  style, whose flat shading and bold silhouette are what survive a reduction.
 
 Choosing one reveals a **Strength** slider, from 0 to 1.5, defaulting to the LoRA's own tuned
 weight of 0.9. The slider is hidden entirely when no LoRA is chosen. LoRAs are trained against full
@@ -214,7 +220,20 @@ character's feet, and an importer that guesses is wrong for half a set.
 
 The **Pixel art** section of the inspector's Details tab is where the pixel exports are set up and
 previewed. **Size** picks which of the three artifacts you are looking at; **Colours** limits the
-palette to 8, 16, 32 or 64, or leaves it off.
+palette to 8, 16, 32 or 64, or leaves it off; **Palette** maps the export onto a palette file you
+supplied, and **Dither** (offered only with one) mixes two nearby entries where a flat map would
+pick one.
+
+A palette is a file you drop into the palette directory (`palettes/` by default — see
+[Configuration](11-configuration.md)), in either of the two formats palette sites publish: Lospec's
+`.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
+art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
+RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being
+eaten. A palette file supersedes the **Colours** cap entirely: the cap is a median cut of the
+picture's own colours, and a palette is a decision about which colours exist.
+
+Editing a palette in place re-derives every export that used it — freshness is keyed on the file's
+*contents*, not its name, because editing one is the normal way to work on it.
 
 The preview is drawn crisp, at a whole multiple of the artifact's own size — a fractional scale
 samples some source pixels twice and others once, which reads as banding and is exactly what the
@@ -230,7 +249,17 @@ always would have.
 
 The reduction is nearest-neighbour, never a smooth resample: a filtered downscale puts a ramp of
 in-between colours along every edge, and hard edges are the one property that makes the result read
-as pixel art rather than as a small photograph. Palette reduction runs on colour only, with
+as pixel art rather than as a small photograph.
+
+There are two reductions, and which one runs is decided by the *image* rather than by a setting.
+A pixel-art model draws logical pixels as square blocks — typically eight screen pixels across — and
+that lattice has a phase: the first block rarely starts at the very edge of the frame. When one is
+detected, the export takes one output pixel per block, sampled at the block's centre, across the
+whole frame, and crops to the subject afterwards; the result is exactly the pixels the model
+authored. Cropping first — which is what an ordinary export does — would move the origin off the
+lattice by however wide the subject happens to be, and shear the art instead of reducing it. An
+ordinary render has no lattice to find and takes the plain path unchanged, which is what every asset
+already on disk was cut with. The provenance line says which happened. Palette reduction runs on colour only, with
 transparency carried around it, so the cutout survives the quantization exactly.
 
 The 2D pane's art-style select names console eras rather than abstract styles — **NES era**,

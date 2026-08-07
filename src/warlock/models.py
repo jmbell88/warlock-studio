@@ -217,6 +217,41 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "--local-dir models/sdxl-base-1.0"
         ),
     ),
+    BaseModel(
+        # The pixel-art profile's null hypothesis: the same SDXL 1.0 weights as
+        # "sdxl"/"sdxl_cfg" (no new checkpoint), run the way the pixel-art-xl
+        # author documents -- LCM at 8 steps, guidance 1.0. Distinct from the
+        # Hyper-SD arm because stacking a 1.0-weight distillation LoRA under a
+        # 1.2-weight style LoRA is unproven; both arms exist so bench/pixel-v1
+        # can decide which the preset keeps.
+        #
+        # No VAE override on purpose. sdxl-vae-fp16-fix patches fp16's
+        # overflow-to-NaN, and everything here loads bfloat16 (see
+        # pipelines/text2image; variant="fp16" only names the weight *files*),
+        # which has fp32's exponent range -- so that failure mode does not
+        # exist here. If bench images ever show VAE decode artifacts, add a
+        # BaseModel.vae field then, with a docs/measurements/ note.
+        "pixel",
+        "SDXL 1.0 + LCM (pixel art)",
+        "sdxl-base-1.0",
+        image_size=1024,
+        steps=8,
+        guidance_scale=1.0,
+        scheduler="lcm",
+        base_lora="lcm-lora-sdxl.safetensors",
+        download=(
+            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
+            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
+            "--local-dir models/sdxl-base-1.0\n"
+            "  uvx hf download latent-consistency/lcm-lora-sdxl "
+            "pytorch_lora_weights.safetensors --local-dir models/loras\n"
+            # Renamed because the upstream filename is generic: any other repo's
+            # default-named LoRA downloaded into the flat loras/ directory would
+            # silently overwrite it.
+            "  then rename models/loras/pytorch_lora_weights.safetensors "
+            "to lcm-lora-sdxl.safetensors"
+        ),
+    ),
 )
 
 STYLE_LORAS: dict[str, StyleLora] = _table(
@@ -250,6 +285,26 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         download=(
             "uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl "
             "PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras"
+        ),
+    ),
+    StyleLora(
+        # The one LoRA that generates pixel art *natively* rather than being
+        # downscaled into it. Its default weight is the author's documented
+        # recipe (1.2), not this module's DEFAULT_LORA_WEIGHT -- below it the
+        # output keeps SDXL's anti-aliased gradients and no downscale recovers
+        # a clean grid from them.
+        #
+        # The trigger carries both spellings the model card uses; they are
+        # model-facing scaffolding, which is exactly why guidance.py's fragments
+        # may never contain the word (tests/test_guidance.py pins that).
+        "pixelxl",
+        "Pixel art (pixel-art-xl)",
+        "pixel-art-xl.safetensors",
+        trigger="pixel, pixel art",
+        default_weight=1.2,
+        download=(
+            "uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors "
+            "--local-dir models/loras"
         ),
     ),
 )

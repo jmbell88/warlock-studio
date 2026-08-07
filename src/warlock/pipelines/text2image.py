@@ -44,6 +44,13 @@ def _scheduler(name: str, current):
         from diffusers import DDIMScheduler
 
         return DDIMScheduler.from_config(current.config, timestep_spacing="trailing")
+    if name == "lcm":
+        # The LCM LoRA is a consistency distillation: it is only sampled
+        # correctly by LCMScheduler, and on the checkpoint's own sampler it
+        # produces flat grey rather than an error.
+        from diffusers import LCMScheduler
+
+        return LCMScheduler.from_config(current.config)
     raise ValueError(f"unknown scheduler {name!r}")
 
 

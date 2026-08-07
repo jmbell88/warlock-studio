@@ -99,17 +99,27 @@ uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-di
 uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/playground-v2.5
 
+# SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
+# guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
+# LCM LoRA has to be renamed: loras/ is flat, and the upstream filename is
+# generic enough that any other repo's default-named adapter would overwrite it.
+uvx hf download latent-consistency/lcm-lora-sdxl `
+  pytorch_lora_weights.safetensors --local-dir models/loras
+Rename-Item models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
+
 # Style LoRAs -> models/loras/
 uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
 uvx hf download artificialguybr/3DRedmond-V1 `
   3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir models/loras
 uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
   PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
+# Pixel art: generates on a pixel grid rather than being downscaled into one.
+uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
 ```
 
-The SDXL 1.0 weights serve two entries in the model list — the Hyper-SD one above, and a full-CFG
-one that runs the same checkpoint at 30 steps with real classifier-free guidance. Downloading them
-once gets you both.
+The SDXL 1.0 weights serve three entries in the model list — the Hyper-SD one above, and a full-CFG
+one that runs the same checkpoint at 30 steps with real classifier-free guidance, and a pixel-art
+one that runs it at 8 steps under an LCM adapter. Downloading them once gets you all three.
 
 ### Optional conditioning models
 

@@ -357,9 +357,13 @@ def test_every_2d_artifact_has_a_derivation():
     } | set(svc_files.PIXEL_ARTIFACTS)
 
 
-def _manifest_palette(svc, job_id, name):
+def _entry(svc, job_id, name):
     manifest = json.loads((svc.job_dir(job_id) / "manifest.json").read_text("utf-8"))
-    return manifest["artifacts"][name].get("palette")
+    return manifest["artifacts"][name]
+
+
+def _manifest_palette(svc, job_id, name):
+    return _entry(svc, job_id, name).get("palette")
 
 
 def test_a_palette_request_re_derives_a_fresh_pixel_artifact(svc):
@@ -429,6 +433,92 @@ def test_a_missing_manifest_costs_one_re_derive_then_caches(svc):
     stamp = first.stat().st_mtime_ns
     again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
     assert again.stat().st_mtime_ns == stamp
+
+
+def _palette_dir(svc, tmp_path, text="#000000\n#ffffff\n"):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    (directory / "duo.hex").write_text(text)
+    svc.config.palette_dir = directory
+    return directory
+
+
+def test_a_palette_file_maps_the_export_and_is_recorded(svc, tmp_path):
+    _palette_dir(svc, tmp_path)
+    job_id = _reference(svc)
+    path = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    entry = _entry(svc, job_id, "pixel_32.png")
+    assert entry["palette_file"] == "duo"
+    assert entry["palette_hash"]
+    # The int cap and a palette file are different things; conflating them
+    # would make the "rebuild" prompt in the inspector fire forever.
+    assert entry["palette"] is None
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+        colours = {c[:3] for _, c in rgba.getcolors(rgba.width * rgba.height) if c[3] > 0}
+    assert colours <= {(0, 0, 0), (255, 255, 255)}
+
+
+def test_editing_a_palette_in_place_makes_the_artifact_stale(svc, tmp_path):
+    # Editing a palette is the normal way to work on one, and it keeps the
+    # file's name -- so freshness has to be keyed on the content digest.
+    directory = _palette_dir(svc, tmp_path)
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    stamp = first.stat().st_mtime_ns
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    assert again.stat().st_mtime_ns == stamp
+
+    (directory / "duo.hex").write_text("#000000\n#ff0000\n")
+    rebuilt = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    assert rebuilt.stat().st_mtime_ns != stamp
+
+
+def test_turning_dither_on_re_derives(svc, tmp_path):
+    _palette_dir(svc, tmp_path)
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    stamp = first.stat().st_mtime_ns
+    dithered = svc_derive.get_file(
+        svc, job_id, "pixel_32.png", pixel_palette="duo", pixel_dither=True
+    )
+    assert dithered.stat().st_mtime_ns != stamp
+    assert _entry(svc, job_id, "pixel_32.png")["dither"] is True
+
+
+def test_dropping_a_palette_goes_back_to_the_plain_export(svc, tmp_path):
+    _palette_dir(svc, tmp_path)
+    job_id = _reference(svc)
+    svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="duo")
+    svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    entry = _entry(svc, job_id, "pixel_32.png")
+    assert entry["palette_file"] is None and entry["palette"] is None
+
+
+def test_a_pre_upgrade_manifest_reads_current_when_no_palette_is_asked_for(svc):
+    # An asset directory written before palettes existed carries none of the
+    # new keys. Serving it untouched is what stops the feature churning every
+    # asset on disk the first time it is installed.
+    job_id = _reference(svc)
+    first = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    manifest_path = svc.job_dir(job_id) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    entry = manifest["artifacts"]["pixel_32.png"]
+    for key in ("palette_file", "palette_hash", "dither", "grid", "cleanup", "qa"):
+        entry.pop(key, None)
+    manifest_path.write_text(json.dumps(manifest), "utf-8")
+    stamp = first.stat().st_mtime_ns
+
+    again = svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_colors=0)
+    assert again.stat().st_mtime_ns == stamp
+
+
+def test_an_unknown_palette_name_is_refused_before_any_disk_work(svc, tmp_path):
+    _palette_dir(svc, tmp_path)
+    job_id = _reference(svc)
+    with pytest.raises(Invalid):
+        svc_derive.get_file(svc, job_id, "pixel_32.png", pixel_palette="nope")
+    assert not (svc.job_dir(job_id) / "pixel_32.png").exists()
 
 
 def test_an_unknown_palette_size_is_refused_before_any_disk_work(svc):
