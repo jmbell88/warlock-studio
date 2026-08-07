@@ -246,10 +246,16 @@ def _t2i_checks(config: Config) -> list[Check]:
         path = _base_model_dir(config, spec)
         # model_index.json is the diffusers layout marker; the unet shard is the
         # biggest file and the one a partial/wrong-variant download would miss.
+        #
+        # A spec may name its own probe files instead, because that formula is
+        # an SDXL fact: FLUX.2 klein has no unet/ at all, and its text encoder
+        # is half the download -- so a probe that looked only at the transformer
+        # would call a half-fetched model present.
         variant = f".{spec.variant}" if spec.variant else ""
-        ok = (path / "model_index.json").exists() and (
-            path / "unet" / f"diffusion_pytorch_model{variant}.safetensors"
-        ).exists()
+        wanted = spec.probe or (f"unet/diffusion_pytorch_model{variant}.safetensors",)
+        ok = (path / "model_index.json").exists() and all(
+            (path / rel).exists() for rel in wanted
+        )
         # The step-distillation LoRA counts as part of the checkpoint, because
         # _load_loras *raises* on a missing one where a style LoRA is merely
         # skipped. Without this the row called the model ready and the job then

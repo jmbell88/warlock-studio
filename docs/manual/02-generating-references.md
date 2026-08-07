@@ -84,31 +84,41 @@ kept to a few words and your own prompt is best kept to a sentence.
 
 ## Models and style LoRAs
 
-The **Advanced** section holds the model choice. Five base models ship in the registry:
+The **Advanced** section holds the model choice. Nine base models ship in the registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
 | SDXL-Turbo (fast) | The default. Small, quick, good enough for most props. | 512 px, 4 steps, guidance 0 |
 | SDXL 1.0 + Hyper-SD (best LoRA response) | Full SDXL weights with a step-distillation LoRA fused on. | 1024 px, 4 steps, guidance 0 |
+| SDXL 1.0 + Lightning (4-step) | The same weights and the same idea, distilled a different way — an alternative to compare Hyper-SD against. | 1024 px, 4 steps, guidance 0 |
 | Playground v2.5 (highest fidelity, slow) | The best-looking output, and correspondingly slow. | 1024 px, 25 steps, guidance 3.0 |
 | SDXL 1.0 (full CFG, structural control) | The same weights as the Hyper-SD entry, run the way the checkpoint was trained. | 1024 px, 30 steps, guidance 7.0 |
 | SDXL 1.0 + LCM (pixel art) | The same weights again, under a consistency adapter — the recipe the pixel-art LoRA was trained against. | 1024 px, 8 steps, guidance 1.0 |
+| Juggernaut XL v9 (photoreal) | A photoreal SDXL finetune, at its own documented recipe. | 1024 px, 35 steps, guidance 4.0 |
+| DreamShaper XL (stylised) | The stylised counterpart to Juggernaut. | 1024 px, 25 steps, guidance 7.0 |
+| FLUX.2 klein-base 4B (full CFG) | A different architecture entirely, and the slowest thing here. | 1024 px, 50 steps, guidance 4.0 |
 
 The sampler settings travel with the checkpoint and are not yours to set. They are part of the
-model's identity: a four-step distilled model run at 25 steps with guidance produces mush, and
-Hyper-SD degrades silently without the right timestep spacing.
+model's identity: a four-step distilled model run at 25 steps with guidance produces mush, and both
+Hyper-SD and Lightning degrade silently without the right timestep spacing.
 
-Two consequences are worth knowing. A **negative prompt** is only encoded when guidance is above
-1.0, so it does nothing on the two four-step entries — pick "full CFG" or Playground if you want it
-honoured. And **structure control** (see [Conditioning on an image](#conditioning-on-an-image)) is
-only offered on those same two, because a ControlNet at guidance 0 fights the hint instead of
-following it.
+Three consequences are worth knowing. A **negative prompt** is only encoded when guidance is above
+1.0, so it does nothing on the three four-step entries — pick one of the full-CFG models if you want
+it honoured. **Structure control** (see [Conditioning on an image](#conditioning-on-an-image)) is
+only offered on the SDXL models that run with real guidance, because a ControlNet at guidance 0
+fights the hint instead of following it. And **style LoRAs, conditioning and seamless tiles are
+SDXL-only**: they are all built against SDXL's internals, so on FLUX.2 the Style LoRA picker is
+disabled with a note saying so, and asking for a tile is refused rather than quietly producing one
+whose edges do not line up. The negative prompt does work on FLUX.2 — that is why the undistilled
+`klein-base` variant is the one that ships.
 
 Only one base model is resident on the card at a time — a 32 GB card holds the reconstruction engine
-plus a single SDXL-class pipeline, not two — so switching between models between jobs costs a
-reload of several seconds. Any model whose weights are not on disk is still listed, with
-"— weights missing" appended to its name, so you learn at pick time rather than at job-failure
-time. Run `warlock doctor` for the exact download command.
+plus a single image pipeline, not two — so switching between models between jobs costs a reload of
+several seconds. FLUX.2 is the exception to *how* it is held: it is large enough that it is streamed
+onto the card one piece at a time rather than kept there whole, which makes each job slower but means
+it still does not displace the reconstruction engine. Any model whose weights are not on disk is
+still listed, with "— weights missing" appended to its name, so you learn at pick time rather than at
+job-failure time. Run `warlock doctor` for the exact download command.
 
 **Style LoRAs** are the opposite: they are adapters on whatever pipeline is already resident and
 switch for free, with no reload. Four ship:
@@ -126,7 +136,7 @@ switch for free, with no reload. Four ship:
 Choosing one reveals a **Strength** slider, from 0 to 1.5, defaulting to the LoRA's own tuned
 weight of 0.9. The slider is hidden entirely when no LoRA is chosen. LoRAs are trained against full
 SDXL at 20 to 25 steps with guidance, so they land noticeably stronger on the SDXL entries than on
-Turbo.
+Turbo — and they do not apply at all on FLUX.2, where the whole picker is disabled.
 
 ## Seeds and candidates
 

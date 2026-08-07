@@ -60,6 +60,34 @@ uvx hf download latent-consistency/lcm-lora-sdxl `
   pytorch_lora_weights.safetensors --local-dir models/loras
 Rename-Item models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
 
+# SDXL 1.0 + Lightning (394 MB, reuses the sdxl-base-1.0 weights above): a
+# second 4-step distillation, adversarial where Hyper-SD is trajectory-
+# consistency, so the two are directly comparable with everything else fixed.
+uvx hf download ByteDance/SDXL-Lightning `
+  sdxl_lightning_4step_lora.safetensors --local-dir models/loras
+
+# Juggernaut XL v9 (~6.9 GB): a photoreal SDXL finetune, DPM++ 2M Karras at 35
+# steps with CFG 4.0 -- the middle of the ranges its own model card gives.
+uvx hf download RunDiffusion/Juggernaut-XL-v9 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/juggernaut-xl-v9
+
+# DreamShaper XL (~6.9 GB): the stylised counterpart, DEIS at 25 steps per its card.
+uvx hf download Lykon/dreamshaper-xl-1-0 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/dreamshaper-xl
+
+# FLUX.2 klein-base 4B (~16 GB): the one non-SDXL architecture -- one Qwen3 text
+# encoder at 512 tokens instead of two CLIPs at 77, and a DiT instead of a UNet.
+# Style LoRAs, conditioning and seamless tiles are all SDXL-only and are refused
+# on it; the negative prompt does work, which is why this is the undistilled
+# -base variant rather than the distilled FLUX.2-klein-4B (that one hardwires
+# is_distilled=True, which switches classifier-free guidance off entirely).
+# Streamed onto the card a submodule at a time, so it peaks near 10 GB rather
+# than 16 and still coexists with trellis. The --exclude skips a redundant
+# 7.75 GB single-file checkpoint the repo ships beside the diffusers layout.
+uvx hf download black-forest-labs/FLUX.2-klein-base-4B `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-base-4b.safetensors" --local-dir models/flux2-klein-base-4b
+
 # Style LoRAs -> models/loras/
 uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
 uvx hf download artificialguybr/3DRedmond-V1 `

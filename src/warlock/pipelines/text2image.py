@@ -30,6 +30,12 @@ from .prompt import PROMPT_TEMPLATE, SHEET_TEMPLATE, TILE_TEMPLATE, chunk, pad_p
 
 log = logging.getLogger(__name__)
 
+# Flux2KleinPipeline's own tokenizer_max_length, restated rather than read off
+# the pipe: it is the number ``_sample_flux2`` must pass to both the negative
+# encode and the call, and the two disagreeing would silently truncate one side
+# of the guidance pair.
+FLUX2_MAX_SEQUENCE = 512
+
 
 def _scheduler(name: str, current):
     """Build a replacement scheduler from the pipeline's existing config.
@@ -44,6 +50,15 @@ def _scheduler(name: str, current):
         from diffusers import DDIMScheduler
 
         return DDIMScheduler.from_config(current.config, timestep_spacing="trailing")
+    if name == "euler_trailing":
+        # SDXL-Lightning's pairing, and trailing spacing is required for the
+        # same reason ddim_trailing is: an adversarially distilled 4-step LoRA
+        # sampled on leading spacing washes out, silently.
+        from diffusers import EulerDiscreteScheduler
+
+        return EulerDiscreteScheduler.from_config(
+            current.config, timestep_spacing="trailing"
+        )
     if name == "lcm":
         # The LCM LoRA is a consistency distillation: it is only sampled
         # correctly by LCMScheduler, and on the checkpoint's own sampler it
@@ -51,6 +66,19 @@ def _scheduler(name: str, current):
         from diffusers import LCMScheduler
 
         return LCMScheduler.from_config(current.config)
+    if name == "dpm_karras":
+        # Juggernaut's card: DPM++ 2M with Karras sigmas. Neither half is the
+        # from_config default, so both are named.
+        from diffusers import DPMSolverMultistepScheduler
+
+        return DPMSolverMultistepScheduler.from_config(
+            current.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+        )
+    if name == "deis":
+        # DreamShaper XL's card ships its own snippet using this one.
+        from diffusers import DEISMultistepScheduler
+
+        return DEISMultistepScheduler.from_config(current.config)
     raise ValueError(f"unknown scheduler {name!r}")
 
 
@@ -213,10 +241,17 @@ class Text2Image:
         )
         if self.spec.scheduler is not None:
             self._pipe.scheduler = _scheduler(self.spec.scheduler, self._pipe.scheduler)
-        # Fully resident: SDXL bf16 is ~7 GB, which fits the 32 GB card even
-        # alongside trellis-server. (cpu_offload was for 30+ GB Flux; a local
-        # Flux user should set WARLOCK_VRAM_EXCLUSIVE=1 instead.)
-        self._pipe.to("cuda")
+        if self.spec.residency == models.OFFLOAD:
+            # One submodule on the device at a time, so a ~16 GB checkpoint
+            # peaks near the larger of its two big modules and still coexists
+            # with trellis-server. Mutually exclusive with the branch below:
+            # accelerate's hooks assume the modules start on the host, and a
+            # preceding .to("cuda") defeats the whole mechanism.
+            self._pipe.enable_model_cpu_offload()
+        else:
+            # Fully resident: SDXL bf16 is ~7 GB, which fits the 32 GB card even
+            # alongside trellis-server.
+            self._pipe.to("cuda")
         self._load_loras()
 
     def _load_loras(self) -> None:
@@ -228,6 +263,13 @@ class Text2Image:
         is a 4-step run of undistilled SDXL, i.e. noise -- so that one raises.
         """
         assert self._pipe is not None
+        if self.spec.family != models.FAMILY_SDXL:
+            # Every LoRA in the registry is fitted against an SDXL UNet, and
+            # loading one onto another architecture's transformer raises rather
+            # than degrading -- so the "a missing LoRA is skipped, not fatal"
+            # tolerance below is the wrong tolerance for it. guidance.normalize
+            # refuses the selection at the door; this is the other half.
+            return
         if self.spec.base_lora is not None:
             path = self._lora_dir / self.spec.base_lora
             if not path.exists():
@@ -271,6 +313,11 @@ class Text2Image:
         generates without the style LoRA.
         """
         assert self._pipe is not None
+        if self.spec.family != models.FAMILY_SDXL:
+            # Symmetric with _load_loras' early return: nothing was ever
+            # loaded, so there is no adapter set to apply -- and the empty case
+            # below would call disable_lora() on a pipe that has no PEFT state.
+            return
         names: list[str] = []
         weights: list[float] = []
         if self._base_adapter is not None:
@@ -307,6 +354,14 @@ class Text2Image:
         from PIL import Image
 
         assert self._pipe is not None
+        if self.spec.family != models.FAMILY_SDXL:
+            # Belt and braces behind guidance.normalize and queue._conditioning:
+            # every pipeline class built below is a StableDiffusionXL* one, so
+            # there is nothing here that could attach to another architecture.
+            raise RuntimeError(
+                f"{self.spec.label} cannot take conditioning; "
+                f"it is not an SDXL-family checkpoint"
+            )
         target = self._pipe
         extra: dict[str, Any] = {}
         teardown_control = False
@@ -561,8 +616,6 @@ class Text2Image:
         same resident pipeline serves ordinary references, so the patch is
         applied here and reverted before this method returns.
         """
-        import torch
-
         self.load(on_state)
         assert self._pipe is not None
         # load()/download() have no interruption point of their own; check
@@ -583,6 +636,18 @@ class Text2Image:
         # VRAM for the life of the process.
         stack = contextlib.ExitStack()
         try:
+            if tile and self.spec.family != models.FAMILY_SDXL:
+                # Refused rather than degraded. Circular padding is a property
+                # of Conv2d, and a DiT has none -- so patching what a Flux pipe
+                # does have (its VAE) would produce an image whose latent
+                # never wrapped and whose decode did, which is a tile that
+                # looks seamless in a thumbnail and seams in a material.
+                # service.jobs.create_job refuses this at the door; this is the
+                # other half.
+                raise RuntimeError(
+                    f"{self.spec.label} cannot generate a seamless tile; "
+                    f"it is not an SDXL-family checkpoint"
+                )
             if tile:
                 # The VAE decoder as well as the UNet: a seamless latent
                 # decoded through zero-padded convolutions grows a visible
@@ -639,45 +704,12 @@ class Text2Image:
                 text = f"{style.trigger}, {text}"
             self.last_prompt = text
 
-            tokenizers = [self._pipe.tokenizer, self._pipe.tokenizer_2]
-            positive_chunks = chunk(text, tokenizers)
-            # Only playground (guidance_scale > 1) runs classifier-free
-            # guidance; turbo and sdxl+Hyper-SD run at guidance_scale=0.0, where
-            # diffusers ignores the negative prompt outright
-            # (force_zeros_for_empty_prompt), so skipping the extra encode on
-            # the default path costs nothing.
-            negative_chunks: list[str] | None = None
-            if self.spec.guidance_scale > 1.0:
-                negative_chunks = chunk(negative_prompt or "", tokenizers)
-                positive_chunks, negative_chunks = pad_pair(
-                    positive_chunks, negative_chunks
-                )
-
-            prompt_embeds, pooled_prompt_embeds = _encode_long_prompt(
-                self._pipe, positive_chunks
+            sample = (
+                self._sample_flux2
+                if self.spec.family == models.FAMILY_FLUX2_KLEIN
+                else self._sample_sdxl
             )
-            negative_embeds = negative_pooled = None
-            if negative_chunks is not None:
-                negative_embeds, negative_pooled = _encode_long_prompt(
-                    self._pipe, negative_chunks
-                )
-
-            # extra is splatted rather than passed as explicit None kwargs:
-            # diffusers branches on `is not None`, and "probably identical"
-            # is not what the bit-identity rule asks for.
-            image = target(
-                prompt_embeds=prompt_embeds,
-                pooled_prompt_embeds=pooled_prompt_embeds,
-                negative_prompt_embeds=negative_embeds,
-                negative_pooled_prompt_embeds=negative_pooled,
-                num_inference_steps=steps,
-                guidance_scale=self.spec.guidance_scale,
-                width=self.spec.image_size,
-                height=self.spec.image_size,
-                generator=torch.Generator("cuda").manual_seed(seed),
-                callback_on_step_end=step_cb,
-                **extra,
-            ).images[0]
+            image, chunks = sample(target, extra, text, negative_prompt, seed, step_cb)
         finally:
             stack.close()
             teardown()
@@ -685,8 +717,108 @@ class Text2Image:
         image.save(output_path)
         self.last_used = time.monotonic()
         self.last_recipe = self._recipe(seed, text, negative_prompt, lora, lora_weight,
-                                        conditioning, len(positive_chunks), tile)
+                                        conditioning, chunks, tile)
         return output_path
+
+    def _sample_sdxl(self, target, extra, text, negative_prompt, seed, step_cb):
+        """The SDXL sample: chunked CLIP encoding, then the pipeline call.
+
+        Lifted out of generate() without a single expression moving. The
+        unconditioned path's bit-identity is the reason ``_conditioned`` is
+        written the way it is, and a refactor that "tidied" any line of this
+        while splitting it is exactly how that guarantee would be lost.
+        """
+        import torch
+
+        assert self._pipe is not None
+        tokenizers = [self._pipe.tokenizer, self._pipe.tokenizer_2]
+        positive_chunks = chunk(text, tokenizers)
+        # Only playground (guidance_scale > 1) runs classifier-free
+        # guidance; turbo and sdxl+Hyper-SD run at guidance_scale=0.0, where
+        # diffusers ignores the negative prompt outright
+        # (force_zeros_for_empty_prompt), so skipping the extra encode on
+        # the default path costs nothing.
+        negative_chunks: list[str] | None = None
+        if self.spec.guidance_scale > 1.0:
+            negative_chunks = chunk(negative_prompt or "", tokenizers)
+            positive_chunks, negative_chunks = pad_pair(
+                positive_chunks, negative_chunks
+            )
+
+        prompt_embeds, pooled_prompt_embeds = _encode_long_prompt(
+            self._pipe, positive_chunks
+        )
+        negative_embeds = negative_pooled = None
+        if negative_chunks is not None:
+            negative_embeds, negative_pooled = _encode_long_prompt(
+                self._pipe, negative_chunks
+            )
+
+        # extra is splatted rather than passed as explicit None kwargs:
+        # diffusers branches on `is not None`, and "probably identical"
+        # is not what the bit-identity rule asks for.
+        image = target(
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_prompt_embeds=negative_embeds,
+            negative_pooled_prompt_embeds=negative_pooled,
+            num_inference_steps=self.spec.steps,
+            guidance_scale=self.spec.guidance_scale,
+            width=self.spec.image_size,
+            height=self.spec.image_size,
+            generator=torch.Generator("cuda").manual_seed(seed),
+            callback_on_step_end=step_cb,
+            **extra,
+        ).images[0]
+        return image, len(positive_chunks)
+
+    def _sample_flux2(self, target, extra, text, negative_prompt, seed, step_cb):
+        """The FLUX.2 klein sample. Four things differ, all forced by the
+        pipeline's real signature rather than chosen:
+
+        *No chunking.* One Qwen3 text encoder at ``tokenizer_max_length`` 512,
+        so the whole prompt goes in as a string. The 77-token limit ``chunk``
+        exists for is a CLIP fact and does not apply here -- hence a recorded
+        ``prompt_chunks`` of 1.
+
+        *No pooled embedding.* ``__call__`` accepts neither
+        ``pooled_prompt_embeds`` nor ``negative_pooled_prompt_embeds``; passing
+        either is a TypeError.
+
+        *The negative prompt arrives as embeddings.* There is no
+        ``negative_prompt`` string parameter -- with CFG on, the pipeline
+        hardcodes ``""`` and encodes that. But it passes whatever
+        ``negative_prompt_embeds`` it was given straight through to
+        ``encode_prompt``, which returns non-None embeds verbatim, so encoding
+        the text here is how the field is honoured at all. Only under CFG:
+        below guidance 1.0 the pipeline never looks at them.
+
+        *``extra`` is asserted empty.* ``_conditioned`` refuses this family
+        outright, so a non-empty ``extra`` means something upstream built
+        SDXL kwargs for a Flux call.
+        """
+        import torch
+
+        assert not extra, f"conditioning kwargs on a {self.spec.family} sample: {sorted(extra)}"
+        negative_embeds = None
+        if self.spec.guidance_scale > 1.0:
+            negative_embeds = target.encode_prompt(
+                prompt=negative_prompt or "",
+                num_images_per_prompt=1,
+                max_sequence_length=FLUX2_MAX_SEQUENCE,
+            )[0]
+        image = target(
+            prompt=text,
+            negative_prompt_embeds=negative_embeds,
+            num_inference_steps=self.spec.steps,
+            guidance_scale=self.spec.guidance_scale,
+            width=self.spec.image_size,
+            height=self.spec.image_size,
+            max_sequence_length=FLUX2_MAX_SEQUENCE,
+            generator=torch.Generator("cuda").manual_seed(seed),
+            callback_on_step_end=step_cb,
+        ).images[0]
+        return image, 1
 
     def _recipe(
         self, seed, text, negative_prompt, lora, lora_weight, conditioning, chunks,
@@ -699,6 +831,8 @@ class Text2Image:
 
         out: dict[str, Any] = {
             "base_model": self.spec.key,
+            "family": self.spec.family,
+            "residency": self.spec.residency,
             "steps": self.spec.steps,
             "guidance_scale": self.spec.guidance_scale,
             "image_size": self.spec.image_size,

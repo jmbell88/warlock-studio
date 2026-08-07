@@ -97,27 +97,46 @@ TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_styl
 # and a benchmark comparing across the bump is comparing two compilers.
 PROMPT_VERSION = 4
 
-_tokenizer_cache: dict[Path, tuple[Any, Any]] = {}
+_tokenizer_cache: dict[Path, list[Any]] = {}
 
 
-def load_tokenizers(model_dir: Path) -> tuple[Any, Any]:
-    """CLIP-L and CLIP-G tokenizers for a local diffusers checkout, cached by
-    directory. ~1.5 MB of vocab/merges each -- no weights, no network, no
-    VRAM, so this is safe to call from a request handler.
+def load_tokenizers(model_dir: Path, family: str = "sdxl") -> list[Any]:
+    """The tokenizers a checkpoint's text encoders use, cached by directory.
+    ~1.5 MB of vocab/merges each -- no weights, no network, no VRAM, so this is
+    safe to call from a request handler.
+
+    Two for SDXL (CLIP-L and CLIP-G, in ``tokenizer``/``tokenizer_2``); one for
+    anything else, loaded with AutoTokenizer from ``tokenizer`` because the
+    class is the checkpoint's business rather than this module's. ``family``
+    is passed rather than sniffed for the same reason models.BaseModel declares
+    it: a directory with one tokenizer/ is not evidence of an architecture.
+
+    Before this took a family, a non-SDXL directory raised OSError on the
+    missing ``tokenizer_2`` and service.system swallowed it into tokens=None,
+    so the prompt preview degraded silently rather than being right.
     """
     cached = _tokenizer_cache.get(model_dir)
     if cached is not None:
         return cached
-    from transformers import CLIPTokenizer
+    if family == "sdxl":
+        from transformers import CLIPTokenizer
 
-    tok = CLIPTokenizer.from_pretrained(
-        str(model_dir), subfolder="tokenizer", local_files_only=True
-    )
-    tok2 = CLIPTokenizer.from_pretrained(
-        str(model_dir), subfolder="tokenizer_2", local_files_only=True
-    )
-    _tokenizer_cache[model_dir] = (tok, tok2)
-    return (tok, tok2)
+        tokenizers = [
+            CLIPTokenizer.from_pretrained(
+                str(model_dir), subfolder=sub, local_files_only=True
+            )
+            for sub in ("tokenizer", "tokenizer_2")
+        ]
+    else:
+        from transformers import AutoTokenizer
+
+        tokenizers = [
+            AutoTokenizer.from_pretrained(
+                str(model_dir), subfolder="tokenizer", local_files_only=True
+            )
+        ]
+    _tokenizer_cache[model_dir] = tokenizers
+    return tokenizers
 
 
 def count(text: str, tokenizers: list[Any]) -> int:

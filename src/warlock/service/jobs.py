@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .. import guidance, rigging
+from .. import guidance, models, rigging
 from .core import WarlockService
 from .errors import Conflict, Failed, Invalid, NotFound, TooLarge
 from .files import ImageTooLarge, attach_files, measure_storage, to_png
@@ -189,6 +189,19 @@ def create_job(
         raise Invalid(
             "conditioning needs a reference image", field="reference"
         )
+    # Same place and the same reason: a tile's seamlessness is circular padding
+    # over Conv2d, which a DiT has none of. Refused rather than degraded --
+    # patching only what a non-SDXL pipe does have (its VAE) yields an image
+    # whose latent never wrapped, which looks seamless in a thumbnail and seams
+    # in a material.
+    if output == "tile":
+        base = models.BASE_MODELS.get(str(params.get("base_model") or ""))
+        if base is not None and base.family != models.FAMILY_SDXL:
+            raise Invalid(
+                f"base_model {base.key!r} cannot generate a seamless tile; "
+                f"pick one of {models.tile_bases()}",
+                field="base_model",
+            )
     # One seed used to drive both stages, so "keep this reference, try another
     # mesh" was impossible without also redrawing the image. seed remains the
     # fallback for both so old rows are unchanged.

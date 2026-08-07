@@ -403,6 +403,16 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
                 f"and {models.LORA_WEIGHT_MAX}"
             )
 
+    if style_lora is not None and base_model.family != models.FAMILY_SDXL:
+        # Symmetric with the ControlNet refusal below, and refused for a
+        # stronger reason: every style LoRA in the registry names SDXL UNet
+        # modules, so loading one onto another architecture raises at load time
+        # with the checkpoint already in VRAM rather than merely doing nothing.
+        raise ValueError(
+            f"base_model {base_model.key!r} cannot take a style LoRA; "
+            f"pick one of {models.lora_bases()}"
+        )
+
     ip_adapter = chosen["ip_adapter"]
     control = chosen["control"]
     if control is not None and not base_model.controlnet:
@@ -636,6 +646,9 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
         # checks the chosen base against before it presents the negative
         # prompt as a live control rather than an inert one.
         "cfg_bases": models.cfg_bases(),
+        # And again for the style LoRA: what the UI checks before it offers the
+        # picker as a live control rather than a disabled one with a reason.
+        "lora_bases": models.lora_bases(),
         # Copied, not handed out: the UI reads these and a shared dict would let
         # a caller mutate the shipped table.
         "presets": [dict(p) for p in PRESETS],

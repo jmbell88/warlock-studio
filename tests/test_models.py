@@ -170,7 +170,13 @@ def test_every_named_scheduler_is_one_text2image_can_build():
     find out. diffusers is an optional extra, so build the ones that are
     nameable and only assert the name is known when it is absent."""
     pytest.importorskip("diffusers")
-    from diffusers import DDIMScheduler, LCMScheduler
+    from diffusers import (
+        DDIMScheduler,
+        DEISMultistepScheduler,
+        DPMSolverMultistepScheduler,
+        EulerDiscreteScheduler,
+        LCMScheduler,
+    )
 
     from warlock.pipelines import text2image
 
@@ -182,3 +188,86 @@ def test_every_named_scheduler_is_one_text2image_can_build():
     }
     assert isinstance(built["lcm"], LCMScheduler)
     assert built["ddim_trailing"].config.timestep_spacing == "trailing"
+    # Both distillation arms need trailing spacing, and neither says so at
+    # runtime -- the failure is a washed-out image, not an error.
+    assert isinstance(built["euler_trailing"], EulerDiscreteScheduler)
+    assert built["euler_trailing"].config.timestep_spacing == "trailing"
+    assert isinstance(built["dpm_karras"], DPMSolverMultistepScheduler)
+    assert built["dpm_karras"].config.use_karras_sigmas
+    assert built["dpm_karras"].config.algorithm_type == "dpmsolver++"
+    assert isinstance(built["deis"], DEISMultistepScheduler)
+
+
+@pytest.mark.parametrize("key", sorted(models.BASE_MODELS))
+def test_family_is_one_text2image_can_sample(key):
+    """The mirror of the scheduler test above: a family with no sample path
+    fails at generate time with the checkpoint already loaded."""
+    assert models.BASE_MODELS[key].family in models.FAMILIES
+
+
+@pytest.mark.parametrize("key", sorted(models.BASE_MODELS))
+def test_residency_is_one_load_knows_and_costs_something(key):
+    spec = models.BASE_MODELS[key]
+    assert spec.residency in (models.RESIDENT, models.OFFLOAD)
+    assert spec.vram_gib > 0.0
+
+
+@pytest.mark.parametrize("key", sorted(models.BASE_MODELS))
+def test_a_probe_path_agrees_with_the_variant(key):
+    """A probe naming an fp16 shard on a spec that loads without a variant --
+    or the reverse -- is a doctor row that is red on a complete download."""
+    spec = models.BASE_MODELS[key]
+    for rel in spec.probe:
+        assert rel.endswith(".safetensors")
+        if spec.variant is None:
+            assert "fp16" not in rel
+        # A probe path must be relative and POSIX-shaped: it is joined onto the
+        # model dir, and a backslash would never resolve.
+        assert not rel.startswith("/") and "\\" not in rel
+
+
+def test_lora_bases_are_exactly_the_sdxl_family():
+    bases = models.lora_bases()
+    assert bases
+    assert all(models.BASE_MODELS[b].family == models.FAMILY_SDXL for b in bases)
+    assert all(
+        m.key in bases
+        for m in models.BASE_MODELS.values()
+        if m.family == models.FAMILY_SDXL
+    )
+    # The registry's whole point here is that it now holds more than one
+    # architecture; if it did not, none of the family plumbing is exercised.
+    assert set(bases) != set(models.BASE_MODELS)
+
+
+def test_tile_bases_are_a_separate_question_with_the_same_answer_today():
+    # Same list, deliberately not the same function -- see models.tile_bases.
+    assert models.tile_bases() == models.lora_bases()
+
+
+def test_flux_download_skips_the_redundant_single_file_checkpoint():
+    """The repo ships a 7.75 GB single-file checkpoint beside the diffusers
+    layout, and the --include "*.safetensors" shape would fetch it for
+    nothing."""
+    spec = models.BASE_MODELS["flux_klein"]
+    assert '--exclude "flux-2-klein-base-4b.safetensors"' in spec.download
+    assert spec.variant is None
+    assert spec.family == models.FAMILY_FLUX2_KLEIN
+    assert spec.residency == models.OFFLOAD
+    # Undistilled, so CFG runs and the negative prompt is honoured -- which is
+    # the entire reason -base was chosen over the distilled klein.
+    assert spec.key in models.cfg_bases()
+    # And every SDXL-only feature is off.
+    assert not spec.controlnet
+    assert spec.key not in models.lora_bases()
+
+
+def test_lightning_is_a_second_distillation_arm_over_the_same_weights():
+    lightning, hyper = models.BASE_MODELS["lightning"], models.BASE_MODELS["sdxl"]
+    assert lightning.dir_name == hyper.dir_name
+    assert lightning.base_lora != hyper.base_lora
+    # Trailing spacing on both arms, for the same silent-failure reason.
+    assert lightning.scheduler == "euler_trailing"
+    assert lightning.steps == 4
+    assert lightning.guidance_scale == 0.0
+    assert "lightning" not in models.cfg_bases()

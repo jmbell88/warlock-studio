@@ -811,6 +811,30 @@ def test_tiles_can_be_batched_like_references(svc):
     assert len(out["ids"]) == 3
 
 
+def test_a_tile_on_a_non_sdxl_base_is_refused_at_the_door(svc):
+    """Seamlessness is circular padding over Conv2d, and a DiT has none -- so
+    patching what a Flux pipe does have (its VAE) would give back an image
+    whose latent never wrapped: seamless in a thumbnail, seamed in a material.
+    Refusing beats producing that."""
+    with pytest.raises(Invalid, match="seamless tile"):
+        svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="cobblestone",
+            output="tile",
+            guidance_fields={"base_model": "flux_klein"},
+        )
+    # The same base is fine for an ordinary reference -- the refusal is about
+    # the pairing, not the checkpoint.
+    assert svc_jobs.create_job(
+        svc,
+        kind="text",
+        prompt="a barrel",
+        output="reference",
+        guidance_fields={"base_model": "flux_klein"},
+    )["id"]
+
+
 def test_a_tile_cannot_be_promoted_to_a_mesh(svc):
     # There is no subject to reconstruct. Refusing at the door beats two
     # minutes of trellis turning a texture into a lumpy plane.

@@ -434,6 +434,24 @@ def test_a_control_on_a_distilled_base_is_refused_by_name():
         guidance.normalize({"control": "canny", "base_model": "turbo"})
 
 
+def test_a_style_lora_on_a_non_sdxl_base_is_refused_by_name():
+    """Stronger than the ControlNet refusal above: a style LoRA's tensors name
+    SDXL UNet modules, so loading one onto another architecture raises at load
+    time with the checkpoint already in VRAM. The message names the bases that
+    do work."""
+    with pytest.raises(ValueError, match="style LoRA"):
+        guidance.normalize({"style_lora": "render3d", "base_model": "flux_klein"})
+    # And the same base without a style is fine -- the refusal is about the
+    # pairing, not about the checkpoint.
+    assert guidance.normalize({"base_model": "flux_klein"})["base_model"] == "flux_klein"
+
+
+def test_lora_bases_reaches_the_ui_through_the_catalog():
+    catalog = guidance.catalog()
+    assert catalog["lora_bases"] == models.lora_bases()
+    assert "flux_klein" not in catalog["lora_bases"]
+
+
 def test_the_composed_prompt_never_sees_a_conditioning_field():
     """The bit-identity rule at the prompt layer: conditioning changes what
     the pipeline is handed, never a single character of the text."""

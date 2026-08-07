@@ -135,6 +135,32 @@ def test_style_lora_check_passes_when_file_present(tmp_path):
     assert checks[f"style LoRA: {lora.label}"].ok is True
 
 
+def test_a_probe_driven_row_checks_every_file_it_names(tmp_path):
+    """flux_klein has no unet/, so the default formula would never go green;
+    and its text encoder is half the download, so a probe satisfied by the
+    transformer alone would call a half-fetched model present."""
+    root = tmp_path / "m"
+    spec = model_registry.BASE_MODELS["flux_klein"]
+    assert spec.probe, "this test is about the probe path"
+    base = root / spec.dir_name
+    base.mkdir(parents=True)
+    (base / "model_index.json").write_text("{}")
+
+    def row():
+        checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+        return checks[f"image model: {spec.label}"]
+
+    for rel in spec.probe[:-1]:
+        path = base / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    assert row().ok is False, "a partial download must not read as present"
+    last = base / spec.probe[-1]
+    last.parent.mkdir(parents=True, exist_ok=True)
+    last.write_bytes(b"")
+    assert row().ok is True
+
+
 def test_turbo_dir_override_is_still_honoured(tmp_path):
     # WARLOCK_T2I_DIR predates the registry; existing setups point it at an
     # arbitrary diffusers dir and must keep working.

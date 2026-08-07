@@ -702,6 +702,34 @@ def test_the_2d_pane_builds_with_a_reference_chosen(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
+def test_a_non_sdxl_base_disables_the_style_lora_control_and_says_why(app_ctx, imgui_ctx):
+    """Disabled with a reason, not hidden: the form holds a style picked under
+    another base, and hiding the control would make that selection vanish with
+    no explanation of why the submit is now refused."""
+    from warlock.studio.panes import settings_2d
+
+    form = app_ctx.state.form_2d
+    form["prompt"] = "a barrel"
+    form["base_model"] = "sdxl_cfg"
+    form["style_lora"] = "render3d"
+    assert settings_2d.lora_note(app_ctx, form) is None
+    assert not settings_2d.validate(form)
+
+    form["base_model"] = "flux_klein"
+    note = settings_2d.lora_note(app_ctx, form)
+    assert note is not None
+    # It has to name bases the user can actually find in the picker.
+    assert "SDXL" in note
+    assert "Style LoRAs need an SDXL model." in settings_2d.validate(form)
+    # And the disabled branch has to draw.
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+    # A tile is refused on the same grounds, and independently of the LoRA.
+    form["style_lora"] = ""
+    form["output"] = "tile"
+    assert "Seamless tiles need an SDXL model." in settings_2d.validate(form)
+
+
 def test_the_inspector_builds_with_a_reference_report(app_ctx, imgui_ctx):
     from warlock.studio.panes import inspector
 

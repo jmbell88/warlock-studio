@@ -143,7 +143,7 @@ def prompt_preview(
             if params["base_model"] == models.DEFAULT_BASE_MODEL
             else None,
         )
-        tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir)
+        tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir, spec.family)
         tokens = prompt_pipeline.count(positive, tokenizers)
         chunks = len(prompt_pipeline.chunk(positive, tokenizers))
     except (ImportError, OSError):

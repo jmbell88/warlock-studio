@@ -530,6 +530,22 @@ def negative_prompt_note(ctx: Any, form: dict[str, Any]) -> str | None:
     )
 
 
+def lora_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Why the style LoRA picker is inert here, or None when it is live.
+
+    A LoRA is fitted against a specific architecture's UNet, so on anything
+    that is not SDXL-family it is not a weak effect but a refusal: the service
+    rejects the submit outright rather than generating without it.
+    """
+    bases = ctx.guidance.get("lora_bases") or []
+    if (form.get("base_model") or "") in bases:
+        return None
+    return (
+        "Style LoRAs are fitted to SDXL, so this model cannot use one. "
+        f"These can: {_base_labels(ctx, bases)}."
+    )
+
+
 def structure_note(ctx: Any, form: dict[str, Any]) -> str | None:
     """Which bases could run the ControlNet this one cannot, or None."""
     bases = ctx.guidance.get("controlnet_bases") or []
@@ -549,6 +565,13 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if hint is not None:
         imgui.same_line()
         imgui.text_disabled(hint)
+    no_lora = lora_note(ctx, form)
+    if no_lora is not None:
+        # Disabled rather than hidden, this pane's stated rule: the form holds
+        # a style the user picked under another base, and hiding the control
+        # would make that selection vanish with no explanation of why the
+        # submit is now refused.
+        imgui.begin_disabled()
     form["style_lora"] = widgets.combo("Style LoRA", form["style_lora"], ctx.style_loras)
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
@@ -568,6 +591,9 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         if hint is not None:
             imgui.same_line()
             imgui.text_disabled(hint)
+    if no_lora is not None:
+        imgui.end_disabled()
+        widgets.muted(no_lora)
     inert = negative_prompt_note(ctx, form)
     if inert is not None:
         # Disabled rather than hidden, and with the reason underneath: the
@@ -660,6 +686,13 @@ def validate(form: dict[str, Any]) -> list[str]:
         problems.append("Conditioning needs a reference image.")
     if form.get("control") and form["base_model"] not in modelslib.controlnet_bases():
         problems.append("Structure control needs a full-CFG model.")
+    # Reachable the same way: a style picked under one base survives a change
+    # of base under Advanced, and the service refuses the submit outright
+    # rather than generating without it.
+    if form.get("style_lora") and form["base_model"] not in modelslib.lora_bases():
+        problems.append("Style LoRAs need an SDXL model.")
+    if form.get("output") == "tile" and form["base_model"] not in modelslib.tile_bases():
+        problems.append("Seamless tiles need an SDXL model.")
     return problems
 
 

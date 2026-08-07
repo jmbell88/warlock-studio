@@ -833,6 +833,17 @@ class Worker:
             style_lora = params.get("style_lora") or None
             lora_weight = float(params.get("lora_weight", models.DEFAULT_LORA_WEIGHT))
             spec = models.BASE_MODELS[base_key]
+            if style_lora is not None and spec.family != models.FAMILY_SDXL:
+                # The same tolerance _conditioning applies to a ControlNet the
+                # base cannot run, and reachable the same two ways: a stored
+                # base_model fell back to the default above, or a row predates
+                # the base changing family. Dropping the style beats failing a
+                # job whose params the user can no longer edit.
+                log.warning(
+                    "base model %s cannot take a style LoRA; generating without %s",
+                    spec.key, style_lora,
+                )
+                style_lora = None
             cond = await self._conditioning(job_dir, params, spec)
             # A fully conditioned CFG job wants ~6 GB over the unconditioned
             # budget (a ControlNet plus the CLIP-ViT-H encoder), which does not

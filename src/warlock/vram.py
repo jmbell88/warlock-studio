@@ -50,7 +50,11 @@ TRELLIS_GIB = 16.0
 """trellis-server.exe resident, at res 1024 (queue.py's module docstring)."""
 
 SDXL_GIB = 7.0
-"""An SDXL-class pipe fully .to("cuda") in bf16 (text2image.py:160)."""
+"""An SDXL-class pipe fully .to("cuda") in bf16 (text2image.py:160).
+
+Also the fallback for a ``base_model`` the registry no longer carries: params
+outlive the registry, and ``queue._generate`` already applies that tolerance.
+"""
 
 CONTROLNET_GIB = 2.5
 """A ControlNet attached for one call (text2image._conditioned)."""
@@ -88,6 +92,20 @@ def _trellis_cost(params: dict[str, Any] | None) -> float:
     return TRELLIS_GIB * TRELLIS_RES_MULT[_resolution(params)]
 
 
+def _image_model_cost(params: dict[str, Any] | None) -> float:
+    """What this job's chosen checkpoint costs, in GiB.
+
+    Not every image model is 7 GB any more: a spec carries its own
+    ``vram_gib``, measured under its own ``residency``. Importing ``models``
+    here is consistent with this module's purity rule -- the ban is on
+    ``service``/``queue``/``studio``, and ``models`` is stdlib-only.
+    """
+    from . import models
+
+    spec = models.BASE_MODELS.get(str((params or {}).get("base_model") or ""))
+    return SDXL_GIB if spec is None else spec.vram_gib
+
+
 def estimate(
     kind: str,
     stage: str,
@@ -118,7 +136,7 @@ def estimate(
 
     sdxl = 0.0
     if kind == "text":
-        sdxl = SDXL_GIB
+        sdxl = _image_model_cost(params)
         if params.get("control"):
             sdxl += CONTROLNET_GIB
         if params.get("ip_adapter"):

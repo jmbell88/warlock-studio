@@ -310,7 +310,7 @@ def test_the_prompt_preview_rejects_unknown_guidance(svc):
 def test_the_prompt_preview_degrades_to_null_tokens_without_a_tokenizer(svc, monkeypatch):
     from warlock.pipelines import prompt as prompt_pipeline
 
-    def _raise(_model_dir):
+    def _raise(_model_dir, _family="sdxl"):
         raise OSError("no tokenizer on disk")
 
     monkeypatch.setattr(prompt_pipeline, "load_tokenizers", _raise)

@@ -19,6 +19,24 @@ from typing import Any
 
 DEFAULT_BASE_MODEL = "turbo"
 
+# Which architecture a checkpoint is, and therefore which encode/sample path
+# runs. Declared per model rather than sniffed, for the same reason
+# BaseModel.controlnet is: a future checkpoint must not become "SDXL-shaped"
+# because it happened to ship two text encoders and a unet/.
+FAMILY_SDXL = "sdxl"
+FAMILY_FLUX2_KLEIN = "flux2klein"
+FAMILIES = (FAMILY_SDXL, FAMILY_FLUX2_KLEIN)
+
+# How a pipeline is placed on the device.
+#
+# "resident" is .to("cuda") -- the whole pipe, which is what every SDXL-class
+# checkpoint has always done. "offload" is enable_model_cpu_offload(), which
+# keeps one submodule on the device at a time; the two are mutually exclusive
+# (accelerate's hooks assume the modules start on the host, so a preceding
+# .to("cuda") defeats the whole mechanism).
+RESIDENT = "resident"
+OFFLOAD = "offload"
+
 # LoRA adapter names are per-pipeline, so the always-on step-distillation
 # adapter needs a name no style LoRA key can collide with.
 BASE_LORA_ADAPTER = "_base"
@@ -92,6 +110,23 @@ class BaseModel:
     # future base at CFG 1.5 must not silently become "controllable" because it
     # cleared a threshold nobody qualified it against.
     controlnet: bool = False
+    # Which architecture this is, from FAMILIES. Everything the image half of
+    # the app does -- chunked CLIP encoding, the pooled embeddings, style
+    # LoRAs, ControlNet, IP-Adapter, img2img -- is an SDXL fact, so a
+    # non-"sdxl" family takes a different sample path and loses all of it.
+    family: str = FAMILY_SDXL
+    # RESIDENT or OFFLOAD. A 16 GB checkpoint fully resident cannot coexist
+    # with trellis-server on a 32 GB card; offloaded, its peak is roughly the
+    # larger of its two big submodules and it fits.
+    residency: str = RESIDENT
+    # Peak device footprint under ``residency``, in GiB -- what vram.estimate
+    # charges a text job for this checkpoint. Deliberately conservative:
+    # refusing a job is the good outcome.
+    vram_gib: float = 7.0
+    # Files (relative to the model directory) whose presence means "downloaded",
+    # for doctor. Empty keeps the default unet/-shaped formula, which is right
+    # for every SDXL checkpoint and wrong for anything that has no unet/.
+    probe: tuple[str, ...] = ()
     download: str = ""
 
 
@@ -264,6 +299,121 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             # silently overwrite it.
             "  then rename models/loras/pytorch_lora_weights.safetensors "
             "to lcm-lora-sdxl.safetensors"
+        ),
+    ),
+    BaseModel(
+        # The second distillation arm, and the reason it is worth a row: it is
+        # a genuinely different method from "sdxl"'s Hyper-SD -- adversarial
+        # rather than trajectory-consistency -- over the same base weights, so
+        # the sweep/verdict machinery can compare the two with everything else
+        # held fixed. 394 MB of new download, and no new checkpoint.
+        #
+        # Trailing timestep spacing is not optional, exactly as it is not for
+        # Hyper-SD: on the default leading spacing a Lightning LoRA produces a
+        # washed-out image and no error saying so. Euler rather than DDIM
+        # because that is the pairing the model card documents.
+        "lightning",
+        "SDXL 1.0 + Lightning (4-step)",
+        "sdxl-base-1.0",
+        image_size=1024,
+        steps=4,
+        guidance_scale=0.0,
+        scheduler="euler_trailing",
+        base_lora="sdxl_lightning_4step_lora.safetensors",
+        download=(
+            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
+            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
+            "--local-dir models/sdxl-base-1.0\n"
+            "  uvx hf download ByteDance/SDXL-Lightning "
+            "sdxl_lightning_4step_lora.safetensors --local-dir models/loras"
+        ),
+    ),
+    BaseModel(
+        # A photoreal SDXL finetune, run at its card's own recipe: DPM++ 2M
+        # Karras, 30-40 steps, CFG 3-7. 35/4.0 is the middle of both ranges.
+        # Full CFG, so the negative prompt is live and a ControlNet has
+        # something to steer.
+        "juggernaut",
+        "Juggernaut XL v9 (photoreal)",
+        "juggernaut-xl-v9",
+        image_size=1024,
+        steps=35,
+        guidance_scale=4.0,
+        scheduler="dpm_karras",
+        controlnet=True,
+        download=(
+            "uvx hf download RunDiffusion/Juggernaut-XL-v9 "
+            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
+            "--local-dir models/juggernaut-xl-v9"
+        ),
+    ),
+    BaseModel(
+        # The stylised counterpart to juggernaut, and the card's own snippet is
+        # DEIS at 25 steps. It states no CFG, so this takes SDXL's own 7.0
+        # rather than inventing one.
+        "dreamshaper",
+        "DreamShaper XL (stylised)",
+        "dreamshaper-xl",
+        image_size=1024,
+        steps=25,
+        guidance_scale=7.0,
+        scheduler="deis",
+        controlnet=True,
+        download=(
+            "uvx hf download Lykon/dreamshaper-xl-1-0 "
+            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
+            "--local-dir models/dreamshaper-xl"
+        ),
+    ),
+    BaseModel(
+        # The first non-SDXL architecture in the registry, and the reason
+        # BaseModel has a ``family`` at all. One Qwen3 text encoder at 512
+        # tokens instead of two CLIPs at 77, a DiT instead of a UNet, and no
+        # pooled embedding -- so the chunker, the style LoRAs, the ControlNet,
+        # the IP-Adapter and img2img are all inapplicable to it.
+        #
+        # The *base* variant rather than the distilled FLUX.2-klein-4B, and
+        # deliberately: the distilled checkpoint registers is_distilled=True,
+        # and Flux2KleinPipeline.do_classifier_free_guidance is
+        # ``guidance_scale > 1 and not is_distilled``, so a negative prompt is
+        # impossible on it. This one carries no is_distilled in its
+        # model_index.json, takes the class default of False, and therefore
+        # honours the negative prompt the app fills in by default.
+        #
+        # variant=None because the repo ships no *.fp16.safetensors, and a
+        # ``probe`` because the default doctor formula looks for a unet/ this
+        # has no equivalent of. Both halves of the probe matter: the text
+        # encoder is half the download, and checking only the transformer would
+        # call a half-fetched model present.
+        #
+        # OFFLOAD, not RESIDENT. Transformer 7.75 GB + text encoder 8.04 GB +
+        # VAE 0.17 GB is ~16 GB fully resident -- the same as trellis-server,
+        # so .to("cuda") would put coexist out of reach on a 32 GB card
+        # (16 + 16 + 1.5 headroom > 32) and make this usable only under
+        # WARLOCK_VRAM_EXCLUSIVE=1. Offloaded, the peak is roughly the larger
+        # submodule plus activations; 10.0 is that, rounded up.
+        "flux_klein",
+        "FLUX.2 klein-base 4B (full CFG)",
+        "flux2-klein-base-4b",
+        image_size=1024,
+        steps=50,
+        guidance_scale=4.0,
+        variant=None,
+        family=FAMILY_FLUX2_KLEIN,
+        residency=OFFLOAD,
+        vram_gib=10.0,
+        probe=(
+            "transformer/diffusion_pytorch_model.safetensors",
+            "text_encoder/model-00001-of-00002.safetensors",
+        ),
+        download=(
+            "uvx hf download black-forest-labs/FLUX.2-klein-base-4B "
+            '--include "*.json" --include "*.txt" --include "*.jinja" '
+            '--include "*.safetensors" '
+            # The repo carries a redundant 7.75 GB single-file checkpoint
+            # beside the diffusers layout; nothing here reads it.
+            '--exclude "flux-2-klein-base-4b.safetensors" '
+            "--local-dir models/flux2-klein-base-4b"
         ),
     ),
 )
@@ -498,6 +648,31 @@ def cfg_bases() -> list[str]:
     against this checkpoint" is a judgement no threshold can make.
     """
     return [m.key for m in BASE_MODELS.values() if m.guidance_scale > 1.0]
+
+
+def lora_bases() -> list[str]:
+    """Base models a style LoRA may be applied to.
+
+    Derived from ``family`` rather than declared, unlike ``controlnet``: "does
+    an SDXL LoRA fit this pipe" *is* the architecture -- the adapter's tensors
+    name UNet modules -- whereas "is a ControlNet qualified against this
+    checkpoint" is a judgement no property can make. Loading one onto a Flux
+    transformer is a load error, not a weak result, which is why this refuses
+    rather than degrading the way a missing LoRA file does.
+    """
+    return [m.key for m in BASE_MODELS.values() if m.family == FAMILY_SDXL]
+
+
+def tile_bases() -> list[str]:
+    """Base models that can produce a seamless tile.
+
+    Its own name rather than a second reader of ``lora_bases()``, which today
+    returns the same list: seamlessness is circular padding over ``Conv2d``,
+    and a LoRA is a set of UNet tensors. They agree only because both are SDXL
+    facts right now, and a shared list is how two questions quietly become one
+    wrong answer.
+    """
+    return [m.key for m in BASE_MODELS.values() if m.family == FAMILY_SDXL]
 
 
 def catalog() -> dict[str, Any]:
