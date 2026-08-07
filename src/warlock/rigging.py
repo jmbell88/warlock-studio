@@ -739,6 +739,31 @@ def sheet_png_path(job_dir: Path, sheet_id: str) -> Path:
     return sheet_path(job_dir, sheet_id).with_suffix(".png")
 
 
+def sheet_pixel_path(job_dir: Path, sheet_id: str) -> Path:
+    """The pixel restyle's sidecar, beside the render's.
+
+    ``<id>.pixel.json`` rather than a second directory, and it is invisible to
+    ``list_sheets`` for free: ``<id>.pixel`` fails ``is_valid_id``, so the
+    listing skips it without needing to know this feature exists.
+    """
+    return sheet_path(job_dir, sheet_id).with_suffix(".pixel.json")
+
+
+def sheet_pixel_png_path(job_dir: Path, sheet_id: str) -> Path:
+    return sheet_path(job_dir, sheet_id).with_suffix(".pixel.png")
+
+
+def read_sheet_pixel(job_dir: Path, sheet_id: str) -> dict[str, Any] | None:
+    path = sheet_pixel_path(job_dir, sheet_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.exception("unreadable pixel sheet at %s", path)
+        return None
+
+
 def read_sheet(job_dir: Path, sheet_id: str) -> dict[str, Any] | None:
     path = sheet_path(job_dir, sheet_id)
     if not path.exists():
@@ -772,12 +797,21 @@ def list_sheets(job_dir: Path) -> list[dict[str, Any]]:
 
 
 def delete_sheet(job_dir: Path, sheet_id: str) -> bool:
-    path = sheet_path(job_dir, sheet_id)
-    png = sheet_png_path(job_dir, sheet_id)
-    if not path.exists() and not png.exists():
+    """Both files, and the pixel restyle's pair if one was ever made.
+
+    The restyle is derived from this render and depicts nothing else, so
+    leaving it behind would leave a sprite sheet of a sheet that is gone.
+    """
+    paths = [
+        sheet_path(job_dir, sheet_id),
+        sheet_png_path(job_dir, sheet_id),
+        sheet_pixel_path(job_dir, sheet_id),
+        sheet_pixel_png_path(job_dir, sheet_id),
+    ]
+    if not any(p.exists() for p in paths):
         return False
-    path.unlink(missing_ok=True)
-    png.unlink(missing_ok=True)
+    for path in paths:
+        path.unlink(missing_ok=True)
     return True
 
 

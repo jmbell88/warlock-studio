@@ -14,10 +14,11 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
-from warlock import rigging
+from warlock import models, rigging
 from warlock.config import Config
 from warlock.db import JobStore
 from warlock.pipelines import sheet as sheetlib
@@ -866,3 +867,155 @@ def test_the_reported_pivot_sits_at_the_subjects_feet_in_every_direction(tmp_pat
         bottom = trim["y"] + trim["h"]
         assert abs(py - bottom) <= 2, f"column {cell['column']}: pivot {py} vs floor {bottom}"
         assert trim["x"] <= px <= trim["x"] + trim["w"]
+
+
+# --- the pixel restyle -------------------------------------------------------
+
+
+def _rendered_sheet(worker, source, *, frame_size=128, columns=8, rows=1):
+    """A finished render on disk, with a subject in each cell."""
+    source_dir = worker.config.job_dir(source)
+    sheet_id = rigging.new_id()
+    png = rigging.sheet_png_path(source_dir, sheet_id)
+    png.parent.mkdir(parents=True, exist_ok=True)
+    atlas = Image.new("RGBA", (frame_size * columns, frame_size * rows), (0, 0, 0, 0))
+    for row in range(rows):
+        for column in range(columns):
+            block = Image.new("RGBA", (frame_size // 2,) * 2, (200, 60, 60, 255))
+            atlas.paste(
+                block,
+                (column * frame_size + frame_size // 4, row * frame_size + frame_size // 4),
+            )
+    atlas.save(png)
+    meta = {
+        "version": 1, "id": sheet_id, "name": "turnaround", "source_job": source,
+        "created": 1.0, "image": png.name, "frame_size": frame_size,
+        "columns": columns, "rows": rows,
+        "width": frame_size * columns, "height": frame_size * rows,
+        "elevation": 30.0, "lighting": "flat",
+        "yaws": [i * 360.0 / columns for i in range(columns)],
+        "poses": [{"id": None, "name": "rest"}],
+        "cells": [
+            {
+                "index": row * columns + column, "row": row, "column": column,
+                "x": column * frame_size, "y": row * frame_size,
+                "w": frame_size, "h": frame_size,
+                "pose": None, "pose_name": "rest",
+                "yaw": column * 360.0 / columns, "frame": 0,
+                "pivot_x": frame_size / 2, "pivot_y": float(frame_size),
+                "trim": None,
+            }
+            for row in range(rows)
+            for column in range(columns)
+        ],
+    }
+    rigging.sheet_path(source_dir, sheet_id).write_text(json.dumps(meta), encoding="utf-8")
+    return sheet_id
+
+
+async def _run(worker, job_id):
+    worker.start()
+    try:
+        await _wait_until(
+            lambda: worker.store.get(job_id)["status"] in ("done", "error", "cancelled")
+        )
+    finally:
+        await worker.shutdown()
+    return worker.store.get(job_id)
+
+
+@pytest.mark.asyncio
+async def test_a_restyle_writes_its_pair_beside_the_render(worker):
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    source_dir = worker.config.job_dir(source)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 3},
+    )
+
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None and row["status"] == "done"
+    png = rigging.sheet_pixel_png_path(source_dir, sheet_id)
+    with Image.open(png) as out:
+        # 8 columns x 128px, reduced by 128/32 = 4.
+        assert out.size == (8 * 32, 32)
+        arr = np.asarray(out.convert("RGBA"))
+    doc = rigging.read_sheet_pixel(source_dir, sheet_id)
+    assert doc["frame_size"] == 32 and doc["columns"] == 8
+    assert doc["restyle"]["seed"] == 3
+    assert len(doc["palette"]) <= 8
+
+    # The silhouette is the render's, exactly -- and the colours are the
+    # generation's, which is what makes those two separable claims.
+    assert set(np.unique(arr[:, :, 3])) <= {0, 255}
+    assert arr[0, 0, 3] == 0
+    assert arr[16, 16, 3] == 255
+
+
+@pytest.mark.asyncio
+async def test_the_render_survives_a_cancelled_restyle(worker):
+    """The restyle lives in someone else's directory: a cancel must take its
+    own pair and nothing else."""
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    source_dir = worker.config.job_dir(source)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32, "colors": 8},
+    )
+
+    worker.start()
+    try:
+        await _wait_until(lambda: worker.current_job_id == job_id)
+        await worker.request_cancel(job_id)
+        worker.store.cancel(job_id)
+        await _wait_until(lambda: worker.current_job_id is None)
+    finally:
+        await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "cancelled"
+    assert not rigging.sheet_pixel_path(source_dir, sheet_id).exists()
+    assert not rigging.sheet_pixel_png_path(source_dir, sheet_id).exists()
+    # The render it was derived from is minutes of Blender belonging to a
+    # different, successful job.
+    assert rigging.sheet_png_path(source_dir, sheet_id).exists()
+    assert rigging.sheet_path(source_dir, sheet_id).exists()
+    assert (source_dir / "model.glb").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_restyle_of_a_deleted_sheet_fails_rather_than_inventing_one(worker):
+    source = _source_job(worker)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": rigging.new_id(), "logical_size": 32},
+    )
+    row = await _run(worker, job_id)
+    assert row["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_every_band_is_generated_under_one_seed(worker):
+    """Twelve rows is two bands, and one identity down the whole atlas is the
+    reason the restyle is banded rather than per cell."""
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source, rows=12)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 11},
+    )
+
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None
+    pipe = worker._text2image
+    assert len(pipe.seeds) == 2
+    assert set(pipe.seeds) == {11}
+    # And it is a sheet generation, with the pixel LoRA -- not a reference one.
+    assert all(pipe.sheets)
+    assert {lora for lora, _weight in pipe.lora_calls} == {models.PIXEL_SHEET_LORA}
+    assert all(c.uses_init for c in pipe.conditionings)

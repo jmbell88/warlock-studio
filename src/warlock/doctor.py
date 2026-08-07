@@ -246,11 +246,27 @@ def _t2i_checks(config: Config) -> list[Check]:
         ok = (path / "model_index.json").exists() and (
             path / "unet" / f"diffusion_pytorch_model{variant}.safetensors"
         ).exists()
-        detail = (
-            str(path)
-            if ok
-            else f"not found at {path} -- unavailable; download with:\n  {spec.download}"
-        )
+        # The step-distillation LoRA counts as part of the checkpoint, because
+        # _load_loras *raises* on a missing one where a style LoRA is merely
+        # skipped. Without this the row called the model ready and the job then
+        # failed at load time with the checkpoint already in VRAM -- which is
+        # the one thing this file exists to find out about first.
+        missing_lora = None
+        if ok and spec.base_lora:
+            lora_path = config.t2i_model_root / "loras" / spec.base_lora
+            if not lora_path.exists():
+                ok = False
+                missing_lora = lora_path
+        if ok:
+            detail = str(path)
+        elif missing_lora is not None:
+            detail = (
+                f"weights present, but {spec.base_lora} is missing at "
+                f"{missing_lora} -- this model cannot run without it; "
+                f"download with:\n  {spec.download}"
+            )
+        else:
+            detail = f"not found at {path} -- unavailable; download with:\n  {spec.download}"
         checks.append(Check(f"image model: {spec.label}", ok, detail, fatal=False))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename

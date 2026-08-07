@@ -95,6 +95,18 @@ def test_resolution_scales_the_reconstruction():
     assert vram.estimate("image", "model", {"resolution": "junk"}, exclusive=True) == at_1024
 
 
+def test_a_pixel_sheet_restyle_costs_sdxl_plus_a_controlnet():
+    """It is an img2img generation, not a Blender render: the same resident
+    pipe a text job wants, plus a ControlNet, and never trellis -- the mesh was
+    reconstructed long before."""
+    exclusive = vram.estimate("pixel_sheet", "model", {}, exclusive=True)
+    coexist = vram.estimate("pixel_sheet", "model", {}, exclusive=False)
+    assert exclusive == pytest.approx(vram.SDXL_GIB + vram.CONTROLNET_GIB)
+    # Under coexist a warm trellis is still holding its memory, exactly as the
+    # reference stage accounts for.
+    assert coexist == pytest.approx(exclusive + vram.TRELLIS_GIB)
+
+
 def test_a_rig_job_costs_no_vram():
     assert vram.estimate("rig", "model", {}, exclusive=False) == 0.0
 

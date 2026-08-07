@@ -105,6 +105,13 @@ def estimate(
     smaller card rather than only refusing it.
     """
     params = params or {}
+    if kind == "pixel_sheet":
+        # An img2img restyle: the same resident SDXL pipe as a text job, plus a
+        # ControlNet, and never trellis -- the mesh was reconstructed long
+        # before. Under coexist a warm trellis is still holding its memory,
+        # exactly as the reference stage below accounts for.
+        pixel = SDXL_GIB + CONTROLNET_GIB
+        return pixel if exclusive else pixel + TRELLIS_GIB
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.
         return 0.0

@@ -211,7 +211,16 @@ class FakeText2Image:
             if on_step is not None:
                 on_step(i + 1, self.steps)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"fake-png")
+        if sheet:
+            # A sheet restyle's caller reopens and crops what it wrote, so this
+            # one path has to produce a decodable image rather than a marker.
+            # Deliberately a flat colour no source render uses, so a test can
+            # tell "the generation landed here" from "the render did".
+            from PIL import Image
+
+            Image.new("RGB", (1024, 1024), (10, 200, 90)).save(output_path, "PNG")
+        else:
+            output_path.write_bytes(b"fake-png")
         self.last_used = time.monotonic()
         return output_path
 

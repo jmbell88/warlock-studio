@@ -78,6 +78,41 @@ Rendered sheets are listed under **Rendered sheets** with their cell count and f
 offers **Save PNG...**, **Save JSON...** and **Delete**. Save both: the PNG without its sidecar is
 just a picture.
 
+## Pixel art from the sheet
+
+Each rendered sheet carries a **Pixelate** disclosure, and it is the one thing here that generates
+rather than renders: it restyles the finished atlas into pixel art and writes a second image and
+sidecar beside the render's, leaving the render itself untouched.
+
+What makes it work is that the eight directions are not eight generations that have to be talked
+into agreeing. They are exact orthographic renders of one mesh, so the geometry already agrees
+perfectly and the only thing being generated is how it looks. Three consequences follow, and each is
+a property rather than a hope:
+
+- **One denoise per band.** Eight directions at 128 px is exactly 1024 pixels wide, which is one
+  frame — so every direction is drawn in a single latent under a single seed, and there is one
+  identity rather than eight. Whole rows are grouped; a row is never split across two.
+- **Exact silhouettes.** The generated colours are given the render's own alpha, verbatim. Whatever
+  the model invented outside the subject is background it was never asked for, so the silhouette
+  cannot drift.
+- **One palette.** The reduction and the colour quantization run once, across the whole atlas —
+  never per cell, which is how the same shirt comes out two shades in two directions.
+
+The controls are **Pixel size** (only the sizes that divide this sheet's cells exactly are offered;
+anything else would resample across cell boundaries), **Colours**, **Strength** — how far the
+denoise is taken, 0.30 to 0.65, with lower keeping more of the render — **Lock silhouettes**, which
+adds an edge hint from the flat render, and a seed with a **Reroll**. The result is saved with
+**Save pixel PNG...** and **Save pixel JSON...**; the pixel sidecar is the render's, with every
+rectangle divided by the reduction, plus the palette it chose and the settings that produced it.
+
+A restyle is a queued job, not an instant export: it needs the image model, so it waits its turn
+behind whatever else is generating. Cancelling one leaves the render completely intact — the restyle
+deletes only its own pair. Deleting a sheet deletes its restyle too, since a pixel sheet of a render
+that is gone depicts nothing.
+
+A sheet wider than 1024 pixels cannot be restyled, and the panel says so with the frame size to
+re-render at rather than offering a button that fails.
+
 ## Unrigged props
 
 A sheet does not require a rig. A crate, a rock or a sword has no poses and needs none — render it

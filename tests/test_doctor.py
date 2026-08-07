@@ -239,3 +239,34 @@ def test_the_two_birefnet_rows_are_told_apart(tmp_path):
     assert len(set(birefnet)) == 2
     assert any(n.startswith("trellis:") for n in birefnet)
     assert any(n.startswith("host matting:") for n in birefnet)
+
+
+def test_a_base_model_missing_its_distillation_lora_is_not_reported_ready(tmp_path):
+    """A base LoRA raises at load where a style LoRA is skipped, so it is part
+    of the checkpoint as far as this file is concerned. Reporting the model
+    ready meant finding out at job time with the weights already in VRAM."""
+    from warlock import doctor, models
+    from warlock.config import Config
+
+    spec = next(s for s in models.BASE_MODELS.values() if s.base_lora)
+    config = Config(t2i_model_root=tmp_path)
+    root = tmp_path / spec.dir_name
+    (root / "unet").mkdir(parents=True)
+    (root / "model_index.json").write_text("{}")
+    variant = f".{spec.variant}" if spec.variant else ""
+    (root / "unet" / f"diffusion_pytorch_model{variant}.safetensors").write_bytes(b"x")
+
+    def row():
+        return next(
+            c for c in doctor._t2i_checks(config) if c.name.endswith(spec.label)
+        )
+
+    assert row().ok is False
+    assert spec.base_lora in row().detail
+    # And it is not fatal: every image model is optional, and only the job that
+    # picks this one is affected.
+    assert row().fatal is False
+
+    (tmp_path / "loras").mkdir()
+    (tmp_path / "loras" / spec.base_lora).write_bytes(b"x")
+    assert row().ok is True

@@ -592,7 +592,7 @@ class Worker:
         successful job because the user cancelled a rig.
         """
         params = job["params"]
-        if job["kind"] in ("rig", "sheet"):
+        if job["kind"] in ("rig", "sheet", "pixel_sheet"):
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
             # could have written, so there is nothing to undo.
@@ -615,10 +615,20 @@ class Worker:
                 sheet_id = str(params.get("sheet_id") or "")
                 if not rigging.is_valid_id(sheet_id):
                     return
-                paths = [
-                    rigging.sheet_path(job_dir, sheet_id),
-                    rigging.sheet_png_path(job_dir, sheet_id),
-                ]
+                if job["kind"] == "pixel_sheet":
+                    # Only the restyle's own pair. The render it was derived
+                    # from belongs to a different, successful job -- deleting
+                    # it because a restyle was cancelled would destroy minutes
+                    # of Blender for a job the user did not cancel.
+                    paths = [
+                        rigging.sheet_pixel_path(job_dir, sheet_id),
+                        rigging.sheet_pixel_png_path(job_dir, sheet_id),
+                    ]
+                else:
+                    paths = [
+                        rigging.sheet_path(job_dir, sheet_id),
+                        rigging.sheet_png_path(job_dir, sheet_id),
+                    ]
         else:
             # Both halves of the contract: model.glb is what the user would
             # see, source.glb is what it was derived from. Leaving the source
@@ -711,6 +721,9 @@ class Worker:
             return
         if job["kind"] == "sheet":
             await self._sheet(job)
+            return
+        if job["kind"] == "pixel_sheet":
+            await self._pixel_sheet(job)
             return
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -1421,6 +1434,193 @@ class Worker:
         log.info(
             "rendered sheet %s for job %s: %dx%d cells at %dpx",
             sheet_id, source_id, layout.columns, layout.rows, layout.frame_size,
+        )
+
+    async def _pixel_sheet(self, job: dict[str, Any]) -> None:
+        """Restyle a finished sprite sheet into pixel art, one band at a time.
+
+        A queue job rather than a derivation, for the reason every other GPU
+        path here is one: it needs the resident SDXL pipe, and a TaskRunner
+        thread racing the worker for VRAM is the OOM that only reproduces under
+        load. And a job of its own rather than a stage of the sheet render: the
+        EEVEE render is slow and deterministic, while the restyle is the part a
+        user iterates on -- strength, palette, seed -- so paying for the render
+        again on every attempt would be the whole cost for none of the change.
+
+        The output belongs to the render, so it lands beside it in the *source*
+        job's directory, and the JSON is written last as the completion marker
+        -- the same rule ``_sheet`` and ``_rig`` follow.
+        """
+        from PIL import Image
+
+        from .pipelines import pixelsheet
+        from .pipelines.conditioning import Conditioning
+
+        job_id = job["id"]
+        params = job["params"]
+        source_id = str(params.get("source_job") or "")
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
+        sheet_id = str(params.get("sheet_id") or "")
+        if not rigging.is_valid_id(sheet_id):
+            raise ValueError(f"sheet_id is not a sheet id: {sheet_id!r}")
+        source_dir = self.config.job_dir(source_id)
+
+        meta = await asyncio.to_thread(rigging.read_sheet, source_dir, sheet_id)
+        if meta is None:
+            # Deleted between queueing and running -- the same failure `poses`
+            # gets in _sheet, and for the same reason: a restyle of a sheet
+            # that is gone would depict nothing.
+            raise RuntimeError(f"sheet {sheet_id} no longer exists")
+        png = rigging.sheet_png_path(source_dir, sheet_id)
+        if not png.exists():
+            raise RuntimeError(f"sheet {sheet_id} has no rendered atlas")
+
+        logical = int(params.get("logical_size", 32))
+        colors = int(params.get("colors", 32))
+        strength = float(params.get("strength", models.DEFAULT_IMG2IMG_STRENGTH))
+        structure = bool(params.get("structure_lock", True))
+        seed = int(params.get("seed", 42))
+        # Re-checked here as well as at the door: params outlive the sheet they
+        # name, and a re-rendered sheet is a different grid.
+        pixelsheet.check_restylable(meta, logical)
+
+        base_key = str(params.get("base_model") or "sdxl_cfg")
+        if base_key not in models.BASE_MODELS:
+            base_key = "sdxl_cfg"
+        spec = models.BASE_MODELS[base_key]
+        if self.config.vram_exclusive or self.trellis.running:
+            # The same handoff a text job makes, and the same reasoning: the
+            # restyle needs SDXL plus a ControlNet, which does not fit beside a
+            # resident trellis.
+            await asyncio.to_thread(self.trellis.stop)
+            _log_mem("after trellis stop")
+        t2i = await self._get_text2image(base_key)
+
+        with Image.open(png) as opened:
+            opened.load()
+            atlas = opened.convert("RGBA")
+
+        prompt = guidance.compose_prompt(job["prompt"] or "", params)
+        plan = pixelsheet.bands(meta)
+        styled = Image.new("RGBA", atlas.size, (0, 0, 0, 0))
+        try:
+            for band in plan:
+                self.progress.update(
+                    job_id, phase="restyle", label="Restyling sheet",
+                    inner=band.index / len(plan),
+                    inner_next=(band.index + 1) / len(plan),
+                    nominal=30.0, detail=f"band {band.index + 1}/{len(plan)}",
+                )
+                with tempfile.TemporaryDirectory(prefix="a3d-pixel-") as tmp:
+                    scratch = Path(tmp)
+                    init_path = scratch / "init.png"
+                    out_path = scratch / "out.png"
+                    await asyncio.to_thread(
+                        pixelsheet.band_init(atlas, band).save, init_path, "PNG"
+                    )
+                    control_path = None
+                    if structure and spec.controlnet:
+                        # Canny off the flat render, which is clean unlit
+                        # albedo -- so the hint is each cell's real silhouette
+                        # rather than an edge map of its lighting.
+                        control_path = scratch / "hint.png"
+                        await asyncio.to_thread(
+                            functools.partial(
+                                control.write_hint,
+                                init_path,
+                                control_path,
+                                kind="canny",
+                                size=pixelsheet.BAND_PX,
+                            )
+                        )
+                    cond = Conditioning(
+                        init_image=init_path,
+                        strength=strength,
+                        control="canny" if control_path else None,
+                        control_image=control_path,
+                    )
+                    await asyncio.to_thread(
+                        functools.partial(
+                            t2i.generate,
+                            prompt,
+                            out_path,
+                            # One seed for every band, so a multi-band sheet
+                            # keeps one identity all the way down the atlas.
+                            seed=seed,
+                            lora=models.PIXEL_SHEET_LORA,
+                            lora_weight=models.STYLE_LORAS[
+                                models.PIXEL_SHEET_LORA
+                            ].default_weight,
+                            conditioning=cond,
+                            on_state=lambda s: self._t2i_state(job_id, s),
+                            on_step=lambda i, n: self._t2i_step(job_id, i, n),
+                            cancel_event=self._cancel.event if self._cancel else None,
+                            sheet=True,
+                        )
+                    )
+                    with Image.open(out_path) as generated:
+                        generated.load()
+                        piece = pixelsheet.crop_back(generated, band)
+                top = band.first_row * band.frame
+                source_band = atlas.crop((0, top, band.width, top + band.height))
+                styled.paste(pixelsheet.remask(piece, source_band), (0, top))
+        finally:
+            if self.config.vram_exclusive:
+                # Unload before anything restarts trellis, exactly as the text
+                # branch does -- and in a finally, so a cancelled restyle does
+                # not leave 7 GB resident.
+                await asyncio.to_thread(t2i.unload)
+                self._text2image = None
+                self._t2i_key = None
+
+        self.progress.update(
+            job_id, phase="quantize", label="Reducing to pixels",
+            inner=0.0, inner_next=1.0, nominal=3.0, detail="",
+        )
+        factor = int(meta["frame_size"]) // logical
+        small = await asyncio.to_thread(pixelsheet.downscale, styled, factor)
+        reduced, palette = await asyncio.to_thread(
+            pixelsheet.quantize_shared, small, colors
+        )
+
+        if self._cancel is not None and self._cancel.event.is_set():
+            # Nothing is published for a cancelled restyle. The run loop is
+            # about to call _discard_artifacts, and writing the pair first
+            # would leave it deleting files it had just been told to make --
+            # the same reason _rig skips finalize_rig on a cancel.
+            return
+
+        out_png = rigging.sheet_pixel_png_path(source_dir, sheet_id)
+        await asyncio.to_thread(reduced.save, out_png, "PNG")
+        doc = pixelsheet.pixel_sidecar(
+            meta,
+            image=out_png.name,
+            logical_size=logical,
+            palette=palette,
+            recipe={
+                "base_model": base_key,
+                "style_lora": models.PIXEL_SHEET_LORA,
+                "strength": strength,
+                "structure_lock": bool(structure and spec.controlnet),
+                "seed": seed,
+                "colors": colors,
+                "prompt": t2i.last_prompt or prompt,
+                "bands": len(plan),
+            },
+            created=time.time(),
+        )
+        # Last, and only after the PNG: this file is what the service treats as
+        # the completion marker, so publishing it first would advertise an
+        # atlas that is still being written.
+        await asyncio.to_thread(
+            rigging.sheet_pixel_path(source_dir, sheet_id).write_text,
+            json.dumps(doc, indent=2),
+            encoding="utf-8",
+        )
+        log.info(
+            "restyled sheet %s for job %s: %d bands, %d colours at %dpx",
+            sheet_id, source_id, len(plan), len(palette), logical,
         )
 
     async def _optimize(

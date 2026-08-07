@@ -14,8 +14,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from ... import rigging
+from ... import models, rigging
 from ...service import sheets as svc_sheets
+from ...service import validation
 from .. import dialogs, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
@@ -73,6 +74,11 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
         # asset's turnaround under the new asset's controls, with nothing in
         # the panel to say the picture was stale.
         ctx.state.preview.pop("sheet_strip", None)
+        # Both are keyed by sheet id, and sheet ids belong to the asset whose
+        # directory holds them: carried across a selection change they would
+        # describe another job's sheets.
+        ctx.state.preview.pop("pixel_forms", None)
+        ctx.state.preview.pop("pixel_sidecars", None)
         release_strip_texture(ctx)
     return form
 
@@ -289,7 +295,195 @@ def _saved(ctx: Any, job: Any) -> None:
                 job_id,
                 sheet_id,
             )
+        _pixelate(ctx, job_id, sheet)
         imgui.pop_id()
+
+
+def _pixel_form(ctx: Any, sheet_id: str) -> dict[str, Any]:
+    """One restyle form per sheet, kept on the app state like the render's.
+
+    Keyed by sheet id rather than by job, because a job holds several sheets
+    and each one is restyled on its own terms -- and dropped when the selection
+    moves, since a sheet id names a grid that another asset does not have.
+    """
+    forms = ctx.state.preview.setdefault("pixel_forms", {})
+    form = forms.get(sheet_id)
+    if form is None:
+        defaults = (svc_sheets.pixel_sheet_options() or {}).get("defaults") or {}
+        form = {
+            "logical_size": int(defaults.get("logical_size") or 32),
+            "colors": int(defaults.get("colors") or 32),
+            "strength": float(defaults.get("strength") or 0.45),
+            "structure_lock": bool(defaults.get("structure_lock", True)),
+            "seed": validation.random_seed(),
+        }
+        forms[sheet_id] = form
+    return form
+
+
+def _pixel_sizes(frame_size: int) -> list[int]:
+    """The offered logical sizes that actually divide this sheet's cells.
+
+    Filtered rather than refused after the fact: a size that does not divide
+    the frame exactly cannot be reduced without resampling across cell
+    boundaries, and offering it would be offering a button that fails.
+    """
+    return [
+        size
+        for size in svc_sheets.PIXEL_LOGICAL_SIZES
+        if frame_size % size == 0 and size <= frame_size
+    ]
+
+
+def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
+    """The restyle controls for one rendered sheet.
+
+    A disclosure rather than a second panel: it belongs to the sheet it
+    restyles, and the pair it produces lives beside that sheet's own files.
+    """
+    from ...pipelines import pixelsheet
+
+    sheet_id = sheet["id"]
+    if not imgui.tree_node("Pixelate"):
+        return
+    try:
+        frame_size = int(sheet.get("frame_size") or 0)
+        columns = int(sheet.get("columns") or 0)
+        width = frame_size * columns
+        if width > pixelsheet.BAND_PX:
+            # Said here rather than under a disabled button with no reason:
+            # the remedy is to re-render, which is a different control.
+            widgets.muted(
+                f"{width}px wide -- a restyle generates "
+                f"{pixelsheet.BAND_PX}px at a time. Re-render at "
+                f"{pixelsheet.BAND_PX // max(columns, 1)}px or smaller."
+            )
+            return
+        sizes = _pixel_sizes(frame_size)
+        if not sizes:
+            widgets.muted(f"no pixel size divides {frame_size}px cells exactly")
+            return
+
+        form = _pixel_form(ctx, sheet_id)
+        if form["logical_size"] not in sizes:
+            form["logical_size"] = sizes[-1]
+        form["logical_size"] = int(
+            widgets.labeled_combo(
+                "Pixel size",
+                str(form["logical_size"]),
+                [(str(s), f"{s} px") for s in sizes],
+            )
+        )
+        form["colors"] = int(
+            widgets.labeled_combo(
+                "Colours",
+                str(form["colors"]),
+                [(str(n), f"{n} colours") for n in svc_sheets.PIXEL_COLOR_CHOICES],
+            )
+        )
+        changed, value = imgui.slider_float(
+            "Strength",
+            form["strength"],
+            models.IMG2IMG_STRENGTH_MIN,
+            models.IMG2IMG_STRENGTH_MAX,
+        )
+        if changed:
+            form["strength"] = float(value)
+        toggled, locked = imgui.checkbox("Lock silhouettes", form["structure_lock"])
+        if toggled:
+            form["structure_lock"] = bool(locked)
+        imgui.text(f"Seed {form['seed']}")
+        imgui.same_line()
+        if imgui.small_button("Reroll"):
+            form["seed"] = validation.random_seed()
+
+        key = f"sheet-pixel:{job_id}:{sheet_id}"
+        busy = ctx.busy(key)
+        if busy:
+            widgets.spinner()
+            imgui.same_line()
+        if widgets.disabled_button("Pixelate", not busy):
+            ctx.submit(
+                key,
+                svc_sheets.create_pixel_sheet,
+                ctx.svc,
+                job_id,
+                sheet_id,
+                logical_size=form["logical_size"],
+                colors=form["colors"],
+                strength=form["strength"],
+                seed=form["seed"],
+                structure_lock=form["structure_lock"],
+            )
+        _pixel_result(ctx, job_id, sheet_id)
+    finally:
+        # In a finally because every early return above is inside the node.
+        imgui.tree_pop()
+
+
+def _pixel_result(ctx: Any, job_id: str, sheet_id: str) -> None:
+    """The finished restyle, if the sidecar has landed.
+
+    Keyed on the sidecar, never on the PNG: the worker writes the image first,
+    so the PNG alone can be a file still being written.
+    """
+    path = rigging.sheet_pixel_path(ctx.job_dir(job_id), sheet_id)
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return
+    # One stat per frame and a parse only when the file changes -- the same
+    # idiom inspector._manifest uses, and for the same reason: this is drawn
+    # sixty times a second while the worker rewrites the file underneath it.
+    cache = ctx.state.preview.setdefault("pixel_sidecars", {})
+    cached = cache.get(sheet_id)
+    if cached is None or cached[0] != stamp:
+        cached = (stamp, rigging.read_sheet_pixel(ctx.job_dir(job_id), sheet_id))
+        cache[sheet_id] = cached
+    record = cached[1]
+    if record is None:
+        return
+    widgets.muted(
+        f"{record.get('frame_size')} px cells - "
+        f"{len(record.get('palette') or [])} colours"
+    )
+    if imgui.small_button("Save pixel PNG..."):
+        _save_pixel(ctx, job_id, sheet_id)
+    imgui.same_line()
+    if imgui.small_button("Save pixel JSON..."):
+        _save_pixel_sidecar(ctx, job_id, sheet_id)
+
+
+def _save_pixel(ctx: Any, job_id: str, sheet_id: str) -> None:
+    def run():
+        source = svc_sheets.sheet_pixel_png(ctx.svc, job_id, sheet_id)
+        dest = dialogs.save_file(
+            "Save pixel sheet", f"{job_id}_{sheet_id}_pixel.png", dialogs.PNG_FILTER
+        )
+        if dest is None:
+            return None
+        dest.write_bytes(source.read_bytes())
+        return dest
+
+    ctx.submit(f"sheet-save:{job_id}:{sheet_id}:pixel", run)
+
+
+def _save_pixel_sidecar(ctx: Any, job_id: str, sheet_id: str) -> None:
+    import json
+
+    def run():
+        record = svc_sheets.get_pixel_sheet(ctx.svc, job_id, sheet_id)
+        dest = dialogs.save_file(
+            "Save pixel sheet data",
+            f"{job_id}_{sheet_id}_pixel.json",
+            dialogs.filters_for("x.json"),
+        )
+        if dest is None:
+            return None
+        dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        return dest
+
+    ctx.submit(f"sheet-save:{job_id}:{sheet_id}:pixeljson", run)
 
 
 def _save(ctx: Any, job_id: str, sheet_id: str) -> None:

@@ -9,7 +9,14 @@ from typing import Any
 from .. import rigging
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound
-from .validation import check_job_id, check_pose_id, check_sheet_id
+from .validation import (
+    check_job_id,
+    check_pose_id,
+    check_seed,
+    check_sheet_id,
+    check_vram,
+    random_seed,
+)
 
 
 def sheet_options() -> dict[str, Any]:
@@ -159,3 +166,132 @@ def delete_sheet(svc: WarlockService, job_id: str, sheet_id: str) -> dict[str, A
     if not rigging.delete_sheet(svc.job_dir(job_id), sheet_id):
         raise NotFound("no such sheet")
     return {"ok": True}
+
+
+# What a pixel restyle may be reduced to. Its own tuple rather than the 2D
+# export's PIXEL_SIZES: those are artifact *names* in an allowlist, while these
+# are logical cell sizes that have to divide a sheet's frame size.
+PIXEL_LOGICAL_SIZES = (16, 24, 32, 48, 64)
+PIXEL_COLOR_CHOICES = (8, 16, 32, 64)
+
+
+def pixel_sheet_options() -> dict[str, Any]:
+    """What a restyle request may ask for, from one source, as with the render
+    above -- the pane never hardcodes a size or a strength range."""
+    from .. import models
+    from ..pipelines import pixelsheet
+
+    return {
+        "logical_sizes": list(PIXEL_LOGICAL_SIZES),
+        "colors": list(PIXEL_COLOR_CHOICES),
+        "strength_range": [
+            models.IMG2IMG_STRENGTH_MIN,
+            models.IMG2IMG_STRENGTH_MAX,
+        ],
+        "defaults": {
+            "logical_size": 32,
+            "colors": 32,
+            "strength": models.DEFAULT_IMG2IMG_STRENGTH,
+            "structure_lock": True,
+        },
+        "max_width": pixelsheet.BAND_PX,
+    }
+
+
+def create_pixel_sheet(
+    svc: WarlockService,
+    job_id: str,
+    sheet_id: str,
+    *,
+    logical_size: int = 32,
+    colors: int = 32,
+    strength: float | None = None,
+    seed: int | None = None,
+    structure_lock: bool = True,
+) -> dict[str, Any]:
+    """Queue a pixel-art restyle of one finished sprite sheet.
+
+    Every refusal is here rather than in the worker, exactly as ``create_sheet``
+    states: a sheet too wide to denoise in one frame, or a logical size that
+    does not divide its cells, costs the request rather than a place in the
+    queue and a minute of GPU.
+    """
+    from .. import models
+    from ..pipelines import pixelsheet
+
+    check_job_id(job_id)
+    check_sheet_id(sheet_id)
+    source = svc.require_job(job_id)
+    job_dir = svc.job_dir(job_id)
+    meta = rigging.read_sheet(job_dir, sheet_id)
+    if meta is None or not rigging.sheet_png_path(job_dir, sheet_id).exists():
+        raise NotFound("no such sheet")
+
+    if int(logical_size) not in PIXEL_LOGICAL_SIZES:
+        raise Invalid(
+            f"logical_size must be one of {list(PIXEL_LOGICAL_SIZES)}",
+            field="logical_size",
+        )
+    if int(colors) not in PIXEL_COLOR_CHOICES:
+        raise Invalid(
+            f"colors must be one of {list(PIXEL_COLOR_CHOICES)}", field="colors"
+        )
+    try:
+        pixelsheet.check_restylable(meta, int(logical_size))
+    except pixelsheet.NotRestylable as exc:
+        raise Invalid(str(exc)) from exc
+
+    value = models.DEFAULT_IMG2IMG_STRENGTH if strength is None else float(strength)
+    if not models.IMG2IMG_STRENGTH_MIN <= value <= models.IMG2IMG_STRENGTH_MAX:
+        raise Invalid(
+            f"strength must be between {models.IMG2IMG_STRENGTH_MIN} "
+            f"and {models.IMG2IMG_STRENGTH_MAX}",
+            field="strength",
+        )
+    if seed is not None:
+        check_seed("seed", seed)
+
+    params = {
+        # Every one of these is an *input*: the restyle's own recipe is
+        # recorded in the pixel sidecar, not here, so nothing in this dict is
+        # derived and a rerun copies it verbatim. That is why none of it joins
+        # DERIVED_PARAMS.
+        "source_job": job_id,
+        "sheet_id": sheet_id,
+        "logical_size": int(logical_size),
+        "colors": int(colors),
+        "strength": value,
+        "structure_lock": bool(structure_lock),
+        "seed": random_seed() if seed is None else int(seed),
+        "base_model": "sdxl_cfg",
+    }
+    # At the door, exactly as create_job does, and before the row exists: an
+    # img2img restyle wants SDXL plus a ControlNet, which is the shape of
+    # request a smaller card has to refuse.
+    check_vram(svc, "pixel_sheet", "model", params)
+    new_id = svc.store.create(
+        "pixel_sheet", source["prompt"], params, uuid.uuid4().hex[:12]
+    )
+    svc.wake_worker()
+    return {"id": new_id, "source_job": job_id, "sheet_id": sheet_id}
+
+
+def get_pixel_sheet(svc: WarlockService, job_id: str, sheet_id: str) -> dict[str, Any]:
+    check_job_id(job_id)
+    check_sheet_id(sheet_id)
+    record = rigging.read_sheet_pixel(svc.job_dir(job_id), sheet_id)
+    if record is None:
+        raise NotFound("no such pixel sheet")
+    return record
+
+
+def sheet_pixel_png(svc: WarlockService, job_id: str, sheet_id: str) -> Path:
+    check_job_id(job_id)
+    check_sheet_id(sheet_id)
+    job_dir = svc.job_dir(job_id)
+    path = rigging.sheet_pixel_png_path(job_dir, sheet_id)
+    # The sidecar is the completion marker here too: the worker writes the PNG
+    # first, so existence alone can serve a partial file mid-save.
+    if not path.exists() or not rigging.sheet_pixel_path(job_dir, sheet_id).exists():
+        raise NotFound("no such pixel sheet")
+    return path
