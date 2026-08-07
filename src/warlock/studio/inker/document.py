@@ -315,7 +315,7 @@ class Document:
         out = cp.paint_colour(
             before.astype(np.float32), colour, self._weights(box, weight)
         )
-        layer.pixels[y0:y1, x0:x1] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True
 
@@ -479,7 +479,7 @@ class Document:
         rgb = before[..., :3].astype(np.float32)
         out[..., :3] = rgb + (crop[..., :3] * 255.0 - rgb) * share[..., None]
         out[..., 3] = out_a * 255.0
-        layer.pixels[y0:y1, x0:x1] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True
 

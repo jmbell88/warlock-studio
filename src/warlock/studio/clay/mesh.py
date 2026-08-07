@@ -283,6 +283,32 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return np.divide(v, length, out=np.zeros_like(v), where=length > 0.0)
 
 
+def _accumulate(loops: np.ndarray, values: np.ndarray, n_verts: int) -> np.ndarray:
+    """``(n_verts, 3)`` f8 scatter-add of *values* onto vertex *loops*.
+
+    ``np.bincount`` rather than ``np.add.at``: the latter is numpy's unbuffered
+    ufunc path, which is an order of magnitude slower and is the single slowest
+    primitive in Clay's rebuild-on-every-mesh-edit path
+    (``clay_view.ClayView.sync`` keys its GPU cache on ``id(obj.mesh)``, so
+    every extrude, inset and element-drag commit pays this).
+
+    Both accumulate in *input* order, so the float sum order -- and therefore
+    the result, bit for bit -- is unchanged. That is asserted rather than
+    assumed: the output feeds :func:`_normalize` and then the GPU, where a
+    changed last bit would be invisible right up until it was not.
+    """
+    return np.stack(
+        [
+            np.bincount(loops, weights=values[:, k], minlength=n_verts)
+            for k in range(3)
+        ],
+        axis=1,
+        # ``bincount`` ignores ``weights`` entirely when the input is empty and
+        # hands back an *integer* table -- which a mesh with no smooth face at
+        # all reaches, and which ``_normalize`` then refuses to divide into.
+    ).astype("f8", copy=False)
+
+
 def render_arrays(
     mesh: Mesh,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
@@ -341,8 +367,7 @@ def render_arrays(
     smooth_loops = mesh.loops[smooth_corner]
     used[smooth_loops] = True
     n_shared = int(used.sum())
-    accum = np.zeros((n_verts, 3), dtype="f8")
-    np.add.at(accum, smooth_loops, raw[face_of_corner[smooth_corner]])
+    accum = _accumulate(smooth_loops, raw[face_of_corner[smooth_corner]], n_verts)
     remap = np.zeros(n_verts, dtype="i8")
     remap[used] = np.arange(n_shared, dtype="i8")
 
@@ -382,9 +407,10 @@ def _render_arrays_per_corner(
     identically to an untextured one. Only the de-duplication is gone.
     """
     assert mesh.uv is not None
-    accum = np.zeros((len(mesh.positions), 3), dtype="f8")
     smooth_loops = mesh.loops[smooth_corner]
-    np.add.at(accum, smooth_loops, raw[face_of_corner[smooth_corner]])
+    accum = _accumulate(
+        smooth_loops, raw[face_of_corner[smooth_corner]], len(mesh.positions)
+    )
 
     normals = unit[face_of_corner]
     normals[smooth_corner] = _normalize(accum[smooth_loops])

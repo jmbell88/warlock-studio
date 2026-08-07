@@ -258,3 +258,79 @@ def test_the_clipboard_copies_in_and_copies_out():
 
 def test_taking_from_an_empty_clipboard_gives_nothing():
     assert sel.Clipboard().take() is None
+
+
+# --- the bounded supersample --------------------------------------------------
+
+
+def _draw_shape_reference(size, kind, geometry):
+    """The whole-canvas supersample ``_draw_shape`` used to do.
+
+    A 4x buffer the size of the document, drawn and box-resized in full however
+    small the shape was -- 64 MB at 2048 square for a fifty-pixel lasso. The
+    replacement bounds that buffer by the shape; this is here so "same output"
+    is a measured claim rather than an argument about how BOX resizing works.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = size
+    big = Image.new("L", (width * sel._SS, height * sel._SS), 0)
+    draw = ImageDraw.Draw(big)
+    if kind == "rect":
+        x0, y0, x1, y1 = (v * sel._SS for v in geometry)
+        draw.rectangle((x0, y0, x1 - 1, y1 - 1), fill=255)
+    elif kind == "ellipse":
+        x0, y0, x1, y1 = (v * sel._SS for v in geometry)
+        draw.ellipse((x0, y0, x1 - 1, y1 - 1), fill=255)
+    elif kind == "polygon":
+        points = [(x * sel._SS, y * sel._SS) for x, y in geometry]
+        if len(points) >= 3:
+            draw.polygon(points, fill=255)
+    return np.asarray(big.resize((width, height), Image.BOX), dtype=np.uint8)
+
+
+SHAPES = [
+    ("ellipse", (10, 12, 40, 39)),
+    ("ellipse", (0, 0, 64, 48)),
+    ("ellipse", (-8, -6, 12, 9)),  # partly off the top-left
+    ("ellipse", (55, 40, 90, 70)),  # partly off the bottom-right
+    ("polygon", [(4.5, 5.25), (30.75, 8.0), (18.0, 33.5), (9.0, 20.0)]),
+    ("polygon", [(1.0, 1.0), (2.0, 1.0), (1.5, 2.0)]),  # a few pixels
+    ("polygon", [(-20.0, -20.0), (100.0, -5.0), (40.0, 90.0)]),  # overhangs
+    ("polygon", [(1.0, 1.0), (5.0, 5.0)]),  # too few points to fill
+    ("polygon", [(200.0, 200.0), (240.0, 210.0), (220.0, 250.0)]),  # off-canvas
+]
+
+
+@pytest.mark.parametrize("kind,geometry", SHAPES)
+def test_the_bounded_supersample_is_bit_identical_to_the_whole_canvas_one(
+    kind, geometry
+):
+    size = (64, 48)
+    got = sel._draw_shape(size, kind, geometry)
+    assert got.shape == (48, 64)
+    assert np.array_equal(got, _draw_shape_reference(size, kind, geometry))
+
+
+def test_a_small_shape_no_longer_supersamples_the_document(monkeypatch):
+    """The point of the change, asserted as the thing it actually bought.
+
+    The old path allocated ``(W * 4, H * 4)`` regardless; the new one asks
+    Pillow for a buffer bounded by the shape. A 50-pixel lasso on a 2048 square
+    document must not touch anything of that order.
+    """
+    from PIL import Image
+
+    sizes: list[tuple[int, int]] = []
+    real_new = Image.new
+
+    def spy(mode, size, *args, **kwargs):
+        sizes.append(size)
+        return real_new(mode, size, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "new", spy)
+    sel.SelectionMask.from_polygon(
+        (2048, 2048), [(1000.0, 1000.0), (1050.0, 1010.0), (1020.0, 1048.0)]
+    )
+    assert sizes, "the rasteriser stopped going through Image.new"
+    assert max(w * h for w, h in sizes) < (2048 * 4) ** 2 // 100

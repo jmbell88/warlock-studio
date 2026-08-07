@@ -38,6 +38,8 @@ thrown that away.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 __all__ = ["concave_faces", "corner_triangles", "fan_corners"]
@@ -164,11 +166,11 @@ def _flatten(pts: np.ndarray, normal: np.ndarray) -> np.ndarray:
     return np.stack([pts[:, u], pts[:, v]], axis=1)
 
 
-def _cross2(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+def _cross2(o: Any, a: Any, b: Any) -> float:
     return float((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]))
 
 
-def _inside(pts: np.ndarray, a: int, b: int, c: int, p: int) -> bool:
+def _inside(pts: Any, a: int, b: int, c: int, p: int) -> bool:
     """Is corner *p* strictly inside triangle *abc*? Ties count as outside."""
     d1 = _cross2(pts[a], pts[b], pts[p])
     d2 = _cross2(pts[b], pts[c], pts[p])
@@ -181,8 +183,14 @@ def _earclip(pts: np.ndarray) -> np.ndarray:
     n = len(pts)
     if n < 3:
         return np.zeros((0, 3), dtype="i8")
+    # Plain float tuples, once. ``pts`` is an ``(n, 2)`` f8 array and the search
+    # is ~3n^2 scalar cross products, each of which was paying numpy's scalar
+    # boxing (~100 ns) for what is a float subtraction (~20 ns). The arithmetic
+    # is unchanged -- a numpy f8 scalar and a Python float are the same IEEE
+    # double -- so the triangulation is identical, only the constant moves.
+    pt = [(float(x), float(y)) for x, y in pts]
     idx = list(range(n))
-    if sum(_cross2(pts[0], pts[i], pts[i + 1]) for i in range(1, n - 1)) < 0.0:
+    if sum(_cross2(pt[0], pt[i], pt[i + 1]) for i in range(1, n - 1)) < 0.0:
         idx.reverse()
 
     tris: list[tuple[int, int, int]] = []
@@ -191,9 +199,11 @@ def _earclip(pts: np.ndarray) -> np.ndarray:
     while len(idx) > 3 and stalled <= len(idx):
         m = len(idx)
         a, b, c = idx[p % m], idx[(p + 1) % m], idx[(p + 2) % m]
-        rest = [i for i in idx if i not in (a, b, c)]
-        if _cross2(pts[a], pts[b], pts[c]) > 0.0 and not any(
-            _inside(pts, a, b, c, i) for i in rest
+        # The containment test skips a, b and c in the walk rather than
+        # materialising the complement: ``rest`` was a fresh list built on every
+        # one of the O(n^2) iterations, and it is only ever consumed once.
+        if _cross2(pt[a], pt[b], pt[c]) > 0.0 and not any(
+            _inside(pt, a, b, c, i) for i in idx if i != a and i != b and i != c
         ):
             tris.append((a, b, c))
             del idx[(p + 1) % m]

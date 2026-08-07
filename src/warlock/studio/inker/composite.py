@@ -342,6 +342,32 @@ def to_uint8(pixels: np.ndarray) -> np.ndarray:
     return np.clip(pixels * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
 
 
+def to_uint8_255(pixels: np.ndarray) -> np.ndarray:
+    """:func:`to_uint8` for values that are already levels, not fractions.
+
+    The brush's ``_resolve`` and ``_filter`` and the document's ``write_colour``
+    and ``gradient`` all do their arithmetic in the 0..255 domain -- that is
+    what ``paint_colour`` speaks -- so none of them can use :func:`to_uint8`,
+    which scales first. They hand-rolled the narrowing instead; this is that
+    expression in one place, with the same kernel-or-numpy seam.
+
+    The float32 gate is not a formality: ``np.clip(x + 0.5, 0, 255)`` on a
+    float64 input rounds at a different width, so a caller who let a float64
+    through must get the numpy path back rather than a silently different
+    answer.
+    """
+    if (
+        native.available()
+        and pixels.dtype == np.float32
+        and pixels.size
+        and pixels.flags["C_CONTIGUOUS"]
+    ):
+        out = np.empty(pixels.shape, dtype=np.uint8)
+        native.to_uint8_255_f32(pixels, out, pixels.size)
+        return out
+    return np.clip(pixels + 0.5, 0, 255).astype(np.uint8)
+
+
 def empty(width: int, height: int) -> np.ndarray:
     """A fully transparent layer-sized buffer."""
     return np.zeros((int(height), int(width), 4), dtype=np.uint8)

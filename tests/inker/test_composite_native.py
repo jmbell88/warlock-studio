@@ -307,6 +307,56 @@ def test_to_uint8_refuses_what_it_cannot_index_and_numpy_answers(monkeypatch):
     assert cp.to_uint8(strided).shape == (8, 4, 4)
 
 
+@needs_dll
+def test_to_uint8_255_is_bit_identical_on_both_paths(monkeypatch):
+    """The unscaled sibling, over the values its four call sites produce.
+
+    Same trap as the scaled one and a sharper version of it: these values are
+    already levels, so a half-level shift here is not a rounding question about
+    a fraction, it is the wrong byte written straight into a layer.
+    """
+    rng = np.random.default_rng(4242)
+    pixels = rng.random((23, 47, 4), dtype=np.float32) * np.float32(255.0)
+    # Exact integers, exact halves, both ends, and just outside both -- the
+    # last two because paint_colour's divide can overshoot by an ulp.
+    pixels[0] = np.arange(47 * 4, dtype=np.float32).reshape(47, 4) % np.float32(256.0)
+    pixels[1] = (np.arange(47 * 4, dtype=np.float32) + 0.5).reshape(47, 4) % np.float32(256.0)
+    pixels[2] = np.float32(0.0)
+    pixels[3] = np.float32(255.0)
+    pixels[4] = np.float32(-0.4)
+    pixels[5] = np.float32(255.6)
+
+    fast, slow = _both(lambda: cp.to_uint8_255(pixels), monkeypatch)
+    assert fast.dtype == slow.dtype == np.uint8
+    assert np.array_equal(fast, slow)
+    assert np.array_equal(slow, np.clip(pixels + 0.5, 0, 255).astype(np.uint8))
+
+
+@needs_dll
+def test_to_uint8_255_round_trips_every_level_on_both_paths(monkeypatch):
+    """A layer's own pixels, widened and narrowed again, are themselves."""
+    values = np.arange(256, dtype=np.uint8).reshape(1, 256, 1).repeat(4, axis=2)
+    call = lambda: cp.to_uint8_255(values.astype(np.float32))  # noqa: E731
+    fast, slow = _both(call, monkeypatch)
+    assert np.array_equal(fast, values)
+    assert np.array_equal(fast, slow)
+
+
+def test_to_uint8_255_refuses_what_it_cannot_index_and_numpy_answers(monkeypatch):
+    """A non-contiguous or non-float32 input must reach numpy, not the kernel.
+
+    float64 is the one that matters: ``x + 0.5`` rounds at a different width,
+    so a kernel that took it would answer a different question rather than the
+    same one faster.
+    """
+    monkeypatch.setattr(native, "available", lambda: True)
+    strided = np.zeros((8, 8, 4), dtype=np.float32)[:, ::2]
+    assert cp.to_uint8_255(strided).shape == (8, 4, 4)
+    wide = np.full((2, 2), 127.5, dtype=np.float64)
+    assert np.array_equal(cp.to_uint8_255(wide), np.full((2, 2), 128, dtype=np.uint8))
+    assert cp.to_uint8_255(np.zeros((0, 4), dtype=np.float32)).shape == (0, 4)
+
+
 # --- the refusals -------------------------------------------------------------
 #
 # ``_over_native`` returning None is not an error path, it is the whole design:

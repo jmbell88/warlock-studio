@@ -36,7 +36,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 4
+#define WARLOCKC_ABI 5
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -145,6 +145,21 @@ WARLOCKC_API void warlockc_stack_f32(const uint8_t **layers,
  * uint8 layer -- and defining it here would be a divergence, not a fix. */
 WARLOCKC_API void warlockc_to_uint8_f32(const float *pixels, uint8_t *out,
                                         int64_t count);
+
+/* The same narrowing for floats that are *already* in 0..255 -- the four hand
+ * rolled `np.clip(out + 0.5, 0, 255).astype(np.uint8)` expressions in
+ * inker.brush._resolve / _filter and inker.document.write_colour / gradient,
+ * none of which can use the kernel above because that one multiplies by 255
+ * first.
+ *
+ * A sibling rather than a scale parameter: the two differ by one multiply, and
+ * a per-element branch or a per-element multiply by 1.0f to unify them would
+ * cost more than the duplication does. Parity is exact for the same reason the
+ * scaled one's is -- add, clamp in numpy's NaN-leaving direction, truncate --
+ * and it matters more here, because these four sites write straight into a
+ * layer's pixels and a half-level shift is a different file on disk. */
+WARLOCKC_API void warlockc_to_uint8_255_f32(const float *pixels, uint8_t *out,
+                                            int64_t count);
 
 /* Closed boundary loops around `mask >= threshold` --
  * warlock.studio.inker.selection.SelectionMask.contours, which is the one true

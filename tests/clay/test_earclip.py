@@ -140,3 +140,72 @@ def test_reversed_corner_perm_reverses_each_face_in_place() -> None:
         lo, hi = m.starts[i], m.starts[i + 1]
         assert flipped[lo:hi].tolist() == m.loops[lo:hi].tolist()[::-1]
     assert bm.reversed_corner_perm(np.zeros(1, dtype="i4")).shape == (0,)
+
+
+# --- the constant factor ------------------------------------------------------
+
+
+def _earclip_reference(pts: np.ndarray) -> np.ndarray:
+    """The ear search as it stood before the boxing and ``rest`` were removed.
+
+    Kept verbatim here rather than in the module: the change claimed to move
+    speed only, and the only way to hold it to that is to run the old code and
+    compare. A star polygon exercises every branch -- reflex corners, a
+    rejected ear, the pointer walking back after a clip.
+    """
+    n = len(pts)
+    if n < 3:
+        return np.zeros((0, 3), dtype="i8")
+    idx = list(range(n))
+    if sum(ec._cross2(pts[0], pts[i], pts[i + 1]) for i in range(1, n - 1)) < 0.0:
+        idx.reverse()
+
+    tris: list[tuple[int, int, int]] = []
+    p = 0
+    stalled = 0
+    while len(idx) > 3 and stalled <= len(idx):
+        m = len(idx)
+        a, b, c = idx[p % m], idx[(p + 1) % m], idx[(p + 2) % m]
+        rest = [i for i in idx if i not in (a, b, c)]
+        if ec._cross2(pts[a], pts[b], pts[c]) > 0.0 and not any(
+            ec._inside(pts, a, b, c, i) for i in rest
+        ):
+            tris.append((a, b, c))
+            del idx[(p + 1) % m]
+            p = max(0, p - 1)
+            stalled = 0
+        else:
+            p += 1
+            stalled += 1
+
+    if len(idx) == 3:
+        tris.append((idx[0], idx[1], idx[2]))
+    else:
+        tris.extend((idx[0], idx[k], idx[k + 1]) for k in range(1, len(idx) - 1))
+    return np.array(tris, dtype="i8").reshape(-1, 3)
+
+
+def _star(points: int, inner: float, rng) -> np.ndarray:
+    angles = np.arange(points * 2) * (np.pi / points)
+    radius = np.where(np.arange(points * 2) % 2 == 0, 1.0, inner)
+    jitter = 1.0 + (rng.random(points * 2) - 0.5) * 0.1
+    return np.stack(
+        [np.cos(angles) * radius * jitter, np.sin(angles) * radius * jitter], axis=1
+    ).astype("f8")
+
+
+@pytest.mark.parametrize("points", [3, 4, 5, 8, 13])
+def test_the_faster_ear_search_triangulates_exactly_as_the_old_one_did(points):
+    rng = np.random.default_rng(1000 + points)
+    for inner in (0.35, 0.7):
+        pts = _star(points, inner, rng)
+        assert np.array_equal(ec._earclip(pts), _earclip_reference(pts))
+        # And reversed, which is what sends it through the winding flip.
+        assert np.array_equal(ec._earclip(pts[::-1]), _earclip_reference(pts[::-1]))
+
+
+def test_a_degenerate_loop_still_falls_back_exactly_as_it_did():
+    """All-collinear corners stall the search; the fan-the-remainder path is
+    the contract every caller indexes by, so it has to be unchanged too."""
+    pts = np.stack([np.arange(6, dtype="f8"), np.zeros(6)], axis=1)
+    assert np.array_equal(ec._earclip(pts), _earclip_reference(pts))

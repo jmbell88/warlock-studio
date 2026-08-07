@@ -488,3 +488,42 @@ def test_a_meshs_arrays_own_their_bytes() -> None:
     m = _from_faces(big[:8], BOX_FACES)
     for arr in (m.positions, m.loops, m.starts, m.material, m.smooth):
         assert arr.base is None
+
+
+# --- the smooth-normal scatter ----------------------------------------------
+
+
+def test_bincount_accumulation_is_bit_identical_to_add_at():
+    """``_accumulate`` replaced ``np.add.at`` for speed and nothing else.
+
+    ``np.add.at`` is the unbuffered ufunc path and is an order of magnitude
+    slower; ``np.bincount`` sums the same values in the same *input* order, so
+    the float result is identical rather than merely close. Asserting that is
+    the whole point -- the output feeds ``_normalize`` and then the GPU, where
+    a changed last bit has nothing to announce it.
+    """
+    rng = np.random.default_rng(90210)
+    n_verts = 137
+    # Heavy repetition, so a vertex accumulates many contributions and the
+    # summation order actually has something to disagree about.
+    loops = rng.integers(0, n_verts, size=4096, dtype="i8")
+    values = (rng.random((4096, 3)) - 0.5) * 1e3
+
+    reference = np.zeros((n_verts, 3), dtype="f8")
+    np.add.at(reference, loops, values)
+
+    got = bm._accumulate(loops, values, n_verts)
+    assert got.dtype == reference.dtype
+    assert np.array_equal(got, reference)
+
+
+def test_accumulation_of_nothing_is_the_zeroed_table():
+    """A mesh with no smooth face still needs a full-length accumulator."""
+    empty = bm._accumulate(
+        np.zeros(0, dtype="i8"), np.zeros((0, 3), dtype="f8"), 9
+    )
+    assert empty.shape == (9, 3)
+    assert not empty.any()
+    # Float, not the integer table bincount hands back for an empty input:
+    # ``_normalize`` divides into this and refuses an int output array.
+    assert empty.dtype == np.dtype("f8")

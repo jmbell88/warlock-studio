@@ -196,3 +196,17 @@ void warlockc_to_uint8_f32(const float *pixels, uint8_t *out, int64_t count) {
         out[i] = (uint8_t)clipped;
     }
 }
+
+void warlockc_to_uint8_255_f32(const float *pixels, uint8_t *out,
+                               int64_t count) {
+    for (int64_t i = 0; i < count; ++i) {
+        /* No scale: the callers' floats are already levels, not fractions.
+         * Everything else is warlockc_to_uint8_f32's reasoning verbatim --
+         * clamp written so a NaN falls through both comparisons the way
+         * numpy's clip propagates one, then truncate, because the reference's
+         * .astype is the truncation and the +0.5f above is the round. */
+        const float biased = pixels[i] + 0.5f;
+        const float clipped = biased < 0.0f ? 0.0f : (biased > 255.0f ? 255.0f : biased);
+        out[i] = (uint8_t)clipped;
+    }
+}

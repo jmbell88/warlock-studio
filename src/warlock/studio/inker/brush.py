@@ -203,7 +203,7 @@ class StrokeState:
             out[..., 3] = before[..., 3] * (1.0 - alpha[..., 0])
         else:
             out = composite.paint_colour(before, self.colour, alpha[..., 0])
-        target[y0:y1, x0:x1] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        target[y0:y1, x0:x1] = composite.to_uint8_255(out)
 
     def _filter(
         self, piece: np.ndarray, rect: tuple[int, int, int, int], target: np.ndarray
@@ -235,7 +235,7 @@ class StrokeState:
             self._pickup = source + (crop - source) * float(self.strength)
 
         out = crop + (source - crop) * weight
-        target[y0:y1, x0:x1] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        target[y0:y1, x0:x1] = composite.to_uint8_255(out)
 
     def _mark(self, rect: tuple[int, int, int, int]) -> None:
         if self.dirty is None:

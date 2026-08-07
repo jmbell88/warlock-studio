@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 4
+ABI = 5
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -123,6 +123,13 @@ def _bind(lib: ctypes.CDLL) -> None:
     lib.warlockc_to_uint8_f32.restype = None
     lib.warlockc_to_uint8_f32.argtypes = [
         f,  # pixels
+        ctypes.POINTER(ctypes.c_uint8),  # out
+        i64,  # count
+    ]
+
+    lib.warlockc_to_uint8_255_f32.restype = None
+    lib.warlockc_to_uint8_255_f32.argtypes = [
+        f,  # pixels, already 0..255
         ctypes.POINTER(ctypes.c_uint8),  # out
         i64,  # count
     ]
@@ -357,6 +364,22 @@ def to_uint8_f32(pixels: Any, out: Any, count: int) -> None:
     if handle is None:  # pragma: no cover - callers check available() first
         raise RuntimeError("warlockc is not loaded")
     handle.warlockc_to_uint8_f32(
+        _ptr(pixels, ctypes.c_float),
+        _ptr(out, ctypes.c_uint8),
+        ctypes.c_int64(count),
+    )
+
+
+def to_uint8_255_f32(pixels: Any, out: Any, count: int) -> None:
+    """Round, clamp and narrow ``count`` floats already in 0..255 into ``out``.
+
+    The unscaled sibling of :func:`to_uint8_f32`, for the call sites that do
+    their arithmetic in levels rather than in fractions.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    handle.warlockc_to_uint8_255_f32(
         _ptr(pixels, ctypes.c_float),
         _ptr(out, ctypes.c_uint8),
         ctypes.c_int64(count),

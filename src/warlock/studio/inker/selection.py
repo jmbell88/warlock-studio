@@ -36,28 +36,76 @@ COMBINE_OPS = ("replace", "add", "subtract", "intersect")
 _SS = 4
 
 
+def _shape_box(
+    size: tuple[int, int], kind: str, geometry: Any
+) -> tuple[int, int, int, int] | None:
+    """The shape's own pixel-aligned bounding box, clipped to the canvas.
+
+    ``None`` when the shape misses the canvas entirely, or is a polygon with
+    too few points to fill. A one-pixel margin is added before clipping so a
+    rounding question at the edge can never cost a covered pixel -- the box is
+    a bound on the work, not a statement about the geometry.
+    """
+    width, height = size
+    if kind == "polygon":
+        points = list(geometry)
+        if len(points) < 3:
+            return None
+        xs = [float(x) for x, _ in points]
+        ys = [float(y) for _, y in points]
+        lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
+    else:
+        a, b, c, d = (float(v) for v in geometry)
+        lo_x, hi_x, lo_y, hi_y = min(a, c), max(a, c), min(b, d), max(b, d)
+
+    x0 = max(0, int(np.floor(lo_x)) - 1)
+    y0 = max(0, int(np.floor(lo_y)) - 1)
+    x1 = min(width, int(np.ceil(hi_x)) + 1)
+    y1 = min(height, int(np.ceil(hi_y)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+
 def _draw_shape(
     size: tuple[int, int], kind: str, geometry: Any
 ) -> np.ndarray:
-    """Rasterise a shape into an antialiased mask by supersampling."""
+    """Rasterise a shape into an antialiased mask by supersampling.
+
+    **Supersampled over the shape's own box, not the canvas.** The 4x buffer
+    used to be canvas-sized -- 64 MB at 2048 square, allocated, drawn into and
+    box-resized in full however small the shape was, so a fifty-pixel lasso
+    paid for the whole document. The output is unchanged: an exact 4x BOX
+    resize averages each 4x4 block independently, and the box is pixel-aligned,
+    so every output pixel sees the same sixteen samples it saw before. Pixels
+    outside the box are zero either way -- that is what makes it the box.
+    """
     from PIL import Image, ImageDraw
 
     width, height = size
-    big = Image.new("L", (width * _SS, height * _SS), 0)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    box = _shape_box(size, kind, geometry)
+    if box is None:
+        return mask
+    bx0, by0, bx1, by1 = box
+
+    big = Image.new("L", ((bx1 - bx0) * _SS, (by1 - by0) * _SS), 0)
     draw = ImageDraw.Draw(big)
+    dx, dy = bx0 * _SS, by0 * _SS
     if kind == "rect":
         x0, y0, x1, y1 = (v * _SS for v in geometry)
-        draw.rectangle((x0, y0, x1 - 1, y1 - 1), fill=255)
+        draw.rectangle((x0 - dx, y0 - dy, x1 - 1 - dx, y1 - 1 - dy), fill=255)
     elif kind == "ellipse":
         x0, y0, x1, y1 = (v * _SS for v in geometry)
-        draw.ellipse((x0, y0, x1 - 1, y1 - 1), fill=255)
+        draw.ellipse((x0 - dx, y0 - dy, x1 - 1 - dx, y1 - 1 - dy), fill=255)
     elif kind == "polygon":
-        points = [(x * _SS, y * _SS) for x, y in geometry]
-        if len(points) >= 3:
-            draw.polygon(points, fill=255)
+        draw.polygon([(x * _SS - dx, y * _SS - dy) for x, y in geometry], fill=255)
     else:  # pragma: no cover - programming error
         raise ValueError(f"unknown selection shape {kind!r}")
-    return np.asarray(big.resize((width, height), Image.BOX), dtype=np.uint8)
+
+    small = big.resize((bx1 - bx0, by1 - by0), Image.BOX)
+    mask[by0:by1, bx0:bx1] = np.asarray(small, dtype=np.uint8)
+    return mask
 
 
 @dataclass
