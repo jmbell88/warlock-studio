@@ -32,6 +32,13 @@ def worker(tmp_path, fake_pipelines):
         db_path=tmp_path / "assets" / "jobs.sqlite",
         trellis_server_exe=tmp_path / "missing.exe",
         trellis_models_dir=tmp_path / "models",
+        # Pinned empty, not left at PROJECT_ROOT/models. The landmark gate
+        # stats this root for the pose weights, so without it every assertion
+        # below about the detector *not* being consulted would depend on
+        # whether whoever ran the suite happens to have downloaded vitpose --
+        # the same rule conftest's svc fixture keeps for gltfpack. Tests that
+        # want the detector present fake it (_fake_detection).
+        t2i_model_root=tmp_path / "t2i-models",
     )
     store = JobStore(config.db_path)
     w = Worker(config, store)
@@ -345,3 +352,204 @@ async def test_an_ordinary_rig_job_sends_no_bones_so_the_worker_fits(worker, mon
 
     assert "bones" not in calls[0]["spec"]
     await worker.shutdown()
+
+
+# --- landmark-informed joint placement ---------------------------------------
+#
+# The mesh is a reconstruction of the source job's input.png, so that image
+# says where the subject's joints are. What is tested here is only the gating:
+# when the queue asks the detector at all, and that no answer it gives -- none,
+# nonsense, or an exception -- can cost the rig. Where a joint lands is
+# tests/test_pose2d.py's subject.
+
+
+def _fake_detection(monkeypatch, *, bones="landmarks", available=True, raises=None):
+    """Stand in for the whole pose2d model half, recording every call."""
+    from warlock.pipelines import pose2d
+
+    calls: list[Path] = []
+
+    def fake_detect(image_path, subject_bbox, config=None):
+        calls.append(Path(image_path))
+        if raises is not None:
+            raise raises
+        return [pose2d.Keypoint(n, 1.0, 1.0, 0.9) for n in pose2d.COCO_KEYPOINTS]
+
+    monkeypatch.setattr(pose2d, "available", lambda config=None: available)
+    monkeypatch.setattr(pose2d, "detect", fake_detect)
+    monkeypatch.setattr(
+        pose2d,
+        "refit",
+        lambda template, keypoints, bbox: (
+            None if bones is None else [dict(b) for b in template.bones]
+        ),
+    )
+    return calls
+
+
+def _rigged_reference(worker, **params) -> str:
+    """A finished job with both a mesh and the reference it was made from."""
+    job_id = _mesh_job(worker, **params)
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (128, 256), (240, 240, 240))
+    ImageDraw.Draw(image).rectangle((40, 30, 88, 226), fill=(20, 20, 20))
+    image.save(worker.config.job_dir(job_id) / "input.png")
+    return job_id
+
+
+async def test_a_humanoid_rig_asks_the_reference_where_the_joints_are(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch)
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source, "template": "humanoid"})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == [worker.config.job_dir(source) / "input.png"]
+    spec = calls[0]["spec"]
+    assert spec["template_bones"]
+    assert spec["fit"]["method"] == "pose2d"
+    assert spec["fit"]["model"]
+    assert 0.0 <= spec["fit"]["confidence"] <= 1.0
+    await worker.shutdown()
+
+
+async def test_a_mesh_with_no_reference_image_gets_the_bbox_fit(worker, monkeypatch):
+    """An imported or hand-modelled asset has no input.png, and there is
+    nothing to read joints off. It rigs exactly as it always did."""
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == []
+    assert "template_bones" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+def test_a_mesh_with_no_reference_is_not_offered_to_the_detector(worker, monkeypatch):
+    """The gate itself, rather than what it prevents.
+
+    ``measure_file`` would decline a missing file too, so the test above passes
+    either way -- what this one pins is that a rig of an imported mesh does not
+    pay a thread hop and a model load to be told there is no image, which is
+    the only thing the check buys.
+    """
+    _fake_detection(monkeypatch)
+    source_dir = worker.config.job_dir(rigging.new_id())
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    assert worker._wants_landmarks(source_dir, "humanoid", {}) is False
+    (source_dir / "input.png").write_bytes(b"a reference, of some description")
+    assert worker._wants_landmarks(source_dir, "humanoid", {}) is True
+
+
+async def test_joints_the_user_corrected_are_never_second_guessed(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch)
+    source = _rigged_reference(worker)
+    fitted = rigging.fit_template(rigging.get_template("humanoid"), [-1, -1, 0], [1, 1, 2])
+    rig_id = worker.store.create(
+        "rig", None, {"source_job": source, "bones": fitted, "adjusted": True}
+    )
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == [], "adjust-joints is the user overruling every fit"
+    assert "template_bones" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+async def test_the_kill_switch_stops_the_detector_being_asked(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch)
+    worker.config.pose_fit = False
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == []
+    assert "template_bones" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+async def test_a_non_humanoid_template_is_never_asked(worker, monkeypatch):
+    """COCO-17 is a human skeleton. There is no mapping from it onto a
+    quadruped's shoulder, so the question is not worth asking."""
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch)
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source, "template": "quadruped"})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == []
+    assert "template_bones" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+async def test_no_weights_means_the_rig_runs_exactly_as_it_did_before(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    detections = _fake_detection(monkeypatch, available=False)
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert detections == []
+    assert "template_bones" not in calls[0]["spec"]
+    assert "fit" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+async def test_a_refused_detection_falls_back_to_the_bbox_fit(worker, monkeypatch):
+    """refit returning None is a sanity gate refusing -- a figure the landmarks
+    do not describe. The rig still happens, on the fit that always works."""
+    calls = _fake_worker_run(monkeypatch)
+    _fake_detection(monkeypatch, bones=None)
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert "template_bones" not in calls[0]["spec"]
+    await worker.shutdown()
+
+
+async def test_a_detector_that_raises_never_fails_the_rig(worker, monkeypatch):
+    """Log and swallow, the rule every diagnostic in the worker follows: a
+    better skeleton is an optimisation, and an optimisation must not be able to
+    fail a job whose mesh is already on disk."""
+    calls = _fake_worker_run(monkeypatch)
+    _fake_detection(monkeypatch, raises=RuntimeError("the model exploded"))
+    source = _rigged_reference(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert "template_bones" not in calls[0]["spec"]
+    assert (worker.config.job_dir(source) / "rig.json").exists()
+    await worker.shutdown()
+
+
+def test_the_kill_switch_reads_the_environment(monkeypatch):
+    import warlock.config as config_mod
+
+    monkeypatch.setenv("WARLOCK_POSE_FIT", "0")
+    monkeypatch.setattr(config_mod, "_config", None)
+    assert config_mod.get_config().pose_fit is False
+    monkeypatch.setenv("WARLOCK_POSE_FIT", "1")
+    monkeypatch.setattr(config_mod, "_config", None)
+    assert config_mod.get_config().pose_fit is True

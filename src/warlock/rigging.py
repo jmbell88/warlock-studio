@@ -540,13 +540,34 @@ RIG_JSON_TMP = ".rig.tmp.json"
 
 
 def rig_spec(
-    job_dir: Path, template_key: str, bones: list[dict[str, Any]] | None = None
+    job_dir: Path,
+    template_key: str,
+    bones: list[dict[str, Any]] | None = None,
+    *,
+    template_bones: list[dict[str, Any]] | None = None,
+    fit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The worker spec for rigging a finished job's mesh.
 
-    ``bones`` overrides the bbox-proportional fit with joints the user moved.
-    The fit is deliberately approximate -- rig.json records what it chose so a
-    correction can be made without re-running anything else.
+    Three sources of joints, in a fixed order of preference, and the order is
+    the design:
+
+    * ``bones`` -- world-space joints the *user* moved, from the adjust-joints
+      pass. Already validated against the template by ``validate_joints``, and
+      they win over everything: a correction is the last word by definition.
+    * ``template_bones`` -- the template's own landmarks, replaced with ones
+      measured off the reference image (``pipelines.pose2d``). Still normalized
+      and still the template's shape, so the worker fits them onto the mesh
+      bbox with exactly the ``fit_template`` it uses for the shipped ones --
+      the scaling stays owned by the worker and this stays a *better template*
+      rather than a second fitter.
+    * nothing -- the shipped template, scaled bbox-proportionally, which is
+      what every rig did before landmarks existed and is still right for a
+      reference that really is standing in a T-pose.
+
+    ``fit`` is what the host knows about how the second of those was found and
+    the worker cannot: which model, how confident. It is recorded in rig.json
+    and read by nothing that has to work, which is why it is a free-form dict.
     """
     get_template(template_key)  # fail here, not three seconds into a subprocess
     spec = {
@@ -559,6 +580,10 @@ def rig_spec(
     }
     if bones is not None:
         spec["bones"] = bones
+    if template_bones is not None:
+        spec["template_bones"] = template_bones
+    if fit is not None:
+        spec["fit"] = fit
     return spec
 
 

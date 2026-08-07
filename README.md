@@ -84,6 +84,17 @@ Blender runs as a subprocess, never inside the app — `bpy` is process-global a
 
 Once a job is rigged the inspector gains a **Pose** panel: click **Edit pose** to swap the preview to the rig, click a joint to attach a rotation gizmo, and save the result under a name. Poses are forward-kinematic only — each joint's local rotation, nothing else — and each one can be downloaded as its own posed GLB, baked by Blender on first request and cached afterwards. Saving under an existing name replaces that pose rather than adding a near-duplicate.
 
+#### Optional: landmark-informed joint placement
+
+```powershell
+uvx hf download usyd-community/vitpose-base-simple `
+  --include "*.json" --include "*.safetensors" --local-dir models/vitpose-base
+```
+
+Without it, a humanoid rig places its joints by scaling the template onto the mesh's bounding box — which is right when the reference is standing in a T-pose and progressively wrong as it departs from one. With it, the *reference image the mesh was reconstructed from* is read for the subject's actual shoulders, elbows, hips, knees and ankles, and those positions are used for the skeleton's X and Z. Depth still comes from the template: one view cannot supply it.
+
+It runs on the CPU, beside the resident trellis and SDXL rather than taking VRAM from them, and it costs about a second per rig. Nothing about it is required: it engages by itself when the weights are present, the template is `humanoid`, the job has a reference image, and the detection clears its sanity gates — and falls back wholesale to the bounding-box fit otherwise, never partially, since a skeleton half-measured and half-assumed is worse than either. `rig.json` records which fit produced the joints under `fit.method` (`pose2d`, `bbox`, or `manual` after an adjust-joints pass), and `WARLOCK_POSE_FIT=0` turns the whole thing off.
+
 ### Optional: native kernels
 
 ```powershell

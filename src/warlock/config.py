@@ -276,6 +276,22 @@ class Config:
     vram_total_gib: float | None = field(
         default_factory=lambda: _env_opt_float("WARLOCK_VRAM_TOTAL")
     )
+    # Whether a rig may read its joint positions off the reference image the
+    # mesh was reconstructed from (pipelines/pose2d) instead of scaling the
+    # template onto the bounding box.
+    #
+    # On, and it is a kill-switch rather than an opt-in because the thing it
+    # switches off is already the fallback: with no weights on disk, a
+    # non-humanoid template, no reference image, or a detection that fails any
+    # sanity gate, a rig is byte-for-byte what it was before this existed. So
+    # there is no state in which turning it *on* is a risk the user should have
+    # to accept deliberately -- but a wrong skeleton is hard to see and easy to
+    # blame on something else, so there has to be one flag that takes the whole
+    # feature out of the picture while it is being judged.
+    pose_fit: bool = field(
+        default_factory=lambda: os.environ.get("WARLOCK_POSE_FIT", "on").lower()
+        not in ("0", "false", "off", "no")
+    )
     # Skeleton template a rig request falls back to when it doesn't name one.
     # Validated against rigging.templates() at request time, not here -- config
     # is imported by everything and must not pull the template registry in.

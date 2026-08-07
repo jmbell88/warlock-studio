@@ -388,6 +388,44 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
 )
 
 
+DEFAULT_POSE_MODEL = "vitpose"
+
+
+@dataclass(frozen=True, slots=True)
+class PoseModel:
+    """A model that finds a subject's joints in a picture of it.
+
+    Its own table for the same reason MattingModel is not a MetricModel: this
+    one is read by the *generation* path -- the rig fitter asks it where the
+    shoulders are -- while a metric only ever grades a finished asset. What
+    they share is that every one of them is optional, none is ever downloaded
+    at runtime, and a missing one costs quality rather than a job.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    download: str = ""
+
+
+POSE_MODELS: dict[str, PoseModel] = _table(
+    PoseModel(
+        # The plain ViTPose-base, not one of the MoE variants: those need a
+        # dataset_index passed with every forward and buy accuracy on datasets
+        # this project never sees. COCO-17 on a single centred subject is the
+        # easiest case a pose estimator has, and base clears it.
+        "vitpose",
+        "ViTPose base (rig joint placement)",
+        "vitpose-base",
+        download=(
+            "uvx hf download usyd-community/vitpose-base-simple "
+            '--include "*.json" --include "*.safetensors" '
+            "--local-dir models/vitpose-base"
+        ),
+    ),
+)
+
+
 DEFAULT_MATTING = "birefnet"
 
 

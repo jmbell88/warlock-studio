@@ -84,6 +84,7 @@ def test_run_checks_returns_every_check(tmp_path):
         + len(model_registry.CONTROLNETS)
         + len(model_registry.METRIC_MODELS)
         + len(model_registry.MATTING_MODELS)
+        + len(model_registry.POSE_MODELS)
     )
     assert len(run_checks(_config(tmp_path))) == expected
 
@@ -270,3 +271,32 @@ def test_a_base_model_missing_its_distillation_lora_is_not_reported_ready(tmp_pa
     (tmp_path / "loras").mkdir()
     (tmp_path / "loras" / spec.base_lora).write_bytes(b"x")
     assert row().ok is True
+
+
+def test_pose_model_row_is_not_fatal_and_names_the_consequence(tmp_path):
+    """Missing, a humanoid rig still happens -- on the bbox-proportional fit,
+    which is what every rig used before landmarks existed. That is a quality
+    difference with no other visible cause, which is exactly what a row is
+    for."""
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    # The model root pinned empty rather than left at PROJECT_ROOT/models,
+    # which is the rule CLAUDE.md states for warlockc.dll and gltfpack: a test
+    # about what happens when weights are *missing* must own that they are.
+    # Downloading vitpose on 2026-08-07 duly turned this red.
+    config = _config(tmp_path, t2i_model_root=tmp_path / "no-models")
+    row = {c.name: c for c in run_checks(config)}[f"pose model: {spec.label}"]
+    assert row.ok is False
+    assert row.fatal is False
+    assert "bbox" in row.detail
+    assert spec.download in row.detail
+
+
+def test_pose_model_row_goes_green_on_weights(tmp_path):
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    root = tmp_path / "t2i" / spec.dir_name
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}", encoding="utf-8")
+    checks = {
+        c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
+    }
+    assert checks[f"pose model: {spec.label}"].ok is True

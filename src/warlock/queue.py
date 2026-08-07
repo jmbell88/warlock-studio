@@ -35,7 +35,7 @@ from typing import Any
 from . import errors, guidance, memlog, models, provenance, rigging, vectors, vram
 from .config import Config
 from .db import JobStore
-from .pipelines import control, reference, seam
+from .pipelines import control, pose2d, reference, seam
 from .pipelines import prompt as prompt_lib
 from .pipelines.trellis import TrellisServer
 from .progress import ProgressBus, TrellisProgressParser
@@ -141,6 +141,63 @@ something a job can fail on, so the only useful place to stand is *before* the
 next allocation. It needs no watchdog thread: the stage boundaries _log_mem
 already runs at are exactly the moments the number can be acted on.
 """
+
+
+def _landmark_bones(
+    config: Config, source_dir: Path, template_key: str
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+    """Where the subject's joints are, read off the image the mesh was made
+    from. -> ``(normalized bones, how they were found)``, or ``(None, None)``.
+
+    The mesh *is* ``input.png`` reconstructed, so a landmark's position in that
+    image is the joint's position on the mesh in X and Z -- which is the whole
+    premise, and the reason the subject bbox comes from ``reference.measure``
+    rather than from a person detector: the composition gate has already
+    established that this image holds exactly one subject and has already
+    measured its silhouette, so a second network to find a box that is known
+    would be cost with no answer attached.
+
+    Blocking. Every caller dispatches it through ``asyncio.to_thread``.
+
+    ``(None, None)`` on anything at all -- an unreadable PNG, no weights, a
+    detection that fails a sanity gate -- and the caller then rigs exactly as
+    it did before this existed. Nothing here is allowed to raise: a better
+    skeleton is an optimisation, and ``_audit_mesh``'s rule applies with more
+    force here, because the artifact this would fail is one the user asked for
+    and the improvement is one they did not.
+    """
+    try:
+        image = source_dir / "input.png"
+        report = reference.measure_file(image)
+        if report.bbox is None:
+            return (None, None)
+        keypoints = pose2d.detect(image, report.bbox, config)
+        if keypoints is None:
+            return (None, None)
+        bones = pose2d.refit(rigging.get_template(template_key), keypoints, report.bbox)
+        if bones is None:
+            return (None, None)
+        # The confidences of the landmarks the fit actually rests on, not of
+        # all seventeen: an unseen ear says nothing about whether the knees
+        # were found, and averaging it in would flatter exactly the detections
+        # worth doubting.
+        scores = sorted(k.score for k in keypoints if k.name in pose2d.REQUIRED_KEYPOINTS)
+        return (
+            bones,
+            {
+                "method": "pose2d",
+                "model": models.DEFAULT_POSE_MODEL,
+                # Both, because they answer different questions: the mean says
+                # how well the figure was read, the minimum says whether any
+                # one joint is a guess -- and one bad joint is what a rig
+                # actually breaks on.
+                "confidence": round(sum(scores) / len(scores), 3),
+                "confidence_min": round(scores[0], 3),
+            },
+        )
+    except Exception:
+        log.exception("could not read joint landmarks from %s; using the bbox fit", source_dir)
+        return (None, None)
 
 
 def _observe_finished(store: JobStore, job_id: str) -> bool:
@@ -1228,6 +1285,29 @@ class Worker:
             with contextlib.suppress(OSError):
                 scratch.unlink()
 
+    def _wants_landmarks(
+        self, source_dir: Path, template: str, params: dict[str, Any]
+    ) -> bool:
+        """Whether reading joints off the reference image is worth attempting.
+
+        Every one of these is a case where the answer could not be used, not a
+        case where it might be poor -- how *good* a detection is is decided by
+        pose2d's own sanity gates, which see the landmarks. Cheap checks first;
+        ``available`` stats a directory and goes last because it is the only
+        one that touches the disk outside the job's own.
+        """
+        return (
+            template in pose2d.POSE_FIT_TEMPLATES
+            and self.config.pose_fit
+            # Adjust-joints. The user has already overruled one fit; running a
+            # detector to produce a second one they would also overrule is pure
+            # cost.
+            and not params.get("bones")
+            # An imported or hand-modelled mesh has no reference to read.
+            and (source_dir / "input.png").exists()
+            and pose2d.available(self.config)
+        )
+
     async def _rig(self, job: dict[str, Any]) -> None:
         """Fit a skeleton to a finished job's mesh, out-of-process in Blender.
 
@@ -1271,7 +1351,20 @@ class Worker:
         def on_start(proc: Any) -> None:
             self._blender = proc
 
-        spec = rigging.rig_spec(source_dir, template, params.get("bones"))
+        # Blocking (a PIL decode, a silhouette measurement and a torch forward
+        # on the CPU), so it goes through to_thread exactly as run_worker below
+        # does. Skipped entirely -- not merely ignored -- when any gate is
+        # closed, because the point of the gates is that the model is never
+        # loaded on a job that could not use its answer.
+        landmarks, fit = None, None
+        if self._wants_landmarks(source_dir, template, params):
+            landmarks, fit = await asyncio.to_thread(
+                _landmark_bones, self.config, source_dir, template
+            )
+
+        spec = rigging.rig_spec(
+            source_dir, template, params.get("bones"), template_bones=landmarks, fit=fit
+        )
         try:
             result = await asyncio.to_thread(
                 functools.partial(

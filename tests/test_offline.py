@@ -121,6 +121,10 @@ def test_vram_reports_from_an_already_loaded_torch(monkeypatch):
         # and it must be answerable without paying for a torch import, so torch
         # stays inside _load/_model_mask where the weights already exist.
         "warlock.pipelines.matting",
+        # Same again, and it matters more here: this one is consulted on the
+        # job queue for every humanoid rig, so a top-level torch import would
+        # be paid by rigs on machines that have no pose weights at all.
+        "warlock.pipelines.pose2d",
         "warlock.pipelines.reference",
         "warlock.pipelines.rank",
         "warlock.pipelines.seam",

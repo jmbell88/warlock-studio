@@ -47,6 +47,7 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _port_check(config, trellis_running),
         *_t2i_checks(config),
         *_matting_checks(config),
+        *_pose_checks(config),
         blender_check(),
     ]
 
@@ -331,6 +332,37 @@ def _metric_checks(config: Config) -> list[Check]:
             f"  {spec.download}"
         )
         checks.append(Check(f"metric model: {spec.label}", ok, detail, fatal=False))
+    return checks
+
+
+def _pose_checks(config: Config) -> list[Check]:
+    """The rig's joint-placement weights, non-fatal -- and only the weights.
+
+    Missing, every humanoid rig still happens: ``rigging.fit_template`` scales
+    the template onto the mesh bounding box, which is what every rig did before
+    this model existed and is still right for a reference standing in a T-pose.
+    What is lost is joint placement on the ones that are *not*, and that is a
+    quality difference with no other visible cause -- the skeleton is simply in
+    the wrong place inside the limbs, which looks like a bad rig rather than a
+    missing download.
+
+    A green row claims less than "informed fitting is on", the same honesty
+    ``_matting_checks`` keeps: all this has looked at is a directory, and
+    whether a detection then clears ``pose2d``'s sanity gates is a property of
+    each reference image.
+    """
+    checks: list[Check] = []
+    for spec in models.POSE_MODELS.values():
+        path = config.t2i_model_root / spec.dir_name
+        ok = (path / "config.json").exists()
+        detail = (
+            f"weights present at {path} -- rig joints are read off the reference image "
+            "when the detection is confident, and fall back to the bbox fit when it is not"
+            if ok
+            else f"not found at {path} -- joint placement falls back to the "
+            f"bbox-proportional fit; download with:\n  {spec.download}"
+        )
+        checks.append(Check(f"pose model: {spec.label}", ok, detail, fatal=False))
     return checks
 
 

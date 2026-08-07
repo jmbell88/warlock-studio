@@ -17,6 +17,7 @@ joint goes.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import sys
 from collections.abc import Sequence
@@ -443,6 +444,44 @@ def _project(bpy: Any, cam: Any, point: Sequence[float], size: int) -> tuple[flo
 # --- operations -------------------------------------------------------------
 
 
+def _rig_bones(
+    spec: dict[str, Any], lo: Sequence[float], hi: Sequence[float]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The joints to build the armature from, and the record of where they
+    came from. See ``rigging.rig_spec`` for the order of preference.
+
+    Its own function because it is the only decision in ``op_rig``, and
+    everything around it needs Blender -- so this is what a test can reach on a
+    machine with no bpy.
+
+    A ``template_bones`` list that does not name exactly this template's bones
+    is ignored rather than trusted. The spec arrives over a pipe, and a bone
+    list whose names do not match builds an armature whose parents do not
+    resolve; falling back to the fit that is always available costs the
+    informed placement and never the rig.
+    """
+    template = rigging.get_template(spec["template"])
+    if spec.get("bones"):
+        # Caller-supplied joints win over any fit. They are already validated
+        # against the template host-side (rigging.validate_joints), so this is
+        # a straight substitution rather than a second, disagreeing check.
+        return spec["bones"], spec.get("fit") or {"method": "manual"}
+
+    landmarks = spec.get("template_bones")
+    informed = bool(landmarks) and {b["name"] for b in landmarks} == {
+        b["name"] for b in template.bones
+    }
+    if landmarks and not informed:
+        print(
+            "template_bones does not name this template's bones; using the bbox fit",
+            flush=True,
+        )
+    if informed:
+        template = dataclasses.replace(template, bones=tuple(landmarks))
+    fit = spec.get("fit") or {"method": "pose2d" if informed else "bbox"}
+    return rigging.fit_template(template, lo, hi), fit
+
+
 def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     template = rigging.get_template(spec["template"])
     source = Path(spec["source_glb"])
@@ -455,10 +494,7 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
     progress(0.25, "Fitting skeleton")
     lo, hi = _world_bounds(mesh)
-    # Caller-supplied joints win over the fit. They are already validated
-    # against the template host-side (rigging.validate_joints), so this is a
-    # straight substitution rather than a second, disagreeing check.
-    bones = spec.get("bones") or rigging.fit_template(template, lo, hi)
+    bones, fit = _rig_bones(spec, lo, hi)
     arm_obj = _build_armature(bpy, bones)
 
     progress(0.40, "Computing weights")
@@ -477,6 +513,11 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         "bones": bones,
         "mirror_pairs": [list(pair) for pair in template.mirror_pairs],
         "adjusted": bool(spec.get("bones")),
+        # Additive, and no version bump with it: every reader of rig.json is
+        # .get-based (rigging.read_rig, service/rig.py, the pose panel), so a
+        # file written before this field existed stays readable and one written
+        # after it stays readable by anything that has not heard of it.
+        "fit": fit,
     }
     Path(spec["out_json"]).write_text(json.dumps(rig_meta, indent=2), encoding="utf-8")
     progress(1.0, "Rig complete")

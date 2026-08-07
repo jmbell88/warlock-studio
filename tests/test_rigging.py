@@ -247,6 +247,101 @@ def test_rig_spec_carries_corrected_bones_when_given_them(tmp_path):
     assert rigging.rig_spec(tmp_path, "humanoid", fitted)["bones"] == fitted
 
 
+# --- image-informed landmarks ------------------------------------------------
+#
+# The host reads the reference image, converts what it finds into the
+# template's own normalized space, and hands the result over as
+# ``template_bones``. The worker then fits *that* template exactly as it fits
+# the shipped one, so the bbox scaling stays in one place and host and worker
+# still cannot disagree about where a joint goes.
+
+
+def _landmarks() -> list[dict]:
+    """A normalized bone list shaped like a template's, with one joint moved
+    somewhere the shipped template would never put it."""
+    template = rigging.get_template("humanoid")
+    moved = []
+    for bone in template.bones:
+        bone = {k: list(v) if isinstance(v, list) else v for k, v in bone.items()}
+        if bone["name"] == "forearm.L":
+            bone["head"] = [0.40, 0.0, 0.20]
+        moved.append(bone)
+    return moved
+
+
+def test_rig_spec_leaves_out_the_landmark_fields_when_there_are_none(tmp_path):
+    spec = rigging.rig_spec(tmp_path, "humanoid")
+    assert "template_bones" not in spec
+    assert "fit" not in spec
+
+
+def test_rig_spec_carries_landmarks_and_how_they_were_found(tmp_path):
+    bones = _landmarks()
+    fit = {"method": "pose2d", "model": "vitpose", "confidence": 0.81}
+    spec = rigging.rig_spec(tmp_path, "humanoid", template_bones=bones, fit=fit)
+    assert spec["template_bones"] == bones
+    assert spec["fit"] == fit
+
+
+def test_the_worker_fits_the_landmark_template_not_the_shipped_one(tmp_path):
+    """The whole seam in one assertion: with landmarks in the spec, the joints
+    the armature is built from are the ones measured off the reference image,
+    scaled onto the mesh bbox by the same fit_template every rig uses."""
+    from warlock.pipelines import blender_worker
+
+    spec = rigging.rig_spec(
+        tmp_path, "humanoid", template_bones=_landmarks(), fit={"method": "pose2d"}
+    )
+    bones, fit = blender_worker._rig_bones(spec, [-1.0, -1.0, 0.0], [1.0, 1.0, 2.0])
+    informed = {b["name"]: b for b in bones}["forearm.L"]["head"]
+    shipped = {b["name"]: b for b in blender_worker._rig_bones(
+        rigging.rig_spec(tmp_path, "humanoid"), [-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]
+    )[0]}["forearm.L"]["head"]
+    assert informed != shipped
+    # 0.40 of a 2-unit-wide bbox centred on 0, and 0.20 of a 2-unit-tall one
+    # off a floor at 0 -- fit_template's arithmetic, unchanged.
+    assert informed == pytest.approx([0.80, 0.0, 0.40])
+    assert fit == {"method": "pose2d"}
+
+
+def test_a_rig_with_no_landmarks_records_the_bbox_fit(tmp_path):
+    from warlock.pipelines import blender_worker
+
+    _, fit = blender_worker._rig_bones(
+        rigging.rig_spec(tmp_path, "humanoid"), [-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]
+    )
+    assert fit == {"method": "bbox"}
+
+
+def test_joints_the_user_moved_still_beat_the_landmarks(tmp_path):
+    """Adjust-joints is the user overruling the fit, whichever fit it was."""
+    from warlock.pipelines import blender_worker
+
+    template = rigging.get_template("humanoid")
+    corrected = rigging.fit_template(template, [-5.0, -5.0, 0.0], [5.0, 5.0, 10.0])
+    spec = rigging.rig_spec(
+        tmp_path, "humanoid", bones=corrected, template_bones=_landmarks()
+    )
+    bones, fit = blender_worker._rig_bones(spec, [-1.0, -1.0, 0.0], [1.0, 1.0, 2.0])
+    assert bones == corrected
+    assert fit == {"method": "manual"}
+
+
+def test_landmarks_that_are_not_this_templates_bones_are_ignored(tmp_path):
+    """The worker reads its spec off a pipe. A bone list that does not name
+    this template's bones would build an armature whose parents do not resolve,
+    so it falls back to the fit that is always available and says so."""
+    from warlock.pipelines import blender_worker
+
+    spec = rigging.rig_spec(
+        tmp_path, "humanoid", template_bones=[{"name": "tentacle", "parent": None,
+                                               "head": [0, 0, 0], "tail": [0, 0, 1]}]
+    )
+    bones, fit = blender_worker._rig_bones(spec, [-1.0, -1.0, 0.0], [1.0, 1.0, 2.0])
+    assert [b["name"] for b in bones] == [b["name"] for b in rigging.get_template("humanoid").bones]
+    assert fit == {"method": "bbox"}
+
+
 # --- mirroring ---------------------------------------------------------------
 
 
@@ -457,6 +552,50 @@ def test_end_to_end_rig_of_a_generated_cube(tmp_path):
     rig = rigging.read_rig(tmp_path)
     assert rig["template"] == "humanoid"
     assert len(rig["bones"]) == result["bones"]
+    # Which fit produced those joints, recorded beside them: a rig fitted to
+    # landmarks and one scaled onto the bbox are not the same artifact, and
+    # nothing else in the file distinguishes them.
+    assert rig["fit"] == {"method": "bbox"}
+    assert rig["adjusted"] is False
+
+
+@pytest.mark.gpu
+def test_a_landmark_informed_rig_builds_the_armature_from_the_landmarks(tmp_path):
+    """The seam, all the way through a real Blender.
+
+    ``_rig_bones`` is unit-tested above, but what it returns then has to
+    survive ``_build_armature`` and the export, and rig.json has to say which
+    fit produced it -- that file is the only record, and the pose editor and
+    the adjust-joints pass both start from it.
+    """
+    pytest.importorskip("bpy")
+    import bpy
+
+    from warlock.pipelines import blender_worker
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.mesh.primitive_cube_add(size=2)
+    bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
+
+    landmarks = _landmarks()  # forearm.L's head moved to [0.40, 0.0, 0.20]
+    spec = rigging.rig_spec(
+        tmp_path,
+        "humanoid",
+        template_bones=landmarks,
+        fit={"method": "pose2d", "model": "vitpose", "confidence": 0.77},
+    )
+    blender_worker.op_rig(bpy, spec)
+    rigging.finalize_rig(tmp_path)
+
+    rig = rigging.read_rig(tmp_path)
+    assert rig["fit"]["method"] == "pose2d"
+    assert rig["fit"]["confidence"] == 0.77
+    assert rig["adjusted"] is False, "a measured fit is not a correction the user made"
+    # A default cube spans -1..1 on every axis, so fit_template's arithmetic
+    # here is x*2 and z*2 off a floor at -1 -- the landmark, scaled, and not
+    # the shipped template's own [0.22, 0.0, 0.66].
+    head = {b["name"]: b for b in rig["bones"]}["forearm.L"]["head"]
+    assert head == pytest.approx([0.80, 0.0, -0.60], abs=1e-4)
 
 
 def _glb_node_rotations(path) -> dict[str, list[float]]:

@@ -168,6 +168,54 @@ tier preserves UVs, both PBR maps and material assignment, which cannot be
 judged on output that is already broken. Qualify against the **re-run** (§0).
 The three accepted birefnet meshes are a start and are not enough.
 
+## 6. Judge the landmark-informed rig against a real reference
+
+**The code is done and the model half is exercised.** `pipelines/pose2d.py`, the
+`template_bones` seam through `rig_spec`/`op_rig`, the `_wants_landmarks` gates,
+the doctor row and `WARLOCK_POSE_FIT` all landed on 2026-08-07 with 50 tests,
+including one that runs a landmark-fitted rig through a real Blender.
+`models/vitpose-base` was downloaded the same day and the whole production path
+was run once by hand against `assets/test/player.png` — a front-facing armoured
+biped with its arms **down**, which is the case the feature exists for:
+
+- all 17 landmarks detected, worst required score 0.822, mean 0.910;
+- `_landmark_bones` → 19 bones and
+  `fit={"method": "pose2d", "model": "vitpose", "confidence": 0.91,
+  "confidence_min": 0.822}`, through `rig_spec` into a real `op_rig`, with
+  `rig.json` carrying it and `weighting: automatic`;
+- with the model root pointed elsewhere, the same job produced a spec with
+  neither key and `fit: {"method": "bbox"}` — the old path exactly;
+- the placement is right where the template is worst: this subject's shoulders
+  sit at x ±0.274 against the template's ±0.100 and its feet at ±0.25 against
+  ±0.07, so the bbox fit was putting both arms and both legs *inside the
+  torso*.
+
+**What is still not verified, and it is the one that would be invisible.** The
+mapping takes COCO's anatomical left to the template's +X (`humanoid.json`: "+X
+is the subject's left"), on the reasoning that a subject facing the camera has
+their left at the larger pixel x. The image half of that is now confirmed on a
+real detection, and
+`test_a_subjects_left_arm_lands_on_the_templates_positive_x_side` pins the
+convention — but whether **trellis reconstructs with the same handedness** is a
+fact about the exe, and the check above used a symmetric box as its stand-in
+mesh because `jobs.sqlite` is empty and no reconstruction survives. A mirrored
+skeleton looks perfectly plausible in a still. So: on the first mesh out of the
+§0 re-run, rig an *asymmetric* subject and look at which side the skeleton's
+`.L` bones came out on. Nothing else in this file depends on the answer, and a
+flip is a one-line sign change if it is wrong.
+
+Also unjudged, because it needs meshes worth rigging: whether the placement
+actually improves the **skin weights**, which is the only reason any of this
+matters. The detector tracks the inner edge of bulky armour rather than the
+limb's centre line, which is visible in the overlay and may or may not cost
+anything once Blender's automatic weights run.
+
+Two further things are deliberately out of scope and stay that way until the §0
+re-run: skeleton-conditioned *generation* (ControlNet OpenPose, so the reference
+is drawn in a pose rather than measured after the fact) and non-humanoid
+templates (a quadruped needs an AP-10K model and its own mapping;
+`pose2d.POSE_FIT_TEMPLATES` is the extension point).
+
 ## 7. `art_style=snes` fights an explicit colour brief
 
 **No code change yet — this is a note for whoever reads the sweep results.**
