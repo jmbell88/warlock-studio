@@ -69,7 +69,13 @@ __all__ = [
 # 2: vectors rank by wilson_low, the dead mean_* nulls are gone, and the
 # metrics / comparisons sections exist. Readers tolerate v1 files (hint falls
 # back to the bare "accept 6/8" when wilson_low is absent).
-FINDINGS_VERSION = 2
+# 3: the ``prompts`` section -- the same marginals again, one set per subject
+# (TODO item 4) -- and the ``refused*`` metrics the composition gate now
+# records (item 3). Both are additive: every v2 key keeps its meaning and its
+# value, so a reader that knows nothing about either is correct on a v3 file,
+# and ``hint`` asked for a subject it cannot find simply falls back to the
+# pooled answer.
+FINDINGS_VERSION = 3
 JSON_FILENAME = "findings.json"
 
 # How many verdicts a whole vector needs before it is offered as a preset. The
@@ -107,45 +113,21 @@ def aggregate(store: Any) -> dict[str, Any]:
         o for o in store.latest_observations() if isinstance(o.get("vector"), dict)
     ]
 
-    params: dict[str, dict[str, list[dict[str, Any]]]] = {}
     vectors: dict[str, dict[str, Any]] = {}
     for record in records:
-        vector = record["vector"]
-        for param, value in vector.items():
-            if param == "stage":
-                continue
-            params.setdefault(param, {}).setdefault(str(value), []).append(record)
-        key = vector_key(vector)
-        bucket = vectors.setdefault(key, {"key": key, "vector": vector, "records": []})
+        key = vector_key(record["vector"])
+        bucket = vectors.setdefault(
+            key, {"key": key, "vector": record["vector"], "records": []}
+        )
         bucket["records"].append(record)
 
-    # The machine-evidence twin of the two structures above: the same
-    # confounded-marginal crediting for params, an exact-configuration join
-    # for vectors.
-    params_metrics: dict[str, dict[str, list[dict[str, Any]]]] = {}
     vector_metrics: dict[str, list[dict[str, Any]]] = {}
     for obs in observations:
         metrics = obs.get("metrics")
-        if not isinstance(metrics, dict) or not metrics:
-            continue
-        for param, value in obs["vector"].items():
-            if param == "stage":
-                continue
-            params_metrics.setdefault(param, {}).setdefault(str(value), []).append(metrics)
-        vector_metrics.setdefault(vector_key(obs["vector"]), []).append(metrics)
+        if isinstance(metrics, dict) and metrics:
+            vector_metrics.setdefault(vector_key(obs["vector"]), []).append(metrics)
 
-    # Sorted so the written file is stable and diffable across refreshes --
-    # set-union order would churn with hash randomization on every launch.
-    out_params: dict[str, dict[str, Any]] = {}
-    for param in sorted(set(params) | set(params_metrics)):
-        judged = params.get(param, {})
-        measured = params_metrics.get(param, {})
-        out_params[param] = {}
-        for value in sorted(set(judged) | set(measured)):
-            entry = _summarise(judged.get(value, []))
-            if value in measured:
-                entry["metrics"] = _metric_summary(measured[value])
-            out_params[param][value] = entry
+    out_params = _marginals(records, observations, full=True)
 
     out_vectors = []
     for bucket in vectors.values():
@@ -171,8 +153,95 @@ def aggregate(store: Any) -> dict[str, Any]:
         "version": FINDINGS_VERSION,
         "generated": datetime.now(UTC).isoformat(timespec="seconds"),
         "params": out_params,
+        "prompts": _per_prompt(records, observations),
         "vectors": out_vectors,
         "comparisons": _comparisons(records, observations),
+    }
+
+
+def _marginals(
+    records: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    *,
+    full: bool,
+) -> dict[str, dict[str, Any]]:
+    """The confounded ``param: value`` marginals over one pool of rows.
+
+    Factored out so the global document and each per-prompt scope are computed
+    by the same code rather than by two that can drift -- the whole value of
+    scoping is that a scoped number means exactly what the pooled one means,
+    over a narrower set.
+
+    ``full`` is what the global one gets. A scoped bucket keeps only the four
+    fields ``bench.findings.hint`` reads, because there is one of them per
+    distinct prompt and ``sources``/``top_reasons`` are read by the Review
+    pane's whole-vector view, which stays global.
+    """
+    judged: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for record in records:
+        for param, value in record["vector"].items():
+            if param == "stage":
+                continue
+            judged.setdefault(param, {}).setdefault(str(value), []).append(record)
+
+    # The machine-evidence twin: the same confounded crediting, so a value
+    # generated with twenty times and never reviewed still says something.
+    measured: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for obs in observations:
+        metrics = obs.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        for param, value in obs["vector"].items():
+            if param == "stage":
+                continue
+            measured.setdefault(param, {}).setdefault(str(value), []).append(metrics)
+
+    # Sorted so the written file is stable and diffable across refreshes --
+    # set-union order would churn with hash randomization on every launch.
+    out: dict[str, dict[str, Any]] = {}
+    for param in sorted(set(judged) | set(measured)):
+        rows, metric_rows = judged.get(param, {}), measured.get(param, {})
+        out[param] = {}
+        for value in sorted(set(rows) | set(metric_rows)):
+            entry = _summarise(rows.get(value, []))
+            if not full:
+                entry = {
+                    k: entry[k] for k in ("n", "accepts", "accept_rate", "wilson_low")
+                }
+            if value in metric_rows:
+                entry["metrics"] = _metric_summary(metric_rows[value])
+            out[param][value] = entry
+    return out
+
+
+def _per_prompt(
+    records: list[dict[str, Any]], observations: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """The same marginals again, one set per subject.
+
+    The global ones pool across subjects, which is a confound of a different
+    kind from the accepted one. A verdict crediting every ``param: value`` in
+    its vector is the price of letting daily use feed the hints at all, and
+    everything under it was still generated for the same thing. Two subjects
+    are not: what makes a good wooden crate says very little about what makes
+    a good character, and a hint that silently mixes them is worse than no hint
+    -- it is trusted.
+
+    A row with no prompt (an upload, a painted reference) has ``prompt_hash``
+    ``""``, and is skipped rather than bucketed: that is an absence, and a
+    bucket keyed on it would pool every unrelated one of them into a single
+    subject that does not exist.
+    """
+    by_prompt: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]]]] = {}
+    for pool, rows in ((0, records), (1, observations)):
+        for row in rows:
+            key = row.get("prompt_hash")
+            if not isinstance(key, str) or not key:
+                continue
+            by_prompt.setdefault(key, ([], []))[pool].append(row)
+    return {
+        key: {"params": _marginals(scoped_records, scoped_obs, full=False)}
+        for key, (scoped_records, scoped_obs) in sorted(by_prompt.items())
     }
 
 
@@ -239,6 +308,17 @@ def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if values:
             out[name] = round(sum(values) / len(values), 3)
             counts[name] = len(values)
+    # The composition gate's verdicts, averaged the same way. Stored as 0.0/1.0
+    # numbers rather than bools precisely so this is a mean: a job that passed
+    # contributes a zero, which is what makes the result a *rate* rather than
+    # the tautology "every refused job was refused". Enumerated off the rows
+    # rather than off a fixed list so a rule added to reference.py needs no
+    # edit here -- but still prefixed, so nothing else can land in the sum.
+    for key in sorted({k for row in rows for k in row if str(k).startswith("refused")}):
+        values = numbers(key)
+        if values:
+            out[f"{key}_rate"] = round(sum(values) / len(values), 3)
+            counts[f"{key}_rate"] = len(values)
     values = numbers("triangles")
     if values:
         out["triangles"] = int(round(sum(values) / len(values)))

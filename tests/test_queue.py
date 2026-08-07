@@ -1229,7 +1229,43 @@ def _bad_then_good(monkeypatch, failures: int):
     return calls
 
 
+async def test_a_refused_reference_is_rerolled_before_the_job_fails(worker, monkeypatch):
+    """TODO item 2, and the config default is the whole of it.
+
+    Seed 11's baseline errored in the 2026-08-07 rogue sweep, which did not
+    cost one mesh: ``findings.comparisons`` pairs two rows only when they share
+    a sweep, a source and a *seed*, so the baseline at seed 11 was one side of
+    nine prospective pairs -- one per axis value at that seed -- and every one
+    of them went with it. Which of three reference draws happened to avoid a
+    character sheet is not a setting anyone is trying to measure.
+
+    ``mesh_seed`` is what must not move: a unit's identity in the corpus is its
+    config vector and its mesh seed, so a reroll that changed both would be a
+    different unit rather than a second attempt at this one.
+    """
+    import warlock.pipelines.reference as reference_mod
+
+    _bad_then_good(monkeypatch, failures=1)
+    # The post-normalisation gate passes; this test is about the composition
+    # reroll above it, which is the half that can act on a refusal at all.
+    monkeypatch.setattr(
+        reference_mod, "prepare", lambda *a, **k: reference_mod.Report(ok=True)
+    )
+    job_id = worker.store.create("text", "a barrel", {"seed": 11})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    reference_seeds = worker._text2image.seeds
+    assert len(reference_seeds) == 2, "the refused draw was not rerolled"
+    assert reference_seeds[0] == 11 and reference_seeds[1] != 11
+    assert worker.trellis.generate_calls[0]["seed"] == 11
+
+
 async def test_without_the_setting_a_bad_reference_is_not_rerolled(worker, monkeypatch):
+    # Pins the reroll *off*, rather than trusting the default to be off -- it
+    # is 2 now (TODO item 2) and this test is about the other setting.
+    monkeypatch.setattr(worker.config, "reference_retries", 0)
     _bad_then_good(monkeypatch, failures=99)
     job_id = worker.store.create("text", "a barrel", {"seed": 5}, stage="reference")
     worker.start()
@@ -1310,6 +1346,7 @@ async def test_a_model_stage_job_measures_nothing_when_the_reroll_is_off(worker,
     # job makes is reference.prepare's, further down and unchanged -- the loop
     # adds none of its own, which is what the early break is for. Drop that
     # break and this is 2.
+    monkeypatch.setattr(worker.config, "reference_retries", 0)
     calls = _bad_then_good(monkeypatch, failures=0)
     job_id = worker.store.create("text", "a barrel", {"seed": 5})
     worker.start()
@@ -2066,12 +2103,70 @@ async def test_a_finished_model_job_leaves_one_observation_row(worker, monkeypat
     assert row["metrics"]["hole_mean"] == 0.05
 
 
-async def test_an_errored_job_leaves_no_observation(worker):
+async def test_a_job_refused_at_the_composition_gate_leaves_an_observation(
+    worker, monkeypatch
+):
+    """TODO item 3. The 17 refusals in the 2026-08-07 rogue sweep wrote nothing
+    at all, so findings.json could only ever report a checkpoint's accept rate
+    *among the references that survived* -- which flatters exactly the
+    checkpoints that fail most often. ``sdxl_cfg`` refused 3 of 5 and
+    ``playground`` 0 of 5, and no reader could say so."""
+    import warlock.pipelines.reference as reference_mod
+
+    monkeypatch.setattr(
+        reference_mod,
+        "prepare",
+        lambda *a, **k: reference_mod.Report(
+            ok=False,
+            reasons=("There is more than one object in the reference.",),
+            codes=("multi_object",),
+        ),
+    )
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+    await worker.shutdown()
+
+    row = worker.store.latest_observations()[0]
+    assert row["job_id"] == job_id
+    assert row["metrics"]["refused"] == 1.0
+    assert row["metrics"]["refused_multi_object"] == 1.0
+    # And the settings it was refused under, or the rate is attributable to
+    # nothing -- which is the whole point of recording it.
+    assert row["vector"]["resolution"] == 512
+
+
+async def test_an_errored_job_still_records_that_its_reference_passed(worker):
+    """A job that cleared the gate and then died in trellis is a *passing*
+    reference, and the refusal rate needs it: a mean over refusals alone is
+    1.0 by construction. It carries no mesh metrics, because there is no mesh.
+    """
     bad_id = _make_image_job(worker)
     worker.trellis.should_raise = RuntimeError("boom")
 
     worker.start()
     await _wait_until(lambda: worker.store.get(bad_id)["status"] == "error")
+    await worker.shutdown()
+
+    row = worker.store.latest_observations()[0]
+    assert row["metrics"]["refused"] == 0.0
+    assert "hole_worst" not in row["metrics"]
+
+
+async def test_a_cancelled_job_leaves_no_observation(worker, monkeypatch):
+    """A cancel is the user changing their mind, not a measurement of
+    anything. It is also the one terminal status that discards artifacts, so a
+    row about them would outlive what it describes."""
+    import warlock.pipelines.reference as reference_mod
+
+    monkeypatch.setattr(
+        reference_mod, "prepare", lambda *a, **k: reference_mod.Report(ok=True)
+    )
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.trellis.running)
+    await worker.request_cancel(job_id)
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "cancelled")
     await worker.shutdown()
 
     assert worker.store.latest_observations() == []

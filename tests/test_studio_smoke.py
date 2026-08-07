@@ -80,7 +80,7 @@ def app_ctx(gl, svc, tmp_path, imgui_ctx):
         viewer=viewer,
         textures=textures.ThumbnailCache(gl),
     )
-    ctx.guidance = svc_system.guidance_catalog()
+    ctx.guidance = svc_system.guidance_catalog(svc)
     ctx.sheet_options = svc_sheets.sheet_options()
     ctx.base_models = [("turbo", "SDXL-Turbo")]
     ctx.style_loras = [("", "none"), ("render3d", "3D render")]

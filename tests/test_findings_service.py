@@ -89,6 +89,75 @@ def test_a_verdict_credits_every_param_in_its_vector(svc):
     assert "stage" not in doc["params"]
 
 
+def _judged_about(svc, prompt, verdict, source="human", **params):
+    job_id = svc.store.create("image", prompt, params, stage="model", status="done")
+    svc_verdicts.record_verdict(svc, job_id, verdict=verdict, reasons=(), source=source)
+    return job_id
+
+
+def test_the_marginals_are_also_broken_out_per_subject(svc):
+    """TODO item 4. Confounding across *settings* is documented and accepted --
+    the price of letting daily use feed the hints. Confounding across
+    *subjects* is not the same bargain: what makes a good wooden crate says
+    very little about what makes a good character.
+
+    Demonstrated rather than predicted, too. The regenerated findings.json of
+    2026-08-07 reported ``bg_removal: auto`` at n=84, but only 80 of those were
+    rogue-sweep units -- the other four were old wood-prompt rejects, pooled
+    into a marginal about a character.
+    """
+    from warlock import vectors
+
+    _judged_about(svc, "a wooden crate", "reject", platform="pc")
+    _judged_about(svc, "a wooden crate", "reject", platform="pc")
+    _judged_about(svc, "a snes rogue", "accept", platform="pc")
+
+    doc = svc_findings.aggregate(svc.store)
+    # The global marginal is unchanged: pooled, as it always was.
+    assert doc["params"]["platform"]["pc"]["n"] == 3
+    assert doc["params"]["platform"]["pc"]["accepts"] == 1
+
+    rogue = doc["prompts"][vectors.prompt_hash("a snes rogue")]["params"]["platform"]["pc"]
+    crate = doc["prompts"][vectors.prompt_hash("a wooden crate")]["params"]["platform"]["pc"]
+    assert (rogue["n"], rogue["accepts"]) == (1, 1)
+    assert (crate["n"], crate["accepts"]) == (2, 0)
+    # Everything ``bench.findings.hint`` reads, and nothing else: a scoped
+    # bucket exists per distinct prompt, so the two fields only the Review
+    # pane's whole-vector view uses would be paid for once per subject.
+    assert set(rogue) == {"n", "accepts", "accept_rate", "wilson_low"}
+
+
+def test_a_verdict_with_no_prompt_joins_no_subject_scope(svc):
+    """``prompt_hash`` is "" for a job with no prompt -- an upload, a painted
+    reference. That is an absence, not a subject, and a bucket keyed on it
+    would pool every unrelated one of them into a single fake subject."""
+    _judged_about(svc, None, "accept", platform="pc")
+    doc = svc_findings.aggregate(svc.store)
+    assert doc["params"]["platform"]["pc"]["n"] == 1
+    assert doc["prompts"] == {}
+
+
+def test_the_per_subject_scope_carries_machine_evidence_too(svc):
+    """An observation is scoped for the same reason a verdict is, and it is the
+    tier that fires without anyone reviewing anything."""
+    from warlock import vectors
+
+    for i in range(5):
+        svc.store.add_observation(
+            f"{i:012x}",
+            sweep_id=None,
+            sweep_unit="",
+            seed=1,
+            prompt_hash=vectors.prompt_hash("a snes rogue"),
+            vector={"base_model": "sdxl_cfg", "stage": "model"},
+            metrics={"refused": 1.0},
+        )
+
+    doc = svc_findings.aggregate(svc.store)
+    scoped = doc["prompts"][vectors.prompt_hash("a snes rogue")]
+    assert scoped["params"]["base_model"]["sdxl_cfg"]["metrics"]["refused_rate"] == 1.0
+
+
 def test_vectors_are_ranked_and_carry_their_jobs(svc):
     good = [_judged(svc, "accept", lora_weight=0.6) for _ in range(2)]
     _judged(svc, "reject", ("bad-shape",), lora_weight=1.2)
@@ -176,3 +245,52 @@ def test_the_machine_evidence_reaches_the_file_with_no_verdict_filed(svc):
     # And a value nobody has reviewed still says something true under the
     # control it belongs to.
     assert bench_findings.hint(doc, "platform", "pc") == "holes 3% · watertight 80% (5 meshes)"
+
+
+def test_a_refusal_rate_survives_into_the_document(svc):
+    """TODO item 3's other half, and the half that decides whether it was worth
+    doing: an appended observation is not a finding until something aggregates
+    it. ``_metric_summary`` names the keys it averages, so a metric added to
+    ``vectors.observation_metrics`` and not to it is written to the DB, read
+    back out, and silently dropped on the floor."""
+    for i in range(5):
+        svc.store.add_observation(
+            f"{i:012x}",
+            sweep_id=None,
+            sweep_unit="",
+            seed=42,
+            prompt_hash="p1",
+            vector={"base_model": "sdxl_cfg", "stage": "model"},
+            # Three of five refused, all of them for the same rule.
+            metrics={
+                "refused": 1.0 if i < 3 else 0.0,
+                "refused_multi_object": 1.0 if i < 3 else 0.0,
+                "refused_occupancy": 0.0,
+            },
+        )
+
+    doc = bench_findings.load(svc_findings.refresh(svc))
+    metrics = doc["params"]["base_model"]["sdxl_cfg"]["metrics"]
+    assert metrics["refused_rate"] == 0.6
+    assert metrics["refused_multi_object_rate"] == 0.6
+    assert metrics["refused_occupancy_rate"] == 0.0
+    assert metrics["counts"]["refused_rate"] == 5
+
+
+def test_a_refusal_rate_is_shown_where_the_setting_is_chosen(svc):
+    """It is a fact about the *reference*, so it belongs under the prompt and
+    model controls -- which is exactly where a mesh-only hint said nothing,
+    because a refused job never reached a mesh."""
+    for i in range(6):
+        svc.store.add_observation(
+            f"{i:012x}",
+            sweep_id=None,
+            sweep_unit="",
+            seed=1,
+            prompt_hash="p1",
+            vector={"base_model": "sdxl_cfg", "stage": "model"},
+            metrics={"refused": 1.0 if i < 3 else 0.0},
+        )
+
+    doc = bench_findings.load(svc_findings.refresh(svc))
+    assert bench_findings.hint(doc, "base_model", "sdxl_cfg") == "refused 50% (6 references)"

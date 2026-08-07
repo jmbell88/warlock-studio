@@ -44,7 +44,7 @@ def test_vectors_rank_by_the_lower_bound_not_the_raw_rate(store):
     _v(store, "b19", {"lora_weight": 0.9}, "reject")
 
     doc = svc_findings.aggregate(store)
-    assert doc["version"] == 2
+    assert doc["version"] == 3
     top = doc["vectors"][0]
     assert top["vector"]["lora_weight"] == 0.9
     assert (top["accept_rate"], top["wilson_low"]) == (0.95, 0.764)

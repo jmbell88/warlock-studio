@@ -48,6 +48,20 @@ MIN_OCCUPANCY = 0.04
 MIN_SECOND_COMPONENT = 0.08
 MAX_ASPECT = 8.0
 
+# The same four refusals as ``Report.reasons``, spelled for a machine.
+#
+# ``reasons`` are sentences written for a person and are rewritten whenever the
+# wording can be improved; ``vectors.observation_metrics`` turns these into
+# ``refused_<code>`` rates that accumulate across a corpus which outlives the
+# jobs in it, so it needs a key that is not allowed to drift. Parsing English
+# back out of a stored report is how a reworded sentence silently empties a
+# bucket -- and a bucket that empties looks exactly like a failure mode that
+# stopped happening.
+#
+# Order is the order the rules fire in, which is the order ``reasons`` is built
+# in: the two stay index-aligned, and ``measure`` appends to both together.
+REFUSAL_CODES = ("empty", "occupancy", "edge", "multi_object")
+
 # Per-channel tolerance for the corner flood fill, and the corner patch size
 # sampled to find the background colour.
 #
@@ -100,6 +114,8 @@ class Report:
 
     ok: bool = True
     reasons: tuple[str, ...] = ()
+    # The same refusals as ``reasons``, index-aligned, from REFUSAL_CODES.
+    codes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     occupancy: float = 0.0
     bbox: tuple[int, int, int, int] | None = None
@@ -114,6 +130,7 @@ class Report:
         return {
             "ok": self.ok,
             "reasons": list(self.reasons),
+            "codes": list(self.codes),
             "warnings": list(self.warnings),
             "occupancy": self.occupancy,
             "bbox": list(self.bbox) if self.bbox else None,
@@ -232,6 +249,7 @@ def measure(image: PILImage) -> Report:
         return Report(
             ok=False,
             reasons=("No subject found against the background.",),
+            codes=("empty",),
             size=(w, h),
             alpha_source=alpha_source,
         )
@@ -264,6 +282,10 @@ def measure(image: PILImage) -> Report:
     components = len(sizes)
 
     reasons: list[str] = []
+    # Appended in lockstep with ``reasons`` -- one refusal, one sentence, one
+    # code. A rule that grew a reason and no code would make a refused job look
+    # like a passing one to the findings corpus.
+    codes: list[str] = []
     warnings: list[str] = []
 
     if occupancy < MIN_OCCUPANCY:
@@ -271,13 +293,16 @@ def measure(image: PILImage) -> Report:
             f"The subject fills only {occupancy * 100:.0f}% of the frame; "
             "TRELLIS needs it much larger."
         )
+        codes.append("occupancy")
     opposite = ("left" in touches and "right" in touches) or (
         "top" in touches and "bottom" in touches
     )
     if len(touches) >= 3 or opposite:
         reasons.append("The subject runs off the edge of the frame.")
+        codes.append("edge")
     if len(sizes) >= 2 and sizes[1] >= sizes[0] * MIN_SECOND_COMPONENT:
         reasons.append("There is more than one object in the reference.")
+        codes.append("multi_object")
 
     bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
     aspect = max(bw, bh) / max(1, min(bw, bh))
@@ -291,6 +316,7 @@ def measure(image: PILImage) -> Report:
     return Report(
         ok=not reasons,
         reasons=tuple(reasons),
+        codes=tuple(codes),
         warnings=tuple(warnings),
         occupancy=occupancy,
         bbox=bbox,

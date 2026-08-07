@@ -19,6 +19,7 @@ from imgui_bundle import imgui
 
 from ... import guidance as guidancelib
 from ... import models as modelslib
+from ... import vectors
 from ...bench import findings as findings_lib
 from ...pipelines import prompt as prompt_lib
 from ...service import jobs as svc_jobs
@@ -120,9 +121,22 @@ def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
     Read fresh every frame -- ``findings.load`` is mtime-cached, so the common
     case (no bench dir, or an unchanged file) costs one ``stat()`` and never
     blocks the frame loop.
+
+    Scoped to what the user is currently asking for. This pane owns the prompt,
+    so it always knows its subject: the hash of the prompt in the form is what
+    ``vectors.prompt_hash`` recorded on every verdict and observation, so
+    ``hint`` can prefer the evidence about *this* subject and say when it fell
+    back to the pooled corpus. Hashing a short string once per control per
+    frame is a sha1 over a few dozen bytes, which is nothing beside the
+    ``stat()`` above it.
     """
     doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
-    return findings_lib.hint(doc, param, value)
+    return findings_lib.hint(
+        doc,
+        param,
+        value,
+        prompt_hash=vectors.prompt_hash(ctx.state.form_2d.get("prompt")),
+    )
 
 
 def _guidance(ctx: Any, form: dict[str, Any]) -> None:

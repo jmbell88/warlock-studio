@@ -110,12 +110,26 @@ class Config:
         not in ("0", "false", "off", "no")
     )
     # How many extra times a text job may redraw its reference when the
-    # composition report refuses the one it just drew. 0 -- off -- because a
-    # retry is another four seconds of GPU the user did not ask for, and the
-    # report's rules are heuristics: a refusal is a strong hint, not a fact.
-    # 1 is the setting that pays for itself.
+    # composition report refuses the one it just drew.
+    #
+    # Was 0 -- off -- on the reasoning that a retry is four seconds of GPU
+    # nobody asked for and the report's rules are heuristics, so a refusal is a
+    # strong hint rather than a fact. Both halves are still true and neither is
+    # what the setting costs. The 2026-08-07 rogue sweep refused 17 of 100
+    # units at the composition gate, and a model-stage refusal is not a hint at
+    # all there: the job *fails*. Seed 11's baseline was one of them, and losing
+    # it did not cost one mesh -- ``findings.comparisons`` pairs rows sharing a
+    # sweep, a source and a seed, so that baseline was one side of nine
+    # prospective pairs and every one went with it.
+    #
+    # 2, per TODO item 2. The reroll holds ``mesh_seed`` fixed and moves only
+    # the reference seed, which is the point: a unit's identity in the corpus
+    # is its config vector and its mesh seed, and which of three reference
+    # draws avoided a character sheet is not a setting anyone is measuring.
+    # The ceiling still ends the loop rather than a verdict, so past it the
+    # user gets the last draw and the model stage gets its ordinary refusal.
     reference_retries: int = field(
-        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_REFERENCE_RETRIES", "0")))
+        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_REFERENCE_RETRIES", "2")))
     )
     # How many extra times the trellis stage may run when the finished mesh
     # audits worse than mesh_hole_max. 0 -- off -- because a retry is two

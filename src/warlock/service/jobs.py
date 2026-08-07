@@ -36,9 +36,14 @@ from .validation import (
 log = logging.getLogger(__name__)
 
 
-def _normalize_guidance(raw: dict[str, Any]) -> dict[str, Any]:
+def _normalize_guidance(svc: WarlockService, raw: dict[str, Any]) -> dict[str, Any]:
+    """``guidance.normalize`` with this host's matte gate applied and its
+    ValueError translated. Takes the service purely for the gate: guidance is
+    pure and cannot look at ``birefnet.gguf`` itself."""
     try:
-        return guidance.normalize(raw)
+        return guidance.normalize(
+            raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
+        )
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
 
@@ -164,6 +169,7 @@ def create_job(
 
     # Validated up front: a rejected request must not leave an input.png behind.
     params = _normalize_guidance(
+        svc,
         {
             **(guidance_fields or {}),
             "size_m": size_m,
@@ -174,7 +180,7 @@ def create_job(
             "control_end": control_end,
             "bg_removal": bg_removal,
             "negative_prompt": negative_prompt,
-        }
+        },
     )
     # Checked after normalize so an unknown adapter key still fails first, and
     # before anything is written: a conditioning selection with no image to
@@ -833,7 +839,7 @@ def promote_to_model(
         raw = {**params, **overrides}
         if "platform" in overrides:
             raw.pop("resolution", None)
-        params.update(_normalize_guidance(raw))
+        params.update(_normalize_guidance(svc, raw))
     _resolve_profile(svc, params, profile, custom_triangles)
     if reference_prep is not None:
         params["reference_prep"] = bool(reference_prep)

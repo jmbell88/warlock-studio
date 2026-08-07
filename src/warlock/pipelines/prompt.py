@@ -27,9 +27,26 @@ from typing import Any
 # silhouette. Moved here from text2image.py so prompt.build() (used by the
 # /api/prompt-preview endpoint) and text2image.generate() share one copy;
 # text2image.py re-exports this name so existing readers are unchanged.
+#
+# Two edits on 2026-08-07, both from the rogue sweep's 17 refusals. Every one
+# was reference.py's multi-object rule and they were one family: concept-art
+# layouts -- character sheets, turnarounds, multi-view plates -- reproducing
+# across every checkpoint, so a property of the prompt rather than of a model.
+#
+# "game asset concept art" became "game asset render", because a character
+# sheet is the canonical form of the genre this asked for: the template was
+# requesting the failure. And "single object centered" became "a single subject
+# centered ... no other objects", stating the constraint rather than implying
+# it. Positive side deliberately, per TODO item 1: `sdxl_cfg` -- full CFG at 30
+# steps, where negative adherence is *strongest* -- refused most of all, which
+# points at the positive prompt driving the layout; and the negative prompt is
+# a field the user can empty, so a constraint living only there is one the
+# composed prompt can lose. It also keeps `negative_prompt` -- which is in
+# vectors.VECTOR_PARAMS -- unchanged, so no stored vector is re-keyed and every
+# unit recorded before today still pairs in findings.comparisons.
 PROMPT_TEMPLATE = (
-    "{prompt}, single object centered on a plain light gray background, "
-    "3/4 perspective view, studio lighting, game asset concept art, "
+    "{prompt}, a single subject centered on a plain light gray background, "
+    "no other objects, 3/4 perspective view, studio lighting, game asset render, "
     "full object in frame, no cropping, no text, no watermark"
 )
 
@@ -74,7 +91,11 @@ TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_styl
 # the bump is about the compiler, not about any one prompt.
 # 3: SHEET_TEMPLATE. Same shape of change as 2 -- a third template, reachable
 # only from the pixel-sheet restyle, with the object and tile paths untouched.
-PROMPT_VERSION = 3
+# 4: PROMPT_TEMPLATE's concept-art and single-subject clauses (see above). The
+# object path's output genuinely moves, which is the case this counter exists
+# for: an object recipe recorded under 1-3 no longer reproduces byte-for-byte,
+# and a benchmark comparing across the bump is comparing two compilers.
+PROMPT_VERSION = 4
 
 _tokenizer_cache: dict[Path, tuple[Any, Any]] = {}
 

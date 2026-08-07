@@ -223,7 +223,7 @@ class App:
         # the App's business and not a pane's. Attached here so the button has a
         # handler from the first frame rather than toasting "not wired up yet".
         ctx.clay_send_to_3d = self._clay_send_to_3d
-        ctx.guidance = svc_system.guidance_catalog()
+        ctx.guidance = svc_system.guidance_catalog(self.svc)
         ctx.sheet_options = svc_sheets.sheet_options()
         # Marked rather than hidden when weights are absent: the combo listing
         # every registered model regardless meant picking one whose weights

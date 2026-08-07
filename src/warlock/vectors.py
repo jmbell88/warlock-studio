@@ -27,6 +27,14 @@ import hashlib
 import json
 from typing import Any
 
+# The gate's own vocabulary, not a second copy of it: a rule added to
+# reference.py would otherwise record a rate under a name nothing aggregates.
+# Safe against this module's stdlib-only rule -- pipelines/reference.py imports
+# nothing but stdlib at module scope (cv2/numpy/Pillow are imported inside the
+# functions that use them), which is the same discipline that lets it be
+# measured headlessly.
+from .pipelines.reference import REFUSAL_CODES
+
 # What a config vector is made of: every param that is an *input* to a
 # generation and could plausibly be varied. An allowlist rather than "params
 # minus DERIVED_PARAMS" because the interesting property is that adding a
@@ -135,4 +143,38 @@ def observation_metrics(params: dict[str, Any]) -> dict[str, Any]:
         status = report.get("status")
         if isinstance(status, str):
             out["ready"] = status == "ready"
+    out.update(_refusal_metrics(params.get("reference_report")))
+    return out
+
+
+def _refusal_metrics(report: Any) -> dict[str, float]:
+    """Whether the composition gate refused this job, and for what.
+
+    Recorded as 0.0/1.0 numbers rather than as a flag on the refused jobs
+    alone, and that is the whole design: the mean of ``refused`` over a bucket
+    is only the refusal *rate* if the jobs that passed contribute zeros. With
+    the refusals alone every bucket would read 100%.
+
+    The 17 refusals in the 2026-08-07 rogue sweep wrote nothing at all, so a
+    reader saw each checkpoint's accept rate *among the references that
+    survived* -- which flatters exactly the checkpoints that fail most often.
+    ``sdxl_cfg`` refused 3 of 5 and ``playground`` 0 of 5, and findings.json
+    could not say so.
+
+    Defensive in the way the two measurements above are: a report that crossed
+    a disk can be any shape, and a partial one costs its own keys and no more.
+    An absent ``ok`` says nothing rather than "it passed".
+    """
+    if not isinstance(report, dict) or not isinstance(report.get("ok"), bool):
+        return {}
+    refused = not report["ok"]
+    out: dict[str, float] = {"refused": float(refused)}
+    codes = report.get("codes")
+    if refused and not isinstance(codes, list):
+        # A refusal recorded before ``codes`` existed. The aggregate rate is
+        # still true and still worth having; which rule fired is not knowable,
+        # and a zero for every reason would be a claim that none of them did.
+        return out
+    named = set(codes or ()) if isinstance(codes, list) else set()
+    out.update({f"refused_{code}": float(code in named) for code in REFUSAL_CODES})
     return out

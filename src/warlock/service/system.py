@@ -84,9 +84,16 @@ def health(svc: WarlockService) -> dict[str, Any]:
     }
 
 
-def guidance_catalog() -> dict[str, Any]:
-    """Taxonomy for the design-guidance selects, so the UI has one source."""
-    return guidance.catalog()
+def guidance_catalog(svc: WarlockService) -> dict[str, Any]:
+    """Taxonomy for the design-guidance selects, so the UI has one source.
+
+    Takes the service for the matte gate alone: ``catalog()["defaults"]`` is
+    what the generate form initialises from, so it has to be the value a submit
+    would pick on *this* host, not the preference in the constant.
+    """
+    return guidance.catalog(
+        bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
+    )
 
 
 def prompt_preview(
@@ -107,7 +114,9 @@ def prompt_preview(
     from ..pipelines.text2image import Text2Image
 
     try:
-        params = guidance.normalize(raw)
+        params = guidance.normalize(
+            raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
+        )
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
 

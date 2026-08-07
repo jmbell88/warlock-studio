@@ -58,7 +58,43 @@ def load(path: Path) -> dict[str, Any] | None:
     return doc
 
 
-def hint(doc: dict[str, Any] | None, param: str, value: Any, *, min_n: int = 5) -> str | None:
+def _params_section(doc: dict[str, Any], prompt_hash: str | None) -> dict[str, Any]:
+    """The marginals to look ``param`` up in: this subject's when it has any,
+    the pooled ones otherwise. Every access is defensive -- the file crossed a
+    disk and this runs on the frame thread."""
+    if prompt_hash:
+        prompts = doc.get("prompts")
+        scope = prompts.get(prompt_hash) if isinstance(prompts, dict) else None
+        scoped = scope.get("params") if isinstance(scope, dict) else None
+        if isinstance(scoped, dict):
+            return scoped
+    return doc.get("params") or {}
+
+
+def _lookup(bucket: dict[str, Any], value: Any) -> dict[str, Any] | None:
+    """``bucket[str(value)]``, with the float32 second pass. See ``hint``."""
+    entry = bucket.get(str(value))
+    if entry is not None or not isinstance(value, float):
+        return entry
+    target = round(value, 6)
+    for key, candidate in bucket.items():
+        try:
+            key_value = float(key)
+        except ValueError:
+            continue
+        if round(key_value, 6) == target:
+            return candidate
+    return None
+
+
+def hint(
+    doc: dict[str, Any] | None,
+    param: str,
+    value: Any,
+    *,
+    min_n: int = 5,
+    prompt_hash: str | None = None,
+) -> str | None:
     """``"accept 6/8 (41%+)"`` for ``param``/``value`` in ``doc``, or the
     machine-evidence fallback, or ``None`` when neither has ``min_n`` behind
     it -- a thin bucket is noise, not a finding.
@@ -78,30 +114,46 @@ def hint(doc: dict[str, Any] | None, param: str, value: Any, *, min_n: int = 5) 
     misses the literal-string lookup gets a second pass: every bucket key
     that itself parses as a float is compared to ``value`` rounded to 6
     decimals, which absorbs float32's error (~1e-7 relative) while still
-    telling "0.6" apart from "0.65"."""
+    telling "0.6" apart from "0.65".
+
+    ``prompt_hash`` scopes the lookup to one subject (TODO item 4). A verdict
+    crediting every ``param: value`` in its vector is a confound this project
+    accepts -- the price of letting daily use feed the hints at all -- but
+    pooling across *subjects* is a different bargain: what makes a good wooden
+    crate says very little about what makes a good character. So a subject with
+    enough behind it answers for itself, a thin one falls back to the pooled
+    corpus rather than to silence, and **the line says which**, because an
+    unlabelled fallback is exactly the silent mixing this exists to stop.
+
+    Passing nothing keeps the old behaviour to the character, label included:
+    a caller that does not know its subject is making no claim about one.
+    """
     if doc is None:
         return None
-    bucket = (doc.get("params") or {}).get(param) or {}
-    entry = bucket.get(str(value))
-    if entry is None and isinstance(value, float):
-        target = round(value, 6)
-        for key, candidate in bucket.items():
-            try:
-                key_value = float(key)
-            except ValueError:
-                continue
-            if round(key_value, 6) == target:
-                entry = candidate
-                break
-    if entry is None:
-        return None
-    if entry.get("n", 0) >= min_n:
-        base = f"accept {entry.get('accepts', 0)}/{entry['n']}"
-        bound = entry.get("wilson_low")
-        if isinstance(bound, (int, float)) and not isinstance(bound, bool):
-            base += f" ({round(bound * 100)}%+)"
-        return base
-    return _metrics_hint(entry.get("metrics"), min_n)
+
+    def rendered(section: dict[str, Any]) -> str | None:
+        entry = _lookup(section.get(param) or {}, value)
+        if entry is None:
+            return None
+        if entry.get("n", 0) >= min_n:
+            base = f"accept {entry.get('accepts', 0)}/{entry['n']}"
+            bound = entry.get("wilson_low")
+            if isinstance(bound, (int, float)) and not isinstance(bound, bool):
+                base += f" ({round(bound * 100)}%+)"
+            return base
+        return _metrics_hint(entry.get("metrics"), min_n)
+
+    if not prompt_hash:
+        return rendered(doc.get("params") or {})
+
+    scoped = _params_section(doc, prompt_hash)
+    pooled = doc.get("params") or {}
+    if scoped is not pooled:
+        line = rendered(scoped)
+        if line is not None:
+            return f"{line} · this subject"
+    line = rendered(pooled)
+    return None if line is None else f"{line} · all subjects"
 
 
 def _reading(metrics: dict[str, Any], key: str, min_n: int) -> tuple[float, int] | None:
@@ -124,6 +176,26 @@ def _reading(metrics: dict[str, Any], key: str, min_n: int) -> tuple[float, int]
     if not isinstance(count, int) or isinstance(count, bool) or count < min_n:
         return None
     return float(value), count
+
+
+def _refusal_hint(metrics: dict[str, Any], min_n: int) -> str | None:
+    """The composition gate's rate, when it is worth saying.
+
+    Its own tier rather than a part joined into ``_measured``, and the word
+    *references* rather than *meshes* is why: a refused job never reached a
+    mesh, so a count of them under the "(21 meshes)" suffix would be a claim
+    about geometry that does not exist. It also leads rather than trails --
+    "this checkpoint is refused half the time" outranks its hole fraction,
+    which is measured only over the half that got through.
+
+    Silent at zero: "refused 0%" under every control is noise, and the absence
+    of the line already says it.
+    """
+    reading = _reading(metrics, "refused_rate", min_n)
+    if reading is None or reading[0] <= 0:
+        return None
+    percent = round(reading[0] * 100)
+    return f"refused {percent}% ({reading[1]} references)"
 
 
 def _measured(parts: list[tuple[str, int]]) -> str:
@@ -155,6 +227,9 @@ def _metrics_hint(metrics: Any, min_n: int) -> str | None:
     """
     if not isinstance(metrics, dict):
         return None
+    refused = _refusal_hint(metrics, min_n)
+    if refused is not None:
+        return refused
     parts: list[tuple[str, int]] = []
     hole = _reading(metrics, "hole_worst", min_n)
     if hole is not None:

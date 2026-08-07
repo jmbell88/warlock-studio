@@ -50,6 +50,56 @@ def test_observation_metrics_omits_keys_rather_than_guessing():
     assert vectors.observation_metrics({"mesh_report": {"triangles": True}}) == {}
 
 
+def test_a_refused_reference_is_a_measurement_like_any_other():
+    """TODO item 3. The 17 refusals in the 2026-08-07 rogue sweep produced zero
+    observations rows, so "this checkpoint draws character sheets 60% of the
+    time" -- the single most useful thing that sweep measured about
+    ``base_model`` -- lived only in the jobs table and died with
+    ``prune_jobs``."""
+    params = {"reference_report": {"ok": False, "codes": ["multi_object"]}}
+    metrics = vectors.observation_metrics(params)
+    assert metrics["refused"] == 1.0
+    assert metrics["refused_multi_object"] == 1.0
+    assert metrics["refused_occupancy"] == 0.0
+    assert metrics["refused_edge"] == 0.0
+
+
+def test_a_reference_that_passed_the_gate_is_the_denominator():
+    """A rate needs both halves. If only refused jobs carried ``refused``, its
+    mean over any bucket would be 1.0 -- the reader would show "refused 100%"
+    for a checkpoint that almost never is."""
+    metrics = vectors.observation_metrics({"reference_report": {"ok": True}})
+    assert metrics["refused"] == 0.0
+    assert metrics["refused_multi_object"] == 0.0
+
+
+def test_a_refusal_with_no_codes_still_counts_as_one():
+    """A report stored before ``codes`` existed. The aggregate rate survives;
+    the per-reason keys are simply absent rather than guessed at, which is the
+    rule every other malformed piece follows."""
+    metrics = vectors.observation_metrics({"reference_report": {"ok": False}})
+    assert metrics["refused"] == 1.0
+    assert not any(k.startswith("refused_") for k in metrics)
+
+
+def test_a_missing_or_malformed_report_contributes_no_refusal_keys():
+    assert vectors.observation_metrics({}) == {}
+    assert vectors.observation_metrics({"reference_report": "broken"}) == {}
+    # ``ok`` absent is not "it passed": nothing is known, so nothing is said.
+    assert vectors.observation_metrics({"reference_report": {"codes": []}}) == {}
+
+
+def test_the_refusal_keys_are_the_gate_s_own_vocabulary():
+    """One list, so a rule added to reference.py cannot record a rate under a
+    name nothing aggregates."""
+    from warlock.pipelines import reference
+
+    metrics = vectors.observation_metrics({"reference_report": {"ok": True}})
+    assert set(metrics) == {"refused"} | {
+        f"refused_{code}" for code in reference.REFUSAL_CODES
+    }
+
+
 def test_prompt_hash_is_short_stable_and_empty_for_no_prompt():
     a = vectors.prompt_hash("a wooden chest")
     assert a == vectors.prompt_hash("a wooden chest")

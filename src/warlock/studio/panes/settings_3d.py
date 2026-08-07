@@ -14,6 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import vectors
 from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
@@ -87,9 +88,19 @@ def draw(ctx: Any) -> None:
 
 
 def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
-    """Same lookup as the 2D pane's -- see ``settings_2d._findings_hint``."""
+    """Same lookup as the 2D pane's -- see ``settings_2d._findings_hint``.
+
+    The subject comes from the source asset rather than from a form, because
+    this pane owns no prompt controls at all: a 3D job starts from a finished
+    2D reference and inherits its prompt, so that reference's prompt *is* the
+    subject the mesh will be of. With no source picked yet there is no subject
+    to scope by and the pooled corpus answers, unlabelled -- which is honest:
+    nothing has been chosen for a hint to be about.
+    """
     doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
-    return findings_lib.hint(doc, param, value)
+    source = ctx.cache.get(ctx.state.source_job)
+    subject = vectors.prompt_hash(source.get("prompt")) if source else ""
+    return findings_lib.hint(doc, param, value, prompt_hash=subject or None)
 
 
 def _hint(ctx: Any, param: str, value: Any) -> None:

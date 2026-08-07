@@ -125,6 +125,34 @@ def test_prepare_is_idempotent(tmp_path):
     assert once.read_bytes() == twice.read_bytes()
 
 
+def test_every_refusal_carries_a_machine_readable_code():
+    """TODO item 3. ``reasons`` are sentences written for a person -- the
+    corpus needs a key it can count, and parsing English back out of a stored
+    report is how a reworded sentence silently empties a bucket."""
+    two = _subject(box=(20, 100, 90, 170))
+    ImageDraw.Draw(two).rectangle([160, 100, 230, 170], fill=(160, 40, 40))
+
+    assert reference.measure(two).codes == ("multi_object",)
+    assert reference.measure(_subject(box=(110, 110, 145, 145))).codes == ("occupancy",)
+    assert reference.measure(_subject(box=(-1, -1, 300, 200))).codes == ("edge",)
+    assert reference.measure(Image.new("RGB", (128, 128), BG)).codes == ("empty",)
+    assert reference.measure(_subject()).codes == ()
+
+
+def test_a_code_and_a_reason_are_raised_together():
+    """One refusal, one code -- a rule that grew a reason and no code would
+    make a refused job look like a passing one to the corpus."""
+    wide = _subject(box=(-1, -1, 300, 200))
+    report = reference.measure(wide)
+    assert len(report.codes) == len(report.reasons)
+    assert set(report.codes) <= set(reference.REFUSAL_CODES)
+
+
+def test_the_codes_survive_the_round_trip_through_params():
+    report = reference.measure(Image.new("RGB", (64, 64), BG))
+    assert report.as_dict()["codes"] == ["empty"]
+
+
 def test_report_is_json_safe():
     import json
 

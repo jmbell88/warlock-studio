@@ -177,6 +177,71 @@ def test_hint_missing_accepts_key_does_not_raise(tmp_path):
     assert findings_mod.hint(doc, "lora_weight", 0.6) == "accept 0/8"
 
 
+def _scoped_doc(pooled, per_prompt):
+    return {"version": 3, "generated": "x", "params": pooled, "prompts": per_prompt}
+
+
+def test_hint_prefers_this_subject_and_says_so(tmp_path):
+    """TODO item 4. A hint that silently mixes subjects is worse than no hint,
+    because it is trusted -- so when a subject-scoped answer exists it wins,
+    and either way the line says which corpus it came from."""
+    doc = _scoped_doc(
+        {"base_model": {"turbo": {"n": 84, "accepts": 3}}},
+        {"abc123": {"params": {"base_model": {"turbo": {"n": 8, "accepts": 6}}}}},
+    )
+
+    assert findings_mod.hint(doc, "base_model", "turbo", prompt_hash="abc123") == (
+        "accept 6/8 · this subject"
+    )
+
+
+def test_hint_falls_back_to_every_subject_and_says_that_too(tmp_path):
+    """A thin subject scope is not a reason to say nothing -- the pooled answer
+    is still evidence, and the label is what stops it being mistaken for a
+    finding about this prompt."""
+    doc = _scoped_doc(
+        {"base_model": {"turbo": {"n": 84, "accepts": 3}}},
+        {"abc123": {"params": {"base_model": {"turbo": {"n": 2, "accepts": 2}}}}},
+    )
+
+    assert findings_mod.hint(doc, "base_model", "turbo", prompt_hash="abc123") == (
+        "accept 3/84 · all subjects"
+    )
+    # A subject with nothing recorded at all takes the same path.
+    assert findings_mod.hint(doc, "base_model", "turbo", prompt_hash="nothing") == (
+        "accept 3/84 · all subjects"
+    )
+
+
+def test_hint_without_a_subject_is_unlabelled_and_pooled(tmp_path):
+    """Every caller that does not know its subject -- and every findings.json
+    written before ``prompts`` existed -- behaves exactly as it did. The label
+    would be a claim the caller never made."""
+    doc = _scoped_doc(
+        {"base_model": {"turbo": {"n": 84, "accepts": 3}}},
+        {"abc123": {"params": {"base_model": {"turbo": {"n": 8, "accepts": 6}}}}},
+    )
+
+    assert findings_mod.hint(doc, "base_model", "turbo") == "accept 3/84"
+
+
+def test_hint_with_a_subject_on_a_v2_file_still_answers(tmp_path):
+    doc = _doc({"base_model": {"turbo": {"n": 84, "accepts": 3}}})
+
+    assert findings_mod.hint(doc, "base_model", "turbo", prompt_hash="abc123") == (
+        "accept 3/84 · all subjects"
+    )
+
+
+def test_hint_with_a_malformed_prompts_section_never_raises(tmp_path):
+    """The file crossed a disk, and this runs on the frame thread."""
+    for broken in ("nonsense", [], {"abc123": 7}, {"abc123": {"params": "no"}}):
+        doc = _scoped_doc({"base_model": {"turbo": {"n": 8, "accepts": 6}}}, broken)
+        assert findings_mod.hint(doc, "base_model", "turbo", prompt_hash="abc123") == (
+            "accept 6/8 · all subjects"
+        )
+
+
 def test_hint_matches_a_float32_slider_value_against_a_string_key(tmp_path):
     """``findings.json`` keys a bucket by ``str()`` of the sweep's JSON
     value ("0.6"), but imgui's float32 ``slider_float`` hands back

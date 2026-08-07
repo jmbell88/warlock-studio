@@ -98,10 +98,21 @@ NORMALIZED_KWARGS = (
 # units are grouped by.
 SERVER_AXES = ("trellis_tex_res", "trellis_band")
 
-# How many jobs one submit may queue. Each is a real place in the serial
-# worker, and a model-stage unit is roughly two minutes of GPU -- 64 of them is
-# already a couple of hours, which is about as much as anyone can plan for in
-# one sitting.
+# How many jobs one submit may queue -- a guard against a runaway fan-out from
+# a mis-typed axis list, and nothing more.
+#
+# It used to be justified by time ("a model-stage unit is roughly two minutes of
+# GPU -- 64 of them is already a couple of hours"), which is not what it
+# measures: it bounds one *submit*, not the queue, and two submits of 64 are
+# admitted without a word. Someone reading the old comment could reasonably
+# raise the number believing it protected them from a long run. It never did.
+# The 2026-08-07 rogue sweep hit it at 100 units and was split into two 50-unit
+# sweeps, which turned out better -- each half had a coherent question -- but
+# the cap chose that, not the person planning it.
+#
+# Bounding total queue depth is the change that would enforce the time reading,
+# and it is deliberately not made here: it would refuse a second sweep
+# submitted while the first is still draining, which is a real workflow.
 MAX_UNITS = 64
 
 
@@ -252,7 +263,12 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
                 "control_end": kwargs.get("control_end"),
                 "bg_removal": kwargs.get("bg_removal"),
                 "negative_prompt": kwargs.get("negative_prompt"),
-            }
+            },
+            # Same gate create_job applies, for the reason this whole function
+            # exists: a unit's canonical key is what it would actually submit,
+            # and an ungated default here would key every unit on a matte the
+            # job then ran without.
+            bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir),
         )
     except ValueError as exc:
         raise Invalid(str(exc)) from exc

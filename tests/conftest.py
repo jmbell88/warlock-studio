@@ -41,6 +41,21 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
     # Points at a nonexistent exe; nothing here ever runs a job.
     monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
+    # And gltfpack is pinned *absent* rather than left to the machine. Its
+    # default is PROJECT_ROOT/vendor/gltfpack/gltfpack.exe and vendor/ is
+    # gitignored, so whether a named triangle tier is refused depended on
+    # whether whoever ran the suite happened to have vendored the binary --
+    # which is exactly the "a test about the fallback must pin the fallback"
+    # rule CLAUDE.md states for warlockc.dll. Vendoring gltfpack on 2026-08-07
+    # duly turned two admission tests red without a line of their subject
+    # changing. A test that wants the binary *present* writes one.
+    monkeypatch.setenv("WARLOCK_GLTFPACK", str(tmp_path / "no-gltfpack.exe"))
+    # And the trellis weights directory, for the same reason: the bg_removal
+    # default is gated on birefnet.gguf being in it (guidance.default_bg_removal),
+    # so leaving it pointed at PROJECT_ROOT/models would make every submitted
+    # job's matte depend on which weights this machine happens to have
+    # downloaded. Empty here; a test that wants the learned matte writes the file.
+    monkeypatch.setenv("WARLOCK_TRELLIS_MODELS", str(tmp_path / "trellis-models"))
     monkeypatch.setattr(config_mod, "_config", None)
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)

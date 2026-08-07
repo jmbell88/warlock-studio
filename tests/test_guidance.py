@@ -194,11 +194,65 @@ def test_style_lora_brings_its_own_default_weight():
     assert params["lora_weight"] == models.STYLE_LORAS["ps1"].default_weight
 
 
-def test_bg_removal_defaults_to_auto_and_rejects_unknown():
-    assert guidance.normalize({})["bg_removal"] == "auto"
+def test_bg_removal_defaults_to_birefnet_and_rejects_unknown():
+    assert guidance.normalize({})["bg_removal"] == "birefnet"
     assert guidance.normalize({"bg_removal": "birefnet"})["bg_removal"] == "birefnet"
     with pytest.raises(ValueError):
         guidance.normalize({"bg_removal": "magic"})
+
+
+def test_the_bg_removal_default_is_gated_on_the_weights_being_on_disk(tmp_path):
+    """TODO item 0. birefnet is the learned matte and the only thing the
+    2026-08-07 review found any signal for -- 3 accepts in 83, all of them
+    birefnet, ``auto`` 0 for 80 -- but ``auto`` is still the right answer on a
+    host that never downloaded ``birefnet.gguf``, where the server has nothing
+    to load and falls back to a threshold cutout anyway.
+    """
+    assert guidance.default_bg_removal(tmp_path) == "auto"
+    (tmp_path / guidance.BIREFNET_WEIGHTS).write_bytes(b"")
+    assert guidance.default_bg_removal(tmp_path) == "birefnet"
+
+
+def test_the_gate_and_the_doctor_row_name_the_same_file(tmp_path):
+    """Two readers of one fact. The doctor reports the weights missing and the
+    gate silently picks ``auto`` for it; a copy of the filename that drifted
+    would let the app choose a matte the doctor says is unavailable."""
+    from warlock import doctor
+
+    config = _doctor_config(tmp_path)
+    config.data_dir.mkdir(parents=True)  # run_checks measures free space on it
+    config.trellis_models_dir.mkdir()
+    before = _birefnet_row(doctor.run_checks(config))
+    assert before.ok is False
+    assert guidance.default_bg_removal(config.trellis_models_dir) == "auto"
+
+    (config.trellis_models_dir / guidance.BIREFNET_WEIGHTS).write_bytes(b"")
+    assert _birefnet_row(doctor.run_checks(config)).ok is True
+    assert guidance.default_bg_removal(config.trellis_models_dir) == "birefnet"
+
+
+def _doctor_config(tmp_path):
+    from warlock.config import Config
+
+    return Config(
+        data_dir=tmp_path / "data",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+    )
+
+
+def _birefnet_row(checks):
+    return next(c for c in checks if c.name.startswith("trellis: birefnet"))
+
+
+def test_bg_removal_can_be_defaulted_explicitly_by_the_caller():
+    """``normalize`` is pure and has no Config, so the gate is a value passed
+    in. An explicit ``bg_removal`` still wins over it."""
+    assert guidance.normalize({}, bg_default="auto")["bg_removal"] == "auto"
+    assert (
+        guidance.normalize({"bg_removal": "threshold"}, bg_default="auto")["bg_removal"]
+        == "threshold"
+    )
 
 
 def test_explicit_lora_weight_overrides_the_default():

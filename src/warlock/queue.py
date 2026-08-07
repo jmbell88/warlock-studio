@@ -144,17 +144,23 @@ already runs at are exactly the moments the number can be acted on.
 
 
 def _observe_finished(store: JobStore, job_id: str) -> bool:
-    """Append the machine-evidence row for a finished model job. -> whether a
-    row was written.
+    """Append the machine-evidence row for a model job that reached a terminal
+    status. -> whether a row was written.
 
     Reads the row fresh rather than trusting an in-memory job dict: the audit
     and report were committed via ``set_params``/``merge_params`` and the
-    remesh-restore path rebinds params, so the row is the record. A job whose
-    audit *and* report both failed writes nothing -- an empty metrics row
-    would be a bucket diluting every mean it joins. ``import_mesh`` and the
-    retarget re-audit deliberately have no call site here: the corpus is
-    about what generation settings produce, and a hand-imported or rewritten
-    mesh measures neither.
+    remesh-restore path rebinds params, so the row is the record. A job with
+    nothing measured writes nothing -- an empty metrics row would be a bucket
+    diluting every mean it joins. ``import_mesh`` and the retarget re-audit
+    deliberately have no call site here: the corpus is about what generation
+    settings produce, and a hand-imported or rewritten mesh measures neither.
+
+    "Nothing measured" is a smaller set than it was. A job refused at the
+    composition gate has no mesh and so no audit and no report, but the
+    refusal is itself a reading of the settings that drew the reference, and
+    ``vectors.observation_metrics`` returns it -- so the *status* is not the
+    filter here and never was. ``_process`` calls this for ``done`` and
+    ``error`` alike and lets the metrics decide.
     """
     job = store.get(job_id)
     if job is None:
@@ -526,6 +532,23 @@ class Worker:
                         # marked done. A diagnostic must not be able to cost
                         # that; in this order the worst it can cost is itself.
                         await self._maybe_queue_rig(job)
+                        await self._record_observation(job_id)
+                    else:
+                        # An errored job too, and it is not a consolation
+                        # prize: a job refused at the composition gate is the
+                        # *measurement* -- "this checkpoint draws character
+                        # sheets" is a fact about its settings, and the 17
+                        # refusals of the 2026-08-07 rogue sweep recorded it
+                        # nowhere and died with prune_jobs. A job that cleared
+                        # the gate and then failed in trellis matters for the
+                        # same rate, from the other side: a mean over refusals
+                        # alone is 1.0 by construction.
+                        #
+                        # No rig: there is no mesh to rig. And nothing at all
+                        # on a cancel, which is the branch above -- that is the
+                        # user changing their mind rather than a measurement,
+                        # and it is the status that discards the artifacts a
+                        # row would be describing.
                         await self._record_observation(job_id)
             finally:
                 # Unconditionally, and in a nest of its own: the terminal write
@@ -1016,7 +1039,7 @@ class Worker:
             source_glb,
             seed=mesh_seed,
             resolution=resolution,
-            bg_removal=str(params.get("bg_removal") or "auto"),
+            bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
         )
         # The remesh loop, and it re-enters only the trellis half. Everything
         # above it -- the VRAM handoff, the reference measurement, the
@@ -1126,7 +1149,7 @@ class Worker:
                     source_glb,
                     seed=mesh_seed,
                     resolution=resolution,
-                    bg_removal=str(params.get("bg_removal") or "auto"),
+                    bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
                 )
             except Exception:
                 # The best reconstruction so far is already on disk and the

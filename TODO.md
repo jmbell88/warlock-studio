@@ -6,24 +6,59 @@ the 100-unit SNES-rogue sweep (`scripts/sweep_rogue.py`, sweeps `b5c47248e13d`
 "rogue - render" and `8340cd0b2f5a` "rogue - depiction") or the QA audit of the
 same day — not in a reading of the code alone.
 
-**Nothing in items 1–11 has been implemented.** Item 12 is a closed record kept
-only so the deleted documents' conclusions are not lost.
-
 **Sweep state.** Both sweeps ran to completion: 100 attempted, 83 done, 17
 refused, 3.7 h GPU. All 17 refusals had one cause — more than one object in the
 reference — and the occupancy and edge-runoff gates never fired once. **The 83
 meshes were reviewed on 2026-08-07** (88 latest-wins verdicts in the DB, 84 of
-them sweep-scoped, an 11.3 h session). **Three were accepted.** What that review
-found is item 0, and it invalidates enough of the rest of this file that the
-corrections are marked inline rather than left to be rediscovered.
+them sweep-scoped, an 11.3 h session). **Three were accepted.**
+
+**Implementation state, 2026-08-07 (later the same day).** Items 0 (the code
+half), 1, 2, 3, 4 and 6 are **done and removed from this file**; what they
+concluded is now recorded in `CLAUDE.md` and in the comments at each site. What
+remains below is what is genuinely still open: two GPU sessions nobody has run
+(§0), a note waiting on their numbers (§7), a qualification pass waiting on the
+same (§5), and the quality judge (§8–§11). §12 is a closed record.
+
+The removed items, one line each, so an old reference can be chased:
+
+- **0 (partial)** — `guidance.DEFAULT_BG_REMOVAL` is `birefnet`, gated on
+  `birefnet.gguf` via `guidance.default_bg_removal`, applied in `create_job`,
+  `promote_to_model`, the sweep admission check, the prompt preview and the
+  form's own defaults. The two GPU halves are **not** done and are §0 below.
+- **1** — `PROMPT_TEMPLATE` no longer says "game asset concept art" (a
+  character sheet is the canonical form of the genre it was asking for) and now
+  says "a single subject … no other objects". `PROMPT_VERSION` 3 → 4.
+  `negative_prompt` was deliberately left alone, so no stored vector is
+  re-keyed and every unit recorded before today still pairs.
+- **2** — `Config.reference_retries` 0 → 2. The reroll machinery already
+  existed and already held `mesh_seed` fixed; only the default was wrong.
+- **3** — `reference.REFUSAL_CODES` + `Report.codes`;
+  `vectors.observation_metrics` emits `refused` and `refused_<code>` as 0.0/1.0
+  so the mean is a rate; `_process` records an observation on `error` as well
+  as `done` (never on cancel); `_metric_summary` averages them and the hint
+  tier renders `"refused 50% (6 references)"`.
+- **4** — `findings.json` v3 gains a `prompts` section, and
+  `bench.findings.hint(..., prompt_hash=…)` prefers this subject, falls back to
+  the pooled corpus, and says which. Both generate panes pass their subject.
+- **6** — `MAX_UNITS`'s comment now says what it is (a runaway-fan-out guard),
+  not what it never measured (a time budget).
+
+One thing found while doing them, since it was not in any of the source
+documents: **`vendor/gltfpack/gltfpack.exe` is now present.** Two admission
+tests had been asserting a named tier is refused "while gltfpack is absent"
+against the machine's real `vendor/` directory, and went red the moment it
+arrived. The `svc` fixture now pins `WARLOCK_GLTFPACK` — and
+`WARLOCK_TRELLIS_MODELS`, which the new matte gate reads — at empty tmp paths,
+which is the rule `CLAUDE.md` already states for `warlockc.dll`.
 
 ---
 
-## 0. Make `bg_removal=birefnet` the default, then re-run
+## 0. Two GPU sessions, and nothing else in this file should start before them
 
-**The review is done. This is what it found and the one thing to do about it.**
+The code change is done (see above). Neither of the two runs it was meant to
+enable has happened, and **items 5, 7 and 9 are all waiting on them.**
 
-### The result
+### What the review found
 
 **3 accepts in 83.** All three are `bg_removal=birefnet`; `auto` went 0 for 80.
 It is the only signal in the corpus — `bench/findings.json` has `bg_removal` as
@@ -51,6 +86,23 @@ A threshold cutout on a deliberately dark brief ("black and silver and blue")
 leaves background attached, and TRELLIS reconstructs it into a solid slab.
 `models/trellis2-gguf/birefnet.gguf` is present, so the learned matte was
 available the whole time and simply was not being asked for.
+
+### The two runs
+
+1. **Blind-confirm, before any of this is leaned on.** The clean 2×2 on its own
+   is Fisher p=0.14; the p≈4×10⁻⁵ figure (≈8×10⁻⁴ after Bonferroni over ~20
+   blocks) comes from using all 80 `auto` units as controls, which is legitimate
+   but leans on their comparability. The review was also unblinded and
+   single-reviewer, and the app shows the params. 8–12 units, birefnet against
+   auto, labels hidden, is cheap next to a 3.7 h sweep.
+2. **Re-run the render sweep with birefnet as the baseline**, check the accept
+   rate is workable, and only then re-run the depiction axes on top of it.
+
+Note that the re-run measures a *second* change as well now: `PROMPT_TEMPLATE`
+moved (item 1), so a unit from the new run is not comparable with one from the
+old on the prompt axis either. Both changes are deliberate and both land before
+the re-run, which is the right order — a sweep around a broken base measures the
+brokenness — but the re-run is the first corpus in which either is measured.
 
 ### `hole_worst` is not weakly informative. It is backwards.
 
@@ -80,20 +132,6 @@ about a knob that was an afterthought in the design.
 a workable rate before fanning out.** A sweep around a broken base measures the
 brokenness.
 
-### The actions
-
-1. Change the `bg_removal` default from `auto` to `birefnet`
-   (`guidance.DEFAULT_BG_REMOVAL`), gated on `birefnet.gguf` being present —
-   `doctor` already reports it, and `auto` remains correct when it is absent.
-2. **Blind-confirm first if any of this is to be leaned on.** The clean 2×2 on
-   its own is Fisher p=0.14; the p≈4×10⁻⁵ figure (≈8×10⁻⁴ after Bonferroni over
-   ~20 blocks) comes from using all 80 `auto` units as controls, which is
-   legitimate but leans on their comparability. The review was also unblinded and
-   single-reviewer, and the app shows the params. 8–12 units, birefnet against
-   auto, labels hidden, is cheap next to a 3.7 h sweep.
-3. Re-run the render sweep with birefnet as the **baseline**, check the accept
-   rate is workable, and only then re-run the depiction axes on top of it.
-
 ### What the review says about the checkpoints: nothing yet
 
 Refusal rate and mesh quality still rank them oppositely — `playground` and
@@ -103,145 +141,32 @@ worst meshes (0.48 and 0.61 worst-view hole fraction). But every checkpoint ran
 under `auto`, so all of them were being judged through the same defect. Neither
 number picks a checkpoint, and the re-run is what settles it.
 
+**The re-run will now say this itself**, which it could not before: item 3 makes
+a refusal an observation, so `findings.json` carries `refused_multi_object` as a
+per-checkpoint rate and the hint under the base-model select reads it. The
+refusal half of that contradiction stops being something only a human trawling
+the jobs table can see.
+
 ---
 
-## 1. Harden the reference prompt against concept-art layouts
+## 5. Qualify the gltfpack tiers
 
-**Observed.** Every one of the 17 refusals was `reference.py:279` (second
-component ≥ `MIN_SECOND_COMPONENT`, 8% of the largest), and they are one family
-under one cause: **concept-art layouts** — character sheets (a central figure
-ringed by detached armour and shield icons), turnarounds (side and front side by
-side), multi-view plates. It reproduces across checkpoints, so it is a property
-of the prompt, not of one model. A third unit, `baseline s23`, *passed* and drew
-a full architectural background: pillars, a stone floor, a cast shadow.
-
-**Why.** The composed prompt never asks for a single subject on plain ground.
-`PROMPT_TEMPLATE` contributes "a game character, full body, standing, T-pose
-neutral stance", which SDXL readily satisfies with a concept sheet.
-`DEFAULT_NEGATIVE_PROMPT` does carry `multiple objects, busy background`.
-
-**The sweep favours the positive fix.** `sdxl_cfg` — full CFG at 30 steps, where
-negative adherence is *strongest* — refused most of all. That points at the
-positive prompt driving the layout rather than at weak negative adherence, and
-so at amending `PROMPT_TEMPLATE` over lengthening the negative.
-
-1. Preferred: add the constraint on the positive side (`isolated on a plain
-   background, single subject, no props`) so it is composed for every
-   model-stage job and cannot be lost by a user editing the negative prompt.
-2. Failing that: extend `DEFAULT_NEGATIVE_PROMPT` with `character sheet,
-   turnaround, multiple views, item icons, reference sheet, background scenery,
-   architecture`.
-
-**The migration cost is the real decision.** `negative_prompt` is in
-`VECTOR_PARAMS`, so changing it re-keys every stored vector: units recorded
-before and after stop pairing in `findings.comparisons` and their marginals
-split across two spellings. Same accepted cost `_LEGACY_ALIASES` documents for a
-renamed taxonomy key, and it deserves the same treatment — a deliberate
-decision, applied by requeuing a whole sweep, never mid-run.
-
-## 2. Bounded reference-seed re-roll on refusal
-
-**Observed.** Seed 11's baseline errored, so that unit is absent from sweep
-`b5c47248e13d`.
-
-**Why it costs more than one mesh.** `findings.comparisons` pairs two rows only
-when they share `(sweep_id, source)` and a **seed** and differ in exactly one
-key. The baseline at seed 11 was one side of *nine* prospective pairs — one per
-axis value at that seed. Losing it does not cost 1/50 of the comparison power,
-it costs every comparison anchored at that seed.
-
-Let a reference refusal re-roll the *reference* seed a bounded number of times
-(2–3) while holding `mesh_seed` fixed, before failing the job. `create_job`
-already separates `reference_seed` from `mesh_seed`, so the machinery exists. A
-unit's identity in the corpus is its config vector and its mesh seed; which of
-three reference draws happened to avoid a sheet is not a setting anyone is
-trying to measure.
-
-Cheaper fallback if that is too invasive: have `service/sweeps.py` report refused
-units at the end of a run, so a targeted requeue is one command rather than a
-manual diff of what is missing.
-
-## 3. Record an observation for a job refused at the reference gate
-
-**Prerequisite for item 8.**
-
-**Observed.** The 17 refusals produced zero `observations` rows.
-`_observe_finished` records only finished model-stage jobs, so "this checkpoint
-produces character sheets 60% of the time" is not in the corpus — it lives only
-in the `jobs` table and dies with `prune_jobs`. It is the single most useful
-thing this sweep measured about `base_model`, and `findings.json` will never
-show it. A reader sees a checkpoint's accept rate *among the references that
-survived*, which flatters exactly the checkpoints that fail most often.
-
-Write an observation for a job that fails at the gate, carrying the refusal
-reason as a metric (`refused_multi_object`, `refused_occupancy`,
-`refused_edge`) with no mesh metrics. The `metrics` sub-object already tolerates
-missing keys — every mean carries its own `counts[metric]` precisely so a
-partial reading is not advertised as a whole one — so a refusal row costs
-nothing structurally and turns an invisible failure into a comparable rate.
-
-## 4. Scope findings by `prompt_hash`
-
-**Prerequisite for item 8; promoted from nice-to-have by the judge's scope risk.**
-
-**Observed.** Before the sweep the DB held 8 verdicts and 9 observations, **all**
-against an unrelated `environment`/`wood` prompt and all rejects, and
-`bench/findings.json` was a stub still carrying the legacy `platform: "pc"`
-value. Those rows now confound the marginals for `base_model`, `platform` and
-`negative_prompt` in a document about a character.
-
-`verdicts` and `observations` both already carry `prompt_hash` (migration 5).
-`service/findings.py` should aggregate scoped to a prompt hash, and the generate
-panes should say which corpus a hint came from.
-
-Confounding across *settings* is documented and accepted — the price of letting
-daily use feed the hints. Confounding across *subjects* is not the same bargain:
-what makes a good wooden crate says very little about what makes a good
-character, and a hint that silently mixes them is worse than no hint.
-
-**Now demonstrated rather than predicted.** The regenerated `findings.json`
-reports `bg_removal: auto` at **n=84**, but only 80 of those are rogue sweep
-units — the other 4 are the old wood-prompt rejects, silently pooled into a
-marginal about a character. They happen not to change the conclusion here (all
-four are rejects, and `auto` is 0 either way), which is exactly why it is worth
-fixing before a case arrives where they do.
-
-## 5. Vendor gltfpack and qualify the tiers
+**The binary is vendored now** — `vendor/gltfpack/gltfpack.exe` arrived on
+2026-08-07 — so `pipelines/optimize.py`, the config field, the doctor check and
+the retarget panel's full tier list are all live. What is *not* done is the
+qualification: a tier stays unqualified until it has been run against a chest, a
+sword and a rock and shown to keep UVs, both PBR maps and material assignment.
+`Config.mesh_profile` stays `raw` until then, and the generate forms still offer
+only `raw`.
 
 **Observed.** All 83 meshes: 177k–299k triangles, 0 of 83 watertight, unmoved by
-any sweep axis. That is `gltfpack` being absent rather than a settings effect —
-working as documented, since `vendor/gltfpack/gltfpack.exe` is missing, so `raw`
-is the only profile and `Config.mesh_profile` defaults to it.
-
-**Corrected after the review.** This item used to read "hole fraction was
-essentially zero, so reconstruction quality is genuinely fine — the issue is
-only budget". Both halves of that were wrong. A near-zero hole fraction was
-evidence of the slab failure, not of quality (item 0), and the review accepted 3
-of 83 — so budget was never the binding problem.
+any sweep axis — `gltfpack` being absent rather than a settings effect.
 
 **The qualification corpus is not this sweep.** 80 of these 83 meshes were
 rejected, and a tier test needs meshes worth keeping: the question is whether a
 tier preserves UVs, both PBR maps and material assignment, which cannot be
-judged on output that is already broken. Vendor the binary, but qualify the
-tiers against the **re-run** (item 0), not against this corpus. The three
-accepted birefnet meshes are a start and are not enough.
-
-## 6. `MAX_UNITS = 64` measures the wrong thing
-
-**Observed.** A 100-unit intent had to be split into two 50-unit sweeps. The
-split turned out fine — arguably better, since each half has a coherent question
-— but it was forced by the cap, not chosen.
-
-Its stated rationale is time ("a model-stage unit is roughly two minutes of GPU
-— 64 of them is already a couple of hours"), but it bounds one *submit*, not the
-queue. Two submits of 64 are admitted without complaint, so the constant does not
-cap the thing its comment is about.
-
-Either bound total queue depth (which would enforce the stated intent), or keep
-the per-submit cap and reword the comment to say what it really is — a guard
-against a runaway fan-out from a mis-typed axis list, which is a legitimate and
-different purpose. The present mismatch invites someone to raise the number
-believing it protects them from a long run.
+judged on output that is already broken. Qualify against the **re-run** (§0).
+The three accepted birefnet meshes are a start and are not enough.
 
 ## 7. `art_style=snes` fights an explicit colour brief
 
@@ -261,11 +186,11 @@ That would be a real finding about `guidance.py`, and it is worth waiting for
 the numbers rather than adjusting the fragment on taste.
 
 **Still unmeasured.** Sweep B returned 0 accepts and all ties on every palette
-comparison — the floor effect in item 0, not a null result about colour. The
+comparison — the floor effect in §0, not a null result about colour. The
 question is untouched and rides on the re-run. Note also that a colour finding
 is one of the few things `meshaudit` could never have answered even had the
 meshes been sound: it is a texture judgement, so it needs human verdicts or the
-image probe (item 8) regardless.
+image probe (§8) regardless.
 
 ---
 
@@ -277,8 +202,8 @@ described below exists yet.
 
 ## 8. Phase 1 — the 2D judge
 
-**Blocked on items 3 and 4** (they are prerequisites, not neighbours) **and on a
-labelling pass.**
+**Its two code prerequisites (old items 3 and 4) are now done.** What it is
+still blocked on is **a labelling pass** — and, for the mesh half, §9's corpus.
 
 ### Why this is cheaper than it looks
 
@@ -297,6 +222,10 @@ The seam is already built and tested, not hypothetical:
   the normalized CLS token, `_dino_model` (`:96`) caches per `(path, device)`.
 - `service/verdicts.py:38` already defines the vocabulary:
   `REASONS = ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")`.
+- **And the corpus is now scoped and carries refusals** — the two things the
+  old items 4 and 3 were prerequisites *for*. `findings.json` v3 breaks
+  marginals out per `prompt_hash`, and a reference refused at the gate is an
+  observation rather than a silent hole in the record.
 
 The missing piece is **calibration**. `meshaudit` and `meshreport` measure holes,
 watertightness, triangles and pivot on every job, and nothing anywhere has ever
@@ -305,7 +234,7 @@ convert a measurement into a decision boundary.
 
 **And the first calibration result is that the boundary runs the wrong way.**
 Against the 84 reviewed meshes, `AUC(hole_worst → reject) = 0.115` — not
-uninformative, inverted (item 0). 59% of rejects scored exactly 0.0 and no
+uninformative, inverted (§0). 59% of rejects scored exactly 0.0 and no
 accept did. Two consequences for anything built here. A probe must be trained on
 **pixels**, never on the audit scalars, which would have to be sign-flipped to
 beat a coin and would then be fitting the slab artefact rather than quality. And
@@ -358,7 +287,7 @@ Intent, not artifact type, separates the models:
 |---|---|---|---|
 | `image-as-product` | `reference.png` from a `reference`-stage job | Is this a good 2D asset? | a labelling pass |
 | `image-as-blank` | `reference.png` from a `model`-stage job | Will this reconstruct? | a labelling pass |
-| `mesh` | 8 rendered views of `model.glb` | Is this a good mesh? | **a corpus with positives in it** — see item 9 |
+| `mesh` | 8 rendered views of `model.glb` | Is this a good mesh? | **a corpus with positives in it** — see §9 |
 
 All three are **linear probes over frozen DINOv2 CLS embeddings** — logistic
 regression on a 768-d vector. Tens to low hundreds of examples per class rather
@@ -384,7 +313,8 @@ mesh classifier would be learning camera pose, not quality. See
   `MIN_SECOND_COMPONENT` (0.08) and `MAX_ASPECT` (8.0) are not replaced. They
   remain the fallback when no probe is trained *and* the reference the probe's
   accuracy is reported against — the `native.py` rule that the reference
-  implementation is never deleted.
+  implementation is never deleted. `REFUSAL_CODES` is now the vocabulary that
+  comparison is spelled in.
 - **Fully offline.** DINOv2 loads from a local path with `local_files_only=True`.
   The probe weights are ours. Nothing downloads at runtime, ever.
 - **A judge failure must never fail a job.** Inference logs and swallows, exactly
@@ -409,11 +339,13 @@ multi-object is the most informative negative available) and **sweep units**
 (the entire corpus this work is built on).
 
 **`findings.py` must filter by stage.** `aggregate` runs over every source's
-latest verdicts (`findings.py:103`). Matched pairs group by `(sweep_id, source)`
-(`:314-323`) and stay clean, but the **marginals do not**: an image label would
-count into the same accept/reject rate as a mesh verdict, and `"accept 6/8"`
-under a prompt control would silently average two different questions. Mesh
-findings must read `stage = 'model'` only.
+latest verdicts. Matched pairs group by `(sweep_id, source)` and stay clean, but
+the **marginals do not**: an image label would count into the same accept/reject
+rate as a mesh verdict, and `"accept 6/8"` under a prompt control would silently
+average two different questions. Mesh findings must read `stage = 'model'` only.
+Note this now applies in two places, not one — the per-subject `prompts` section
+is built by the same `_marginals` helper, so a stage filter belongs *there*
+rather than at either call site.
 
 ### User interface
 
@@ -433,7 +365,7 @@ A labelling surface in Review mode, beside the existing verdict loop.
   the exact bug `AppState.findings_dirty` / `pump_findings` exists to prevent.
   Reuse that pattern.
 - **Review sorts by judge score rather than filtering by it** — the filter-bubble
-  guard, see item 10.
+  guard, see §10.
 - Training runs on `TaskRunner`. A DINOv2 forward pass over a hundred images plus
   a logistic fit is seconds, and seconds on the frame thread is a freeze.
 
@@ -455,7 +387,7 @@ That is not a thin corpus, it is an unusable one: a linear probe fitted to it
 learns "reject" and scores 96% accuracy doing so. The risk section below flagged
 17 negatives as thin; 3 positives is the worse end of the same problem.
 
-So the ordering has changed. This phase now sits behind item 0's re-run, and the
+So the ordering has changed. This phase now sits behind §0's re-run, and the
 gate on starting it is a positive count in the tens, not a total label count.
 The 84 existing labels are not wasted — they are a clean negative set, and the
 matched pairs (identical `input.png`, opposite verdict) are the most useful
@@ -464,12 +396,13 @@ held constant.
 
 ## 10. Phase 3 — earned authority
 
-Only after item 11's numbers exist. Candidates, in increasing order of risk:
+Only after §11's numbers exist. Candidates, in increasing order of risk:
 
 1. Sorting Review by score (already in Phase 1).
-2. A bounded reference-seed re-roll on a predicted-bad blank — pairs with item 2
-   and is cheap because `create_job` already separates `reference_seed` from
-   `mesh_seed`.
+2. A bounded reference-seed re-roll on a predicted-bad blank. The mechanism is
+   already there and already on — `Config.reference_retries` is 2 and the loop
+   holds `mesh_seed` fixed — so this is only a matter of letting the probe, not
+   `reference.py`'s three thresholds, decide what counts as bad.
 3. Refusal at the gate, which should not be attempted without a measurement
    document.
 
@@ -481,13 +414,15 @@ Only after item 11's numbers exist. Candidates, in increasing order of risk:
   advisory-only through Phase 2, Review **sorts** rather than filters, and a
   sampled share of the judge's own rejects keeps surfacing for human review.
 - **Scope.** A probe trained on this sweep learns "good SNES rogue", not "good
-  asset". Pointed at a wooden crate it is confidently wrong. This is what
-  promotes item 4 from nice-to-have to prerequisite. A judge with no notion of
-  subject is worse than no judge, because it is trusted.
+  asset". Pointed at a wooden crate it is confidently wrong. The corpus is
+  scoped by `prompt_hash` now and the hints say which subject they came from;
+  the *probe* is not, and giving it the same treatment is a decision this phase
+  still owes. A judge with no notion of subject is worse than no judge, because
+  it is trusted.
 - **Label volume — measured, and worse than feared.** The estimate here was 83
   passing and 17 refused references, with seventeen negatives called thin. The
   review came back **3 accepts and 81 rejects**, so the *positive* class is the
-  scarce one and the mesh probe is unbuildable on this corpus (item 9). The
+  scarce one and the mesh probe is unbuildable on this corpus (§9). The
   deliberate labelling session this predicted is now confirmed necessary, and it
   has to run against output worth accepting.
 - **Confounded marginals, inherited.** A verdict credits every `param: value` in
@@ -516,10 +451,12 @@ Report, on a held-out split:
 - **Agreement with `reference.py`'s rules**, on the blank probe specifically. If
   agreement is ~100%, the probe has learned to imitate the rules and has added
   nothing. Genuine value shows up as *disagreement that a human sides with the
-  probe on* — `baseline s23` is the canonical test case.
+  probe on* — `baseline s23` is the canonical test case. Agreement is now
+  cheap to compute per rule rather than in aggregate, since a refusal is an
+  observation carrying `refused_<code>`.
 - **Per-subject breakdown by `prompt_hash`**, or the scope risk is unmeasured.
 - **Beat `hole_worst`, which is a floor of 0.115 AUC and therefore no floor at
-  all.** Its inversion (item 0) means the honest baseline to beat is a coin
+  all.** Its inversion (§0) means the honest baseline to beat is a coin
   flip, and any probe that merely correlates with the audit scalars has learned
   the slab artefact. Report the probe against the human labels directly.
 

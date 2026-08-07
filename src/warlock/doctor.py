@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import models, native, rigging, vram, winjob
+from . import guidance, models, native, rigging, vram, winjob
 from .config import Config
 
 MIN_FREE_DISK_GB = 5.0
@@ -111,7 +111,10 @@ def _gguf_check(config: Config) -> Check:
 
 
 def _birefnet_check(config: Config) -> Check:
-    path = config.trellis_models_dir / "birefnet.gguf"
+    # The filename from guidance, not a second copy of it: guidance gates the
+    # bg_removal default on this exact file, so a drifted spelling here would
+    # report the weights missing while the app quietly kept asking for them.
+    path = config.trellis_models_dir / guidance.BIREFNET_WEIGHTS
     ok = path.exists()
     detail = (
         str(path)

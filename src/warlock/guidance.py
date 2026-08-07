@@ -25,6 +25,7 @@ cross-attention, so brevity stays a rule even though truncation no longer is.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from . import models
@@ -39,7 +40,40 @@ DEFAULT_PLATFORM = "3d"
 # How trellis-server mattes the input image. Not an Option table: these are
 # server capabilities, not prompt fragments, so they never reach compose_prompt.
 BG_REMOVAL = ("auto", "birefnet", "threshold")
-DEFAULT_BG_REMOVAL = "auto"
+
+# birefnet, and it is the one thing the 2026-08-07 review of the rogue sweep
+# found any signal at all for. 3 accepts in 83; all three were
+# bg_removal=birefnet and `auto` went 0 for 80, over matched pairs whose
+# input.png hashed identically -- bg_removal is passed to trellis-server at
+# reconstruction time, so nothing about the picture differed. The failure mode
+# moved as well as the rate: 58 of 80 `auto` rejects were tagged `broken`, 0 of
+# 4 birefnet were. The mechanism is in doctor.py's own words -- without the
+# weights matting "falls back to a threshold cutout", and `auto` lets the
+# server decide -- and a threshold cutout on a dark brief leaves background
+# attached, which TRELLIS reconstructs into a solid slab.
+#
+# Gated, though, and default_bg_removal below is the gate: on a host that never
+# downloaded birefnet.gguf there is nothing to load, and `auto` is still right
+# there. n=4 is thin and the blind confirmation TODO item 0 asks for has not
+# been run; what tips it is that the alternative is a default already measured
+# at 0 for 80.
+DEFAULT_BG_REMOVAL = "birefnet"
+FALLBACK_BG_REMOVAL = "auto"
+
+# The weights DEFAULT_BG_REMOVAL needs, named once. doctor._birefnet_check
+# reports this same file, and a second spelling of it would let the app pick a
+# matte the doctor is telling the user is unavailable.
+BIREFNET_WEIGHTS = "birefnet.gguf"
+
+
+def default_bg_removal(trellis_models_dir: Path) -> str:
+    """The matte to use when the caller named none: the learned one when its
+    weights are on disk, ``auto`` when they are not."""
+    return (
+        DEFAULT_BG_REMOVAL
+        if (trellis_models_dir / BIREFNET_WEIGHTS).exists()
+        else FALLBACK_BG_REMOVAL
+    )
 
 # What a TRELLIS reference image must not be. A second subject or a cropped one
 # is the single most common cause of a mesh that reconstructs into nonsense, so
@@ -318,12 +352,19 @@ def _number(raw: dict[str, Any], field: str, *, default: float, low: float, high
     return value
 
 
-def normalize(raw: dict[str, Any]) -> dict[str, Any]:
+def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str, Any]:
     """Validate submitted guidance and fill in what it implies.
 
     Returns the dict stored in jobs.params, so it also carries the derived
     ``resolution`` the worker actually sends to trellis-server. Raises
     ValueError (which the API turns into a 400) on any unrecognised value.
+
+    ``bg_default`` is the matte to use when ``raw`` names none -- what
+    ``default_bg_removal`` resolved against the host's weights directory. It is
+    a passed value rather than a lookup because this module is pure and holds
+    no Config; ``None`` means "no gate was applied", which is the stated
+    preference and what the validation-only callers (bench recipes, the sweep
+    parser) want, since they never reach a server.
     """
     chosen = {field: _lookup(field, raw.get(field)) for field in _TABLES}
 
@@ -390,8 +431,12 @@ def normalize(raw: dict[str, Any]) -> dict[str, Any]:
 
     bg_removal = raw.get("bg_removal")
     if bg_removal in (None, ""):
-        bg_removal = DEFAULT_BG_REMOVAL
-    elif str(bg_removal) not in BG_REMOVAL:
+        bg_removal = bg_default or DEFAULT_BG_REMOVAL
+    # Validated after the fallback rather than only on the explicit branch: the
+    # default is a value a caller hands in now, and an unknown one would
+    # otherwise reach trellis-server unchecked -- the one path where "the
+    # server decides" is not a safe answer.
+    if str(bg_removal) not in BG_REMOVAL:
         raise ValueError(f"bg_removal must be one of {list(BG_REMOVAL)}")
 
     # Unlike bg_removal, a missing key and an explicit "" are NOT the same
@@ -562,8 +607,13 @@ PRESETS: tuple[dict[str, Any], ...] = (
 )
 
 
-def catalog() -> dict[str, Any]:
-    """The taxonomy as JSON, so the UI builds its selects from one source."""
+def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
+    """The taxonomy as JSON, so the UI builds its selects from one source.
+
+    ``bg_default`` is ``normalize``'s, for the same reason and with the same
+    meaning: the form's initial matte must be the one a submit would pick, or
+    the pane shows a setting the job will not run at.
+    """
     return {
         "fields": {
             field: [
@@ -594,7 +644,7 @@ def catalog() -> dict[str, Any]:
             "size_m": DEFAULT_SIZE_M,
             "base_model": models.DEFAULT_BASE_MODEL,
             "lora_weight": models.DEFAULT_LORA_WEIGHT,
-            "bg_removal": DEFAULT_BG_REMOVAL,
+            "bg_removal": bg_default or DEFAULT_BG_REMOVAL,
             "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
         },
         "size_range_m": [SIZE_MIN_M, SIZE_MAX_M],

@@ -204,8 +204,8 @@ def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch
 # --- guidance ---------------------------------------------------------------
 
 
-def test_the_guidance_catalog_is_served():
-    body = svc_system.guidance_catalog()
+def test_the_guidance_catalog_is_served(svc):
+    body = svc_system.guidance_catalog(svc)
     assert set(body["fields"]) == {
         "genre", "art_style", "category", "platform", "base_model", "style_lora",
         "ip_adapter", "control",
@@ -806,6 +806,36 @@ def test_promote_without_overrides_inherits_the_reference(svc):
     assert params["platform"] == "2d"
     assert params["size_m"] == 0.4
     assert params["bg_removal"] == "birefnet"
+
+
+def test_a_job_gets_the_learned_matte_when_its_weights_are_on_disk(svc):
+    """TODO item 0, end to end: the gate is applied where a job is actually
+    created, not only in ``guidance``. ``auto`` went 0 for 80 in the 2026-08-07
+    review and every accept was birefnet, so this is the default the queue must
+    see -- there is no point in the constant moving if ``create_job`` does not
+    read it."""
+    from warlock import guidance as guidance_mod
+
+    svc.config.trellis_models_dir.mkdir(parents=True, exist_ok=True)
+    (svc.config.trellis_models_dir / guidance_mod.BIREFNET_WEIGHTS).write_bytes(b"")
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a rogue")["id"]
+    assert _params(svc, job_id)["bg_removal"] == "birefnet"
+
+
+def test_a_job_falls_back_to_auto_when_the_matte_weights_are_absent(svc):
+    # The gate's other half. The svc fixture points trellis_models_dir at an
+    # empty tmp dir, which is this case.
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="a rogue")["id"]
+    assert _params(svc, job_id)["bg_removal"] == "auto"
+
+
+def test_the_form_default_matches_what_a_submit_would_pick(svc):
+    """The catalog's ``defaults`` is what the generate pane initialises from,
+    so an ungated one would show a matte the job then refuses to run at."""
+    submitted = _params(svc, svc_jobs.create_job(svc, kind="text", prompt="x")["id"])
+    assert svc_system.guidance_catalog(svc)["defaults"]["bg_removal"] == (
+        submitted["bg_removal"]
+    )
 
 
 def test_promote_migrates_a_reference_carrying_legacy_guidance(svc):

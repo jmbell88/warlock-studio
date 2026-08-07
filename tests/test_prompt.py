@@ -91,21 +91,24 @@ def test_pad_pair_equalises_chunk_counts():
 
 
 def test_build_reproduces_the_trigger_and_template_order():
+    # Against the template constant, not a copy of its opening words: this test
+    # is about the *order* the three pieces are assembled in, and a literal made
+    # it fail for a wording change that left that order exactly as it was.
     text = prompt.build("a barrel", {}, trigger="3d style, 3d render")
-    assert text.startswith("3d style, 3d render, a barrel, single object centered")
-    assert text.endswith("no cropping, no text, no watermark")
+    assert text == f"3d style, 3d render, {prompt.PROMPT_TEMPLATE.format(prompt='a barrel')}"
 
 
 def test_build_with_no_trigger_has_no_leading_comma():
     text = prompt.build("a barrel", {})
-    assert text.startswith("a barrel, single object centered")
+    assert text == prompt.PROMPT_TEMPLATE.format(prompt="a barrel")
+    assert not text.startswith(",")
 
 
 def test_a_tile_prompt_does_not_ask_for_a_single_centred_object():
     from warlock.pipelines import prompt as prompt_mod
 
     out = prompt_mod.build("mossy cobblestone", {}, tile=True)
-    assert "single object" not in out
+    assert "single subject" not in out
     assert "seamless" in out and "tileable" in out
 
 
@@ -147,6 +150,40 @@ def test_the_tile_field_list_is_a_real_subset_of_the_taxonomy():
     # that contribute no prompt fragment at all, so a TILE_FIELDS entry naming
     # one would satisfy that weaker check while adding nothing to a tile prompt.
     assert set(prompt_mod.TILE_FIELDS) < set(guidance._PROMPT_FIELDS)
+
+
+def test_the_object_template_does_not_ask_for_concept_art():
+    """TODO item 1. Every one of the 17 refusals in the 2026-08-07 rogue sweep
+    was the multi-object rule, and the family was concept-art layouts: character
+    sheets, turnarounds, multi-view plates. "game asset concept art" is a
+    request for exactly that -- a sheet is the canonical form of the genre --
+    and it sat in the template that wraps every object prompt.
+    """
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert "concept art" not in prompt_mod.PROMPT_TEMPLATE
+
+
+def test_the_object_template_asks_for_one_subject_and_nothing_beside_it():
+    """The positive half of TODO item 1, and positive on purpose: a user is
+    free to empty ``negative_prompt``, so a constraint that lives only there is
+    one the composed prompt can lose."""
+    from warlock.pipelines import prompt as prompt_mod
+
+    text = prompt_mod.build("a rogue", {})
+    assert "single subject" in text
+    assert "no other objects" in text
+
+
+def test_the_sheet_template_still_asks_for_a_grid():
+    """The isolation clause must not leak across. SHEET_TEMPLATE restyles a
+    contact sheet of eight real renders, so "one subject, nothing beside it" is
+    the opposite of what it needs -- the two templates fight by design."""
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert "grid of separate character poses" in prompt_mod.SHEET_TEMPLATE
+    assert "single subject" not in prompt_mod.SHEET_TEMPLATE
+    assert "no other objects" not in prompt_mod.SHEET_TEMPLATE
 
 
 def test_no_object_field_leaks_into_the_tile_subset():

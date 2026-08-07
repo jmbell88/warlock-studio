@@ -20,6 +20,54 @@ def _ctx():
     )
 
 
+def _hint_ctx(tmp_path, prompt, doc):
+    import json
+
+    (tmp_path / "findings.json").write_text(json.dumps(doc), encoding="utf-8")
+    from warlock.bench import findings as findings_lib
+
+    findings_lib._CACHE.clear()
+    return SimpleNamespace(
+        svc=SimpleNamespace(config=SimpleNamespace(bench_dir=tmp_path)),
+        state=SimpleNamespace(form_2d={"prompt": prompt}),
+    )
+
+
+def _scoped_doc(prompt):
+    from warlock import vectors
+
+    return {
+        "version": 3,
+        "generated": "x",
+        "params": {"base_model": {"turbo": {"n": 84, "accepts": 3}}},
+        "prompts": {
+            vectors.prompt_hash(prompt): {
+                "params": {"base_model": {"turbo": {"n": 8, "accepts": 6}}}
+            }
+        },
+    }
+
+
+def test_the_pane_scopes_its_hints_to_the_prompt_in_the_form(tmp_path):
+    """TODO item 4's last mile. The pane owns the prompt, so it always knows
+    its subject -- and this is the half a service-level test cannot reach: the
+    form key is ``form_2d``, and reading the wrong one would silently hand
+    ``prompt_hash("")`` to every lookup and pool everything forever, with no
+    error and no visible difference except a wrong number.
+    """
+    ctx = _hint_ctx(tmp_path, "a snes rogue", _scoped_doc("a snes rogue"))
+    assert settings_2d._findings_hint(ctx, "base_model", "turbo") == (
+        "accept 6/8 · this subject"
+    )
+
+
+def test_the_pane_says_when_it_fell_back_to_every_subject(tmp_path):
+    ctx = _hint_ctx(tmp_path, "a wooden crate", _scoped_doc("a snes rogue"))
+    assert settings_2d._findings_hint(ctx, "base_model", "turbo") == (
+        "accept 3/84 · all subjects"
+    )
+
+
 def test_a_cfg_base_gets_no_negative_prompt_note():
     form = {"base_model": models.cfg_bases()[0]}
     assert settings_2d.negative_prompt_note(_ctx(), form) is None
