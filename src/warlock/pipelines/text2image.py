@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import models
-from .prompt import PROMPT_TEMPLATE, TILE_TEMPLATE, chunk, pad_pair
+from .prompt import PROMPT_TEMPLATE, SHEET_TEMPLATE, TILE_TEMPLATE, chunk, pad_pair
 
 log = logging.getLogger(__name__)
 
@@ -374,9 +374,21 @@ class Text2Image:
                 # doubles from ~7 GB to ~14 GB, which does not fit beside
                 # trellis. Measured 2026-08-03: build the pipe without this and
                 # never call it, and the next plain generate() already differs.
-                target = StableDiffusionXLControlNetPipeline.from_pipe(
-                    self._pipe, controlnet=controlnet, torch_dtype=torch.bfloat16
-                )
+                if cond.uses_init:
+                    # Structure hint *and* a starting picture: a different
+                    # pipeline class again, and the kwargs swap places -- see
+                    # the routing note below.
+                    from diffusers import (
+                        StableDiffusionXLControlNetImg2ImgPipeline,
+                    )
+
+                    target = StableDiffusionXLControlNetImg2ImgPipeline.from_pipe(
+                        self._pipe, controlnet=controlnet, torch_dtype=torch.bfloat16
+                    )
+                else:
+                    target = StableDiffusionXLControlNetPipeline.from_pipe(
+                        self._pipe, controlnet=controlnet, torch_dtype=torch.bfloat16
+                    )
                 # Set the moment the ControlNet is attached, so a failure in the
                 # IP-Adapter block below still frees these 2.5 GB.
                 teardown_control = True
@@ -397,9 +409,33 @@ class Text2Image:
                     )
                     target.scheduler = self._pipe.scheduler
                 with Image.open(cond.control_image) as im:
-                    extra["image"] = im.convert("RGB")
+                    # The routing that is easy to get exactly backwards. On a
+                    # ControlNet-only pipeline the hint *is* ``image``; add an
+                    # init picture and ``image`` becomes the thing being
+                    # denoised, with the hint demoted to ``control_image``.
+                    # Diffusers accepts either shape without complaint and
+                    # produces a traced copy of the wrong picture.
+                    extra["control_image" if cond.uses_init else "image"] = im.convert(
+                        "RGB"
+                    )
                 extra["controlnet_conditioning_scale"] = float(cond.control_scale)
                 extra["control_guidance_end"] = float(cond.control_end)
+
+            if cond.uses_init:
+                if not cond.uses_control:
+                    # No ControlNet in play, so the plain img2img class. Pure
+                    # component reuse like the branch above: no second UNet,
+                    # VAE or text encoder, and therefore no teardown flag --
+                    # there is nothing attached to detach.
+                    import torch
+                    from diffusers import StableDiffusionXLImg2ImgPipeline
+
+                    target = StableDiffusionXLImg2ImgPipeline.from_pipe(
+                        self._pipe, torch_dtype=torch.bfloat16
+                    )
+                with Image.open(cond.init_image) as im:
+                    extra["image"] = im.convert("RGB")
+                extra["strength"] = float(cond.strength)
 
             if cond.uses_ip:
                 spec = models.IP_ADAPTERS[cond.ip_adapter]
@@ -503,6 +539,7 @@ class Text2Image:
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
         tile: bool = False,
+        sheet: bool = False,
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -589,7 +626,14 @@ class Text2Image:
             # Only the framing template belongs here; the guidance-field subset
             # a tile wants is applied by the caller, which composes ``prompt``,
             # exactly as it is for an object today.
-            template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
+            # Template only -- ``sheet`` deliberately does not imply the
+            # circular padding ``tile`` does. A contact sheet must not wrap:
+            # its left and right edges are different directions of the same
+            # subject, and making them continuous would bleed one cell into
+            # another.
+            template = (
+                SHEET_TEMPLATE if sheet else (TILE_TEMPLATE if tile else PROMPT_TEMPLATE)
+            )
             text = template.format(prompt=prompt)
             if style is not None and style.trigger and lora in self._adapters:
                 text = f"{style.trigger}, {text}"

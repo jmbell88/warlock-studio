@@ -47,7 +47,16 @@ def score_run(
     if not records:
         raise ValueError(f"{run_dir.name}: no items.jsonl to score")
 
-    names = list(metrics_mod.available(config))
+    provenance = _provenance(run_dir)
+    # A reference-stage run has no mesh and therefore no views, which used to
+    # mean it could not be scored at all. It can: the pixel metrics measure the
+    # generated picture itself, which is the only thing that stage produces.
+    reference_stage = provenance.get("stage") == "reference"
+    names = (
+        list(metrics_mod.REFERENCE_METRICS)
+        if reference_stage
+        else list(metrics_mod.available(config))
+    )
     units: list[dict[str, Any]] = []
     for key in sorted(records):
         record = records[key]
@@ -61,6 +70,20 @@ def score_run(
         pair = _pair(run_dir, key, record)
         if record.get("status") != "done":
             entry["skipped"] = f"status {record.get('status')}"
+        elif reference_stage:
+            reference = run_dir / "items" / key / "input.png"
+            if not reference.exists():
+                entry["skipped"] = "no reference image"
+            else:
+                say(f"scoring {key}")
+                try:
+                    entry["scores"] = metrics_mod.score_reference(reference, config)
+                except Exception as exc:
+                    # The same rule the view path states below: a measurement
+                    # that fails costs its unit a score, never the run.
+                    log.warning("could not score %s: %s", key, exc)
+                    entry["error"] = f"{type(exc).__name__}: {exc}"
+                    say(f"could not score {key}: {exc}")
         elif pair is None:
             # Not a failure: a reference-stage run has no mesh to render, and a
             # model-stage run without --render has no views. Saying which is
@@ -87,7 +110,7 @@ def score_run(
         "metrics": names,
         # Enough of the manifest to make a pasted scores.json self-describing;
         # the manifest itself stays the authority next to it.
-        "measured": _provenance(run_dir),
+        "measured": provenance,
         "units": units,
         "summary": summarise(units, names),
         "by_category": {

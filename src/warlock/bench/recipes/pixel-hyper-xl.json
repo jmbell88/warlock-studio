@@ -1,0 +1,13 @@
+{
+  "key": "pixel-hyper-xl",
+  "label": "SDXL 1.0 + Hyper-SD, pixel-art-xl LoRA",
+  "notes": "The other arm: the same style LoRA on the step-distillation backend the other style LoRAs are run on. Stacking a 1.0-weight distillation LoRA under a 1.2-weight style LoRA is exactly the unproven thing this comparison exists to settle.",
+  "guidance": {
+    "base_model": "sdxl",
+    "style_lora": "pixelxl",
+    "art_style": "nes",
+    "platform": "2d"
+  },
+  "lora_weight": 1.2,
+  "profile": "raw"
+}

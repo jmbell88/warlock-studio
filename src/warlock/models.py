@@ -36,6 +36,20 @@ DEFAULT_IP_SCALE = 0.6
 CONTROL_SCALE_MIN = 0.0
 CONTROL_SCALE_MAX = 2.0
 DEFAULT_CONTROL_SCALE = 0.65
+# How far an img2img denoise is taken. Below ~0.3 the init image survives
+# essentially unchanged and above ~0.65 it stops constraining the result, which
+# for a restyle is the whole point of starting from one. The effective step
+# count is steps x strength, which is why a 4-step distilled base cannot do
+# img2img at all: 0.45 of four steps is under two.
+IMG2IMG_STRENGTH_MIN = 0.30
+IMG2IMG_STRENGTH_MAX = 0.65
+DEFAULT_IMG2IMG_STRENGTH = 0.45
+
+# The style LoRA a pixel sheet restyle is fixed to in v1. Named here rather
+# than in the sheet code so the registry stays the only place a model key is
+# written down.
+PIXEL_SHEET_LORA = "pixelxl"
+
 # How far into the denoise the ControlNet keeps acting. Ending early lets the
 # last steps add detail the hint image never had; 1.0 holds the structure to
 # the final step and tends to look traced.

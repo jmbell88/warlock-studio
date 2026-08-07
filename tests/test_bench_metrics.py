@@ -216,3 +216,63 @@ def test_a_table_leads_with_the_best_cells():
         "silhouette_iou",
     )
     assert table.splitlines()[2].strip().startswith("90.0")
+
+
+# --- pixel-art metrics -------------------------------------------------------
+
+
+def _pixel_art(path, scale=8, phase=(3, 5), cells=32):
+    """Authored pixel art blown up to a canvas the way a pixel-art model draws
+    it: square blocks, on a lattice whose first cell does not start at 0."""
+    import numpy as np
+
+    rng = np.random.default_rng(5)
+    palette = np.array(
+        [[20, 20, 30], [200, 60, 60], [60, 180, 90], [240, 220, 130]], np.uint8
+    )
+    art = palette[rng.integers(0, len(palette), size=(cells, cells))]
+    big = Image.fromarray(art, "RGB").resize((cells * scale, cells * scale), Image.NEAREST)
+    canvas = Image.new("RGB", (big.width + scale, big.height + scale), (128, 128, 128))
+    canvas.paste(big, (phase[1], phase[0]))
+    canvas.save(path)
+    return path
+
+
+def test_score_reference_measures_the_grid_a_generator_drew(tmp_path):
+    scores = metrics.score_reference(_pixel_art(tmp_path / "input.png"))
+    assert set(scores) == set(metrics.REFERENCE_METRICS)
+    assert scores["pixel_grid_scale"] == 8
+    assert scores["pixel_grid_residual"] < 0.05
+    assert scores["pixel_colors_128"] > 0
+
+
+def test_a_smooth_reference_reports_no_grid_rather_than_failing(tmp_path):
+    """The control arm's images are ordinary SDXL renders, and "no lattice" is
+    the measurement, not an error."""
+    import numpy as np
+
+    ramp = np.dstack([np.tile(np.linspace(0, 255, 256), (256, 1))] * 3).astype(np.uint8)
+    path = tmp_path / "smooth.png"
+    Image.fromarray(ramp, "RGB").save(path)
+    scores = metrics.score_reference(path)
+    assert scores["pixel_grid_scale"] is None
+    assert scores["pixel_grid_residual"] > 0.05
+
+
+def test_the_reference_metrics_need_no_torch_at_all(tmp_path, monkeypatch):
+    """A reference-stage run is scored on pixels, and paying seconds for a
+    torch import to measure a PNG would be a cost with nothing behind it."""
+    import builtins
+    import sys
+
+    path = _pixel_art(tmp_path / "input.png")
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    real_import = builtins.__import__
+
+    def refusing_import(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise AssertionError("score_reference must not import torch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refusing_import)
+    assert metrics.score_reference(path)["pixel_grid_scale"] == 8

@@ -1,0 +1,163 @@
+{
+  "key": "pixel-v1",
+  "label": "Pixel-art benchmark v1",
+  "seeds": [
+    42,
+    1337,
+    20240701,
+    987654321
+  ],
+  "notes": "Never edited in place. Changing a prompt means pixel-v2.json: old manifests reference this file's fingerprint, and an in-place edit would silently invalidate every comparison made against them. Subjects are sprite-shaped rather than reconstruction-shaped -- this suite is run at the reference stage, where the measurement is whether the generator drew on a pixel grid, not whether a mesh came out of it.",
+  "items": [
+    {
+      "id": "character-01",
+      "category": "character",
+      "prompt": "a hooded adventurer standing in a neutral pose",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "silhouette": "slender"
+      },
+      "tags": [
+        "biped"
+      ],
+      "notes": "the canonical sprite subject"
+    },
+    {
+      "id": "character-02",
+      "category": "character",
+      "prompt": "a stout dwarf smith with a heavy hammer",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "silhouette": "bulky"
+      },
+      "tags": [
+        "biped"
+      ],
+      "notes": "thick limbs"
+    },
+    {
+      "id": "character-03",
+      "category": "character",
+      "prompt": "a knight in plate armour, front facing",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "snes",
+        "material": "steel"
+      },
+      "tags": [
+        "biped"
+      ],
+      "notes": "hard-surface"
+    },
+    {
+      "id": "creature-01",
+      "category": "character",
+      "prompt": "a small green slime with two eyes",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "nes"
+      },
+      "tags": [
+        "blob"
+      ],
+      "notes": "the easiest subject here"
+    },
+    {
+      "id": "creature-02",
+      "category": "character",
+      "prompt": "a giant spider with long thin legs",
+      "guidance": {
+        "category": "character",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "silhouette": "slender"
+      },
+      "tags": [
+        "thin"
+      ],
+      "notes": "the hardest silhouette to keep at 32px"
+    },
+    {
+      "id": "weapon-01",
+      "category": "weapon",
+      "prompt": "a broadsword with a leather-wrapped grip",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "material": "steel"
+      },
+      "tags": [
+        "thin"
+      ],
+      "notes": "diagonal"
+    },
+    {
+      "id": "weapon-02",
+      "category": "weapon",
+      "prompt": "a wooden bow with a taut string",
+      "guidance": {
+        "category": "weapon",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "material": "wood"
+      },
+      "tags": [
+        "thin"
+      ],
+      "notes": "curved"
+    },
+    {
+      "id": "prop-01",
+      "category": "prop",
+      "prompt": "a weathered wooden crate bound with iron",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "material": "wood",
+        "condition": "worn"
+      },
+      "tags": [
+        "boxy"
+      ],
+      "notes": "shares its prompt with core-v1 on purpose"
+    },
+    {
+      "id": "prop-02",
+      "category": "prop",
+      "prompt": "a treasure chest with a heavy iron lock",
+      "guidance": {
+        "category": "prop",
+        "genre": "fantasy",
+        "art_style": "snes",
+        "material": "wood"
+      },
+      "tags": [
+        "boxy"
+      ],
+      "notes": "hard-surface"
+    },
+    {
+      "id": "consumable-01",
+      "category": "prop",
+      "prompt": "a red healing potion in a round flask",
+      "guidance": {
+        "category": "consumable",
+        "genre": "fantasy",
+        "art_style": "nes",
+        "material": "glass"
+      },
+      "tags": [
+        "small"
+      ],
+      "notes": "transparent"
+    }
+  ]
+}

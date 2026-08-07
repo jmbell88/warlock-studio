@@ -45,6 +45,19 @@ TILE_TEMPLATE = (
     "no single focal object, no text, no watermark, no border"
 )
 
+# The sheet template. A contact sheet of orthographic views is neither a single
+# centred object nor a texture, and both templates above actively fight it:
+# "single object centered" asks the model to compose one subject out of eight
+# cells, and the tile template asks for no focal object at all. What this one
+# has to protect is the *grid* -- every cell keeping its own subject, its own
+# framing and the layout it arrived with, because the cells are already exact
+# renders of one mesh and the restyle is only allowed to change how they look.
+SHEET_TEMPLATE = (
+    "{prompt}, sprite sheet, grid of separate character poses, "
+    "flat even lighting, plain background, consistent scale across cells, "
+    "each cell a complete figure, no text, no watermark"
+)
+
 # The half of the taxonomy that describes a *surface*. The rest -- category,
 # silhouette, rarity, mood, emissive, platform -- describes an object, and
 # naming one in a tile prompt is how a "cobblestone" tile comes back as a
@@ -59,7 +72,9 @@ TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_styl
 # 2: TILE_TEMPLATE and the tile field subset. The object path's output is
 # unchanged, so an object recipe recorded under 1 still reproduces exactly;
 # the bump is about the compiler, not about any one prompt.
-PROMPT_VERSION = 2
+# 3: SHEET_TEMPLATE. Same shape of change as 2 -- a third template, reachable
+# only from the pixel-sheet restyle, with the object and tile paths untouched.
+PROMPT_VERSION = 3
 
 _tokenizer_cache: dict[Path, tuple[Any, Any]] = {}
 

@@ -192,6 +192,59 @@ def available(config: Any = None) -> tuple[str, ...]:
     return tuple(out)
 
 
+# What a *reference-stage* run is scored on. Its own tuple rather than an
+# addition to available(): those are per-view metrics of a reconstruction, and
+# a model-stage scores.json gaining five always-null pixel rows would be five
+# rows of nothing on every existing run.
+REFERENCE_METRICS = (
+    "pixel_grid_residual",
+    "pixel_grid_scale",
+    "pixel_colors_128",
+    "pixel_colors_64",
+    "pixel_orphans_128",
+)
+
+
+def score_reference(reference_path: Path, config: Any = None) -> dict[str, Any]:
+    """The pixel-art metrics for one generated reference.
+
+    Measured on the raw generation -- ``input.png`` at full resolution -- and
+    deliberately not on the exported pixel artifact. The grid residual is a
+    statement about *the generator*: whether it drew on a lattice at all. The
+    export's own palette mapping and orphan cleanup would launder exactly the
+    failures this is here to detect, so measuring the post-processed file would
+    make every arm score the same.
+
+    The colour and orphan counts are taken *through* the export's own reduction
+    (``pipelines.pixel``), because a reduction is how anyone would ever look at
+    the image, and they are what "reads as pixel art" comes down to once the
+    grid is there.
+
+    Pure numpy and Pillow, no torch, so a reference-stage run scores on a
+    machine that cannot load a model.
+    """
+    from PIL import Image
+
+    from ..pipelines import pixel as pixelmod
+
+    with Image.open(reference_path) as im:
+        im.load()
+        image = im.convert("RGBA")
+
+    grid = pixelmod.detect_grid(image)
+    out: dict[str, Any] = {
+        "pixel_grid_residual": float(grid["residual"]),
+        "pixel_grid_scale": grid["scale"],
+    }
+    for size in (128, 64):
+        reduced = image.resize((size, size), Image.NEAREST)
+        report = pixelmod.report(reduced)
+        out[f"pixel_colors_{size}"] = float(report["colors"])
+        if size == 128:
+            out["pixel_orphans_128"] = float(report["orphan_fraction"])
+    return out
+
+
 def score_view(
     reference_path: Path, render_path: Path, config: Any = None
 ) -> dict[str, float | None]:

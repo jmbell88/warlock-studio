@@ -95,6 +95,43 @@ def test_a_unit_with_no_views_says_so_rather_than_failing(tmp_path, scored):
     assert doc["summary"]["scored"] == 0
 
 
+def test_a_reference_stage_run_is_scored_rather_than_skipped(tmp_path, scored, monkeypatch):
+    """The pixel metrics measure the generated picture, which is the only thing
+    a reference-stage run produces. It used to be skipped for having no views,
+    so the whole stage was unmeasurable."""
+    from warlock.bench import metrics as metrics_mod
+
+    monkeypatch.setattr(
+        metrics_mod,
+        "score_reference",
+        lambda reference, config=None: {"pixel_grid_residual": 0.01},
+    )
+    run_dir = _run_dir(
+        tmp_path,
+        [_record("prop-01--s1")],
+        manifest={"stage": "reference", "suite": "pixel-v1", "recipe": "pixel-lcm-xl"},
+    )
+
+    doc = score_mod.score_run(run_dir)
+
+    assert "skipped" not in doc["units"][0]
+    assert doc["units"][0]["scores"]["pixel_grid_residual"] == 0.01
+    assert doc["metrics"] == list(metrics_mod.REFERENCE_METRICS)
+
+
+def test_a_model_stage_run_keeps_the_view_metrics(tmp_path, scored):
+    # The reference branch must not widen: a model-stage scores.json gaining
+    # five always-null pixel rows would be five rows of nothing on every run.
+    run_dir = _run_dir(
+        tmp_path,
+        [_record("prop-01--s1")],
+        views_for=("prop-01--s1",),
+        manifest={"stage": "model", "suite": "core-v1", "recipe": "baseline-turbo-raw"},
+    )
+    doc = score_mod.score_run(run_dir)
+    assert doc["metrics"] == ["silhouette_iou"]
+
+
 def test_an_errored_unit_is_not_scored(tmp_path, scored):
     run_dir = _run_dir(
         tmp_path, [_record("prop-01--s1", status="error")], views_for=("prop-01--s1",)

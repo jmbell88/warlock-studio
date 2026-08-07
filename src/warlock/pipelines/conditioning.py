@@ -23,6 +23,7 @@ from typing import Any
 from ..models import (  # noqa: F401
     DEFAULT_CONTROL_END,
     DEFAULT_CONTROL_SCALE,
+    DEFAULT_IMG2IMG_STRENGTH,
     DEFAULT_IP_SCALE,
 )
 
@@ -43,6 +44,12 @@ class Conditioning:
     control_image: Path | None = None
     control_scale: float = DEFAULT_CONTROL_SCALE
     control_end: float = DEFAULT_CONTROL_END
+    # img2img: the picture the denoise *starts from*, and how far it is taken.
+    # A third independent axis rather than a variant of the two above -- it
+    # changes which pipeline class runs, where the other two only change what
+    # is attached to one.
+    init_image: Path | None = None
+    strength: float = DEFAULT_IMG2IMG_STRENGTH
 
     @property
     def uses_ip(self) -> bool:
@@ -52,8 +59,12 @@ class Conditioning:
     def uses_control(self) -> bool:
         return bool(self.control and self.control_image)
 
+    @property
+    def uses_init(self) -> bool:
+        return self.init_image is not None
+
     def __bool__(self) -> bool:
-        return self.uses_ip or self.uses_control
+        return self.uses_ip or self.uses_control or self.uses_init
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe, and only the halves that are actually in play -- a scale
@@ -71,4 +82,7 @@ class Conditioning:
             out["control_image"] = self.control_image.name if self.control_image else None
             out["control_scale"] = self.control_scale
             out["control_end"] = self.control_end
+        if self.uses_init:
+            out["init_image"] = self.init_image.name if self.init_image else None
+            out["strength"] = self.strength
         return out

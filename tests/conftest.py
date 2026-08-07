@@ -169,6 +169,7 @@ class FakeText2Image:
         # pipeline conditioning=None, not an empty Conditioning.
         self.conditionings: list = []
         self.tiles: list[bool] = []
+        self.sheets: list[bool] = []
         self.last_prompt = ""
         self.last_recipe: dict = {}
 
@@ -186,9 +187,11 @@ class FakeText2Image:
         on_step=None,
         cancel_event=None,
         tile=False,
+        sheet=False,
     ):
         self.prompts.append(prompt)
         self.tiles.append(tile)
+        self.sheets.append(sheet)
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)

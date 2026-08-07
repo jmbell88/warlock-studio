@@ -1,0 +1,13 @@
+{
+  "key": "pixel-lcm-xl",
+  "label": "SDXL 1.0 + LCM, pixel-art-xl LoRA",
+  "notes": "The pixel-art-xl author's documented recipe, and the arm the pixel_sprite preset names until this comparison says otherwise. 8 steps at guidance 1.0 under an LCM adapter.",
+  "guidance": {
+    "base_model": "pixel",
+    "style_lora": "pixelxl",
+    "art_style": "nes",
+    "platform": "2d"
+  },
+  "lora_weight": 1.2,
+  "profile": "raw"
+}
