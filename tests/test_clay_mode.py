@@ -17,6 +17,7 @@ import pytest
 
 from warlock.studio import clay_mode, clay_state
 from warlock.studio.clay import document as bd
+from warlock.studio.clay import elements as el
 from warlock.studio.clay import primitives as bp
 
 
@@ -720,3 +721,82 @@ def test_select_all_still_takes_every_visible_object():
     doc, first, second = _two_objects()
     clay_mode._select_all(doc)
     assert doc.selection == {first, second}
+
+
+# --- the mesh check (Clay14) -------------------------------------------------
+#
+# ``check_manifold`` builds a whole adjacency and has never been drawable per
+# frame, which is the constraint that shapes the whole feature: the panel runs
+# it from a button and holds the answer against the ``Mesh`` it measured. Both
+# halves are tested here rather than through imgui -- the staleness rule is a
+# comparison and the click is three document calls.
+
+
+def _stray_vertex_box() -> Any:
+    """A box plus a vertex no face uses: one finding, in vertex mode."""
+    import numpy as np
+
+    from warlock.studio.clay import mesh as bm
+
+    box = bp.box()
+    return bm.Mesh(
+        positions=np.vstack([box.positions, np.array([[9.0, 9.0, 9.0]], dtype="f4")]),
+        loops=box.loops,
+        starts=box.starts,
+        material=box.material,
+        smooth=box.smooth,
+    )
+
+
+def test_a_stored_check_is_stale_the_moment_the_mesh_is_replaced() -> None:
+    from warlock.studio.clay import diagnose
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=_stray_vertex_box()))
+    state = clay_state.ClayState()
+    state.manifold[obj.uid] = (obj.mesh, diagnose.findings(obj.mesh))
+
+    measured, rows = state.manifold[obj.uid]
+    assert measured is doc.by_uid(obj.uid).mesh, "fresh while nothing has edited it"
+    assert [row.kind for row in rows] == ["unused"]
+
+    doc.set_mesh(obj.uid, bp.box())
+    measured, _ = state.manifold[obj.uid]
+    assert measured is not doc.by_uid(obj.uid).mesh, "an op replaces the mesh, so identity says so"
+
+
+def test_clicking_a_finding_selects_exactly_its_elements_in_its_own_mode() -> None:
+    from warlock.studio.clay import diagnose
+    from warlock.studio.panes import clay_props
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=_stray_vertex_box()))
+    other = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=_stray_vertex_box()))
+    doc.set_element_mode("face")
+    doc.set_element_sel(other.uid, el.select_all(other.mesh, "face"))
+
+    row = diagnose.findings(obj.mesh)[0]
+    clay_props._select_finding(doc, obj, row)
+
+    assert doc.element_mode == "vertex"
+    # The other object's stale face selection is gone, and the object selection
+    # is derived rather than set: ``set_element_sel`` is what puts the uid in it.
+    assert set(doc.element_sel) == {obj.uid}
+    assert doc.selection == {obj.uid}
+    assert doc.element_sel_of(obj.uid).verts.tolist() == row.sel.verts.tolist()
+
+
+def test_a_finding_click_pushes_no_undo_step() -> None:
+    """Selection is not undoable in Clay, and a diagnostic click is selection.
+
+    A step here would move ``history.head`` and make a document ask to be saved
+    because the user looked at a hole.
+    """
+    from warlock.studio.clay import diagnose
+    from warlock.studio.panes import clay_props
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=_stray_vertex_box()))
+    head = doc.history.head
+    clay_props._select_finding(doc, obj, diagnose.findings(obj.mesh)[0])
+    assert doc.history.head == head

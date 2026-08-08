@@ -182,6 +182,22 @@ the origin.
 Snapping applies to gizmo drags only. A number typed into the properties panel is used exactly as
 typed, because you already said what you meant.
 
+## Checking a mesh
+
+The properties panel has a **mesh check** under the generator's parameters. It measures the selected
+object against the defects a mesh can carry without anything noticing: holes, non-manifold edges
+(three or more faces on one edge), inconsistently wound faces, duplicate faces and vertices no face
+uses. Each finding is a button — clicking it switches to the element mode the defect lives in and
+selects exactly the offenders, so "3 non-manifold edges" becomes three edges you are looking at.
+
+It runs when you press the button and not before. Building the tables it needs is proportional to
+the size of the mesh, which is fine once and unacceptable sixty times a second, so the answer is
+kept and marked *edited since the last check* the moment anything changes the geometry.
+
+None of it is a verdict. An open sheet is a perfectly good mesh and so is a plane with no thickness;
+what the check tells you is what is there, and whether that matters depends on where the asset is
+going. A game engine will usually want a closed mesh; a decal will not.
+
 ## Materials
 
 Every object points at a slot in the document's material palette, chosen in the properties panel.

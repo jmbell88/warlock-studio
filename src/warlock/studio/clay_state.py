@@ -160,6 +160,19 @@ class ClayState:
     # anchor that was an index would silently point at a different row.
     outliner_anchor: int = 0
 
+    # The last manifold check, per object: the ``Mesh`` it measured and the rows
+    # it produced. Held here rather than recomputed because ``check_manifold``
+    # builds a whole adjacency -- O(corners), and not something to run sixty
+    # times a second to redraw a line that has not changed.
+    #
+    # **Keyed on the mesh object, not on a revision or an id.** A ``Mesh`` is
+    # immutable and every op replaces it, so ``obj.mesh is measured`` is exactly
+    # "this result is still about what is on screen"; an ``id()`` would be
+    # recycled by the allocator onto a different mesh and silently report last
+    # edit's holes. Keeping the mesh alive is the price, and it is one mesh per
+    # object the user has actually asked about.
+    manifold: dict[int, tuple[Any, list[Any]]] = field(default_factory=dict)
+
     # -- documents ---------------------------------------------------------
 
     @property

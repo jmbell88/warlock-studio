@@ -56,6 +56,8 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 6))
     _generator(doc, obj)
     imgui.dummy((0, 6))
+    _diagnostics(state, doc, obj)
+    imgui.dummy((0, 6))
     _material(doc, obj)
     imgui.end_disabled()
 
@@ -201,6 +203,63 @@ def _widget(key: str, value: Any, default: Any) -> tuple[Any, bool]:
     # silently dropped from the panel.
     imgui.text_disabled(f"{key}: {value!r}")
     return value, False
+
+
+def _diagnostics(state: Any, doc: Any, obj: Any) -> None:
+    """What is wrong with this object's mesh, measured on request.
+
+    **On request, never per frame.** ``check_manifold`` builds a whole
+    adjacency, which is O(corners) and is exactly the sort of thing that turns
+    a properties panel into a stall on an imported mesh -- so the button is the
+    interface, and the answer is kept against the ``Mesh`` it was measured from.
+    That comparison is by identity and it is sound for the reason the whole
+    package rests on: a ``Mesh`` is immutable and every op replaces it, so a
+    result about ``obj.mesh`` is a result about what is on screen.
+
+    A row is a button because the useful thing to do with "3 non-manifold
+    edges" is to look at them. Clicking sets the element mode *and* the
+    selection together, since either one alone leaves the user staring at an
+    overlay of the wrong kind.
+    """
+    from ..clay import diagnose
+
+    widgets.field_label("mesh check")
+    measured, rows = state.manifold.get(obj.uid, (None, []))
+    if measured is not obj.mesh:
+        if measured is not None:
+            widgets.muted("edited since the last check")
+        if imgui.button(f"{icons.ACTIVITY} Check mesh##claycheck"):
+            state.manifold[obj.uid] = (obj.mesh, diagnose.findings(obj.mesh))
+        widgets.help_marker(
+            "Looks for holes, non-manifold edges, inconsistently wound faces, "
+            "duplicate faces and unused vertices. An open sheet is a perfectly "
+            "good mesh, so these are measurements rather than a verdict -- but "
+            "a game engine will usually want a closed one."
+        )
+        return
+
+    if not rows:
+        widgets.muted(f"{icons.CIRCLE_CHECK} closed, consistent, nothing unused")
+        return
+    for row in rows:
+        if imgui.button(f"{icons.TRIANGLE_ALERT} {row.label}##claydiag{row.kind}"):
+            _select_finding(doc, obj, row)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Select them")
+
+
+def _select_finding(doc: Any, obj: Any, row: Any) -> None:
+    """Show one finding's elements: the mode, then only those elements.
+
+    The object selection is not set here and must not be: in an element mode it
+    is *derived*, and ``set_element_sel`` adds the object itself. Setting it by
+    hand in between would be overwritten by the ``clear`` on the next line
+    anyway -- the clear is what stops a finding on one object arriving beside a
+    stale selection in another.
+    """
+    doc.set_element_mode(row.mode)
+    doc.clear_element_sel()
+    doc.set_element_sel(obj.uid, row.sel)
 
 
 def _material(doc: Any, obj: Any) -> None:

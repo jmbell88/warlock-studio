@@ -331,15 +331,18 @@ def check_manifold(mesh: Mesh) -> ManifoldReport:
     "is this closed", but an open sheet is a legitimate mesh -- ``clean`` is a
     strict reading, not a verdict on usability.
 
-    **No pane calls this, deliberately.** It builds a full adjacency, which is
-    O(corners) and not frame-thread work on a real model, and the question it
-    answers is already answered where it costs nothing extra: ``import_mesh``
-    runs ``meshreport.build`` on the exported GLB, so an asset built in Clay
-    arrives in the library with its watertightness measured. What this is for
-    is the callers that need the answer *about a mesh in hand* -- the topology
-    ops' own tests, and ``serialize.read_wblk``'s validation, which validates
-    rather than trusts because ``edges`` and ``_face_normals`` go quietly wrong
-    on a short face instead of raising.
+    **No pane calls this per frame, and that is the whole constraint on where
+    it is surfaced.** It builds a full adjacency, which is O(corners) and not
+    frame-thread work on a real model -- so the properties panel runs it from a
+    button and holds the result against the ``Mesh`` it measured, which is sound
+    because a ``Mesh`` is immutable and every op replaces it. Drawing it
+    unconditionally would re-measure a 200k-corner mesh sixty times a second to
+    show a line that had not changed. The other callers need the answer *about a
+    mesh in hand*: the topology ops' own tests, and ``serialize.read_wblk``'s
+    validation, which validates rather than trusts because ``edges`` and
+    ``_face_normals`` go quietly wrong on a short face instead of raising.
+    ``diagnose.rows_for`` is what turns the six arrays into something a panel
+    can draw and a click can select.
     """
     a = adjacency(mesh)
     loops = mesh.loops.astype("i8")
