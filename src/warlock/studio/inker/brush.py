@@ -39,7 +39,29 @@ DEFAULT_SPACING = 0.1
 
 MODES = ("paint", "erase", "blur", "smudge")
 
-SYMMETRY = ("none", "x", "y", "xy")
+SYMMETRY = ("none", "x", "y", "xy", "radial")
+
+# How many ways a radial symmetry divides the circle by default. Six is the
+# snowflake/mandala number every tool that has this control opens on.
+DEFAULT_RADIAL = 6
+MIN_RADIAL = 2
+MAX_RADIAL = 32
+
+# The distance between two input samples, in pixels, at which speed taper is
+# fully applied. Samples arrive one per frame, so distance *is* speed -- there
+# is no clock in this class and adding one would make a stroke depend on the
+# frame rate it was drawn at, which is exactly what the spacing carry exists to
+# avoid. 40 px/frame is a brisk drag at 60 fps.
+TAPER_SPEED = 40.0
+
+# How much of the previous dab's size carries into the next. Without it a
+# single fast frame puts one thin dab in the middle of a thick stroke, which
+# reads as a gap rather than as a taper.
+TAPER_SMOOTHING = 0.6
+
+# The most a stabiliser may lag. At 1.0 the brush never reaches the cursor at
+# all, so the stroke stops where it started and the control looks broken.
+MAX_STABILISE = 0.95
 
 
 def clamp_brush(size: int) -> int:
@@ -69,20 +91,51 @@ def make_stamp(diameter: int, hardness: float) -> np.ndarray:
     return (t * t * (3.0 - 2.0 * t)).astype(np.float32)  # smoothstep
 
 
+def default_axis(size: tuple[int, int]) -> tuple[float, float]:
+    """The centre of the canvas, in the coordinates ``_mirror`` reflects about.
+
+    ``(width - 1) / 2`` rather than ``width / 2``: a reflection about it sends
+    column 0 to column ``width - 1``, which is what the fixed formula this
+    replaced did and is the only placement where a symmetric drawing is
+    symmetric to the pixel.
+    """
+    return ((size[0] - 1) / 2.0, (size[1] - 1) / 2.0)
+
+
 def _mirror(
-    point: tuple[float, float], size: tuple[int, int], symmetry: str
+    point: tuple[float, float],
+    size: tuple[int, int],
+    symmetry: str,
+    axis: tuple[float, float] | None = None,
+    radial: int = DEFAULT_RADIAL,
 ) -> list[tuple[float, float]]:
     """A point and its reflections. Applied at the *position* level, so every
-    mode -- erase, blur, smudge -- inherits symmetry without knowing about it."""
+    mode -- erase, blur, smudge -- inherits symmetry without knowing about it.
+
+    ``axis`` is the point the mirrors reflect about and the point a radial
+    symmetry turns around; it defaults to the canvas centre, which is where it
+    always was. Reflections are ``2a - x`` rather than ``width - 1 - x``: the
+    two agree exactly at the centre, and only the first generalises.
+    """
     x, y = point
-    width, height = size
+    ax, ay = default_axis(size) if axis is None else axis
     points = [(x, y)]
+    if symmetry == "radial":
+        # Whole turns of 2pi/n about the axis. The point itself is the n = 0
+        # case and is already in the list, so the loop starts at one.
+        count = max(MIN_RADIAL, min(MAX_RADIAL, int(radial)))
+        dx, dy = x - ax, y - ay
+        for step in range(1, count):
+            angle = 2.0 * math.pi * step / count
+            cos, sin = math.cos(angle), math.sin(angle)
+            points.append((ax + dx * cos - dy * sin, ay + dx * sin + dy * cos))
+        return points
     if symmetry in ("x", "xy"):
-        points.append((width - 1 - x, y))
+        points.append((2.0 * ax - x, y))
     if symmetry in ("y", "xy"):
-        points.append((x, height - 1 - y))
+        points.append((x, 2.0 * ay - y))
     if symmetry == "xy":
-        points.append((width - 1 - x, height - 1 - y))
+        points.append((2.0 * ax - x, 2.0 * ay - y))
     return points
 
 
@@ -106,6 +159,17 @@ class StrokeState:
     mode: str = "paint"
     strength: float = 0.5
     symmetry: str = "none"
+    #: Where the mirrors reflect and a radial symmetry turns. None is the
+    #: canvas centre, which is where it was fixed before it was a field.
+    axis: tuple[float, float] | None = None
+    radial: int = DEFAULT_RADIAL
+    #: 0..1. How far the drawn point lags the cursor -- a "lazy mouse", which
+    #: is what turns a shaky hand's line into a smooth one.
+    stabilise: float = 0.0
+    #: 0..1. How much speed thins the stroke, for a pen-like taper on a fast
+    #: flick. Speed is measured in pixels between input samples; see
+    #: TAPER_SPEED.
+    speed_taper: float = 0.0
     clip: SelectionMask | None = None
     # The layer's "preserve transparency". Applied per dab rather than once at
     # release, because the canvas draws every dab: enforcing it only at the end
@@ -118,11 +182,20 @@ class StrokeState:
     _carry: float = field(init=False, default=0.0)
     _last: tuple[float, float] | None = field(init=False, default=None)
     _pickup: np.ndarray | None = field(init=False, default=None)
+    #: The stabilised cursor: what the brush is chasing. Distinct from
+    #: ``_last``, which is where the brush *is* -- the two are the same point
+    #: only when stabilisation is off.
+    _target: tuple[float, float] | None = field(init=False, default=None)
+    #: The tapered diameter carried between segments; see TAPER_SMOOTHING.
+    _width: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         width, height = self.size
         self.coverage = np.zeros((height, width), dtype=np.float32)
         self.diameter = clamp_brush(self.diameter)
+        self.stabilise = min(MAX_STABILISE, max(0.0, float(self.stabilise)))
+        self.speed_taper = min(1.0, max(0.0, float(self.speed_taper)))
+        self._width = float(self.diameter)
 
     # -- the walk ----------------------------------------------------------
 
@@ -131,45 +204,91 @@ class StrokeState:
         return max(0.5, self.diameter * self.spacing)
 
     def begin(self, point: tuple[float, float], target: np.ndarray) -> None:
-        """A click is one dab -- press must mark, not wait for a drag."""
+        """A click is one dab -- press must mark, not wait for a drag.
+
+        The stabiliser starts *at* the press rather than lagging into it: a
+        brush that crept toward the first click would put the dab somewhere the
+        user did not press, which is the one place a lag is not forgivable.
+        """
         self._last = point
+        self._target = point
         self._carry = 0.0
+        self._width = float(self.diameter)
         self._dab(point, target)
 
     def to(self, point: tuple[float, float], target: np.ndarray) -> None:
         if self._last is None:
             self.begin(point, target)
             return
+        previous = self._target or point
+        speed = math.hypot(point[0] - previous[0], point[1] - previous[1])
+        self._target = point
+        # The point the brush chases. An exponential lag rather than a rolling
+        # average of the last n samples: it needs no history, it arrives at the
+        # cursor when the cursor stops, and one number is the whole control.
+        keep = self.stabilise
+        goal = (
+            point
+            if keep <= 0.0
+            else (
+                self._last[0] + (point[0] - self._last[0]) * (1.0 - keep),
+                self._last[1] + (point[1] - self._last[1]) * (1.0 - keep),
+            )
+        )
+        self._advance(goal, speed, target)
+
+    def _advance(
+        self, goal: tuple[float, float], speed: float, target: np.ndarray
+    ) -> None:
+        assert self._last is not None
         x0, y0 = self._last
-        x1, y1 = point
+        x1, y1 = goal
         length = math.hypot(x1 - x0, y1 - y0)
         if length <= 0.0:
             return
+        width = self._taper(speed)
         step = self.step
         travelled = self._carry
         while travelled + step <= length:
             travelled += step
             t = travelled / length
-            self._dab((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t), target)
+            self._dab((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t), target, width)
         self._carry = travelled - length
-        self._last = point
+        self._last = goal
+
+    def _taper(self, speed: float) -> int:
+        """The diameter for this segment's dabs, thinned by how fast it moved.
+
+        Smoothed against the previous segment, because a single fast frame
+        otherwise puts one thin dab in the middle of a thick stroke and reads
+        as a gap rather than as a taper. Never below one pixel: a stamp with no
+        diameter is a stroke that stops.
+        """
+        if self.speed_taper <= 0.0:
+            return self.diameter
+        fraction = min(1.0, speed / TAPER_SPEED)
+        wanted = self.diameter * (1.0 - self.speed_taper * fraction)
+        self._width += (wanted - self._width) * (1.0 - TAPER_SMOOTHING)
+        return max(MIN_BRUSH, int(round(self._width)))
 
     # -- one dab -----------------------------------------------------------
 
-    def _dab(self, point: tuple[float, float], target: np.ndarray) -> None:
-        for mirrored in _mirror(point, self.size, self.symmetry):
-            self._stamp(mirrored, target)
+    def _dab(
+        self, point: tuple[float, float], target: np.ndarray, diameter: int | None = None
+    ) -> None:
+        for mirrored in _mirror(point, self.size, self.symmetry, self.axis, self.radial):
+            self._stamp(mirrored, target, self.diameter if diameter is None else diameter)
 
-    def _stamp(self, point: tuple[float, float], target: np.ndarray) -> None:
+    def _stamp(self, point: tuple[float, float], target: np.ndarray, diameter: int) -> None:
         width, height = self.size
-        stamp = make_stamp(self.diameter, self.hardness)
-        radius = self.diameter / 2.0
+        stamp = make_stamp(diameter, self.hardness)
+        radius = diameter / 2.0
         left = int(math.floor(point[0] - radius + 0.5))
         top = int(math.floor(point[1] - radius + 0.5))
 
         x0, y0 = max(0, left), max(0, top)
-        x1 = min(width, left + self.diameter)
-        y1 = min(height, top + self.diameter)
+        x1 = min(width, left + diameter)
+        y1 = min(height, top + diameter)
         if x1 <= x0 or y1 <= y0:
             return
         piece = stamp[y0 - top : y1 - top, x0 - left : x1 - left]

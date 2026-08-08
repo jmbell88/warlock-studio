@@ -82,6 +82,8 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "wand_tolerance": 32,
     "wand_contiguous": True,
     "sample_layer": False,
+    "stabilise": 0.0,
+    "speed_taper": 0.0,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -316,8 +318,18 @@ class InkerState:
         default_factory=list
     )
     symmetry: str = "none"
+    # Where the mirrors sit, in image coordinates, or None for the canvas
+    # centre. None rather than a materialised centre: a document opened at a
+    # different size must not inherit the last one's axis, and "the centre" is
+    # the only answer that stays true across a resize.
+    symmetry_axis: tuple[float, float] | None = None
+    radial_count: int = 6
     grid: bool = False
     grid_size: int = 16
+    # Whether a shape, a marquee or a line snaps to the grid. Deliberately not
+    # applied to freehand strokes: quantising a brush to a 16-pixel lattice is
+    # not a drawing aid, it is a different tool.
+    grid_snap: bool = False
 
     # Onion skinning: app-level, like every other tool setting, because it is a
     # property of how the user works rather than of the drawing. Tinted red
@@ -384,6 +396,8 @@ class InkerState:
     wand_tolerance = _tool_option("wand_tolerance")
     wand_contiguous = _tool_option("wand_contiguous")
     sample_layer = _tool_option("sample_layer")
+    stabilise = _tool_option("stabilise")
+    speed_taper = _tool_option("speed_taper")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.

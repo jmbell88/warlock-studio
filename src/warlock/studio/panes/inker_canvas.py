@@ -296,11 +296,30 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         _transform_input(state, tab, origin, point, active=active)
         return
     if active and imgui.is_mouse_clicked(0) and not state.space_held:
-        _press(ctx, state, tab, point)
+        _press(ctx, state, tab, _snapped(state, point))
     elif state.drag_kind and imgui.is_mouse_down(0):
-        _drag(state, tab, point)
+        _drag(state, tab, _snapped(state, point))
     elif state.drag_kind and not imgui.is_mouse_down(0):
-        _release(ctx, state, tab, point)
+        _release(ctx, state, tab, _snapped(state, point))
+
+
+def _snapped(state: Any, point: tuple[float, float]) -> tuple[float, float]:
+    """The cursor, on a grid intersection, for the tools that want one.
+
+    Applied here rather than inside each tool so there is one answer to "where
+    did the user click" -- a press that snapped and a release that did not
+    would draw a rectangle whose far corner is off the grid.
+
+    **Never for a freehand stroke.** Quantising a brush to a 16-pixel lattice
+    is not a drawing aid, it is a different tool, and the paint tools are the
+    ones a grid is most likely to be switched on around.
+    """
+    if not (state.grid and state.grid_snap):
+        return point
+    if state.tool in PAINT_TOOLS or state.tool in ("lasso", "wand", "eyedropper"):
+        return point
+    step = max(2, int(state.grid_size))
+    return (round(point[0] / step) * step, round(point[1] / step) * step)
 
 
 # Corner handles, in screen pixels.
@@ -479,6 +498,10 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
             spacing=state.spacing,
             mode=inker_state.BRUSH_MODES[tool],
             strength=state.strength,
+            axis=state.symmetry_axis,
+            radial=state.radial_count,
+            stabilise=state.stabilise,
+            speed_taper=state.speed_taper,
             symmetry=state.symmetry,
         )
         state.drag_kind = "paint"

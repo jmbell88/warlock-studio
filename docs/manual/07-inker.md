@@ -59,8 +59,19 @@ with three of them can fade out in the middle and back in. **Use fg / bg** goes 
 which is a live reading of the two colours rather than a copy — so `X` still changes the next
 gradient you draw.
 
+The painting tools also have **Smoothing** and **Taper**. Smoothing makes the brush follow the
+cursor at a distance instead of exactly, which turns a shaky line into a smooth one; it catches up
+when you stop moving, so a stroke still ends where you left it. Taper thins a fast stroke, for a
+pen-like flick. Both are off by default, and with both off a stroke is the same stroke this app has
+always drawn.
+
 Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
-left/right, top/bottom, or both. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels.
+left/right, top/bottom, both, or **radial**, which repeats it around a circle a set number of ways
+(2 to 32) for snowflakes and mandalas. With any symmetry on you can set the **axis** the mirrors
+reflect about, in image coordinates; **Centre** puts it back, and "centred" means exactly that even
+after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels,
+and **Snap to grid** lands shapes, lines and the marquee on its intersections. Freehand strokes
+never snap: quantising a brush to a lattice is a different tool, not a drawing aid.
 
 ## Colour
 

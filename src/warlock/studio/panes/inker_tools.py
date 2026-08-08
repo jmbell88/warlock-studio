@@ -13,6 +13,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
+from ..inker import brush
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -109,6 +110,20 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             changed, value = imgui.slider_float("Strength", state.strength, 0.05, 1.0)
             if changed:
                 state.strength = value
+        imgui.set_next_item_width(-1)
+        changed, value = imgui.slider_float("Smoothing", state.stabilise, 0.0, 0.95)
+        if changed:
+            state.stabilise = value
+        widgets.help_marker(
+            "The brush follows the cursor at a distance instead of exactly, "
+            "which turns a shaky line into a smooth one. It catches up when "
+            "you stop moving."
+        )
+        imgui.set_next_item_width(-1)
+        changed, value = imgui.slider_float("Taper", state.speed_taper, 0.0, 1.0)
+        if changed:
+            state.speed_taper = value
+        widgets.help_marker("How much a fast stroke thins, for a pen-like flick.")
     if tool in SHAPE_TOOLS and tool != "line":
         changed, filled = imgui.checkbox("Filled", state.shape_filled)
         if changed:
@@ -308,6 +323,15 @@ def _selection_actions(state: Any, doc: Any) -> None:
 def _canvas_options(state: Any) -> None:
     widgets.section("canvas")
     state.symmetry = widgets.combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
+    if state.symmetry == "radial":
+        imgui.set_next_item_width(sp(90))
+        changed, count = imgui.slider_int(
+            "Ways", int(state.radial_count), brush.MIN_RADIAL, brush.MAX_RADIAL
+        )
+        if changed:
+            state.radial_count = int(count)
+    if state.symmetry != "none":
+        _symmetry_axis(state)
     changed, value = imgui.checkbox("Grid", state.grid)
     if changed:
         state.grid = value
@@ -317,3 +341,35 @@ def _canvas_options(state: Any) -> None:
         changed, size = imgui.input_int("##gridsize", state.grid_size, 0)
         if changed:
             state.grid_size = max(2, min(512, size))
+        changed, value = imgui.checkbox("Snap to grid", state.grid_snap)
+        if changed:
+            state.grid_snap = value
+        widgets.help_marker(
+            "Shapes, lines and the marquee land on grid intersections. "
+            "Freehand strokes never snap -- quantising a brush to a lattice is "
+            "a different tool, not a drawing aid."
+        )
+
+
+def _symmetry_axis(state: Any) -> None:
+    """Where the mirrors sit. Empty means the canvas centre.
+
+    Shown only with a symmetry on, and offered as two numbers rather than a
+    draggable handle because the useful values are exact ones -- the centre, a
+    character's spine, a tile edge -- and a handle can only be dragged near
+    them.
+    """
+    axis = state.symmetry_axis
+    imgui.set_next_item_width(sp(120))
+    changed, values = imgui.input_float2(
+        "Axis##symaxis", list(axis or (0.0, 0.0)), "%.0f"
+    )
+    if changed:
+        state.symmetry_axis = (float(values[0]), float(values[1]))
+    imgui.same_line()
+    if widgets.disabled_button("Centre##symcentre", axis is not None):
+        # Back to None rather than to the middle of the current document: None
+        # *is* the centre, and stays the centre across a resize.
+        state.symmetry_axis = None
+    if axis is None:
+        widgets.muted("centred")

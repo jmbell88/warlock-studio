@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 
+from . import brush as brush_mod
 from . import composite as cp
 from . import filters
 from . import gradient as grad
@@ -1176,6 +1177,10 @@ class Document:
         mode: str = "paint",
         strength: float = 0.5,
         symmetry: str = "none",
+        axis: tuple[float, float] | None = None,
+        radial: int = brush_mod.DEFAULT_RADIAL,
+        stabilise: float = 0.0,
+        speed_taper: float = 0.0,
     ) -> None:
         self.end_stroke()
         self._ensure_active_cel()
@@ -1192,6 +1197,10 @@ class Document:
             mode=mode,
             strength=strength,
             symmetry=symmetry,
+            axis=axis,
+            radial=radial,
+            stabilise=stabilise,
+            speed_taper=speed_taper,
             clip=self.mask,
             alpha_lock=layer.alpha_lock,
         )
