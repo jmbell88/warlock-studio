@@ -212,6 +212,13 @@ def _selection_actions(state: Any, doc: Any) -> None:
     imgui.same_line()
     if imgui.button("Invert"):
         doc.invert_selection()
+    if imgui.button("This layer"):
+        doc.select_layer_alpha()
+    widgets.help_marker(
+        "Selects what is painted on the active layer, at the coverage it is "
+        "painted at -- a soft edge becomes a soft selection."
+    )
+
     imgui.set_next_item_width(-80)
     changed, value = imgui.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
     if changed:
@@ -219,6 +226,30 @@ def _selection_actions(state: Any, doc: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Feather", doc.mask is not None):
         doc.feather_selection(state.feather_radius)
+
+    # Whole pixels, and its own control: feather softens an edge where these
+    # *move* it, and one slider serving both would have to pick a unit that is
+    # wrong for one of them.
+    imgui.set_next_item_width(-80)
+    changed, steps = imgui.slider_int("##selgrow", int(state.select_steps), 1, 32, "%d px")
+    if changed:
+        state.select_steps = int(steps)
+    imgui.same_line()
+    widgets.muted("by")
+    has = doc.mask is not None
+    if widgets.disabled_button("Grow", has):
+        doc.grow_selection(state.select_steps)
+    imgui.same_line()
+    if widgets.disabled_button("Shrink", has):
+        doc.shrink_selection(state.select_steps)
+    imgui.same_line()
+    if widgets.disabled_button("Border", has):
+        doc.border_selection(state.select_steps)
+    widgets.help_marker(
+        "Border replaces the selection with the band that many pixels either "
+        "side of its edge -- fill it and you have stroked the outline."
+    )
+
     if widgets.disabled_button("Crop to selection", doc.mask is not None):
         doc.crop_to_selection()
 

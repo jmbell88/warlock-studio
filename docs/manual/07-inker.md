@@ -141,6 +141,15 @@ With a selection live, the **selection** section offers **All**, **None**, **Inv
 **Feather** radius slider up to 32 pixels with a **Feather** button, and **Crop to selection**. The
 same actions have keyboard shortcuts: `Ctrl+A`, `Ctrl+D` and `Ctrl+Shift+I`.
 
+**This layer** selects what is painted on the active layer, at the coverage it is painted at — a
+soft brush edge becomes a soft selection rather than a jagged one. It reads the layer's own pixels,
+so its opacity and blend mode do not enter into it.
+
+**Grow**, **Shrink** and **Border** move the edge by a whole number of pixels, which is a different
+thing from feathering: feather *softens* an edge where these *move* it, so they have their own
+control. Border replaces the selection with the band that many pixels either side of its edge —
+fill it and you have stroked the outline.
+
 Cutting or copying a selection puts it on the clipboard; pasting brings it back as a **floating
 buffer** which you move with the Move tool and commit by doing anything else. `Esc` cancels a
 floating buffer, and `Delete` clears the selected pixels.

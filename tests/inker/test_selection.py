@@ -10,7 +10,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from warlock.studio import inker
 from warlock.studio.inker import selection as sel
+from warlock.studio.inker.selection import SelectionMask
 
 
 def _rgba(plane: np.ndarray) -> np.ndarray:
@@ -334,3 +336,98 @@ def test_a_small_shape_no_longer_supersamples_the_document(monkeypatch):
     )
     assert sizes, "the rasteriser stopped going through Image.new"
     assert max(w * h for w, h in sizes) < (2048 * 4) ** 2 // 100
+
+
+# --- morphology and layer alpha (Ink5) ---------------------------------------
+
+
+def _square(size=16, box=(6, 6, 10, 10)) -> SelectionMask:
+    return SelectionMask.from_rect((size, size), box)
+
+
+def test_growing_moves_the_edge_out_by_the_radius_asked_for():
+    grown = _square().grown(3)
+    assert grown.mask[8, 3] == 255, "three pixels to the left of the old edge"
+    assert grown.mask[8, 2] == 0, "and not four"
+
+
+def test_shrinking_moves_it_in_by_the_radius_asked_for():
+    shrunk = _square(box=(4, 4, 12, 12)).shrunk(2)
+    assert shrunk.mask[8, 6] == 255
+    assert shrunk.mask[8, 5] == 0
+
+
+def test_growing_then_shrinking_by_the_same_amount_recovers_a_convex_shape():
+    """Not a general property of morphology -- a closing fills concavities --
+    but it holds for a convex region and is the sanity check that says the two
+    passes use the same neighbourhood."""
+    original = _square(box=(4, 4, 12, 12))
+    back = original.grown(3).shrunk(3)
+    assert np.array_equal(back.mask, original.mask)
+
+
+def test_the_neighbourhood_is_an_octagon_rather_than_a_square():
+    """A square kernel is one line shorter and turns a circle into a rectangle
+    with visibly square corners, which is what this rules out."""
+    grown = SelectionMask.from_rect((21, 21), (10, 10, 11, 11)).grown(4)
+    assert grown.mask[10, 6] == 255, "four out along the axis"
+    assert grown.mask[6, 6] == 0, "but not four out on both axes at once"
+
+
+def test_growing_keeps_a_soft_edge_soft():
+    """On the 8-bit mask, not on a threshold of it: hardening every
+    antialiased selection the moment somebody nudged it by a pixel is the bug
+    this rules out."""
+    soft = _square().feathered(2.0)
+    partial = int(((soft.mask > 0) & (soft.mask < 255)).sum())
+    grown = soft.grown(1)
+    assert int(((grown.mask > 0) & (grown.mask < 255)).sum()) >= partial * 0.5
+    assert grown.mask.max() == soft.mask.max()
+
+
+def test_a_border_is_a_band_either_side_of_the_edge():
+    band = _square(box=(4, 4, 12, 12)).bordered(2)
+    assert band.mask[8, 4] == 255, "on the old edge"
+    assert band.mask[8, 8] == 0, "hollow in the middle"
+    assert band.mask[8, 1] == 0, "and bounded outside"
+
+
+def test_a_zero_width_border_selects_nothing():
+    assert _square().bordered(0).is_empty
+
+
+def test_a_zero_radius_grow_or_shrink_is_the_identity_and_a_copy():
+    original = _square()
+    for out in (original.grown(0), original.shrunk(0)):
+        assert np.array_equal(out.mask, original.mask)
+        assert out.mask is not original.mask
+
+
+def test_growing_a_selection_that_touches_the_canvas_edge_stays_against_it():
+    """Edge padding, not zero padding: the selection continues off-canvas,
+    which is what the user drew -- zero padding would peel it off the border."""
+    grown = SelectionMask.from_rect((8, 8), (0, 0, 4, 8)).grown(2)
+    assert grown.mask[0, 0] == 255
+    assert grown.mask[7, 0] == 255
+
+
+def test_selecting_a_layers_alpha_copies_the_coverage_rather_than_thresholding():
+    doc = inker.Document.blank(8, 8)
+    doc.stack.active.pixels[2:6, 2:6] = (255, 0, 0, 128)
+    doc.select_layer_alpha()
+    assert doc.mask is not None
+    assert int(doc.mask.mask[3, 3]) == 128, "half coverage stays half"
+    assert int(doc.mask.mask[0, 0]) == 0
+
+
+def test_selecting_a_layers_alpha_ignores_its_opacity_and_visibility():
+    """The same split ``eyedrop(layer_only=True)`` makes: both are about how a
+    layer is shown, not about what is painted in it."""
+    doc = inker.Document.blank(4, 4)
+    layer = doc.add_layer("Top")
+    layer.pixels[:, :] = (10, 10, 10, 255)
+    layer.opacity = 0.25
+    layer.visible = False
+    doc.invalidate_all()
+    doc.select_layer_alpha()
+    assert doc.mask is not None and int(doc.mask.mask[0, 0]) == 255

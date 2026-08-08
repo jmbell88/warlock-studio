@@ -214,6 +214,41 @@ class SelectionMask:
         )
         return SelectionMask(np.asarray(blurred, dtype=np.uint8).copy())
 
+    # -- morphology --------------------------------------------------------
+    #
+    # Grow, shrink and border, on the 8-bit mask rather than on a threshold of
+    # it: a max filter over a soft edge moves the edge and keeps it soft, where
+    # thresholding first would harden every antialiased selection the moment
+    # somebody nudged it by a pixel.
+    #
+    # The neighbourhood is an *octagon*, built by alternating a 4-neighbour and
+    # an 8-neighbour pass. A square kernel is one line shorter and grows a
+    # circle into a rectangle with visibly square corners; a true disc needs a
+    # distance transform, which is a scipy dependency this package does not
+    # have and does not need for a control whose unit is whole pixels.
+
+    def grown(self, radius: int) -> SelectionMask:
+        """Expand the selection by *radius* pixels."""
+        return SelectionMask(_morph(self.mask, int(radius), np.maximum))
+
+    def shrunk(self, radius: int) -> SelectionMask:
+        """Contract the selection by *radius* pixels."""
+        return SelectionMask(_morph(self.mask, int(radius), np.minimum))
+
+    def bordered(self, width: int) -> SelectionMask:
+        """The band *width* pixels either side of the current edge.
+
+        Centred on the edge rather than lying inside it, so bordering a
+        selection and filling it strokes the line the marching ants are drawn
+        on -- which is what somebody asking for a border of a selection means.
+        """
+        width = max(int(width), 0)
+        if width <= 0:
+            return SelectionMask(np.zeros_like(self.mask))
+        outer = _morph(self.mask, width, np.maximum).astype(np.int16)
+        inner = _morph(self.mask, width, np.minimum).astype(np.int16)
+        return SelectionMask(np.clip(outer - inner, 0, 255).astype(np.uint8))
+
     # -- the outline -------------------------------------------------------
 
     def contours(self) -> list[list[tuple[int, int]]]:
@@ -342,6 +377,36 @@ def _chain(
 
 
 # --- the magic wand ---------------------------------------------------------
+
+
+def _morph(mask: np.ndarray, radius: int, combine) -> np.ndarray:
+    """*radius* passes of an octagonal max (dilate) or min (erode) filter.
+
+    Edge handling is what decides whether growing a selection that touches the
+    canvas edge pulls away from it. A dilate pads with the border value (the
+    selection continues off-canvas, which is what the user drew); an erode pads
+    the same way, so a full-canvas selection shrinks from nothing rather than
+    from four sides at once. ``mode="edge"`` gives both, which is why the
+    padding is not conditional on the operation.
+    """
+    if radius <= 0:
+        return mask.copy()
+    out = mask
+    for step in range(radius):
+        out = _spread(out, combine, diagonal=step % 2 == 1)
+    return out
+
+
+def _spread(mask: np.ndarray, combine, *, diagonal: bool) -> np.ndarray:
+    padded = np.pad(mask, 1, mode="edge")
+    height, width = mask.shape
+    offsets = [(0, 1), (2, 1), (1, 0), (1, 2)]
+    if diagonal:
+        offsets += [(0, 0), (0, 2), (2, 0), (2, 2)]
+    out = mask.copy()
+    for dy, dx in offsets:
+        out = combine(out, padded[dy : dy + height, dx : dx + width])
+    return out
 
 
 def colour_distance(pixels: np.ndarray, colour: np.ndarray) -> np.ndarray:

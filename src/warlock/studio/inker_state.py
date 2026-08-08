@@ -302,6 +302,10 @@ class InkerState:
     # has no entry rather than a copy of the defaults.
     tool_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     feather_radius: float = 2.0
+    # Grow / shrink / border, in whole pixels. App-level like every other
+    # tool setting, and separate from ``feather_radius`` because the two have
+    # different units and mean different things to an edge.
+    select_steps: int = 2
     gradient_kind: str = "linear"
     gradient_to_transparent: bool = False
     symmetry: str = "none"

@@ -1444,6 +1444,36 @@ class Document:
         if self.mask is not None:
             self.select(self.mask.feathered(radius))
 
+    def grow_selection(self, radius: int) -> None:
+        if self.mask is not None:
+            self.select(self.mask.grown(radius))
+
+    def shrink_selection(self, radius: int) -> None:
+        if self.mask is not None:
+            self.select(self.mask.shrunk(radius))
+
+    def border_selection(self, width: int) -> None:
+        if self.mask is not None:
+            self.select(self.mask.bordered(width))
+
+    def select_layer_alpha(self, index: int | None = None, op: str = "replace") -> None:
+        """Select what is painted on a layer, at the coverage it is painted at.
+
+        The alpha channel *is* a selection mask -- both are 8-bit per-pixel
+        coverage over the canvas -- so this is a copy rather than a threshold,
+        and a soft brush edge becomes a soft selection edge. Thresholding would
+        turn every antialiased drawing into a jagged one the first time somebody
+        asked to select it.
+
+        It reads the layer's own alpha, not the composite's: "select this
+        layer's pixels" is a question about one layer, and its opacity and blend
+        mode are about how it is *shown*. That is the same split
+        ``eyedrop(layer_only=True)`` makes.
+        """
+        index = self.stack.active_index if index is None else index
+        layer = self.stack[index]
+        self.select(SelectionMask(layer.pixels[..., 3].copy()), op)
+
     def select_wand(
         self, xy: tuple[int, int], *, tolerance: int = 32, op: str = "replace",
         contiguous: bool = True,
