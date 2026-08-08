@@ -570,7 +570,9 @@ def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
 
     Through ``layout.pane_child`` rather than ``begin_child``, because that is
     what main.py calls now and a style var pushed and popped around begin is
-    exactly the kind of thing that only fails inside a real frame.
+    exactly the kind of thing that only fails inside a real frame. The right
+    column is two stacked panes (inspector over library) since the library
+    moved off the left sidebar onto the right one, under the inspector.
     """
     from warlock.studio import layout as layout_mod
     from warlock.studio.panes import inspector, library, overlay, settings_2d
@@ -581,8 +583,6 @@ def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
     def build():
         layout_mod.pane_child("settings", (340, 0))
         settings_2d.draw(app_ctx)
-        imgui.separator()
-        library.draw(app_ctx)
         imgui.end_child()
         imgui.same_line()
         layout_mod.pane_child("viewport", (400, 0))
@@ -590,12 +590,55 @@ def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
         overlay.placeholder(app_ctx)
         imgui.end_child()
         imgui.same_line()
-        layout_mod.pane_child("inspector", (340, 0))
+        layout_mod.pane_child("inspector", (340, 250))
         inspector.draw(app_ctx)
+        imgui.end_child()
+        layout_mod.pane_child("library", (340, 0))
+        library.draw(app_ctx)
         imgui.end_child()
 
     _frame(imgui_ctx, build)
     del renderer
+
+
+def test_the_right_sidebar_splits_inspector_and_library_by_settings_share(app_ctx, imgui_ctx):
+    """The right sidebar's split pins the same arithmetic the left sidebar's
+    settings/library split used before the library moved -- inspector gets
+    ``avail_y * settings_share`` and library gets whatever is left, so a
+    future edit that hardcodes a 50/50 split (or swaps which pane is on top)
+    shows up here rather than only on screen.
+    """
+    from warlock.studio import layout as layout_mod
+
+    imgui, _renderer = imgui_ctx
+    lay = layout_mod.Layout(app_ctx.settings)
+    assert lay.settings_share == 0.55  # the untouched default this test relies on
+
+    tops: list[float] = []
+    bottoms: list[float] = []
+
+    def build():
+        imgui.begin_group()
+        avail_y = imgui.get_content_region_avail().y
+        inspector_height = avail_y * lay.settings_share
+        top = imgui.get_cursor_screen_pos().y
+        if layout_mod.pane_child("inspector", (300, inspector_height)):
+            pass
+        imgui.end_child()
+        tops.append(imgui.get_item_rect_size().y)
+        bottom_start = imgui.get_cursor_screen_pos().y
+        if layout_mod.pane_child("library", (300, 0)):
+            pass
+        imgui.end_child()
+        bottoms.append(imgui.get_item_rect_size().y)
+        imgui.end_group()
+        del top, bottom_start
+
+    _frame(imgui_ctx, build)
+
+    total = tops[0] + bottoms[0]
+    assert tops[0] == pytest.approx(total * 0.55, abs=5.0)
+    assert bottoms[0] == pytest.approx(total * 0.45, abs=5.0)
 
 
 def test_the_landing_screen_builds_in_each_of_its_views(app_ctx, imgui_ctx):

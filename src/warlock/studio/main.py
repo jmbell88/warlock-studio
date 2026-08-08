@@ -1016,23 +1016,33 @@ class App:
             self._overlays(viewport)
             return
 
-        # The sidebar is two scrollers, not one: sharing a single scroll region
-        # meant the settings form pushed the library off the bottom of a
-        # 950-pixel window, which made the whole asset list unreachable.
+        # The library used to share the left sidebar with settings, split by
+        # settings_share; it shares the right sidebar with the inspector now
+        # instead, so the left column is settings alone (nothing left to split
+        # against) and the right column is the two-scroller stack that used to
+        # live on the left.
         from . import layout as layout_mod
         from . import tokens
         from .tokens import sp
 
         lay = self.layout
         sidebar_w = sp(layout_mod.SIDEBAR_W)
-        imgui.begin_group()
-        avail_y = imgui.get_content_region_avail().y
-        form_height = avail_y * lay.settings_share
-        if layout_mod.pane_child("settings", (sidebar_w, form_height)):
+        if layout_mod.pane_child("settings", (sidebar_w, 0)):
             if ctx.state.mode == "2d":
                 settings_2d.draw(ctx)
             else:
                 settings_3d.draw(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        self._viewport_pane()
+        imgui.same_line()
+
+        imgui.begin_group()
+        avail_y = imgui.get_content_region_avail().y
+        inspector_height = avail_y * lay.settings_share
+        if layout_mod.pane_child("inspector", (0, inspector_height)):
+            inspector.draw(ctx)
         imgui.end_child()
         drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
         if drag and avail_y > 0:
@@ -1041,18 +1051,11 @@ class App:
                 layout_mod.SHARE_MAX,
             )
             lay.save()
-        if layout_mod.pane_child("library", (sidebar_w, 0)):
+        if layout_mod.pane_child("library", (0, 0)):
             library.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
-        imgui.same_line()
-        self._viewport_pane()
-        imgui.same_line()
-
-        if layout_mod.pane_child("inspector", (0, 0)):
-            inspector.draw(ctx)
-        imgui.end_child()
         imgui.end()
         self._overlays(viewport)
 
@@ -1951,7 +1954,7 @@ class App:
             height = max(avail.y, 64)
             if ctx.state.mode == "3d" and self.viewer.has_model:
                 self._draw_viewport_image(image_pos, width, height)
-            elif self.viewer.reference is not None:
+            elif ctx.state.mode == "2d" and self.viewer.reference is not None:
                 self._draw_reference(width, height)
             else:
                 overlay.placeholder(ctx)
