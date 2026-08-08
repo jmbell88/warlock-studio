@@ -238,7 +238,7 @@ and the compact library row are the two most likely to want an eye.
 
 ---
 
-## Phase 4 — Feature expansion + gated work
+## Phase 4 — Feature expansion + gated work — **17 of 25 landed**
 
 *Net-new capability. TODO.md plans zero Inker or Clay work, so all 25 review items are
 additive; both engines are pure by invariant, so every engine-level item lands with
@@ -246,7 +246,64 @@ headless tests. The gated subsection is not code — it is the GPU/network/human
 TODO.md §2–§8 already specifies, listed here so the roadmap accounts for every LIST.md
 item.*
 
-### Inker — 13 features (LIST.md's payoff-per-effort order)
+**Landed (2026-08-08):** Clay14, Ink1–Ink8, Ink10–Ink13, Clay15, Clay16, Clay17, Clay25.
+Each is one commit; the tests are `tests/inker/test_filters.py`, `test_gpl.py`,
+`tests/clay/test_diagnose.py`, `test_uv.py` and additions to the existing engine and
+mode suites. Six decisions are worth carrying forward:
+
+- **`_MODE_IDS` is written out and the numbers are free of `BLEND_MODES`' order.** The
+  list is now menu order (grouped by family) and the kernel's numbering is 0–11
+  regardless, so the menu can be regrouped without invalidating a DLL. `WARLOCKC_ABI`
+  is 6. `hard-light` is written as `overlay` with the operands swapped **on both
+  paths**, so the identity is exact rather than exact-to-an-ulp.
+- **A per-tool option is a property over the active tool's dictionary**, not a rewrite
+  of nine call sites. Each of those call sites meant "the tool in my hand" all along;
+  the state layer was the thing that disagreed. Symmetry, the grid and the colours stay
+  app-level, and a test pins that split.
+- **Alpha lock restores the channel after the formula**, never folds the layer alpha
+  into the weight — a weight-based version still raises the alpha of a half-transparent
+  pixel, which is the whole thing the lock exists to prevent. It rides to disk as
+  `warlock-alpha-lock`, with a hyphen: a colon is an XML namespace prefix and an
+  undeclared one makes the whole `stack.xml` unparseable.
+- **An autosave is never a save.** It does not clear dirty, move `saved_head`, retitle
+  the tab or set `saving` — locking the editor for a second every two minutes would be
+  worse than no autosave, and the others would answer "where should this go" on the
+  user's behalf. Recovered documents open untitled *and* dirty.
+- **Clay25's unwrap normalises over the mesh's own bbox, not per island.** Per-island
+  scaling makes texel density depend on how big a face happens to be. The generators
+  pack rather than overlap, because a canonical unwrap whose islands overlap cannot be
+  baked to — which is the only reason these coordinates exist.
+- **Shade Auto's limitation is written down rather than discovered**: a capped cylinder
+  comes out entirely flat, because a per-face flag can only say "this face has no sharp
+  edge". That is also the correct answer for this renderer, since smoothing the band
+  would average the cap normals into the rim.
+
+The smoke test grew **three columns** on the way through Ink2: stacked in one column the
+Inker canvas child sits below the tools pane, imgui culls a child pushed past the visible
+area, and a culled canvas uploads no textures — so one added row failed the animated-inker
+test with an empty texture list and nothing to do with frames.
+
+**Not started, and why:**
+
+- **Ink9** (canvas rotation and flipped view). The only Inker item whose correct
+  implementation is a viewport-wide coordinate change: `ants.py`'s fast path is written
+  against "`to_screen` is a uniform scale plus this offset" (its own comment), and the
+  composite, the floating buffer, the onion frames, the grid, the symmetry lines and the
+  transform handles are all drawn axis-aligned. A half-done version silently misplaces
+  every overlay, which is worse than not having it.
+- **Clay18–Clay21** (axis constraints and numeric entry, snapping during element drags,
+  proportional editing, bridge/extrude on `topo.py`). The four heaviest interaction
+  items; none is blocked, they simply were not reached. One correction for whoever
+  takes Clay19: `clay_view._element_world_transform` **already** applies both
+  `snap_translation` and `snap_rotation` to an element drag, so the "consistency bug"
+  half of that item appears to be already satisfied — check the object path against it
+  before writing anything, and if they agree the item is snap-to-vertex alone.
+- **Clay22** (icosphere, capsule, grid plane) and **Clay23**/**Clay24** (bbox readout
+  and camera in `.wblk`; outliner ergonomics). Small; Clay22 now also owes canonical
+  UVs, since every generator produces them and `tests/clay/test_uv.py` asserts it over
+  the whole registry.
+
+### Inker — 13 features (LIST.md's payoff-per-effort order). **Ink9 is the one left.**
 
 1. **Ink1** — More blend modes (darken, lighten, soft-light, hard-light, color-dodge,
    color-burn, difference) in `inker/composite.py`: numpy reference first, optional C
@@ -277,7 +334,7 @@ item.*
     existing TaskRunner save path, gated on `busy`, deleted on clean save/close,
     recovery offer on open.
 
-### Clay — 12 features
+### Clay — 12 features. **Clay18–24 are the ones left.**
 
 14. **Clay14** — Surface `check_manifold`/`ManifoldReport` in the UI
     (`clay/adjacency.py:307`): "2 holes · 3 non-manifold edges", click selects the
