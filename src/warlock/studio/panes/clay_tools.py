@@ -244,6 +244,43 @@ def _invoke(ctx: Any, doc: Any, op: Any) -> None:
     imgui.open_popup(clay_menu.PARAM_POPUP)
 
 
+def _axis_views(ctx: Any) -> None:
+    """Front / Right / Top, and the orthographic toggle beside them.
+
+    Buttons as well as keys because the keys are the part a user has to be
+    told about, and a viewport control nobody can find is a control that does
+    not exist. The camera lives on the view rather than on the state, so this
+    reads through ``ctx`` and does nothing at all before the viewport has been
+    built -- which is the first frame, and exactly when a pane must not raise.
+    """
+    view = getattr(ctx, "clay_view", None)
+    if view is None:
+        return
+    width = (imgui.get_content_region_avail().x - 8 * 3) / 4
+    for label, name, key in (
+        ("F", "front", "Front  (Ctrl+1, Shift for back)"),
+        ("R", "right", "Right  (Ctrl+3, Shift for left)"),
+        ("T", "top", "Top  (Ctrl+7, Shift for bottom)"),
+    ):
+        if imgui.button(f"{label}##axis{name}", (width, sp(24))):
+            view.camera.look_along(name)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(key)
+        imgui.same_line()
+    ortho = view.camera.orthographic
+    if ortho:
+        imgui.push_style_color(
+            imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
+        )
+    if imgui.button("Ortho##axisortho", (width, sp(24))):
+        view.camera.orthographic = not ortho
+    if ortho:
+        imgui.pop_style_color()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Orthographic  (Ctrl+5)")
+    imgui.new_line()
+
+
 def _snapping(state: Any) -> None:
     widgets.field_label("snap")
     changed, value = widgets.toggle(f"{icons.MAGNET} Snap", state.snap)
@@ -265,6 +302,7 @@ def _snapping(state: Any) -> None:
 
 def _display(ctx: Any, state: Any) -> None:
     widgets.field_label("view")
+    _axis_views(ctx)
     changed, value = widgets.toggle(f"{icons.GRID} Grid", state.grid)
     if changed:
         state.grid = value

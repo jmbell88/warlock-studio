@@ -442,6 +442,13 @@ TOOL_KEYS = {
 # key, so the four modes are one contiguous run under four fingers.
 ELEMENT_KEYS = {"1": "vertex", "2": "edge", "3": "face", "4": "object"}
 
+# Ctrl+digit axis views, on the numbers a modeller's hand already knows from
+# Blender's numpad. **Bound here rather than in ``App._shortcut``**: a global
+# binding is checked above the workspace modes and takes its key from them
+# permanently, which is the whole reason the mode switch moved to Alt. These
+# keys belong to Clay and only Clay.
+AXIS_VIEW_KEYS = {"1": "front", "3": "right", "7": "top"}
+
 # Ctrl-shortcuts that change the document. Serialising reads the live document
 # on a task thread, so anything that restructures it or moves the history head
 # the save captured waits for the save, exactly as a gizmo drag does.
@@ -591,7 +598,20 @@ def _ctrl_key(
 ) -> bool:
     if tab.saving and name in _MUTATING_CTRL:
         return True
-    if name == "s":
+    if name in AXIS_VIEW_KEYS:
+        # Shift is the opposite view, as Blender's numpad does it -- Ctrl+1 is
+        # the front and Ctrl+Shift+1 the back, so six views cost three keys.
+        wanted = AXIS_VIEW_KEYS[name]
+        if shift:
+            wanted = {"front": "back", "right": "left", "top": "bottom"}[wanted]
+        view = getattr(ctx, "clay_view", None)
+        if view is not None:
+            view.camera.look_along(wanted)
+    elif name == "5":
+        view = getattr(ctx, "clay_view", None)
+        if view is not None:
+            view.camera.orthographic = not view.camera.orthographic
+    elif name == "s":
         save_as(ctx, tab) if shift else save(ctx, tab)
     elif name == "o":
         ask_open(ctx)

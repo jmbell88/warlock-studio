@@ -42,6 +42,10 @@ class Camera:
         self.min_distance = 0.01
         self.max_distance = 1000.0
         self.auto_rotate = False
+        # Orthographic rather than perspective. Off everywhere except where a
+        # mode turns it on: the asset viewer shows what an engine will show,
+        # and an engine uses a perspective camera.
+        self.orthographic = False
         # Damping works on a *goal* the input moves and the camera chases.
         self._goal_theta = self.theta
         self._goal_phi = self.phi
@@ -63,7 +67,48 @@ class Camera:
         return m3.look_at(self.position, self.target, m3.vec3(0, 1, 0))
 
     def projection(self) -> np.ndarray:
-        return m3.perspective(self.fov, max(self.aspect, 1e-6), self.near, self.far)
+        if not self.orthographic:
+            return m3.perspective(self.fov, max(self.aspect, 1e-6), self.near, self.far)
+        # Sized so the plane through the *target* is the same size either way,
+        # which is what makes the toggle look like a change of projection
+        # rather than a jump cut: dollying in and switching would otherwise
+        # rescale the whole scene.
+        half = self.distance * math.tan(math.radians(self.fov * 0.5))
+        wide = half * max(self.aspect, 1e-6)
+        # The near plane goes *behind* the eye. An orthographic frustum has no
+        # apex, so geometry between the target and the camera -- which a
+        # perspective near plane at radius/1000 keeps clear of -- would
+        # otherwise be clipped away the moment the projection changed.
+        return m3.orthographic(-wide, wide, -half, half, -self.far, self.far)
+
+    # -- named views -------------------------------------------------------
+
+    #: Azimuth and polar angle for the six axis-aligned views, by name. Written
+    #: out rather than derived from an axis index because the *names* are the
+    #: contract -- a pane binds a key to "front" and must not have to know
+    #: which way theta runs.
+    AXIS_VIEWS = {
+        "front": (0.0, math.pi / 2),
+        "back": (math.pi, math.pi / 2),
+        "right": (math.pi / 2, math.pi / 2),
+        "left": (-math.pi / 2, math.pi / 2),
+        "top": (0.0, _POLE_EPSILON),
+        "bottom": (0.0, math.pi - _POLE_EPSILON),
+    }
+
+    def look_along(self, name: str) -> bool:
+        """Snap to a named axis view, keeping the target and the distance.
+
+        Keeping both is the point: an axis view is a change of *angle*, and a
+        camera that also reframed would lose the part of the model the user was
+        looking at, which is the one thing they were about to line up.
+        """
+        angles = self.AXIS_VIEWS.get(name)
+        if angles is None:
+            return False
+        self.theta, self.phi = angles
+        self._goal_theta, self._goal_phi = angles
+        return True
 
     # -- framing -----------------------------------------------------------
 

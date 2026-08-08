@@ -800,3 +800,87 @@ def test_a_finding_click_pushes_no_undo_step() -> None:
     head = doc.history.head
     clay_props._select_finding(doc, obj, diagnose.findings(obj.mesh)[0])
     assert doc.history.head == head
+
+
+# --- axis views and the orthographic toggle (Clay17) -------------------------
+#
+# Bound inside Clay's own handle_key, never in App._shortcut: a global binding
+# is checked above the workspace modes and takes its key from them permanently,
+# which is exactly why the mode switch went to Alt in Phase 3.
+
+
+def test_every_axis_view_key_names_a_view_the_camera_knows() -> None:
+    from warlock.studio.viewer.camera import Camera
+
+    for name in clay_mode.AXIS_VIEW_KEYS.values():
+        assert name in Camera.AXIS_VIEWS
+
+
+def test_the_axis_views_point_along_the_axes_they_name() -> None:
+    import numpy as np
+
+    from warlock.studio.viewer.camera import Camera
+
+    camera = Camera()
+    camera.set_target(np.zeros(3))
+    camera.distance = 4.0
+
+    for name, axis in (("front", 2), ("right", 0), ("top", 1)):
+        assert camera.look_along(name)
+        offset = camera.position - camera.target
+        assert offset[axis] > 3.9, name
+        assert float(np.abs(np.delete(offset, axis)).max()) < 0.01, name
+
+
+def test_an_axis_view_keeps_the_target_and_the_distance() -> None:
+    """A change of angle, not of framing: reframing would lose the part of the
+    model the user was about to line up."""
+    import numpy as np
+
+    from warlock.studio.viewer.camera import Camera
+
+    camera = Camera()
+    camera.set_target(np.array([1.0, 2.0, 3.0]))
+    camera.distance = 7.5
+    camera.look_along("front")
+    assert camera.distance == 7.5
+    assert list(camera.target) == [1.0, 2.0, 3.0]
+
+
+def test_an_unknown_view_name_changes_nothing() -> None:
+    from warlock.studio.viewer.camera import Camera
+
+    camera = Camera()
+    before = (camera.theta, camera.phi)
+    assert camera.look_along("isometric") is False
+    assert (camera.theta, camera.phi) == before
+
+
+def test_the_orthographic_projection_matches_the_perspective_one_at_the_target():
+    """What makes the toggle a change of projection rather than a jump cut."""
+    import numpy as np
+
+    from warlock.studio.viewer.camera import Camera
+
+    camera = Camera(aspect=1.6)
+    camera.distance = 5.0
+    # Front view first, so "the plane through the target" is a plane the test
+    # can name: from an arbitrary orbit angle it is not z = 0 and the point
+    # below would be in front of it or behind it rather than on it.
+    camera.look_along("front")
+    point = np.array([0.4, 0.3, 0.0, 1.0])
+
+    camera.orthographic = False
+    near = camera.projection() @ camera.view() @ point
+    camera.orthographic = True
+    far = camera.projection() @ camera.view() @ point
+
+    assert float(np.abs(near[:2] / near[3] - far[:2] / far[3]).max()) < 1e-6
+
+
+def test_the_camera_is_perspective_unless_something_asks_otherwise() -> None:
+    """The asset viewer shows what an engine will show, and an engine uses a
+    perspective camera."""
+    from warlock.studio.viewer.camera import Camera
+
+    assert Camera().orthographic is False

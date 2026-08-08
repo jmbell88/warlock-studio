@@ -173,6 +173,22 @@ whether a negative scale flips the winding order, so an asset that used one woul
 here and inside out in some engines, with nothing in the file to explain it. Mirroring here rebuilds
 the geometry and reverses the faces, which is true under every reader.
 
+## Axis views
+
+`Ctrl+1`, `Ctrl+3` and `Ctrl+7` snap the camera to the front, right and top views — the numbers
+Blender puts them on, so the muscle memory carries over. Hold `Shift` for the opposite view, which
+is how three keys cover six. `Ctrl+5` toggles an **orthographic** projection, where parallel edges
+stay parallel and there is no perspective foreshortening; it is what you want for lining two things
+up. The buttons **F**, **R**, **T** and **Ortho** in the tool panel do the same.
+
+An axis view changes the *angle* only. It keeps the distance and whatever you were looking at,
+because reframing would lose the part of the model you were about to line up. Switching to
+orthographic keeps the scale at the point you are looking at, so it reads as a change of projection
+rather than a jump cut.
+
+These are Clay's keys, not the app's — which is why the mode switch is on `Alt`+1..8. A global
+binding is checked above Clay and would take the key from it permanently.
+
 ## Snapping
 
 **Snap** quantises a drag to a grid — a distance for moving, an angle for rotating. Both are set
