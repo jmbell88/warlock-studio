@@ -740,7 +740,10 @@ def test_end_to_end_rig_of_a_generated_cube(tmp_path):
     # The worker writes temp names; publishing them is the queue's job.
     rigging.finalize_rig(tmp_path)
     assert result["ok"] is True
-    assert result["weighting"] in ("automatic", "envelope")
+    # ``automatic-welded`` joined this list when weld-before-heat landed, and a
+    # cube reaches it: the glTF export splits every vertex by normal, so even
+    # this mesh arrives with 24 vertices and welds back to 8 before the solve.
+    assert result["weighting"] in ("automatic", "automatic-welded", "envelope")
     assert (tmp_path / "rig.glb").exists()
     rig = rigging.read_rig(tmp_path)
     assert rig["template"] == "humanoid"

@@ -437,8 +437,12 @@ def test_welding_does_not_change_what_the_user_sees(tmp_path):
     def snapshot(path):
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB")
+        # ``uv_layers.active.uv`` yields ``Float2AttributeValue``, whose
+        # component is ``vector`` -- the ``.uv`` spelling belongs to the older
+        # ``.data[i]`` collection and raises AttributeError here.
         uvs = sorted(
-            (round(uv.uv[0], 6), round(uv.uv[1], 6)) for uv in obj.data.uv_layers.active.uv
+            (round(uv.vector[0], 6), round(uv.vector[1], 6))
+            for uv in obj.data.uv_layers.active.uv
         )
         return hashlib.sha256(path.read_bytes()).hexdigest(), uvs, len(obj.data.polygons)
 
