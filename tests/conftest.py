@@ -67,6 +67,18 @@ def svc(tmp_path, monkeypatch):
     # Empty here; a test that wants the model writes the files or patches
     # matting.available, which tests/test_inspector_exports.py already does.
     monkeypatch.setenv("WARLOCK_T2I_ROOT", str(tmp_path / "t2i-models"))
+    # And the bench directory, for the fourth time -- but this one is not about
+    # a test reading the machine's state, it is about a test *writing* over it.
+    # bench_dir defaults to PROJECT_ROOT/bench, and service.findings.refresh
+    # writes findings.json under it, so any test that recomputed findings wrote
+    # into the real bench/ -- replacing a 299 KB corpus with whatever three
+    # verdicts the test had just invented. That file is what the generate panes
+    # read for their accept-rate hints, so `uv run pytest` silently blanked the
+    # evidence on screen. Derived rather than lost (service.findings.refresh
+    # rebuilds it from the verdicts table), which is precisely why it went
+    # unnoticed: nothing was destroyed that could not be recomputed, and nothing
+    # recomputed it.
+    monkeypatch.setenv("WARLOCK_BENCH_DIR", str(tmp_path / "bench"))
     monkeypatch.setattr(config_mod, "_config", None)
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)

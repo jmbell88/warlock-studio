@@ -294,3 +294,21 @@ def test_a_refusal_rate_is_shown_where_the_setting_is_chosen(svc):
 
     doc = bench_findings.load(svc_findings.refresh(svc))
     assert bench_findings.hint(doc, "base_model", "sdxl_cfg") == "refused 50% (6 references)"
+
+
+def test_the_suite_never_writes_findings_into_the_real_bench_directory(svc, tmp_path):
+    """refresh() writes under the *fixture's* bench dir, not PROJECT_ROOT/bench.
+
+    Without the WARLOCK_BENCH_DIR pin in conftest, every test that recomputed
+    findings wrote over the repository's own bench/findings.json -- the file the
+    2D and 3D panes read for their accept-rate hints -- replacing a corpus built
+    from ~93 real verdicts with whatever the test had just invented. It is
+    derived rather than precious, which is exactly why nobody noticed: it can
+    always be rebuilt, and nothing rebuilt it.
+    """
+    from warlock.config import PROJECT_ROOT
+
+    written = svc_findings.refresh(svc)
+
+    assert written.is_relative_to(tmp_path)
+    assert not written.is_relative_to(PROJECT_ROOT / "bench")
