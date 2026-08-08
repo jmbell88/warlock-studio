@@ -18,7 +18,7 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, theme, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, primary_action
+from ..state import ACTIONS, card_kind, primary_action
 from ..tokens import sp
 
 CARD_HEIGHT = 92.0
@@ -311,6 +311,25 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     imgui.pop_id()
 
 
+def thumb_glyph(job: Any) -> str:
+    """The icon standing in for a missing thumbnail (H72).
+
+    Keyed on the job's *kind* as the library already computes it, so the
+    placeholder says what sort of thing is coming rather than only that
+    something is. A failed job gets the alert glyph regardless: its card is
+    about the failure, not about what it would have been.
+    """
+    if job.get("status") == "error":
+        return icons.CIRCLE_ALERT
+    return {
+        "reference": icons.IMAGE,
+        "tile": icons.GRID,
+        "model": icons.BOX,
+        "rig": icons.BONE,
+        "sheet": icons.FILM,
+    }.get(card_kind(job), icons.IMAGE)
+
+
 def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     job_id = job["id"]
     texture = None
@@ -319,7 +338,10 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
     if texture is not None:
         imgui.image(widgets.texture_ref(texture), (sp(THUMB_SIZE), sp(THUMB_SIZE)))
     else:
-        imgui.dummy((sp(THUMB_SIZE), sp(THUMB_SIZE)))
+        # A framed glyph rather than a hole (H72). Every queued job, every
+        # failure and every rig row lacks a thumbnail, and an empty square the
+        # size of one reads as a broken image instead of a pending one.
+        widgets.thumb_placeholder(sp(THUMB_SIZE), thumb_glyph(job))
     imgui.same_line()
 
     # begin_group returns nothing -- the pair is unconditional, and wrapping it

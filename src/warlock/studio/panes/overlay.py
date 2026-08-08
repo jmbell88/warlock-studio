@@ -308,15 +308,27 @@ def doctor_banner(ctx: Any) -> None:
     imgui.pop_style_color()
 
 
+# What an empty viewport says, per mode: icon, title, and what to do about it
+# (H74). Upgraded from one muted sentence to the icon+title+hint form every
+# other empty list in the app uses, and given the ``inker`` entry it never had
+# -- Inker fell through to the 3D sentence, so an empty canvas pane advised
+# picking a finished reference.
+PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
+    "2d": (icons.IMAGE, "Nothing generated yet", "Describe something and press Generate."),
+    "3d": (icons.BOX, "No mesh on screen", "Pick a finished reference, or open an image."),
+    "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
+    "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
+    "review": (icons.CIRCLE_CHECK, "No unit on screen", "Pick a sweep run to review."),
+}
+
+
 def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
-    text = {
-        "2d": "Describe something and press Generate.",
-        "clay": "Add a primitive to start blocking something out.",
-        "review": "Pick a sweep run to review.",
-    }.get(ctx.state.mode, "Pick a finished reference, or open an image.")
+    from ..tokens import sp
+
+    icon, title, hint = PLACEHOLDERS.get(ctx.state.mode, PLACEHOLDERS["3d"])
     avail = imgui.get_content_region_avail()
-    imgui.dummy((0, max(avail.y * 0.5 - 20, 0)))
-    width = imgui.calc_text_size(text).x
-    imgui.set_cursor_pos_x(max((avail.x - width) * 0.5, 0))
-    widgets.muted(text)
+    # Centred vertically by hand, as before: ``empty_state`` centres its own
+    # text horizontally but knows nothing about the height it is sitting in.
+    imgui.dummy((0, max(avail.y * 0.5 - sp(48), 0)))
+    widgets.empty_state(icon, title, hint)

@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker, inker_mode, theme, widgets
+from .. import icons, inker, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from . import inker_textures
 
@@ -29,7 +29,11 @@ def draw(ctx: Any) -> None:
     widgets.section("layers")
     manual_render.help_button(ctx, "inker-layers")
     if tab is None:
-        widgets.muted("Nothing open.")
+        widgets.empty_state(
+            icons.LAYERS,
+            "No drawing open",
+            "Ctrl+N starts one, Ctrl+O opens a file.",
+        )
         return
     doc = tab.doc
     # Every control below restructures the stack, and a save is encoding that

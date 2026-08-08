@@ -135,8 +135,14 @@ class Ctx:
 
     # -- shorthands --------------------------------------------------------
 
-    def toast(self, text: str, level: str = "info", action: str | None = None) -> None:
-        self.state.toast(text, level, action)
+    def toast(
+        self,
+        text: str,
+        level: str = "info",
+        action: str | None = None,
+        action_arg: str | None = None,
+    ) -> None:
+        self.state.toast(text, level, action, action_arg)
 
     def open_log(self) -> None:
         """Hand ``warlock.log`` to whatever the user reads text files in.

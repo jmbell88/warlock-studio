@@ -15,7 +15,7 @@ from imgui_bundle import imgui
 
 from ...service import validation
 from ...service.validation import MAX_UPLOAD_BYTES
-from .. import dialogs, profiles, theme, widgets
+from .. import dialogs, icons, profiles, theme, widgets
 from ..manual import render as manual_render
 from . import settings_2d
 
@@ -37,10 +37,15 @@ def _list(ctx: Any) -> None:
     if imgui.button("New profile"):
         _open_draft(ctx, "", profiles.capture(ctx.state.form_2d))
     if not saved:
-        widgets.muted(
+        # H73: the same sentence, but as the empty state the rest of the app
+        # uses -- an icon and a title say "there is nothing here yet" before
+        # the paragraph explaining what would be.
+        widgets.empty_state(
+            icons.PALETTE,
+            "No profiles yet",
             "A profile remembers the model, the LoRA, the negative prompt and "
             "the core style choices under a name -- the prompt, the seed and "
-            "the per-asset guidance stay per-generation."
+            "the per-asset guidance stay per-generation.",
         )
         return
     imgui.separator()

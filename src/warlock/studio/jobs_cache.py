@@ -239,9 +239,45 @@ def transition_message(job: dict[str, Any], previous: str | None) -> tuple[str, 
     name = job.get("name") or job.get("prompt") or job["id"]
     name = name if len(name) <= 40 else name[:37] + "..."
     if job["status"] == "done":
-        return f"{name} finished.", "info"
+        # ``success`` rather than ``info`` (H68): a finished job is the one
+        # unambiguously good thing this function reports, and it spent its
+        # whole life in the same neutral grey as "settings copied to the form".
+        return f"{name} finished.", "success"
     if job["status"] == "error":
         return f"{name} failed: {job.get('error') or 'unknown error'}", "error"
     if job["status"] == "cancelled" and previous == "running":
         return f"{name} cancelled.", "info"
     return None
+
+
+def sweep_summary(jobs: list[dict[str, Any]], sweep_id: str) -> tuple[str, str] | None:
+    """-> (text, level) once every loaded unit of a sweep has finished (N109).
+
+    ``None`` while any of them is still queued or running, which is what makes
+    one call per finished unit collapse into exactly one toast at the end.
+
+    Judged against the *loaded* window, and that is a real limitation rather
+    than an oversight: the list is the newest N of M, so a sweep longer than
+    the window could be declared finished early. It is the honest trade -- the
+    alternative is a ``COUNT`` on the frame thread, which the single-connection
+    rule forbids -- and it fails in the safe direction: an early summary is a
+    slightly wrong number, where a missed one is silence at the end of an
+    overnight run.
+    """
+    units = [job for job in jobs if job.get("sweep_id") == sweep_id]
+    if not units or any(job.get("status") in ("queued", "running") for job in units):
+        return None
+    done = sum(1 for job in units if job.get("status") == "done")
+    failed = sum(1 for job in units if job.get("status") == "error")
+    cancelled = len(units) - done - failed
+    parts = [f"{done} done"]
+    if failed:
+        # *Refused* rather than *failed*: the dominant error here is the
+        # composition gate declining the reference, which is a measurement
+        # rather than a fault, and the word decides whether the user goes
+        # looking for a bug.
+        parts.append(f"{failed} refused")
+    if cancelled:
+        parts.append(f"{cancelled} cancelled")
+    level = "warn" if failed and not done else "success"
+    return f"Sweep finished - {', '.join(parts)}.", level

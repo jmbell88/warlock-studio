@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import dialogs, widgets
+from .. import dialogs, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 
@@ -278,9 +278,17 @@ def validate(job: Any, form: dict[str, Any]) -> list[str]:
 
 def _saved(ctx: Any, job: Any) -> None:
     sheets = (ctx.state.preview or {}).get("sheets") or []
-    if not sheets:
-        return
     widgets.section("Rendered sheets")
+    if not sheets:
+        # H73. Returning early left the section itself absent, so a user who
+        # had rendered a sheet yesterday and could not find it had no way to
+        # tell "none for this asset" from "the panel forgot how".
+        widgets.empty_state(
+            icons.GRID,
+            "No sheets for this asset",
+            "Render one above; it is saved beside the mesh.",
+        )
+        return
     job_id = job["id"]
     for sheet in sheets:
         sheet_id = sheet["id"]

@@ -438,6 +438,24 @@ def _reference(ctx: Any, form: dict[str, Any]) -> None:
     if not widgets.header("Reference", default_open=False, persist_key="2d/reference"):
         return
 
+    # The block is grouped so a dropped file can outline exactly what it landed
+    # in (H70) -- this section is collapsed by default, so a drop used to be
+    # accepted with nothing on screen moving.
+    imgui.begin_group()
+    origin = imgui.get_cursor_screen_pos()
+    try:
+        _reference_body(ctx, form)
+    finally:
+        imgui.end_group()
+        widgets.ring(
+            origin,
+            imgui.get_item_rect_max(),
+            theme.ACCENT,
+            widgets.drop_flash(ctx.state, "2d-ref"),
+        )
+
+
+def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
     path = form["ref_path"]
     if not path:
         found = profiles.active_anchor(ctx.settings, ctx.svc.config)

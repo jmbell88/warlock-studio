@@ -15,6 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from . import fonts, icons, motion, theme, tokens
+from . import state as app_state
 from .tokens import sp
 
 # Every artifact the downloads section offers, in the order it offers them:
@@ -392,6 +393,97 @@ def attach_settings(settings: Any) -> None:
     _SETTINGS = settings
 
 
+# Sections asked to open on their next draw, by persist_key. Module state
+# rather than a field on AppState because ``header`` already reads its other
+# half (``FORCE_SECTIONS_OPEN``, ``_SETTINGS``) from here and takes no state
+# argument to hang it on.
+_OPEN_REQUESTS: set[str] = set()
+
+
+def thumb_placeholder(size: float, glyph: str) -> None:
+    """A framed square with an icon in it, where a thumbnail would be (H72).
+
+    A bare ``dummy`` was the old answer, which reads as a layout bug rather
+    than as "there is no picture yet" -- and every queued job, every failure
+    and every rig row has no picture. The glyph says what *kind* of thing is
+    missing, which is the difference between a card that looks broken and one
+    that looks pending.
+
+    Takes exactly the space an image of the same size would, so a card with a
+    thumbnail and a card without lay out identically.
+    """
+    origin = imgui.get_cursor_screen_pos()
+    imgui.dummy((size, size))
+    draw = imgui.get_window_draw_list()
+    draw.add_rect(
+        origin,
+        (origin.x + size, origin.y + size),
+        imgui.get_color_u32(theme.rgba(theme.MUTED, 0.28)),
+        sp(4),
+    )
+    if not glyph:
+        return
+    # The glyphs live in the same atlas as the text (they are a merged icon
+    # range, not a second font), so a bigger one is just a bigger push.
+    with fonts.title(imgui):
+        extent = imgui.calc_text_size(glyph)
+        draw.add_text(
+            (
+                origin.x + (size - extent.x) * 0.5,
+                origin.y + (size - extent.y) * 0.5,
+            ),
+            imgui.get_color_u32(theme.rgba(theme.MUTED, 0.55)),
+            glyph,
+        )
+
+
+def request_open(persist_key: str) -> None:
+    """Open a collapsible section the next time it is drawn.
+
+    For the case where something arrives in a section the user has collapsed --
+    a dropped image landing in the 2D pane's Reference block -- and would
+    otherwise be accepted with nothing on screen changing at all.
+    """
+    _OPEN_REQUESTS.add(persist_key)
+
+
+# How long a slot stays outlined after something is dropped into it (H70).
+# Long enough to catch the eye after the mouse has moved on, short enough not
+# to read as a permanent state of the control.
+DROP_FLASH_SECONDS = 1.4
+
+
+def drop_flash(state: Any, key: str) -> float:
+    """0..1 -- how strongly the named slot should be outlined right now.
+
+    An eased fade rather than a blink: a control that flashes on and off reads
+    as an error, and this is an acknowledgement.
+    """
+    if getattr(state, "drop_flash_slot", "") != key:
+        return 0.0
+    age = time.monotonic() - getattr(state, "drop_flash_at", 0.0)
+    if age < 0 or age > DROP_FLASH_SECONDS:
+        return 0.0
+    return (1.0 - age / DROP_FLASH_SECONDS) ** 0.6
+
+
+def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> None:
+    """An outline around a rectangle, drawn into the current window.
+
+    Shared by the drop flash and by the in-app drag target, so "this is the
+    thing you are aiming at" looks the same however the payload arrived.
+    """
+    if alpha <= 0.0:
+        return
+    imgui.get_window_draw_list().add_rect(
+        (low.x - sp(4), low.y - sp(4)),
+        (high.x + sp(4), high.y + sp(4)),
+        imgui.get_color_u32(theme.rgba(colour, alpha)),
+        sp(4),
+        thickness=sp(thick),
+    )
+
+
 def header(label: str, default_open: bool = True, persist_key: str | None = None) -> bool:
     """A collapsing section. Open by default, because these *are* the panel.
 
@@ -406,6 +498,13 @@ def header(label: str, default_open: bool = True, persist_key: str | None = None
     if persist_key and _SETTINGS is not None:
         stored = _SETTINGS.get("panels_open") or {}
     if FORCE_SECTIONS_OPEN:
+        imgui.set_next_item_open(True, imgui.Cond_.always.value)
+    elif persist_key and persist_key in _OPEN_REQUESTS:
+        # A one-shot ``always``, consumed here. ``once`` cannot serve this: it
+        # fires the first time the section is drawn in a session, and the case
+        # this exists for -- a dropped file landing in a section the user has
+        # collapsed -- happens long after that.
+        _OPEN_REQUESTS.discard(persist_key)
         imgui.set_next_item_open(True, imgui.Cond_.always.value)
     elif persist_key and persist_key in stored:
         imgui.set_next_item_open(bool(stored[persist_key]), imgui.Cond_.once.value)
@@ -783,7 +882,29 @@ def empty_state(icon: str, title: str, hint: str = "") -> None:
 # What a toast's ``action`` draws as. A name with no entry here draws nothing,
 # so an action the UI has not learned yet degrades to a plain toast rather than
 # to a button that does something unexpected.
-TOAST_ACTIONS = {"log": "Open log"}
+TOAST_ACTIONS = {"log": "Open log", "show": "Show", "review": "Review"}
+
+# How many toasts are on screen at once. The rest are counted, not dropped
+# (H69): five stacked notices already reach a third of the way up the window,
+# and a burst -- a sweep landing, a bulk delete -- would otherwise cover the
+# viewport it is reporting about.
+TOAST_VISIBLE = 5
+
+
+def toast_style(level: str) -> tuple[int, str]:
+    """``(background colour, leading glyph)`` for a toast level (H68).
+
+    One table rather than a chain of ``if level ==``, because the colour, the
+    glyph, the dwell time and the stickiness are four facts about one level and
+    three of them already live in ``state``. An unknown level renders as an
+    ordinary notice, which is what makes a new level safe to raise before this
+    file has heard of it.
+    """
+    return {
+        "success": (theme.OK, icons.CIRCLE_CHECK),
+        "warn": (theme.WARN, icons.TRIANGLE_ALERT),
+        "error": (theme.ERR, icons.CIRCLE_ALERT),
+    }.get(level, (theme.ELEV_2, ""))
 
 
 def toasts(
@@ -791,27 +912,35 @@ def toasts(
 ) -> None:
     """Stacked bottom-right, newest lowest; born sliding up, dying fading out.
 
-    Info toasts stay ``no_inputs`` -- they never mattered enough to click --
-    unless they carry an action, which would otherwise be a button the mouse
-    passes straight through. Error toasts always take input so their close
-    button works: eight seconds is enough to read a sentence, not always
-    enough to act on one.
+    Info and success toasts stay ``no_inputs`` -- they never mattered enough to
+    click -- unless they carry an action, which would otherwise be a button the
+    mouse passes straight through. ``state.TOAST_STICKY`` levels always take
+    input so their close button works: eight seconds is enough to read a
+    sentence, not always enough to act on one.
+
+    **Hovering pauses the clock** (H69), by pushing ``born`` forward by the
+    frame's own delta rather than by recording a pause timestamp: age is read
+    from ``born`` in four places, and a second field saying "but not that age"
+    is how two of them come to disagree. Only a toast that takes input can be
+    hovered at all, which is the same set that is worth pausing.
     """
     state.expire_toasts()
     if not state.toasts:
         return
     now = time.monotonic()
+    delta = imgui.get_io().delta_time
     margin = sp(16)
     y = viewport_size[1] - margin
     dismissed: list[Any] = []
-    for toast in reversed(state.toasts[-5:]):
+    hidden = max(0, len(state.toasts) - TOAST_VISIBLE)
+    for toast in reversed(state.toasts[-TOAST_VISIBLE:]):
         age = now - toast.born
         fade_in = min(age / 0.18, 1.0)
         fade_out = min(max(toast.ttl - age, 0.0) / 0.3, 1.0)
         alpha = min(fade_in, fade_out)
         rise = (1.0 - (1.0 - fade_in) ** 3) * sp(10) - sp(10)  # eased slide-up
-        error = toast.level == "error"
-        colour = theme.ERR if error else theme.ELEV_2
+        sticky = toast.level in app_state.TOAST_STICKY
+        colour, glyph = toast_style(toast.level)
         imgui.set_next_window_bg_alpha(0.96 * alpha)
         imgui.set_next_window_pos(
             (viewport_size[0] - margin, y - rise), imgui.Cond_.always.value, (1, 1)
@@ -826,18 +955,25 @@ def toasts(
             | imgui.WindowFlags_.no_focus_on_appearing.value
         )
         label = TOAST_ACTIONS.get(toast.action or "") if on_action is not None else None
-        if not error and not label:
+        if not sticky and not label:
             flags |= imgui.WindowFlags_.no_inputs.value
         if imgui.begin(f"##toast{id(toast)}", None, flags)[0]:
-            if error:
+            if imgui.is_window_hovered(imgui.HoveredFlags_.child_windows.value):
+                # Paused, not extended: the clock resumes where it stopped when
+                # the mouse leaves.
+                toast.born += delta
+            if sticky:
                 if imgui.small_button("x"):
                     dismissed.append(toast)
+                imgui.same_line()
+            if glyph:
+                text_colored(theme.TEXT, glyph)
                 imgui.same_line()
             imgui.text_wrapped(toast.text)
             # Its own line: the text above it wraps to the toast's full width,
             # so a same_line here would start past the right edge.
             if label and imgui.small_button(f"{label}##toast-action{id(toast)}"):
-                on_action(toast.action)
+                on_action(toast.action, toast.action_arg)
                 # Acted on, so done with: leaving it up invites a second click
                 # that opens a second copy of the same file.
                 dismissed.append(toast)
@@ -846,6 +982,24 @@ def toasts(
         imgui.pop_style_var()
         imgui.pop_style_color()
         y -= height + sp(8)
+    if hidden:
+        # Above the stack, in the direction the older ones went. A count rather
+        # than a scrollable list: the full record is the history in the
+        # diagnostics popup, and this line exists to say the stack is a window
+        # onto something rather than the whole of it.
+        imgui.set_next_window_bg_alpha(0.0)
+        imgui.set_next_window_pos((viewport_size[0] - margin, y), imgui.Cond_.always.value, (1, 1))
+        if imgui.begin(
+            "##toast-more",
+            None,
+            imgui.WindowFlags_.no_decoration.value
+            | imgui.WindowFlags_.no_saved_settings.value
+            | imgui.WindowFlags_.always_auto_resize.value
+            | imgui.WindowFlags_.no_inputs.value
+            | imgui.WindowFlags_.no_focus_on_appearing.value,
+        )[0]:
+            muted(f"+{hidden} more")
+        imgui.end()
     for toast in dismissed:
         if toast in state.toasts:
             state.toasts.remove(toast)

@@ -176,7 +176,7 @@ class Filters:
             return False
         if self.status != "all" and job.get("status") != self.status:
             return False
-        if self.kind != "all" and _kind_of(job) != self.kind:
+        if self.kind != "all" and card_kind(job) != self.kind:
             return False
         if self.text:
             needle = self.text.strip().lower()
@@ -229,7 +229,7 @@ class Filters:
         return sorted(jobs, key=key)
 
 
-def _kind_of(job: dict[str, Any]) -> str:
+def card_kind(job: dict[str, Any]) -> str:
     """What the filter calls this row.
 
     Not simply job["kind"]: a text job that stops at a reference, one that
@@ -244,10 +244,39 @@ def _kind_of(job: dict[str, Any]) -> str:
     return "model"
 
 
+# How long each level of toast stays up, in seconds (H68). Four levels, and
+# the ladder is the *reading time* each one asks for rather than a severity
+# score: a confirmation is read at a glance, a warning is a sentence, and an
+# error usually says what to do next and four seconds is not long enough to
+# read a sentence and act on it.
+#
+# ``success`` and ``warn`` are new, and the gap they fill is real: everything
+# that finished, and everything that half-worked, has been arriving in the same
+# neutral grey as "settings copied to the form". A level with no entry here
+# falls back to ``info`` -- the same rule ``Toast.action`` follows, and what
+# lets a level be introduced from the calling side.
+TOAST_LEVELS: dict[str, float] = {
+    "info": 4.0,
+    "success": 4.0,
+    "warn": 6.0,
+    "error": 8.0,
+}
+
+# The levels that take mouse input and offer a close button: a message the user
+# may need to act on must not be un-clickable, and must not vanish under the
+# cursor. See ``widgets.toasts``.
+TOAST_STICKY = frozenset({"warn", "error"})
+
+# How many past toasts the history keeps. A session's worth of notices, not a
+# log file: the log file is the log file, and this is the thing you check
+# because something flashed past while you were looking at the viewport.
+TOAST_LOG_MAX = 100
+
+
 @dataclass
 class Toast:
     text: str
-    level: str = "info"  # info | error
+    level: str = "info"  # one of TOAST_LEVELS
     born: float = field(default_factory=time.monotonic)
     # A route the toast offers alongside its text. Only "log" today: an
     # unexpected exception's toast says "see the log for details" and the one
@@ -255,12 +284,18 @@ class Toast:
     # away than eight seconds. Named rather than a bool so the widget's label
     # is a function of the toast; an unrecognised name simply draws nothing.
     action: str | None = None
+    # What the action acts *on* -- a job id for "show", a sweep id for
+    # "review". A field rather than a name like ``show:abc123``: the label
+    # comes from ``TOAST_ACTIONS[action]``, so an id spliced into the name
+    # would make every toast's action unrecognised and silently unlabelled.
+    action_arg: str | None = None
 
     @property
     def ttl(self) -> float:
-        # Errors linger: they usually say what to do next, and four seconds is
-        # not long enough to read a sentence and act on it.
-        return 8.0 if self.level == "error" else 4.0
+        # A level the UI has not learned is an ordinary notice rather than an
+        # exception: the same rule ``action`` follows, and the reason a new
+        # level can be introduced from one side.
+        return TOAST_LEVELS.get(self.level, TOAST_LEVELS["info"])
 
     def expired(self, now: float | None = None) -> bool:
         return (time.monotonic() if now is None else now) - self.born > self.ttl
@@ -427,6 +462,12 @@ class AppState:
     # it holds a query, a cursor and whether it is up, and nothing about it
     # survives being closed -- reopening on the last query would make Ctrl+K
     # act on a search the user has forgotten typing.
+    # Which slot last received a drop, and when (H70). A dropped file used to
+    # be acknowledged only by a toast in the far corner of the window, while
+    # the control that actually changed -- in 2D, inside a section that is
+    # collapsed by default -- showed nothing at all. See ``widgets.drop_flash``.
+    drop_flash_slot: str = ""
+    drop_flash_at: float = 0.0
     palette_open: bool = False
     palette_query: str = ""
     palette_index: int = 0
@@ -442,6 +483,13 @@ class AppState:
     history: list[str] = field(default_factory=list)
     checked: set[str] = field(default_factory=set)
     toasts: list[Toast] = field(default_factory=list)
+    # Every toast raised this session, newest first, capped (H67). A toast is
+    # the app's only channel for "that worked" and "that did not", and it is
+    # gone in four seconds -- which for anything that happens while the user is
+    # looking elsewhere means it never happened at all. Not persisted: it is a
+    # record of *this* run, and one restored from disk would be a list of
+    # things that are no longer true.
+    toast_log: list[Toast] = field(default_factory=list)
     # The composed-prompt preview, refreshed off-thread as the prompt is typed.
     preview: dict[str, Any] = field(default_factory=dict)
     preview_dirty_at: float = 0.0
@@ -562,8 +610,21 @@ class AppState:
 
     # -- toasts ------------------------------------------------------------
 
-    def toast(self, text: str, level: str = "info", action: str | None = None) -> None:
-        self.toasts.append(Toast(text=text, level=level, action=action))
+    def toast(
+        self,
+        text: str,
+        level: str = "info",
+        action: str | None = None,
+        action_arg: str | None = None,
+    ) -> None:
+        entry = Toast(text=text, level=level, action=action, action_arg=action_arg)
+        self.toasts.append(entry)
+        # And into the history, which is the same object rather than a copy of
+        # its text (H67): the history has to be able to say what *level* a
+        # message was and when, and a list of strings cannot. Newest first, so
+        # the popup that draws it needs no reversal and no scroll to the end.
+        self.toast_log.insert(0, entry)
+        del self.toast_log[TOAST_LOG_MAX:]
 
     def expire_toasts(self) -> None:
         now = time.monotonic()

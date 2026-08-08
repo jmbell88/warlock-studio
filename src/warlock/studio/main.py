@@ -60,6 +60,26 @@ _SINGLE_PANE_MODES = ("home", "manual", "settings")
 _DIGIT_KEYS: dict[int, int] = {}
 
 
+# What a drop onto the window is allowed to be. One tuple, because the refusal
+# message and the accept path have to agree about it (H71).
+DROPPABLE_IMAGES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+
+def _ago(seconds: float) -> str:
+    """``12s`` / ``4m`` / ``2h``, for the notification history (H67).
+
+    Coarse on purpose: the question it answers is "was that the one from just
+    now", and a figure with more precision than that invites reading it as a
+    measurement.
+    """
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    return f"{int(seconds // 3600)}h"
+
+
 def _digit_keys() -> dict[int, int]:
     global _DIGIT_KEYS
     if not _DIGIT_KEYS:
@@ -870,14 +890,27 @@ class App:
 
     def _refresh(self) -> None:
         from . import review_mode
-        from .jobs_cache import transition_message
+        from .jobs_cache import sweep_summary, transition_message
 
         ctx = self.app_ctx
 
         def announce(job: Any, previous: str | None) -> None:
-            message = transition_message(job, previous)
-            if message is not None:
-                ctx.toast(*message)
+            sweep_id = job.get("sweep_id")
+            if sweep_id:
+                # One toast per sweep, not one per unit (N109). A twenty-unit
+                # sweep otherwise raises twenty notices, which is exactly the
+                # burst the "+N more" line exists to count -- and the useful
+                # message ("how did it go") is the one nothing was raising.
+                summary = sweep_summary(ctx.cache.jobs, sweep_id)
+                if summary is not None:
+                    ctx.toast(*summary, action="review", action_arg=sweep_id)
+            else:
+                message = transition_message(job, previous)
+                if message is not None:
+                    # "Show" selects it (N108): a toast that names a job and
+                    # offers no way to it makes the user find it by hand,
+                    # which after an overnight batch is the whole problem.
+                    ctx.toast(*message, action="show", action_arg=job["id"])
             if job["status"] == "done":
                 # Incremental (C33): only this job's directory changed, so only
                 # it is re-walked; delete and prune still trigger the full one.
@@ -1340,8 +1373,18 @@ class App:
             else:
                 ctx.toast("Clay opens .wblk documents and .glb meshes.", "error")
             return
-        if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
-            ctx.toast("Drop an image to start a mesh from it.", "error")
+        if path.suffix.lower() not in DROPPABLE_IMAGES:
+            # The refusal says what a drop would have *done here* (H71). One
+            # sentence for both modes was wrong in 2D, where a dropped image is
+            # a conditioning reference and never a mesh -- and the sentence is
+            # the only thing that teaches the difference, since the two modes
+            # accept the same file types.
+            ctx.toast(
+                "Drop an image to condition this generation on it."
+                if ctx.state.mode == "2d"
+                else "Drop an image to start a mesh from it.",
+                "error",
+            )
             return
         if ctx.state.mode == "2d":
             # In the 2D pane a dropped image is a *conditioning reference*, not
@@ -1349,12 +1392,25 @@ class App:
             # the prompt the user is composing. One branch, and it is what
             # makes the feature discoverable at all.
             ctx.state.form_2d["ref_path"] = str(path)
-            ctx.toast(f"Using {path.name} as the reference.")
+            # The Reference section is collapsed by default, so without these
+            # two lines the drop is accepted and nothing on screen moves (H70).
+            from . import widgets
+
+            widgets.request_open("2d/reference")
+            self._flash_drop("2d-ref")
+            ctx.toast(f"Using {path.name} as the reference.", "success")
             return
         # A drop is a start: it would otherwise land behind the chooser, with
         # nothing on screen saying anything had happened.
-        ctx.state.mode = "3d"
+        self._set_mode("3d")
+        self._flash_drop("3d-source")
         settings_3d.upload(ctx, path)
+
+    def _flash_drop(self, slot: str) -> None:
+        """Mark a slot as having just received a drop, for ``widgets.ring``."""
+        state = self.app_ctx.state
+        state.drop_flash_slot = slot
+        state.drop_flash_at = time.monotonic()
 
     def _request_quit(self) -> None:
         """One chain, in order: painted pixels, then built geometry, then a pose.
@@ -1979,6 +2035,17 @@ class App:
         if changed:
             review_mode.set_blind(ctx, blind)
         widgets.hint_text("Hides which settings each unit ran, and the order.")
+        if not state.sweeps and not state.scanning:
+            # H73. An empty Sweeps heading with a Rescan button under it says
+            # nothing about *why* -- and the two reasons (no sweep has ever run
+            # here, versus the bench directory is somewhere else) want different
+            # responses.
+            widgets.empty_state(
+                icons.LIST,
+                "No sweep runs found",
+                "Launch one below, or check that the bench directory is where "
+                "you expect.",
+            )
         for sweep in state.sweeps:
             todo = sweep["todo"]
             total = len(sweep["units"])
@@ -2347,15 +2414,31 @@ class App:
         ctx.confirms.draw()
         ctx.prompts.draw()
 
-    def _toast_action(self, name: str) -> None:
+    def _toast_action(self, name: str, arg: str | None = None) -> None:
         """What a toast's action button does, kept out of the widget.
 
         ``widgets.toasts`` knows what to *draw* for an action and nothing about
         what it means, which is what lets state.py carry the name with no
         import of the App and lets a pane raise a toast without either.
         """
+        ctx = self.app_ctx
         if name == "log":
-            self.app_ctx.open_log()
+            ctx.open_log()
+        elif name == "show" and arg:
+            from .panes import library
+
+            # Through the library's own selector, so the promotion source
+            # follows the selection exactly as a click on the card would.
+            library.select(ctx, arg)
+            job = ctx.cache.get(arg)
+            if job is not None:
+                self._set_mode("2d" if job.get("stage") in ("reference", "tile") else "3d")
+            ctx.state.library_scroll_to = arg
+        elif name == "review":
+            # The sweep is not named here: Review rescans on arrival and its
+            # run list is the thing that knows which directories exist. Landing
+            # on the mode is the whole of what the button promises.
+            self._set_mode("review")
 
     def _mode_switch(self) -> None:
         from imgui_bundle import imgui
@@ -2628,6 +2711,7 @@ class App:
         if not checks:
             widgets.muted("No checks ran.")
         self._effective_config_section(ctx)
+        self._toast_history_section(ctx)
         if ctx.state.dismissed_errors:
             # What Dismiss took off the banner (F59). Here rather than nowhere:
             # every writer of ``state.errors`` fires once, so clearing the list
@@ -2668,6 +2752,53 @@ class App:
         if manual_render.troubleshooting_button(ctx):
             imgui.close_current_popup()
         imgui.end_popup()
+
+    def _toast_history_section(self, ctx: Any) -> None:
+        """Every notice this session raised, newest first (H67).
+
+        In the diagnostics popup rather than behind a bell of its own: this is
+        the same question as "what is wrong with my install" asked about the
+        last ten seconds instead of about the machine, and a second icon in the
+        top bar for it would be a second place to look. It sits *below* the
+        checks for that reason -- the checks are the standing answer and this is
+        the transient one.
+
+        Collapsed by default, because on a healthy session it is a list of
+        things that went right.
+        """
+        from imgui_bundle import imgui
+
+        from . import theme, widgets
+        from .tokens import sp
+
+        log = ctx.state.toast_log
+        if not log:
+            return
+        imgui.separator()
+        if not imgui.collapsing_header(f"Notifications ({len(log)})##toast-history"):
+            return
+        now = time.monotonic()
+        if imgui.begin_child("toast-history", (0, sp(160))):
+            for entry in log:
+                colour, glyph = widgets.toast_style(entry.level)
+                widgets.text_colored(colour, glyph or "-")
+                imgui.same_line()
+                # Relative, not a clock time: what a reader wants from this
+                # list is "was that the one from just now", and a wall clock
+                # makes them do the subtraction.
+                widgets.muted(_ago(now - entry.born))
+                imgui.same_line()
+                imgui.push_style_color(
+                    imgui.Col_.text.value,
+                    imgui.ImVec4(*theme.rgba(theme.TEXT if entry.level != "info" else theme.MUTED)),
+                )
+                imgui.text_wrapped(entry.text)
+                imgui.pop_style_color()
+        imgui.end_child()
+        if imgui.small_button("Copy notifications"):
+            imgui.set_clipboard_text(
+                "\n".join(f"{e.level}: {e.text}" for e in reversed(log))
+            )
 
     def _effective_config_section(self, ctx: Any) -> None:
         """What this process is running on, with the overridden rows marked.

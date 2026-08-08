@@ -115,15 +115,27 @@ def _draw_toc(ms: Any) -> None:
     )
     needle = ms.search.strip().lower()
     part = None
+    found = 0
     for chapter in _toc():
         if needle and not _matches(chapter, needle):
             continue
+        found += 1
         if chapter.part != part and chapter.part:
             widgets.section(chapter.part)
         part = chapter.part
         label = chapter.title if chapter.part else "Contents"
         if imgui.selectable(f"{label}##{chapter.key}", ms.chapter == chapter.key)[0]:
             ms.open_at(chapter.key)
+    if needle and not found:
+        # H73. A search that matches nothing used to empty the whole table of
+        # contents, which reads as the manual having vanished rather than as a
+        # query having missed -- and the search box is above the list, so there
+        # was nothing on screen to say a filter was on.
+        widgets.empty_state(
+            icons.SEARCH,
+            "No chapter matches.",
+            "Titles and headings are searched, not the body text.",
+        )
 
 
 def _matches(chapter: loader.Chapter, needle: str) -> bool:

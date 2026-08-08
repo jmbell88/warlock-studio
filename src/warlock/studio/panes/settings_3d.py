@@ -21,7 +21,6 @@ from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, matte_preview, theme, widgets
 from ..manual import render as manual_render
-from ..tokens import sp
 
 MATTE_TITLE = "Check the cutout"
 
@@ -180,20 +179,23 @@ def _source(ctx: Any) -> None:
         ctx.submit("upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER)
     widgets.muted("...or drop an image on the window.")
     imgui.end_group()
+    end = imgui.get_item_rect_max()
     if dragging is not None:
-        # H70's rule applied to the in-app drag: a target the pointer is over
-        # says so, and one that is merely *available* says that too but more
-        # quietly. Drawn after the group so the outline is not clipped by it.
-        end = imgui.get_item_rect_max()
+        # A target the pointer is over says so, and one that is merely
+        # *available* says that too but more quietly. Drawn after the group so
+        # the outline is not clipped by it.
         hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_blocked_by_active_item.value)
-        colour = theme.ACCENT if hovered else theme.MUTED
-        imgui.get_window_draw_list().add_rect(
-            (origin.x - sp(4), origin.y - sp(4)),
-            (end.x + sp(4), end.y + sp(4)),
-            imgui.get_color_u32(theme.rgba(colour, 0.9 if hovered else 0.4)),
-            sp(4),
-            thickness=sp(2 if hovered else 1),
+        widgets.ring(
+            origin,
+            end,
+            theme.ACCENT if hovered else theme.MUTED,
+            0.9 if hovered else 0.4,
+            2.0 if hovered else 1.0,
         )
+    else:
+        # The same ring, fading, for a file dropped from Explorer (H70): the
+        # two arrivals look the same because they are the same event.
+        widgets.ring(origin, end, theme.ACCENT, widgets.drop_flash(state, "3d-source"))
     if imgui.begin_drag_drop_target():
         payload = imgui.accept_drag_drop_payload_py_id(library.DRAG_JOB)
         if payload is not None and state.dragging_job:

@@ -2148,3 +2148,43 @@ def test_the_3d_source_slot_builds_while_a_drag_is_in_flight(app_ctx, imgui_ctx)
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
     app_ctx.state.dragging_job = None
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
+
+
+def test_the_toast_stack_and_its_history_build(app_ctx, imgui_ctx):
+    """Every level, the over-cap counter, an action button, and the history in
+    the diagnostics popup -- all of which draw only when something has been
+    raised, which is why nothing had built them."""
+    from warlock.studio import widgets
+
+    for level in ("info", "success", "warn", "error"):
+        app_ctx.toast(f"a {level} notice", level)
+    app_ctx.toast("with an action", "success", action="show", action_arg="nope")
+    for index in range(widgets.TOAST_VISIBLE):
+        app_ctx.toast(f"filler {index}")
+    seen: list[tuple] = []
+    _frame(
+        imgui_ctx,
+        lambda: widgets.toasts(
+            app_ctx.state, (1200.0, 900.0), on_action=lambda *a: seen.append(a)
+        ),
+    )
+    assert len(app_ctx.state.toast_log) == widgets.TOAST_VISIBLE + 5
+
+
+def test_the_placeholder_builds_in_every_mode(app_ctx, imgui_ctx):
+    from warlock.studio import modes
+    from warlock.studio.panes import overlay
+
+    for mode in modes.KEYS:
+        app_ctx.state.mode = mode
+        _frame(imgui_ctx, lambda: overlay.placeholder(app_ctx))
+
+
+def test_a_card_with_no_thumbnail_builds_its_placeholder(app_ctx, imgui_ctx):
+    from warlock.studio.panes import library
+
+    job_id = _seeded(app_ctx)
+    # No thumb.png was written, so every card takes the placeholder path.
+    app_ctx.state.mode = "3d"
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    assert "thumb.png" not in (app_ctx.cache.get(job_id).get("files") or [])

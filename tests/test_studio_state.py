@@ -220,7 +220,9 @@ def test_byte_counts_read_as_sizes():
 
 def test_only_terminal_transitions_are_worth_a_toast():
     assert transition_message(job(status="running"), "queued") is None
-    assert transition_message(job(status="done"), "running")[1] == "info"
+    # H68: a finished job is the one unambiguously good thing this
+    # function reports, and it spent its life in the neutral grey.
+    assert transition_message(job(status="done"), "running")[1] == "success"
     assert transition_message(job(status="error", error="boom"), "running")[1] == "error"
 
 
@@ -715,7 +717,7 @@ def test_a_malformed_rank_is_treated_as_unranked():
 
 
 def test_the_kind_filter_knows_a_tile():
-    assert statelib._kind_of({"kind": "text", "stage": "tile"}) == "tile"
+    assert statelib.card_kind({"kind": "text", "stage": "tile"}) == "tile"
 
 
 def test_a_finished_tile_offers_no_mesh():

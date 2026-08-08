@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import rig as svc_rig
-from .. import dialogs, theme, widgets
+from .. import dialogs, icons, theme, widgets
 from ..manual import render as manual_render
 
 log = logging.getLogger(__name__)
@@ -269,9 +269,16 @@ def _joints(ctx: Any, job: Any, viewer: Any) -> None:
 
 def _saved_list(ctx: Any, job: Any) -> None:
     poses = (ctx.state.preview or {}).get("poses") or []
-    if not poses:
-        return
     widgets.section("Saved poses")
+    if not poses:
+        # H73, and the same reason the sheet list has one: an absent section
+        # is indistinguishable from a broken one.
+        widgets.empty_state(
+            icons.PERSON_STANDING,
+            "No saved poses",
+            "Enter edit mode, rotate a joint, then Save.",
+        )
+        return
     # S138, and the interesting half of it: a pose bake is deliberately *not*
     # queued -- it is a one-second Blender subprocess derived on request, for
     # the same reason the STL and OBJ exports are -- so saying so is what stops
