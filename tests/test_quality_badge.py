@@ -43,6 +43,27 @@ def test_the_badge_reads_the_welded_watertight_flag_not_the_raw_one(monkeypatch)
     assert drawn == ["watertight"]
 
 
+def test_a_report_verdict_key_means_nothing_to_the_badge(monkeypatch):
+    """There used to be a branch above both of the ones this file pins,
+    painting ``report["verdict"]`` as good / usable / anything-else. Nothing
+    has ever written that key -- ``meshreport.build`` writes ``status``, whose
+    values are ready / review / invalid -- so it was dead from the day it was
+    typed and every mesh fell past it. It is deleted rather than re-pointed at
+    ``status``: that word pools the triangle budget, the UV set, both PBR maps
+    and the pivot into one verdict, which is the inspector's section (where the
+    reasons are listed beside it), and as the first branch it would have
+    suppressed the welded-watertight badge for every mesh.
+    """
+    drawn: list[str] = []
+    monkeypatch.setattr(widgets, "text_colored", lambda colour, label: drawn.append(label))
+
+    widgets.quality_badge(
+        {"params": {"mesh_audit": {"worst": 0.05}, "mesh_report": {"verdict": "good"}}}
+    )
+
+    assert drawn == ["5.0% open"]
+
+
 def test_an_audit_without_a_measurement_draws_no_badge(monkeypatch):
     drawn: list[str] = []
     monkeypatch.setattr(widgets, "text_colored", lambda colour, label: drawn.append(label))

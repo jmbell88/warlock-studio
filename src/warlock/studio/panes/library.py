@@ -242,6 +242,11 @@ def _card_body(ctx: Any, job: Any) -> None:
     name = job.get("name") or job.get("prompt") or job_id
     imgui.text_wrapped(name if len(name) <= 46 else name[:43] + "...")
     widgets.status_pill(job["status"])
+    # Between the two, and that order is the rule rather than a preference:
+    # ``quality_badge`` may draw nothing and owns its own ``same_line`` for it,
+    # so anything unconditional has to be ahead of it -- a badge placed after
+    # would inherit the ``same_line`` that call did not spend.
+    widgets.stage_badge(job, inline=True)
     widgets.quality_badge(job, inline=True)
     rank = (job.get("params") or {}).get("rank")
     if isinstance(rank, dict) and rank.get("score") is not None:
@@ -276,10 +281,8 @@ def _card_actions(ctx: Any, job: Any) -> None:
     if action is not None and imgui.small_button(ACTIONS[action]):
         run_action(ctx, job, action)
     imgui.same_line()
-    if imgui.small_button(icons.ELLIPSIS):
+    if widgets.small_icon_button(icons.ELLIPSIS, "More actions"):
         imgui.open_popup("more")
-    if imgui.is_item_hovered():
-        imgui.set_tooltip("More actions")
     imgui.same_line()
     checked = job["id"] in ctx.state.checked
     changed, value = imgui.checkbox("##pick", checked)
@@ -291,7 +294,7 @@ def _card_actions(ctx: Any, job: Any) -> None:
     favourite = bool(job.get("favorite"))
     if favourite:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
-    if imgui.small_button(icons.STAR):
+    if widgets.small_icon_button(icons.STAR, "Unfavourite" if favourite else "Favourite"):
         ctx.submit(
             f"fav:{job['id']}",
             svc_jobs.update_job,
@@ -301,8 +304,6 @@ def _card_actions(ctx: Any, job: Any) -> None:
         )
     if favourite:
         imgui.pop_style_color()
-    if imgui.is_item_hovered():
-        imgui.set_tooltip("Unfavourite" if favourite else "Favourite")
     _overflow(ctx, job)
 
 
@@ -333,6 +334,16 @@ def _overflow(ctx: Any, job: Any) -> None:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
         if _remeshable(job) and imgui.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
+    # The 2D half of the same pair as Edit in Clay, and gated the same way: on
+    # a predicate the mode owns, answered from the cached row alone so the
+    # frame thread never stats anything. Above the mesh block because the two
+    # are mutually exclusive -- a reference has no ``model.glb`` -- and the
+    # loader reuses an already-open tab rather than forking a second one over
+    # the same file.
+    from .. import inker_mode
+
+    if inker_mode.can_edit_job(ctx, job) and imgui.menu_item("Open in Inker", "", False)[0]:
+        inker_mode.open_job_reference(ctx, job)
     if "model.glb" in files:
         # Clay prefers the ``build.wblk`` sidecar when the asset was authored
         # here, and imports ``model.glb`` -- the optimized, grounded, served
