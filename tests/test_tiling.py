@@ -16,7 +16,11 @@ torch = pytest.importorskip("torch")
 
 from warlock import models  # noqa: E402
 from warlock.pipelines import text2image  # noqa: E402
-from warlock.pipelines.prompt import PROMPT_TEMPLATE, TILE_TEMPLATE  # noqa: E402
+from warlock.pipelines.prompt import (  # noqa: E402
+    PROMPT_TEMPLATE,
+    TILE_TEMPLATE,
+    view_clause,
+)
 
 
 class _Net(torch.nn.Module):
@@ -185,7 +189,12 @@ def test_a_job_that_asks_for_no_tiling_never_enters_the_patch(stub_t2i, monkeypa
     t2i.generate("a wooden crate", tmp_path / "a.png")
 
     assert pipe.modes_during_call == ["zeros"] * 4
-    assert t2i.last_prompt == PROMPT_TEMPLATE.format(prompt="a wooden crate")
+    # The {view} slot mirrors generate()'s own default framing ("") rather than
+    # a literal, so this assertion keeps testing the tiling path and does not
+    # quietly become a second copy of the framing clause.
+    assert t2i.last_prompt == PROMPT_TEMPLATE.format(
+        prompt="a wooden crate", view=view_clause("")
+    )
     assert t2i.last_recipe["tile"] is False
 
 
