@@ -251,6 +251,110 @@ class Toast:
         return (time.monotonic() if now is None else now) - self.born > self.ttl
 
 
+# How often the status strip re-reads the machine. Every reading behind it is
+# a syscall -- two Win32 calls and a ``cudaMemGetInfo`` -- and the frame loop
+# must never block, so they are sampled at about 2 Hz and the frames in between
+# redraw the same numbers. Two per second is also as fast as any of them is
+# worth reading: a memory figure that changes 60 times a second is unreadable.
+RESOURCE_PERIOD = 0.5
+
+
+def _pair(used: float | None, total: float | None) -> str:
+    """``21.4/32``, or ``--`` when either half is unavailable.
+
+    Never ``0``: ``vram.device_memory`` returns None whenever torch has not
+    been imported into this process yet, which is most of a session, and a zero
+    there would read as "the card is empty" rather than "nobody has looked".
+    """
+    if used is None or total is None:
+        return "--"
+    return f"{used:.1f}/{total:.0f}"
+
+
+@dataclass(frozen=True)
+class Resources:
+    """One sample of what the machine is doing, all four fields None-able.
+
+    Taken straight from ``memlog`` and ``vram``, which are the two pure modules
+    that answer with None rather than raising -- so a reading this cannot get
+    is simply absent, and every renderer here has to say so.
+
+    The host pair is deliberately *this process* over the *system* commit
+    limit: those are the two halves of the 2026-08-03 crash ("are we the leak"
+    and "how close is the wall"), and they are the two numbers memlog exists to
+    record. The device pair is device-wide rather than ours, because
+    ``cudaMemGetInfo`` reports the card -- which is the point, since
+    trellis-server's ~16 GB lives in another process entirely.
+    """
+
+    private_gib: float | None = None
+    commit_gib: float | None = None
+    commit_limit_gib: float | None = None
+    vram_used_gib: float | None = None
+    vram_total_gib: float | None = None
+    vram_free_gib: float | None = None
+
+    @classmethod
+    def sample(cls) -> Resources:
+        """Read the machine once. Never raises; every source is None-safe."""
+        from .. import memlog, vram
+
+        proc = memlog.process_memory()
+        sysmem = memlog.system_memory()
+        # device_memory() and never probe(): probe imports torch, which costs
+        # seconds, and this runs on the frame thread.
+        device = vram.device_memory()
+        used = None if device is None else device.total_gib - device.free_gib
+        return cls(
+            private_gib=None if proc is None else proc.private,
+            commit_gib=None if sysmem is None else sysmem.commit_total,
+            commit_limit_gib=None if sysmem is None else sysmem.commit_limit,
+            vram_used_gib=used,
+            vram_total_gib=None if device is None else device.total_gib,
+            vram_free_gib=None if device is None else device.free_gib,
+        )
+
+    def line(self, fps: float, frames: int) -> str:
+        """The compact strip: ``58 fps · 1.9/32 GB · VRAM 21.4/32``.
+
+        Latin-1 throughout -- the separator is U+00B7, which imgui's default
+        atlas carries; anything above it draws as the missing-glyph box.
+        """
+        rate = f"{fps:.0f}" if frames else "--"
+        host = _pair(self.private_gib, self.commit_limit_gib)
+        return f"{rate} fps · {host} GB · VRAM {_pair(self.vram_used_gib, self.vram_total_gib)}"
+
+    def detail(self, fps: float, frame_ms: float, worst_ms: float, frames: int) -> str:
+        """The tooltip: the same readings said in full, one per line."""
+        lines = []
+        if frames:
+            lines.append(f"Frames: {fps:.1f} fps, {frame_ms:.1f} ms mean, {worst_ms:.1f} ms peak")
+        else:
+            lines.append("Frames: not measured yet")
+        if self.private_gib is None:
+            lines.append("Host memory: unavailable")
+        else:
+            lines.append(f"This process: {self.private_gib:.2f} GiB private commit")
+        if self.commit_gib is None or self.commit_limit_gib is None:
+            lines.append("System commit: unavailable")
+        else:
+            fraction = self.commit_gib / self.commit_limit_gib if self.commit_limit_gib else 0.0
+            lines.append(
+                f"System commit: {self.commit_gib:.1f}/{self.commit_limit_gib:.1f} GiB"
+                f" ({fraction * 100:.0f}%)"
+            )
+        if self.vram_total_gib is None:
+            # The honest sentence, and the common one: nothing has imported
+            # torch yet, so there is no reading rather than a reading of zero.
+            lines.append("Device VRAM: unavailable until a job loads torch")
+        else:
+            lines.append(
+                f"Device VRAM: {self.vram_used_gib:.1f}/{self.vram_total_gib:.1f} GiB used,"
+                f" {self.vram_free_gib:.1f} GiB free (whole card)"
+            )
+        return "\n".join(lines)
+
+
 @dataclass
 class ManualState:
     """The Manual mode: which chapter it shows and where in it.
@@ -299,8 +403,15 @@ class AppState:
     preview: dict[str, Any] = field(default_factory=dict)
     preview_dirty_at: float = 0.0
     # The frame-rate overlay (F10). Persisted, because someone watching for a
-    # stall wants it to survive the restart they are about to do.
+    # stall wants it to survive the restart they are about to do. It is the
+    # *detailed* view -- mean and worst frame -- and the always-on strip beside
+    # the mode switch is the summary; see ``overlay.fps_meter``.
     show_fps: bool = False
+    # The status strip's last sample and when it was taken, throttled to
+    # RESOURCE_PERIOD. A timestamp rather than a frame counter because the
+    # thing being bounded is syscalls per second, not per frame.
+    resources: Resources = field(default_factory=Resources)
+    resources_at: float = 0.0
     wireframe: bool = False
     turntable: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
@@ -355,6 +466,21 @@ class AppState:
     # file in it. A palette added while the app runs appears on the next frame,
     # because dropping a file moves the directory's own mtime.
     palettes: Any = None
+
+    # -- the status strip ---------------------------------------------------
+
+    def pump_resources(self, now: float | None = None) -> Resources:
+        """Re-sample at most every RESOURCE_PERIOD; return what to draw.
+
+        Called from the frame loop, so the throttle is the whole point: the
+        first sample is taken on the first frame (``resources_at`` starts at 0)
+        and every frame in between redraws the numbers already held.
+        """
+        now = time.monotonic() if now is None else now
+        if now - self.resources_at >= RESOURCE_PERIOD:
+            self.resources = Resources.sample()
+            self.resources_at = now
+        return self.resources
 
     # -- toasts ------------------------------------------------------------
 

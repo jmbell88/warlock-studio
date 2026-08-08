@@ -1357,6 +1357,81 @@ def test_the_bulk_bar_says_how_much_of_the_selection_is_off_screen(app_ctx, imgu
     assert library._delete_message(2, 0) == "2 jobs and everything derived from them."
 
 
+@pytest.mark.parametrize("scale", [1.0, 1.75])
+def test_the_mode_switchs_right_hand_strip_stays_inside_the_window(
+    app_ctx, imgui_ctx, scale
+):
+    """The readout, the ? and the health dot are one right-aligned strip, and
+    its width is measured rather than reserved as a constant.
+
+    A constant is what was there (``sp(64)``, sized for two controls), and a
+    ``same_line`` past the content region clips rather than wraps -- so a strip
+    that outgrew its reservation would not be squeezed, it would be gone. The
+    text's width is a function of the DPI scale, the font *and* how many digits
+    the readings happen to have, which is why this runs at more than one scale.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import main as main_mod
+    from warlock.studio import tokens
+    from warlock.studio import widgets as widgets_mod
+    from warlock.studio.fps import FpsMeter
+    from warlock.studio.panes import overlay
+
+    fake = SimpleNamespace(app_ctx=app_ctx, fps=FpsMeter())
+    fake._shortcuts_popup = lambda: main_mod.App._shortcuts_popup(fake)
+    fake._diagnostics_popup = lambda checks: main_mod.App._diagnostics_popup(fake, checks)
+    fake._request_quit = lambda: None
+    fake.fps.record(1 / 60)
+
+    rects: list[tuple[str, tuple[float, float, float, float]]] = []
+    edge: list[float] = []
+
+    def record(name: str) -> None:
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        rects.append((name, (lo.x, lo.y, hi.x, hi.y)))
+
+    real_icon = widgets_mod.icon_button
+    real_readout = overlay.status_readout
+
+    def icon_spy(label, *args, **kwargs):
+        result = real_icon(label, *args, **kwargs)
+        record(f"icon:{label}")
+        return result
+
+    def readout_spy(text, tooltip):
+        real_readout(text, tooltip)
+        record("readout")
+
+    def build():
+        edge.append(imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x)
+        main_mod.App._mode_switch(fake)
+        record("health")
+
+    old_scale = tokens.SCALE
+    tokens.set_scale(scale)
+    widgets_mod.icon_button = icon_spy
+    overlay.status_readout = readout_spy
+    try:
+        _frame(imgui_ctx, build)
+    finally:
+        widgets_mod.icon_button = real_icon
+        overlay.status_readout = real_readout
+        tokens.set_scale(old_scale)
+
+    assert {name for name, _ in rects} >= {"readout", "icon:?", "health"}, rects
+    right = edge[0]
+    for name, rect in rects:
+        assert rect[2] <= right + 1.0, (
+            f"{name} ends {rect[2] - right:.0f} px past the content edge; "
+            "a clipped control is an invisible one"
+        )
+    # And the readout does not run under the buttons it sits beside -- the
+    # overlap guard only covers icon buttons, and text against a button is the
+    # same bug with neither of them an icon.
+    by_name = dict(rects)
+    assert by_name["readout"][2] <= by_name["icon:?"][0] + 1.0
+
+
 def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
     app_ctx, imgui_ctx
 ):

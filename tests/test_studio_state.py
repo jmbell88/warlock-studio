@@ -18,6 +18,7 @@ from warlock.studio.state import (
     AppState,
     Eta,
     Filters,
+    Resources,
     format_bytes,
     format_duration,
     primary_action,
@@ -836,3 +837,84 @@ def test_a_toast_carries_no_action_by_default():
     state = AppState()
     state.toast("saved")
     assert state.toasts[0].action is None
+
+
+# --- the status strip's readings ---------------------------------------------
+
+
+def test_the_status_line_is_the_compact_form_it_promises():
+    line = Resources(
+        private_gib=1.94,
+        commit_gib=20.1,
+        commit_limit_gib=32.0,
+        vram_used_gib=21.42,
+        vram_total_gib=31.99,
+        vram_free_gib=10.57,
+    ).line(58.4, 1200)
+    assert line == "58 fps · 1.9/32 GB · VRAM 21.4/32"
+
+
+def test_every_character_of_the_status_line_is_inside_the_font_atlas():
+    """imgui's default atlas is Basic Latin + Latin-1; anything above U+00FF
+    draws as the missing-glyph box, which is why the separator is U+00B7 and
+    not a real bullet."""
+    resources = Resources(private_gib=1.9, commit_limit_gib=32.0)
+    text = resources.line(60.0, 10) + resources.detail(60.0, 16.6, 33.0, 10)
+    assert max(ord(c) for c in text) <= 0xFF
+
+
+def test_an_unavailable_vram_reading_renders_as_dashes_not_zero():
+    """``vram.device_memory`` answers None whenever torch has not been imported
+    into this process -- which is most of a session -- and a 0 there would read
+    as "the card is empty" rather than "nobody has measured"."""
+    resources = Resources(private_gib=1.9, commit_gib=20.1, commit_limit_gib=32.0)
+    line = resources.line(60.0, 600)
+    assert line.endswith("VRAM --")
+    assert "VRAM 0" not in line
+    assert "unavailable until a job loads torch" in resources.detail(60.0, 16.6, 33.0, 600)
+
+
+def test_an_unavailable_host_reading_renders_as_dashes_too():
+    """Off Windows every memlog reading is None, and the strip still draws."""
+    assert Resources().line(0.0, 0) == "-- fps · -- GB · VRAM --"
+
+
+def test_resources_are_sampled_at_most_twice_a_second(monkeypatch):
+    """The frame loop must never block, and every field behind this is a
+    syscall -- two Win32 calls and a cudaMemGetInfo."""
+    calls: list[int] = []
+
+    def fake() -> Resources:
+        calls.append(1)
+        return Resources(private_gib=float(len(calls)))
+
+    monkeypatch.setattr(Resources, "sample", staticmethod(fake))
+    state = AppState()
+    # The first frame always samples: resources_at starts at 0.
+    assert state.pump_resources(1000.0).private_gib == 1.0
+    for tick in range(1, 30):
+        state.pump_resources(1000.0 + tick / 60)
+    assert len(calls) == 1, "a sample per frame is exactly what the throttle is for"
+    state.pump_resources(1000.0 + statelib.RESOURCE_PERIOD)
+    assert len(calls) == 2
+
+
+def test_a_sample_never_raises_however_the_machine_answers(monkeypatch):
+    """memlog and vram are pure and None-safe; this pins that the composition
+    of them is too, so a reading can never take the frame down."""
+    from warlock import memlog, vram
+
+    monkeypatch.setattr(memlog, "process_memory", lambda: None)
+    monkeypatch.setattr(memlog, "system_memory", lambda: None)
+    monkeypatch.setattr(vram, "device_memory", lambda: None)
+    assert Resources.sample() == Resources()
+
+
+def test_nothing_in_the_status_strip_ever_calls_vram_probe():
+    """``probe()`` imports torch, which costs seconds -- on the frame thread
+    that is a freeze, not a stall."""
+    import inspect
+
+    source = inspect.getsource(Resources.sample)
+    assert "vram.device_memory" in source
+    assert "vram.probe" not in source
