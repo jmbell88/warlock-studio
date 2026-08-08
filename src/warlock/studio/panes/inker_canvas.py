@@ -426,7 +426,7 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
     ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
 
     if tool == "eyedropper":
-        picked = doc.eyedrop(ipoint)
+        picked = doc.eyedrop(ipoint, layer_only=state.sample_layer)
         if picked is not None:
             state.fg = picked
         state.drag_kind = ""

@@ -102,6 +102,14 @@ def _actions(ctx: Any, doc: Any) -> None:
     )
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)
+    changed, locked = imgui.checkbox("Lock alpha", layer.alpha_lock)
+    widgets.help_marker(
+        "Paints inside what is already on this layer and never past its edge: "
+        "colours change, transparency does not. The eraser does nothing on a "
+        "locked layer, because erasing is changing transparency."
+    )
+    if changed:
+        doc.set_layer_props(alpha_lock=locked)
 
 
 def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
@@ -126,7 +134,8 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     _reorder(doc, index)
     imgui.text_colored(
         imgui.ImVec4(*theme.rgba(theme.MUTED)),
-        f"{layer.blend}  {layer.opacity * 100:.0f}%",
+        f"{layer.blend}  {layer.opacity * 100:.0f}%"
+        + ("  locked" if layer.alpha_lock else ""),
     )
     imgui.end_group()
 

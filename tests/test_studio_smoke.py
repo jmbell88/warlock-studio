@@ -934,6 +934,8 @@ def test_the_inspector_builds_with_a_reference_report(app_ctx, imgui_ctx):
 def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     """The panes that own GL objects of their own. _seeded writes a byte, not
     a PNG, so this seeds a real image -- opening one is a decode."""
+    from imgui_bundle import imgui
+
     from warlock.studio import inker_mode, inker_state
     from warlock.studio.panes import (
         inker_bridge,
@@ -942,17 +944,33 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         inker_layers,
         inker_tools,
     )
+    from warlock.studio.tokens import sp
 
     job_id = _reference_job(app_ctx)
     app_ctx.state.mode = "inker"
     state = inker_mode.ensure(app_ctx)
 
     def build() -> None:
-        inker_tools.draw(app_ctx)
-        inker_colors.draw(app_ctx)
-        inker_canvas.draw(app_ctx)
-        inker_layers.draw(app_ctx)
-        inker_bridge.draw(app_ctx)
+        """Three columns, as the app lays them out -- see the animated test.
+
+        Stacked in one column the canvas child ends up below the tools pane and
+        imgui culls a child pushed past the visible area, so a row added to the
+        tools pane silently stops the canvas drawing and the texture assertions
+        below fail with nothing to do with textures.
+        """
+        if imgui.begin_child("##paint-left", (sp(300), 0)):
+            inker_tools.draw(app_ctx)
+            inker_colors.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##paint-centre", (sp(560), 0)):
+            inker_canvas.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##paint-right", (sp(300), 0)):
+            inker_layers.draw(app_ctx)
+            inker_bridge.draw(app_ctx)
+        imgui.end_child()
 
     # Empty first: the "nothing open" branch is what a user sees on arrival.
     _frame(imgui_ctx, build)

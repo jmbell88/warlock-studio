@@ -128,6 +128,17 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "Off selects every similar pixel in the image, not just the ones touching."
         )
 
+    if tool == "eyedropper":
+        widgets.section("sample")
+        changed, value = imgui.checkbox("This layer only", state.sample_layer)
+        if changed:
+            state.sample_layer = value
+        widgets.help_marker(
+            "Off reads the colour you can see, which is the blend of every "
+            "visible layer. On reads the active layer's own pixels -- what was "
+            "painted into it, before its opacity and blend mode."
+        )
+
     if tool == "gradient":
         widgets.section("gradient")
         state.gradient_kind = widgets.combo(
@@ -161,7 +172,7 @@ def _has_options(tool: str) -> bool:
     that clears nothing is a control that says the panel is confused about
     which tool is selected.
     """
-    return tool in PAINT_TOOLS or tool in SHAPE_TOOLS or tool in ("fill", "wand")
+    return tool in PAINT_TOOLS or tool in SHAPE_TOOLS or tool in ("fill", "wand", "eyedropper")
 
 
 def _per_tool_note() -> None:

@@ -40,6 +40,11 @@ class Layer:
     opacity: float = 1.0
     visible: bool = True
     blend: str = "normal"
+    # "Preserve transparency": writes may change this layer's colours but not
+    # its alpha, so painting inside a shape cannot spill past its edge. An
+    # editing aid rather than picture data -- nothing about the composite reads
+    # it, and a locked layer flattens exactly as an unlocked one does.
+    alpha_lock: bool = False
     uid: int = field(default_factory=lambda: next(_uids))
 
     def __post_init__(self) -> None:
@@ -71,6 +76,7 @@ class Layer:
             opacity=self.opacity,
             visible=self.visible,
             blend=self.blend,
+            alpha_lock=self.alpha_lock,
             **({} if uid is None else {"uid": uid}),
         )
 

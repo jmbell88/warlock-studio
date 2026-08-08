@@ -20,6 +20,7 @@ import pytest
 from PIL import Image
 
 from warlock.studio import inker
+from warlock.studio.inker import ora
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
@@ -833,3 +834,116 @@ def test_a_paste_bigger_than_the_canvas_is_cropped_rather_than_refused():
     doc.put_clipboard(np.full((32, 32, 4), 255, dtype=np.uint8))
     assert doc.paste_as_layer()
     assert doc.stack[1].size == (8, 8)
+
+
+# --- alpha lock and the layer eyedropper (Ink3) ------------------------------
+#
+# "Preserve transparency" is exactly *the alpha does not change*, which is why
+# every write path restores the channel rather than pre-multiplying the weight
+# by it: a weight-based version still raises the alpha of a half-transparent
+# pixel, and the whole point is painting inside a shape without growing it.
+
+
+def _dot(doc, x=4, y=4, colour=(255, 0, 0, 255)) -> None:
+    doc.stack.active.pixels[y, x] = colour
+
+
+def test_a_locked_layer_keeps_its_alpha_under_a_flat_write():
+    doc = inker.Document.blank(8, 8)
+    _dot(doc)
+    doc.stack.active.alpha_lock = True
+    before = doc.stack.active.pixels[..., 3].copy()
+
+    doc.write_colour((0, 0, 8, 8), (0, 0, 255, 255), np.ones((8, 8), dtype=np.float32))
+
+    after = doc.stack.active.pixels
+    assert np.array_equal(after[..., 3], before), "the write must not grow the shape"
+    assert tuple(after[4, 4]) == (0, 0, 255, 255), "and must still recolour what is there"
+    # Outside the shape the colour channels *do* take the paint and the alpha
+    # stays zero, so the pixel is invisible -- which is what makes restoring the
+    # one channel enough on its own. Asserting the alpha is the honest bar;
+    # asserting the RGB would be asserting an implementation detail of
+    # ``paint_colour`` that nothing can see.
+    assert int(after[0, 0, 3]) == 0
+
+
+def test_an_unlocked_layer_is_untouched_by_any_of_this():
+    doc = inker.Document.blank(8, 8)
+    _dot(doc)
+    doc.write_colour((0, 0, 8, 8), (0, 0, 255, 255), np.ones((8, 8), dtype=np.float32))
+    assert int(doc.stack.active.pixels[0, 0, 3]) == 255
+
+
+def test_a_locked_layer_keeps_its_alpha_under_a_stroke():
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[6:10, 6:10] = (255, 0, 0, 255)
+    doc.stack.active.alpha_lock = True
+    before = doc.stack.active.pixels[..., 3].copy()
+
+    doc.begin_stroke((8.0, 8.0), (0, 0, 255, 255), size=12, hardness=1.0)
+    doc.stroke_to((12.0, 12.0))
+    doc.end_stroke()
+
+    after = doc.stack.active.pixels
+    assert np.array_equal(after[..., 3], before)
+    assert tuple(after[8, 8])[:3] == (0, 0, 255)
+
+
+def test_the_eraser_does_nothing_on_a_locked_layer():
+    """The correct reading rather than a gap: erasing *is* changing alpha."""
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[:, :] = (255, 0, 0, 255)
+    doc.stack.active.alpha_lock = True
+    keep = doc.stack.active.pixels.copy()
+
+    doc.begin_stroke((8.0, 8.0), (0, 0, 0, 255), size=8, hardness=1.0, mode="erase")
+    doc.end_stroke()
+    assert np.array_equal(doc.stack.active.pixels, keep)
+
+
+def test_the_eyedropper_reads_the_composite_by_default_and_one_layer_on_ask():
+    doc = inker.Document.blank(4, 4)
+    doc.stack[0].pixels[:, :] = (255, 0, 0, 255)
+    top = doc.add_layer("Top")
+    top.pixels[:, :] = (0, 0, 255, 255)
+    top.opacity = 0.5
+    doc.invalidate_all()
+
+    blended = doc.eyedrop((1, 1))
+    assert blended is not None and blended[:3] != (0, 0, 255)
+    assert doc.eyedrop((1, 1), layer_only=True) == (0, 0, 255, 255)
+
+
+def test_a_layer_only_pick_ignores_opacity_blend_and_visibility():
+    """All three are about how a layer is *shown*, not what is painted in it."""
+    doc = inker.Document.blank(4, 4)
+    top = doc.add_layer("Top")
+    top.pixels[:, :] = (10, 20, 30, 200)
+    top.opacity = 0.1
+    top.blend = "multiply"
+    top.visible = False
+    doc.invalidate_all()
+    assert doc.eyedrop((0, 0), layer_only=True) == (10, 20, 30, 200)
+
+
+def test_the_lock_travels_with_a_layer_copy_and_survives_an_ora_round_trip(tmp_path):
+    doc = inker.Document.blank(8, 8)
+    doc.stack.active.alpha_lock = True
+    assert doc.stack.active.copy().alpha_lock is True
+
+    path = tmp_path / "locked.ora"
+    inker.write_ora(doc, path)
+    assert inker.Document.load(path).stack[0].alpha_lock is True
+
+
+def test_an_unlocked_document_writes_no_lock_attribute(tmp_path):
+    """Written only when set, so a document nobody has locked anything in
+    produces the XML this build produced before the attribute existed."""
+    import zipfile
+    from xml.etree import ElementTree
+
+    path = tmp_path / "plain.ora"
+    inker.write_ora(inker.Document.blank(8, 8), path)
+    with zipfile.ZipFile(path) as zf:
+        root = ElementTree.fromstring(zf.read("stack.xml"))
+    assert all(ora.LOCK_ATTR not in element.attrib for element in root.iter("layer"))

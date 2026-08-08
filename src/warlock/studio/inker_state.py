@@ -81,6 +81,7 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "shape_filled": False,
     "wand_tolerance": 32,
     "wand_contiguous": True,
+    "sample_layer": False,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -362,6 +363,7 @@ class InkerState:
     shape_filled = _tool_option("shape_filled")
     wand_tolerance = _tool_option("wand_tolerance")
     wand_contiguous = _tool_option("wand_contiguous")
+    sample_layer = _tool_option("sample_layer")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.

@@ -998,12 +998,24 @@ class Document:
         x, y = int(xy[0]), int(xy[1])
         return 0 <= x < width and 0 <= y < height
 
-    def eyedrop(self, xy: tuple[int, int]) -> RGBA | None:
-        """Reads the *composite*, not the active layer: the colour a user is
-        pointing at is the one they can see."""
+    def eyedrop(self, xy: tuple[int, int], *, layer_only: bool = False) -> RGBA | None:
+        """The colour at a point: the composite by default, one layer on ask.
+
+        The composite is the default because the colour a user is pointing at
+        is the one they can see, and that is what they mean nine times in ten.
+        ``layer_only`` is the tenth: picking up a line colour off a lineart
+        layer that has a colour layer under it reads the *blend* otherwise,
+        which is a colour that exists nowhere in the document.
+
+        It reads the layer's own stored pixels, so it is unaffected by the
+        layer's opacity, its blend mode and whether it is even visible -- all
+        three are properties of how the layer is shown rather than of what was
+        painted into it.
+        """
         if not self.in_bounds(xy):
             return None
-        r, g, b, a = self._composite[int(xy[1]), int(xy[0])]
+        source = self.stack.active.pixels if layer_only else self._composite
+        r, g, b, a = source[int(xy[1]), int(xy[0])]
         return (int(r), int(g), int(b), int(a))
 
     # -- writing to a layer -------------------------------------------------
@@ -1051,6 +1063,13 @@ class Document:
         out = cp.paint_colour(
             before.astype(np.float32), colour, self._weights(box, weight)
         )
+        if layer.alpha_lock:
+            # The lock, in one line and after the formula rather than inside
+            # it: "preserve transparency" is exactly *the alpha does not
+            # change*, so restoring the channel is the definition rather than
+            # an approximation of it. Colour written where alpha is zero is
+            # invisible, which is what makes this enough on its own.
+            out[..., 3] = before[..., 3]
         layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True
@@ -1086,6 +1105,7 @@ class Document:
             strength=strength,
             symmetry=symmetry,
             clip=self.mask,
+            alpha_lock=layer.alpha_lock,
         )
         self._stroke.begin(point, layer.pixels)
         self._touch_stroke()

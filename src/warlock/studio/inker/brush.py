@@ -107,6 +107,11 @@ class StrokeState:
     strength: float = 0.5
     symmetry: str = "none"
     clip: SelectionMask | None = None
+    # The layer's "preserve transparency". Applied per dab rather than once at
+    # release, because the canvas draws every dab: enforcing it only at the end
+    # would show the stroke spilling past the shape for the whole drag and then
+    # snap it back, which reads as a bug in the lock rather than as the lock.
+    alpha_lock: bool = False
 
     coverage: np.ndarray = field(init=False)
     dirty: tuple[int, int, int, int] | None = field(init=False, default=None)
@@ -203,6 +208,11 @@ class StrokeState:
             out[..., 3] = before[..., 3] * (1.0 - alpha[..., 0])
         else:
             out = composite.paint_colour(before, self.colour, alpha[..., 0])
+        if self.alpha_lock:
+            # Which makes the eraser a no-op on a locked layer, and that is the
+            # correct reading rather than a gap: erasing *is* changing alpha,
+            # and every other editor with this lock behaves the same way.
+            out[..., 3] = before[..., 3]
         target[y0:y1, x0:x1] = composite.to_uint8_255(out)
 
     def _filter(
@@ -235,6 +245,8 @@ class StrokeState:
             self._pickup = source + (crop - source) * float(self.strength)
 
         out = crop + (source - crop) * weight
+        if self.alpha_lock:
+            out[..., 3] = crop[..., 3]
         target[y0:y1, x0:x1] = composite.to_uint8_255(out)
 
     def _mark(self, rect: tuple[int, int, int, int]) -> None:

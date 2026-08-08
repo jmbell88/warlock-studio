@@ -99,9 +99,28 @@ def _stack_xml(doc) -> bytes:
                 "opacity": f"{float(layer.opacity):.6f}",
                 "visibility": "visible" if layer.visible else "hidden",
                 "composite-op": cp.ORA_OPS.get(layer.blend, "svg:src-over"),
+                **_lock_attr(layer.alpha_lock),
             },
         )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
+
+
+# Ours, and prefixed with the app name to say so. ORA readers ignore attributes
+# they do not recognise -- that tolerance is what the format is built on and
+# what ``_foreign`` exercises from the other side -- so a locked layer opens in
+# Krita as an ordinary layer rather than as an error. It is written only when
+# set, so a document nobody has locked anything in produces byte-identical XML
+# to the one this build wrote before the attribute existed.
+#
+# A hyphen, **not** ``warlock:alpha-lock``: a colon in an attribute name is an
+# XML namespace prefix, and an undeclared one makes the whole ``stack.xml``
+# unparseable -- so the private attribute would have cost every reader the
+# entire file, this one included.
+LOCK_ATTR = "warlock-alpha-lock"
+
+
+def _lock_attr(locked: bool) -> dict[str, str]:
+    return {LOCK_ATTR: "1"} if locked else {}
 
 
 def _cel_names(anim) -> dict[int, str]:
@@ -153,6 +172,7 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
                     # show every frame at once.
                     "visibility": "visible" if track.visible and not hidden else "hidden",
                     "composite-op": cp.ORA_OPS.get(track.blend, "svg:src-over"),
+                    **_lock_attr(track.alpha_lock),
                 },
             )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -313,6 +333,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 opacity=float(entry.get("opacity", 1.0)),
                 visible=bool(entry.get("visible", True)),
                 blend=entry.get("blend", "normal"),
+                alpha_lock=bool(entry.get("alpha_lock", False)),
             )
             for i, entry in enumerate(payload["tracks"])
         ]
@@ -338,6 +359,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                     opacity=track.opacity,
                     visible=track.visible,
                     blend=track.blend,
+                    alpha_lock=track.alpha_lock,
                 )
                 planes[src] = layer
             cels[(tracks[ti].uid, frames[fi].uid)] = layer
@@ -411,6 +433,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                     opacity=float(element.get("opacity") or 1.0),
                     visible=element.get("visibility", "visible") != "hidden",
                     blend=cp.OPS_ORA.get(element.get("composite-op", ""), "normal"),
+                    alpha_lock=element.get(LOCK_ATTR) == "1",
                 )
             )
 

@@ -41,7 +41,11 @@ The painting tools have **Size**, **Hardness**, **Opacity** and **Spacing**; blu
 **Strength**. The shape tools have the size slider and, except for the line, a **Filled**
 checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
 off acts on every similar pixel in the image, not just the ones touching where you clicked. The
-gradient tool chooses its **Shape** and whether it fades **To transparent**.
+gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer
+only** — off, it reads the colour you can see, which is the blend of every visible layer; on, it
+reads the active layer's own pixels, before its opacity and blend mode. The second is what you want
+picking a line colour off lineart with flats underneath it, because the blend of the two is a
+colour that exists nowhere in the document.
 
 **Each tool remembers its own.** Sizing the eraser to 60 to clean up a corner leaves the brush at
 whatever you had it, and switching back finds each tool exactly as you left it. **Reset _tool_**
@@ -88,6 +92,11 @@ These are the W3C formulas, which is what OpenRaster's composite operators are d
 a document saved here and reopened in Krita or GIMP composites identically rather than approximately.
 The four *non-separable* modes (hue, saturation, colour, luminosity) are not implemented; a file
 that arrives using one opens with that layer set to `normal` rather than being refused.
+
+**Lock alpha** paints inside what is already on a layer and never past its edge: colours change,
+transparency does not. It is how you recolour lineart or shade a shape without selecting it first —
+and it makes the eraser a no-op on that layer, because erasing *is* changing transparency. The lock
+is saved with the document; other editors ignore it and open the layer as an ordinary one.
 
 One rule about erasing is worth stating plainly, because it differs from some editors. **The eraser
 makes pixels transparent.** It does not paint the background colour. The background colour — the

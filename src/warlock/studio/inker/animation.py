@@ -76,6 +76,7 @@ class Track:
     opacity: float = 1.0
     visible: bool = True
     blend: str = "normal"
+    alpha_lock: bool = False
     uid: int = field(default_factory=new_uid)
 
     @classmethod
@@ -94,6 +95,7 @@ class Track:
             opacity=layer.opacity,
             visible=layer.visible,
             blend=layer.blend,
+            alpha_lock=layer.alpha_lock,
             uid=layer.uid,
         )
 
@@ -103,6 +105,7 @@ class Track:
             "opacity": self.opacity,
             "visible": self.visible,
             "blend": self.blend,
+            "alpha_lock": self.alpha_lock,
         }
 
 
@@ -305,6 +308,7 @@ class Animation:
             opacity=track.opacity,
             visible=track.visible,
             blend=track.blend,
+            alpha_lock=track.alpha_lock,
             uid=uid,
         )
 
@@ -345,6 +349,7 @@ class Animation:
             layer.opacity = track.opacity
             layer.visible = track.visible
             layer.blend = track.blend
+            layer.alpha_lock = track.alpha_lock
             out.append(layer)
         return out
 
