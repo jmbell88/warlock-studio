@@ -1,0 +1,231 @@
+{
+  "base_model": "turbo",
+  "materials": {
+    "checker": "black and white checkerboard floor tiles",
+    "mosaic": "small square ceramic mosaic tiles with grout",
+    "hex": "hexagonal concrete paving stones",
+    "panel": "sci-fi metal hull panels with rivets and seams",
+    "chain": "galvanised chain link fence mesh",
+    "circuit": "printed circuit board traces and pads",
+    "herring": "herringbone parquet wood floor",
+    "corrugate": "corrugated ribbed metal sheeting"
+  },
+  "rows": [
+    {
+      "material": "checker",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "checker-s11-tiled.png",
+      "horizontal": 0.6913761454993574,
+      "vertical": 0.6265724761598949,
+      "worst": 0.6913761454993574
+    },
+    {
+      "material": "checker",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "checker-s12-tiled.png",
+      "horizontal": 0.8880695642427837,
+      "vertical": 1.2010398356750625,
+      "worst": 1.2010398356750625
+    },
+    {
+      "material": "checker",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "checker-s13-tiled.png",
+      "horizontal": 0.8545209226251154,
+      "vertical": 0.8712400398914203,
+      "worst": 0.8712400398914203
+    },
+    {
+      "material": "mosaic",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "mosaic-s11-tiled.png",
+      "horizontal": 1.776122388051751,
+      "vertical": 1.5443962630911268,
+      "worst": 1.776122388051751
+    },
+    {
+      "material": "mosaic",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "mosaic-s12-tiled.png",
+      "horizontal": 0.6402237882849067,
+      "vertical": 1.0220905527916704,
+      "worst": 1.0220905527916704
+    },
+    {
+      "material": "mosaic",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "mosaic-s13-tiled.png",
+      "horizontal": 0.7568527756711381,
+      "vertical": 2.5001079058695206,
+      "worst": 2.5001079058695206
+    },
+    {
+      "material": "hex",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "hex-s11-tiled.png",
+      "horizontal": 0.622665573766253,
+      "vertical": 0.7081728745592821,
+      "worst": 0.7081728745592821
+    },
+    {
+      "material": "hex",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "hex-s12-tiled.png",
+      "horizontal": 0.4636644210350737,
+      "vertical": 1.0136871010584674,
+      "worst": 1.0136871010584674
+    },
+    {
+      "material": "hex",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "hex-s13-tiled.png",
+      "horizontal": 0.9547019321236764,
+      "vertical": 0.6751986788317317,
+      "worst": 0.9547019321236764
+    },
+    {
+      "material": "panel",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "panel-s11-tiled.png",
+      "horizontal": 0.8195545366317961,
+      "vertical": 0.3616684604625192,
+      "worst": 0.8195545366317961
+    },
+    {
+      "material": "panel",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "panel-s12-tiled.png",
+      "horizontal": 0.8611092628677345,
+      "vertical": 1.4253089627584596,
+      "worst": 1.4253089627584596
+    },
+    {
+      "material": "panel",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "panel-s13-tiled.png",
+      "horizontal": 0.4539589133933758,
+      "vertical": 0.13419106183412297,
+      "worst": 0.4539589133933758
+    },
+    {
+      "material": "chain",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "chain-s11-tiled.png",
+      "horizontal": 1.151088714997355,
+      "vertical": 1.1829379743314659,
+      "worst": 1.1829379743314659
+    },
+    {
+      "material": "chain",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "chain-s12-tiled.png",
+      "horizontal": 0.8778724191511024,
+      "vertical": 1.2437165195704811,
+      "worst": 1.2437165195704811
+    },
+    {
+      "material": "chain",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "chain-s13-tiled.png",
+      "horizontal": 0.8380958561441509,
+      "vertical": 0.7972422780125656,
+      "worst": 0.8380958561441509
+    },
+    {
+      "material": "circuit",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "circuit-s11-tiled.png",
+      "horizontal": 1.284906648003129,
+      "vertical": 1.1779778296381356,
+      "worst": 1.284906648003129
+    },
+    {
+      "material": "circuit",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "circuit-s12-tiled.png",
+      "horizontal": 0.8241297281300111,
+      "vertical": 1.5392716793293162,
+      "worst": 1.5392716793293162
+    },
+    {
+      "material": "circuit",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "circuit-s13-tiled.png",
+      "horizontal": 0.9722789343873913,
+      "vertical": 0.41005955711896586,
+      "worst": 0.9722789343873913
+    },
+    {
+      "material": "herring",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "herring-s11-tiled.png",
+      "horizontal": 1.0025832873840297,
+      "vertical": 0.9910290629488234,
+      "worst": 1.0025832873840297
+    },
+    {
+      "material": "herring",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "herring-s12-tiled.png",
+      "horizontal": 0.9796583300546368,
+      "vertical": 1.1993049414655246,
+      "worst": 1.1993049414655246
+    },
+    {
+      "material": "herring",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "herring-s13-tiled.png",
+      "horizontal": 0.9645178944076592,
+      "vertical": 0.8430993462082343,
+      "worst": 0.9645178944076592
+    },
+    {
+      "material": "corrugate",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "corrugate-s11-tiled.png",
+      "horizontal": 1.4674742612947385,
+      "vertical": 2.236546918142153,
+      "worst": 2.236546918142153
+    },
+    {
+      "material": "corrugate",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "corrugate-s12-tiled.png",
+      "horizontal": 0.6758420353079923,
+      "vertical": 0.13386863672866364,
+      "worst": 0.6758420353079923
+    },
+    {
+      "material": "corrugate",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "corrugate-s13-tiled.png",
+      "horizontal": 1.224208018319074,
+      "vertical": 1.743998756742334,
+      "worst": 1.743998756742334
+    }
+  ]
+}

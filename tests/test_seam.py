@@ -15,6 +15,19 @@ from PIL import Image
 from warlock.pipelines import seam
 
 
+def test_the_threshold_stays_inside_the_band_that_was_measured():
+    """The calibration, as an assertion rather than as a comment.
+
+    ``docs/measurements/2026-08-08-seam-threshold.md`` puts the highest
+    legitimately seamless tile at 2.50 and the lowest visible seam at 5.52 over
+    72 units. Anything inside that band scores identically on the corpus and
+    anything outside it is known to misclassify -- 2.0, the value this replaced,
+    raised two false alarms on tiles that wrap perfectly. This does not re-derive
+    the number; it fails a re-guess that leaves the evidence behind.
+    """
+    assert 2.50 < seam.SEAM_MAX < 5.52
+
+
 def _gradient(width=64, height=64, wrap=False):
     """A left-to-right ramp. Wrapped, it is a triangle wave and tiles."""
     x = np.arange(width)

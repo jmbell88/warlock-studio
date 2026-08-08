@@ -27,3 +27,8 @@ dist/
 # meant every run produced a diff and every branch produced a conflict, over a
 # file that is per-machine by definition.
 imgui.ini
+# Measurement corpora: the images a docs/measurements/ document was eyeballed
+# against. Regenerable from the scripts/ harness that produced them (fixed
+# seeds), and 49 MB for the seam corpus alone. The results JSON beside them is
+# the evidence and is tracked.
+/docs/measurements/data/**/*.png

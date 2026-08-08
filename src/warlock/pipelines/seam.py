@@ -21,10 +21,21 @@ from pathlib import Path
 from typing import Any
 
 # Above this the seam is a visible edge rather than part of the texture.
-# Chosen as "twice the picture's own grain", which is comfortably past the
-# noise on a real SDXL tile and comfortably short of an unpatched generation --
-# a plain image scores several times this. Re-measure before moving it.
-SEAM_MAX = 2.0
+#
+# Measured, not guessed: docs/measurements/2026-08-08-seam-threshold.md. 72
+# units on sdxl-turbo -- 48 generated through the circular-padding path and 24
+# identical prompts and seeds with it off -- put the highest legitimately
+# seamless tile at 2.50 and the lowest visible seam at 5.52, an empty band whose
+# geometric centre is 3.72. 3.5 is the round value inside it, and it classifies
+# every one of the 72 correctly where the previous 2.0 raised two false alarms.
+#
+# Both false alarms were large flat cells separated by thin hard lines (ceramic
+# grout, metal ribs), which is the shape that breaks the ratio: the denominator
+# is a mean over every adjacent pair and so is tiny on a mostly-flat picture,
+# while the numerator is one column that may land on a grout line. Re-measure
+# before moving it, and re-measure it per checkpoint -- the corpus is turbo at
+# 4 steps, and a CFG base at 25 draws harder edges than any of it.
+SEAM_MAX = 3.5
 
 # Below this many pixels on a side there is no interior to compare against.
 MIN_SIDE = 8

@@ -159,8 +159,12 @@ def test_a_seamless_tile_says_so_in_the_ok_colour():
 def test_a_failing_tile_quotes_the_threshold_it_went_over():
     # The ratio alone is uncalibratable by eye; the number it was compared
     # against is what makes it a verdict rather than a statistic.
+    # Derived from the constant rather than written out: a fixture holding a
+    # number that used to be over the threshold and no longer is still passes
+    # both assertions below while depicting a verdict the app cannot produce.
+    worst = seam.SEAM_MAX + 1.4
     colour, text = inspector.seam_verdict(
-        {"worst": 3.4, "seamless": False, "threshold": seam.SEAM_MAX}
+        {"worst": worst, "seamless": False, "threshold": seam.SEAM_MAX}
     )
     assert colour == theme.WARN
-    assert "3.40" in text and f"{seam.SEAM_MAX:.2f}" in text
+    assert f"{worst:.2f}" in text and f"{seam.SEAM_MAX:.2f}" in text
