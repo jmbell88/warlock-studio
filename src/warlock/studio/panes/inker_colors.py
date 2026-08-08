@@ -18,7 +18,18 @@ from ..tokens import sp
 
 # One swatch, in *design* pixels -- see ``_swatches``.
 SWATCH = 20.0
-FLAGS = imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value
+# imgui's own picker rather than hand-rolled hex and HSV fields. It already has
+# both, plus a wheel and an eyedropper, and every one of those is a widget that
+# would otherwise have to be written and then kept agreeing with the others
+# about rounding. ``display_hex`` puts the hex box on the inline row too, so the
+# common case -- reading or typing a colour somebody sent you -- needs no popup
+# at all.
+FLAGS = (
+    imgui.ColorEditFlags_.no_inputs.value
+    | imgui.ColorEditFlags_.alpha_bar.value
+    | imgui.ColorEditFlags_.display_hex.value
+    | imgui.ColorEditFlags_.picker_hue_bar.value
+)
 
 
 def _to_rgba(value: Any) -> tuple[int, int, int, int]:
@@ -59,6 +70,29 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, 4))
     _swatches(ctx, state)
+    imgui.dummy((0, 4))
+    _palette_files(ctx, state)
+
+
+def _palette_files(ctx: Any, state: Any) -> None:
+    """Import and export the swatch row as a ``.gpl``.
+
+    Both go through ``ctx.submit``: a native picker is modal to the OS and
+    blocks until it is dismissed, so neither may touch the frame thread. The
+    export's *bytes* are built here, before the submit, for the reason every
+    save in this app is -- serialising after an unbounded modal would write
+    whatever the user changed while it was open.
+    """
+    if imgui.small_button("Import .gpl"):
+        inker_mode.import_palette(ctx)
+    imgui.same_line()
+    if widgets.disabled_button("Export .gpl", bool(state.swatches)):
+        inker_mode.export_palette(ctx)
+    widgets.help_marker(
+        "The GIMP palette format, which Krita, Aseprite and Inkscape all read. "
+        "It has no alpha channel, so exported swatches are written opaque. An "
+        "import adds to the row rather than replacing it."
+    )
 
 
 def _swatches(ctx: Any, state: Any) -> None:

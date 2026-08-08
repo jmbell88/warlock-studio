@@ -602,6 +602,18 @@ def on_task_done(ctx: Any, done: Any) -> None:
             ctx.state.mode = "inker"
         return
 
+    if name == "inker-palette":
+        # A list of colours, or None for a cancelled picker. Appended rather
+        # than replacing: an import is "add these to what I have", and a user
+        # who wanted the old ones gone can right-click them away -- where an
+        # import that silently wiped a session's palette has no way back.
+        if result:
+            for colour in result:
+                state.add_swatch(colour)
+            persist(ctx)
+            ctx.toast(f"Added {len(result)} colour(s).", "success")
+        return
+
     if name in ("inker-send", "inker-promote"):
         ctx.cache.invalidate()
         # ``inker-send`` locks its tab while the flatten runs off-thread;
@@ -1060,3 +1072,42 @@ def release_all(ctx: Any) -> None:
     from .panes import inker_textures
 
     inker_textures.release_all(ctx)
+
+
+# --- palette files ----------------------------------------------------------
+#
+# The picker and the file are both blocking, so both go to a task thread -- the
+# rule every dialog and every encode in this module follows. The *bytes* for an
+# export are built on the frame thread, for ``save_as``'s reason: they read live
+# state, and doing that after an unbounded modal would write whatever the user
+# changed while it was open.
+
+GPL_FILTER = ["GIMP palette (*.gpl)", "*.gpl"]
+
+
+def import_palette(ctx: Any) -> None:
+    from .inker import gpl
+
+    ensure(ctx)
+
+    def run() -> list[tuple[int, int, int, int]] | None:
+        path = dialogs.open_file("Import a palette", GPL_FILTER)
+        if path is None:
+            return None
+        return gpl.parse(path.read_text(encoding="utf-8", errors="replace"))
+
+    ctx.submit("inker-palette", run)
+
+
+def export_palette(ctx: Any) -> None:
+    from .inker import gpl
+
+    state = ensure(ctx)
+    text = gpl.dumps(list(state.swatches))
+
+    def run() -> None:
+        path = dialogs.save_file("Export the palette", "palette.gpl", GPL_FILTER)
+        if path is not None:
+            path.with_suffix(".gpl").write_text(text, encoding="utf-8")
+
+    ctx.submit("inker-palette-export", run)

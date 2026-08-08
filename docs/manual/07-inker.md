@@ -68,9 +68,17 @@ Two colours, not one: **Foreground** and **Background**. The gradient tool needs
 swaps them — universal muscle memory from every other raster editor. Both carry an alpha bar, so a
 semi-transparent brush is a colour rather than a separate mode.
 
+Both swatches show their hex value inline and open a full picker — wheel, HSV, hex, alpha — when
+clicked, so a colour somebody sent you as `#3b4252` can be typed straight in.
+
 Below them is a row of **swatches**. Clicking one makes it the foreground; the row is saved with
 your settings rather than reset each session, because a project has a palette and retyping it every
 time is the kind of small friction that makes a tool feel unfinished.
+
+**Import .gpl** and **Export .gpl** move that row in and out as a GIMP palette, which is the format
+GIMP, Krita, Aseprite and Inkscape all read. Two things about it: the format has no alpha channel,
+so exported swatches are written opaque, and an import **adds** to the row rather than replacing it
+— unwanted colours are a right-click each, where a palette silently wiped has no way back.
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
 

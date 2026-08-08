@@ -358,3 +358,109 @@ def test_the_tool_shortcuts_and_the_tool_list_agree():
     tools = {key for key, _, _ in inker_state.TOOLS}
     assert set(inker_mode.TOOL_KEYS.values()) == tools
     assert len(set(inker_mode.TOOL_KEYS)) == len(inker_mode.TOOL_KEYS)
+
+
+# --- palette files (Ink8) ----------------------------------------------------
+
+
+class _PaletteCtx:
+    """Enough of Ctx for the two palette entry points, running inline."""
+
+    def __init__(self) -> None:
+        from warlock.studio.state import AppState
+
+        self.state = AppState()
+        self.settings = _MemorySettings()
+        self.submitted: list[str] = []
+        self.toasts: list[tuple[str, str]] = []
+        self.result = None
+
+    def submit(self, key, run, *args):
+        self.submitted.append(key)
+        self.result = run(*args)
+        return True
+
+    def toast(self, message, level="info") -> None:
+        self.toasts.append((message, level))
+
+
+class _MemorySettings:
+    def __init__(self) -> None:
+        self.store: dict = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def set(self, key, value) -> None:
+        self.store[key] = value
+
+
+def test_importing_a_palette_never_opens_a_picker_on_the_frame_thread(monkeypatch):
+    """The rule every dialog in this app follows: a native picker is modal to
+    the OS and blocks until it is dismissed."""
+    from warlock.studio import dialogs, inker_mode
+
+    opened: list[str] = []
+
+    def fake_open(title, filters=None):
+        opened.append(title)
+        return None
+
+    monkeypatch.setattr(dialogs, "open_file", fake_open)
+    ctx = _PaletteCtx()
+    inker_mode.import_palette(ctx)
+    assert ctx.submitted == ["inker-palette"]
+    assert opened, "the picker ran, on the task thread the submit stands in for"
+
+
+def test_an_imported_palette_adds_to_the_row_rather_than_replacing_it(monkeypatch, tmp_path):
+    """A user who wanted the old ones gone can right-click them away; an
+    import that wiped a session's palette has no way back."""
+    from warlock.studio import dialogs, inker_mode
+
+    path = tmp_path / "p.gpl"
+    path.write_text("GIMP Palette\n10 20 30\n", encoding="utf-8")
+    monkeypatch.setattr(dialogs, "open_file", lambda *a, **k: path)
+
+    ctx = _PaletteCtx()
+    state = inker_mode.ensure(ctx)
+    state.swatches = [(1, 1, 1, 255)]
+    inker_mode.import_palette(ctx)
+    inker_mode.on_task_done(
+        ctx, type("Done", (), {"key": "inker-palette", "result": ctx.result})()
+    )
+    assert state.swatches == [(1, 1, 1, 255), (10, 20, 30, 255)]
+
+
+def test_a_cancelled_palette_picker_changes_nothing(monkeypatch):
+    from warlock.studio import dialogs, inker_mode
+
+    monkeypatch.setattr(dialogs, "open_file", lambda *a, **k: None)
+    ctx = _PaletteCtx()
+    state = inker_mode.ensure(ctx)
+    before = list(state.swatches)
+    inker_mode.import_palette(ctx)
+    inker_mode.on_task_done(ctx, type("Done", (), {"key": "inker-palette", "result": None})())
+    assert state.swatches == before
+    assert not ctx.toasts
+
+
+def test_exporting_builds_the_bytes_before_the_picker(monkeypatch, tmp_path):
+    """``save_as``'s rule: serialising after an unbounded modal would write
+    whatever the user changed while it was open."""
+    from warlock.studio import dialogs, inker_mode
+    from warlock.studio.inker import gpl
+
+    out = tmp_path / "out.gpl"
+
+    def fake_save(title, default, filters=None):
+        # The state changes *while the picker is up*; the file must not.
+        state.swatches = [(9, 9, 9, 255)]
+        return out
+
+    ctx = _PaletteCtx()
+    state = inker_mode.ensure(ctx)
+    state.swatches = [(1, 2, 3, 255)]
+    monkeypatch.setattr(dialogs, "save_file", fake_save)
+    inker_mode.export_palette(ctx)
+    assert gpl.parse(out.read_text(encoding="utf-8")) == [(1, 2, 3, 255)]
