@@ -452,3 +452,52 @@ def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path):
         for c in run_checks(_config(tmp_path, t2i_model_root=bad))
     }
     assert rows[f"pose model: {spec.label}"].ok is False
+
+
+# --- N112: the load probe, and why it is a child process --------------------
+
+
+def test_the_load_probe_child_reports_a_failure_as_a_sentence(tmp_path):
+    """It must never raise out of the child: a probe that does turns a red row
+    into a traceback in a log nobody is reading yet."""
+    from warlock.pipelines import loadprobe
+
+    ok, detail = loadprobe.probe("pose", tmp_path / "nothing-here")
+    assert ok is False
+    assert detail  # names the exception type as well as its message
+    assert ":" in detail
+
+
+def test_the_load_probe_child_refuses_an_unknown_kind(capsys):
+    from warlock.pipelines import loadprobe
+
+    assert loadprobe.main(["nonsense", "x"]) == 2
+    assert capsys.readouterr().out.startswith("fail usage:")
+
+
+def test_a_probe_that_prints_nothing_is_a_failure_naming_what_it_said(monkeypatch, tmp_path):
+    """The child can die before it prints -- an OOM kill, a DLL that will not
+    load. Its stderr is the only thing that knows why."""
+    from types import SimpleNamespace
+
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    monkeypatch.setattr(
+        doctor.winjob, "run",
+        lambda *a, **k: SimpleNamespace(stdout="", stderr="ImportError: DLL load failed"),
+    )
+    ok, detail = doctor._run_load_probe("matting", weights)
+    assert ok is False
+    assert "DLL load failed" in detail
+
+
+def test_the_probe_does_not_run_at_all_without_weights(monkeypatch, tmp_path):
+    """No spawn, no seconds, no torch import -- the cheap answer first, which is
+    the ordering every model path in the repo follows."""
+    def boom(*a, **k):
+        raise AssertionError("should not have spawned anything")
+
+    monkeypatch.setattr(doctor.winjob, "run", boom)
+    ok, detail = doctor._run_load_probe("matting", tmp_path / "absent")
+    assert ok is False
+    assert "not on disk" in detail

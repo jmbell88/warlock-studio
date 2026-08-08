@@ -443,25 +443,6 @@ def unload() -> None:
     _cache.clear()
 
 
-def probe(config: Any = None) -> tuple[bool, str]:
-    """Load the checkpoint once and say what happened (N112).
-
-    ``matting.probe``'s twin, for the same reason and on the same terms: CPU
-    only, idempotent through ``_cache``, and it never raises. What it buys here
-    is narrower but sharper -- a pose model that will not load costs *joint
-    placement* and nothing else, so the symptom is a skeleton sitting slightly
-    wrong inside the limbs, which reads as a bad rig rather than as a broken
-    install and has no other visible cause.
-    """
-    if not available(config):
-        return False, "weights are not on disk"
-    try:
-        _load(model_dir(config))
-    except Exception as exc:  # noqa: BLE001 -- a probe must never raise
-        return False, f"{type(exc).__name__}: {exc}"
-    return True, "loads"
-
-
 # The sentinel a failed load leaves behind, in the same dict as the model so
 # clearing one clears the other. A checkpoint that cannot load cannot load
 # again, and from_pretrained is seconds of work per attempt -- on a queue

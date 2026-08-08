@@ -10,6 +10,7 @@ import sys
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import fetch, guidance, models, native, rigging, vram, winjob
 from .config import Config
@@ -488,19 +489,33 @@ _probe_lock = threading.Lock()
 _PROBE_PENDING = (True, "still checking in the background whether the model loads")
 
 
+LOAD_PROBE_TIMEOUT = 300.0
+
+
 def _load_probe(config: Config, which: str, *, probe: bool = True) -> tuple[bool, str]:
-    """Whether this model actually loads, once per process.
+    """Whether this model actually loads, once per process, **in a child**.
 
     ``probe=False`` never blocks -- it returns the cached answer or the pending
-    one -- because these are the two slowest probes in the file after bpy: a
-    real ``from_pretrained`` is seconds and drags torch into the process, which
-    is exactly what C29 moved off the startup path. Startup passes
-    ``probe_slow=False``; the first health poll, on a task thread, pays for it.
+    one -- because this is the slowest probe in the file after bpy: a real
+    ``from_pretrained`` is seconds and drags torch in, which is exactly what C29
+    moved off the startup path. Startup passes ``probe_slow=False``; the first
+    health poll, on a task thread, pays for it.
+
+    Out of process because the cost cannot be given back in this one. Loading
+    BiRefNet measures 1475 MB of RSS here and 1053 MB of that is still resident
+    after every reference is dropped and ``gc.collect()`` has run -- the
+    allocator keeps its arenas. See ``pipelines/loadprobe.py``.
+
+    ``winjob.run``, not ``subprocess.run``: this fires from the health poll and
+    holds a checkpoint open for seconds, so killing Warlock while it runs would
+    otherwise strand a python.exe mid-load. It is also what keeps the
+    every-spawn-is-in-the-kill-on-close-job scan satisfied.
     """
     from .pipelines import pose2d
 
     module = pose2d if which == "pose" else matting
-    key = (which, str(module.model_dir(config)))
+    path = module.model_dir(config)
+    key = (which, str(path))
     hit = _probes.get(key)
     if hit is not None:
         return hit
@@ -508,8 +523,30 @@ def _load_probe(config: Config, which: str, *, probe: bool = True) -> tuple[bool
         return _PROBE_PENDING
     with _probe_lock:
         if key not in _probes:
-            _probes[key] = module.probe(config)
+            _probes[key] = _run_load_probe(which, path)
         return _probes[key]
+
+
+def _run_load_probe(which: str, path: Path) -> tuple[bool, str]:
+    if not path.exists():
+        return False, "weights are not on disk"
+    try:
+        proc = winjob.run(
+            [sys.executable, "-m", "warlock.pipelines.loadprobe", which, str(path)],
+            capture_output=True, text=True, timeout=LOAD_PROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"load probe failed to run: {exc}"
+    line = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+    verdict, _, detail = line[0].partition(" ")
+    if verdict == "ok":
+        return True, detail or "loads"
+    if verdict == "fail":
+        return False, detail or "did not load"
+    # Neither word: the child died before it printed. Its stderr is the only
+    # thing that knows why, and the last line of it is the useful part.
+    stderr = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
+    return False, f"load probe did not report: {stderr[0]}"
 
 
 # What BiRefNet's own modelling code reaches for, plus the package that runs

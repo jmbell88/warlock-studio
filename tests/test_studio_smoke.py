@@ -1753,6 +1753,55 @@ def test_the_mode_switchs_right_hand_strip_stays_inside_the_window(
     assert by_name["readout"][2] <= by_name["icon:?"][0] + 1.0
 
 
+@pytest.mark.parametrize("scale", [1.0, 1.75])
+def test_the_strip_stays_inside_the_window_when_the_health_dot_grows_a_label(
+    app_ctx, imgui_ctx, scale
+):
+    """F58 made the health control wider, which is the interesting case.
+
+    A 16 px invisible button with a 9 px circle under it is not a control, so
+    it gained a real hit area and the word *Issues* whenever something is
+    failing -- and the strip's width is *measured*, so the measurement has to
+    have grown with it. If it did not, the health control is drawn past the
+    content edge, which clips rather than wraps: gone, on exactly the hosts
+    where it is the thing worth clicking.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.doctor import Check
+    from warlock.studio import main as main_mod
+    from warlock.studio import tokens
+    from warlock.studio.fps import FpsMeter
+
+    app_ctx.runtime.checks = [
+        Check("trellis-server.exe", False, "not found", fatal=True),
+        Check("CUDA", False, "torch.cuda.is_available() is False", fatal=False),
+    ]
+    fake = SimpleNamespace(app_ctx=app_ctx, fps=FpsMeter())
+    fake._shortcuts_popup = lambda: main_mod.App._shortcuts_popup(fake)
+    fake._diagnostics_popup = lambda checks: main_mod.App._diagnostics_popup(fake, checks)
+    fake._request_quit = lambda: None
+    fake.fps.record(1 / 60)
+
+    seen: list[tuple[float, float]] = []
+
+    def build():
+        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        main_mod.App._mode_switch(fake)
+        seen.append((imgui.get_item_rect_max().x, right))
+
+    old_scale = tokens.SCALE
+    tokens.set_scale(scale)
+    try:
+        _frame(imgui_ctx, build)
+    finally:
+        tokens.set_scale(old_scale)
+
+    end, edge = seen[0]
+    assert end <= edge + 1.0, (
+        f"the health control ends {end - edge:.0f} px past the content edge"
+    )
+
+
 def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
     app_ctx, imgui_ctx
 ):
