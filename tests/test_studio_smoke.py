@@ -1009,6 +1009,8 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
     they were put there -- a fifty-frame tab is fifty textures, and the release
     at the end is what says the prefix sweep really does collect them.
     """
+    from imgui_bundle import imgui
+
     from warlock.studio import inker, inker_mode
     from warlock.studio.panes import (
         inker_bridge,
@@ -1018,18 +1020,39 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
         inker_timeline,
         inker_tools,
     )
+    from warlock.studio.tokens import sp
 
     job_id = _reference_job(app_ctx)
     app_ctx.state.mode = "inker"
     state = inker_mode.ensure(app_ctx)
 
     def build() -> None:
-        inker_tools.draw(app_ctx)
-        inker_colors.draw(app_ctx)
-        inker_canvas.draw(app_ctx)
-        inker_layers.draw(app_ctx)
-        inker_bridge.draw(app_ctx)
-        inker_timeline.draw(app_ctx)
+        """The three columns the app actually lays these panes out in.
+
+        Not a nicety. Stacked in one column, the canvas child ends up below
+        the tools and colours panes, and imgui *culls* a child pushed past the
+        visible area -- a culled canvas uploads no textures, so a single row
+        added to the tools pane upstream failed this test with an empty texture
+        list and nothing whatsoever to do with frames. Columns give each pane
+        the full height, which is what the app gives them.
+        """
+        if imgui.begin_child("##smoke-left", (sp(300), 0)):
+            inker_tools.draw(app_ctx)
+            inker_colors.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##smoke-centre", (sp(560), 0)):
+            inker_canvas.draw(app_ctx)
+            inker_timeline.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##smoke-right", (sp(300), 0)):
+            inker_layers.draw(app_ctx)
+            inker_bridge.draw(app_ctx)
+        imgui.end_child()
+
+    def frame() -> None:
+        _frame(imgui_ctx, build)
 
     loaded = inker_mode._load_job(app_ctx.svc, job_id)
     inker_mode.on_task_done(app_ctx, _done(f"inker-open:{job_id}", loaded))
@@ -1038,18 +1061,18 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
 
     # Still: the timeline draws nothing at all, which is what keeps a
     # non-animated document's layout byte-for-byte what it always was.
-    _frame(imgui_ctx, build)
+    frame()
     assert not [k for k in app_ctx.state.preview if ":frame" in k]
 
     inker_mode.animate(app_ctx, tab)
     assert tab.doc.anim is not None and len(tab.doc.anim.frames) == 2
     tab.doc.add_frame(link=True)
     tab.doc.anim.tags.append(inker.Tag(name="walk", start=0, end=2))
-    _frame(imgui_ctx, build)
+    frame()
 
     # Onion on: the neighbours upload.
     state.onion = True
-    _frame(imgui_ctx, build)
+    frame()
     assert [k for k in app_ctx.state.preview if ":frame" in k]
 
     # Playing: the canvas draws a cached flatten instead of the composite, and
@@ -1057,19 +1080,19 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
     inker_mode.toggle_play(app_ctx, tab)
     assert tab.playing and tab.busy
     for _ in range(3):
-        _frame(imgui_ctx, build)
+        frame()
     inker_mode.stop_play(tab)
     assert not tab.playing
-    _frame(imgui_ctx, build)
+    frame()
 
     # The tag row's rename field, which replaces the label in place rather than
     # opening a modal -- so it is a widget that only exists on some frames and
     # would otherwise never be built by anything.
     state.tag_editing = 0
     state.tag_name = "walk"
-    _frame(imgui_ctx, build)
+    frame()
     state.tag_editing = -1
-    _frame(imgui_ctx, build)
+    frame()
 
     # A deleted frame's texture is released rather than living until the tab is
     # closed: a clip built up and cut down over a session leaks one full-canvas
@@ -1078,7 +1101,7 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
     gone = tab.doc.anim.frames[-1].uid
     assert any(f"frame{gone}" in key for key in app_ctx.state.preview)
     tab.doc.remove_frame(len(tab.doc.anim.frames) - 1)
-    _frame(imgui_ctx, build)
+    frame()
     assert not [key for key in app_ctx.state.preview if f"frame{gone}" in key]
 
     uid = tab.uid

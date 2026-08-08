@@ -86,6 +86,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if tool in PAINT_TOOLS or tool in SHAPE_TOOLS:
         widgets.section("brush")
+        _per_tool_note()
         imgui.set_next_item_width(-1)
         changed, size = imgui.slider_int("Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH)
         if changed:
@@ -115,6 +116,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if tool in ("fill", "wand"):
         widgets.section("tolerance")
+        _per_tool_note()
         imgui.set_next_item_width(-1)
         changed, value = imgui.slider_int("Tolerance", state.wand_tolerance, 0, 255)
         if changed:
@@ -137,6 +139,9 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         if changed:
             state.gradient_to_transparent = value
 
+    if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
+        state.reset_tool_options(tool)
+
     # Everything above this line adjusts the *tool*, which a save does not
     # read. Everything below changes the document -- the selection ops each
     # push a history step and Crop rebinds every layer's pixels -- so it waits
@@ -147,6 +152,30 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
     imgui.end_disabled()
+
+
+def _has_options(tool: str) -> bool:
+    """Whether this tool has anything of its own to reset.
+
+    The move and eyedropper tools have no options at all, and a Reset button
+    that clears nothing is a control that says the panel is confused about
+    which tool is selected.
+    """
+    return tool in PAINT_TOOLS or tool in SHAPE_TOOLS or tool in ("fill", "wand")
+
+
+def _per_tool_note() -> None:
+    """Says out loud that these belong to the tool.
+
+    Without it the feature is invisible in the good case and looks like a bug
+    in the bad one: a user who sizes the eraser to 60 and finds the brush still
+    at 12 has either been given a convenience or lost a setting, and nothing on
+    screen said which.
+    """
+    widgets.help_marker(
+        "These belong to the tool in your hand. Sizing the eraser does not "
+        "resize the brush, and switching back finds each one as you left it."
+    )
 
 
 def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:

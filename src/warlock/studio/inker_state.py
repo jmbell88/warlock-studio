@@ -59,6 +59,30 @@ SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand"})
 # the call site so a new mode is one row.
 BRUSH_MODES = {"brush": "paint", "eraser": "erase", "blur": "blur", "smudge": "smudge"}
 
+# The options a tool remembers *for itself*, and what a tool that has never
+# been touched starts from.
+#
+# Every one of these used to be a single app-level value, which is wrong in the
+# way that is hardest to notice: sizing the eraser to 60 to clean up a corner
+# and going back to the brush found the brush at 60 too, so the user re-set it
+# every time they switched -- and blamed themselves. Aseprite, Photoshop and
+# Krita all key these on the tool, and a user arrives expecting that.
+#
+# What is *not* here is as deliberate. Symmetry, the grid, the foreground and
+# background colours and the onion-skin settings stay app-level: they are
+# properties of the canvas or of the session rather than of a tool, and a grid
+# that switched off because you picked the eraser would be a bug.
+TOOL_OPTION_DEFAULTS: dict[str, Any] = {
+    "brush_size": 12,
+    "hardness": 0.85,
+    "opacity": 1.0,
+    "spacing": 0.1,
+    "strength": 0.5,
+    "shape_filled": False,
+    "wand_tolerance": 32,
+    "wand_contiguous": True,
+}
+
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
     (0, 0, 0, 255),
     (255, 255, 255, 255),
@@ -238,6 +262,29 @@ def title_for(path: Path | None) -> str:
     return path.name if path is not None else "Untitled"
 
 
+def _tool_option(name: str) -> property:
+    """``state.brush_size`` reading and writing the *active tool's* copy.
+
+    A property rather than a rewrite of every call site, and that is the point:
+    the panes, the canvas and the keyboard already say ``state.brush_size``, and
+    each of them meant "the size of the tool in my hand" all along -- the state
+    layer was the thing that disagreed. Nine call sites become per-tool with no
+    edit and no chance of one being missed.
+
+    An unannotated class attribute is not a dataclass field, so these coexist
+    with ``@dataclass`` rather than fighting it; the defaults live in
+    ``TOOL_OPTION_DEFAULTS`` because that is where a *tool's* defaults belong.
+    """
+
+    def get(self: InkerState) -> Any:
+        return self.options_for(self.tool)[name]
+
+    def put(self: InkerState, value: Any) -> None:
+        self.options_for(self.tool)[name] = value
+
+    return property(get, put, doc=f"{name}, remembered per tool.")
+
+
 # --- everything Paint mode remembers ----------------------------------------
 
 
@@ -249,14 +296,10 @@ class InkerState:
 
     # Tool settings: shared across documents on purpose.
     tool: str = "brush"
-    brush_size: int = 12
-    hardness: float = 0.85
-    opacity: float = 1.0
-    strength: float = 0.5
-    spacing: float = 0.1
-    shape_filled: bool = False
-    wand_tolerance: int = 32
-    wand_contiguous: bool = True
+    # Per tool, keyed by tool name; see TOOL_OPTION_DEFAULTS. Populated lazily,
+    # so a fresh session carries nothing and a tool that has never been adjusted
+    # has no entry rather than a copy of the defaults.
+    tool_options: dict[str, dict[str, Any]] = field(default_factory=dict)
     feather_radius: float = 2.0
     gradient_kind: str = "linear"
     gradient_to_transparent: bool = False
@@ -303,6 +346,38 @@ class InkerState:
     # What the handle was grabbed at, so a drag is measured against the press
     # rather than against the previous frame.
     transform_ref: tuple[float, float, float, float] | None = None
+
+    # -- per-tool options ---------------------------------------------------
+    #
+    # Written out one per line rather than looped over TOOL_OPTION_DEFAULTS: a
+    # generated attribute is invisible to a reader and to a type checker, and
+    # the whole point of these is that they are the names the rest of the app
+    # already says.
+
+    brush_size = _tool_option("brush_size")
+    hardness = _tool_option("hardness")
+    opacity = _tool_option("opacity")
+    strength = _tool_option("strength")
+    spacing = _tool_option("spacing")
+    shape_filled = _tool_option("shape_filled")
+    wand_tolerance = _tool_option("wand_tolerance")
+    wand_contiguous = _tool_option("wand_contiguous")
+
+    def options_for(self, tool: str) -> dict[str, Any]:
+        """One tool's option dictionary, created at the defaults on first ask.
+
+        A tool that has never been adjusted has no entry at all, which is what
+        makes "reset this tool" a ``pop`` and what keeps a saved session (if one
+        is ever saved) to the settings the user actually changed.
+        """
+        got = self.tool_options.get(tool)
+        if got is None:
+            got = dict(TOOL_OPTION_DEFAULTS)
+            self.tool_options[tool] = got
+        return got
+
+    def reset_tool_options(self, tool: str | None = None) -> None:
+        self.tool_options.pop(tool or self.tool, None)
 
     # -- documents ---------------------------------------------------------
 

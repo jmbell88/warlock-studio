@@ -37,11 +37,17 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
 
-The painting tools share **Size**, **Hardness**, **Opacity** and **Spacing**; blur and smudge add
-**Strength**. The shape tools share the size slider and, except for the line, a **Filled**
-checkbox. Fill and the wand share **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
+The painting tools have **Size**, **Hardness**, **Opacity** and **Spacing**; blur and smudge add
+**Strength**. The shape tools have the size slider and, except for the line, a **Filled**
+checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
 off acts on every similar pixel in the image, not just the ones touching where you clicked. The
 gradient tool chooses its **Shape** and whether it fades **To transparent**.
+
+**Each tool remembers its own.** Sizing the eraser to 60 to clean up a corner leaves the brush at
+whatever you had it, and switching back finds each tool exactly as you left it. **Reset _tool_**
+under the options puts the one in your hand back to its defaults and touches nothing else. The
+settings below the tool options — symmetry, the grid, the colours — are canvas-wide and shared,
+because they are properties of what you are drawing rather than of what you are drawing with.
 
 Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
 left/right, top/bottom, or both. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels.

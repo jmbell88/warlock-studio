@@ -248,6 +248,63 @@ def test_tool_settings_are_shared_across_documents():
     assert state.brush_size == 40
 
 
+def test_a_tool_remembers_its_own_options():
+    """The whole of Ink2: sizing the eraser must not resize the brush.
+
+    Written against ``state.brush_size`` rather than the dictionary because
+    that attribute is what nine call sites say, and the property is the feature
+    -- a test that went through ``options_for`` would pass with the property
+    removed and every pane back to one shared size.
+    """
+    state = inker_state.InkerState()
+    state.tool = "brush"
+    state.brush_size = 12
+    state.tool = "eraser"
+    state.brush_size = 60
+    state.hardness = 0.1
+
+    state.tool = "brush"
+    assert state.brush_size == 12
+    assert state.hardness == inker_state.TOOL_OPTION_DEFAULTS["hardness"]
+    state.tool = "eraser"
+    assert (state.brush_size, state.hardness) == (60, 0.1)
+
+
+def test_an_untouched_tool_starts_at_the_declared_defaults():
+    state = inker_state.InkerState()
+    for tool, _label, _key in inker_state.TOOLS:
+        state.tool = tool
+        for name, default in inker_state.TOOL_OPTION_DEFAULTS.items():
+            assert getattr(state, name) == default, (tool, name)
+
+
+def test_resetting_a_tool_forgets_only_that_tool():
+    state = inker_state.InkerState()
+    state.tool = "brush"
+    state.brush_size = 40
+    state.tool = "eraser"
+    state.brush_size = 80
+
+    state.reset_tool_options("eraser")
+    assert state.brush_size == inker_state.TOOL_OPTION_DEFAULTS["brush_size"]
+    state.tool = "brush"
+    assert state.brush_size == 40
+
+
+def test_the_canvas_settings_stay_app_level():
+    """A grid that switched off because you picked the eraser would be a bug.
+
+    The split is the decision in Ink2, so it is asserted rather than left to
+    the comment: these names must *not* be per-tool options.
+    """
+    shared = {"symmetry", "grid", "grid_size", "fg", "bg", "feather_radius", "swatches"}
+    assert shared.isdisjoint(inker_state.TOOL_OPTION_DEFAULTS)
+    state = inker_state.InkerState()
+    state.grid_size = 32
+    state.tool = "eraser"
+    assert state.grid_size == 32
+
+
 def test_every_tool_has_a_shortcut_and_a_label():
     keys = [key for key, _, _ in inker_state.TOOLS]
     assert len(set(keys)) == len(keys)
