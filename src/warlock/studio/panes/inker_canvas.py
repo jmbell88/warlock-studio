@@ -561,7 +561,17 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
         # background one: fading to a transparent black leaves a dark fringe
         # wherever the two are blended.
         end = (*state.fg[:3], 0) if state.gradient_to_transparent else state.bg
-        doc.gradient(anchor, point, state.fg, end, kind=state.gradient_kind)
+        doc.gradient(
+            anchor,
+            point,
+            state.fg,
+            end,
+            kind=state.gradient_kind,
+            # Empty means the foreground-to-background preset, which is a live
+            # reading of the two colours rather than a copy of them -- so
+            # swapping with X changes the next gradient, as it always has.
+            stops=state.gradient_stops or None,
+        )
     state.clear_drag()
 
 

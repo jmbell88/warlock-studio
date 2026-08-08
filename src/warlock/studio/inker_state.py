@@ -308,6 +308,13 @@ class InkerState:
     select_steps: int = 2
     gradient_kind: str = "linear"
     gradient_to_transparent: bool = False
+    # Extra colour stops, or empty for the foreground-to-background preset.
+    # Empty rather than a materialised two-stop list on purpose: the preset has
+    # to *follow* the two colours, so that swapping them with X changes the next
+    # gradient the way it always has.
+    gradient_stops: list[tuple[float, tuple[int, int, int, int]]] = field(
+        default_factory=list
+    )
     symmetry: str = "none"
     grid: bool = False
     grid_size: int = 16

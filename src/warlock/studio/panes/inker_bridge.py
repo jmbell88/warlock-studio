@@ -148,6 +148,7 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     changed_h, height = imgui.input_int("H", int(height), 0)
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
+    anchor = _anchor_grid(ctx, tab)
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
     if imgui.button("Scale image", (sp(180), 0)):
@@ -155,13 +156,58 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         tab.view.fitted = False
         imgui.close_current_popup()
     # Two different operations that a single "resize" would conflate: one
-    # resamples the picture, the other changes how much room it has.
+    # resamples the picture, the other changes how much room it has. The anchor
+    # belongs to the second: scaling has nowhere to put slack.
     if imgui.button("Resize canvas", (sp(180), 0)):
-        tab.doc.resize_canvas((max(1, width), max(1, height)))
+        tab.doc.resize_canvas((max(1, width), max(1, height)), anchor=anchor)
         tab.view.fitted = False
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.end_popup()
+
+
+# The grid, drawn in reading order. Taken from ``transform.ANCHORS`` rather
+# than written again here: the pane decides the layout and the engine owns what
+# each name means, which is why that table is written out rather than derived
+# from a 3x3 index.
+ANCHOR_ROWS = (
+    ("top-left", "top", "top-right"),
+    ("left", "centre", "right"),
+    ("bottom-left", "bottom", "bottom-right"),
+)
+
+
+def _anchor_grid(ctx: Any, tab: Any) -> str:
+    """Nine buttons saying where the old image sits in the new canvas.
+
+    Remembered per tab in the preview dictionary beside the width and height,
+    so reopening the popup after a mistake offers the same answer rather than
+    silently going back to the corner.
+    """
+    from ..inker import transform as tf
+
+    key = f"inker_anchor:{tab.uid}"
+    current = ctx.state.preview.get(key) or "top-left"
+    widgets.field_label("anchor")
+    for row in ANCHOR_ROWS:
+        for name in row:
+            selected = name == current
+            if selected:
+                imgui.push_style_color(
+                    imgui.Col_.button.value,
+                    imgui.get_style().color_(imgui.Col_.button_active.value),
+                )
+            if imgui.button(f" ##anchor{name}", (sp(28), sp(24))):
+                ctx.state.preview[key] = name
+                current = name
+            if selected:
+                imgui.pop_style_color()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(name)
+            if name != row[-1]:
+                imgui.same_line()
+        imgui.new_line()
+    return current if current in tf.ANCHORS else "top-left"
 
 
 # --- filters ----------------------------------------------------------------

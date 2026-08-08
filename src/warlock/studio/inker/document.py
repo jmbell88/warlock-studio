@@ -1301,18 +1301,23 @@ class Document:
         self,
         p0: tuple[float, float],
         p1: tuple[float, float],
-        start: RGBA,
-        end: RGBA,
+        start: RGBA | None = None,
+        end: RGBA | None = None,
         *,
         kind: str = "linear",
+        stops: Any = None,
     ) -> bool:
-        """Fill the selection (or the whole layer) with a ramp."""
+        """Fill the selection (or the whole layer) with a ramp.
+
+        ``stops`` is the general form; ``start``/``end`` is the two-stop
+        shorthand every existing caller uses. Both go through one interpolator.
+        """
         width, height = self.size
         rect = self.mask.bounds if self.mask is not None else None
         box = self.clip(rect or (0, 0, width, height))
         if box is None:
             return False
-        rgba, weight = grad.render((width, height), p0, p1, start, end, kind)
+        rgba, weight = grad.render((width, height), p0, p1, start, end, kind, stops=stops)
         x0, y0, x1, y1 = box
         self._ensure_active_cel()
         layer = self.stack.active
@@ -2134,6 +2139,20 @@ class Document:
         bounds = self.mask.bounds if self.mask is not None else None
         return self.crop(bounds) if bounds else False
 
-    def resize_canvas(self, size: tuple[int, int], offset: tuple[int, int] = (0, 0)) -> None:
+    def resize_canvas(
+        self,
+        size: tuple[int, int],
+        offset: tuple[int, int] | None = None,
+        *,
+        anchor: str = "top-left",
+    ) -> None:
+        """Grow or crop the canvas, placing the old image by *anchor*.
+
+        An explicit ``offset`` still wins, because it is the general form and
+        the anchor is a name for nine of its values -- and because every caller
+        that already computed one should keep working unchanged.
+        """
         self.commit_floating()
+        if offset is None:
+            offset = tf.anchor_offset(self.size, size, anchor)
         self._replay(lambda: self._map_planes(lambda plane: tf.resize_canvas(plane, size, offset)))

@@ -53,6 +53,12 @@ under the options puts the one in your hand back to its defaults and touches not
 settings below the tool options — symmetry, the grid, the colours — are canvas-wide and shared,
 because they are properties of what you are drawing rather than of what you are drawing with.
 
+A gradient runs from the foreground colour to the background one by default. **Add stops** turns
+that preset into an editable list: each stop has a position, a colour and an alpha, and a gradient
+with three of them can fade out in the middle and back in. **Use fg / bg** goes back to the preset,
+which is a live reading of the two colours rather than a copy — so `X` still changes the next
+gradient you draw.
+
 Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
 left/right, top/bottom, or both. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels.
 
@@ -113,8 +119,14 @@ back to the saved state marks it clean again rather than leaving it unsaved fore
 
 The pipeline panel on the right also shows **Undo** and **Redo** buttons and the current history
 depth, alongside canvas operations: **Flip H**, **Flip V**, **Rotate**, **Fit view**, and
-**Resize...**. The resize popup deliberately offers two different operations — **Scale image**
-resamples the picture, **Resize canvas** changes how much room it has around the picture.
+**Resize...**, and **Filter...**. The resize popup deliberately offers two different operations —
+**Scale image** resamples the picture, **Resize canvas** changes how much room it has around the
+picture.
+
+The 3×3 **anchor** grid says where the old image sits in the new canvas, and it belongs to Resize
+canvas only: scaling has no slack to put anywhere. Growing a canvas anchored centre adds room on
+all four sides; anchored top-left it adds room right and below, which is what the button did before
+there was a grid. Shrinking works the same way and crops from the opposite sides.
 
 ## Filters
 

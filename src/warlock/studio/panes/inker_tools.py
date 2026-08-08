@@ -149,6 +149,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         changed, value = imgui.checkbox("To transparent", state.gradient_to_transparent)
         if changed:
             state.gradient_to_transparent = value
+        _gradient_stops(state)
 
     if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
         state.reset_tool_options(tool)
@@ -163,6 +164,56 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
     imgui.end_disabled()
+
+
+def _gradient_stops(state: Any) -> None:
+    """The stop list, or the two-colour preset when it is empty.
+
+    Empty is the *preset* rather than "no stops": a materialised two-stop list
+    would stop following the foreground and background colours, so swapping
+    them with X would no longer change the next gradient. Adding a stop is
+    therefore the moment the gradient stops being a preset, and the button says
+    so by seeding the list from the two colours it was already using.
+    """
+    widgets.field_label("stops")
+    if not state.gradient_stops:
+        widgets.muted("foreground to background")
+        if imgui.small_button("Add stops##gradstops"):
+            state.gradient_stops = [(0.0, tuple(state.fg)), (1.0, tuple(state.bg))]
+        return
+
+    remove = -1
+    for index, (position, colour) in enumerate(list(state.gradient_stops)):
+        imgui.push_id(f"gradstop{index}")
+        imgui.set_next_item_width(sp(70))
+        changed, value = imgui.slider_float("##pos", float(position), 0.0, 1.0, "%.2f")
+        if changed:
+            state.gradient_stops[index] = (float(value), colour)
+        imgui.same_line()
+        edited, rgba = imgui.color_edit4(
+            "##col",
+            [c / 255.0 for c in colour],
+            imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value,
+        )
+        if edited:
+            state.gradient_stops[index] = (
+                float(position),
+                tuple(int(round(c * 255.0)) for c in rgba),
+            )
+        imgui.same_line()
+        # Never below one stop: ``sample`` treats a single stop as a flat
+        # colour rather than raising, but a list with none in it has no
+        # gradient to draw and no way back to the preset except this button.
+        if widgets.disabled_button("x", len(state.gradient_stops) > 1):
+            remove = index
+        imgui.pop_id()
+    if remove >= 0:
+        del state.gradient_stops[remove]
+    if imgui.small_button("Add##gradadd"):
+        state.gradient_stops.append((0.5, tuple(state.fg)))
+    imgui.same_line()
+    if imgui.small_button("Use fg / bg##gradreset"):
+        state.gradient_stops = []
 
 
 def _has_options(tool: str) -> bool:

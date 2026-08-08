@@ -80,6 +80,41 @@ def crop(pixels: np.ndarray, rect: tuple[int, int, int, int]) -> np.ndarray:
     return np.ascontiguousarray(pixels[y0:y1, x0:x1])
 
 
+#: The nine anchor positions, as the fraction of the *slack* that goes before
+#: the image on each axis. Written out as a table rather than derived from a
+#: 3x3 index so the names are the contract: a pane draws the grid in whatever
+#: order it likes and cannot get the mapping subtly wrong.
+ANCHORS: dict[str, tuple[float, float]] = {
+    "top-left": (0.0, 0.0),
+    "top": (0.5, 0.0),
+    "top-right": (1.0, 0.0),
+    "left": (0.0, 0.5),
+    "centre": (0.5, 0.5),
+    "right": (1.0, 0.5),
+    "bottom-left": (0.0, 1.0),
+    "bottom": (0.5, 1.0),
+    "bottom-right": (1.0, 1.0),
+}
+
+
+def anchor_offset(
+    old: tuple[int, int], new: tuple[int, int], anchor: str = "top-left"
+) -> tuple[int, int]:
+    """Where the old image lands inside the new canvas, for a named anchor.
+
+    Negative when the canvas shrinks, which is exactly what ``resize_canvas``
+    already means by a negative offset -- growing and cropping are one
+    operation and an anchor is one number either way. Rounded rather than
+    floored, so a two-pixel growth centred puts one pixel on each side rather
+    than both on the right.
+    """
+    fx, fy = ANCHORS.get(anchor, ANCHORS["top-left"])
+    return (
+        int(round((new[0] - old[0]) * fx)),
+        int(round((new[1] - old[1]) * fy)),
+    )
+
+
 def resize_canvas(
     pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int] = (0, 0)
 ) -> np.ndarray:

@@ -162,3 +162,134 @@ def test_shrinking_the_canvas_discards_what_falls_outside_it():
 def test_a_canvas_resize_that_overlaps_nothing_gives_an_empty_plane():
     out = tf.resize_canvas(_plane(4, 4, RED), (4, 4), (100, 100))
     assert out.max() == 0
+
+
+# --- multi-stop gradients (Ink6) ---------------------------------------------
+
+
+def test_two_colours_and_a_two_stop_list_are_the_same_call():
+    """The shorthand builds the list rather than having arithmetic of its own,
+    which is what stops the two disagreeing in the last ulp at the ends."""
+    size, p0, p1 = (16, 1), (0, 0), (15, 0)
+    a_rgba, a_weight = grad.render(size, p0, p1, RED, (0, 0, 255, 0))
+    b_rgba, b_weight = grad.render(
+        size, p0, p1, stops=[(0.0, RED), (1.0, (0, 0, 255, 0))]
+    )
+    assert np.array_equal(a_rgba, b_rgba)
+    assert np.array_equal(a_weight, b_weight)
+
+
+def test_a_middle_stop_is_reached_where_it_was_placed():
+    rgba, _ = grad.render(
+        (11, 1),
+        (0, 0),
+        (10, 0),
+        stops=[(0.0, (0, 0, 0, 255)), (0.5, (255, 0, 0, 255)), (1.0, (0, 0, 0, 255))],
+    )
+    assert rgba[0, 5, 0] == pytest.approx(1.0, abs=0.02)
+    assert rgba[0, 0, 0] == pytest.approx(0.0, abs=0.02)
+    assert rgba[0, 10, 0] == pytest.approx(0.0, abs=0.02)
+
+
+def test_a_gradient_can_fade_out_in_the_middle_and_back_in():
+    """Which is the whole reason the weight is per stop rather than per end."""
+    _rgba, weight = grad.render(
+        (11, 1),
+        (0, 0),
+        (10, 0),
+        stops=[(0.0, RED), (0.5, (255, 0, 0, 0)), (1.0, RED)],
+    )
+    assert weight[0, 5] == pytest.approx(0.0, abs=0.02)
+    assert weight[0, 0] == pytest.approx(1.0, abs=0.02)
+    assert weight[0, 10] == pytest.approx(1.0, abs=0.02)
+
+
+def test_stops_are_sorted_rather_than_required_sorted():
+    """The UI's list is in the order stops were added, and dragging one past
+    another must not invert the ramp."""
+    forward = grad.sample([(0.0, RED), (1.0, (0, 0, 255, 255))], np.linspace(0, 1, 9))
+    shuffled = grad.sample([(1.0, (0, 0, 255, 255)), (0.0, RED)], np.linspace(0, 1, 9))
+    assert np.array_equal(forward, shuffled)
+
+
+def test_one_stop_is_a_flat_colour_rather_than_an_error():
+    """Dragging a two-stop gradient down to one is something a user does on the
+    way to a three-stop one; refusing mid-edit would be refusing a keystroke."""
+    out = grad.sample([(0.3, RED)], np.linspace(0, 1, 5))
+    assert out.shape == (5, 4)
+    assert np.allclose(out[:, 0], 1.0)
+
+
+def test_no_stops_at_all_is_a_programming_error():
+    with pytest.raises(ValueError):
+        grad.sample([], np.zeros(3, dtype=np.float32))
+    with pytest.raises(ValueError):
+        grad.render((4, 1), (0, 0), (3, 0))
+
+
+def test_a_stop_list_is_clamped_past_both_ends():
+    out = grad.sample([(0.25, RED), (0.75, (0, 0, 0, 255))], np.array([0.0, 1.0]))
+    assert out[0, 0] == pytest.approx(1.0)
+    assert out[1, 0] == pytest.approx(0.0)
+
+
+# --- the resize anchor (Ink7) ------------------------------------------------
+
+
+def test_the_default_anchor_is_the_corner_the_old_offset_meant():
+    assert tf.anchor_offset((8, 8), (16, 16), "top-left") == (0, 0)
+
+
+def test_centring_splits_the_slack_and_rounds_rather_than_flooring():
+    assert tf.anchor_offset((8, 8), (16, 16), "centre") == (4, 4)
+    assert tf.anchor_offset((8, 8), (10, 10), "centre") == (1, 1)
+    # An odd growth: one extra pixel, and it goes after rather than being lost.
+    assert tf.anchor_offset((8, 8), (11, 11), "centre") == (2, 2)
+
+
+def test_the_far_corner_puts_every_pixel_of_slack_before_the_image():
+    assert tf.anchor_offset((8, 4), (12, 10), "bottom-right") == (4, 6)
+
+
+def test_shrinking_gives_a_negative_offset_which_is_a_crop():
+    """Growing and cropping are one operation, so an anchor is one number
+    either way -- which is what ``resize_canvas`` already meant by a negative
+    offset."""
+    assert tf.anchor_offset((16, 16), (8, 8), "centre") == (-4, -4)
+    assert tf.anchor_offset((16, 16), (8, 8), "top-left") == (0, 0)
+
+
+def test_an_unknown_anchor_falls_back_to_the_corner():
+    """It comes out of a settings dictionary, so a name this build does not
+    carry is a stale file rather than a bug worth raising over."""
+    assert tf.anchor_offset((8, 8), (16, 16), "middle-ish") == (0, 0)
+
+
+def test_every_named_anchor_places_the_image_inside_the_new_canvas():
+    for name in tf.ANCHORS:
+        ox, oy = tf.anchor_offset((8, 6), (20, 14), name)
+        assert 0 <= ox <= 12 and 0 <= oy <= 8, name
+
+
+def test_a_centred_canvas_growth_puts_the_image_in_the_middle():
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    doc.stack.active.pixels[:, :] = RED
+    doc.resize_canvas((8, 8), anchor="centre")
+    pixels = doc.stack.active.pixels
+    assert doc.size == (8, 8)
+    assert tuple(pixels[4, 4]) == RED
+    assert tuple(pixels[0, 0]) == (0, 0, 0, 0)
+    assert tuple(pixels[7, 7]) == (0, 0, 0, 0)
+
+
+def test_an_explicit_offset_still_wins_over_the_anchor():
+    """The general form, and every caller that already computed one keeps
+    working unchanged."""
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    doc.stack.active.pixels[:, :] = RED
+    doc.resize_canvas((8, 8), (0, 0), anchor="centre")
+    assert tuple(doc.stack.active.pixels[0, 0]) == RED
