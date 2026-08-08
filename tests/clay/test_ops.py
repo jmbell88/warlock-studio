@@ -310,10 +310,23 @@ def test_join_welds_coincident_vertices_into_one_surface() -> None:
     assert len(welded.positions) == len(a.mesh.positions)
 
 
+def _bare(mesh: bm.Mesh) -> bm.Mesh:
+    """The same mesh with no texture coordinates.
+
+    Every generator produces UVs now, so a mesh without them is an *imported*
+    one -- which is exactly the case the absent-uv branches exist for, and why
+    the fixtures below strip them explicitly rather than relying on a primitive
+    to have none.
+    """
+    from dataclasses import replace
+
+    return replace(mesh, uv=None)
+
+
 def test_join_keeps_uvs_when_only_one_side_has_them() -> None:
     """Dropping them would lose coordinates one half already had; the side
     without gets zeros, which is what "this mesh has no UVs" already means."""
-    a = _obj("A")
+    a = _obj("A", mesh=_bare(bp.box()))
     textured = bm.Mesh(
         positions=a.mesh.positions,
         loops=a.mesh.loops,
@@ -331,7 +344,17 @@ def test_join_keeps_uvs_when_only_one_side_has_them() -> None:
 
 
 def test_join_keeps_no_uvs_when_neither_side_has_them() -> None:
-    assert ops.join([_obj("A"), _obj("B")], eps=0.0).uv is None
+    a = _obj("A", mesh=_bare(bp.box()))
+    b = _obj("B", mesh=_bare(bp.box()))
+    assert ops.join([a, b], eps=0.0).uv is None
+
+
+def test_join_keeps_the_uvs_both_sides_brought() -> None:
+    """The ordinary case now that generators produce them: two primitives
+    merged keep one corner's coordinates each."""
+    merged = ops.join([_obj("A"), _obj("B")], eps=0.0)
+    assert merged.uv is not None
+    assert merged.uv.shape == (len(merged.loops), 2)
 
 
 def test_join_carries_per_face_materials_through_unchanged() -> None:

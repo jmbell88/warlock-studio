@@ -86,21 +86,50 @@ MIN_SEGMENTS = 3
 MIN_RINGS = 2
 
 
-def _mesh(positions: np.ndarray, faces: Sequence[Sequence[int]]) -> Mesh:
+def _mesh(
+    positions: np.ndarray,
+    faces: Sequence[Sequence[int]],
+    uv: Sequence[Sequence[Sequence[float]]] | None = None,
+) -> Mesh:
     """Assemble the CSR arrays from a list of corner loops.
 
     Every generator funnels through here so that the offsets are computed once,
     in one place, rather than six times with six chances to leave ``starts``
     one short.
+
+    ``uv`` is one ``(u, v)`` per corner of each face, in the same nesting as
+    ``faces`` -- per *corner* rather than per vertex, because that is what the
+    field is and because it is the only shape that can put the two sides of a
+    wrap seam at u = 0 and u = 1 while sharing one position.
     """
     counts = [len(f) for f in faces]
+    flat = None
+    if uv is not None:
+        flat = np.array([c for face in uv for c in face], dtype="f4").reshape(-1, 2)
     return Mesh(
         positions=np.asarray(positions, dtype="f4"),
         loops=np.array([i for f in faces for i in f], dtype="i4"),
         starts=np.concatenate([[0], np.cumsum(counts)]).astype("i4"),
         material=np.zeros(len(faces), dtype="i4"),
         smooth=np.zeros(len(faces), dtype=bool),
+        uv=flat,
     )
+
+
+def _disc_uv(segments: int, centre: tuple[float, float], radius: float, reverse: bool = False):
+    """A cap's corners on a circle in UV space, matching ``_ring``'s order.
+
+    Caps go in their own corner of the square rather than sharing it with the
+    sides: a canonical unwrap whose islands overlap is one that cannot be baked
+    to, and baking is what these coordinates exist for.
+    """
+    theta = np.linspace(0.0, 2.0 * np.pi, segments, endpoint=False)
+    if reverse:
+        theta = theta[::-1]
+    return [
+        (centre[0] + radius * float(np.cos(t)), centre[1] + radius * float(np.sin(t)))
+        for t in theta
+    ]
 
 
 def _ring(radius: float, y: float, segments: int) -> np.ndarray:
@@ -177,7 +206,11 @@ def box(size: Sequence[float] = (1.0, 1.0, 1.0)) -> Mesh:
         [2, 1, 5, 6],  # +X
         [0, 3, 7, 4],  # -X
     ]
-    return _mesh(positions, faces)
+    # A box's canonical unwrap *is* the cube projection, so it is that call
+    # rather than a second table of the same six squares written out here.
+    from .uv import box_unwrap
+
+    return box_unwrap(_mesh(positions, faces))
 
 
 def plane(size: Sequence[float] = (1.0, 1.0)) -> Mesh:
@@ -192,7 +225,7 @@ def plane(size: Sequence[float] = (1.0, 1.0)) -> Mesh:
         [[-hx, 0.0, +hz], [+hx, 0.0, +hz], [+hx, 0.0, -hz], [-hx, 0.0, -hz]],
         dtype="f4",
     )
-    return _mesh(positions, [[0, 1, 2, 3]])
+    return _mesh(positions, [[0, 1, 2, 3]], [[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]])
 
 
 def cylinder(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Mesh:
@@ -203,7 +236,17 @@ def cylinder(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Me
     faces = _side_quads(0, n, n)
     faces.append(list(range(n)))  # bottom cap, ring order, normal -Y
     faces.append(list(range(2 * n - 1, n - 1, -1)))  # top cap, reversed, normal +Y
-    return _mesh(positions, faces)
+
+    # The band across the top half of the square, the two caps in the bottom
+    # corners. ``u`` runs to exactly 1 on the last quad rather than wrapping to
+    # 0, which is the whole reason UVs are per corner.
+    uv = [
+        [(i / n, 0.5), (i / n, 1.0), ((i + 1) / n, 1.0), ((i + 1) / n, 0.5)]
+        for i in range(n)
+    ]
+    uv.append(_disc_uv(n, (0.25, 0.25), 0.24))
+    uv.append(_disc_uv(n, (0.75, 0.25), 0.24, reverse=True))
+    return _mesh(positions, faces, uv)
 
 
 def cone(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Mesh:
@@ -221,7 +264,15 @@ def cone(radius: float = 0.5, height: float = 1.0, segments: int = 16) -> Mesh:
     apex = n
     faces: list[list[int]] = [[i, apex, (i + 1) % n] for i in range(n)]
     faces.append(list(range(n)))  # base cap, normal -Y
-    return _mesh(positions, faces)
+
+    # The apex gets a *different* u per side triangle -- it is one vertex and
+    # many corners, which is exactly the case a per-corner field exists for. A
+    # shared apex uv would smear the whole top of the texture into one point.
+    uv = [
+        [(i / n, 0.5), ((i + 0.5) / n, 1.0), ((i + 1) / n, 0.5)] for i in range(n)
+    ]
+    uv.append(_disc_uv(n, (0.25, 0.25), 0.24))
+    return _mesh(positions, faces, uv)
 
 
 def uv_sphere(radius: float = 0.5, segments: int = 16, rings: int = 8) -> Mesh:
@@ -253,7 +304,31 @@ def uv_sphere(radius: float = 0.5, segments: int = 16, rings: int = 8) -> Mesh:
     for j in range(1, m - 1):
         faces.extend(_side_quads(row(j + 1), row(j), n))
     faces.extend([bottom, row(m - 1) + i, row(m - 1) + (i + 1) % n] for i in range(n))
-    return _mesh(positions, faces)
+
+    # Equirectangular: u around, v from the south pole up. The whole square,
+    # with no caps to pack, because a sphere has no faces that are not part of
+    # the same surface.
+    def band(j: int) -> float:
+        return 1.0 - j / m
+
+    uv: list[list[tuple[float, float]]] = [
+        [(i / n, band(1)), ((i + 0.5) / n, 1.0), ((i + 1) / n, band(1))] for i in range(n)
+    ]
+    for j in range(1, m - 1):
+        uv.extend(
+            [
+                (i / n, band(j + 1)),
+                (i / n, band(j)),
+                ((i + 1) / n, band(j)),
+                ((i + 1) / n, band(j + 1)),
+            ]
+            for i in range(n)
+        )
+    uv.extend(
+        [((i + 0.5) / n, 0.0), (i / n, band(m - 1)), ((i + 1) / n, band(m - 1))]
+        for i in range(n)
+    )
+    return _mesh(positions, faces, uv)
 
 
 def torus(
@@ -305,7 +380,20 @@ def torus(
         for i in range(n)
         for j in range(k)
     ]
-    return _mesh(positions, faces)
+    # Both seams run to exactly 1 rather than wrapping to 0, for the reason the
+    # cylinder's does: the corners are per face, so the last ring and the last
+    # tube section can each close the square instead of folding it.
+    uv = [
+        [
+            (i / n, j / k),
+            (i / n, (j + 1) / k),
+            ((i + 1) / n, (j + 1) / k),
+            ((i + 1) / n, j / k),
+        ]
+        for i in range(n)
+        for j in range(k)
+    ]
+    return _mesh(positions, faces, uv)
 
 
 # --- the registry ------------------------------------------------------------

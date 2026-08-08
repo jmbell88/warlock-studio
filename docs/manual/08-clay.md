@@ -182,6 +182,25 @@ the origin.
 Snapping applies to gizmo drags only. A number typed into the properties panel is used exactly as
 typed, because you already said what you meant.
 
+## Texture coordinates
+
+Every primitive comes with texture coordinates already on it — a box's six faces, a cylinder's band
+with its two caps tucked into the corners, a sphere laid out pole to pole, a torus wrapped both
+ways. They are laid out so that no two parts of one shape sit on top of each other in the square,
+because a texture cannot be baked onto a layout whose pieces overlap.
+
+**Box Unwrap** recomputes them for whatever is selected, projecting each face along whichever axis
+it points along most. It is the same projection the box primitive uses, and it is the right answer
+for the blockout geometry Clay makes: instant, predictable, and with no way to fail. It is
+deliberately not a conformal unwrap — that is the right tool for an organic surface and the wrong
+one for a shape made of flat panels, and it fails in ways a modelling panel has nothing useful to
+say about.
+
+Two things follow from it being a *projection*. Faces pointing opposite ways share the same square,
+so a texture applied to a box appears on both the front and the back (mirrored, so lettering reads
+the right way round on each). And unwrapping does not freeze a generator: coordinates are not
+geometry, so an unwrapped box is still a box and editing its size still rebuilds it.
+
 ## Checking a mesh
 
 The properties panel has a **mesh check** under the generator's parameters. It measures the selected

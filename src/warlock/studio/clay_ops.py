@@ -388,6 +388,28 @@ def _delete(ctx: Any, doc: Any, **_: Any) -> None:
     clay_mode._delete(ctx, doc)
 
 
+def _unwrap(ctx: Any, doc: Any, **_: Any) -> None:
+    """Give every selected object a fresh box projection.
+
+    Whole objects rather than the selected faces, and that is the decision:
+    unwrapping half a mesh leaves the other half's coordinates from whenever
+    they were last computed, so the two islands are at different texel
+    densities and a checker map says so immediately. Per-face unwrapping is a
+    real feature and it needs a seam tool first.
+
+    It does **not** freeze the generator. UVs are not geometry -- the positions,
+    the topology and the parameters are all untouched -- so a box that has been
+    unwrapped is still describable as "box, size 1", and re-editing the size
+    correctly rebuilds it with the generator's own canonical coordinates.
+    """
+    from .clay import uv as uv_mod
+
+    del ctx
+    for uid in list(doc.selection):
+        obj = doc.by_uid(uid)
+        doc.set_mesh(uid, uv_mod.box_unwrap(obj.mesh), keep_generator=True)
+
+
 def _frame(ctx: Any, doc: Any, **_: Any) -> None:
     view = getattr(ctx, "clay_view", None)
     if view is not None:
@@ -461,6 +483,15 @@ def _register_defaults() -> None:
             enabled=has_objects,
             key="Ctrl+D",
             separator_before=True,
+        )
+    )
+    register(
+        Op(
+            name="unwrap",
+            label="Box Unwrap",
+            modes=("object",),
+            run=_unwrap,
+            enabled=has_objects,
         )
     )
     register(

@@ -285,6 +285,13 @@ def _tex(seed: int = 0) -> tuple[int, int, bytes]:
     return (2, 2, bytes((seed + i) % 256 for i in range(2 * 2 * 4)))
 
 
+def _bare(mesh):
+    """The same mesh with no texture coordinates -- an import, or a v1 file."""
+    from dataclasses import replace
+
+    return replace(mesh, uv=None)
+
+
 def _uvd(mesh):
     n = len(mesh.loops)
     uv = np.stack([np.arange(n, dtype="f4") / n, np.zeros(n, dtype="f4")], axis=1)
@@ -310,7 +317,10 @@ def test_the_version_is_written_unconditionally() -> None:
 def test_uvs_survive_a_round_trip_and_absent_ones_stay_absent() -> None:
     doc = bd.ClayDoc()
     textured = doc.add_object(bd.Obj(uid=bd.new_uid(), name="T", mesh=_uvd(bp.plane())))
-    plain = doc.add_object(bd.Obj(uid=bd.new_uid(), name="P", mesh=bp.box()))
+    # Explicitly stripped: every generator produces UVs now, so a mesh without
+    # them is an imported one or one this test built -- and the absent case is
+    # still real and still has to survive.
+    plain = doc.add_object(bd.Obj(uid=bd.new_uid(), name="P", mesh=_bare(bp.box())))
 
     out = _roundtrip(doc)
     assert np.array_equal(
@@ -399,6 +409,20 @@ def _rewrite_version(data: bytes, version: int) -> bytes:
     with zipfile.ZipFile(out, "w") as zf:
         zf.writestr(ser.SCENE, json.dumps(scene))
         for name in source.namelist():
-            if name != ser.SCENE:
-                zf.writestr(name, source.read(name))
+            if name == ser.SCENE:
+                continue
+            data = source.read(name)
+            if version < 2 and name.endswith(".npz"):
+                # A real v1 file has no ``uv`` member in its mesh archive --
+                # the version number alone was enough to fake one only while
+                # every primitive produced meshes without them.
+                data = _without_uv(data)
+            zf.writestr(name, data)
+    return out.getvalue()
+
+
+def _without_uv(data: bytes) -> bytes:
+    npz = np.load(BytesIO(data))
+    out = BytesIO()
+    np.savez_compressed(out, **{k: npz[k] for k in npz.files if k != "uv"})
     return out.getvalue()

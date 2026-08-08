@@ -472,7 +472,13 @@ def test_submesh_gathers_the_uvs_alongside_the_corners() -> None:
 
 
 def test_submesh_of_an_untextured_mesh_stays_untextured() -> None:
-    assert bd._submesh(bp.box(), np.array([0, 2])).uv is None
+    from dataclasses import replace
+
+    # Stripped explicitly: every generator produces UVs now, so an untextured
+    # mesh is an imported one -- which is exactly the case this branch exists
+    # for.
+    bare = replace(bp.box(), uv=None)
+    assert bd._submesh(bare, np.array([0, 2])).uv is None
 
 
 # --- element mode and element selection (T13) -------------------------------
