@@ -23,7 +23,7 @@ from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
 from ..tokens import sp
-from . import pose_panel, retarget_panel, sheet_panel
+from . import candidates_panel, pose_panel, retarget_panel, sheet_panel
 
 # Matches the library card's thumbnail, so the two read as the same kind of
 # object rather than as two different image widgets. Design px: every use of it
@@ -41,6 +41,12 @@ REFERENCE_MAX_THUMBS = 3
 def draw(ctx: Any) -> None:
     from .. import icons
 
+    if ctx.state.mode == "3d":
+        # Above the header, and above the "select an asset" empty state, on
+        # purpose: an undecided candidate group is a question being asked, and
+        # its rows are hidden from the library -- so this is the only way back
+        # to them, and it has to be visible whatever is (or is not) selected.
+        candidates_panel.draw(ctx)
     job = ctx.job()
     if job is None:
         widgets.empty_state(icons.BOX, "Select an asset.", "Its details and exports live here.")

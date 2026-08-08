@@ -371,7 +371,7 @@ def _overflow(ctx: Any, job: Any) -> None:
                 message="The job and everything derived from it are removed from disk.",
                 confirm_label="Delete",
                 cancel_label="Keep",
-                on_confirm=lambda: _delete(ctx, job_id),
+                on_confirm=lambda: delete_asset(ctx, job_id),
             )
         )
     imgui.end_popup()
@@ -469,7 +469,14 @@ def compare(ctx: Any, job_id: str) -> None:
         ctx.viewer.compare(ctx.job_dir(job_id) / "model.glb")
 
 
-def _delete(ctx: Any, job_id: str) -> None:
+def delete_asset(ctx: Any, job_id: str) -> None:
+    """Remove one asset: the tick, the selection, then the job and its files.
+
+    Public because the candidate picker offers exactly this for the attempts
+    the user did not keep -- through this function rather than a second
+    ``svc_jobs.delete_job`` call, so a loser is removed by the one path that
+    also clears the selection and the tick set.
+    """
     ctx.state.checked.discard(job_id)
     if ctx.state.selected == job_id:
         ctx.state.select(None)
@@ -523,7 +530,7 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
                 message=_delete_message(len(picked), hidden),
                 confirm_label="Delete",
                 cancel_label="Keep",
-                on_confirm=lambda: [_delete(ctx, j) for j in picked],
+                on_confirm=lambda: [delete_asset(ctx, j) for j in picked],
             )
         )
 

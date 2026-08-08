@@ -28,10 +28,56 @@ Derived values never carry across. Anything the worker recorded about the *sourc
 wears a quality verdict about a mesh that does not exist yet. See
 [Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
 
-If the reference's own quality report says it may not reconstruct, promoting it opens a confirm
-naming the reasons, with **Build anyway** as the affirmative. It is a confirm rather than a refusal
-because the rules are heuristics about composition — what you must not do is spend two minutes of
-GPU by accident.
+## Checking the cutout
+
+**Make 3D** does not submit straight away. It opens **Check the cutout**: the subject cut out of the
+reference, drawn over a checkerboard so transparency reads as transparency, with the panel naming
+which matte produced it — the reference's own alpha, the BiRefNet model, or the corner fill that
+answers when BiRefNet's weights are not installed.
+
+The matte is the single decision that most often turns a good reference into a solid slab, and it
+used to be made inside the reconstruction engine two minutes after you had committed. The panel is
+where you see it first. It also carries the reference's own quality report: the reasons it may not
+reconstruct, and the milder warnings — edge contact, a very thin subject — that are worth knowing
+before the spend rather than after.
+
+Three buttons:
+
+- **Accept** queues the mesh job. When the report refused the reference the button reads
+  **Build anyway** instead, and it submits with the refusal overridden — a confirm rather than a
+  refusal, because the rules are heuristics about composition and you can see the image they are
+  arguing about. What you must not do is spend two minutes of GPU by accident.
+- **Fix matte** opens the reference in Inker with the cutout already folded into its alpha, as one
+  undoable step. The eraser and the brush then edit the matte directly; see
+  [Inker](06-inker.md#fixing-a-matte).
+- **Cancel** leaves everything as it was.
+
+A matte you edited and saved travels to the engine as the image's own alpha, and the job records
+that it was approved — the engine is told to keep the alpha rather than cut its own.
+
+## Candidates
+
+The reconstruction engine is deterministic in its seed, and its failure mode is a lottery: the same
+reference comes back clean at one seed and with a hole through the shoulder at another. **Candidates**,
+directly above **Make 3D**, is how many attempts one press buys — 1, 2 or 3. The cost line under it
+changes with the choice, because this is the one control in the pane that multiplies what the button
+spends.
+
+Each candidate is an ordinary mesh job: same validation, same VRAM admission, same worker. The first
+keeps the mesh seed you pinned, so a pinned seed still reproduces; the rest draw fresh ones.
+
+While a group is undecided its members are **hidden from the library** — three near-identical cards
+are not a workshop — and the **Candidates** picker at the top of the 3D inspector is where they live
+instead. Selecting one shows it in the viewport exactly as selecting any other asset does. Once every
+attempt has finished, **Keep this one** settles the group: the one you kept and the ones you did not
+all become ordinary assets, and only then are you *asked* whether to delete the ones you did not keep.
+Nothing is ever deleted on your behalf, and declining leaves you with ordinary assets rather than
+hidden ones.
+
+Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
+See [Review](16-review.md).
+
+The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
 
 ## Starting from an upload
 

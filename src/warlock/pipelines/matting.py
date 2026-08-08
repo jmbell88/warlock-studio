@@ -90,7 +90,7 @@ def mask(image: PILImage, config: Any = None, *, device: str = "cpu") -> tuple[A
     an exported set whose alpha came from the flood fill has visibly rougher
     edges than one that did not, and that is a fact about the files.
     """
-    if _alpha_is_a_cutout(image):
+    if is_cutout(image):
         return (subject_mask(image), "alpha")
     # An alpha channel that says nothing must not be read by the fill either:
     # subject_mask keys on the *presence* of the channel, so it would take the
@@ -115,8 +115,14 @@ def mask(image: PILImage, config: Any = None, *, device: str = "cpu") -> tuple[A
     return (subject_mask(flat), "flood")
 
 
-def _alpha_is_a_cutout(image: PILImage) -> bool:
+def is_cutout(image: PILImage) -> bool:
     """Whether the image's alpha channel is a matte somebody already made.
+
+    Exported rather than left private for the reason ``has_alpha`` was: a
+    second caller now asks the same question about the same pixels.
+    ``service.matte.approve`` records ``matte: approved`` on exactly this
+    condition, and a copy of it that drifted would either claim an approval for
+    an opaque upload or throw away a real one.
 
     Having the channel is not the same as using it. A PNG saved by almost any
     editor is RGBA whether or not anything in it is transparent, and treating a

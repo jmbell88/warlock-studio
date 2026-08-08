@@ -952,6 +952,48 @@ class Document:
         uid = new_uid()
         self._replay(lambda: self._do_flatten(uid))
 
+    def apply_matte(self, alpha: np.ndarray) -> bool:
+        """Fold a cutout into the document's alpha, as one undoable step.
+
+        ``alpha`` is a canvas-sized uint8 plane: 255 keeps a pixel, 0 cuts it.
+        It is multiplied into *every* layer rather than into the composite,
+        because the composite is a cache and there is nowhere else for it to
+        live -- and with the binary matte this is given, multiplying each
+        layer's alpha and multiplying the normal-blended result are the same
+        arithmetic. So a layered drawing keeps its layers, and the user goes on
+        editing the cutout with the eraser and the brush, which is the whole
+        point of handing them a matte here rather than a finished PNG.
+
+        One ``CompoundEdit``, so a single Ctrl+Z reverses the whole cutout
+        rather than one layer of it. ``matte`` is set to None outside the edit
+        on purpose: it is a property of the document (what a flatten puts
+        behind transparency), not of a region of pixels, and leaving it as the
+        opaque white ``matte_for`` gives an opaque photo would flatten every
+        cut pixel straight back to white on save -- which is exactly the file
+        this edit exists to avoid writing.
+        """
+        width, height = self.size
+        if alpha.shape[:2] != (height, width):
+            return False
+        self.commit_floating()
+        rect = (0, 0, width, height)
+        edits: list[Any] = []
+        weight = alpha.astype(np.float32) / 255.0
+        for layer in self.stack:
+            before = layer.pixels.copy()
+            layer.pixels[:, :, 3] = np.clip(
+                layer.pixels[:, :, 3].astype(np.float32) * weight + 0.5, 0, 255
+            ).astype(np.uint8)
+            if np.array_equal(before, layer.pixels):
+                continue
+            edits.append(PatchEdit(layer.uid, rect, before, layer.pixels.copy()))
+        if not edits:
+            return False
+        self.history.push(CompoundEdit(edits))
+        self.matte = None
+        self.invalidate_all()
+        return True
+
     def _do_flatten(self, uid: int) -> None:
         flat = self.stack.flatten()
         self.stack = LayerStack([Layer(pixels=flat, name="Flattened", uid=uid)], 0)

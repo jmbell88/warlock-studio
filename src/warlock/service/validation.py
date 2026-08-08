@@ -21,6 +21,16 @@ ALLOWED_RESOLUTIONS = {512, 1024, 1536}
 # each is a real queued job holding a place in the serial worker.
 MAX_REFERENCE_COUNT = 8
 
+# And a promotion may ask for several *mesh* candidates. Far smaller, because
+# the two are not the same purchase: a reference candidate is four steps of
+# SDXL, and a mesh candidate is roughly two minutes of the serial GPU worker --
+# so three of them is already six minutes during which nothing else runs. The
+# generic ``count`` refusal for output="model" in ``create_job`` stands
+# unchanged; candidates are the deliberate exception and go through their own
+# entry point (``jobs.promote_candidates``), which is what keeps "N meshes per
+# submit" from being reachable by accident from every other caller.
+MAX_MESH_CANDIDATES = 3
+
 # Ceiling for list() and the internal full-history reads (prune). Bounded so a
 # caller can't ask the single sqlite connection for everything at once and
 # stall every other reader behind it.

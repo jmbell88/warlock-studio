@@ -72,6 +72,13 @@ VECTOR_PARAMS = (
     "resolution",
     "size_m",
     "bg_removal",
+    # Whether the reference carried a matte the user approved. An *input*, and
+    # a deliberate one: it is set at the door by ``service.matte.approve`` and
+    # never by the worker, so it stays out of ``validation.DERIVED_PARAMS`` and
+    # survives a reroll. Here so findings can compare an approved matte against
+    # the server's own -- which is the whole question the promote preview and
+    # the Inker hand-off exist to let a user answer.
+    "matte",
     "reference_prep",
     "profile",
     "custom_triangles",
