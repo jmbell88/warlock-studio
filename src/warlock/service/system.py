@@ -10,7 +10,7 @@ from typing import Any
 
 from .. import doctor, guidance, models
 from .core import WarlockService
-from .errors import Invalid, NotFound
+from .errors import Invalid, NotFound, invalid_from
 from .validation import MAX_PROMPT
 
 # Health used to run the full doctor suite -- a socket bind, a disk stat and a
@@ -135,7 +135,7 @@ def prompt_preview(
             raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "Those generation settings are not usable") from exc
 
     style = models.STYLE_LORAS.get(params.get("style_lora") or "")
     # Same gate the real run applies (text2image.generate only prepends a

@@ -25,7 +25,7 @@ from concurrent.futures.thread import _threads_queues
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..service.errors import ServiceError
+from ..service.errors import Failed, ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -152,8 +152,21 @@ class TaskRunner:
             if error is None:
                 finished.append(Done(key=key, result=pending.future.result(), tag=pending.tag))
             elif isinstance(error, ServiceError):
+                # ``Failed`` is the one ServiceError whose message cannot name a
+                # remedy (E52): it means a subprocess or a conversion that
+                # should have worked didn't -- Blender is installed and the bake
+                # still died, gltfpack ran and returned garbage -- so the next
+                # thing to look at is the log, exactly as for an unexpected
+                # exception. Every other ServiceError names its own remedy and
+                # would be worse for the extra button.
                 finished.append(
-                    Done(key=key, error=error, message=error.message, tag=pending.tag)
+                    Done(
+                        key=key,
+                        error=error,
+                        message=error.message,
+                        action="log" if isinstance(error, Failed) else None,
+                        tag=pending.tag,
+                    )
                 )
             else:
                 log.exception("task %s failed", key, exc_info=error)

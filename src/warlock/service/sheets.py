@@ -8,7 +8,7 @@ from typing import Any
 
 from .. import rigging
 from .core import WarlockService
-from .errors import Conflict, Invalid, NotFound
+from .errors import Conflict, Invalid, NotFound, invalid_from
 from .validation import (
     check_job_id,
     check_pose_id,
@@ -95,7 +95,9 @@ def create_sheet(
         try:
             records = sheetlib.interpolate(ends[0], ends[1], clip_frames)
         except ValueError as exc:
-            raise Invalid(str(exc)) from exc
+            raise invalid_from(
+                exc, "That clip cannot be built", field="clip_frames"
+            ) from exc
 
     try:
         # Built and thrown away: the worker plans it again from the same
@@ -109,7 +111,7 @@ def create_sheet(
             yaws=yaws or sheetlib.DEFAULT_YAWS,
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "That sprite sheet cannot be laid out") from exc
 
     sheet_name = (name or "").strip()
     if len(sheet_name) > rigging.MAX_SHEET_NAME:
@@ -239,7 +241,9 @@ def create_pixel_sheet(
     try:
         pixelsheet.check_restylable(meta, int(logical_size))
     except pixelsheet.NotRestylable as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(
+            exc, "This sheet cannot be restyled as pixel art", field="logical_size"
+        ) from exc
 
     value = models.DEFAULT_IMG2IMG_STRENGTH if strength is None else float(strength)
     if not models.IMG2IMG_STRENGTH_MIN <= value <= models.IMG2IMG_STRENGTH_MAX:

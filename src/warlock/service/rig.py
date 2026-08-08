@@ -16,7 +16,7 @@ from typing import Any
 
 from .. import doctor, rigging
 from .core import WarlockService
-from .errors import Conflict, Failed, Invalid, NotFound
+from .errors import Conflict, Failed, Invalid, NotFound, invalid_from
 from .validation import check_job_id, check_pose_id, valid_template
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,9 @@ def template_presets(key: str) -> dict[str, Any]:
     try:
         return {"poses": rigging.preset_poses(key)}
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(
+            exc, "That skeleton has no pose library", field="rig_template"
+        ) from exc
 
 
 def create_rig(svc: WarlockService, job_id: str, *, template: str | None = None) -> dict[str, Any]:
@@ -83,7 +85,7 @@ def adjust_joints(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> 
         template = rigging.get_template(str(rig.get("template") or svc.config.rig_template))
         bones = rigging.validate_joints(payload, template)
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "Those joint positions cannot be used") from exc
 
     params = {
         "source_job": job_id,
@@ -125,7 +127,7 @@ def save_pose(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dict
     try:
         pose = rigging.validate_pose(payload, known)
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "That pose cannot be saved") from exc
 
     pose_id = str(payload["id"]) if payload.get("id") else None
     if pose_id is not None:

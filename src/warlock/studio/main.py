@@ -1403,7 +1403,16 @@ class App:
             # thread (D41), exactly as ctx.capture_thumbnail does.
             image = self.clay_view.screenshot()
         except Exception:
+            # A warning rather than an error (E48): the export itself succeeded
+            # and the asset is in the library -- what failed is its picture. The
+            # card falls back to the placeholder, which on its own reads as "the
+            # build produced nothing".
             log.exception("could not capture a thumbnail for built asset %s", job_id)
+            # Level ``info``, not ``error``: the export succeeded and only the
+            # picture did not, and there is exactly one level above info until
+            # H68 adds the middle one -- claiming ``error`` here would put a red
+            # dismissable card over a build that worked.
+            ctx.toast("The asset was built, but its thumbnail could not be made.", "info", "log")
             return
 
         def run() -> Any:
@@ -1434,7 +1443,10 @@ class App:
             png = self._render_clay_reference(tab)
         except Exception:
             log.exception("could not render the build reference")
-            ctx.toast("That document could not be rendered.", "error")
+            # The remedy is in the log, so say so (E48): the causes are a lost
+            # GL context and a document the renderer choked on, and the message
+            # cannot tell the user which without reading it.
+            ctx.toast("That document could not be rendered.", "error", "log")
             return
         settings_3d.upload_bytes(ctx, png)
 

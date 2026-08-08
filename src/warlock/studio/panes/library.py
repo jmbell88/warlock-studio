@@ -37,8 +37,7 @@ def draw(ctx: Any) -> None:
     # here: the Profiles panel's marker anchors at #profiles.
     _filters(ctx, jobs)
     imgui.separator()
-    if ctx.cache.error:
-        widgets.text_colored(theme.ERR, "Could not read the job list.")
+    _read_error(ctx)
     # Leave room for the footer below: the bulk bar only exists when something
     # is checked, so the reservation has to change with it or the list either
     # overlaps the footer or floats above a gap.
@@ -68,6 +67,23 @@ def draw(ctx: Any) -> None:
     _storage(ctx)
 
 
+def _read_error(ctx: Any) -> None:
+    """What went wrong reading the list, in words, with a way to try again (E46).
+
+    The text mattered more than it looks: a locked database and a vanished job
+    directory are the two realistic causes and they want opposite responses
+    (wait, versus look at the disk), which one fixed sentence cannot tell apart.
+    Retry is ``invalidate`` rather than a re-read on this thread -- the list is
+    read on the refresh tick and a pane must not do sqlite on the frame thread.
+    """
+    if not ctx.cache.error:
+        return
+    widgets.text_colored(theme.ERR, "Could not read the job list.")
+    widgets.muted(ctx.cache.error)
+    if imgui.small_button("Try again##library-retry"):
+        ctx.cache.invalidate()
+
+
 def _load_more(ctx: Any) -> None:
     """The window is the newest N of M -- and the filters above apply only to
     that window, so a history longer than it needs to say so rather than let a
@@ -75,6 +91,15 @@ def _load_more(ctx: Any) -> None:
     loaded = len(ctx.cache.jobs)
     total = ctx.cache.total
     if total <= loaded:
+        # A failed COUNT(*) makes ``total`` a floor rather than a total (E43),
+        # and on a full page that floor is exactly ``loaded`` -- so the honest
+        # answer is "there may be more", with the button still there. Silently
+        # returning here is what made a locked database look like a short
+        # history.
+        if ctx.cache.count_error and loaded >= ctx.cache.limit:
+            widgets.muted(f"Showing the newest {loaded}; could not count the rest.")
+            if imgui.button("Load older##library-more", (-1, 0)):
+                ctx.cache.load_more()
         return
     widgets.muted(f"Showing the newest {loaded} of {total}.")
     if imgui.button("Load older##library-more", (-1, 0)):
@@ -571,6 +596,13 @@ def _export_zip(ctx: Any, ids: list[str]) -> None:
 
 def _storage(ctx: Any) -> None:
     storage = ctx.cache.storage
+    if ctx.cache.storage_error:
+        # Before the figure rather than after it (E45): a stale total beside a
+        # warning reads as current, and this line is the only thing that says
+        # the number below is the last one that worked.
+        widgets.text_colored(theme.WARN, "Could not measure disk use.")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(ctx.cache.storage_error)
     if storage:
         from ..state import format_bytes
 

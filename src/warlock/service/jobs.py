@@ -11,7 +11,7 @@ from typing import Any
 from .. import guidance, models, rigging
 from . import matte
 from .core import WarlockService
-from .errors import Conflict, Failed, Invalid, NotFound, TooLarge
+from .errors import Conflict, Failed, Invalid, NotFound, TooLarge, invalid_from
 from .files import ImageTooLarge, attach_files, measure_storage, to_png
 from .validation import (
     ALLOWED_RESOLUTIONS,
@@ -31,6 +31,7 @@ from .validation import (
     check_trellis_tex_res,
     check_vram,
     normalize_tags,
+    not_done_message,
     random_seed,
     valid_template,
 )
@@ -47,7 +48,7 @@ def _normalize_guidance(svc: WarlockService, raw: dict[str, Any]) -> dict[str, A
             raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "Those generation settings are not usable") from exc
 
 
 def _resolve_profile(
@@ -74,7 +75,7 @@ def _resolve_profile(
     try:
         target = optimize.resolve(profile, custom_triangles)
     except ValueError as exc:
-        raise Invalid(str(exc), field="profile") from exc
+        raise invalid_from(exc, "That triangle budget is not usable", field="profile") from exc
     if target is not None and not svc.config.gltfpack_exe.exists():
         raise Invalid(
             f"the '{profile}' budget needs gltfpack, which is not installed "
@@ -839,7 +840,7 @@ def promote_to_model(
             else "this job is not a reference"
         )
     if source["status"] != "done":
-        raise Invalid(f"reference is {source['status']}")
+        raise Invalid(not_done_message("That reference", source["status"]))
     src_png = svc.job_dir(job_id) / "input.png"
     if not src_png.exists():
         raise Invalid("reference has no image")

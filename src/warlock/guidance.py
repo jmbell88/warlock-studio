@@ -30,6 +30,30 @@ from typing import Any
 
 from . import models
 
+
+class GuidanceError(ValueError):
+    """A refused guidance value, naming the field it came from.
+
+    A ``ValueError`` subclass, deliberately: every caller in the repo already
+    catches ``ValueError`` and this module has raised one since it was written,
+    so the addition is purely ``field`` and nothing that reads it today has to
+    change. What ``field`` buys is an *address* -- ``service.errors.Invalid``
+    has carried a ``field`` since it was written and the UI highlights the
+    control it names, but the guidance passthroughs could never supply one, so
+    the twelve most common refusals in the app arrived as a toast pointing at
+    nothing in particular (S137).
+
+    Recovering the field by parsing the message was the alternative and is the
+    translation-table hazard ``judge.STAGES``/``verdicts.STAGES`` is written
+    down about: two spellings of one fact, drifting silently the first time a
+    message is reworded.
+    """
+
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 SIZE_MIN_M = 0.01
 SIZE_MAX_M = 100.0
 
@@ -361,7 +385,9 @@ def _lookup(field: str, value: Any) -> Any | None:
     table = _TABLES[field]
     option = table.get(_canonical(field, str(value)))
     if option is None:
-        raise ValueError(f"unknown {field} {value!r}; expected one of {sorted(table)}")
+        raise GuidanceError(
+            f"unknown {field} {value!r}; expected one of {sorted(table)}", field=field
+        )
     return option
 
 
@@ -374,9 +400,9 @@ def _number(raw: dict[str, Any], field: str, *, default: float, low: float, high
     try:
         value = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be a number, got {value!r}") from exc
+        raise GuidanceError(f"{field} must be a number, got {value!r}", field=field) from exc
     if not low <= value <= high:
-        raise ValueError(f"{field} must be between {low} and {high}")
+        raise GuidanceError(f"{field} must be between {low} and {high}", field=field)
     return value
 
 
@@ -414,9 +440,13 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         try:
             size_m = float(size_m)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"size_m must be a number, got {size_m!r}") from exc
+            raise GuidanceError(
+                f"size_m must be a number, got {size_m!r}", field="size_m"
+            ) from exc
         if not SIZE_MIN_M <= size_m <= SIZE_MAX_M:
-            raise ValueError(f"size_m must be between {SIZE_MIN_M} and {SIZE_MAX_M} metres")
+            raise GuidanceError(
+                f"size_m must be between {SIZE_MIN_M} and {SIZE_MAX_M} metres", field="size_m"
+            )
 
     base_model = chosen["base_model"] or models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
     style_lora = chosen["style_lora"]
@@ -429,11 +459,14 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         try:
             lora_weight = float(lora_weight)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"lora_weight must be a number, got {lora_weight!r}") from exc
+            raise GuidanceError(
+                f"lora_weight must be a number, got {lora_weight!r}", field="lora_weight"
+            ) from exc
         if not models.LORA_WEIGHT_MIN <= lora_weight <= models.LORA_WEIGHT_MAX:
-            raise ValueError(
+            raise GuidanceError(
                 f"lora_weight must be between {models.LORA_WEIGHT_MIN} "
-                f"and {models.LORA_WEIGHT_MAX}"
+                f"and {models.LORA_WEIGHT_MAX}",
+                field="lora_weight",
             )
 
     if style_lora is not None and base_model.family != models.FAMILY_SDXL:
@@ -441,17 +474,23 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         # stronger reason: every style LoRA in the registry names SDXL UNet
         # modules, so loading one onto another architecture raises at load time
         # with the checkpoint already in VRAM rather than merely doing nothing.
-        raise ValueError(
+        # ``base_model``, not ``style_lora``: two controls are in conflict and
+        # only one of them can be highlighted, so it is the one the message
+        # already tells the user to change. A highlight that disagreed with the
+        # sentence beside it would be worse than none.
+        raise GuidanceError(
             f"base_model {base_model.key!r} cannot take a style LoRA; "
-            f"pick one of {models.lora_bases()}"
+            f"pick one of {models.lora_bases()}",
+            field="base_model",
         )
 
     ip_adapter = chosen["ip_adapter"]
     control = chosen["control"]
     if control is not None and not base_model.controlnet:
-        raise ValueError(
+        raise GuidanceError(
             f"base_model {base_model.key!r} cannot run a ControlNet; "
-            f"pick one of {models.controlnet_bases()}"
+            f"pick one of {models.controlnet_bases()}",
+            field="base_model",
         )
 
     # The selection's own tuned default, so picking an adapter is one click --
@@ -480,7 +519,7 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
     # otherwise reach trellis-server unchecked -- the one path where "the
     # server decides" is not a safe answer.
     if str(bg_removal) not in BG_REMOVAL:
-        raise ValueError(f"bg_removal must be one of {list(BG_REMOVAL)}")
+        raise GuidanceError(f"bg_removal must be one of {list(BG_REMOVAL)}", field="bg_removal")
 
     # Unlike bg_removal, a missing key and an explicit "" are NOT the same
     # thing here: missing means "use the game-asset default", an explicit
@@ -490,7 +529,10 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         negative = DEFAULT_NEGATIVE_PROMPT
     negative = str(negative).strip()
     if len(negative) > MAX_NEGATIVE_PROMPT:
-        raise ValueError(f"negative_prompt must be at most {MAX_NEGATIVE_PROMPT} characters")
+        raise GuidanceError(
+            f"negative_prompt must be at most {MAX_NEGATIVE_PROMPT} characters",
+            field="negative_prompt",
+        )
 
     out: dict[str, Any] = {
         "resolution": resolution,

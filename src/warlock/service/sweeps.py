@@ -45,7 +45,7 @@ from typing import Any
 from .. import guidance
 from . import jobs as jobs_mod
 from .core import WarlockService
-from .errors import Invalid, NotFound
+from .errors import Invalid, NotFound, invalid_from
 from .validation import (
     ALLOWED_RESOLUTIONS,
     MAX_PROMPT,
@@ -271,7 +271,7 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
             bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir),
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "A sweep unit's settings are not usable") from exc
     # A sweep unit is submitted with no reference upload, so a conditioning
     # selection can never have an image to condition on -- create_job would
     # refuse it, but only after the sweep row was minted.

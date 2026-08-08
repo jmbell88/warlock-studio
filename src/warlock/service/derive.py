@@ -57,7 +57,7 @@ def get_file(
     path = job_dir / name
     glb = job_dir / "model.glb"
     if not files.ready(job, job_dir, name):
-        raise NotReady("file not ready")
+        raise NotReady(files.unready_reason(job, job_dir, name))
     # FBX needs a Blender subprocess rather than a trimesh call, so it does not
     # fit the `derived` dict below -- but it takes the same per-artifact lock,
     # for the same reason. Existence checked only under the lock: Blender
@@ -111,7 +111,10 @@ def get_file(
             svc, job, job_id, job_dir, name, pixel_colors=pixel_colors, opts=opts
         )
     if not path.exists():
-        raise NotReady("file not ready")
+        # After the derivation ran, so this is "it was produced and is still
+        # not there" -- a different fact from the gate above, and the reason
+        # names the artifact rather than repeating the gate's sentence.
+        raise NotReady(f"{name} could not be produced for this job.")
     return path
 
 

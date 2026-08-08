@@ -47,6 +47,16 @@ class JobsCache:
         # of M" rather than silently presenting a truncated history as whole.
         self.total = 0
         self.error: str | None = None
+        # Why ``total`` is not to be trusted, when it is not (E43). A failed
+        # COUNT(*) falls back to ``len(jobs)``, which on a full page is exactly
+        # the value that means "this is the whole history" -- so the fallback
+        # silently retracts "Load older" and presents a truncated window as
+        # complete. The library reads this and says so instead.
+        self.count_error: str | None = None
+        # Likewise for the storage walk (E45). Set on the task thread and read
+        # on the frame thread, as ``_dir_sizes`` beside it already is: a plain
+        # attribute write is atomic enough for a flag nothing branches twice on.
+        self.storage_error: str | None = None
         self._last_status: dict[str, str] = {}
         self._next_refresh = 0.0
         self._next_count = 0.0
@@ -111,13 +121,17 @@ class JobsCache:
         # cadence, and immediately after anything the UI did (invalidate).
         if len(jobs) < self.limit:
             self.total = len(jobs)
+            self.count_error = None
         elif was_dirty or now >= self._next_count:
             self._next_count = now + COUNT_SECONDS
             try:
                 self.total = self.svc.store.count()
-            except Exception:  # a count is not worth failing the refresh over
+            except Exception as exc:  # a count is not worth failing the refresh over
                 log.exception("could not count the job list")
                 self.total = len(jobs)
+                self.count_error = str(exc)
+            else:
+                self.count_error = None
         self.by_id = {j["id"]: j for j in jobs}
         if on_transition is not None:
             for job in jobs:
@@ -141,9 +155,11 @@ class JobsCache:
         """
         try:
             sizes = svc_jobs.storage_sizes(self.svc)
-        except Exception:
+        except Exception as exc:
             log.exception("could not measure storage")
+            self.storage_error = str(exc)
             return self.storage
+        self.storage_error = None
         self._dir_sizes = sizes
         return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
@@ -165,9 +181,11 @@ class JobsCache:
                 sizes[path.name] = size
             else:
                 sizes.pop(path.name, None)
-        except Exception:
+        except Exception as exc:
             log.exception("could not measure job dir %s", job_id)
+            self.storage_error = str(exc)
             return self.storage
+        self.storage_error = None
         return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
     # -- queries -----------------------------------------------------------

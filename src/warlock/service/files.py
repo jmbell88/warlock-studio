@@ -15,6 +15,7 @@ from .validation import (
     MAX_THUMB_BYTES,
     MAX_UPLOAD_BYTES,
     check_job_id,
+    not_done_message,
 )
 
 # The complete artifact allowlist. It is also the export allowlist: the point
@@ -270,7 +271,7 @@ def _editable_reference(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:
     if job["stage"] != "reference":
         raise Invalid("this job is not a reference")
     if job["status"] != "done":
-        raise Invalid(f"reference is {job['status']}")
+        raise Invalid(not_done_message("That reference", job["status"]))
     src = svc.job_dir(job_id) / "input.png"
     if not src.exists():
         raise Invalid("reference has no image")
@@ -376,7 +377,14 @@ def _check_pixels(data: bytes) -> None:
         with Image.open(io.BytesIO(data)) as im:
             width, height = im.width, im.height
     except Exception as exc:
-        raise Invalid("that is not a readable image") from exc
+        # The formats, named (E53). "That is not a readable image" is true of a
+        # PDF, a .psd, a truncated download and a file the user renamed to
+        # .png, and it tells apart none of them -- while the one thing the user
+        # can act on is knowing what would have worked. Spelled from the same
+        # list the file picker offers, so the dialog and the refusal agree.
+        raise Invalid(
+            "That is not a readable image. PNG, JPEG, WebP and BMP are accepted."
+        ) from exc
     if width * height > MAX_IMAGE_PIXELS:
         raise TooLarge(f"image is {width}x{height}; the limit is {MAX_IMAGE_PIXELS:,} pixels")
 
@@ -581,6 +589,41 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
     # complete the moment they exist -- error.log before the row is even marked
     # failed, thumb.png by the viewer long after the job finished.
     return path.exists()
+
+
+def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
+    """Why ``name`` is not servable, as a sentence (E51).
+
+    Explanatory only. :func:`ready` stays the gate and the authority -- this is
+    called on the refusal path, having already been refused, so a sentence that
+    disagreed with it would be a slightly wrong explanation rather than a wrong
+    permission. Written as a separate function for exactly that reason: folding
+    it into ``ready`` would put string formatting inside the per-row, per-name
+    listing loop that ``attach_files`` exists to keep cheap.
+
+    "file not ready" was the whole message before, on all three refusal paths at
+    once, and it is the least actionable sentence in the app: the job is queued,
+    the mesh is still being written, the rig has not been made, the export has
+    to be derived first and the model has no textures to derive it from are five
+    different situations with five different responses.
+    """
+    status = job.get("status")
+    derived_from_a_run = (
+        name in ("model.glb", "source.glb") or name in DERIVED or name in DERIVED_2D
+    )
+    if status in ("queued", "running", "error", "cancelled") and derived_from_a_run:
+        return not_done_message(f"{name} is not available yet: this job", str(status))
+    if name == "rig.glb" and not (job_dir / "rig.json").exists():
+        return "This asset has not been rigged yet."
+    if name == "rig_qa.png" and not (job_dir / "rig_qa.json").exists():
+        return "The deformation sheet is only made when a rig is."
+    if name in DERIVED_2D and name not in derived_2d_for(job.get("stage")):
+        return f"{name} is only offered for a reference or a tile, not for a mesh."
+    if name in DERIVED_2D and not (job_dir / "input.png").exists():
+        return f"{name} is derived from the reference image, which is not on disk."
+    if name in DERIVED and not (job_dir / "model.glb").exists():
+        return f"{name} is derived from the mesh, which is not on disk."
+    return f"{name} is not on disk for this job."
 
 
 # How old a job directory's mtime must be before that mtime is trusted as a

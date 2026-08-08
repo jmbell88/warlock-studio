@@ -13,7 +13,7 @@ import secrets
 from typing import Any
 
 from .. import rigging, vram
-from .errors import Invalid, NotFound
+from .errors import Invalid, NotFound, invalid_from
 
 ALLOWED_RESOLUTIONS = {512, 1024, 1536}
 
@@ -270,7 +270,25 @@ def valid_template(key: str | None, default: str) -> str:
     try:
         return rigging.get_template(key or default).key
     except ValueError as exc:
-        raise Invalid(str(exc), field="rig_template") from exc
+        raise invalid_from(exc, "That skeleton is not available", field="rig_template") from exc
+
+
+# What a job's status *means* to someone waiting on it, rather than the word
+# the row stores (E50). ``reference is queued`` is accurate and useless: it
+# names a state machine the user has never been shown and says nothing about
+# what to do. Keyed on the status column's own vocabulary so an unknown value
+# falls through to the word itself rather than to a wrong sentence.
+STATUS_SENTENCES = {
+    "queued": "is still waiting in the queue",
+    "running": "is still being generated",
+    "error": "failed, so it has no image",
+    "cancelled": "was cancelled, so it has no image",
+}
+
+
+def not_done_message(subject: str, status: str) -> str:
+    """-> "<subject> <what that status means>", e.g. for a refused promotion."""
+    return f"{subject} {STATUS_SENTENCES.get(status, f'is {status}')}."
 
 
 def normalize_tags(raw: Any) -> str:
