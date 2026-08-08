@@ -118,6 +118,10 @@ class App:
         self.svc = None
         self.ctx = None
         self.window = None
+        # Read in setup_window (the window size is in it) and consumed in
+        # setup_context, which the splash now runs between.
+        self.settings = None
+        self._monitor_scale = 1.0
         self.imgui_renderer = None
         self.viewer = None
         self.app_ctx = None
@@ -158,20 +162,38 @@ class App:
     # -- setup -------------------------------------------------------------
 
     def setup(self) -> None:
+        """The three phases in order, with nothing drawn between them.
+
+        ``run`` does not call this -- it draws a splash over the middle phase
+        -- but the composition is what the phases mean, and a caller that
+        wants a window with no ceremony still has one call for it.
+        """
+        self.setup_window()
+        self.setup_runtime()
+        self.setup_context()
+
+    def setup_window(self) -> None:
+        """Everything that needs the main thread and the one GL context.
+
+        Fast, and first: this used to run *after* ``runtime.start()``, so the
+        slow half of startup -- doctor, the worker, the out-of-process bpy
+        probe -- happened with no window on screen at all. Splitting it out is
+        what lets the splash be drawn over the rest.
+        """
         import moderngl
         import pygame
         from imgui_bundle import imgui
 
-        from . import dpi, fonts, imgui_backend, textures, theme, tokens, widgets
-        from .app_ctx import Ctx
-        from .jobs_cache import JobsCache
+        from . import dpi, fonts, imgui_backend, theme, tokens, widgets
         from .layout import Layout
-        from .settings import Settings, restore_form
-        from .state import DEFAULT_FORM_3D, AppState, Eta, Filters, default_form_2d
+        from .settings import Settings
         from .viewer_embed import Viewer
 
-        self.svc = self.runtime.start()
+        # Read before the runtime exists: it is a file under the configured
+        # data directory, which the Config already knows, and the window size
+        # it carries is needed by set_mode below.
         settings = Settings.load(self.runtime.config.data_dir)
+        self.settings = settings
 
         # Before the window exists: awareness is frozen at window creation.
         dpi.make_process_dpi_aware()
@@ -221,6 +243,28 @@ class App:
         widgets.attach_settings(settings)
         self.imgui_renderer = imgui_backend.ImguiRenderer(self.ctx)
         self.viewer = Viewer(self.ctx)
+        self._monitor_scale = monitor_scale
+
+    def setup_runtime(self) -> None:
+        """The slow half, run on a plain worker thread behind the splash.
+
+        Nothing here touches GL or imgui: it opens the store, runs the doctor
+        checks, starts the worker's loop thread and probes bpy in a
+        subprocess. ``Ctx`` is deliberately *not* built here -- it constructs
+        textures, and textures belong to the frame thread's one context.
+        """
+        self.svc = self.runtime.start()
+
+    def setup_context(self) -> None:
+        """The Ctx and the state it carries. Frame thread only, after both."""
+        from . import textures
+        from .app_ctx import Ctx
+        from .jobs_cache import JobsCache
+        from .settings import restore_form
+        from .state import DEFAULT_FORM_3D, AppState, Eta, Filters, default_form_2d
+
+        settings = self.settings
+        monitor_scale = self._monitor_scale
 
         state = AppState()
         # No mode restore, and nothing writes one either: the app opens on Home
@@ -313,26 +357,35 @@ class App:
     def run(self) -> int:
         import pygame
 
-        # setup() is inside the try: it starts the runtime before it touches
-        # pygame or GL, so a failure past that point used to skip teardown and
-        # leave the store, the loop thread and the worker running.
+        # Setup is inside the try: it starts the runtime, so a failure past
+        # that point used to skip teardown and leave the store, the loop
+        # thread and the worker running.
         #
         # The two phases are reported differently on purpose. A window that
         # never appeared and a window that vanished after twenty minutes are
         # different bugs, and the log line was the only thing that could tell
-        # them apart -- when there was one at all.
+        # them apart -- when there was one at all. All three setup phases are
+        # the *first* of those, splash or no splash: the window being up is
+        # not the app being up, and a failure to build the Ctx is still a
+        # startup failure.
         in_setup = True
         rc = 0
         try:
-            self.setup()
-            in_setup = False
-            self._running = True
-            clock = pygame.time.Clock()
-            while self._running:
-                dt = self._tick()
-                self.frame(dt)
-                pygame.display.flip()
-                clock.tick(TARGET_FPS)
+            self.setup_window()
+            if self._startup_with_splash():
+                self.setup_context()
+                in_setup = False
+                self._running = True
+                clock = pygame.time.Clock()
+                while self._running:
+                    dt = self._tick()
+                    self.frame(dt)
+                    pygame.display.flip()
+                    clock.tick(TARGET_FPS)
+            else:
+                # Closed during the splash. The load was waited out rather
+                # than abandoned, so teardown unwinds a whole runtime.
+                log.info("closed during startup")
         except Exception:
             rc = 1
             if in_setup:
@@ -345,6 +398,68 @@ class App:
         finally:
             self.teardown()
         return rc
+
+    def _startup_with_splash(self) -> bool:
+        """Draw the logo while ``setup_runtime`` runs. -> keep going?
+
+        The window is up by now, which is the point and also the new risk: the
+        X button is live, so a quit has to be handled here, before there is a
+        ``Ctx``, a job cache or anything else the ordinary quit path talks to.
+        It is honoured by *waiting* -- see ``splash.Startup`` -- because
+        abandoning a half-started runtime strands whatever it had already
+        opened, and then returning False so ``run`` skips straight to teardown.
+
+        A load that raised is re-raised here rather than reported, so it lands
+        in ``run``'s existing "could not start" branch with its own traceback.
+        """
+        import pygame
+        from imgui_bundle import imgui
+
+        from . import imgui_backend, splash
+
+        started = splash.Startup(self.setup_runtime)
+        started.start()
+        logo = splash.load_logo(self.ctx)
+        clock = pygame.time.Clock()
+        try:
+            while not started.finished():
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        started.request_quit()
+                        continue
+                    if event.type == pygame.VIDEORESIZE:
+                        # Not persisted: settings are written at teardown from
+                        # the Ctx that does not exist yet, and a resize during
+                        # a three-second splash is not a preference.
+                        sized = (
+                            max(event.w, self._min_size[0]),
+                            max(event.h, self._min_size[1]),
+                        )
+                        pygame.display.set_mode(
+                            sized, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
+                        )
+                        continue
+                    imgui_backend.process_event(event)
+                io = imgui.get_io()
+                io.delta_time = 1.0 / TARGET_FPS
+                size = pygame.display.get_window_size()
+                io.display_size = size
+                io.display_framebuffer_scale = (1.0, 1.0)
+                imgui.new_frame()
+                splash.draw(logo, size)
+                imgui.render()
+                self.ctx.screen.use()
+                self.ctx.clear(*_background())
+                self.imgui_renderer.render(imgui.get_draw_data())
+                pygame.display.flip()
+                clock.tick(TARGET_FPS)
+        finally:
+            # Two megabytes of decoded pixels, and the backend still holds the
+            # object under its GL name -- forget it before the release, or the
+            # next texture to be handed that name renders as this logo.
+            splash.release_logo(logo, self.imgui_renderer)
+        started.raise_if_failed()
+        return not started.quit_requested
 
     def _tick(self) -> float:
         now = time.perf_counter()
