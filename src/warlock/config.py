@@ -329,6 +329,18 @@ class Config:
         default_factory=lambda: float(os.environ.get("WARLOCK_SHEET_TIMEOUT", "1800"))
     )
 
+    @property
+    def autosave_dir(self) -> Path:
+        """Where Inker's crash-safety copies live.
+
+        Under ``data_dir`` rather than beside each document: a document may
+        have no path at all, and one that does may sit on a network share or a
+        read-only directory -- neither of which is a good place to be writing
+        every two minutes. One directory also means recovery is a listing
+        rather than a search.
+        """
+        return self.data_dir / "autosave"
+
     def job_dir(self, job_id: str) -> Path:
         return self.data_dir / job_id
 

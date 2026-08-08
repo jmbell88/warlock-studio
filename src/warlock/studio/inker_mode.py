@@ -602,6 +602,27 @@ def on_task_done(ctx: Any, done: Any) -> None:
             ctx.state.mode = "inker"
         return
 
+    if name == "inker-recover":
+        if isinstance(result, dict):
+            tab = _adopt(
+                ctx,
+                state,
+                result["doc"],
+                path=None,
+                title=result.get("title"),
+                file_format="ora",
+            )
+            # Dirty from the moment it opens, and it owns the file it came
+            # from: saving or closing it is what clears the crash copy, and
+            # until one of those happens the copy has to stay.
+            tab.saved_head = -1
+            tab.autosave_name = Path(result["autosave"]).name
+            ctx.state.mode = "inker"
+        return
+
+    if name == "inker-autosave":
+        return
+
     if name == "inker-palette":
         # A list of colours, or None for a cancelled picker. Appended rather
         # than replacing: an import is "add these to what I have", and a user
@@ -639,6 +660,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     tab.mark_saved(result.get("rev"))
+    # The document is on disk under a name the user chose, so the crash copy is
+    # describing work that is no longer at risk. Dropped here rather than on a
+    # timer: an autosave that outlived its document is exactly the file that
+    # gets offered back after a clean session and confuses somebody.
+    drop_autosave(ctx, tab)
     if result.get("retitle") and result.get("path"):
         tab.path = Path(result["path"])
         tab.title = inker_state.title_for(tab.path)
@@ -716,6 +742,7 @@ def request_close(ctx: Any, tab: InkerDoc) -> None:
         from .panes import inker_textures
 
         inker_textures.release_doc(ctx, tab.uid)
+        drop_autosave(ctx, tab)
         state.close(tab.uid)
 
     if not tab.dirty:
@@ -1111,3 +1138,176 @@ def export_palette(ctx: Any) -> None:
             path.with_suffix(".gpl").write_text(text, encoding="utf-8")
 
     ctx.submit("inker-palette-export", run)
+
+
+# --- crash-safe autosave ------------------------------------------------------
+#
+# The rule the whole feature turns on: **an autosave is never a save.** It does
+# not clear ``dirty``, it does not move ``saved_head``, it does not retitle the
+# tab and it does not touch the linked job. All it promises is that a crash
+# loses minutes rather than an afternoon, and every one of those omissions is
+# what stops it silently answering a question the user has not been asked --
+# "where should this go".
+#
+# It rides the existing save path: the bytes are built on the frame thread (the
+# encoders read the live document, and doing that after a thread hand-off would
+# encode whatever the user drew in between) and only the write goes to a task.
+# ``busy`` gates it for the reason every other structural control is gated --
+# write_ora walks the stack, and a rotate landing mid-write produces an archive
+# whose parts disagree about the canvas size.
+
+#: How long a document may go unsaved before a copy is taken. Two minutes is
+#: the interval every editor with this feature has converged on: long enough
+#: that the encode is invisible, short enough that what is lost is one idea.
+AUTOSAVE_SECONDS = 120.0
+
+#: How many recovered files the offer lists. A crash with more open than this
+#: is a crash where the count is the useful part, not the names.
+MAX_RECOVERY = 8
+
+
+def autosave_dir(ctx: Any) -> Path:
+    return Path(ctx.svc.config.autosave_dir)
+
+
+def _autosave_name(tab: InkerDoc) -> str:
+    """A stable, safe filename for one tab.
+
+    Derived from the title and the tab uid rather than from the path: a path
+    can be absent, can contain anything the filesystem allows, and can change
+    under a Save As while a copy is already on disk under the old name.
+    """
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in tab.title)[:40]
+    return f"{safe or 'untitled'}-{tab.uid}.ora"
+
+
+def pump_autosave(ctx: Any, now: float | None = None) -> None:
+    """Called once a frame from the app, in every mode.
+
+    Every mode, not only Inker: a crash while the user is looking at the
+    library still loses the painting. A flag pumped from the frame loop is the
+    ``findings_dirty`` idiom, and for the same reason -- ``submit`` refuses a
+    key already in flight, so a slow encode simply skips a beat rather than
+    queuing.
+    """
+    state = ctx.state.inker
+    if state is None:
+        return
+    stamp = time.monotonic() if now is None else now
+    for tab in state.docs:
+        if tab.busy or not tab.dirty:
+            continue
+        if tab.autosave_head == tab.doc.history.head:
+            # Nothing has changed since the last copy. Compared against the
+            # head rather than tracked with a flag, for ``dirty``'s reason: an
+            # undo back to the autosaved position is not a new edit.
+            continue
+        if stamp - tab.autosave_at < AUTOSAVE_SECONDS:
+            continue
+        _write_autosave(ctx, tab, stamp)
+
+
+def _write_autosave(ctx: Any, tab: InkerDoc, stamp: float) -> None:
+    from .inker import ora
+
+    if not tab.autosave_name:
+        tab.autosave_name = _autosave_name(tab)
+    path = autosave_dir(ctx) / tab.autosave_name
+    head = tab.doc.history.head
+    data = ora.ora_bytes(tab.doc)
+
+    def run() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Through a temp name: a crash *during* the crash copy would otherwise
+        # leave a truncated archive where a whole one used to be, which is the
+        # one outcome worse than having no copy at all.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+
+    # Not ``_start``: ``saving`` locks the document, and locking the editor for
+    # a second every two minutes is a worse feature than no autosave.
+    if ctx.submit(f"inker-autosave:{tab.uid}", run):
+        tab.autosave_head = head
+        tab.autosave_at = stamp
+
+
+def drop_autosave(ctx: Any, tab: InkerDoc) -> None:
+    """Forget a tab's crash copy. Never raises -- it is cleanup, not an edit."""
+    if not tab.autosave_name:
+        return
+    path = autosave_dir(ctx) / tab.autosave_name
+    tab.autosave_name = ""
+    tab.autosave_head = None
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        log.warning("could not remove the autosave at %s", path, exc_info=True)
+
+
+def recoverable(ctx: Any) -> list[Path]:
+    """Autosaves left behind by a previous session, newest first."""
+    directory = autosave_dir(ctx)
+    try:
+        found = [p for p in directory.glob("*.ora") if p.is_file()]
+    except OSError:
+        return []
+    found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return found[:MAX_RECOVERY]
+
+
+def offer_recovery(ctx: Any) -> bool:
+    """Ask whether to reopen what a crashed session left. -> whether it asked.
+
+    A question rather than a silent reopen: the files may be from a session the
+    user deliberately abandoned, and opening six documents unasked is its own
+    kind of data loss. Declining **keeps** them -- the answer to "not now" is
+    not "delete my work" -- and they are cleared by saving or closing whatever
+    is recovered, or by the next offer being declined again.
+    """
+    found = recoverable(ctx)
+    if not found:
+        return False
+    names = ", ".join(p.stem.rsplit("-", 1)[0] for p in found[:3])
+    more = "" if len(found) <= 3 else f" and {len(found) - 3} more"
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Recover unsaved work?",
+            message=(
+                f"Warlock closed with unsaved changes in {names}{more}. "
+                "Reopening gives you the document as it was; you still choose "
+                "where to save it."
+            ),
+            confirm_label="Recover",
+            cancel_label="Not now",
+            on_confirm=lambda: recover(ctx, found),
+        )
+    )
+    return True
+
+
+def recover(ctx: Any, paths: list[Path]) -> None:
+    """Reopen each autosave as an *untitled, dirty* document.
+
+    Untitled on purpose: the file it was copied from may still be on disk with
+    its own contents, and adopting the path would arm Ctrl+S to overwrite it
+    with a document the user has not looked at yet. Dirty for the same reason
+    -- there is unsaved work here, and the tab must say so.
+    """
+    ensure(ctx)
+    for path in paths:
+        ctx.submit(f"inker-recover:{abs(hash(str(path)))}", _load_recovery, path)
+
+
+def _load_recovery(path: Path) -> dict[str, Any]:
+    """Blocking; task thread only."""
+    from .inker import Document
+
+    doc = Document.load(Path(path))
+    doc.path = None
+    return {
+        "doc": doc,
+        "title": f"{Path(path).stem.rsplit('-', 1)[0]} (recovered)",
+        "format": "ora",
+        "autosave": str(path),
+    }

@@ -953,6 +953,21 @@ class App:
         # the request following a retrain is the one with nothing after it.
         review_mode.pump_scores(ctx)
         self._check_worker()
+        # Every mode, not only Inker: a crash while the user is looking at the
+        # library still loses the painting. ``submit`` refuses a key already in
+        # flight, so a slow encode skips a beat rather than queuing. Imported
+        # here because ``inker_mode`` pulls the raster engine in and a session
+        # that never opens Inker should not pay for it -- the same reason
+        # ``ensure`` builds its state lazily.
+        from . import inker_mode
+
+        inker_mode.pump_autosave(self.app_ctx)
+        if not ctx.state.recovery_offered:
+            # Once, on the first frame that has a Ctx: the autosave directory
+            # is also where *this* session's copies land, so a second offer
+            # would hand the user their own open documents back.
+            ctx.state.recovery_offered = True
+            inker_mode.offer_recovery(ctx)
 
     def _check_worker(self) -> None:
         """Say so, once, when the GPU worker dies.

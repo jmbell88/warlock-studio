@@ -275,6 +275,20 @@ transparency rather than being flattened onto the document's matte, which is wha
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
 composited over whatever is behind it in the game.
 
+## Autosave and recovery
+
+Every open document with unsaved changes is copied to `assets/autosave/` every two minutes. This is
+crash safety and nothing else: an autosave is **not** a save. It does not mark the document saved,
+it does not choose a location, and it does not touch a linked job — all it promises is that a crash
+costs you minutes rather than an afternoon. Saving or closing a document removes its copy, because
+an autosave that outlived its document is exactly the file that turns up later and confuses you.
+
+If Warlock finds copies left over from a previous session, it offers to reopen them once, at
+startup. Recovered documents open **untitled and unsaved**, deliberately: the file each was copied
+from may still be on disk with its own contents, and adopting that path would arm `Ctrl+S` to
+overwrite something you have not looked at yet. Declining keeps the copies — "not now" is not
+"delete my work" — and they are cleared once you save or close whatever you recover.
+
 ## Pipeline bridges
 
 Inker is wired into the pipeline in both directions. The **document** panel on the right states

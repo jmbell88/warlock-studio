@@ -225,6 +225,16 @@ class InkerDoc:
     play_index: int = 0
     play_accum_ms: float = 0.0
 
+    # Crash-safety. ``autosave_name`` is the file this tab owns under the
+    # autosave directory and is minted once, on the first autosave: naming it
+    # eagerly would litter the directory with entries for tabs nobody ever
+    # edited. ``autosave_head`` is the history position the last one captured,
+    # so an idle document is not rewritten every two minutes -- the same
+    # comparison ``dirty`` is, against a different mark.
+    autosave_name: str = ""
+    autosave_head: int | None = None
+    autosave_at: float = 0.0
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.

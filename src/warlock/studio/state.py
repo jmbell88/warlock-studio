@@ -647,6 +647,10 @@ class AppState:
     # frames (K99): the atlas rebuild invalidates every ImFont handle, and a
     # rebuild inside a frame would leave the rest of it drawing through freed
     # pointers.
+    # Whether the crash-recovery offer has been made this session. One-shot:
+    # the autosave directory is *also* where this session's own copies land, so
+    # asking again later would offer the user their own open documents back.
+    recovery_offered: bool = False
     fonts_dirty: bool = False
     # Which Home tile the keyboard is on (M107). Not persisted: the app opens
     # on Home every launch, and a remembered cursor would put Enter on

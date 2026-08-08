@@ -464,3 +464,194 @@ def test_exporting_builds_the_bytes_before_the_picker(monkeypatch, tmp_path):
     monkeypatch.setattr(dialogs, "save_file", fake_save)
     inker_mode.export_palette(ctx)
     assert gpl.parse(out.read_text(encoding="utf-8")) == [(1, 2, 3, 255)]
+
+
+# --- crash-safe autosave (Ink13) ---------------------------------------------
+
+
+class _AutosaveCtx(_PaletteCtx):
+    """A ctx with a config whose autosave directory is a tmp_path."""
+
+    def __init__(self, root) -> None:
+        super().__init__()
+        self.svc = type("Svc", (), {"config": type("Cfg", (), {"autosave_dir": root})()})()
+        self.confirms = _Confirms()
+
+    def submit(self, key, run, *args):
+        self.submitted.append(key)
+        self.result = run(*args)
+        return True
+
+
+class _Confirms:
+    def __init__(self) -> None:
+        self.pending = None
+
+    def ask(self, confirm) -> None:
+        self.pending = confirm
+
+    def dismiss(self) -> None:
+        self.pending = None
+
+
+def _dirty_tab(state, title="a"):
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(8, 8)
+    tab = InkerDoc(doc=doc, title=title, saved_head=doc.history.head)
+    state.add(tab)
+    doc.add_layer()  # one edit, so the tab is dirty
+    return tab
+
+
+def test_a_clean_document_is_never_autosaved(tmp_path):
+    from warlock.studio import inker, inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    doc = inker.Document.blank(8, 8)
+    state.add(InkerDoc(doc=doc, title="clean", saved_head=doc.history.head))
+    inker_mode.pump_autosave(ctx, now=10_000.0)
+    assert ctx.submitted == []
+    assert not list(tmp_path.glob("*.ora"))
+
+
+def test_a_dirty_document_is_autosaved_once_the_interval_has_passed(tmp_path):
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    tab = _dirty_tab(state)
+
+    inker_mode.pump_autosave(ctx, now=0.0)
+    assert ctx.submitted == [], "not immediately -- the interval starts at zero"
+    inker_mode.pump_autosave(ctx, now=inker_mode.AUTOSAVE_SECONDS + 1.0)
+    assert ctx.submitted == [f"inker-autosave:{tab.uid}"]
+    assert (tmp_path / tab.autosave_name).exists()
+
+
+def test_an_autosave_is_not_a_save(tmp_path):
+    """It must not clear dirty, move the saved head or retitle the tab: all
+    three would answer "where should this go" on the user's behalf."""
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    tab = _dirty_tab(state)
+    head, title = tab.saved_head, tab.title
+
+    inker_mode.pump_autosave(ctx, now=inker_mode.AUTOSAVE_SECONDS + 1.0)
+    assert tab.dirty
+    assert tab.saved_head == head
+    assert tab.title == title
+    assert tab.path is None
+    assert not tab.saving, "and it must never lock the editor"
+
+
+def test_an_idle_document_is_not_rewritten_every_interval(tmp_path):
+    """Compared against the history head rather than tracked with a flag, so
+    an undo back to the autosaved position is not a new edit either."""
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    _dirty_tab(state)
+
+    inker_mode.pump_autosave(ctx, now=200.0)
+    inker_mode.pump_autosave(ctx, now=400.0)
+    assert len(ctx.submitted) == 1
+
+    state.active.doc.add_layer()
+    inker_mode.pump_autosave(ctx, now=600.0)
+    assert len(ctx.submitted) == 2
+
+
+def test_a_busy_document_is_skipped(tmp_path):
+    """write_ora walks the stack; a second encode mid-save is the archive whose
+    parts disagree about the canvas size."""
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    tab = _dirty_tab(state)
+    tab.saving = True
+    inker_mode.pump_autosave(ctx, now=10_000.0)
+    assert ctx.submitted == []
+
+
+def test_saving_for_real_drops_the_crash_copy(tmp_path):
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    tab = _dirty_tab(state)
+    inker_mode.pump_autosave(ctx, now=10_000.0)
+    path = tmp_path / tab.autosave_name
+    assert path.exists()
+
+    inker_mode.drop_autosave(ctx, tab)
+    assert not path.exists()
+    assert tab.autosave_name == ""
+
+
+def test_dropping_a_copy_that_is_already_gone_does_not_raise(tmp_path):
+    """Cleanup, not an edit."""
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    tab = _dirty_tab(state)
+    inker_mode.pump_autosave(ctx, now=10_000.0)
+    (tmp_path / tab.autosave_name).unlink()
+    inker_mode.drop_autosave(ctx, tab)
+
+
+def test_recovery_is_offered_only_when_something_was_left_behind(tmp_path):
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    assert inker_mode.offer_recovery(ctx) is False
+    assert ctx.confirms.pending is None
+
+    (tmp_path / "sketch-pd9.ora").write_bytes(b"not really an ora")
+    assert inker_mode.offer_recovery(ctx) is True
+    assert ctx.confirms.pending is not None
+    assert "sketch" in ctx.confirms.pending.message
+
+
+def test_declining_recovery_keeps_the_files(tmp_path):
+    """"Not now" is not "delete my work"."""
+    from warlock.studio import inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    left = tmp_path / "sketch-pd9.ora"
+    left.write_bytes(b"x")
+    inker_mode.offer_recovery(ctx)
+    ctx.confirms.dismiss()
+    assert left.exists()
+
+
+def test_a_recovered_document_opens_untitled_and_dirty(tmp_path):
+    """The file it was copied from may still be on disk with its own contents,
+    so adopting the path would arm Ctrl+S to overwrite something the user has
+    not looked at."""
+    from warlock.studio import inker, inker_mode
+
+    ctx = _AutosaveCtx(tmp_path)
+    state = inker_mode.ensure(ctx)
+    source = inker.Document.blank(8, 8)
+    source.stack.active.pixels[:, :] = (1, 2, 3, 255)
+    path = tmp_path / "sketch-pd9.ora"
+    inker.write_ora(source, path)
+
+    inker_mode.recover(ctx, [path])
+    inker_mode.on_task_done(
+        ctx,
+        type("Done", (), {"key": "inker-recover:1", "result": ctx.result})(),
+    )
+    tab = state.active
+    assert tab is not None
+    assert tab.path is None
+    assert tab.dirty
+    assert "recovered" in tab.title
+    assert tab.autosave_name == path.name
