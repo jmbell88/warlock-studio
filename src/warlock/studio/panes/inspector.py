@@ -77,9 +77,42 @@ def _details_tab(ctx: Any, job: Any) -> None:
 
 
 def _rig_tab(ctx: Any, job: Any) -> None:
+    _weighting(ctx, job)
     retarget_panel.draw(ctx, job)
     pose_panel.draw(ctx, job)
     sheet_panel.draw(ctx, job)
+
+
+def weighting_verdict(params: Any) -> tuple[int, str] | None:
+    """The one line that says how the mesh is bound to its skeleton, or None.
+
+    A pure function for the reason ``seam_verdict`` is one: the wording is the
+    feature and it has to be assertable without a GL context. Envelope is a
+    *degraded* outcome -- the bone-heat solve failed and a capsule falloff
+    stood in for it -- so it is named as one rather than reported as a second
+    kind of success, which is how a silently degraded rig reached the user
+    looking exactly like a good one.
+    """
+    if not isinstance(params, dict):
+        return None
+    weighting = params.get("weighting")
+    if not weighting:
+        return None
+    if weighting == "envelope":
+        return (theme.WARN, "weighting: envelope - needs review")
+    return (theme.MUTED, f"weighting: {weighting}")
+
+
+def _weighting(ctx: Any, job: Any) -> None:
+    verdict = weighting_verdict(job.get("params") or {})
+    if verdict is None:
+        return
+    widgets.text_colored(*verdict)
+    reason = (job.get("params") or {}).get("weighting_reason")
+    if reason and imgui.is_item_hovered():
+        imgui.set_tooltip(str(reason))
+    if verdict[0] == theme.WARN:
+        widgets.hint_text("Blender's bone-heat solve did not take; hover for why.")
 
 
 # --- pieces -----------------------------------------------------------------

@@ -120,8 +120,8 @@ def _close(a: Any, b: Any, tol: float = 1e-6) -> bool:
     return all(abs(a[i] - b[i]) <= tol for i in range(3))
 
 
-def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> str:
-    """Bind mesh to armature, preferring heat weights. -> which method won.
+def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> tuple[str, str | None]:
+    """Bind mesh to armature, preferring heat weights. -> (method, why not).
 
     Bone-heat weighting solves a Laplacian over the surface and fails outright
     on non-manifold input, which describes a good share of trellis meshes. The
@@ -129,6 +129,13 @@ def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> str:
     operator RuntimeError, or a 'FINISHED' that quietly leaves every vertex
     group empty), so both are checked. Envelope weights are worse but they
     always exist, and a mediocre rig beats a failed job.
+
+    The *reason* is returned rather than only printed. Envelope is a degraded
+    outcome, not a second success, and while the only trace of it was a line on
+    this subprocess's stdout a rig that quietly fell back was indistinguishable
+    from one that did not -- which is exactly the state a user needs to be told
+    about, because it is the one where the deformation will look wrong.
+    ``None`` on the automatic path: there is nothing to explain.
     """
     def bind(kind: str) -> None:
         bpy.ops.object.select_all(action="DESELECT")
@@ -140,17 +147,18 @@ def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> str:
     try:
         bind("ARMATURE_AUTO")
         if _has_weights(mesh):
-            return "automatic"
-        reason = "produced no vertex weights"
+            return "automatic", None
+        cause = "produced no vertex weights"
     except RuntimeError as exc:
-        reason = str(exc).strip() or "raised"
-    print(f"bone-heat weighting failed ({reason}); falling back to envelope", flush=True)
+        cause = str(exc).strip() or "raised"
+    reason = f"bone-heat weighting failed: {cause}"
+    print(f"{reason}; falling back to envelope", flush=True)
 
     # parent_set already made the mesh a child; clear it so the envelope bind
     # doesn't stack a second armature modifier on top of the empty one.
     _unbind(bpy, mesh)
     bind("ARMATURE_ENVELOPE")
-    return "envelope"
+    return "envelope", reason
 
 
 def _unbind(bpy: Any, mesh: Any) -> None:
@@ -482,6 +490,44 @@ def _rig_bones(
     return rigging.fit_template(template, lo, hi), fit
 
 
+def _rig_meta(
+    template: Any,
+    *,
+    bones: list[dict[str, Any]],
+    lo: Any,
+    hi: Any,
+    weighting: str,
+    weighting_reason: str | None,
+    adjusted: bool,
+    fit: dict[str, Any],
+) -> dict[str, Any]:
+    """Everything rig.json says about a rig, as a plain dict.
+
+    Its own function for the reason ``_rig_bones`` is: everything around it in
+    ``op_rig`` needs bpy, so pulling the *content* of the file out is what
+    makes it assertable on a machine with no Blender -- which is every machine
+    the app ships on.
+    """
+    return {
+        "version": 1,
+        "template": template.key,
+        "label": template.label,
+        "root": template.root,
+        "weighting": weighting,
+        # Additive beside ``weighting``, and no version bump with it for the
+        # same reason ``fit`` needed none: every reader is .get-based, so a
+        # rig.json written before this field stays readable and one written
+        # after it stays readable by anything that has not heard of it. None on
+        # the automatic path -- there is nothing to explain about a success.
+        "weighting_reason": weighting_reason,
+        "bounds": {"min": lo, "max": hi},
+        "bones": bones,
+        "mirror_pairs": [list(pair) for pair in template.mirror_pairs],
+        "adjusted": adjusted,
+        "fit": fit,
+    }
+
+
 def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     template = rigging.get_template(spec["template"])
     source = Path(spec["source_glb"])
@@ -498,30 +544,29 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     arm_obj = _build_armature(bpy, bones)
 
     progress(0.40, "Computing weights")
-    weighting = _skin(bpy, mesh, arm_obj)
+    weighting, weighting_reason = _skin(bpy, mesh, arm_obj)
 
     progress(0.85, "Exporting rig")
     _export(bpy, Path(spec["out_glb"]))
 
-    rig_meta = {
-        "version": 1,
-        "template": template.key,
-        "label": template.label,
-        "root": template.root,
-        "weighting": weighting,
-        "bounds": {"min": lo, "max": hi},
-        "bones": bones,
-        "mirror_pairs": [list(pair) for pair in template.mirror_pairs],
-        "adjusted": bool(spec.get("bones")),
-        # Additive, and no version bump with it: every reader of rig.json is
-        # .get-based (rigging.read_rig, service/rig.py, the pose panel), so a
-        # file written before this field existed stays readable and one written
-        # after it stays readable by anything that has not heard of it.
-        "fit": fit,
-    }
+    rig_meta = _rig_meta(
+        template,
+        bones=bones,
+        lo=lo,
+        hi=hi,
+        weighting=weighting,
+        weighting_reason=weighting_reason,
+        adjusted=bool(spec.get("bones")),
+        fit=fit,
+    )
     Path(spec["out_json"]).write_text(json.dumps(rig_meta, indent=2), encoding="utf-8")
     progress(1.0, "Rig complete")
-    return {"ok": True, "weighting": weighting, "bones": len(bones)}
+    return {
+        "ok": True,
+        "weighting": weighting,
+        "weighting_reason": weighting_reason,
+        "bones": len(bones),
+    }
 
 
 def op_pose(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:

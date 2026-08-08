@@ -1404,6 +1404,10 @@ class Worker:
         # Recorded on the rig job so the history row can say "envelope
         # weights" without the UI having to fetch rig.json for every card.
         params["weighting"] = result.get("weighting")
+        # Beside it rather than only in rig.json: "envelope" is a degraded
+        # outcome and the question it raises is immediately "why", which the
+        # inspector cannot answer without opening a file per card.
+        params["weighting_reason"] = result.get("weighting_reason")
         params["bone_count"] = result.get("bones")
         await asyncio.to_thread(self.store.set_params, job_id, params)
         log.info(

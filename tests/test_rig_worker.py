@@ -113,6 +113,29 @@ async def test_rig_job_runs_blender_against_the_source_job_dir(worker, monkeypat
     await worker.shutdown()
 
 
+async def test_an_envelope_fallback_records_why_beside_the_weighting(worker, monkeypatch):
+    """The reason used to exist only as a print inside the subprocess, so a rig
+    that quietly degraded looked exactly like one that did not."""
+    _fake_worker_run(
+        monkeypatch,
+        result={
+            "ok": True,
+            "weighting": "envelope",
+            "weighting_reason": "bone-heat weighting failed: produced no vertex weights",
+            "bones": 19,
+        },
+    )
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+    params = worker.store.get(rig_id)["params"]
+    assert params["weighting"] == "envelope"
+    assert params["weighting_reason"] == "bone-heat weighting failed: produced no vertex weights"
+    await worker.shutdown()
+
+
 async def test_rig_job_falls_back_to_the_configured_template(worker, monkeypatch):
     calls = _fake_worker_run(monkeypatch)
     source = _mesh_job(worker)

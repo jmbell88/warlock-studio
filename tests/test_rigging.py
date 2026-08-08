@@ -483,6 +483,199 @@ def test_read_rig_round_trips(tmp_path):
     assert rigging.rig_bone_names(tmp_path) == ["hips"]
 
 
+# --- why the weights are what they are --------------------------------------
+#
+# Envelope weights are a degraded outcome, not a second success, and until this
+# the only trace of *why* the bone-heat solve did not take was a print into a
+# subprocess's stdout. Every test below is host-side: ``_skin`` takes bpy as an
+# argument and ``_rig_meta`` is pure, which is exactly what makes the decision
+# reachable without Blender installed.
+
+
+class _FakeOps:
+    def __init__(self, fail: str | None, weights: bool) -> None:
+        self._fail = fail
+        self._weights = weights
+        self.binds: list[str] = []
+
+    # bpy.ops.object.*
+    @property
+    def object(self):  # noqa: D401 - mimics bpy's namespace
+        return self
+
+    def select_all(self, action: str) -> None:
+        pass
+
+    def parent_set(self, type: str) -> None:  # noqa: A002 - bpy's own keyword
+        self.binds.append(type)
+        if type == "ARMATURE_AUTO" and self._fail is not None:
+            raise RuntimeError(self._fail)
+
+
+class _FakeBpy:
+    def __init__(self, fail: str | None = None, weights: bool = True) -> None:
+        self.ops = _FakeOps(fail, weights)
+
+        class _View:
+            objects = type("O", (), {"active": None})()
+
+        self.context = type("C", (), {"view_layer": _View()})()
+
+
+class _FakeMesh:
+    def __init__(self, weights: bool) -> None:
+        self._weights = weights
+        self.modifiers: list[object] = []
+        self.parent = None
+        self.vertex_groups = _FakeGroups(weights)
+
+    def select_set(self, value: bool) -> None:
+        pass
+
+
+class _FakeGroups(list):
+    def __init__(self, weights: bool) -> None:
+        super().__init__([type("G", (), {"index": 0})()] if weights else [])
+
+    def clear(self) -> None:
+        del self[:]
+
+
+class _FakeArm:
+    def select_set(self, value: bool) -> None:
+        pass
+
+
+def _skin_with(fail: str | None, weights: bool):
+    from warlock.pipelines import blender_worker
+
+    bpy = _FakeBpy(fail, weights)
+    mesh = _FakeMesh(weights)
+    if weights:
+        weighted = type("VG", (), {"group": 0, "weight": 1.0})()
+        mesh.data = type("D", (), {"vertices": [type("V", (), {"groups": [weighted]})()]})()
+    else:
+        mesh.data = type("D", (), {"vertices": []})()
+    return blender_worker._skin(bpy, mesh, _FakeArm()), bpy.ops.binds
+
+
+def test_a_heat_solve_that_works_reports_no_reason():
+    (weighting, reason), binds = _skin_with(None, True)
+    assert weighting == "automatic"
+    assert reason is None
+    assert binds == ["ARMATURE_AUTO"]
+
+
+def test_a_raising_heat_solve_carries_its_message_back_as_the_reason():
+    (weighting, reason), binds = _skin_with("non-manifold input", False)
+    assert weighting == "envelope"
+    assert "non-manifold input" in reason
+    assert binds == ["ARMATURE_AUTO", "ARMATURE_ENVELOPE"]
+
+
+def test_a_silent_heat_solve_failure_is_a_reason_too():
+    """The 'FINISHED' that leaves every vertex group empty is the case that
+    reached the user as nothing at all, so it has to name itself."""
+    (weighting, reason), _ = _skin_with(None, False)
+    assert weighting == "envelope"
+    assert "no vertex weights" in reason
+
+
+def test_rig_meta_round_trips_the_weighting_reason_through_rig_json(tmp_path):
+    """The whole point of the field: what the solve did has to survive the
+    subprocess boundary as a file, not as a print nobody reads.
+
+    Host-side on purpose -- ``_rig_meta`` is pure, so this pins the contract
+    on a machine with no bpy, which is every machine the app ships on.
+    """
+    from warlock.pipelines import blender_worker
+
+    template = rigging.get_template("humanoid")
+    meta = blender_worker._rig_meta(
+        template,
+        bones=[{"name": "hips", "parent": None, "head": [0, 0, 0], "tail": [0, 0, 1]}],
+        lo=[0.0, 0.0, 0.0],
+        hi=[1.0, 1.0, 1.0],
+        weighting="envelope",
+        weighting_reason="bone-heat weighting failed: produced no vertex weights",
+        adjusted=False,
+        fit={"method": "bbox"},
+    )
+    (tmp_path / "rig.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    rig = rigging.read_rig(tmp_path)
+    assert rig["weighting"] == "envelope"
+    assert rig["weighting_reason"] == "bone-heat weighting failed: produced no vertex weights"
+    # Additive: no version bump travels with it, because every reader is
+    # .get-based and a file written before the field stays readable.
+    assert rig["version"] == 1
+
+
+def test_a_successful_rig_records_no_reason(tmp_path):
+    from warlock.pipelines import blender_worker
+
+    meta = blender_worker._rig_meta(
+        rigging.get_template("humanoid"),
+        bones=[],
+        lo=[0.0, 0.0, 0.0],
+        hi=[1.0, 1.0, 1.0],
+        weighting="automatic",
+        weighting_reason=None,
+        adjusted=False,
+        fit={"method": "bbox"},
+    )
+    assert meta["weighting_reason"] is None
+
+
+def test_the_weighting_reason_is_derived_and_cannot_be_inherited_by_a_reroll():
+    from warlock.service.validation import DERIVED_PARAMS
+
+    assert "weighting" in DERIVED_PARAMS
+    assert "weighting_reason" in DERIVED_PARAMS
+
+
+def test_the_inspector_calls_envelope_a_degraded_outcome():
+    """A pure function for the reason ``seam_verdict`` is one: the wording is
+    the feature, and it has to be assertable without a GL context."""
+    from warlock.studio.panes import inspector
+
+    assert inspector.weighting_verdict({}) is None
+    assert inspector.weighting_verdict({"weighting": "automatic"})[1] == "weighting: automatic"
+    colour, text = inspector.weighting_verdict({"weighting": "envelope"})
+    assert text == "weighting: envelope - needs review"
+    # Everything drawn goes through imgui's default Basic-Latin+Latin-1 atlas,
+    # so an em dash would render as the missing-glyph box.
+    text.encode("latin-1")
+
+
+def test_rigging_stays_importable_with_no_bpy_anywhere():
+    """The host half may never import bpy -- it is process-global, not thread
+    safe, and takes the interpreter down rather than raising on the kind of
+    geometry trellis produces. A stub that raises on import proves it."""
+    import pathlib
+    import re
+
+    source = pathlib.Path(rigging.__file__).read_text(encoding="utf-8")
+    # Statements only -- the module's own prose argues about bpy at length.
+    assert not re.search(r"^\s*(import bpy|from bpy)", source, re.MULTILINE)
+    # And transitively, which the scan cannot see. In a subprocess rather than
+    # by reloading in-process: reloading rigging mints new function objects and
+    # breaks the identity tests/test_viewer_pose.py asserts about
+    # ``mirror_quaternion``. ``sys.modules['bpy'] = None`` makes any attempt to
+    # import it raise, so a hidden import fails loudly instead of succeeding on
+    # a machine that happens to have Blender.
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.modules['bpy'] = None; import warlock.rigging",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_run_worker_failure_is_a_blender_error_not_a_traceback(tmp_path):
     """Whether bpy is installed or not, rigging a mesh that isn't there must
     surface as one typed error carrying the worker's output."""
