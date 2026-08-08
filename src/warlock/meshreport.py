@@ -35,6 +35,23 @@ TRIANGLE_BUDGET = 150_000
 # Silhouette hole fraction at which the mesh stops being cosmetically fine.
 HOLE_WARN = 0.02
 
+# Two vertices closer than this fraction of the bounding-box diagonal are the
+# same point, for the purpose of the welded analysis copy below.
+#
+# The mesh is loaded with `process=False` on purpose -- the UV and material
+# checks need the unwelded vertices -- but that made every xatlas UV-seam split
+# count as a boundary edge, so the watertight figure was mostly measuring
+# seams. A seam split carries *identical* positions, so any positive tolerance
+# welds it; the fraction is there only so a rewriter that round-trips a
+# position through float32 does not leave two copies a few ulps apart. It is
+# relative to the model because an absolute epsilon means something different
+# on a 0.02 m gear than on a 30 m building.
+#
+# No `docs/measurements/` document backs this number: nothing in the stored
+# corpus is keyed on it. It decides one boolean, and the boolean it replaces
+# was measuring the wrong thing entirely.
+WELD_TOLERANCE = 1e-5
+
 
 def build(
     glb_path: Path,
@@ -67,27 +84,19 @@ def build(
     # Topology. trimesh's own predicates, not a reimplementation: they are what
     # every other consumer of this format uses to decide the same questions.
     watertight = bool(mesh.is_watertight)
-    # Only the *count* is wanted, so the face-adjacency graph is walked
-    # directly rather than through mesh.split(), which builds a full Trimesh --
-    # vertices, faces, visual and all -- for every shell it finds. On a
-    # 500k-triangle trellis reconstruction with a few hundred stray shells that
-    # is a large transient allocation to compute one integer.
-    components = int(
-        len(
-            # `nodes` is not optional here: face_adjacency omits any face with
-            # no neighbour, and a lone floating triangle is a component.
-            trimesh.graph.connected_components(
-                mesh.face_adjacency, nodes=np.arange(len(mesh.faces))
-            )
-        )
-    )
-    # An edge with exactly one adjacent face is a boundary edge; more than two
-    # is non-manifold. Both fall out of counting how many times each unique
-    # edge is referenced, which is one bincount rather than two traversals.
-    counts = np.bincount(mesh.edges_unique_inverse, minlength=len(mesh.edges_unique))
-    boundary_edges = int((counts == 1).sum())
-    nonmanifold_edges = int((counts > 2).sum())
+    components, boundary_edges, nonmanifold_edges = _topology(trimesh, np, mesh)
     degenerate = int((~mesh.nondegenerate_faces()).sum())
+
+    # The same three questions again, on a copy welded by position -- which is
+    # the answer anyone actually means by "is it watertight". Falls back to the
+    # raw numbers rather than raising: this module is advisory throughout.
+    welded = _welded(trimesh, np, vertices, faces)
+    if welded is None:
+        welded_watertight = watertight
+        welded_components, welded_boundary_edges = components, boundary_edges
+    else:
+        welded_watertight = bool(welded.is_watertight)
+        welded_components, welded_boundary_edges, _ = _topology(trimesh, np, welded)
 
     extents = [float(v) for v in mesh.extents]
     achieved = float(max(extents)) if extents else 0.0
@@ -103,9 +112,10 @@ def build(
     has_uvs, textures = _materials(mesh)
 
     triangles = int(len(faces))
-    if not watertight:
+    if not welded_watertight:
         reasons.append(
-            f"not watertight: {boundary_edges} boundary edge(s) in {components} component(s)"
+            f"not watertight: {welded_boundary_edges} boundary edge(s) in "
+            f"{welded_components} component(s), after welding vertices by position"
         )
     if nonmanifold_edges:
         reasons.append(f"{nonmanifold_edges} non-manifold edge(s)")
@@ -141,6 +151,12 @@ def build(
         "boundary_edges": boundary_edges,
         "nonmanifold_edges": nonmanifold_edges,
         "watertight": watertight,
+        # Additive, and the raw three above keep their meaning: every reader is
+        # `.get`-based, and the unwelded numbers still say how badly the file is
+        # split (a rig or an exporter cares).
+        "welded_watertight": welded_watertight,
+        "welded_boundary_edges": welded_boundary_edges,
+        "welded_components": welded_components,
         "has_uvs": has_uvs,
         "has_normals": has_normals,
         "textures": textures,
@@ -150,6 +166,69 @@ def build(
         "bytes": _size(glb_path),
         "silhouette": silhouette,
     }
+
+
+def _topology(trimesh: Any, np: Any, mesh: Any) -> tuple[int, int, int]:
+    """-> (components, boundary edges, non-manifold edges)."""
+    # Only the *count* is wanted, so the face-adjacency graph is walked
+    # directly rather than through mesh.split(), which builds a full Trimesh --
+    # vertices, faces, visual and all -- for every shell it finds. On a
+    # 500k-triangle trellis reconstruction with a few hundred stray shells that
+    # is a large transient allocation to compute one integer.
+    components = int(
+        len(
+            # `nodes` is not optional here: face_adjacency omits any face with
+            # no neighbour, and a lone floating triangle is a component.
+            trimesh.graph.connected_components(
+                mesh.face_adjacency, nodes=np.arange(len(mesh.faces))
+            )
+        )
+    )
+    # An edge with exactly one adjacent face is a boundary edge; more than two
+    # is non-manifold. Both fall out of counting how many times each unique
+    # edge is referenced, which is one bincount rather than two traversals.
+    counts = np.bincount(mesh.edges_unique_inverse, minlength=len(mesh.edges_unique))
+    return components, int((counts == 1).sum()), int((counts > 2).sum())
+
+
+def _welded(trimesh: Any, np: Any, vertices: Any, faces: Any) -> Any | None:
+    """A copy of the mesh with coincident vertices merged, or None.
+
+    Positions are quantised onto a `WELD_TOLERANCE * diagonal` lattice and
+    `np.unique` does the merging, which is one sort rather than a spatial
+    query. Quantising can in principle leave two points a hair under the
+    tolerance on opposite sides of a cell boundary; that is fine here, because
+    the case this exists for -- a UV seam split -- duplicates the position
+    *exactly*, so both copies land in the same cell whatever the offset.
+
+    Faces that collapse to fewer than three distinct vertices are dropped: they
+    have no area, and trimesh's edge bookkeeping would count their repeated
+    edge as a boundary and undo the whole point.
+    """
+    try:
+        diagonal = float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0)))
+        tolerance = diagonal * WELD_TOLERANCE
+        if not (tolerance > 0.0):
+            return None
+        _, index, inverse = np.unique(
+            np.round(vertices / tolerance), axis=0, return_index=True, return_inverse=True
+        )
+        merged = faces[:, :3] if faces.ndim == 2 else faces
+        merged = inverse.reshape(-1)[merged]
+        keep = (
+            (merged[:, 0] != merged[:, 1])
+            & (merged[:, 1] != merged[:, 2])
+            & (merged[:, 0] != merged[:, 2])
+        )
+        merged = merged[keep]
+        if len(merged) == 0:
+            return None
+        # The representative vertex is an original position, not a rounded one:
+        # the lattice is a lookup key, never geometry.
+        return trimesh.Trimesh(vertices=vertices[index], faces=merged, process=False)
+    except Exception as exc:  # pragma: no cover - defensive, like the rest here
+        log.warning("mesh report could not weld the mesh: %s", exc)
+        return None
 
 
 def _materials(mesh: Any) -> tuple[bool, dict[str, bool]]:
