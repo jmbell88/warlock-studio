@@ -90,12 +90,14 @@ class Config:
     )
     # Default triangle profile for a new job. See pipelines/optimize.PROFILES.
     #
-    # "raw" and not a named tier: every other tier needs gltfpack, which is
-    # vendored but not yet present, so the default used to name a profile that
-    # can only fail -- silently in the worker (which logs and ships the
-    # reconstruction) and with a 500 on POST /optimize. It is also the only
-    # tier the UI offers, because none of the others has been qualified yet.
-    # Set WARLOCK_MESH_PROFILE=standard once the binary is in place.
+    # "raw" and not a named tier: gltfpack is vendored and present now, so the
+    # named tiers can run -- but none of them has been qualified (kept UVs,
+    # both PBR maps and material assignment on a chest, a sword and a rock),
+    # and a default that decimates every mesh through an unqualified tier is a
+    # quality regression nothing on screen would explain. It is the only tier
+    # the UI offers for the same reason. Set WARLOCK_MESH_PROFILE=standard to
+    # exercise one; the retarget control in the inspector is the qualification
+    # path, since it offers the whole list on a job that already exists.
     mesh_profile: str = field(
         default_factory=lambda: os.environ.get("WARLOCK_MESH_PROFILE", "raw")
     )

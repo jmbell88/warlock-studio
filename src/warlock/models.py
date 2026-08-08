@@ -618,13 +618,16 @@ MATTING_MODELS: dict[str, MattingModel] = _table(
             '--include "*.json" --include "*.py" --include "*.safetensors" '
             "--local-dir models/birefnet\n"
             # The weights are not the whole download. The repo's own modelling
-            # code builds its backbone through packages this project does not
-            # depend on, so a user who runs only the line above gets a
-            # directory doctor can see and a model that cannot import. Phrased
-            # as "may" because which of them is needed is a property of that
-            # repo's code, not something Warlock can assert from here.
-            "  you may also need: uv pip install timm torchvision "
-            "-- BiRefNet's modelling code imports them and Warlock does not ship them"
+            # code -- which trust_remote_code runs out of the checkpoint
+            # directory -- builds its backbone through packages no resolver can
+            # see, so a directory doctor is happy with used to hold a model
+            # that could not import. They are declared in the text2image extra
+            # now (einops/kornia/timm/torchvision), which is why this names the
+            # sync rather than a bare pip install: the old "you may also need"
+            # line was both optional-sounding and incomplete.
+            "  then: uv sync --extra text2image "
+            "-- BiRefNet's modelling code imports einops, kornia, timm and "
+            "torchvision, and that extra is what supplies them"
         ),
     ),
 )

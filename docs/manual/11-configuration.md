@@ -22,8 +22,8 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
 | `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](12-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
-| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Not yet vendored; without it jobs ship the raw reconstruction. |
-| `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. Every other tier needs `gltfpack`, so `raw` is the only one that can currently succeed. |
+| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary, vendored and present. Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
+| `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
 | `WARLOCK_BENCH_DIR` | `bench/` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
 | `WARLOCK_T2I_ROOT` | `models/` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |

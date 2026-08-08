@@ -29,6 +29,23 @@ def test_package_import_does_not_override_explicit_env(monkeypatch):
     assert os.environ["HF_HUB_OFFLINE"] == "0"
 
 
+def test_the_packages_version_matches_the_distributions():
+    """``warlock.__version__`` and the packaged version are one number.
+
+    They drifted -- 0.0.9 in ``__init__`` against 0.0.11 in pyproject -- for
+    long enough that the About line and the title bar (``main.py`` reads
+    ``__version__``) were both reporting a release that no longer existed.
+
+    Read from the *installed distribution's* metadata rather than by parsing
+    pyproject.toml here: the metadata is what a wheel, `pip show` and any
+    consumer of this package actually see, so re-parsing the TOML would only
+    prove the repo agrees with itself.
+    """
+    from importlib.metadata import version
+
+    assert warlock.__version__ == version("warlock")
+
+
 def test_missing_weights_raise_actionable_error(tmp_path):
     # Load-bearing ordering: the existence check precedes the torch import,
     # so this passes (fast) even without the text2image extra installed.

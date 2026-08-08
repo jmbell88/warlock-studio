@@ -9,4 +9,7 @@ import os
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-__version__ = "0.0.9"
+# Keep in step with pyproject.toml's [project] version -- the two drifted to
+# 0.0.9 against 0.0.11, and tests/test_models.py pins them together by reading
+# the installed distribution's metadata rather than re-parsing the TOML.
+__version__ = "0.0.11"

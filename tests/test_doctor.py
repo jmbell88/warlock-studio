@@ -233,9 +233,11 @@ def test_a_missing_matting_model_is_non_fatal_and_says_what_happens_instead(tmp_
         assert "fall back" in row.detail
         assert "hf download" in row.detail
         # And the download is not only weights: the repo's modelling code
-        # imports packages this project does not declare, so a user who
-        # follows this row exactly still has to be told about them.
-        assert "you may also need" in row.detail
+        # imports packages no resolver can see from the checkpoint, so the row
+        # has to name the extra that declares them. It used to say "you may
+        # also need: uv pip install timm torchvision", which was both
+        # optional-sounding and short of einops and kornia.
+        assert "uv sync --extra text2image" in row.detail
 
 
 def _matting_weights(tmp_path):

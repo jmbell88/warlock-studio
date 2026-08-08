@@ -402,7 +402,7 @@ def capture_base(ctx: Any) -> dict[str, Any]:
     """The settings vector the two generate forms currently describe.
 
     Reusing the forms the user has already tuned is the whole point: a sweep is
-    "this, but vary that", and re-picking a checkpoint and eleven taxonomy
+    "this, but vary that", and re-picking a checkpoint and twelve taxonomy
     selects inside a second form would be its own small hell.
     """
     from .. import guidance

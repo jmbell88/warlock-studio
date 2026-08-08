@@ -22,8 +22,13 @@ from ...service.validation import MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, theme, widgets
 from ..manual import render as manual_render
 
-# The only tier the UI offers. Every named tier needs a gltfpack that is not
-# vendored yet, so offering one would be offering a button that can only fail.
+# The only tier the UI offers. gltfpack is vendored now, so the named tiers can
+# run -- but none of them has been qualified (kept UVs, both PBR maps and
+# material assignment on a chest, a sword and a rock), and an unqualified tier
+# on a generate form is a button that silently degrades a mesh. The retarget
+# control in the inspector is the qualification path: it offers the whole list
+# once the binary is present, so a tier can be exercised before it is exposed
+# here.
 PROFILES = [("raw", "Raw (no decimation)")]
 
 
@@ -196,8 +201,11 @@ def promote_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     """The overrides, with "unset" left out entirely.
 
     Omitted means "keep what the reference recorded", and that is not the same
-    as sending the reference's value back -- a platform override drops the
-    resolution it implied, so sending one unnecessarily re-derives it.
+    as sending the reference's value back. ``promote_to_model`` drops the
+    inherited resolution unconditionally -- re-deriving it from a platform
+    override, or from the default 3D platform when there is none -- so this
+    pane sends no ``resolution`` at all: an override here would pin a number
+    the platform no longer implies.
     """
     out: dict[str, Any] = {}
     if form["platform"]:
