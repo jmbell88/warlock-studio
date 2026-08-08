@@ -231,6 +231,16 @@ class Model:
     def triangle_count(self) -> int:
         return sum(len(p.indices) // 3 for prims in self.meshes for p in prims)
 
+    @property
+    def vertex_count(self) -> int:
+        """Total vertices, computed once (B18): the primitives are immutable
+        after load and the inspector asks for this every frame."""
+        count = getattr(self, "_vertex_count", None)
+        if count is None:
+            count = sum(len(p.positions) for prims in self.meshes for p in prims)
+            self._vertex_count = count
+        return count
+
 
 # --- loading ----------------------------------------------------------------
 
@@ -286,6 +296,12 @@ class _Reader:
     def __init__(self, gltf: dict, buffer: bytes) -> None:
         self.gltf = gltf
         self.buffer = buffer
+        # Decoded pixels per glTF image *source* index (D39). Several
+        # materials routinely reference one atlas, and the PNG decode is the
+        # dominant cost of parse_model -- so each image is decoded once and
+        # the same (w, h, bytes) tuple is shared, which is also what lets the
+        # GPU side de-duplicate its uploads by buffer identity.
+        self._images: dict[int, tuple[int, int, bytes] | None] = {}
 
     # -- accessors ---------------------------------------------------------
 
@@ -461,21 +477,27 @@ class _Reader:
         from PIL import Image
 
         tex = self.gltf.get("textures", [])[ref["index"]]
-        image = self.gltf.get("images", [])[tex["source"]]
+        source = tex["source"]
+        if source in self._images:
+            return self._images[source]
+        image = self.gltf.get("images", [])[source]
         data = self._image_bytes(image)
         if data is None:
+            self._images[source] = None
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
                 rgba = im.convert("RGBA")
-                return rgba.width, rgba.height, rgba.tobytes()
+                decoded = rgba.width, rgba.height, rgba.tobytes()
         except Exception:
             # The stated policy for images, applied to the decode as well as to
             # the lookup: a texture that cannot be read is a cosmetic loss, and
             # raising here turned one corrupt map into "this file will not
             # open" -- for a mesh that is otherwise entirely intact.
             log.warning("skipping a texture whose image data could not be decoded")
-            return None
+            decoded = None
+        self._images[source] = decoded
+        return decoded
 
     def skin(self, skin: dict) -> Skin:
         joints = list(skin["joints"])

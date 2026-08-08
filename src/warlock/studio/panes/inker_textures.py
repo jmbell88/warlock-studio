@@ -14,8 +14,16 @@ structural change and a freshly opened file both need.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
+
+# How often one layer's panel thumbnail may re-render while its pixels keep
+# changing (B24). During a stroke ``doc.rev`` ticks per dab, and every tick
+# used to re-shrink and re-upload *every* layer's 48-square -- per frame. The
+# panel draws every frame, so a throttled thumb still catches up within a
+# quarter second of the stroke ending.
+THUMB_REFRESH_SECONDS = 0.25
 
 # The checkerboard behind transparency. One small texture drawn tiled, so the
 # pattern costs a single quad however far the canvas is zoomed out.
@@ -171,15 +179,24 @@ def layer_thumb(ctx: Any, tab: Any, index: int, size: int = 48) -> Any:
     layer = tab.doc.stack[index]
     key = _slot(tab.uid, f"thumb{layer.uid}")
     rev_key = f"{key}:rev"
+    at_key = f"{key}:at"
     stamp = (tab.doc.rev, layer.uid)
     texture = ctx.state.preview.get(key)
     if texture is not None and ctx.state.preview.get(rev_key) == stamp:
+        return texture
+    now = time.monotonic()
+    if texture is not None and now - float(ctx.state.preview.get(at_key) or 0.0) < (
+        THUMB_REFRESH_SECONDS
+    ):
+        # Stale but recent (B24): keep showing the last shrink and try again
+        # on a later frame -- the stamp mismatch persists until we catch up.
         return texture
     small = Image.fromarray(layer.pixels, "RGBA").resize((size, size), Image.BOX)
     data = np.asarray(small, dtype=np.uint8).tobytes()
     texture = _cached(ctx, key, (size, size), lambda: data)
     texture.write(data)
     ctx.state.preview[rev_key] = stamp
+    ctx.state.preview[at_key] = now
     return texture
 
 

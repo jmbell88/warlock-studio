@@ -10,6 +10,9 @@ TODO.md's sections rather than restating their specs.
 Ordering is **dependency + payoff**: Phase 1 makes the app fast and the base honest,
 Phase 2 makes failures diagnosable, Phase 3 polishes interaction on that base, Phase 4
 adds net-new capability. Within each phase items are listed in recommended order.
+Phase 5 (the texture generator) is additive beyond LIST.md — designed 2026-08-08, no
+survey item numbers — and sits last because it depends on Phase 4's Clay25 and on
+TODO §11's bake op.
 
 ## Excluded — already done (verified against TODO.md, 2026-08-08)
 
@@ -422,6 +425,84 @@ resource is available, independent of the code phases)
 work keeps the numpy reference and the bit-parity bar; new blend modes preserve `.ora`
 interop (Krita/GIMP round-trip). Gated items each end in a measurement doc under
 `docs/measurements/` where they move a corpus-keyed constant, per the repo rule.
+
+---
+
+## Phase 5 — Dedicated texture generator
+
+*Additive beyond LIST.md (designed 2026-08-08). Three tiers, in dependency order:
+materials first (mostly wiring over the existing seamless-tile path), mesh re-texturing
+second (the real feature; its spec is largely written across `optimize_job`, the rig
+publication pattern and TODO §11's bake op — build the bake infrastructure once for
+both), a dedicated texture model third and only if the bake path proves insufficient.
+Hard prerequisite: **Clay25** (generator UVs + box unwrap, Phase 4) — Clay geometry
+currently has no UVs, so nothing user-modelled is texturable until it lands.*
+
+### Tier 1 — Material generator (tileable PBR sets)
+
+1. **T1** — Calibrate `seam.SEAM_MAX` (currently 2.0, uncalibrated — TODO's deferred
+   table): stone / plaster / gravel / fabric tiles eyeballed. Corpus-keyed constant, so
+   it gets a `docs/measurements/` doc before it moves. First because everything in this
+   tier stands on the seam gate meaning something.
+2. **T2** — `output=texture` jobs through `service.jobs.create_job`: same validation
+   door, same VRAM admission, same directory-before-row ordering. Reuses the existing
+   `tile=True` circular-padding path (SDXL family only — refused for Flux at the door,
+   as today). New params join `service.validation.DERIVED_PARAMS` where the worker
+   records them.
+3. **T3** — PBR map derivation as a pure module (`pipelines/material.py`):
+   normal-from-luminance/height, roughness estimate — stdlib+numpy in the `vram.py`
+   purity sense, testable headlessly, a future native-kernel candidate (numpy reference
+   kept, per the invariant). Outputs land as derived artifacts under the
+   `_convert_locks` idiom.
+4. **T4** — Material packaging: a `material.zip` (albedo/normal/roughness[/height])
+   derived artifact, plus a glTF material export for engine import.
+5. **T5** — UI: a "Material" toggle on the 2D form (2D mode owns every prompt control;
+   a control belongs to exactly one pane), tiled 2×2 preview in the viewport, and an
+   "Open in Inker" path for hand-editing the albedo (the `paint.ora` staleness rule
+   applies: regenerating marks the layered source stale).
+
+### Tier 2 — Mesh re-texturing (new look for an existing `model.glb`'s UVs)
+
+6. **T6** — A new `blender_worker` op (`op_bake`): render N views of the mesh, run
+   img2img/inpaint over them with the prompt (IP-Adapter/ControlNet conditioning
+   already wired), project back onto the UV atlas, bake. Host side stays bpy-free (the
+   `rigging.py` split); subprocess in the kill-on-close job; writes temp names and
+   renames on success — the `rig.glb`/`rig.json` publication pattern verbatim. Shared
+   deliberately with TODO §11's retopo bake so the infrastructure is built once.
+7. **T7** — `service.jobs.retexture_job`, a near-sibling of `optimize_job`: `Conflict`
+   refusal on queued/running jobs, staged rewrite of the served `model.glb`
+   (`optimize.staged_copy` — it is a served file on a done job), deletion of every
+   derived artifact describing the old surface (STL/OBJ/FBX/`textures.zip`/
+   `collision.glb`), stale-artifact report to the panel before the button. `source.glb`
+   stays immutable — a retexture is derivation, never authorship.
+8. **T8** — VRAM admission: a declared entry in `vram.py`'s cost table (never sniffed),
+   `check_vram` at the door, `Worker._check_resources` at dispatch. Multi-view SDXL
+   passes beside resident trellis is a real budget question on the 32 GB card.
+9. **T9** — UI: a texture panel in the 3D inspector beside the retarget panel — not a
+   new mode (the mode list is closed; the retarget panel is the precedent for
+   "operation on a selected done job").
+10. **T10** — Pin that a retexture makes the rig **not** stale (a rig references
+    geometry, not pixels) with a test — the one place this differs from a retarget,
+    and worth a written assertion so nobody "fixes" it later.
+11. **T11** — Observations: whether a retexture writes an `observations` row is a
+    decision — the corpus is about what *generation* settings produce, and
+    `import_mesh`/the retarget re-audit deliberately write none. Default to none;
+    revisit if texture settings ever feed findings hints.
+
+### Tier 3 — Dedicated texture model (only if Tier 2's bake proves insufficient)
+
+12. **T12** — A UV-space diffusion or material-decomposition model as a registry spec
+    in `models.py` (family/residency **declared**, never sniffed), a `models.Fetch`
+    entry deduped on `(repo_id, destination)`, download only through the `fetch_worker`
+    subprocess, `local_files_only=True` at load. Enters as an isolated backend A/B'd
+    against Tier 2's bake on a fixed corpus through Review — the TODO §12 pattern —
+    never as a replacement. Gets its own spec first.
+
+**Phase 5 verification:** pure modules (T3) get headless tests; T6/T7 follow the rig
+worker's test patterns (temp-name publication, cancel semantics, `_discard_artifacts`
+resolving the right directory); T2's admission and DERIVED_PARAMS additions get the
+existing validation-test treatment; T1 and any threshold constant land with a
+measurement doc. Full suite green both native and `WARLOCK_NATIVE=0`, as everywhere.
 
 ---
 

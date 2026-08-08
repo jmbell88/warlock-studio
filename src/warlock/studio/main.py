@@ -42,6 +42,11 @@ MIN_SIZE = (1100, 700)
 # Pane widths and the sidebar split now live in layout.Layout, persisted and
 # draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
 TARGET_FPS = 60
+# The redraw rate while nothing on screen can change (B11): no pending input,
+# no job, no toast, no task, cameras settled, nothing playing. Fast enough
+# that the first frame after a wake-up condition is never far away, slow
+# enough that an idle session stops burning a core and the GPU.
+IDLE_FPS = 12
 # The modes that fill the host window with one pane. Inker and Clay are not
 # here: each fills it with a three-column *workspace* instead, which is
 # ``modes.WORKSPACE_MODES``. Those three categories partition ``modes.KEYS``
@@ -308,7 +313,10 @@ class App:
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
         self._load_static_answers()
-        self.app_ctx.cache.refresh_storage()
+        # Off the frame thread (C32): the walk stats every file under every
+        # job directory, and nothing on the first frame needs the number --
+        # the library's storage line simply appears when the task lands.
+        self._request_storage()
         self.viewer.on_pose_dirty = lambda _dirty: None
 
     def _load_static_answers(self) -> None:
@@ -326,14 +334,11 @@ class App:
         ctx.guidance = svc_system.guidance_catalog(self.svc)
         ctx.sheet_options = svc_sheets.sheet_options()
         self._refresh_model_answers()
-        try:
-            templates = svc_rig.rig_templates(self.svc)
-        except Exception:
-            log.exception("could not probe rigging")
-            templates = {"available": False, "templates": [], "default": ""}
-        ctx.rigging_available = bool(templates.get("available"))
-        ctx.rig_templates = list(templates.get("templates") or [])
-        ctx.rig_default = templates.get("default") or ""
+        # Off the frame thread: rig_templates asks doctor.blender_check, whose
+        # first answer is a seconds-long bpy subprocess probe that no longer
+        # runs during startup (C30). The rig controls appear when it lands.
+        ctx.rig_default = self.runtime.config.rig_template or ""
+        ctx.submit("rig-templates", svc_rig.rig_templates, self.svc)
         ctx.export_dir = str(self.runtime.config.export_dir or "") or None
         # The trellis port check is non-fatal -- the app is perfectly usable
         # without ever running trellis -- but a port already held at startup
@@ -413,6 +418,13 @@ class App:
                 self._running = True
                 clock = pygame.time.Clock()
                 while self._running:
+                    if self._skip_idle_frame():
+                        # Nothing can change on screen and the idle cadence is
+                        # not due yet: sleep one 60 Hz tick without drawing.
+                        # Events are only *peeked* here, so none is lost -- the
+                        # frame that consumes them runs the moment one arrives.
+                        clock.tick(TARGET_FPS)
+                        continue
                     dt = self._tick()
                     self.frame(dt)
                     pygame.display.flip()
@@ -495,6 +507,58 @@ class App:
             splash.release_logo(logo, self.imgui_renderer)
         started.raise_if_failed()
         return not started.quit_requested
+
+    def _skip_idle_frame(self) -> bool:
+        """Whether this loop pass may go by without a redraw (B11).
+
+        Gates the *whole* frame -- events, cache tick, UI build, render -- on
+        whether anything could visibly change. Any pending input renders
+        immediately (the events are peeked, never consumed); otherwise a frame
+        is due at IDLE_FPS whenever something live is on screen, and the rest
+        of the time only at IDLE_FPS anyway -- the conservative shape: being
+        wrong about "idle" costs at most 1/IDLE_FPS of latency, never an
+        event.
+        """
+        if time.perf_counter() - self._last_frame >= 1.0 / IDLE_FPS:
+            return False
+        return not self._frame_active()
+
+    def _frame_active(self) -> bool:
+        """Anything that wants the full TARGET_FPS cadence right now."""
+        import pygame
+        from imgui_bundle import imgui
+
+        if pygame.event.peek():
+            return True
+        ctx = self.app_ctx
+        if ctx is None:
+            return True
+        io = imgui.get_io()
+        if io.want_text_input:
+            return True  # the caret blinks
+        state = ctx.state
+        if state.toasts:
+            return True  # TTL fade
+        # A job running or queued animates the progress card and its easing.
+        if self.runtime.current_job_id is not None or ctx.cache.active is not None:
+            return True
+        # Any task in flight draws spinners/progress somewhere.
+        if ctx.tasks.busy_keys:
+            return True
+        viewer = self.viewer
+        if viewer is not None and (
+            viewer.pending is not None
+            or viewer.stripping
+            or viewer.camera.auto_rotate
+            or not viewer.camera.settled()
+        ):
+            return True
+        clay = self.clay_view
+        if clay is not None and state.mode == "clay" and not clay.camera.settled():
+            return True
+        inker = state.inker
+        tab = None if inker is None else inker.active
+        return tab is not None and bool(getattr(tab, "playing", False))
 
     def _tick(self) -> float:
         now = time.perf_counter()
@@ -619,6 +683,23 @@ class App:
             # frame; replacing the list wholesale is atomic enough for both.
             if isinstance(done.result, list):
                 self.runtime.checks = done.result
+                # The first poll is also what pays for the deferred bpy probe
+                # (C30). If it says rigging works and the ctx does not yet,
+                # re-ask for the templates -- the probe's answer is cached, so
+                # the re-ask costs a directory read.
+                blender_ok = any(
+                    c.name == "Blender (rigging)" and c.ok for c in done.result
+                )
+                if blender_ok and not ctx.rigging_available:
+                    from ..service import rig as svc_rig
+
+                    ctx.submit("rig-templates", svc_rig.rig_templates, self.svc)
+            return
+        if key == "rig-templates":
+            templates = done.result if isinstance(done.result, dict) else {}
+            ctx.rigging_available = bool(templates.get("available"))
+            ctx.rig_templates = list(templates.get("templates") or [])
+            ctx.rig_default = templates.get("default") or ctx.rig_default
             return
         # The side data the pose and sheet panels read. Keyed by job so a
         # result that arrives after the selection moved on can be dropped
@@ -721,7 +802,9 @@ class App:
             if done.result is not None:
                 ctx.toast(f"Exported to {done.result}")
             return
-        if key == "storage":
+        if key == "storage" or key.startswith("storage:"):
+            # Both the full walk and the per-job incremental re-measure (C33)
+            # land here; each returns the whole storage dict.
             if done.result is not None:
                 ctx.cache.storage = done.result
             return
@@ -779,7 +862,9 @@ class App:
             if message is not None:
                 ctx.toast(*message)
             if job["status"] == "done":
-                self._request_storage()
+                # Incremental (C33): only this job's directory changed, so only
+                # it is re-walked; delete and prune still trigger the full one.
+                self._request_storage(job["id"])
                 # The worker has just appended an observation for this job
                 # (queue._observe_finished, same condition), and it has no way
                 # to ask for the recompute itself -- it runs on the asyncio
@@ -826,7 +911,7 @@ class App:
             ctx.state.note_error("The GPU worker is not running. Restart Warlock.")
             ctx.toast("The GPU worker is not running.", "error")
 
-    def _request_storage(self) -> None:
+    def _request_storage(self, job_id: str | None = None) -> None:
         """Re-measure the data directory off the frame thread.
 
         A recursive stat walk of every job directory is not something to do
@@ -834,8 +919,15 @@ class App:
         asked for is the worst one: the frame that should be showing a job
         finishing. ``submit`` refuses a duplicate key, so a burst of jobs
         completing coalesces into one walk rather than queuing several.
+
+        With ``job_id`` only that job's directory is re-measured and folded
+        into the running totals (C33); a delete or prune, which can touch any
+        number of directories, still asks for the full walk.
         """
         ctx = self.app_ctx
+        if job_id is not None:
+            ctx.submit(f"storage:{job_id}", ctx.cache.measure_one, job_id)
+            return
         ctx.submit("storage", ctx.cache.measure)
 
     def _reload_viewer(self) -> None:
@@ -1307,11 +1399,21 @@ class App:
         if self.clay_view is None:
             return
         try:
-            data = self.clay_view.thumbnail_png()
+            # The GL readback only; the PNG encode joins the save on the task
+            # thread (D41), exactly as ctx.capture_thumbnail does.
+            image = self.clay_view.screenshot()
         except Exception:
             log.exception("could not capture a thumbnail for built asset %s", job_id)
             return
-        ctx.submit(f"thumb:{job_id}", svc_files.save_thumbnail, ctx.svc, job_id, data)
+
+        def run() -> Any:
+            import io
+
+            buf = io.BytesIO()
+            image.convert("RGB").save(buf, "PNG")
+            return svc_files.save_thumbnail(ctx.svc, job_id, buf.getvalue())
+
+        ctx.submit(f"thumb:{job_id}", run)
 
     def _clay_send_to_3d(self, tab: Any) -> None:
         """Render the document flat and hand the picture to trellis.
@@ -2021,13 +2123,13 @@ class App:
         from ..service import findings as svc_findings
         from . import dialogs, vector_presets, widgets
 
-        doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
         imgui.separator()
         if not widgets.header("What works", default_open=False):
             return
-        # Built after the header, not before it. ``load`` is mtime-cached but
-        # these are not: one line per contrast plus one per metric, formatted
-        # from scratch every frame, for a section that is closed by default.
+        # Everything below the header guard (B21), the load included: it is
+        # mtime-cached but still a stat per frame, for a section that is
+        # closed by default -- and the lines are formatted from scratch.
+        doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
         top = svc_findings.presets(doc or {})
         axis_lines = findings_lib.comparison_lines(doc)
         if axis_lines:

@@ -14,10 +14,17 @@ from .glctx import Viewport
 
 
 def image(viewport: Viewport) -> Any:
-    """The viewport's current contents as an RGBA PIL image, top row first."""
+    """The viewport's current contents as an RGBA PIL image, top row first.
+
+    The row flip is folded into Pillow's raw decoder (orientation -1 reads
+    bottom-up) rather than done as a numpy slice-and-copy first (D41): one
+    copy instead of two on a path the frame thread pays for thumbnails.
+    """
     from PIL import Image
 
-    return Image.fromarray(viewport.read_rgba(), "RGBA")
+    return Image.frombuffer(
+        "RGBA", viewport.size, viewport.read_raw(), "raw", "RGBA", 0, -1
+    )
 
 
 def png_bytes(viewport: Viewport, *, opaque: bool = True) -> bytes:

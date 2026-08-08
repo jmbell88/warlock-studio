@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -34,12 +35,38 @@ class Check:
     fatal: bool
 
 
-def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
+def run_checks(
+    config: Config,
+    *,
+    trellis_running: bool = False,
+    static: list[Check] | None = None,
+    probe_slow: bool = True,
+) -> list[Check]:
     """``trellis_running`` says the port is *ours*.
 
     Without it the port check reports a permanent false warning for the whole
     life of a warm process: /api/health runs these while trellis-server is
     resident and holding the port it is supposed to hold.
+
+    ``static`` reuses a previous :func:`static_checks` result so a poller only
+    pays for the volatile rows (C31); ``probe_slow=False`` skips the two
+    genuinely slow probes -- the torch import and the bpy subprocess -- and
+    reports them as still-checking rows instead (C29/C30). Startup uses both;
+    the header health poll re-runs the slow probes once, off the frame thread,
+    and their answers are cached from then on.
+    """
+    s = static_checks(config, probe_slow=probe_slow) if static is None else list(static)
+    v = volatile_checks(config, trellis_running)
+    # The historical display order: the six install rows, then the four
+    # volatile rows, then the per-model rows, then Blender (last in s).
+    return [*s[:6], *v, *s[6:]]
+
+
+def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
+    """The rows that cannot change without the disk (or the venv) changing.
+
+    Recomputed only on startup and on ``force`` -- a finished download is the
+    one event that invalidates them, and its handler passes force.
     """
     return [
         _exe_check(config),
@@ -47,15 +74,22 @@ def run_checks(config: Config, *, trellis_running: bool = False) -> list[Check]:
         _birefnet_check(config),
         _gltfpack_check(config),
         _warlockc_check(),
-        _cuda_check(),
+        _cuda_check(probe=probe_slow),
+        *_t2i_checks(config),
+        *_matting_checks(config),
+        *_pose_checks(config),
+        blender_check(probe=probe_slow),
+    ]
+
+
+def volatile_checks(config: Config, trellis_running: bool = False) -> list[Check]:
+    """The rows worth re-asking every poll: the card, the job object, the
+    disk and the port are the four answers that change while the app runs."""
+    return [
         _vram_check(config),
         _job_object_check(),
         _disk_check(config),
         _port_check(config, trellis_running),
-        *_t2i_checks(config),
-        *_matting_checks(config),
-        *_pose_checks(config),
-        blender_check(),
     ]
 
 
@@ -63,17 +97,39 @@ BPY_PROBE_TIMEOUT = 120.0
 BPY_INSTALL_HINT = "rigging unavailable; install with: uv sync --extra rig"
 
 
-def blender_check() -> Check:
+_blender_lock = threading.Lock()
+# What a caller that declines to wait gets before the probe has run. ok=True
+# because fatal-ness and the amber dot key on ok, and "still checking" is not a
+# failure; the row flips to the real answer when the deferred probe lands.
+_BLENDER_PENDING = Check(
+    "Blender (rigging)", True,
+    "still checking in the background -- rig controls appear when it finishes",
+    fatal=False,
+)
+
+
+def blender_check(*, probe: bool = True) -> Check:
     """Can we rig? Probed in a subprocess, for the same reason rigging is.
 
     Non-fatal by design: bpy is an optional extra with cp313-only wheels, and
     a machine without it should generate meshes exactly as before with the
     rig/pose controls hidden -- the same way a missing image model degrades.
+
+    ``probe=False`` never blocks: it returns the cached answer or a pending
+    row (C30 -- the probe costs seconds and used to run inside startup). The
+    lock keeps a deferred probe and an eager caller from racing two
+    subprocesses; the answer cannot change while this process lives, so the
+    first probe's result is everyone's.
     """
     global _blender
-    if _blender is None:
-        _blender = _probe_blender()
-    return _blender
+    if _blender is not None:
+        return _blender
+    if not probe:
+        return _BLENDER_PENDING
+    with _blender_lock:
+        if _blender is None:
+            _blender = _probe_blender()
+        return _blender
 
 
 def _probe_blender() -> Check:
@@ -156,7 +212,16 @@ def _warlockc_check() -> Check:
     return Check("warlockc (native kernels)", ok, detail, fatal=False)
 
 
-def _cuda_check() -> Check:
+def _cuda_check(*, probe: bool = True) -> Check:
+    """``probe=False`` refuses to *import* torch (seconds of module init, and
+    this used to run inside startup -- C29). If torch is already loaded the
+    answer is two attribute reads and is given regardless."""
+    if not probe and sys.modules.get("torch") is None:
+        return Check(
+            "CUDA", True,
+            "still checking in the background (importing torch takes a moment)",
+            fatal=False,
+        )
     try:
         import torch
     except ImportError:

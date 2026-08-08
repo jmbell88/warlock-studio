@@ -25,7 +25,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import IO, Any
 
 log = logging.getLogger(__name__)
@@ -222,7 +222,26 @@ class Progress:
     updated_at: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # An explicit literal, not dataclasses.asdict: asdict walks the fields
+        # through a recursive deep-copy machine, and this runs under the bus
+        # lock on every snapshot -- which the frame loop takes every frame.
+        return {
+            "job_id": self.job_id,
+            "kind": self.kind,
+            "phase": self.phase,
+            "label": self.label,
+            "detail": self.detail,
+            "percent": self.percent,
+            "stage_index": self.stage_index,
+            "stage_total": self.stage_total,
+            "step": self.step,
+            "step_total": self.step_total,
+            "stage_eta": self.stage_eta,
+            "cold": self.cold,
+            "error": self.error,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+        }
 
 
 @dataclass(slots=True)

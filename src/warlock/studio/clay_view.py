@@ -326,6 +326,19 @@ class ClayView:
         self._element_drags: dict[int, _ElementDrag] = {}
         self._overlays: dict[int, _SelOverlay] = {}
         self._element_centre = np.zeros(3)
+        # Redraw bookkeeping (B13), the shape Viewer.render uses (B12).
+        self._render_dirty = True
+        self._last_render_key: Any = None
+        # Per-object world matrices, keyed on the identity of the three
+        # transform arrays -- sound because every transform write *rebinds*
+        # them (the documented gizmo rule) rather than mutating in place (B26).
+        self._world_cache: dict[int, tuple[tuple[int, int, int], Any]] = {}
+        # element_centre / selection_centre / world_bounds memos (B25/B27).
+        self._centre_memo: tuple[Any, Any] | None = None
+        self._bounds_memo: dict[bool, tuple[Any, tuple[Any, Any]]] = {}
+        # One shared empty element-selection, so an unselected object stops
+        # synthesising a fresh empty() per frame (B26).
+        self._empty_sel: Any = None
 
     # -- the GPU cache -----------------------------------------------------
 
@@ -366,9 +379,29 @@ class ClayView:
     # -- drawing -----------------------------------------------------------
 
     def draw(self, doc: Any, rect: tuple[float, float, float, float], dt: float) -> Any:
-        """Draw one frame into the viewport. -> the resolved texture."""
+        """Draw one frame into the viewport. -> the resolved texture.
+
+        Skipped -- the last resolved texture returned as-is -- when nothing
+        that feeds the draw moved (B13): the document's own ``rev`` covers
+        every edit, selection and visibility change; ``handle_event`` marks a
+        redraw for hover, marquee and drags; the camera answers for itself;
+        and the tool decides which gizmo is on screen, so it is in the key.
+        """
         self._rect = rect
         width, height = int(max(rect[2], 1)), int(max(rect[3], 1))
+        key = (
+            width, height, bool(self.wireframe), bool(self.show_grid),
+            id(doc), doc.rev, getattr(self.state, "tool", "select"),
+        )
+        if (
+            not self._render_dirty
+            and key == self._last_render_key
+            and self.camera.settled()
+            and self.viewport.texture is not None
+        ):
+            return self.viewport.texture
+        self._last_render_key = key
+        self._render_dirty = False
         self._resize(width, height)
         self.camera.update(dt)
         self.sync(doc)
@@ -382,6 +415,25 @@ class ClayView:
             overlays=self._element_overlays(doc) + self._gizmo_draws(doc, height),
         )
         return self.viewport.texture
+
+    def _world(self, obj: Any) -> Any:
+        """This object's world matrix, memoized on the transform arrays (B26).
+
+        Sound because every transform write *rebinds* the three arrays -- the
+        documented gizmo rule ("rebind rather than write through trs()'s live
+        arrays") -- so the identity triple changes exactly when the transform
+        does. One memo serves the composite, the overlays, the centres and the
+        bounds, which is what "compute world matrices once" means here.
+        """
+        key = (id(obj.translation), id(obj.rotation), id(obj.scale))
+        hit = self._world_cache.get(obj.uid)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        world = m3.compose(obj.translation, obj.rotation, obj.scale)
+        self._world_cache[obj.uid] = (key, world)
+        if len(self._world_cache) > 4096:
+            self._world_cache.clear()
+        return world
 
     def _composite(self, doc: Any) -> Any:
         """Every cached object as one thing the renderer can draw in one pass.
@@ -402,7 +454,7 @@ class ClayView:
             entry = self._cache.get(obj.uid)
             if entry is None:
                 continue
-            world = m3.compose(obj.translation, obj.rotation, obj.scale)
+            world = self._world(obj)
             for node, primitive in entry.gpu.draws:
                 node.world = world
                 draws.append((node, primitive))
@@ -460,7 +512,16 @@ class ClayView:
             # unselected object) or, once the allocator reissued the address,
             # matched a stale overlay and left a new selection invisible.
             stored = doc.element_sel.get(obj.uid)
-            sel = doc.element_sel_of(obj.uid)
+            if stored is not None:
+                sel = doc.element_sel_of(obj.uid)
+            else:
+                # One shared empty selection for every unselected object
+                # (B26): synthesising a fresh empty() per object per frame
+                # allocated for nothing, and the overlay key deliberately uses
+                # ``id(stored)`` -- which is stable at None -- not this.
+                if self._empty_sel is None:
+                    self._empty_sel = doc.element_sel_of(obj.uid)
+                sel = self._empty_sel
             hover_index = hover[1] if hover is not None and hover[0] == obj.uid else -1
             key = (id(obj.mesh), id(stored), mode, hover_index)
             overlay = self._overlays.get(obj.uid)
@@ -469,7 +530,7 @@ class ClayView:
                     overlay.release()
                 overlay = _SelOverlay(self.ctx, program, key, obj.mesh.positions)
                 self._overlays[obj.uid] = overlay
-            world = m3.compose(obj.translation, obj.rotation, obj.scale)
+            world = self._world(obj)
             items.extend(
                 self._overlay_items(obj, overlay, world, mode, sel, hover_index)
             )
@@ -609,8 +670,22 @@ class ClayView:
         return None if lo is None else (lo + hi) * 0.5
 
     def element_centre(self, doc: Any) -> np.ndarray | None:
-        """The world centroid of every selected element, across every object."""
+        """The world centroid of every selected element, across every object.
+
+        Memoized on the identities of everything it reads (B25): the selection
+        objects, the meshes and the transform arrays are all replaced whole
+        rather than mutated, so identity misses exactly when the answer can
+        change -- and this is asked every frame a gizmo is on screen.
+        """
         from .clay import elements as el
+
+        key = (id(doc), tuple(
+            (uid, id(sel), *self._obj_key(doc, uid))
+            for uid, sel in doc.element_sel.items()
+        ))
+        memo = self._centre_memo
+        if memo is not None and memo[0] == key:
+            return memo[1]
 
         total = np.zeros(3)
         count = 0
@@ -622,15 +697,41 @@ class ClayView:
             verts = el.affected_verts(obj.mesh, sel)
             if not len(verts):
                 continue
-            matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+            matrix = self._world(obj)
             local = obj.mesh.positions[verts].astype("f8")
             world = (matrix @ np.hstack([local, np.ones((len(local), 1))]).T).T[:, :3]
             total += world.sum(axis=0)
             count += len(world)
-        return None if count == 0 else total / count
+        centre = None if count == 0 else total / count
+        self._centre_memo = (key, centre)
+        return centre
+
+    @staticmethod
+    def _obj_key(doc: Any, uid: int) -> tuple:
+        """The identity triple-plus-mesh that pins one object's geometry."""
+        try:
+            obj = doc.by_uid(uid)
+        except KeyError:
+            return ()
+        return (id(obj.mesh), id(obj.translation), id(obj.rotation), id(obj.scale))
 
     def world_bounds(self, doc: Any, *, selected_only: bool = False) -> tuple[Any, Any]:
-        """The world AABB over visible objects, or ``(None, None)`` if there are none."""
+        """The world AABB over visible objects, or ``(None, None)`` if there are none.
+
+        Memoized the way ``element_centre`` is (B27): the key names every
+        object's visibility, selection membership, mesh identity and transform
+        identities, so a miss happens exactly when the box can move.
+        """
+        key = (id(doc), tuple(
+            (
+                obj.uid, obj.visible, obj.uid in doc.selection,
+                id(obj.mesh), id(obj.translation), id(obj.rotation), id(obj.scale),
+            )
+            for obj in doc.objects
+        ))
+        memo = self._bounds_memo.get(selected_only)
+        if memo is not None and memo[0] == key:
+            return memo[1]
         lo = np.full(3, np.inf)
         hi = np.full(3, -np.inf)
         found = False
@@ -643,7 +744,9 @@ class ClayView:
             lo = np.minimum(lo, box[0])
             hi = np.maximum(hi, box[1])
             found = True
-        return (lo, hi) if found else (None, None)
+        out = (lo, hi) if found else (None, None)
+        self._bounds_memo[selected_only] = (key, out)
+        return out
 
     def _object_world_box(self, obj: Any) -> tuple[Any, Any] | None:
         from .clay import mesh as bm
@@ -654,7 +757,7 @@ class ClayView:
         corners = np.array(
             [[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
         )
-        matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+        matrix = self._world(obj)
         world = (matrix @ np.hstack([corners, np.ones((8, 1))]).T).T[:, :3]
         return world.min(axis=0), world.max(axis=0)
 
@@ -695,7 +798,7 @@ class ClayView:
             hit = picking.ray_object(
                 origin,
                 direction,
-                m3.compose(obj.translation, obj.rotation, obj.scale),
+                self._world(obj),
                 obj.mesh.positions.astype("f8"),
                 tris,
             )
@@ -732,7 +835,7 @@ class ClayView:
         obj = doc.by_uid(uid)
         width, height = int(max(self._rect[2], 1)), int(max(self._rect[3], 1))
         self.camera.aspect = width / max(height, 1)
-        matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+        matrix = self._world(obj)
         key = (
             id(obj.mesh),
             matrix.tobytes(),
@@ -822,6 +925,10 @@ class ClayView:
         """
         import pygame
 
+        # Any event that reaches the viewport can move the picture: a press
+        # starts a drag or a marquee, motion re-hovers an element, a wheel
+        # dollies. Cheaper to redraw one frame than to enumerate which.
+        self._render_dirty = True
         local = self._local(event)
         if event.type == pygame.MOUSEBUTTONDOWN and hovered:
             return self._press(doc, event.button, local)
@@ -1082,7 +1189,7 @@ class ClayView:
             verts = el.affected_verts(obj.mesh, sel)
             if not len(verts):
                 continue
-            matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+            matrix = self._world(obj)
             try:
                 inverse = np.linalg.inv(matrix)
             except np.linalg.LinAlgError:

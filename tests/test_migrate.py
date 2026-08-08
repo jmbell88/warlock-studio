@@ -258,12 +258,17 @@ def test_a_v4_db_gains_verdict_context_and_the_observations_table(tmp_path):
     fresh_shape, fresh_version, fresh_indexes = shape(fresh_path)
     assert migrated_shape == fresh_shape
     assert migrated_version == fresh_version == len(MIGRATIONS)
-    # job_id only: it is the column the one read of the table groups by. There
-    # is deliberately no index on sweep_id -- nothing queries observations by
-    # sweep (the grouping happens in findings._comparisons, in Python, over the
-    # whole set), so it would be a B-tree maintained on every insert to answer
-    # a question nobody asks.
-    assert migrated_indexes == fresh_indexes == {"idx_observations_job"}
+    # (job_id) and (job_id, id): the second serves latest_observations'
+    # MAX(id) GROUP BY job_id as an index-only scan (migration 8). There is
+    # still deliberately no index on sweep_id -- nothing queries observations
+    # by sweep (the grouping happens in findings._comparisons, in Python, over
+    # the whole set), so it would be a B-tree maintained on every insert to
+    # answer a question nobody asks.
+    assert (
+        migrated_indexes
+        == fresh_indexes
+        == {"idx_observations_job", "idx_observations_latest"}
+    )
 
 
 def test_a_v3_db_gains_the_sweep_columns_and_the_new_tables(tmp_path):

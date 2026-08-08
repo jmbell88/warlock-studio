@@ -19,10 +19,18 @@ from collections.abc import Callable
 from typing import Any
 
 from ..service import jobs as svc_jobs
+from ..service.files import dir_size
 
 log = logging.getLogger(__name__)
 
 REFRESH_SECONDS = 0.5
+# The poll while nothing is queued or running (L102): the list can only change
+# through this UI, and everything the UI does calls ``invalidate`` -- so the
+# slow tick is a backstop against a missed invalidation, not the signal path.
+IDLE_REFRESH_SECONDS = 3.0
+# How often COUNT(*) is re-run while the page is full (A3). When the page is
+# not full the count is exact for free (total == len(jobs)).
+COUNT_SECONDS = 5.0
 LIST_LIMIT = 200
 
 
@@ -41,7 +49,16 @@ class JobsCache:
         self.error: str | None = None
         self._last_status: dict[str, str] = {}
         self._next_refresh = 0.0
+        self._next_count = 0.0
         self._dirty = True
+        # Bumped every time ``jobs`` is replaced -- the key the per-generation
+        # memos below (visible, failures) hang off.
+        self._generation = 0
+        self._visible_memo: tuple[Any, list[dict[str, Any]]] | None = None
+        self._failures_memo: tuple[Any, int] | None = None
+        # {job dir name: bytes} from the last full walk, so a finished job can
+        # fold its own directory back in without re-walking everything (C33).
+        self._dir_sizes: dict[str, int] = {}
         # {job_id: ((status, dir mtime), names)} for attach_files -- the frame
         # loop's largest syscall cost, and the one that grew without limit as
         # "load more" widened the window. Pruned to the page below, so it can
@@ -69,8 +86,8 @@ class JobsCache:
         now = time.monotonic()
         if not self._dirty and now < self._next_refresh:
             return False
+        was_dirty = self._dirty
         self._dirty = False
-        self._next_refresh = now + REFRESH_SECONDS
         try:
             jobs = svc_jobs.list_jobs(self.svc, self.limit, files_cache=self._files)
         except Exception as exc:  # a locked DB, a vanished file
@@ -79,16 +96,28 @@ class JobsCache:
             return False
         self.error = None
         self.jobs = jobs
+        self._generation += 1
+        # Adaptive cadence (L102): fast only while a job is live -- that is the
+        # only time a row can change without the UI having called invalidate.
+        live = any(j.get("status") in ("queued", "running") for j in jobs)
+        self._next_refresh = now + (REFRESH_SECONDS if live else IDLE_REFRESH_SECONDS)
         # Whatever fell off the page cannot be asked for again without a
         # re-read, so its entry is dead weight.
         if len(self._files) > len(jobs):
-            live = {j["id"] for j in jobs}
-            self._files = {k: v for k, v in self._files.items() if k in live}
-        try:
-            self.total = self.svc.store.count()
-        except Exception:  # a count is not worth failing the refresh over
-            log.exception("could not count the job list")
+            live_ids = {j["id"] for j in jobs}
+            self._files = {k: v for k, v in self._files.items() if k in live_ids}
+        # COUNT(*) only when it can disagree with len(jobs) (A3): a page that
+        # is not full *is* the whole history. A full page re-counts on a longer
+        # cadence, and immediately after anything the UI did (invalidate).
+        if len(jobs) < self.limit:
             self.total = len(jobs)
+        elif was_dirty or now >= self._next_count:
+            self._next_count = now + COUNT_SECONDS
+            try:
+                self.total = self.svc.store.count()
+            except Exception:  # a count is not worth failing the refresh over
+                log.exception("could not count the job list")
+                self.total = len(jobs)
         self.by_id = {j["id"]: j for j in jobs}
         if on_transition is not None:
             for job in jobs:
@@ -99,31 +128,79 @@ class JobsCache:
         return True
 
     def refresh_storage(self) -> None:
-        """Measure the data directory now. **Blocking** -- startup only.
-
-        ``svc_jobs.storage`` walks and stats every file under every job
-        directory, which is tens of milliseconds on a workshop with a few
-        hundred assets and grows from there. During the run it is dispatched to
-        a task thread instead (``App._request_storage``); this stays for the
-        one call made before the frame loop exists.
-        """
+        """Measure the data directory now. **Blocking** -- callers off the
+        frame thread only; the app submits :meth:`measure` as a task instead
+        (the startup call this used to serve is deferred too, C32)."""
         self.storage = self.measure()
 
     def measure(self) -> Any:
-        """The measurement itself, safe to call from a task thread."""
+        """The full measurement, safe to call from a task thread.
+
+        Decomposed per job directory so :meth:`measure_one` can later fold a
+        single finished job back in without re-walking the whole tree.
+        """
         try:
-            return svc_jobs.storage(self.svc)
+            sizes = svc_jobs.storage_sizes(self.svc)
         except Exception:
             log.exception("could not measure storage")
             return self.storage
+        self._dir_sizes = sizes
+        return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
+
+    def measure_one(self, job_id: str) -> Any:
+        """Incremental storage accounting (C33): re-measure one job directory.
+
+        Sound because job directories are disjoint: only this job's entry can
+        have changed when this job finished. Falls back to the full walk when
+        no baseline exists yet -- adding one directory to a total that was
+        never measured would present a single job as the whole workshop.
+        """
+        if not self._dir_sizes:
+            return self.measure()
+        try:
+            path = self.svc.job_dir(job_id)
+            size = dir_size(path)
+            sizes = self._dir_sizes
+            if size or path.exists():
+                sizes[path.name] = size
+            else:
+                sizes.pop(path.name, None)
+        except Exception:
+            log.exception("could not measure job dir %s", job_id)
+            return self.storage
+        return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
     # -- queries -----------------------------------------------------------
 
     def get(self, job_id: str | None) -> dict[str, Any] | None:
         return None if job_id is None else self.by_id.get(job_id)
 
+    def _filters_key(self, filters: Any) -> Any:
+        """A hashable snapshot: the generation plus every filter field. The
+        fields are strings and bools, so ``vars`` is the whole state."""
+        return (self._generation, tuple(sorted(vars(filters).items())))
+
     def visible(self, filters: Any) -> list[dict[str, Any]]:
-        return filters.order([j for j in self.jobs if filters.matches(j)])
+        """The filtered, ordered list -- memoized per (list generation,
+        filter state), because the library recomputes it every frame (B19)."""
+        key = self._filters_key(filters)
+        memo = self._visible_memo
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        out = filters.order([j for j in self.jobs if filters.matches(j)])
+        self._visible_memo = (key, out)
+        return out
+
+    def failures(self, filters: Any) -> int:
+        """``filters.failures`` over the loaded page, memoized like
+        :meth:`visible` and for the same reason."""
+        key = self._filters_key(filters)
+        memo = self._failures_memo
+        if memo is not None and memo[0] == key:
+            return memo[1]
+        count = filters.failures(self.jobs)
+        self._failures_memo = (key, count)
+        return count
 
     @property
     def active(self) -> dict[str, Any] | None:

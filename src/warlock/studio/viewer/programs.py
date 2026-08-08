@@ -457,7 +457,11 @@ class ProgramCache:
         self._cache: dict[tuple[str, tuple[str, ...]], Any] = {}
 
     def get(self, name: str, defines: tuple[str, ...] = ()) -> Any:
-        key = (name, tuple(sorted(defines)))
+        # ``defines`` must already be canonical (sorted): GpuPrimitive sorts
+        # its tuple once at build time (B16), so re-sorting here per draw per
+        # primitive would pay the canonicalisation 60 times a second for
+        # tuples that never change.
+        key = (name, defines)
         program = self._cache.get(key)
         if program is None:
             vert, frag = SOURCES[name]

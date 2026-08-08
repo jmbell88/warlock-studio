@@ -258,3 +258,41 @@ def test_a_degenerate_zoom_draws_nothing_rather_than_dividing_by_it():
     verts, cum = _one([SQUARE])
     starts, _, lit = ants.dash_segments(verts, cum, zoom=0.0, offset=(0.0, 0.0), phase=0.0)
     assert len(starts) == 0 and len(lit) == 0
+
+
+# --- viewport culling (B23) --------------------------------------------------
+
+
+def test_cull_keeps_only_runs_touching_the_rect_and_never_reorders():
+    verts, cum = _one([SQUARE])
+    starts, ends, lit = ants.dash_segments(verts, cum, 10.0, (0.0, 0.0), 0.0)
+    # A rectangle covering everything keeps every run, identically.
+    all_kept = ants.cull(starts, ends, lit, (-100.0, -100.0, 1000.0, 1000.0))
+    assert np.array_equal(all_kept[0], starts)
+    assert np.array_equal(all_kept[1], ends)
+    assert np.array_equal(all_kept[2], lit)
+    # A rectangle over the left half drops every run wholly to its right,
+    # keeps every run touching it, and preserves order among survivors.
+    left = (-1.0, -1.0, 15.0, 100.0)
+    ks, ke, kl = ants.cull(starts, ends, lit, left)
+    assert 0 < len(ks) < len(starts)
+    for a, b in zip(ks, ke, strict=True):
+        assert min(a[0], b[0]) <= 15.0
+    # Nothing visible: everything is culled.
+    es, ee, el = ants.cull(starts, ends, lit, (500.0, 500.0, 600.0, 600.0))
+    assert len(es) == len(ee) == len(el) == 0
+
+
+def test_cull_is_conservative_about_touching_runs():
+    """A run crossing the rect boundary is kept -- dropping it would clip the
+    visible outline short."""
+    starts = np.array([[0.0, 0.0], [20.0, 0.0]])
+    ends = np.array([[10.0, 0.0], [30.0, 0.0]])
+    lit = np.array([True, False])
+    ks, _ke, kl = ants.cull(starts, ends, lit, (5.0, -1.0, 6.0, 1.0))
+    assert len(ks) == 1 and bool(kl[0]) is True
+
+
+def test_loop_box_is_the_canvas_space_aabb():
+    verts, _cum = _one([SQUARE])
+    assert ants.loop_box(verts) == (0.0, 0.0, 3.0, 3.0)

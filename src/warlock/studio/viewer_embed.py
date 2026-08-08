@@ -70,6 +70,12 @@ class Viewer:
         self._last_mouse = (0.0, 0.0)
         # A reference image is shown as a plain texture rather than as geometry.
         self.reference: Any = None
+        # Redraw bookkeeping (B12/B14): the scene is redrawn when anything
+        # marked it dirty, when the camera is still gliding, in pose mode
+        # (gizmo hover changes without a state write), or when the draw's own
+        # inputs (size, wireframe, compare) differ from the last frame's.
+        self._render_dirty = True
+        self._last_render_key: Any = None
         # The GLB a parse has been dispatched for but not yet adopted. Held so
         # the timer that dispatched it does not dispatch it again on every tick
         # until the result lands, and so nothing else decides the viewer is
@@ -108,6 +114,7 @@ class Viewer:
         # editor with unsaved rotations in it, bypassing ``pose_panel.guard``,
         # the confirm every other way out of the editor goes through.
         self.pending = None
+        self._render_dirty = True
         self.model, self.gpu, self.path = model, gpu, Path(path)
         self.placement = scenelib.placement(model)
         self.clear_reference()
@@ -126,6 +133,7 @@ class Viewer:
         self.adopt_model(self.parse_model(path), path)
 
     def clear(self) -> None:
+        self._render_dirty = True
         self._release_model()
         self.exit_pose_mode()
         self.model = self.gpu = self.path = None
@@ -172,15 +180,15 @@ class Viewer:
         )
         return {
             "triangles": self.model.triangle_count,
-            "vertices": sum(
-                len(p.positions) for prims in self.model.meshes for p in prims
-            ),
+            # Cached on the immutable model (B18) -- this runs every frame.
+            "vertices": self.model.vertex_count,
             "size": tuple(float(v) for v in size),
         }
 
     # -- camera ------------------------------------------------------------
 
     def frame(self) -> float:
+        self._render_dirty = True
         if self.model is None:
             return 0.0
         lo, hi = self._world_bounds()
@@ -198,15 +206,18 @@ class Viewer:
 
     def set_wireframe(self, on: bool) -> None:
         self.wireframe = bool(on)
+        self._render_dirty = True
 
     def set_turntable(self, on: bool) -> None:
         # OrbitControls' own autoRotate, not a rotation of the model: rotating
         # the model would move the thing the markers are positioned against.
         self.camera.auto_rotate = bool(on)
+        self._render_dirty = True
 
     # -- compare -----------------------------------------------------------
 
     def compare(self, path: Path) -> None:
+        self._render_dirty = True
         model = gltf.load(path)
         gpu = scenelib.GpuModel(self.ctx, model)
         self.exit_compare()
@@ -217,6 +228,7 @@ class Viewer:
             self.compare_viewport = glctx.Viewport(self.ctx, (16, 16))
 
     def exit_compare(self) -> None:
+        self._render_dirty = True
         if self.compare_gpu is not None:
             self.compare_gpu.release()
         self.compare_gpu = self.compare_model = None
@@ -245,9 +257,11 @@ class Viewer:
         self.editor.fitted = list((rig or {}).get("bones") or [])
         self.pose_mode = True
         self.pose_job_id = job_id
+        self._render_dirty = True
         return True
 
     def exit_pose_mode(self) -> None:
+        self._render_dirty = True
         self.pose_mode = False
         self.pose_job_id = None
         self.rotate_gizmo.end_drag()
@@ -278,6 +292,7 @@ class Viewer:
         self._after_pose_change()
 
     def _after_pose_change(self) -> None:
+        self._render_dirty = True
         if self.gpu is not None:
             self.gpu.refresh_palettes()
         if self.on_pose_dirty is not None:
@@ -304,9 +319,28 @@ class Viewer:
     # -- rendering ---------------------------------------------------------
 
     def render(self, rect: tuple[float, float, float, float], dt: float) -> Any:
-        """Draw one frame into the viewport. -> the resolved texture."""
+        """Draw one frame into the viewport. -> the resolved texture.
+
+        Skipped entirely -- the last resolved texture is returned as-is --
+        when nothing that feeds the draw has changed (B12; the compare half
+        rides on the same skip, B14). Every mutating entry point sets
+        ``_render_dirty``; the camera answers for itself via ``settled``; and
+        pose mode always redraws, because gizmo hover moves with the mouse
+        without writing any state this key could see.
+        """
         self._rect = rect
         width, height = int(max(rect[2], 1)), int(max(rect[3], 1))
+        key = (width, height, bool(self.wireframe), self.comparing)
+        if (
+            not self._render_dirty
+            and key == self._last_render_key
+            and not self.pose_mode
+            and self.camera.settled()
+            and self.viewport.texture is not None
+        ):
+            return self.viewport.texture
+        self._last_render_key = key
+        self._render_dirty = False
         self._resize(self.viewport, width, height)
         self.camera.update(dt)
         self.renderer.draw(
@@ -456,6 +490,9 @@ class Viewer:
         """
         import pygame
 
+        # Any event that reaches the viewer can move the picture: a press
+        # starts a drag, motion orbits or re-hovers a gizmo, a wheel dollies.
+        self._render_dirty = True
         local = self._local(event)
         if event.type == pygame.MOUSEBUTTONDOWN and hovered:
             return self._press(event.button, local)

@@ -41,19 +41,37 @@ class GpuMaterial:
     convention lives.
     """
 
-    def __init__(self, ctx: moderngl.Context, material: Material) -> None:
+    def __init__(
+        self,
+        ctx: moderngl.Context,
+        material: Material,
+        texture_cache: dict[int, moderngl.Texture] | None = None,
+    ) -> None:
+        """``texture_cache`` de-duplicates uploads by decoded buffer (D40):
+        keyed on ``id(pixels)``, which is sound because the loader decodes
+        each glTF image source once and shares the bytes object, and the
+        Model keeps those bytes alive for as long as this material exists. A
+        texture found in the cache is *borrowed* -- only the creator releases
+        it -- so two materials over one atlas cost one upload and one free.
+        """
         self.material = material
         self.textures: dict[str, moderngl.Texture] = {}
+        self._owned: list[moderngl.Texture] = []
         self.defines: list[str] = []
         for slot, define, _uniform, _srgb in TEXTURE_SLOTS:
             data = getattr(material, slot)
             if data is None:
                 continue
             width, height, pixels = data
-            texture = ctx.texture((width, height), 4, pixels)
-            texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
-            texture.build_mipmaps()
-            texture.anisotropy = min(8.0, ctx.max_anisotropy)
+            texture = None if texture_cache is None else texture_cache.get(id(pixels))
+            if texture is None:
+                texture = ctx.texture((width, height), 4, pixels)
+                texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+                texture.build_mipmaps()
+                texture.anisotropy = min(8.0, ctx.max_anisotropy)
+                self._owned.append(texture)
+                if texture_cache is not None:
+                    texture_cache[id(pixels)] = texture
             self.textures[slot] = texture
             self.defines.append(define)
 
@@ -80,8 +98,12 @@ class GpuMaterial:
             program["u_alpha_mask"].value = {"MASK": 1, "BLEND": 2}.get(mat.alpha_mode, 0)
 
     def release(self) -> None:
-        for texture in self.textures.values():
+        # Only what this material created: a texture borrowed from the shared
+        # cache belongs to the material that uploaded it, and a double release
+        # frees a GL name the driver may already have reissued.
+        for texture in self._owned:
             texture.release()
+        self._owned.clear()
         self.textures.clear()
 
 
@@ -127,7 +149,11 @@ class GpuPrimitive:
 
         self.vbo = ctx.buffer(self._interleave(columns, count))
         self.ibo = ctx.buffer(np.ascontiguousarray(primitive.indices, "u4").tobytes())
-        self.defines = tuple(material.defines + (["SKINNED"] if self.skinned else []))
+        # Sorted here, once, so ProgramCache.get can key on the tuple as-is
+        # instead of canonicalising it per draw call (B16).
+        self.defines = tuple(
+            sorted(material.defines + (["SKINNED"] if self.skinned else []))
+        )
         self._vaos: dict[int, moderngl.VertexArray] = {}
 
     @staticmethod
@@ -227,6 +253,12 @@ class GpuModel:
         self.model = model
         self.materials: list[GpuMaterial] = []
         self._by_material: dict[int, GpuMaterial] = {}
+        # Shared across this model's materials so one decoded buffer is one
+        # GPU texture (D40). Lives here so it dies with the model.
+        self._texture_cache: dict[int, moderngl.Texture] = {}
+        # Per-node normal matrices, keyed on the world matrix's bytes (B15):
+        # recomputed only when a pose actually moves the node.
+        self._normal_cache: dict[int, tuple[bytes, bytes]] = {}
         self.draws: list[tuple[Node, GpuPrimitive]] = []
         over_budget = False
         for node, primitives in model.mesh_instances():
@@ -250,10 +282,28 @@ class GpuModel:
         key = id(material)
         gpu = self._by_material.get(key)
         if gpu is None:
-            gpu = GpuMaterial(self.ctx, material)
+            gpu = GpuMaterial(self.ctx, material, self._texture_cache)
             self._by_material[key] = gpu
             self.materials.append(gpu)
         return gpu
+
+    def normal_matrix_bytes(self, node: Node, world: np.ndarray) -> bytes:
+        """The GL bytes of ``inv(world[:3,:3]).T``, cached per node (B15).
+
+        The identity fallback keeps a zero-scaled node from raising out of
+        the draw, exactly as the inline version did.
+        """
+        world_key = world.tobytes()
+        hit = self._normal_cache.get(id(node))
+        if hit is not None and hit[0] == world_key:
+            return hit[1]
+        try:
+            normal_matrix = np.linalg.inv(world[:3, :3]).T
+        except np.linalg.LinAlgError:
+            normal_matrix = np.eye(3)
+        out = np.ascontiguousarray(normal_matrix.T, dtype="f4").tobytes()
+        self._normal_cache[id(node)] = (world_key, out)
+        return out
 
     def refresh_palettes(self) -> None:
         """Recompute the joint matrices for every skinned node."""
@@ -280,6 +330,8 @@ class GpuModel:
         self.draws.clear()
         self.materials.clear()
         self._by_material.clear()
+        self._texture_cache.clear()
+        self._normal_cache.clear()
 
 
 def placement(model: Model) -> np.ndarray:

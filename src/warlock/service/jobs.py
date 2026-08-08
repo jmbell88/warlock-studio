@@ -511,6 +511,13 @@ def storage(svc: WarlockService) -> dict[str, Any]:
     return measure_storage(svc.config.data_dir)
 
 
+def storage_sizes(svc: WarlockService) -> dict[str, int]:
+    """The same walk, per job directory -- what incremental accounting needs."""
+    from .files import storage_sizes as _sizes
+
+    return _sizes(svc.config.data_dir)
+
+
 def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
     """Delete everything but the newest ``keep`` jobs. Never touches a running one."""
     if keep < 0:

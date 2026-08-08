@@ -43,6 +43,14 @@ def draw(ctx: Any) -> None:
     # is checked, so the reservation has to change with it or the list either
     # overlaps the footer or floats above a gap.
     height = -sp(96) if ctx.state.checked else -sp(34)
+    # Hoisted out of the card loop (B20): each queued card used to rebuild the
+    # whole reversed-list scan to learn its own position.
+    queue_pos = {
+        job_id: i + 1
+        for i, job_id in enumerate(
+            j["id"] for j in reversed(ctx.cache.jobs) if j.get("status") == "queued"
+        )
+    }
     if imgui.begin_child("library-list", (0, height)):
         if not jobs:
             widgets.empty_state(
@@ -53,7 +61,7 @@ def draw(ctx: Any) -> None:
                 else "Loosen the filters above.",
             )
         for job in jobs:
-            _card(ctx, job)
+            _card(ctx, job, queue_pos)
         _load_more(ctx)
     imgui.end_child()
     _bulk(ctx, jobs)
@@ -163,7 +171,7 @@ def _failures(ctx: Any) -> None:
     filters = ctx.state.filters
     if filters.status == "error":
         return
-    count = filters.failures(ctx.cache.jobs)
+    count = ctx.cache.failures(filters)
     if not count:
         return
     label = "1 job failed" if count == 1 else f"{count} jobs failed"
@@ -198,7 +206,7 @@ def _select_all(ctx: Any, jobs: list[Any]) -> None:
 # --- cards ------------------------------------------------------------------
 
 
-def _card(ctx: Any, job: Any) -> None:
+def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     state = ctx.state
     job_id = job["id"]
     selected = state.selected == job_id
@@ -207,7 +215,7 @@ def _card(ctx: Any, job: Any) -> None:
         imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
     origin = imgui.get_cursor_screen_pos()
     if imgui.begin_child("card", (0, sp(CARD_HEIGHT)), imgui.ChildFlags_.borders.value):
-        _card_body(ctx, job)
+        _card_body(ctx, job, queue_pos)
     imgui.end_child()
     if selected:
         imgui.pop_style_color()
@@ -225,7 +233,7 @@ def _card(ctx: Any, job: Any) -> None:
     imgui.pop_id()
 
 
-def _card_body(ctx: Any, job: Any) -> None:
+def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     job_id = job["id"]
     texture = None
     if ctx.textures is not None and "thumb.png" in (job.get("files") or []):
@@ -259,10 +267,17 @@ def _card_body(ctx: Any, job: Any) -> None:
             )
     if job["status"] == "queued":
         # Where in line it is: the queue used to be invisible past the pill.
-        waiting = [j["id"] for j in reversed(ctx.cache.jobs) if j.get("status") == "queued"]
-        if job_id in waiting:
+        if queue_pos is None:
+            queue_pos = {
+                jid: i + 1
+                for i, jid in enumerate(
+                    j["id"] for j in reversed(ctx.cache.jobs) if j.get("status") == "queued"
+                )
+            }
+        position = queue_pos.get(job_id)
+        if position is not None:
             imgui.same_line()
-            widgets.muted(f"#{waiting.index(job_id) + 1} in queue")
+            widgets.muted(f"#{position} in queue")
     if job.get("parent_id"):
         imgui.same_line()
         widgets.muted("| from a reference")

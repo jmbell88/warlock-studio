@@ -234,7 +234,11 @@ class TrellisServer:
                             self._start_failures = 0
                             self._backoff_until = 0.0
                             return
-                    await asyncio.sleep(1.0)
+                    # 0.1 s, not 1.0 (C35): the server flips healthy between
+                    # polls, and every startup used to donate up to a second
+                    # of dead air to the first job. A refused connection costs
+                    # microseconds, so the tighter loop is nearly free.
+                    await asyncio.sleep(0.1)
             self.stop()
             self._note_start_failure()
             raise RuntimeError("trellis-server did not become healthy in time")
@@ -313,7 +317,9 @@ class TrellisServer:
         while time.monotonic() < deadline:
             if not _port_in_use(self._port):
                 return
-            await asyncio.sleep(0.25)
+            # 50 ms (C36): the kernel tears the socket down almost immediately
+            # after TerminateProcess, and the whole respawn waits on this.
+            await asyncio.sleep(0.05)
         self._note_start_failure()
         raise RuntimeError(
             f"port {self._port} is still held after terminating pid {pid}"

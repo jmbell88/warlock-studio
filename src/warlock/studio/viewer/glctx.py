@@ -82,6 +82,17 @@ class Viewport:
             self.ctx.copy_framebuffer(self._resolve, self._msaa)
         return self.texture
 
+    def read_raw(self) -> bytes:
+        """The resolved pixels as GL hands them back: RGBA8, bottom row first.
+
+        For consumers that can fold the row flip into their own decode
+        (Pillow's raw loader takes a negative orientation), so the numpy
+        reshape-flip-copy in :meth:`read_rgba` is not paid twice (D41).
+        """
+        assert self._resolve is not None
+        self.resolve()
+        return self._resolve.read(components=4, alignment=1)
+
     def read_rgba(self) -> np.ndarray:
         """-> (h, w, 4) uint8, top row first.
 

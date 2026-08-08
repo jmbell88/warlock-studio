@@ -381,23 +381,42 @@ def _check_pixels(data: bytes) -> None:
         raise TooLarge(f"image is {width}x{height}; the limit is {MAX_IMAGE_PIXELS:,} pixels")
 
 
+def dir_size(path: Path) -> int:
+    """One directory's recursive byte count; 0 when it does not exist."""
+    total = 0
+    try:
+        walk = path.rglob("*")
+    except OSError:
+        return 0
+    for f in walk:
+        # Symlinks and vanishing files (a concurrent delete) shouldn't
+        # abort the whole measurement.
+        with contextlib.suppress(OSError):
+            if f.is_file():
+                total += f.stat().st_size
+    return total
+
+
+def storage_sizes(data_dir: Path) -> dict[str, int]:
+    """``{directory name: bytes}`` for every job directory under data_dir.
+
+    The decomposed form of :func:`measure_storage`, kept so an incremental
+    accounting (a job finishing re-measures its own directory only) shares
+    the walk with the full one rather than restating it.
+    """
+    sizes: dict[str, int] = {}
+    if data_dir.exists():
+        for entry in data_dir.iterdir():
+            if entry.is_dir():
+                sizes[entry.name] = dir_size(entry)
+    return sizes
+
+
 def measure_storage(data_dir: Path) -> dict[str, Any]:
     """Total bytes and directory count under data_dir. Blocking; call off the
     frame thread."""
-    total = 0
-    dirs = 0
-    if data_dir.exists():
-        for entry in data_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            dirs += 1
-            for f in entry.rglob("*"):
-                # Symlinks and vanishing files (a concurrent delete) shouldn't
-                # abort the whole measurement.
-                with contextlib.suppress(OSError):
-                    if f.is_file():
-                        total += f.stat().st_size
-    return {"job_dirs": dirs, "bytes": total}
+    sizes = storage_sizes(data_dir)
+    return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
 
 # Everything that is a pure function of model.glb: derivable exactly when

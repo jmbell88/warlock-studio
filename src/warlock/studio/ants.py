@@ -136,6 +136,45 @@ def dash_segments(
     return _merge_runs(head, tail, lit)
 
 
+def cull(
+    starts: np.ndarray,
+    ends: np.ndarray,
+    lit: np.ndarray,
+    rect: tuple[float, float, float, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep only the runs whose AABB touches ``rect`` (screen space).
+
+    ``rect`` is ``(left, top, right, bottom)``. The pane calls this before its
+    per-run ``add_line`` loop -- the one irreducible Python loop the ants have
+    -- so a selection mostly off screen costs only its visible edge (B23).
+    Pure and conservative: a run is dropped only when its box provably misses
+    the rectangle, so drawing the survivors reproduces the visible outline
+    exactly.
+    """
+    if len(starts) == 0:
+        return starts, ends, lit
+    left, top, right, bottom = rect
+    xs = np.minimum(starts[:, 0], ends[:, 0])
+    xe = np.maximum(starts[:, 0], ends[:, 0])
+    ys = np.minimum(starts[:, 1], ends[:, 1])
+    ye = np.maximum(starts[:, 1], ends[:, 1])
+    keep = (xe >= left) & (xs <= right) & (ye >= top) & (ys <= bottom)
+    if keep.all():
+        return starts, ends, lit
+    return starts[keep], ends[keep], lit[keep]
+
+
+def loop_box(verts: np.ndarray) -> tuple[float, float, float, float]:
+    """A loop's canvas-space AABB ``(x0, y0, x1, y1)``, computed once beside
+    ``prepare``'s output so the per-frame pre-filter (B23) is four floats."""
+    return (
+        float(verts[:, 0].min()),
+        float(verts[:, 1].min()),
+        float(verts[:, 0].max()),
+        float(verts[:, 1].max()),
+    )
+
+
 def _merge_runs(
     head: np.ndarray, tail: np.ndarray, lit: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

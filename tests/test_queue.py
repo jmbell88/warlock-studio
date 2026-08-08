@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from types import SimpleNamespace
@@ -1501,7 +1502,14 @@ def _seeded_glb_bytes(worker: Worker) -> None:
 
     async def generate(image_path, output_path, *, seed=42, **kwargs):
         result = await inner(image_path, output_path, seed=seed, **kwargs)
-        output_path.write_bytes(f"glb-{seed}".encode())
+        # Stage-and-rename, exactly as the real server client's _atomic_write
+        # does: every writer of source.glb replaces the directory entry rather
+        # than rewriting the inode, and the remesh staging hard-links against
+        # precisely that contract (C37). A bare write_bytes here would model a
+        # writer the app does not have -- and scribble through the link.
+        tmp = output_path.with_suffix(".glb.tmp")
+        tmp.write_bytes(f"glb-{seed}".encode())
+        os.replace(tmp, output_path)
         return result
 
     worker.trellis.generate = generate
@@ -1673,7 +1681,14 @@ async def test_a_failed_remesh_does_not_fail_a_job_that_already_had_a_mesh(
 
     async def generate(image_path, output_path, **kwargs):
         if w.trellis.generate_calls:
-            output_path.write_bytes(b"half-written")
+            # A failed run leaves *something untrusted* at source.glb. Written
+            # through a rename like every real writer (the client's
+            # _atomic_write never leaves a torn file, and the staging
+            # hard-links against exactly that contract, C37) -- but the bytes
+            # are garbage, which is what the restore must replace.
+            tmp = output_path.with_suffix(".glb.tmp")
+            tmp.write_bytes(b"failed-run-leftovers")
+            os.replace(tmp, output_path)
             raise RuntimeError("trellis-server died")
         return await inner(image_path, output_path, **kwargs)
 
@@ -1740,18 +1755,27 @@ async def test_a_cancel_during_a_retry_kills_the_server(
 async def test_a_failed_staging_copy_gives_up_on_retrying_rather_than_on_the_job(
     tmp_path, fake_pipelines, monkeypatch
 ):
-    # The retry is what doubled a job's peak on-disk footprint, so a full disk
-    # is the realistic way its copy fails -- and it must cost the retry, never
-    # the mesh that is already on disk.
+    # A failed staging must cost the retry, never the mesh that is already on
+    # disk. The staging is a hard link now (C37), so the realistic failures
+    # are a filesystem that refuses links *and* no room for the fallback copy
+    # -- both halves are refused here so the OSError actually escapes
+    # _stage_link rather than being absorbed by its fallback.
     import warlock.queue as queue_mod
 
     real = queue_mod.shutil.copyfile
+    real_link = queue_mod.os.link
+
+    def link(src, dst, *args, **kwargs):
+        if str(src).endswith("model.glb"):
+            raise OSError("links not supported here")
+        return real_link(src, dst, *args, **kwargs)
 
     def copyfile(src, dst, *args, **kwargs):
         if str(dst).endswith("best.glb"):
             raise OSError(28, "No space left on device")
         return real(src, dst, *args, **kwargs)
 
+    monkeypatch.setattr(queue_mod.os, "link", link)
     monkeypatch.setattr(queue_mod.shutil, "copyfile", copyfile)
     _audits(monkeypatch, [0.9])
     w, store = _retry_worker(tmp_path, mesh_retries=2, mesh_hole_max=0.1)

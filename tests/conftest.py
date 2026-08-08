@@ -6,6 +6,7 @@ testable without a GPU."""
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from pathlib import Path
@@ -172,7 +173,14 @@ class FakeTrellisServer:
         for _ in range(self.slices):
             await asyncio.sleep(self.sleep_per_slice)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"fake-glb")
+        # Stage-and-rename, matching the real client's _atomic_write: every
+        # writer of source.glb replaces the directory entry rather than
+        # rewriting the inode, and the remesh staging hard-links against that
+        # contract (C37) -- a fake that wrote in place would model a writer
+        # the app does not have and scribble through the link.
+        tmp = output_path.with_suffix(".glb.tmp")
+        tmp.write_bytes(b"fake-glb")
+        os.replace(tmp, output_path)
         self.last_used = time.monotonic()
         return output_path
 

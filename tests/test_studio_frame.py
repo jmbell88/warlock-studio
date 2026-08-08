@@ -55,7 +55,9 @@ def _fake_app(svc, cache, *, accept_submits: bool = True):
                 toast=lambda *a, **k: None,
             )
 
-        def _request_storage(self) -> None:
+        def _request_storage(self, job_id: str | None = None) -> None:
+            # job_id rides along since C33: a finished job re-measures only
+            # its own directory.
             self.calls.append("_request_storage")
 
         def _sync_viewer(self) -> None:

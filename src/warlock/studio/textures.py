@@ -38,6 +38,15 @@ class ThumbnailCache:
         self._touched: dict[tuple[str, float, bool], int] = {}
         self._retired: list[Any] = []
         self._frame = 0
+        # Per-key-string index over ``_entries``/``_missing`` (L101):
+        # ``_supersede`` used to scan every key in both on every insert, which
+        # made inserting into a big cache O(size) instead of O(versions of one
+        # key). Maintained beside every insert and removal below.
+        self._by_key: dict[str, set[tuple[str, float, bool]]] = {}
+        self._missing_by_key: dict[str, set[tuple[str, float, bool]]] = {}
+        # Frame-scoped stat() memo (B17): several panes ask for one thumbnail
+        # in one frame, and the file cannot change mid-frame meaningfully.
+        self._stats: dict[str, float | None] = {}
 
     def begin_frame(self) -> None:
         """Start a frame, releasing whatever last frame retired.
@@ -46,6 +55,7 @@ class ThumbnailCache:
         so anything evicted during it is finally safe to free.
         """
         self._frame += 1
+        self._stats.clear()
         retired, self._retired = self._retired, []
         for texture in retired:
             self._release_one(texture)
@@ -64,9 +74,16 @@ class ThumbnailCache:
         filter, and the failure -- a blurry pixel preview, or a crisp thumbnail
         somewhere else -- is silent and depends on which was decoded first.
         """
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
+        stat_key = str(path)
+        if stat_key in self._stats:
+            mtime = self._stats[stat_key]
+        else:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = None
+            self._stats[stat_key] = mtime
+        if mtime is None:
             return None
         key = (job_id, mtime, nearest)
         entry = self._entries.get(key)
@@ -79,11 +96,10 @@ class ThumbnailCache:
         texture = self._load(path, nearest)
         if texture is None:
             self._missing.add(key)
+            self._missing_by_key.setdefault(job_id, set()).add(key)
             return None
         self._supersede(job_id, mtime)
-        self._entries[key] = texture
-        self._touched[key] = self._frame
-        self._evict()
+        self._insert(key, texture)
         return texture
 
     def from_pixels(
@@ -115,9 +131,23 @@ class ThumbnailCache:
             log.debug("could not upload %s", key, exc_info=True)
             return None
         self._supersede(key, version)
-        self._entries[entry_key] = texture
-        self._touched[entry_key] = self._frame
+        self._insert(entry_key, texture)
+        return texture
+
+    def _insert(self, key: tuple[str, float, bool], texture: Any) -> None:
+        self._entries[key] = texture
+        self._touched[key] = self._frame
+        self._by_key.setdefault(key[0], set()).add(key)
         self._evict()
+
+    def _drop_entry(self, key: tuple[str, float, bool]) -> Any:
+        texture = self._entries.pop(key)
+        self._touched.pop(key, None)
+        keys = self._by_key.get(key[0])
+        if keys is not None:
+            keys.discard(key)
+            if not keys:
+                del self._by_key[key[0]]
         return texture
 
     def _supersede(self, job_id: str, mtime: float) -> None:
@@ -136,13 +166,16 @@ class ThumbnailCache:
         make two panes drawing one file at two samplings evict each other every
         frame.
         """
-        stale = [k for k in self._entries if k[0] == job_id and k[1] != mtime]
+        stale = [k for k in self._by_key.get(job_id, ()) if k[1] != mtime]
         for key in stale:
-            self._retired.append(self._entries.pop(key))
-            self._touched.pop(key, None)
-        self._missing.difference_update(
-            {k for k in self._missing if k[0] == job_id and k[1] != mtime}
-        )
+            self._retired.append(self._drop_entry(key))
+        missing = self._missing_by_key.get(job_id)
+        if missing:
+            gone = {k for k in missing if k[1] != mtime}
+            self._missing.difference_update(gone)
+            missing.difference_update(gone)
+            if not missing:
+                del self._missing_by_key[job_id]
 
     def _load(self, path: Path, nearest: bool = False) -> Any | None:
         from PIL import Image
@@ -176,8 +209,7 @@ class ThumbnailCache:
                 return
             if self._touched.get(key) == self._frame:
                 continue
-            self._retired.append(self._entries.pop(key))
-            self._touched.pop(key, None)
+            self._retired.append(self._drop_entry(key))
 
     def _release_one(self, texture: Any) -> None:
         """Drop the imgui backend's registration before freeing the texture.
@@ -203,3 +235,6 @@ class ThumbnailCache:
         self._retired.clear()
         self._touched.clear()
         self._missing.clear()
+        self._by_key.clear()
+        self._missing_by_key.clear()
+        self._stats.clear()

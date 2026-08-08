@@ -700,13 +700,29 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
     if step * view.zoom < 6.0:
         return
     width, height = size
-    for x in range(0, width + 1, step):
+    # Only the visible index range (B22): the canvas span intersected with
+    # the window, turned back into grid indices. A 16 px grid over a zoomed
+    # 4096 canvas used to walk all 257 columns to draw the dozen on screen.
+    win = imgui.get_window_pos()
+    wsz = imgui.get_window_size()
+    left = max(top_left[0], win.x)
+    right = min(bottom_right[0], win.x + wsz.x)
+    top = max(top_left[1], win.y)
+    bottom = min(bottom_right[1], win.y + wsz.y)
+    if left > right or top > bottom:
+        return
+    zoom = view.zoom
+    x_lo = max(0, int((left - top_left[0]) / zoom / step) * step)
+    x_hi = min(width, int((right - top_left[0]) / zoom) + step)
+    for x in range(x_lo, x_hi + 1, step):
         sx = inker_state.to_screen(view, origin, x, 0)[0]
-        if top_left[0] <= sx <= bottom_right[0]:
+        if left <= sx <= right:
             draw_list.add_line((sx, top_left[1]), (sx, bottom_right[1]), colour)
-    for y in range(0, height + 1, step):
+    y_lo = max(0, int((top - top_left[1]) / zoom / step) * step)
+    y_hi = min(height, int((bottom - top_left[1]) / zoom) + step)
+    for y in range(y_lo, y_hi + 1, step):
         sy = inker_state.to_screen(view, origin, 0, y)[1]
-        if top_left[1] <= sy <= bottom_right[1]:
+        if top <= sy <= bottom:
             draw_list.add_line((top_left[0], sy), (bottom_right[0], sy), colour)
 
 
@@ -743,7 +759,10 @@ def _contours(ctx: Any, tab: Any):
     mask = tab.doc.mask
     if cached is not None and cached[0] is mask:
         return cached[1]
-    loops = ants.prepare(mask.contours() if mask is not None else [])
+    prepared = ants.prepare(mask.contours() if mask is not None else [])
+    # The canvas-space AABB rides beside each loop (B23): a pure function of
+    # the mask too, so it belongs on this side of the cache.
+    loops = [(verts, cum, ants.loop_box(verts)) for verts, cum in prepared]
     ctx.state.preview[key] = (mask, loops)
     return loops
 
@@ -759,8 +778,23 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     offset = inker_state.to_screen(view, origin, 0.0, 0.0)
     phase = (time.monotonic() * ants.ANT_SPEED) % (ants.DASH * 2)
     light, dark = _u32(theme.TEXT), _u32(theme.BG)
-    for verts, cum in loops:
+    # The visible window, for the two culls below (B23): a whole loop whose
+    # box misses it is skipped before any dash arithmetic, and the runs of a
+    # loop that straddles it are masked before the per-run Python loop.
+    win = imgui.get_window_pos()
+    wsz = imgui.get_window_size()
+    clip = (win.x, win.y, win.x + wsz.x, win.y + wsz.y)
+    zoom = float(view.zoom)
+    for verts, cum, box in loops:
+        if (
+            box[0] * zoom + offset[0] > clip[2]
+            or box[2] * zoom + offset[0] < clip[0]
+            or box[1] * zoom + offset[1] > clip[3]
+            or box[3] * zoom + offset[1] < clip[1]
+        ):
+            continue
         starts, ends, on = ants.dash_segments(verts, cum, view.zoom, offset, phase)
+        starts, ends, on = ants.cull(starts, ends, on, clip)
         # One call per dash. imgui has no batched per-segment-colour API, so
         # this loop is irreducible -- but it is over dashes now rather than over
         # every unit lattice step, which at zoom 1 is six times fewer.

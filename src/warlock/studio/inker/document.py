@@ -301,12 +301,17 @@ class Document:
         do change every frame -- a grid edit, a matte, a whole-canvas geometry
         op, a snapshot restore -- say so themselves with ``_stamp_all``.
         """
-        self._below = self.stack.composite_below()
+        # The below-cache is dropped, not rebuilt (B28): passing no ``below``
+        # lets ``composite_region`` do one pass over the whole stack, where
+        # eagerly rebuilding ``_below`` first paid a second full-canvas pass
+        # over the lower layers on every structural change -- for a cache the
+        # next *stroke* rebuilds lazily anyway (see ``invalidate``).
+        self._below = None
         width, height = self.size
         if self._composite.shape[:2] != (height, width):
             self._composite = np.zeros((height, width, 4), dtype=np.uint8)
         self._composite[:] = cp.to_uint8(
-            self.stack.composite_region((0, 0, width, height), below=self._below)
+            self.stack.composite_region((0, 0, width, height))
         )
         self._full = True
         self._dirty = None

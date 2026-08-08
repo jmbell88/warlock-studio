@@ -147,6 +147,26 @@ class Camera:
         self.distance += (self._goal_distance - self.distance) * alpha
         self.target = self.target + (self._goal_target - self.target) * alpha
 
+    def settled(self) -> bool:
+        """Whether damping has effectively converged.
+
+        The lerp is asymptotic and never *exactly* reaches its goals, so
+        "still moving" needs an epsilon (B11/B12). The angular tolerance is
+        ~0.06 deg -- a fraction of a pixel at any sane viewport size -- and
+        the distance/target tolerances scale with the distance, because a
+        millimetre matters on a gem and not on a building. Auto-rotate is
+        never settled: its goal moves every frame by definition.
+        """
+        if self.auto_rotate:
+            return False
+        scale = max(self.distance, 1e-6) * 1e-3
+        return (
+            abs(self._goal_theta - self.theta) < 1e-3
+            and abs(self._goal_phi - self.phi) < 1e-3
+            and abs(self._goal_distance - self.distance) < scale
+            and float(np.max(np.abs(self._goal_target - self.target))) < scale
+        )
+
     def copy_from(self, other: Camera) -> None:
         """Mirror another camera exactly. The compare view's whole point is
         that both halves are seen from the identical angle, so the second

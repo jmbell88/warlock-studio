@@ -132,7 +132,22 @@ class WarlockService:
         return job
 
     def attach_progress(self, job: dict[str, Any]) -> None:
-        """Live progress, only ever for the job actually running."""
-        job["progress"] = (
-            self.worker.progress.snapshot(job["id"]) if self.worker is not None else None
-        )
+        """Live progress, only ever for the job actually running.
+
+        Short-circuited on ``worker.current_job_id`` (a plain attribute read)
+        before touching the bus: ``list_jobs`` calls this once per row, and
+        without the check a 200-row page took the ProgressBus lock 200 times
+        to be told "not that job" 199 of them. Only a worker *known to be on
+        another job* skips the bus -- ``current_job_id`` unset falls through
+        to ``snapshot``, which verifies the id itself, so the gate can only
+        ever skip work, not misattribute it.
+        """
+        worker = self.worker
+        if worker is None:
+            job["progress"] = None
+            return
+        current = getattr(worker, "current_job_id", None)
+        if current is not None and current != job["id"]:
+            job["progress"] = None
+            return
+        job["progress"] = worker.progress.snapshot(job["id"])

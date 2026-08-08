@@ -50,9 +50,16 @@ def cached_checks(
             and now - cache.get("at", 0.0) < HEALTH_TTL
         ):
             return cache["checks"]
-    checks = doctor.run_checks(svc.config, trellis_running=trellis_running)
+        static = None if force else cache.get("static")
+    # The static half -- every path probe, the torch import, the bpy answer --
+    # is computed once and reused; a poll re-runs only the four volatile rows
+    # (port, disk, VRAM, job object). ``force`` recomputes everything, because
+    # its one caller knows the disk just changed (a finished download).
+    if static is None:
+        static = doctor.static_checks(svc.config)
+    checks = doctor.run_checks(svc.config, trellis_running=trellis_running, static=static)
     with _health_lock:
-        cache.update(at=now, running=trellis_running, checks=checks)
+        cache.update(at=now, running=trellis_running, checks=checks, static=static)
     return checks
 
 

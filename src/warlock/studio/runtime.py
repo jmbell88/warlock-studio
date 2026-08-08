@@ -86,19 +86,28 @@ class Runtime:
         # unclean shutdown -- surface it instead of silently re-running a
         # 2-minute GPU job on every launch.
         self.store.reconcile_startup()
-        self.checks = doctor.run_checks(self.config)
+        # The loop thread starts *before* doctor runs (C34): the two are
+        # independent, so the doctor's path probes and the loop's own spin-up
+        # overlap instead of queueing.
+        self._thread = threading.Thread(target=self._run_loop, name="warlock-loop", daemon=True)
+        self._thread.start()
+        # probe_slow=False keeps the two genuinely slow probes -- the torch
+        # import and the bpy subprocess -- off the startup path (C29/C30).
+        # Their rows say "still checking"; the header health poll's first tick
+        # re-runs them on a task thread and replaces ``checks`` atomically,
+        # which is the delivery path a mid-session change already uses.
+        self.checks = doctor.run_checks(self.config, probe_slow=False)
         for check in self.checks:
             if not check.ok:
                 level = log.critical if check.fatal else log.warning
                 level("doctor: %s -- %s", check.name, check.detail)
-        # Before the Worker exists, and after run_checks (which has already
-        # paid for the torch import). This is what preserves the documented
-        # "read once at startup" invariant: queue.py goes on reading a plain
-        # bool off the config and never learns that it was resolved.
+        # Before the Worker exists. vram.probe() reads the card without
+        # importing torch, so this stays cheap. This is what preserves the
+        # documented "read once at startup" invariant: queue.py goes on
+        # reading a plain bool off the config and never learns that it was
+        # resolved.
         self.vram_plan = self._resolve_vram()
 
-        self._thread = threading.Thread(target=self._run_loop, name="warlock-loop", daemon=True)
-        self._thread.start()
         self._ready.wait(10.0)
         if self._loop is None:
             raise RuntimeError("the worker loop did not start")

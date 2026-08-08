@@ -355,14 +355,20 @@ def create_sweep(svc: WarlockService, plan: SweepPlan) -> dict[str, Any]:
     sweep_id = svc.store.create_sweep(plan.label or "sweep", plan.prompt, spec)
     created: list[str] = []
     try:
-        for unit in units:
-            job = jobs_mod.create_job(
-                svc,
-                **unit_kwargs(plan, unit),
-                sweep_id=sweep_id,
-                sweep_unit=unit_label(unit),
-            )
-            created.append(job["id"])
+        # One commit for the whole batch (A10): the directory-before-row
+        # ordering inside create_job is untouched -- each unit's files still
+        # land before its row is inserted -- only the per-row fsync is
+        # deferred. The context manager commits in ``finally``, so the
+        # rollback below always sees whatever rows were created.
+        with svc.store.deferred_commits():
+            for unit in units:
+                job = jobs_mod.create_job(
+                    svc,
+                    **unit_kwargs(plan, unit),
+                    sweep_id=sweep_id,
+                    sweep_unit=unit_label(unit),
+                )
+                created.append(job["id"])
     except Exception:
         # Best-effort rollback, mirroring create_job's own cleanup: the
         # validation pass makes this unreachable for a *bad* unit, so anything

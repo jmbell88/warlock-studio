@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -242,6 +243,35 @@ MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE verdicts ADD COLUMN stage TEXT NOT NULL DEFAULT 'model'",
     ],
+    # 8 -- read-path indexes (NEXT_ROADMAP A4-A7). All additive, and all live
+    # here rather than in _SCHEMA for the reason idx_jobs_sweep does: several
+    # name columns (verdicts.stage, jobs.sweep_id) that a pre-existing table
+    # may not have when _SCHEMA's CREATE TABLE IF NOT EXISTS no-ops.
+    #
+    # * idx_verdicts_latest serves latest_verdicts/verdicts_for's
+    #   "MAX(id) GROUP BY job_id, source, stage" as an index-only scan.
+    # * idx_verdicts_source serves the NOT EXISTS probe in unverdicted_models
+    #   and unlabelled_references (source and stage first: the probe fixes
+    #   both and asks about one job_id).
+    # * idx_observations_latest serves latest_observations' MAX(id) per job.
+    # * idx_jobs_dispatch serves next_queued (status = 'queued' ORDER BY
+    #   created_at, id) and the status half of unverdicted_models.
+    # * idx_jobs_sweep becomes partial: almost every row has sweep_id NULL,
+    #   and carrying status makes list_sweeps' tally index-only. DROP + CREATE
+    #   is idempotent, so the replay converges on fresh and migrated DBs.
+    [
+        "CREATE INDEX IF NOT EXISTS idx_verdicts_latest"
+        " ON verdicts(job_id, source, stage, id)",
+        "CREATE INDEX IF NOT EXISTS idx_verdicts_source"
+        " ON verdicts(source, stage, job_id)",
+        "CREATE INDEX IF NOT EXISTS idx_observations_latest"
+        " ON observations(job_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_dispatch"
+        " ON jobs(status, created_at, id)",
+        "DROP INDEX IF EXISTS idx_jobs_sweep",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_sweep"
+        " ON jobs(sweep_id, status) WHERE sweep_id IS NOT NULL",
+    ],
 ]
 
 
@@ -307,12 +337,47 @@ class JobStore:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL + NORMAL: a commit stops paying two fsyncs (the WAL append needs
+        # none at NORMAL durability -- a power cut can lose the last commit,
+        # never corrupt the file), and readers stop blocking on writers. The
+        # frame thread reads this store directly, so both halves matter.
+        # journal_mode is persistent in the file; setting it again is a no-op.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
         _migrate(self._conn)
+        # ``list``'s params-JSON memo: raw params string -> parsed dict.
+        # Bounded and cleared wholesale; see ``_row_dict``.
+        self._params_cache: dict[str, dict[str, Any]] = {}
+        # When True, ``create`` skips its per-row commit and the caller commits
+        # once at the end -- see ``deferred_commits``.
+        self._defer_commits = False
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    @contextlib.contextmanager
+    def deferred_commits(self):
+        """Batch several ``create`` calls into one commit.
+
+        For sweep submission: N units are N inserts, and a commit per insert is
+        N journal writes for rows that stand or fall together. The lock is
+        deliberately *not* held across the block -- the caller does file writes
+        between inserts, and holding the store lock across those would queue
+        the frame thread's reads behind a disk. A concurrent writer that
+        commits mid-block simply publishes the rows created so far, which is
+        no worse than the per-row commits this replaces. The final commit runs
+        in ``finally``, so the rollback path (which reads the rows back to
+        delete them) always sees them.
+        """
+        self._defer_commits = True
+        try:
+            yield
+        finally:
+            self._defer_commits = False
+            with self._lock:
+                self._conn.commit()
 
     def create(
         self,
@@ -364,7 +429,8 @@ class JobStore:
                     int(candidate_index),
                 ),
             )
-            self._conn.commit()
+            if not self._defer_commits:
+                self._conn.commit()
         return job_id
 
     def set_stage(self, job_id: str, stage: str) -> None:
@@ -409,7 +475,31 @@ class JobStore:
         args.append(limit)
         with self._lock:
             rows = self._conn.execute(sql, args).fetchall()
-        return [self._to_dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
+
+    def _row_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        """``_to_dict`` with the params parse memoized on the raw string.
+
+        ``list`` runs twice a second over a page of up to 200 rows, and a
+        params blob only changes when the row is rewritten -- so the JSON
+        parse is cached on the string itself. The parsed dict is *shared*
+        between hits, which is safe for readers and for the copy-then-write
+        idiom every params writer uses; a hypothetical in-place mutation of a
+        listed job's params would be a bug against ``set_params`` regardless.
+        The top-level dict is still copied per row so a caller may add or
+        replace keys on its own view. Bounded by wholesale clearing: a page is
+        a few hundred distinct strings, and the simplest bound that cannot
+        leak is to start over.
+        """
+        d = dict(row)
+        raw = d["params"] or "{}"
+        params = self._params_cache.get(raw)
+        if params is None:
+            if len(self._params_cache) > 2048:
+                self._params_cache.clear()
+            params = self._params_cache[raw] = json.loads(raw)
+        d["params"] = dict(params)
+        return d
 
     def count(self) -> int:
         """How many jobs exist, for the "showing newest N of M" row."""
@@ -858,12 +948,15 @@ class JobStore:
         own sweep; this is the "daily use feeds the same findings pool" half,
         and mixing the two would list every sweep unit twice.
         """
+        # NOT EXISTS rather than NOT IN: with idx_verdicts_source it is one
+        # index probe per candidate row instead of materialising the whole
+        # verdict-id set per query. Equivalent here because job_id is NOT NULL.
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE status = 'done' AND stage = 'model'"
                 " AND sweep_id IS NULL"
-                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?"
-                " AND stage = 'model')"
+                " AND NOT EXISTS (SELECT 1 FROM verdicts v WHERE v.source = ?"
+                " AND v.stage = 'model' AND v.job_id = jobs.id)"
                 " ORDER BY created_at DESC, id DESC LIMIT ?",
                 (source, limit),
             ).fetchall()
@@ -909,12 +1002,13 @@ class JobStore:
                 f"unlabelled_references does not serve stage {stage!r}; "
                 f"expected one of {sorted(self.LABEL_POPULATION)}"
             )
+        # NOT EXISTS for the reason unverdicted_models uses it; see there.
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE stage = ?"
                 " AND status IN ('done', 'error')"
-                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?"
-                " AND stage = ?)"
+                " AND NOT EXISTS (SELECT 1 FROM verdicts v WHERE v.source = ?"
+                " AND v.stage = ? AND v.job_id = jobs.id)"
                 " ORDER BY created_at DESC, id DESC LIMIT ?",
                 (population, source, stage, limit),
             ).fetchall()

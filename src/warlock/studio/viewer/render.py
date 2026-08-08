@@ -138,34 +138,57 @@ class Renderer:
         flat: bool,
     ) -> None:
         name = "unlit" if flat else "pbr"
+        # The per-frame constants -- view, projection, exposure, camera, the
+        # environment -- are written once per *program* rather than once per
+        # primitive (B15), mirroring the overlay pass. A frame draws dozens of
+        # primitives through a handful of programs.
+        view_bytes = m3.gl_bytes(view)
+        proj_bytes = m3.gl_bytes(proj)
+        camera_pos = tuple(camera.position)
+        seen: set[int] = set()
+        # The normal-matrix cache lives on GpuModel; Clay's _Composite has
+        # none, so those draws fall back to the inline computation.
+        normal_bytes = getattr(gpu, "normal_matrix_bytes", None)
         for node, primitive in gpu.draws:
             program = self.programs.get(name, primitive.defines)
             world = model_matrix @ node.world
             program["u_model"].write(m3.gl_bytes(world))
-            program["u_view"].write(m3.gl_bytes(view))
-            program["u_proj"].write(m3.gl_bytes(proj))
-            program["u_exposure"].value = self.exposure
+            if id(program) not in seen:
+                seen.add(id(program))
+                program["u_view"].write(view_bytes)
+                program["u_proj"].write(proj_bytes)
+                program["u_exposure"].value = self.exposure
+                if "u_camera_pos" in program:
+                    program["u_camera_pos"].value = camera_pos
+                    self.env.bind(program)
             if "u_normal_matrix" in program:
                 # The inverse transpose, so a non-uniform scale does not tilt
-                # the normals. Rebuilt per node because the placement transform
-                # is uniform but a glTF node's need not be.
+                # the normals. Per node because the placement transform is
+                # uniform but a glTF node's need not be; cached per node on
+                # the model (B15) because a node's world only moves on a pose
+                # change or a placement change.
                 #
                 # A zero on any scale axis makes the 3x3 singular, and an
                 # unguarded inverse raised out of the *draw* -- one flattened
                 # object took the whole viewport down. Its normals are
-                # undefined either way, so the identity is as good an answer as
-                # exists and the rest of the scene still renders.
-                try:
-                    normal_matrix = np.linalg.inv(world[:3, :3]).T
-                except np.linalg.LinAlgError:
-                    normal_matrix = np.eye(3)
-                program["u_normal_matrix"].write(
-                    np.ascontiguousarray(normal_matrix.T, dtype="f4").tobytes()
-                )
-            if "u_camera_pos" in program:
-                program["u_camera_pos"].value = tuple(camera.position)
-                self.env.bind(program)
+                # undefined either way, so the identity is as good an answer
+                # as exists and the rest of the scene still renders.
+                if normal_bytes is not None:
+                    program["u_normal_matrix"].write(normal_bytes(node, world))
+                else:
+                    try:
+                        normal_matrix = np.linalg.inv(world[:3, :3]).T
+                    except np.linalg.LinAlgError:
+                        normal_matrix = np.eye(3)
+                    program["u_normal_matrix"].write(
+                        np.ascontiguousarray(normal_matrix.T, dtype="f4").tobytes()
+                    )
             primitive.material.bind(program)
+            if len(primitive.material.textures) >= 5 and "u_camera_pos" in program:
+                # A five-texture material walks its units up to 4, which is
+                # the environment probe's slot -- rebind it, since the hoist
+                # above only bound it once per program.
+                self.env.bind(program)
             if primitive.skinned and "u_joints" in program:
                 palette = gpu.palette(node)
                 if palette:

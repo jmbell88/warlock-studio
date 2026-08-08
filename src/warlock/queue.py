@@ -22,6 +22,7 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import secrets
 import shutil
 import sys
@@ -43,6 +44,13 @@ from .progress import ProgressBus, TrellisProgressParser
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL = 1.0
+# The poll once a full interval has passed with nothing waking the worker
+# (C38): the backstop against a missed wake() stays, it just stops paying an
+# executor hop plus a sqlite query every second of an idle session. Any
+# enqueue calls wake(), which is observed immediately whichever timeout is in
+# force, so the only thing this can delay is a *missed* wake -- by a few
+# seconds instead of one.
+IDLE_POLL_INTERVAL = 5.0
 SHUTDOWN_TIMEOUT = 20.0
 
 # Labels for the text-to-image phases, which have no trace of their own.
@@ -73,6 +81,30 @@ DEFAULT_REFERENCE_PREP = False
 # EEVEE frames, which is seconds -- the rig itself is minutes.
 DEFORM_QA_FRAME_SIZE = 256
 DEFORM_QA_YAWS = 4
+
+
+def _stage_link(source: Path, dest: Path) -> None:
+    """Make ``dest`` hold ``source``'s bytes -- by hard link when possible.
+
+    The remesh-retry staging copies two whole GLBs per kept attempt (C37); a
+    hard link is free and sound here because **every** writer of source.glb
+    and model.glb replaces the directory entry rather than rewriting the
+    inode: trellis' ``_atomic_write``, ``optimize.staged_copy``, gltfpack's
+    own ``tmp.replace(dest)`` and ``postprocess._staged`` all stage-and-rename,
+    so a linked keep can never be scribbled on by the next attempt. The link
+    itself goes through a temp name and ``os.replace`` so ``dest`` is never
+    half-there, and a filesystem that refuses links falls back to the copy.
+    """
+    tmp = dest.with_name(dest.name + ".lnk.tmp")
+    with contextlib.suppress(OSError):
+        tmp.unlink()
+    try:
+        os.link(source, tmp)
+        os.replace(tmp, dest)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        shutil.copyfile(source, dest)
 
 
 def _fresh_seed() -> int:
@@ -327,24 +359,28 @@ class Worker:
         """
         self._wake.set()
 
-    async def _wait_for_work(self) -> None:
-        """Sleep until a job is enqueued, shutdown is asked for, or the poll
-        interval elapses -- whichever comes first."""
+    async def _wait_for_work(self, timeout: float = POLL_INTERVAL) -> bool:
+        """Sleep until a job is enqueued, shutdown is asked for, or ``timeout``
+        elapses -- whichever comes first. -> whether something woke us (rather
+        than the timeout), which is what lets the idle loop back its DB poll
+        off (C38)."""
         waiters = [
             asyncio.ensure_future(self._stop.wait()),
             asyncio.ensure_future(self._wake.wait()),
         ]
         try:
             await asyncio.wait(
-                waiters, timeout=POLL_INTERVAL, return_when=asyncio.FIRST_COMPLETED
+                waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
             )
         finally:
             for waiter in waiters:
                 waiter.cancel()
+        woke = self._wake.is_set() or self._stop.is_set()
         # Cleared only after the wait, never before it: a wake() that landed
         # while next_queued() was in its thread must still be observed here
         # rather than swallowed into a full poll interval of sleep.
         self._wake.clear()
+        return woke
 
     async def request_cancel(self, job_id: str) -> None:
         """No-op unless job_id is the job currently running."""
@@ -391,13 +427,17 @@ class Worker:
             await asyncio.to_thread(self._text2image.unload)
 
     async def _run(self) -> None:
+        # Widened after an unwoken timeout, reset by anything happening (C38).
+        wait = POLL_INTERVAL
         while not self._stop.is_set():
             try:
                 job = await asyncio.to_thread(self.store.next_queued)
                 if job is None:
                     await self._maybe_evict_idle()
-                    await self._wait_for_work()
+                    woke = await self._wait_for_work(wait)
+                    wait = POLL_INTERVAL if woke else IDLE_POLL_INTERVAL
                     continue
+                wait = POLL_INTERVAL
                 await self._process(job)
             except Exception:
                 # A crash here used to kill the worker permanently and
@@ -1190,8 +1230,13 @@ class Worker:
                 # quietly undo the choice made here the first time someone
                 # changed a triangle budget.
                 try:
-                    await asyncio.to_thread(shutil.copyfile, glb_path, keep)
-                    await asyncio.to_thread(shutil.copyfile, source_glb, keep_source)
+                    # Hard links, one executor hop for the pair (C37): see
+                    # _stage_link for why a link cannot be scribbled on.
+                    def _stage_pair() -> None:
+                        _stage_link(glb_path, keep)
+                        _stage_link(source_glb, keep_source)
+
+                    await asyncio.to_thread(_stage_pair)
                 except OSError:
                     # A full disk is the realistic way a tens-of-megabytes copy
                     # fails, and this feature is what doubled the footprint. So
@@ -1276,8 +1321,15 @@ class Worker:
             # those three grows a new key, which a hand-written strip list
             # would not.
             try:
-                await asyncio.to_thread(shutil.copyfile, keep_source, source_glb)
-                await asyncio.to_thread(shutil.copyfile, keep, glb_path)
+                # source first (the ordering argument above), linked back for
+                # the reason the staging linked out (C37); _stage_link's
+                # os.replace keeps each served name whole for concurrent
+                # readers, which is what staged_copy bought the copy path.
+                def _restore_pair() -> None:
+                    _stage_link(keep_source, source_glb)
+                    _stage_link(keep, glb_path)
+
+                await asyncio.to_thread(_restore_pair)
             except OSError:
                 # Same rule as everywhere else here: the last attempt's mesh is
                 # on disk and usable, so a failed restore costs the user the

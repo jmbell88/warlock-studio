@@ -237,8 +237,18 @@ class Ctx:
         if self.viewer is None or not self.viewer.has_model:
             return
         try:
-            data = self.viewer.thumbnail_png()
+            # Only the GL readback happens here; the PNG encode -- the slow
+            # half -- runs on the task thread with the save (D41).
+            image = self.viewer.screenshot()
         except Exception:
             log.exception("could not capture a thumbnail")
             return
-        self.submit(f"thumb:{job_id}", svc_files.save_thumbnail, self.svc, job_id, data)
+
+        def run() -> Any:
+            import io
+
+            buf = io.BytesIO()
+            image.convert("RGB").save(buf, "PNG")
+            return svc_files.save_thumbnail(self.svc, job_id, buf.getvalue())
+
+        self.submit(f"thumb:{job_id}", run)

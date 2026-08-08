@@ -69,6 +69,9 @@ def test_a_rewritten_file_hands_out_a_new_texture(tmp_path):
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
+    # A new frame: the rewrite lands on a task thread and is drawn on a later
+    # frame, and the per-frame stat memo (B17) is scoped to exactly one.
+    cache.begin_frame()
     again = cache.get("job:pixel_32.png", path, nearest=True)
     assert again is not first
 
@@ -87,6 +90,7 @@ def test_the_superseded_texture_is_retired_rather_than_left_to_lru(tmp_path):
     _png(path, (200, 0, 0, 255))
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    cache.begin_frame()  # the rewrite is seen on the next frame (B17)
     cache.get("job:pixel_32.png", path, nearest=True)
 
     assert len(cache._entries) == 1
