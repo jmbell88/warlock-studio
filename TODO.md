@@ -8,12 +8,13 @@ Night 2 build runs. Everything here is grounded in something observed — the
 2026-08-07, or the two build runs since — not in a reading of the code alone.
 
 **Two numbering schemes exist and they are not the same.** This file's `§`
-numbers are its own. The overnight build plan (pasted into a session, never
-written to disk — recover it from the transcript, see the
-`warlock-master-plan-location` memory) numbers its work `Phase 0`–`Phase 9`.
-Where an item here corresponds to one of those phases, it says so. Nothing in
-this file is named after the phase numbers alone, because two of them collided
-once already.
+numbers are its own. The overnight build plan — transcribed to
+`docs/BUILD_PLAN.md`, which is a **record** of why each package was shaped as it
+was, not a queue — numbers its work `Phase 0`–`Phase 9`. Where an item here
+corresponds to one of those phases, it says so. Nothing in this file is named
+after the phase numbers alone, because two of them collided once already, and
+where the two documents disagree about what is outstanding, **this one is
+right**.
 
 **Implementation state, 2026-08-08.** Night 1 shipped fourteen packages (0a–0f,
 9a–9d, 9h, 9i) and Night 2 shipped four (the matte preview, mesh candidates,
