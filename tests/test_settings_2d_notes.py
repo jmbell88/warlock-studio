@@ -105,6 +105,129 @@ def test_the_structure_note_names_the_bases_that_can_run_one():
         assert models.BASE_MODELS[key].label in note
 
 
+# --- what a change of base model clears --------------------------------------
+
+
+def _other_family():
+    """A base a style LoRA cannot be loaded onto, whichever one that is."""
+    return next(k for k in models.BASE_MODELS if k not in models.lora_bases())
+
+
+def _form(**over):
+    form = {
+        "prompt": "a wooden crate",
+        "count": 1,
+        "base_model": models.lora_bases()[0],
+        "style_lora": "",
+        "lora_weight": models.DEFAULT_LORA_WEIGHT,
+        "ref_path": "",
+        "ip_adapter": "",
+        "control": "",
+        "output": "reference",
+    }
+    form.update(over)
+    return form
+
+
+def test_choosing_a_base_that_cannot_use_a_lora_clears_the_style():
+    """The dead end this replaces: the picker is *disabled* on a non-SDXL base,
+    so the value that disables Generate is the one control the user cannot
+    reach. Clearing it is the only recovery that does not require guessing
+    which earlier choice to undo.
+    """
+    form = _form(style_lora=next(iter(models.STYLE_LORAS)), lora_weight=0.4)
+    form["base_model"] = _other_family()
+    cleared = settings_2d.clear_unusable(_ctx(), form)
+    assert form["style_lora"] == ""
+    assert form["lora_weight"] == models.DEFAULT_LORA_WEIGHT
+    assert cleared
+    # And Generate is live again: that is the whole point.
+    assert settings_2d.validate(form) == []
+
+
+def test_switching_back_does_not_resurrect_the_cleared_style():
+    """A clear is a clear. Remembering the old selection to restore it would
+    make the same value reappear silently under a base the user has since
+    reconfigured around.
+    """
+    ctx = _ctx()
+    form = _form(style_lora=next(iter(models.STYLE_LORAS)))
+    form["base_model"] = _other_family()
+    settings_2d.clear_unusable(ctx, form)
+    form["base_model"] = models.lora_bases()[0]
+    settings_2d.clear_unusable(ctx, form)
+    assert form["style_lora"] == ""
+
+
+def test_a_base_that_cannot_run_a_controlnet_clears_the_structure_control():
+    """The sibling gate, and the sharper one: ``structure_note`` hides the
+    Structure group entirely, so the stale ``control`` that validate refuses is
+    not merely disabled -- it is off screen.
+    """
+    form = _form(
+        ref_path="ref.png",
+        control=guidance.catalog()["fields"]["control"][0]["key"],
+        base_model=models.controlnet_bases()[0],
+    )
+    form["base_model"] = next(
+        k for k in models.BASE_MODELS if k not in models.controlnet_bases()
+    )
+    settings_2d.clear_unusable(_ctx(), form)
+    assert form["control"] == ""
+    assert settings_2d.validate(form) == []
+
+
+def test_the_negative_prompt_is_deliberately_not_cleared():
+    """It is the one gate of the three that refuses nothing: ``validate`` never
+    mentions it, so an inert negative prompt is a note and not a dead end --
+    and the field holds text the user typed, which a base change may not eat.
+    """
+    form = _form(base_model="turbo", negative_prompt="blurry, watermark")
+    settings_2d.clear_unusable(_ctx(), form)
+    assert form["negative_prompt"] == "blurry, watermark"
+    assert not any("negative" in p.lower() for p in settings_2d.validate(form))
+
+
+def test_the_clear_is_explained_rather_than_silent():
+    form = _form(style_lora=next(iter(models.STYLE_LORAS)))
+    form["base_model"] = _other_family()
+    cleared = settings_2d.clear_unusable(_ctx(), form)
+    assert any("style" in note.lower() and "cleared" in note.lower() for note in cleared)
+    # Inside imgui's default Basic-Latin+Latin-1 atlas range.
+    for note in cleared:
+        assert all(ord(ch) < 0x100 for ch in note)
+
+
+def test_a_restored_form_is_not_rewritten_merely_by_being_opened():
+    """The one that catches a per-frame implementation. A form restored with a
+    style picked under another base must keep it until the *user* changes the
+    base: rewriting it on the frame the pane opens destroys a selection nobody
+    touched, and does it before the note explaining it can be read.
+
+    A source scan because the guard is in draw code: the call site must sit
+    under the ``!= before`` comparison and nowhere else.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(settings_2d.__file__).read_text(encoding="utf-8")
+    lines = source.splitlines()
+    calls = [
+        i
+        for i, line in enumerate(lines)
+        if "clear_unusable(" in line and not line.lstrip().startswith("def ")
+    ]
+    assert len(calls) == 1, "one call site, or the guard is not the only path"
+    assert re.search(r'if form\["base_model"\] != before:', lines[calls[0] - 1])
+    # And nothing else in the pane reaches it: the notes stay pure reads.
+    form = _form(style_lora=next(iter(models.STYLE_LORAS)), base_model=_other_family())
+    ctx = _ctx()
+    settings_2d.lora_note(ctx, form)
+    settings_2d.structure_note(ctx, form)
+    settings_2d.validate(form)
+    assert form["style_lora"] != ""
+
+
 # --- where the evidence is shown ---------------------------------------------
 
 

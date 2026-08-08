@@ -561,10 +561,63 @@ def structure_note(ctx: Any, form: dict[str, Any]) -> str | None:
     )
 
 
+#: Where the sentences explaining a base-model change's clears are kept between
+#: frames. ``state.preview`` is this app's frame-scratch namespace and is not
+#: persisted, which is right: the notice belongs to the change the user just
+#: made, not to the form that outlives the session.
+CLEARED_KEY = "base_model_cleared"
+
+
+def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
+    """Drop the selections the newly chosen base cannot run.
+
+    -> one sentence per selection cleared, for the pane to show.
+
+    Called *only* when the base model changes, never per frame: a form restored
+    with a style picked under another base must keep it until the user changes
+    the base, or opening the pane silently rewrites a selection nobody touched
+    and does it before the note explaining it can be read.
+
+    Clearing rather than only disabling, because a disabled control that
+    ``validate`` refuses is a dead end -- the value keeping Generate off is the
+    one thing the user cannot reach, and the only recovery was to guess which
+    earlier choice to undo. It applies to exactly the two gates ``validate``
+    refuses: the style LoRA, whose picker goes disabled, and the structure
+    control, whose whole group ``structure_note`` hides. The negative prompt is
+    deliberately absent -- nothing refuses a submit over it, so its own note is
+    the whole remedy, and it holds text the user typed.
+    """
+    cleared: list[str] = []
+    base = form.get("base_model") or ""
+    if form.get("style_lora") and base not in (ctx.guidance.get("lora_bases") or []):
+        form["style_lora"] = ""
+        # The weight goes back to the default with it: it scales a selection
+        # that no longer exists, and a strength left at 0.2 would silently
+        # apply to whatever style is picked next.
+        form["lora_weight"] = modelslib.DEFAULT_LORA_WEIGHT
+        cleared.append("The style LoRA was cleared: this model cannot use one.")
+    if form.get("control") and base not in (ctx.guidance.get("controlnet_bases") or []):
+        # Only the selection, exactly as the Clear-reference button does: the
+        # strengths are hidden with it and never submitted without it.
+        form["control"] = ""
+        cleared.append(
+            "The structure control was cleared: this model cannot run a ControlNet."
+        )
+    return cleared
+
+
 def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
         return
+    before = form["base_model"]
     form["base_model"] = widgets.combo("Model", form["base_model"], ctx.base_models)
+    if form["base_model"] != before:
+        ctx.state.preview[CLEARED_KEY] = clear_unusable(ctx, form)
+    # Under the Model combo rather than beside each control it emptied: this is
+    # about the change just made, and the structure control's own section is
+    # behind a header the user may never open.
+    for note in ctx.state.preview.get(CLEARED_KEY) or ():
+        widgets.muted(note)
     hint = _findings_hint(ctx, "base_model", form["base_model"])
     if hint is not None:
         imgui.same_line()
