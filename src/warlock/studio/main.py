@@ -299,7 +299,6 @@ class App:
 
     def _load_static_answers(self) -> None:
         """Read the things that cannot change without a restart, once."""
-        from .. import models
         from ..service import rig as svc_rig
         from ..service import sheets as svc_sheets
         from ..service import system as svc_system
@@ -312,22 +311,7 @@ class App:
         ctx.clay_send_to_3d = self._clay_send_to_3d
         ctx.guidance = svc_system.guidance_catalog(self.svc)
         ctx.sheet_options = svc_sheets.sheet_options()
-        # Marked rather than hidden when weights are absent: the combo listing
-        # every registered model regardless meant picking one whose weights
-        # were never downloaded and learning at job-failure time, despite
-        # doctor knowing at startup.
-        missing = {
-            check.name.removeprefix("image model: ")
-            for check in (self.runtime.checks or [])
-            if check.name.startswith("image model: ") and not check.ok
-        }
-        ctx.base_models = [
-            (k, f"{spec.label} - weights missing" if spec.label in missing else spec.label)
-            for k, spec in models.BASE_MODELS.items()
-        ]
-        ctx.style_loras = [("", "no style LoRA")] + [
-            (k, spec.label) for k, spec in models.STYLE_LORAS.items()
-        ]
+        self._refresh_model_answers()
         try:
             templates = svc_rig.rig_templates(self.svc)
         except Exception:
@@ -350,6 +334,44 @@ class App:
         ]
         for check in failed:
             ctx.state.note_error(f"{check.name}: {check.detail}")
+
+    def _refresh_model_answers(self) -> None:
+        """What the app knows about the weights on disk, recomputed from doctor.
+
+        Called at startup and again whenever a download finishes. It used to run
+        only once, and the ctx field it writes was documented as immutable --
+        which was true only while nothing in the app could make weights appear.
+        The generate combos read ``base_models`` every frame, so a model
+        downloaded from the Settings pane has to stop saying "weights missing"
+        without a restart.
+        """
+        from .. import models
+        from ..service import downloads as svc_downloads
+
+        ctx = self.app_ctx
+        # Marked rather than hidden when weights are absent: the combo listing
+        # every registered model regardless meant picking one whose weights
+        # were never downloaded and learning at job-failure time, despite
+        # doctor knowing at startup.
+        missing = {
+            check.name.removeprefix("image model: ")
+            for check in (self.runtime.checks or [])
+            if check.name.startswith("image model: ") and not check.ok
+        }
+        ctx.base_models = [
+            (k, f"{spec.label} - weights missing" if spec.label in missing else spec.label)
+            for k, spec in models.BASE_MODELS.items()
+        ]
+        ctx.style_loras = [("", "no style LoRA")] + [
+            (k, spec.label) for k, spec in models.STYLE_LORAS.items()
+        ]
+        try:
+            ctx.model_rows = svc_downloads.rows(self.svc)
+        except Exception:
+            # A settings pane that cannot list its rows is not a reason to fail
+            # startup, the same posture the rig-template probe below takes.
+            log.exception("could not list the downloadable models")
+            ctx.model_rows = []
 
     # -- the loop ----------------------------------------------------------
 
@@ -553,6 +575,16 @@ class App:
                     from . import clay_mode
 
                     clay_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("download:"):
+                    # A failed fetch has to be *routed* somewhere, not merely
+                    # toasted: the rows carry a presence flag, and a fetch that
+                    # got partway before failing has changed what is on disk.
+                    # Re-probing costs a few stats and is the only thing that
+                    # stops the pane staying optimistic about a download that
+                    # did not happen. (Only the rows, not doctor's whole
+                    # suite -- nothing succeeded, so the diagnostics have
+                    # nothing new to say.)
+                    self._refresh_model_answers()
                 elif done.key.startswith("review-"):
                     from . import review_mode
 
@@ -588,6 +620,25 @@ class App:
                 ctx.state.preview["sheets"] = done.result.get("sheets") or []
             elif name == "presets" and isinstance(done.result, dict):
                 ctx.state.preview["presets"] = done.result.get("poses") or []
+            return
+        if key.startswith("download:"):
+            # Re-probe wholesale, exactly as the "health" task above replaces
+            # runtime.checks: the fetch wrote files doctor has never looked at,
+            # and every model answer in the ctx is derived from that list.
+            from ..service import system as svc_system
+
+            try:
+                self.runtime.checks = svc_system.current_checks(self.svc, force=True)
+            except Exception:
+                log.exception("could not re-run the diagnostics after a download")
+            self._refresh_model_answers()
+            # Untick whatever is now on disk, rather than the rows this task
+            # named: the plan is deduped, so fetching one SDXL 1.0 recipe
+            # satisfies the other three and leaving them ticked would offer to
+            # download 7 GB that is already there.
+            present = {row["row_key"] for row in ctx.model_rows if row.get("present")}
+            ctx.model_picks -= present
+            ctx.toast("Download finished.")
             return
         if key == "upload" and done.result is not None:
             from .panes import settings_3d

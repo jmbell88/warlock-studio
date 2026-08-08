@@ -146,11 +146,20 @@ the right sidebar — back to its default, undoing any dragging of that divider.
 themselves are a fixed 300 px and are not draggable. *Reset collapsed sections* re-opens every
 section that has been collapsed anywhere in the app.
 
-**Models.** A read-only list of the image models and style LoRAs the app knows about, marking any
-whose weights are missing, plus whether rigging is available. It is the same information the startup
-diagnostics report, in a place you can look at without opening the log. Weights are one-time manual
-downloads by design — see [Adding an image model](15-extending.md#adding-an-image-model) — so
-there is nothing to install from here.
+**Models.** Every model the app knows about — image models, style LoRAs, the conditioning adapters,
+and the matting, pose and measurement models — with a tick beside the ones whose weights are on disk
+and a **Download** button beside the ones that are missing, plus whether rigging is available. It is
+the same information the startup diagnostics report, in a place you can look at without opening the
+log. Tick several rows and *Download selected* fetches them together; four of the image models share
+one set of SDXL 1.0 weights, and picking all four downloads them once.
+
+Downloading does not make the app itself online. The button starts a separate process that fetches
+one repository and exits, into a staging folder beside the destination that is only moved into place
+if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
+directory that looks finished. Free disk is checked against the whole selection first, and the whole
+selection is refused if it will not fit. Everything is still equally installable by hand — see
+[Model weights](10-installation.md#model-weights) and
+[Adding an image model](15-extending.md#adding-an-image-model).
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
 saved profiles and settings presets, the sidebar's internal split, and the pixel-art export

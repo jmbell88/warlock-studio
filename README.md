@@ -34,7 +34,9 @@ uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --in
   --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
 ```
 
-These one-time downloads are the only network use. The app itself is fully offline — it never downloads anything (`HF_HUB_OFFLINE=1` is set at import, all model loads are `local_files_only`); missing weights produce a clear error and a `doctor` warning instead of a download.
+These downloads are the only network use there is. The generation pipeline is fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is set at import, all model loads are `local_files_only`), and a missing weight produces a clear error and a `doctor` warning naming the exact command rather than a silent fetch.
+
+Everything below the first two steps can also be fetched from inside the app, in **Settings → Models**: tick the rows you want and press Download. That does not make the app online-capable, and the mechanism is the point — the button spawns a separate `python -m warlock.pipelines.fetch_worker` process which sets `HF_HUB_OFFLINE=0` in its own environment, fetches one repository into a staging directory beside the destination, moves the files in only if it succeeded, and exits. The app process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked against the whole plan before anything is spawned, and a failed fetch leaves no half-populated model directory.
 
 ### Optional image models and style LoRAs
 
@@ -96,6 +98,36 @@ uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
   PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
 uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+```
+
+### Optional conditioning, matting and measurement models
+
+Four more registry entries, none of them required to generate anything. They lived only in
+`models.py` until the download machinery started generating both lists from the same `Fetch`
+records; `warlock doctor` reports each one and the Settings pane can fetch it.
+
+```powershell
+# IP-Adapter Plus (~3.5 GB): condition on a reference image's appearance. Both
+# halves are needed -- the weights alone load fine and then fail at the first call.
+uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
+  --local-dir models/ip-adapter
+uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir models/ip-adapter
+
+# ControlNet, Canny (~2.5 GB): lock the silhouette to a reference image's edges.
+uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
+  --include "*.json" --include "*fp16.safetensors" --local-dir models/controlnet-canny-sdxl
+
+# BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
+# alpha comes from a corner flood fill, with visibly rougher edges. Its own
+# modelling code runs on load and imports einops/kornia/timm/torchvision, so it
+# also wants `uv sync --extra text2image`.
+uvx hf download ZhengPeng7/BiRefNet `
+  --include "*.json" --include "*.py" --include "*.safetensors" --local-dir models/birefnet
+
+# DINOv2 base (~400 MB): the identity metric `python -m warlock.bench` scores
+# with. A missing one costs a number, never a job.
+uvx hf download facebook/dinov2-base `
+  --include "*.json" --include "*.safetensors" --local-dir models/dinov2-base
 ```
 
 FLUX is not offered: both `dev` and `schnell` are click-through gated on Hugging Face, and 12B parameters will not coexist with trellis on one card. To use a local FLUX copy anyway: download it yourself (`uvx hf auth login` for the download only), point `WARLOCK_T2I_DIR` at it, and set `WARLOCK_VRAM_EXCLUSIVE=1`. Note that `WARLOCK_T2I_DIR` only redirects *where* the built-in `turbo` entry loads from — it still runs at that entry's settings (512 px, 4 steps, guidance 0), which suit schnell-like distilled checkpoints and nothing else. A model that needs different settings wants a `models.py` entry, not this variable.

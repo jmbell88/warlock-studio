@@ -8,12 +8,15 @@ guidance.py's docstring states explicitly.
 
 Everything here is optional and independently skippable. A missing base model
 fails that one job with its download command; a missing LoRA is skipped at load
-time. Nothing in this file is ever downloaded at runtime -- see the offline
-invariant in __init__.py.
+time. Nothing here is ever downloaded by the app process -- see the offline
+invariant in __init__.py; the one exception is an explicit, user-initiated
+fetch, which runs out-of-process (``pipelines/fetch_worker``) from the ``Fetch``
+records below.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -77,6 +80,80 @@ DEFAULT_CONTROL_END = 0.8
 
 
 @dataclass(frozen=True, slots=True)
+class Fetch:
+    """One repository fetch: what to get, where it lands, roughly how big.
+
+    Structure rather than prose, because the prose has two readers that cannot
+    both be satisfied by a string. Doctor prints it for a person to paste, and
+    the in-app download button has to *execute* it -- and several entries are
+    multi-command, one carries a rename and one carries a ``uv sync``, so
+    executing the string blindly would be wrong. So the string is derived from
+    this (``download_text``) and the executor reads the fields, which is what
+    keeps doctor's text, the README and what the button actually does from
+    drifting apart again.
+
+    ``local_dir`` is relative to the model root and is rendered into the
+    command as ``models/<local_dir>``, which is what every existing command and
+    the README both say. Resolution for an actual fetch is *not* that literal:
+    ``warlock.fetch`` resolves it against ``Config.t2i_model_root``, so
+    ``WARLOCK_T2I_ROOT`` relocates a download the way it already relocates a
+    load.
+
+    ``size_gib`` is approximate and exists for two things only: the progress
+    bar's denominator and the free-disk refusal. Understating it weakens the
+    refusal and never causes a wrong one, which is the direction to err in.
+    """
+
+    repo_id: str
+    local_dir: str
+    # Explicit paths inside the repo, passed positionally to `hf download`.
+    filenames: tuple[str, ...] = ()
+    # The --include / --exclude sets.
+    allow_patterns: tuple[str, ...] = ()
+    ignore_patterns: tuple[str, ...] = ()
+    # A post step: (name-as-downloaded, name-it-must-have). loras/ is flat, so
+    # a repo's default-named adapter would otherwise overwrite another's.
+    rename: tuple[str, str] | None = None
+    size_gib: float = 0.0
+    # A trailing non-shell instruction, reproduced verbatim. Only BiRefNet has
+    # one, and it names a `uv sync` rather than a download.
+    note: str = ""
+
+    def command(self) -> str:
+        """The one-line `hf download` this record stands for.
+
+        --include is repeated per pattern deliberately; see the note on
+        BaseModel below.
+        """
+        parts = [f"uvx hf download {self.repo_id}"]
+        parts.extend(self.filenames)
+        parts.extend(f'--include "{pat}"' for pat in self.allow_patterns)
+        parts.extend(f'--exclude "{pat}"' for pat in self.ignore_patterns)
+        parts.append(f"--local-dir models/{self.local_dir}")
+        return " ".join(parts)
+
+    def steps(self) -> list[str]:
+        """Every line a person has to run for this record, in order."""
+        out = [self.command()]
+        if self.rename is not None:
+            src, dst = self.rename
+            out.append(f"then rename models/{self.local_dir}/{src} to {dst}")
+        if self.note:
+            out.append(self.note)
+        return out
+
+
+def download_text(fetches: Iterable[Fetch]) -> str:
+    """The prose ``spec.download`` used to be a literal of.
+
+    Two spaces of continuation indent, because doctor prints it after
+    ``download with:\\n  `` and every line of a multi-command entry has to line
+    up with the first.
+    """
+    return "\n  ".join(step for f in fetches for step in f.steps())
+
+
+@dataclass(frozen=True, slots=True)
 class BaseModel:
     """A diffusers text2image checkpoint plus the settings it must be run at.
 
@@ -127,7 +204,14 @@ class BaseModel:
     # for doctor. Empty keeps the default unet/-shaped formula, which is right
     # for every SDXL checkpoint and wrong for anything that has no unet/.
     probe: tuple[str, ...] = ()
-    download: str = ""
+    # What to fetch, and therefore also what doctor prints. A base model that
+    # reuses another's weights lists the same Fetch again; warlock.fetch
+    # dedupes on (repo_id, destination), never on model key.
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +224,11 @@ class StyleLora:
     # scaffolding, not creative direction, so they don't belong in guidance.py.
     trigger: str = ""
     default_weight: float = DEFAULT_LORA_WEIGHT
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +250,11 @@ class IPAdapter:
     # layout the download command produces.
     image_encoder_dir: str
     default_scale: float = 0.6
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
     @property
     def encoder_folder(self) -> str:
@@ -186,11 +278,31 @@ class ControlNet:
     variant: str | None = "fp16"
     default_scale: float = 0.65
     default_end: float = 0.8
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 def _table(*items):
     return {item.key: item for item in items}
+
+
+# The diffusers-layout include set every SDXL-class checkpoint takes: configs,
+# tokenizer vocabularies, and the fp16 weight files only.
+_SDXL_FILES = ("*.json", "*.txt", "*fp16.safetensors")
+
+# Written once and referenced by four entries rather than repeated, because it
+# genuinely *is* one download: sdxl, sdxl_cfg, pixel and lightning are four
+# recipes over the same weights. Identity here is what makes the dedupe in
+# warlock.fetch obvious rather than a coincidence of equal strings.
+_SDXL_BASE_1_0 = Fetch(
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "sdxl-base-1.0",
+    allow_patterns=_SDXL_FILES,
+    size_gib=7.0,
+)
 
 
 BASE_MODELS: dict[str, BaseModel] = _table(
@@ -201,10 +313,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         image_size=512,
         steps=4,
         guidance_scale=0.0,
-        download=(
-            "uvx hf download stabilityai/sdxl-turbo "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            '--exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo'
+        fetch=(
+            Fetch(
+                "stabilityai/sdxl-turbo",
+                "sdxl-turbo",
+                allow_patterns=_SDXL_FILES,
+                ignore_patterns=("sd_xl_turbo_1.0*",),
+                size_gib=7.0,
+            ),
         ),
     ),
     BaseModel(
@@ -220,12 +336,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=0.0,
         scheduler="ddim_trailing",
         base_lora="Hyper-SDXL-4steps-lora.safetensors",
-        download=(
-            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/sdxl-base-1.0\n"
-            "  uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors "
-            "--local-dir models/loras"
+        fetch=(
+            _SDXL_BASE_1_0,
+            Fetch(
+                "ByteDance/Hyper-SD",
+                "loras",
+                filenames=("Hyper-SDXL-4steps-lora.safetensors",),
+                size_gib=0.8,
+            ),
         ),
     ),
     BaseModel(
@@ -240,10 +358,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         steps=25,
         guidance_scale=3.0,
         controlnet=True,
-        download=(
-            "uvx hf download playgroundai/playground-v2.5-1024px-aesthetic "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/playground-v2.5"
+        fetch=(
+            Fetch(
+                "playgroundai/playground-v2.5-1024px-aesthetic",
+                "playground-v2.5",
+                allow_patterns=_SDXL_FILES,
+                size_gib=7.0,
+            ),
         ),
     ),
     BaseModel(
@@ -260,11 +381,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         steps=30,
         guidance_scale=7.0,
         controlnet=True,
-        download=(
-            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/sdxl-base-1.0"
-        ),
+        fetch=(_SDXL_BASE_1_0,),
     ),
     BaseModel(
         # The pixel-art profile's null hypothesis: the same SDXL 1.0 weights as
@@ -288,17 +405,18 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=1.0,
         scheduler="lcm",
         base_lora="lcm-lora-sdxl.safetensors",
-        download=(
-            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/sdxl-base-1.0\n"
-            "  uvx hf download latent-consistency/lcm-lora-sdxl "
-            "pytorch_lora_weights.safetensors --local-dir models/loras\n"
-            # Renamed because the upstream filename is generic: any other repo's
-            # default-named LoRA downloaded into the flat loras/ directory would
-            # silently overwrite it.
-            "  then rename models/loras/pytorch_lora_weights.safetensors "
-            "to lcm-lora-sdxl.safetensors"
+        fetch=(
+            _SDXL_BASE_1_0,
+            Fetch(
+                "latent-consistency/lcm-lora-sdxl",
+                "loras",
+                filenames=("pytorch_lora_weights.safetensors",),
+                # Renamed because the upstream filename is generic: any other
+                # repo's default-named LoRA downloaded into the flat loras/
+                # directory would silently overwrite it.
+                rename=("pytorch_lora_weights.safetensors", "lcm-lora-sdxl.safetensors"),
+                size_gib=0.4,
+            ),
         ),
     ),
     BaseModel(
@@ -320,12 +438,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=0.0,
         scheduler="euler_trailing",
         base_lora="sdxl_lightning_4step_lora.safetensors",
-        download=(
-            "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/sdxl-base-1.0\n"
-            "  uvx hf download ByteDance/SDXL-Lightning "
-            "sdxl_lightning_4step_lora.safetensors --local-dir models/loras"
+        fetch=(
+            _SDXL_BASE_1_0,
+            Fetch(
+                "ByteDance/SDXL-Lightning",
+                "loras",
+                filenames=("sdxl_lightning_4step_lora.safetensors",),
+                size_gib=0.4,
+            ),
         ),
     ),
     BaseModel(
@@ -341,10 +461,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=4.0,
         scheduler="dpm_karras",
         controlnet=True,
-        download=(
-            "uvx hf download RunDiffusion/Juggernaut-XL-v9 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/juggernaut-xl-v9"
+        fetch=(
+            Fetch(
+                "RunDiffusion/Juggernaut-XL-v9",
+                "juggernaut-xl-v9",
+                allow_patterns=_SDXL_FILES,
+                size_gib=6.9,
+            ),
         ),
     ),
     BaseModel(
@@ -359,10 +482,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=7.0,
         scheduler="deis",
         controlnet=True,
-        download=(
-            "uvx hf download Lykon/dreamshaper-xl-1-0 "
-            '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-            "--local-dir models/dreamshaper-xl"
+        fetch=(
+            Fetch(
+                "Lykon/dreamshaper-xl-1-0",
+                "dreamshaper-xl",
+                allow_patterns=_SDXL_FILES,
+                size_gib=6.9,
+            ),
         ),
     ),
     BaseModel(
@@ -406,14 +532,16 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "transformer/diffusion_pytorch_model.safetensors",
             "text_encoder/model-00001-of-00002.safetensors",
         ),
-        download=(
-            "uvx hf download black-forest-labs/FLUX.2-klein-base-4B "
-            '--include "*.json" --include "*.txt" --include "*.jinja" '
-            '--include "*.safetensors" '
-            # The repo carries a redundant 7.75 GB single-file checkpoint
-            # beside the diffusers layout; nothing here reads it.
-            '--exclude "flux-2-klein-base-4b.safetensors" '
-            "--local-dir models/flux2-klein-base-4b"
+        fetch=(
+            Fetch(
+                "black-forest-labs/FLUX.2-klein-base-4B",
+                "flux2-klein-base-4b",
+                allow_patterns=("*.json", "*.txt", "*.jinja", "*.safetensors"),
+                # The repo carries a redundant 7.75 GB single-file checkpoint
+                # beside the diffusers layout; nothing here reads it.
+                ignore_patterns=("flux-2-klein-base-4b.safetensors",),
+                size_gib=16.0,
+            ),
         ),
     ),
 )
@@ -424,9 +552,13 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         "3D render",
         "3d_render_style_xl.safetensors",
         trigger="3d style, 3d render",
-        download=(
-            "uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors "
-            "--local-dir models/loras"
+        fetch=(
+            Fetch(
+                "goofyai/3d_render_style_xl",
+                "loras",
+                filenames=("3d_render_style_xl.safetensors",),
+                size_gib=0.2,
+            ),
         ),
     ),
     StyleLora(
@@ -434,9 +566,13 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         "3D render (Redmond)",
         "3DRedmond-3DRenderStyle-3DRenderAF.safetensors",
         trigger="3D Render Style, 3DRenderAF",
-        download=(
-            "uvx hf download artificialguybr/3DRedmond-V1 "
-            "3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir models/loras"
+        fetch=(
+            Fetch(
+                "artificialguybr/3DRedmond-V1",
+                "loras",
+                filenames=("3DRedmond-3DRenderStyle-3DRenderAF.safetensors",),
+                size_gib=0.2,
+            ),
         ),
     ),
     StyleLora(
@@ -446,9 +582,13 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         "PS1 / low-poly game",
         "PS1Redmond-PS1Game-Playstation1Graphics.safetensors",
         trigger="Ps1 game graphics",
-        download=(
-            "uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl "
-            "PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras"
+        fetch=(
+            Fetch(
+                "artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl",
+                "loras",
+                filenames=("PS1Redmond-PS1Game-Playstation1Graphics.safetensors",),
+                size_gib=0.2,
+            ),
         ),
     ),
     StyleLora(
@@ -466,9 +606,13 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
         "pixel-art-xl.safetensors",
         trigger="pixel, pixel art",
         default_weight=1.2,
-        download=(
-            "uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors "
-            "--local-dir models/loras"
+        fetch=(
+            Fetch(
+                "nerijs/pixel-art-xl",
+                "loras",
+                filenames=("pixel-art-xl.safetensors",),
+                size_gib=0.2,
+            ),
         ),
     ),
 )
@@ -485,11 +629,23 @@ IP_ADAPTERS: dict[str, IPAdapter] = _table(
         subfolder="sdxl_models",
         weight_name="ip-adapter-plus_sdxl_vit-h.safetensors",
         image_encoder_dir="models/image_encoder",
-        download=(
-            "uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors "
-            "--local-dir models/ip-adapter\n"
-            '  uvx hf download h94/IP-Adapter --include "models/image_encoder/*" '
-            "--local-dir models/ip-adapter"
+        # Two records against one repository, and they stay two: the weights
+        # and the CLIP vision encoder are separate lines in the README and in
+        # doctor's text. The dedupe in warlock.fetch is what merges them back
+        # into a single fetch when the button runs.
+        fetch=(
+            Fetch(
+                "h94/IP-Adapter",
+                "ip-adapter",
+                filenames=("sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",),
+                size_gib=0.9,
+            ),
+            Fetch(
+                "h94/IP-Adapter",
+                "ip-adapter",
+                allow_patterns=("models/image_encoder/*",),
+                size_gib=2.6,
+            ),
         ),
     ),
 )
@@ -500,10 +656,13 @@ CONTROLNETS: dict[str, ControlNet] = _table(
         "Edge / silhouette lock (Canny)",
         "controlnet-canny-sdxl",
         preprocessor="canny",
-        download=(
-            "uvx hf download diffusers/controlnet-canny-sdxl-1.0 "
-            '--include "*.json" --include "*fp16.safetensors" '
-            "--local-dir models/controlnet-canny-sdxl"
+        fetch=(
+            Fetch(
+                "diffusers/controlnet-canny-sdxl-1.0",
+                "controlnet-canny-sdxl",
+                allow_patterns=("*.json", "*fp16.safetensors"),
+                size_gib=2.5,
+            ),
         ),
     ),
 )
@@ -521,7 +680,11 @@ class MetricModel:
     key: str
     label: str
     dir_name: str
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 METRIC_MODELS: dict[str, MetricModel] = _table(
@@ -529,10 +692,13 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
         "dinov2",
         "DINOv2 base (identity metric)",
         "dinov2-base",
-        download=(
-            "uvx hf download facebook/dinov2-base "
-            '--include "*.json" --include "*.safetensors" '
-            "--local-dir models/dinov2-base"
+        fetch=(
+            Fetch(
+                "facebook/dinov2-base",
+                "dinov2-base",
+                allow_patterns=("*.json", "*.safetensors"),
+                size_gib=0.4,
+            ),
         ),
     ),
 )
@@ -555,7 +721,11 @@ class PoseModel:
     key: str
     label: str
     dir_name: str
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 POSE_MODELS: dict[str, PoseModel] = _table(
@@ -567,10 +737,13 @@ POSE_MODELS: dict[str, PoseModel] = _table(
         "vitpose",
         "ViTPose base (rig joint placement)",
         "vitpose-base",
-        download=(
-            "uvx hf download usyd-community/vitpose-base-simple "
-            '--include "*.json" --include "*.safetensors" '
-            "--local-dir models/vitpose-base"
+        fetch=(
+            Fetch(
+                "usyd-community/vitpose-base-simple",
+                "vitpose-base",
+                allow_patterns=("*.json", "*.safetensors"),
+                size_gib=0.4,
+            ),
         ),
     ),
 )
@@ -600,7 +773,11 @@ class MattingModel:
     label: str
     dir_name: str
     remote_code: bool = False
-    download: str = ""
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
 
 
 MATTING_MODELS: dict[str, MattingModel] = _table(
@@ -613,21 +790,31 @@ MATTING_MODELS: dict[str, MattingModel] = _table(
         "BiRefNet",
         "birefnet",
         remote_code=True,
-        download=(
-            "uvx hf download ZhengPeng7/BiRefNet "
-            '--include "*.json" --include "*.py" --include "*.safetensors" '
-            "--local-dir models/birefnet\n"
-            # The weights are not the whole download. The repo's own modelling
-            # code -- which trust_remote_code runs out of the checkpoint
-            # directory -- builds its backbone through packages no resolver can
-            # see, so a directory doctor is happy with used to hold a model
-            # that could not import. They are declared in the text2image extra
-            # now (einops/kornia/timm/torchvision), which is why this names the
-            # sync rather than a bare pip install: the old "you may also need"
-            # line was both optional-sounding and incomplete.
-            "  then: uv sync --extra text2image "
-            "-- BiRefNet's modelling code imports einops, kornia, timm and "
-            "torchvision, and that extra is what supplies them"
+        fetch=(
+            Fetch(
+                "ZhengPeng7/BiRefNet",
+                "birefnet",
+                allow_patterns=("*.json", "*.py", "*.safetensors"),
+                size_gib=1.0,
+                # The weights are not the whole download. The repo's own
+                # modelling code -- which trust_remote_code runs out of the
+                # checkpoint directory -- builds its backbone through packages
+                # no resolver can see, so a directory doctor is happy with used
+                # to hold a model that could not import. They are declared in
+                # the text2image extra now (einops/kornia/timm/torchvision),
+                # which is why this names the sync rather than a bare pip
+                # install: the old "you may also need" line was both
+                # optional-sounding and incomplete.
+                #
+                # A ``note`` rather than a second Fetch precisely because the
+                # download button cannot do it: it is not a repository fetch,
+                # so the pane shows it and the worker never runs it.
+                note=(
+                    "then: uv sync --extra text2image "
+                    "-- BiRefNet's modelling code imports einops, kornia, timm and "
+                    "torchvision, and that extra is what supplies them"
+                ),
+            ),
         ),
     ),
 )
