@@ -1807,8 +1807,32 @@ class App:
         else:
             colour = theme.OK
         from . import widgets
+        from .panes import overlay
 
-        imgui.same_line(max(imgui.get_window_width() - sp(64), 0))
+        # The right-hand strip: the resource readout, the shortcuts button and
+        # the health dot. Its width is *measured* rather than reserved as a
+        # constant, because ``same_line`` past the content region clips instead
+        # of wrapping -- a control drawn out there is simply gone, which is the
+        # bug that once hid seven of them -- and the text's width is a function
+        # of the DPI scale, the font and how many digits the readings have.
+        line, tip = overlay.status_text(ctx, self.fps)
+        spacing = imgui.get_style().item_spacing.x
+        strip = (
+            imgui.calc_text_size(line).x
+            + spacing
+            + imgui.get_frame_height()  # the ? button is square
+            + spacing
+            + sp(16)  # the health dot's invisible button
+        )
+        widgets.same_line_or_wrap(strip)
+        avail = imgui.get_content_region_avail().x
+        if avail >= strip:
+            # Right-aligned when there is room for the whole strip, and left
+            # exactly where the switch ended when there is not: never past the
+            # edge, and never on top of the switch either.
+            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - strip)
+        overlay.status_readout(line, tip)
+        imgui.same_line()
         if widgets.icon_button("?", "Keyboard shortcuts"):
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
