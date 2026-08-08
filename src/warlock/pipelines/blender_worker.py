@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .. import rigging
+from .. import meshreport, rigging
 
 
 def progress(frac: float, label: str) -> None:
@@ -120,22 +120,110 @@ def _close(a: Any, b: Any, tol: float = 1e-6) -> bool:
     return all(abs(a[i] - b[i]) <= tol for i in range(3))
 
 
-def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> tuple[str, str | None]:
+def weld_distance(lo: Sequence[float], hi: Sequence[float]) -> float:
+    """The merge-by-distance epsilon for a mesh with this bounding box.
+
+    Relative to the model, and the same fraction ``meshreport`` welds its
+    analysis copy by -- imported rather than restated, because the two are the
+    same judgement about the same meshes: a UV-seam split carries an
+    *identical* position, so any positive tolerance welds it, and the fraction
+    is only insurance against a rewriter that round-tripped a position through
+    float32. An absolute epsilon means something different on a 0.02 m gear
+    than on a 30 m building.
+
+    Zero (a degenerate bbox) means "do not weld", which the caller reads as an
+    ordinary unwelded run rather than as a failure.
+    """
+    diagonal = sum((float(b) - float(a)) ** 2 for a, b in zip(lo, hi, strict=True)) ** 0.5
+    return diagonal * meshreport.WELD_TOLERANCE
+
+
+def _skin_steps(merged: int) -> tuple[tuple[str, bool], ...]:
+    """The heat attempts to make after a weld merged ``merged`` vertices.
+
+    Each step is ``(the method name to record, restore the pre-weld mesh
+    first)``. Pure, and its own function for the reason ``_rig_bones`` is:
+    everything around it needs bpy, so this is the part of the fallback chain a
+    test can reach.
+
+    A weld that merged *nothing* leaves exactly the mesh the heat solve would
+    have seen anyway, so it is reported as plain ``automatic`` and there is no
+    second, identical attempt to fall back to -- retrying it would be two
+    minutes of Laplacian solve for a guaranteed repeat of the same answer.
+    """
+    if merged <= 0:
+        return (("automatic", False),)
+    return (("automatic-welded", False), ("automatic", True))
+
+
+def _weld(bpy: Any, mesh: Any, distance: float) -> tuple[Any, int]:
+    """Merge coincident vertices in place. -> (the pre-weld mesh data, merged).
+
+    The hypothesis this exists for: trellis meshes are UV-atlased, and a
+    seam-split vertex makes the surface non-manifold for bone-heat's Laplacian
+    solve even though nothing is actually open -- the same root cause that made
+    ``meshreport`` measure seams and call them holes. Welding by distance is
+    what turns that back into a closed surface for the solve.
+
+    It must not change what the user sees, and the whole argument that it does
+    not is that Blender's merge-by-distance keeps face-corner data: UVs are
+    per-loop, so the two halves of a seam keep their own texture coordinates
+    while sharing one position. ``tests/test_rigging.py`` proves that on a real
+    Blender rather than asserting it here.
+
+    The pre-weld mesh datablock is returned rather than discarded, because the
+    fallback chain may have to put it back: a welded solve that fails is not
+    evidence the unwelded one would.
+    """
+    original = mesh.data.copy()
+    before = len(mesh.data.vertices)
+    bpy.ops.object.select_all(action="DESELECT")
+    mesh.select_set(True)
+    bpy.context.view_layer.objects.active = mesh
+    bpy.ops.object.mode_set(mode="EDIT")
+    try:
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.remove_doubles(threshold=distance)
+        # Heat weighting reads the surface, and a weld can leave two merged
+        # shells disagreeing about which way is out.
+        bpy.ops.mesh.normals_make_consistent(inside=False)
+    finally:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    return original, before - len(mesh.data.vertices)
+
+
+def _restore_mesh(bpy: Any, mesh: Any, original: Any) -> None:
+    """Put the pre-weld geometry back on the object and drop the welded copy."""
+    welded = mesh.data
+    mesh.data = original
+    bpy.data.meshes.remove(welded)
+
+
+def _skin(bpy: Any, mesh: Any, arm_obj: Any, *, weld: float = 0.0) -> tuple[str, str | None]:
     """Bind mesh to armature, preferring heat weights. -> (method, why not).
 
+    The chain is weld -> verify -> unwelded heat -> envelope, and every rung
+    below the first is a degraded outcome that names itself.
+
     Bone-heat weighting solves a Laplacian over the surface and fails outright
-    on non-manifold input, which describes a good share of trellis meshes. The
-    failure is reported two different ways depending on Blender version (an
+    on non-manifold input, which describes a good share of trellis meshes -- in
+    large part because they are UV-atlased, and an xatlas seam split is a
+    non-manifold edge that is not a hole. ``weld`` is the distance to merge
+    coincident vertices by first (see ``weld_distance``); zero skips the weld
+    entirely and restores exactly the old behaviour.
+
+    The failure is reported two different ways depending on Blender version (an
     operator RuntimeError, or a 'FINISHED' that quietly leaves every vertex
-    group empty), so both are checked. Envelope weights are worse but they
-    always exist, and a mediocre rig beats a failed job.
+    group empty), so both are checked at every rung. Envelope weights are worse
+    but they always exist, and a mediocre rig beats a failed job.
 
     The *reason* is returned rather than only printed. Envelope is a degraded
     outcome, not a second success, and while the only trace of it was a line on
     this subprocess's stdout a rig that quietly fell back was indistinguishable
     from one that did not -- which is exactly the state a user needs to be told
     about, because it is the one where the deformation will look wrong.
-    ``None`` on the automatic path: there is nothing to explain.
+    ``None`` on either automatic path: there is nothing to explain about a
+    solve that took.
     """
     def bind(kind: str) -> None:
         bpy.ops.object.select_all(action="DESELECT")
@@ -144,19 +232,43 @@ def _skin(bpy: Any, mesh: Any, arm_obj: Any) -> tuple[str, str | None]:
         bpy.context.view_layer.objects.active = arm_obj
         bpy.ops.object.parent_set(type=kind)
 
-    try:
-        bind("ARMATURE_AUTO")
-        if _has_weights(mesh):
-            return "automatic", None
-        cause = "produced no vertex weights"
-    except RuntimeError as exc:
-        cause = str(exc).strip() or "raised"
-    reason = f"bone-heat weighting failed: {cause}"
-    print(f"{reason}; falling back to envelope", flush=True)
+    causes: list[str] = []
+    original, merged = None, 0
+    if weld > 0.0:
+        try:
+            original, merged = _weld(bpy, mesh, weld)
+        except RuntimeError as exc:
+            # The weld is an optimisation on the way to a rig, so its failure
+            # costs the welded attempt and nothing else.
+            causes.append(f"the weld pass failed: {str(exc).strip() or 'raised'}")
+            print(f"weld before weighting failed: {exc}", flush=True)
+        else:
+            print(f"welded {merged} coincident vertice(s) before weighting", flush=True)
 
-    # parent_set already made the mesh a child; clear it so the envelope bind
-    # doesn't stack a second armature modifier on top of the empty one.
-    _unbind(bpy, mesh)
+    for method, restore in _skin_steps(merged if original is not None else 0):
+        if restore and original is not None:
+            _restore_mesh(bpy, mesh, original)
+            original = None
+        try:
+            bind("ARMATURE_AUTO")
+            if _has_weights(mesh):
+                if original is not None:
+                    bpy.data.meshes.remove(original)
+                return method, None
+            causes.append(f"{method}: produced no vertex weights")
+        except RuntimeError as exc:
+            causes.append(f"{method}: {str(exc).strip() or 'raised'}")
+        # parent_set already made the mesh a child; clear it so the next bind
+        # doesn't stack a second armature modifier on top of the empty one.
+        _unbind(bpy, mesh)
+
+    if original is not None:
+        # Envelope weights do not care whether the mesh is welded, but what is
+        # exported should be the geometry the user's model.glb describes when
+        # nothing was gained by changing it.
+        _restore_mesh(bpy, mesh, original)
+    reason = "bone-heat weighting failed: " + "; ".join(causes)
+    print(f"{reason}; falling back to envelope", flush=True)
     bind("ARMATURE_ENVELOPE")
     return "envelope", reason
 
@@ -544,7 +656,7 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     arm_obj = _build_armature(bpy, bones)
 
     progress(0.40, "Computing weights")
-    weighting, weighting_reason = _skin(bpy, mesh, arm_obj)
+    weighting, weighting_reason = _skin(bpy, mesh, arm_obj, weld=weld_distance(lo, hi))
 
     progress(0.85, "Exporting rig")
     _export(bpy, Path(spec["out_glb"]))

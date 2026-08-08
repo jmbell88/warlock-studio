@@ -65,11 +65,36 @@ def _mesh_job(worker: Worker, **params) -> str:
     return job_id
 
 
+class _Calls(list):
+    """Rig runs, with the deformation-QA sheet runs kept to one side.
+
+    A rig now ends in a second Blender run -- the QA sheet -- and mixing the
+    two into one list would make every ``len(calls) == 1`` here a statement
+    about the sheet as well as about the rig, which is not what any of them
+    mean.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sheets: list[dict] = []
+
+
 def _fake_worker_run(monkeypatch, *, result=None, side_effect=None, hold=None):
     """Replace rigging.run_worker, recording the spec it was handed."""
-    calls: list[dict] = []
+    calls = _Calls()
 
     def fake(spec, *, on_progress=None, on_start=None, timeout=0.0):
+        if spec.get("op") == "sheet":
+            # What op_sheet does, minus EEVEE: one square transparent PNG per
+            # cell, which is all the host-side packer reads.
+            from PIL import Image
+
+            calls.sheets.append({"spec": spec, "timeout": timeout})
+            size = int(spec["frame_size"])
+            for cell in spec["cells"]:
+                frame = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                frame.save(Path(spec["frames_dir"]) / f"{cell['index']:04d}.png")
+            return {"ok": True, "frames": [c["index"] for c in spec["cells"]]}
         calls.append({"spec": spec, "timeout": timeout})
         if on_progress is not None:
             on_progress(0.4, "Computing weights")
@@ -576,3 +601,122 @@ def test_the_kill_switch_reads_the_environment(monkeypatch):
     monkeypatch.setenv("WARLOCK_POSE_FIT", "1")
     monkeypatch.setattr(config_mod, "_config", None)
     assert config_mod.get_config().pose_fit is True
+
+
+# --- the deformation QA sheet ------------------------------------------------
+#
+# Human-reviewable and nothing more: this scores nothing and gates nothing. A
+# weighting method that *reports* success says only that the solve produced
+# numbers, and looking at the mesh bent is how you find out whether those
+# numbers deform it sensibly. Scoring is a later phase's problem.
+
+
+async def test_a_rig_renders_the_deformation_battery_beside_the_mesh(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    source_dir = worker.config.job_dir(source)
+    # Beside model.glb, for the reason the rig itself is: it describes that
+    # mesh, not the request that produced it.
+    assert (source_dir / "rig_qa.png").exists()
+    meta = rigging.read_rig_qa(source_dir)
+    assert meta["rows"] == len(rigging.deform_battery("humanoid"))
+    # Rendered *through* the rig, so the sheet depicts the weights under test.
+    assert calls.sheets[0]["spec"]["source_glb"] == str(source_dir / "rig.glb")
+    assert calls.sheets[0]["spec"]["lighting"] == "lit"
+    # And attached to the rig job, so a card can say a battery was rendered
+    # without opening a file per row.
+    assert worker.store.get(rig_id)["params"]["deform_qa"]["poses"][0] == "squat"
+    await worker.shutdown()
+
+
+async def test_every_battery_row_is_posed_rather_than_the_first_one_four_times(
+    worker, monkeypatch
+):
+    """The cells carry their rotations inline -- the worker cannot read a job
+    directory -- and a row is identified by its pose id, which is exactly what
+    a battery of id-less rows would collapse."""
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    cells = calls.sheets[0]["spec"]["cells"]
+    assert len({tuple(sorted(c["bones"])) for c in cells}) == len(
+        rigging.deform_battery("humanoid")
+    )
+    assert all(c["bones"] for c in cells), "a battery row with no rotations is the rest pose"
+    await worker.shutdown()
+
+
+async def test_a_battery_that_fails_never_fails_the_rig(worker, monkeypatch):
+    """Log and swallow, the ``_audit_mesh`` rule: the rig is already published,
+    and a review render is the improvement nobody asked for."""
+    calls = _fake_worker_run(monkeypatch)
+    real = rigging.run_worker
+
+    def explode(spec, **kw):
+        if spec.get("op") == "sheet":
+            raise RuntimeError("EEVEE fell over")
+        return real(spec, **kw)
+
+    monkeypatch.setattr(rigging, "run_worker", explode)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    job = worker.store.get(rig_id)
+    assert job["status"] == "done"
+    assert job["params"]["weighting"] == "automatic"
+    assert "deform_qa" not in job["params"]
+    assert not (worker.config.job_dir(source) / "rig_qa.json").exists()
+    assert calls, "the rig itself still ran"
+    await worker.shutdown()
+
+
+async def test_the_battery_kill_switch_leaves_a_rig_byte_for_byte_as_it_was(
+    worker, monkeypatch
+):
+    calls = _fake_worker_run(monkeypatch)
+    worker.config.deform_qa = False
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert calls.sheets == []
+    assert not (worker.config.job_dir(source) / "rig_qa.json").exists()
+    await worker.shutdown()
+
+
+async def test_a_template_with_no_battery_simply_renders_nothing(worker, monkeypatch):
+    calls = _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    rig_id = worker.store.create("rig", None, {"source_job": source, "template": "quadruped"})
+
+    worker.start()
+    await _wait_until(lambda: worker.store.get(rig_id)["status"] == "done")
+
+    assert calls.sheets == []
+    assert worker.store.get(rig_id)["params"]["weighting"] == "automatic"
+    await worker.shutdown()
+
+
+def test_the_battery_kill_switch_reads_the_environment(monkeypatch):
+    import warlock.config as config_mod
+
+    monkeypatch.setenv("WARLOCK_DEFORM_QA", "0")
+    monkeypatch.setattr(config_mod, "_config", None)
+    assert config_mod.get_config().deform_qa is False
+    monkeypatch.setenv("WARLOCK_DEFORM_QA", "1")
+    monkeypatch.setattr(config_mod, "_config", None)
+    assert config_mod.get_config().deform_qa is True

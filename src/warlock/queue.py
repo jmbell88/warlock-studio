@@ -65,6 +65,15 @@ T2I_PHASES = {
 # Config.trellis_band was settled.
 DEFAULT_REFERENCE_PREP = False
 
+# The deformation QA sheet's grid. Four views rather than a sprite sheet's
+# eight, and one size up from the sprite default: this is a picture a person
+# looks at once to decide whether the weights hold, so a cell has to be big
+# enough to read a collapsed elbow in, and the back three-quarter views say
+# nothing a front and a side do not. Four battery poses at these numbers is 16
+# EEVEE frames, which is seconds -- the rig itself is minutes.
+DEFORM_QA_FRAME_SIZE = 256
+DEFORM_QA_YAWS = 4
+
 
 def _fresh_seed() -> int:
     """A new 31-bit seed for a retry.
@@ -1419,6 +1428,121 @@ class Worker:
             "rigged job %s from %s: %s weights, %s bones",
             job_id, source_id, result.get("weighting"), result.get("bones"),
         )
+
+        # Log-and-swallow, the ``_audit_mesh`` rule: the rig is already
+        # published, and a review sheet that could not be rendered must not
+        # fail the job whose artifact is on disk. Recorded with merge_params
+        # rather than a second set_params off the copy above, because the two
+        # writes are a read-modify-write sequence the lock does not cover.
+        try:
+            qa = await self._deform_qa(job_id, source_id, source_dir, template)
+        except Exception:
+            log.exception("deformation QA sheet failed for job %s", job_id)
+            qa = None
+        if qa is not None:
+            await asyncio.to_thread(self.store.merge_params, job_id, {"deform_qa": qa})
+
+    async def _deform_qa(
+        self, job_id: str, source_id: str, source_dir: Path, template: str
+    ) -> dict[str, Any] | None:
+        """Render the deformation battery for a freshly rigged mesh, or None.
+
+        Human-reviewable and nothing more: this scores nothing and gates
+        nothing. It exists because a weighting method that *reports* success
+        says only that the solve produced numbers, and the way to see whether
+        those numbers deform the mesh sensibly is to look at it bent.
+
+        The poses are template data (``rigging.deform_battery``) and the render
+        is the ordinary sheet path -- ``sheetlib.plan``/``pack``/``sidecar``
+        around ``op_sheet`` -- because a second renderer is a second set of
+        camera conventions to keep in agreement with the first. The output is
+        not a sheet in ``sheets/``: it belongs to the rig, so it must not join
+        the user's sheet list, count against MAX_SHEETS, or be deleted by a
+        sheet delete.
+        """
+        from .pipelines import sheet as sheetlib
+
+        poses = rigging.deform_battery(template)
+        rig_glb = source_dir / "rig.glb"
+        if not poses or not self.config.deform_qa or not rig_glb.exists():
+            return None
+
+        layout = sheetlib.plan(
+            poses,
+            frame_size=DEFORM_QA_FRAME_SIZE,
+            elevation=sheetlib.DEFAULT_ELEVATION,
+            # Lit, where a sprite sheet defaults to flat: a collapsed elbow or
+            # a candy-wrapper twist is a shading artefact, and unlit albedo is
+            # exactly the render that hides it.
+            lighting="lit",
+            yaws=DEFORM_QA_YAWS,
+        )
+        bones = {(p["id"], 0): p["bones"] for p in poses}
+        cells = [
+            {
+                "index": c.index,
+                "yaw": c.yaw,
+                "pose": c.pose,
+                "frame": c.frame,
+                "bones": bones.get((c.pose, c.frame)) or {},
+            }
+            for c in layout.cells
+        ]
+
+        def on_progress(frac: float, label: str) -> None:
+            self.progress.update(
+                job_id, phase="rig", label=f"Deformation QA: {label}", inner=frac,
+                inner_next=min(frac + 0.1, 1.0), nominal=20.0, detail="",
+            )
+
+        def on_start(proc: Any) -> None:
+            self._blender = proc
+
+        png = rigging.rig_qa_png_path(source_dir)
+        with tempfile.TemporaryDirectory(prefix="a3d-rigqa-") as tmp:
+            frames_dir = Path(tmp)
+            spec = rigging.sheet_spec(
+                rig_glb,
+                frames_dir,
+                cells,
+                frame_size=layout.frame_size,
+                elevation=layout.elevation,
+                lighting=layout.lighting,
+            )
+            result = await asyncio.to_thread(
+                functools.partial(
+                    rigging.run_worker,
+                    spec,
+                    on_progress=on_progress,
+                    on_start=on_start,
+                    timeout=self.config.sheet_timeout,
+                )
+            )
+            frames = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
+            await asyncio.to_thread(sheetlib.pack, layout, frames, png)
+
+        pivot = result.get("pivot") if isinstance(result, dict) else None
+        meta = sheetlib.sidecar(
+            layout,
+            sheet_id="rig_qa",
+            source_job=source_id,
+            image=png.name,
+            created=time.time(),
+            name="deformation QA",
+            pivot=(float(pivot[0]), float(pivot[1])) if pivot else None,
+        )
+        # Written last, so it is the completion marker the file rules key on --
+        # the same ordering rig.json has for rig.glb.
+        await asyncio.to_thread(
+            rigging.rig_qa_path(source_dir).write_text,
+            json.dumps(meta, indent=2),
+            encoding="utf-8",
+        )
+        log.info(
+            "rendered deformation QA for job %s: %d pose(s) x %d view(s)",
+            source_id, layout.rows, layout.columns,
+        )
+        return {"poses": [str(p["name"]) for p in poses], "cells": len(cells)}
 
     async def _sheet(self, job: dict[str, Any]) -> None:
         """Render a pose x direction sprite sheet for a finished job's mesh.
