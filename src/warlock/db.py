@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     tags        TEXT NOT NULL DEFAULT '',       -- comma-separated, normalized lowercase
     favorite    INTEGER NOT NULL DEFAULT 0,
     sweep_id    TEXT,                           -- NULL for an ordinary job
-    sweep_unit  TEXT NOT NULL DEFAULT ''        -- display label, e.g. "lora_weight=0.6 s42"
+    sweep_unit  TEXT NOT NULL DEFAULT '',       -- display label, e.g. "lora_weight=0.6 s42"
+    candidate_group TEXT,                       -- NULL once decided, and for an ordinary job
+    candidate_index INTEGER NOT NULL DEFAULT 0  -- which candidate of the group this was
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at);
@@ -188,6 +190,29 @@ MIGRATIONS: list[list[str]] = [
         " created_at REAL NOT NULL)",
         "CREATE INDEX IF NOT EXISTS idx_observations_job ON observations(job_id)",
     ],
+    # 6 -- mesh candidates. Two columns, for exactly the reasons migration 4
+    # gives for sweep membership: the library filters on it, params is a JSON
+    # string sqlite cannot index into, and -- the half that matters most --
+    # ``rerun_job``/``promote_to_model`` copy *params* and nothing else, so
+    # membership can never leak onto a reroll. That sidesteps DERIVED_PARAMS
+    # rather than bending it.
+    #
+    # ``candidate_group`` is NULL for an ordinary job *and* for a candidate the
+    # user has decided about: "Keep" dissolves the group (service.jobs.
+    # keep_candidate) rather than flagging a winner, so ``Filters.matches``
+    # asks the same single question it asks of sweep_id and no row can end up
+    # hidden with nothing left to reach it by. ``candidate_index`` survives
+    # that dissolve and is read by nothing, deliberately: it is the forensic
+    # half, the way ``sweep_unit`` is -- it says which candidate of a group an
+    # asset used to be, for somebody reading the table.
+    #
+    # This entry took 6 by landing first. Migrations are append-only and never
+    # edited once shipped, so anything else planned for "migration 6" is now 7.
+    [
+        "ALTER TABLE jobs ADD COLUMN candidate_group TEXT",
+        "ALTER TABLE jobs ADD COLUMN candidate_index INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_candidate ON jobs(candidate_group)",
+    ],
 ]
 
 
@@ -272,6 +297,8 @@ class JobStore:
         status: str = "queued",
         sweep_id: str | None = None,
         sweep_unit: str = "",
+        candidate_group: str | None = None,
+        candidate_index: int = 0,
     ) -> str:
         """Insert a job row. ``status`` is queued for everything the worker
         runs.
@@ -288,8 +315,9 @@ class JobStore:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO jobs (id, kind, status, prompt, params, created_at,"
-                " stage, parent_id, started_at, finished_at, sweep_id, sweep_unit)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " stage, parent_id, started_at, finished_at, sweep_id, sweep_unit,"
+                " candidate_group, candidate_index)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     kind,
@@ -303,6 +331,8 @@ class JobStore:
                     finished,
                     sweep_id,
                     sweep_unit,
+                    candidate_group,
+                    int(candidate_index),
                 ),
             )
             self._conn.commit()
@@ -637,6 +667,42 @@ class JobStore:
         with self._lock:
             self._conn.execute("DELETE FROM sweeps WHERE id = ?", (sweep_id,))
             self._conn.commit()
+
+    # --- candidates -----------------------------------------------------------
+
+    def candidate_jobs(self, group: str) -> list[dict[str, Any]]:
+        """A candidate group's members, in the order they were submitted.
+
+        ``candidate_index`` first rather than ``created_at``: the index is what
+        the seed rule is stated in terms of (candidate 0 keeps the requested
+        seed), so it has to be what the picker numbers them by. ``id`` breaks a
+        tie for the same reason it does everywhere else here -- rowid order is
+        not guaranteed by SQL, and the whole group is inserted inside one
+        ``time.time()`` tick.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE candidate_group = ? ORDER BY candidate_index, id",
+                (group,),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    def resolve_candidates(self, group: str) -> int:
+        """Dissolve a candidate group: every member becomes an ordinary job.
+
+        One statement, so no member can be left in a group the others have
+        left. ``candidate_index`` is deliberately *not* cleared -- it is the
+        forensic record of which candidate an asset was, the way ``sweep_unit``
+        is kept on a verdict row after ``delete_sweep``.
+
+        -> how many rows stopped being candidates.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE jobs SET candidate_group = NULL WHERE candidate_group = ?", (group,)
+            )
+            self._conn.commit()
+            return cur.rowcount
 
     # --- verdicts -------------------------------------------------------------
 

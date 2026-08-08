@@ -55,6 +55,30 @@ Three buttons:
 A matte you edited and saved travels to the engine as the image's own alpha, and the job records
 that it was approved — the engine is told to keep the alpha rather than cut its own.
 
+## Candidates
+
+The reconstruction engine is deterministic in its seed, and its failure mode is a lottery: the same
+reference comes back clean at one seed and with a hole through the shoulder at another. **Candidates**,
+directly above **Make 3D**, is how many attempts one press buys — 1, 2 or 3. The cost line under it
+changes with the choice, because this is the one control in the pane that multiplies what the button
+spends.
+
+Each candidate is an ordinary mesh job: same validation, same VRAM admission, same worker. The first
+keeps the mesh seed you pinned, so a pinned seed still reproduces; the rest draw fresh ones.
+
+While a group is undecided its members are **hidden from the library** — three near-identical cards
+are not a workshop — and the **Candidates** picker at the top of the 3D inspector is where they live
+instead. Selecting one shows it in the viewport exactly as selecting any other asset does. Once every
+attempt has finished, **Keep this one** settles the group: the one you kept and the ones you did not
+all become ordinary assets, and only then are you *asked* whether to delete the ones you did not keep.
+Nothing is ever deleted on your behalf, and declining leaves you with ordinary assets rather than
+hidden ones.
+
+Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
+See [Review](16-review.md).
+
+The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
+
 ## Starting from an upload
 
 You can skip the reference stage entirely. Press **Open an image...** in the **Source** section, or

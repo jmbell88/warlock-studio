@@ -337,6 +337,7 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
 
     from warlock.studio import layout as layout_mod
     from warlock.studio.panes import (
+        candidates_panel,
         clay_bridge,
         clay_outliner,
         clay_props,
@@ -361,7 +362,18 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
     app_ctx.rigging_available = True
     app_ctx.state.form_3d["rig"] = True
     job = app_ctx.cache.get(job_id)
+    # An undecided candidate group, so the picker's own row (a fixed-width
+    # button then ``same_line`` then its status) is measured too.
+    candidate = app_ctx.svc.store.create(
+        "image", "a barrel", {"mesh_seed": 11}, stage="model",
+        candidate_group="grp", candidate_index=0,
+    )
+    app_ctx.svc.store.set_status(candidate, "done")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.select(candidate)
     panes = [
+        ("candidates", lambda: candidates_panel.draw(app_ctx)),
         ("settings-2d", lambda: settings_2d.draw(app_ctx)),
         ("settings-3d", lambda: settings_3d.draw(app_ctx)),
         ("library", lambda: library.draw(app_ctx)),
@@ -420,6 +432,47 @@ def test_the_inspector_builds_for_every_status(app_ctx, imgui_ctx):
     app_ctx.svc.store.set_status(job_id, "error", "it broke")
     app_ctx.cache.invalidate()
     app_ctx.cache.tick()
+    _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
+
+
+def test_the_candidate_picker_builds_running_and_finished(app_ctx, imgui_ctx):
+    """The picker is drawn from ``inspector.draw``, above the header, so it has
+    to build with nothing selected as well as with a candidate selected -- the
+    rows it lists are hidden from the library, and it is the only way back to
+    them."""
+    from warlock.studio.panes import inspector
+
+    app_ctx.state.mode = "3d"
+    ids = []
+    for index in range(2):
+        job_id = app_ctx.svc.store.create(
+            "image", "a barrel", {"mesh_seed": 7 + index},
+            stage="model", candidate_group="grp", candidate_index=index,
+        )
+        ids.append(job_id)
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    # The rows really do reach the picker through the cache -- without this the
+    # frames below would draw nothing at all and pass regardless.
+    from warlock.studio import candidates as candidates_mod
+
+    assert candidates_mod.pending(app_ctx.cache.jobs) is not None
+
+    # Nothing selected, one member still queued: Keep is not offered yet.
+    app_ctx.state.select(None)
+    _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
+    # A candidate selected, with the group settled: Keep is live.
+    for job_id in ids:
+        app_ctx.svc.store.set_status(job_id, "done")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.select(ids[0])
+    _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
+    # And a member that failed, which offers no Keep of its own.
+    app_ctx.svc.store.set_status(ids[1], "error", "it broke")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.select(ids[1])
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
 
 

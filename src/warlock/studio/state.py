@@ -126,6 +126,13 @@ DEFAULT_FORM_3D: dict[str, Any] = {
     "bg_removal": "",
     "mesh_seed": 0,
     "mesh_seed_locked": False,
+    # How many meshes one Make 3D queues. 1 is the old behaviour exactly.
+    # Reliability rather than variety: trellis is deterministic in its seed and
+    # its failure mode is a lottery, so three attempts and a picker is the
+    # cheapest answer to a hole through the shoulder. Bounded at
+    # validation.MAX_MESH_CANDIDATES, because each one is two minutes of a
+    # serial worker.
+    "candidates": 1,
     "rig": False,
     "rig_template": "",
     # Whether the host recentres and rescales the subject before the trellis
@@ -156,6 +163,14 @@ class Filters:
             # purpose is to be compared against each other in Review. Left in,
             # one launched sweep buries a workshop's actual assets. They are
             # reachable by their sweep, and deleting the sweep deletes them.
+            return False
+        if job.get("candidate_group"):
+            # And the same rule for a mesh candidate nobody has picked yet:
+            # three attempts at one asset are three near-identical cards, and
+            # the choice between them belongs in the picker rather than in a
+            # list of finished work. The column goes NULL the moment the user
+            # keeps one (``service.jobs.keep_candidate`` dissolves the whole
+            # group), so nothing stays hidden without a picker to reach it by.
             return False
         if self.favorites_only and not job.get("favorite"):
             return False

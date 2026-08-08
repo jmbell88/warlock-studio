@@ -20,6 +20,7 @@ from .validation import (
     MAX_JOB_NAME,
     MAX_LIST_LIMIT,
     MAX_MESH_BYTES,
+    MAX_MESH_CANDIDATES,
     MAX_PROMPT,
     MAX_REFERENCE_COUNT,
     MAX_UPLOAD_BYTES,
@@ -796,6 +797,8 @@ def promote_to_model(
     rig_template: str | None = None,
     reference_prep: bool | None = None,
     force: bool = False,
+    candidate_group: str | None = None,
+    candidate_index: int = 0,
 ) -> dict[str, Any]:
     """Run the 3D stage from a reference the user approved.
 
@@ -917,7 +920,17 @@ def promote_to_model(
     try:
         shutil.copyfile(src_png, new_dir / "input.png")
         svc.store.create(
-            "image", source["prompt"], params, new_id, stage="model", parent_id=job_id
+            "image",
+            source["prompt"],
+            params,
+            new_id,
+            stage="model",
+            parent_id=job_id,
+            # Columns, never params keys: this function copies the source's
+            # params, so a membership key here would be inherited by every
+            # later promotion of the same reference. See migration 6.
+            candidate_group=candidate_group,
+            candidate_index=candidate_index,
         )
     except Exception:
         # As in create_job: the dir is written first so the worker can never
@@ -927,6 +940,98 @@ def promote_to_model(
         raise
     svc.wake_worker()
     return {"id": new_id, "parent": job_id, "mesh_seed": params["mesh_seed"]}
+
+
+def promote_candidates(
+    svc: WarlockService,
+    job_id: str,
+    *,
+    count: int = 1,
+    mesh_seed: int | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Promote one reference into ``count`` competing meshes.
+
+    Reliability, not variety: trellis is deterministic in its seed and its
+    failure mode is a lottery -- the same reference reconstructs cleanly at one
+    seed and comes back with a hole through the shoulder at another. Asking for
+    three and keeping the best one is the cheapest answer to that, and it costs
+    nothing new anywhere else because each candidate is an *ordinary* mesh job
+    through :func:`promote_to_model`: same validation, same VRAM admission per
+    job, same directory-before-row ordering, same worker path.
+
+    ``count == 1`` is exactly the old call and mints no group at all -- a group
+    of one is a picker asking which of one, and a row hidden from the library
+    until somebody answers.
+
+    **The seed rule.** Candidate 0 keeps the requested ``mesh_seed`` so a
+    pinned seed still reproduces; the rest draw fresh ones. This is the idiom
+    ``create_job`` already applies to reference candidates, for the same
+    reason: fanning out from a seed the user chose, rather than replacing it.
+
+    **Admission is all-or-nothing**, the rule ``service.sweeps`` states -- a
+    refused submit must not leave a partial run nobody asked for. It needs no
+    validation pass of its own here, and duplicating one would be the drift
+    ``sweeps._check_unit`` has to work to avoid: every candidate is the *same*
+    job but for its mesh seed, and ``promote_to_model`` performs every one of
+    its checks before it writes a directory or a row. So a refusal can only
+    land on candidate 0, with nothing yet written. Anything failing later is a
+    genuine failure (a full disk, a DB error), and gets the best-effort
+    rollback below -- through ``delete_if_not_running``, because ``create``
+    wakes the worker and candidate 0 may already be inside trellis.
+    """
+    if not 1 <= count <= MAX_MESH_CANDIDATES:
+        raise Invalid(
+            f"candidates must be between 1 and {MAX_MESH_CANDIDATES}", field="count"
+        )
+    check_seed("mesh_seed", mesh_seed)
+    if count == 1:
+        result = promote_to_model(svc, job_id, mesh_seed=mesh_seed, **kwargs)
+        return {**result, "ids": [result["id"]], "group": None}
+
+    group = uuid.uuid4().hex[:12]
+    ids: list[str] = []
+    try:
+        for index in range(count):
+            # Candidate 0 keeps what was asked for (None included -- then
+            # promote_to_model draws it, which is the unpinned case); the rest
+            # fan out from it.
+            seed = mesh_seed if index == 0 else random_seed()
+            result = promote_to_model(
+                svc,
+                job_id,
+                mesh_seed=seed,
+                candidate_group=group,
+                candidate_index=index,
+                **kwargs,
+            )
+            ids.append(result["id"])
+    except Exception:
+        for made in ids:
+            if svc.store.delete_if_not_running(made):
+                shutil.rmtree(svc.job_dir(made), ignore_errors=True)
+        raise
+    return {"id": ids[0], "ids": ids, "group": group, "parent": job_id}
+
+
+def keep_candidate(svc: WarlockService, job_id: str) -> dict[str, Any]:
+    """Settle a candidate group: this one is the keeper.
+
+    The whole group leaves it, winner and losers alike, in one statement --
+    which is what makes "hidden from the library" a state nothing can be
+    stranded in. The losers are *named*, never deleted: the caller offers that
+    as its own confirmed action through the ordinary delete path, and a user
+    who declines is left with three ordinary assets rather than two invisible
+    ones.
+    """
+    check_job_id(job_id)
+    job = svc.require_job(job_id)
+    group = job.get("candidate_group")
+    if not group:
+        raise Conflict("that job is not an undecided candidate")
+    losers = [m["id"] for m in svc.store.candidate_jobs(group) if m["id"] != job_id]
+    svc.store.resolve_candidates(group)
+    return {"id": job_id, "group": group, "losers": losers}
 
 
 def optimize_job(

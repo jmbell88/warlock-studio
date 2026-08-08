@@ -18,7 +18,7 @@ from ... import vectors
 from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
-from ...service.validation import MAX_UPLOAD_BYTES, random_seed
+from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, matte_preview, theme, widgets
 from ..manual import render as manual_render
 
@@ -191,12 +191,59 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
         imgui.text_wrapped(problem)
         imgui.pop_style_color()
-    widgets.muted("Roughly two minutes of GPU.")
+    _candidates(form)
+    count = candidate_count(form)
+    widgets.muted(
+        "Roughly two minutes of GPU."
+        if count == 1
+        else f"Roughly {count * 2} minutes of GPU - {count} attempts, one queue."
+    )
     busy = ctx.busy("submit")
     if widgets.primary_button("Make 3D", (-1, 34), enabled=not problems and not busy):
         promote(ctx, source, form)
     if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip("Ctrl+Enter")
+
+
+def candidate_count(form: dict[str, Any]) -> int:
+    """How many meshes this form asks for, clamped to what the service admits.
+
+    Clamped here as well as refused there because the form is persisted: a
+    settings file written when the ceiling was higher (or edited by hand) would
+    otherwise send a number ``promote_candidates`` refuses, and the refusal
+    would arrive as an error toast on a control the user cannot see is wrong.
+    """
+    try:
+        count = int(form.get("candidates", 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(count, MAX_MESH_CANDIDATES))
+
+
+def _candidates(form: dict[str, Any]) -> None:
+    """The Candidates control: how many attempts one press buys.
+
+    A row of radio-style buttons rather than a combo, because there are three
+    values and the number is the label -- and because it sits directly above
+    Make 3D, where the cost sentence under it changes with the choice. It is
+    the *only* control in this pane that multiplies what the button spends, so
+    putting it anywhere else in the form would hide that.
+    """
+    widgets.field_label("Candidates")
+    current = candidate_count(form)
+    for count in range(1, MAX_MESH_CANDIDATES + 1):
+        if count > 1:
+            imgui.same_line()
+        # Never drawn past the panel edge: three 40 px buttons and two spacings
+        # fit inside the 300 px sidebar with room to spare, and the guard in
+        # tests/test_studio_smoke.py measures rather than trusts that.
+        if imgui.radio_button(f"{count}##candidates", current == count):
+            form["candidates"] = count
+    widgets.help_marker(
+        "Reconstruct the same reference more than once and keep the best. The "
+        "engine is deterministic in its seed, so each attempt draws a new one; "
+        "the rest are hidden from the library until you keep one."
+    )
 
 
 def validate(source: dict[str, Any] | None) -> list[str]:
@@ -258,17 +305,29 @@ def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> No
     """
     if validate(source):
         return
-    matte_preview.open_for(ctx, source["id"], promote_kwargs(form))
+    # ``count`` rides with the overrides because the preview captures the form
+    # as it stood when the button was pressed -- the whole point of that
+    # capture is that Accept submits what the user pressed with, and how many
+    # of it is part of that. ``promote_candidates`` takes it as a kwarg, so
+    # nothing downstream has to unpack it back out.
+    matte_preview.open_for(
+        ctx, source["id"], {**promote_kwargs(form), "count": candidate_count(form)}
+    )
 
 
 def submit_promotion(ctx: Any, job_id: str, kwargs: dict[str, Any], force: bool) -> None:
-    """Queue the mesh job the preview was about. Accept's other half."""
+    """Queue the mesh job (or the candidate group) the preview was about.
+
+    Always through ``promote_candidates``, count included: at 1 it *is*
+    ``promote_to_model`` with no group minted, so there is one call path here
+    rather than a branch that could send the two halves different overrides.
+    """
     if ctx.state.filters.kind not in ("all", "model"):
         # Otherwise a filter left on "reference" (the natural way to find the
         # source image before promoting it) permanently hides the model job
         # this creates.
         ctx.state.filters.kind = "all"
-    ctx.submit("submit", svc_jobs.promote_to_model, ctx.svc, job_id, force=force, **kwargs)
+    ctx.submit("submit", svc_jobs.promote_candidates, ctx.svc, job_id, force=force, **kwargs)
 
 
 def matte_modal(ctx: Any) -> None:
