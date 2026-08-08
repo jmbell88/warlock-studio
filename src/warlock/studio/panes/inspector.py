@@ -22,11 +22,20 @@ from .. import theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
+from ..tokens import sp
 from . import pose_panel, retarget_panel, sheet_panel
 
 # Matches the library card's thumbnail, so the two read as the same kind of
-# object rather than as two different image widgets.
+# object rather than as two different image widgets. Design px: every use of it
+# goes through ``sp()``, as the library's own does -- a raw literal here was
+# the one size in the pane that ignored the UI scale.
 THUMB_SIZE = 96
+
+# How tall a single reference image may get. The reference now fills the pane's
+# width, and at full width a portrait is taller than the pane -- three thumbs is
+# enough to read the composition by and leaves the sections under it reachable
+# without a scroll to the bottom.
+REFERENCE_MAX_THUMBS = 3
 
 
 def draw(ctx: Any) -> None:
@@ -66,7 +75,47 @@ def draw(ctx: Any) -> None:
         )
 
 
+def can_edit_in_clay(job: Any) -> bool:
+    """Whether "Open in Clay" belongs on this job.
+
+    The library's overflow menu gates on ``model.glb`` being listed and this is
+    the same question asked from the same cached row -- no filesystem call,
+    because the inspector asks it every frame. ``build.wblk`` is deliberately
+    not consulted: it is never listed, and ``clay_mode.edit_asset_in_clay``
+    prefers it on the task thread where a stat is free.
+    """
+    if not isinstance(job, dict):
+        return False
+    return job.get("status") == "done" and "model.glb" in (job.get("files") or [])
+
+
+def _edit_actions(ctx: Any, job: Any) -> None:
+    """Take this asset somewhere it can be edited, from where it was made.
+
+    Both halves already existed and were reachable only from the library's
+    overflow menu -- which is the wrong place for the moment they are wanted,
+    the one straight after a generation finishes with the result still on
+    screen. Wiring only: the Inker gate and the Clay open are the functions
+    those two modes own, called verbatim, so the confirm Clay puts in front of
+    a 200k-triangle import still fires here.
+    """
+    from .. import clay_mode, icons, inker_mode
+
+    if inker_mode.can_edit_job(ctx, job):
+        if imgui.button(f"{icons.BRUSH} Open in Inker"):
+            inker_mode.open_job_reference(ctx, job)
+        widgets.hint_text("Paint over the reference; saving updates this asset.")
+    # Independent, not an else: the two gates are disjoint today (a reference
+    # has no mesh and a mesh has no editable reference), and an else would hide
+    # one of them without saying so if that ever stopped being true.
+    if can_edit_in_clay(job):
+        if imgui.button(f"{icons.BOX} Open in Clay"):
+            clay_mode.edit_asset_in_clay(ctx, job)
+        widgets.hint_text("Opens the authored document when there is one, else the mesh.")
+
+
 def _details_tab(ctx: Any, job: Any) -> None:
+    _edit_actions(ctx, job)
     _settings(ctx, job)
     _reference(ctx, job)
     _pixel(ctx, job)
@@ -251,6 +300,31 @@ def _attempt_verdict(attempt: Any) -> str:
     return "kept" if attempt.get("ok") else "refused"
 
 
+def reference_max_height() -> float:
+    """The tallest a reference image may be drawn, in scaled pixels."""
+    return sp(THUMB_SIZE * REFERENCE_MAX_THUMBS)
+
+
+def reference_fit(size: tuple[int, int], avail: float) -> tuple[float, float]:
+    """The box a reference image is drawn in: fill the width, keep the shape.
+
+    The same fit-to-box arithmetic ``main._draw_reference`` uses for the
+    viewport, and pure for the reason ``pixel_scale`` is -- it decides what the
+    user sees and it should not need a GL context to assert. It used to be a
+    hardcoded ``(THUMB_SIZE, THUMB_SIZE)``, which ignored the aspect ratio
+    outright: a 2:1 sheet was drawn squashed into a square, and the image never
+    reacted to the width of the pane it was in.
+
+    The height cap is the other half. Filling the width of a 300 px sidebar
+    with a 1:4 portrait is a thousand-pixel image, and there are up to four of
+    them, which pushes every section under Reference off the screen.
+    """
+    width = float(max(size[0], 1))
+    height = float(max(size[1], 1))
+    scale = min(max(avail, 1.0) / width, reference_max_height() / height)
+    return (width * scale, height * scale)
+
+
 def _reference(ctx: Any, job: Any) -> None:
     """What the mesh engine was actually handed, and what it made of it.
 
@@ -265,7 +339,13 @@ def _reference(ctx: Any, job: Any) -> None:
     shown = [n for n in ("input.png", "ref.png", "reference.png", "control.png") if n in files]
     if not isinstance(report, dict) and len(shown) <= 1:
         return
-    if not widgets.header("Reference", default_open=False):
+    # Open by default now that the images are legible: the section is only
+    # drawn at all when there is a composition report or more than one image,
+    # so it is never a collapsed heading over nothing, and the question it
+    # answers -- was it the reconstruction or was it what we sent? -- is the
+    # first one a bad mesh raises. It carries no persist_key, so this changes
+    # the default rather than overriding anything a user has closed.
+    if not widgets.header("Reference"):
         return
 
     if isinstance(report, dict):
@@ -305,7 +385,13 @@ def _reference(ctx: Any, job: Any) -> None:
         if texture is None:
             continue
         widgets.muted(name)
-        imgui.image(widgets.texture_ref(texture), (THUMB_SIZE, THUMB_SIZE))
+        # Measured per image rather than once: the label above each one costs a
+        # line, and a scrollbar appearing partway down the list changes what is
+        # left for the images under it.
+        imgui.image(
+            widgets.texture_ref(texture),
+            reference_fit(texture.size, imgui.get_content_region_avail().x),
+        )
 
 
 def seam_verdict(report: Any) -> tuple[int, str] | None:
@@ -368,7 +454,7 @@ def _seam(ctx: Any, job: Any) -> None:
         if widgets.disabled_button("Show it wrapped", not busy):
             ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, "wrap_preview.png")
         return
-    imgui.image(widgets.texture_ref(texture), (THUMB_SIZE * 2, THUMB_SIZE * 2))
+    imgui.image(widgets.texture_ref(texture), (sp(THUMB_SIZE * 2), sp(THUMB_SIZE * 2)))
 
 
 def pixel_provenance(manifest: Any, name: str) -> str | None:
@@ -519,7 +605,7 @@ def _pixel(ctx: Any, job: Any) -> None:
         if widgets.disabled_button("Preview pixels", not busy):
             ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
         return
-    factor = pixel_scale(texture.size, THUMB_SIZE * 2)
+    factor = pixel_scale(texture.size, int(sp(THUMB_SIZE * 2)))
     imgui.image(widgets.texture_ref(texture), (texture.size[0] * factor, texture.size[1] * factor))
     if busy:
         widgets.spinner()
@@ -544,6 +630,42 @@ def _pixel(ctx: Any, job: Any) -> None:
         ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
 
 
+def watertight_value(report: Any) -> bool | None:
+    """Whether the mesh is sealed, read the way the badge reads it.
+
+    ``meshreport`` measures watertightness on a *welded* copy, because it loads
+    with ``process=False`` so the UV and material checks see the unwelded mesh
+    -- and every xatlas seam split is then a boundary edge, which makes the raw
+    flag say "not watertight" about every textured mesh ever reconstructed.
+    ``widgets.quality_badge`` was moved onto ``welded_watertight`` and this
+    panel was not, so it printed ``watertight: False`` directly under a badge
+    saying ``watertight``.
+
+    The fallback is what keeps rows recorded before the change readable, and it
+    is the identical expression ``vectors.py`` uses.
+    """
+    if not isinstance(report, dict):
+        return None
+    value = report.get("welded_watertight", report.get("watertight"))
+    return value if isinstance(value, bool) else None
+
+
+def watertight_line(report: Any) -> str | None:
+    """The one line the panel prints about watertightness, or None.
+
+    The label names which measurement it is: a welded reading says so, and a
+    row that only ever carried the raw flag must not be relabelled as one --
+    that would be the same overclaim in reverse, and it is exactly the mistake
+    the badge made with ``mesh_audit``.
+    """
+    value = watertight_value(report)
+    if value is None:
+        return None
+    if isinstance(report, dict) and isinstance(report.get("welded_watertight"), bool):
+        return f"watertight (welded): {value}"
+    return f"watertight: {value}"
+
+
 def _quality(ctx: Any, job: Any) -> None:
     params = job.get("params") or {}
     report = params.get("mesh_report")
@@ -561,11 +683,14 @@ def _quality(ctx: Any, job: Any) -> None:
         for label, key in (
             ("triangles", "triangles"),
             ("materials", "materials"),
-            ("watertight", "watertight"),
-            ("pivot at feet", "grounded"),
         ):
             if key in report:
                 widgets.muted(f"{label}: {report[key]}")
+        sealed = watertight_line(report)
+        if sealed:
+            widgets.muted(sealed)
+        if "grounded" in report:
+            widgets.muted(f"pivot at feet: {report['grounded']}")
     if isinstance(audit, dict) and audit.get("worst") is not None:
         widgets.muted(f"visible openings: {float(audit['worst']) * 100:.1f}%")
 
