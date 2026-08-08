@@ -779,6 +779,7 @@ def promote_to_model(
     *,
     mesh_seed: int | None = None,
     platform: str | None = None,
+    resolution: int | None = None,
     size_m: float | None = None,
     bg_removal: str | None = None,
     profile: str | None = None,
@@ -802,8 +803,16 @@ def promote_to_model(
     they are validated with the same helpers create_job uses, in the same
     order, so an unusable value costs the request rather than two minutes of
     GPU.
+
+    ``resolution`` is the exception to "omitted means keep what the reference
+    recorded": see the comment below the params copy -- a reference's stored
+    resolution belongs to the 2D pane's platform select, not to the mesh.
     """
     check_seed("mesh_seed", mesh_seed)
+    if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
+        raise Invalid(
+            f"resolution must be one of {sorted(ALLOWED_RESOLUTIONS)}", field="resolution"
+        )
     source = svc.require_job(job_id)
     if source["stage"] != "reference":
         raise Invalid(
@@ -844,15 +853,28 @@ def promote_to_model(
         for k, v in (("platform", platform), ("size_m", size_m), ("bg_removal", bg_removal))
         if v is not None
     }
-    if overrides:
-        # Re-normalized as a whole rather than patched in place: platform
-        # implies the resolution the worker sends to trellis, so a stored
-        # resolution from the old platform has to be dropped and re-derived
-        # rather than left to contradict the new one.
-        raw = {**params, **overrides}
-        if "platform" in overrides:
-            raw.pop("resolution", None)
-        params.update(_normalize_guidance(svc, raw))
+    # Re-normalized as a whole rather than patched in place: platform implies
+    # the resolution the worker sends to trellis, so a stored resolution from
+    # the old platform has to be dropped and re-derived rather than left to
+    # contradict the new one.
+    #
+    # And the inherited one is dropped even with *no* platform override, which
+    # is the 512 trap: ``platform`` is one params key behind two selects, and
+    # the value a reference carries is the 2D pane's prompt fragment -- "2d"
+    # meaning flat and readable, whose 512 is a *reference* resolution. Copying
+    # it wholesale reconstructed every promotion of a 2D-styled reference at
+    # half the geometry resolution, invisibly. So the model side decides,
+    # exactly as ``studio/review_mode.capture_base`` decides it for a sweep:
+    # the 3D platform wins, an explicit resolution survives. The 2D taxonomy
+    # value itself is left alone -- this is the geometry resolution, not a
+    # relabelling of the prompt the reference was drawn from.
+    raw = {**params, **overrides}
+    raw.pop("resolution", None)
+    if resolution is not None:
+        raw["resolution"] = int(resolution)
+    elif "platform" not in overrides:
+        raw["resolution"] = guidance.PLATFORMS[guidance.DEFAULT_PLATFORM].resolution
+    params.update(_normalize_guidance(svc, raw))
     _resolve_profile(svc, params, profile, custom_triangles)
     if reference_prep is not None:
         params["reference_prep"] = bool(reference_prep)
