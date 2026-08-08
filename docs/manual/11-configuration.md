@@ -141,10 +141,10 @@ apply. It takes effect as you drag it, but the font atlas is baked once at start
 text only becomes properly crisp at the new size after a restart — everything is drawn at the right
 size immediately either way. *Show frame rate* is the same toggle as `F10`.
 
-**Layout.** *Reset pane sizes* puts the split between the form and the library back to its
-default, undoing any dragging of that divider. The sidebars themselves are a fixed 300 px and are
-not draggable. *Reset collapsed sections* re-opens every section that has been collapsed anywhere in
-the app.
+**Layout.** *Reset pane sizes* puts the split between the inspector and the library — both now on
+the right sidebar — back to its default, undoing any dragging of that divider. The sidebars
+themselves are a fixed 300 px and are not draggable. *Reset collapsed sections* re-opens every
+section that has been collapsed anywhere in the app.
 
 **Models.** A read-only list of the image models and style LoRAs the app knows about, marking any
 whose weights are missing, plus whether rigging is available. It is the same information the startup

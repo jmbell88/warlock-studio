@@ -1,8 +1,9 @@
 # The library and jobs
 
 Everything the app has ever made is a **job**, and every job is a row in the library — the lower
-half of the left sidebar. This chapter covers what a job goes through, how to find one, how to run
-one again, how to save a reusable style, and how to keep the disk under control.
+half of the right sidebar, under the inspector. This chapter covers what a job goes through, how to
+find one, how to run one again, how to save a reusable style, and how to keep the disk under
+control.
 
 ## The job lifecycle
 

@@ -231,6 +231,11 @@ def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> No
     kwargs = promote_kwargs(form)
 
     def go(force: bool = False) -> None:
+        if ctx.state.filters.kind not in ("all", "model"):
+            # Otherwise a filter left on "reference" (the natural way to find
+            # the source image before promoting it) permanently hides the
+            # model job this creates.
+            ctx.state.filters.kind = "all"
         ctx.submit(
             "submit", svc_jobs.promote_to_model, ctx.svc, source["id"], force=force, **kwargs
         )

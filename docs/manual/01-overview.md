@@ -83,15 +83,17 @@ is the first entry in the mode switch described above, and returns there at any 
 
 Once you are in the workspace, the window is three columns:
 
-- **The left sidebar** is two stacked panels, not one scrolling column. The upper panel is the
-  settings form for the current mode; the lower panel is the asset library — every job you have
-  ever run, with its filters. The divider between them can be dragged; the sidebars themselves are
-  a fixed width.
+- **The left sidebar** is the settings form for the current mode, and nothing else — there is
+  nothing left to split against, so it is one scrolling column with no divider. The sidebar itself
+  is a fixed width.
 - **The middle column** is the viewport: the interactive 3D preview, or the reference image in 2D
   mode, or the canvas in Inker mode. A small toolbar sits over it with the framing, wireframe and
   turntable toggles, and — on a finished reference in 2D mode — the **Open in Inker** button.
-- **The right column** is the inspector: everything about the selected asset. In 3D mode it is
-  three tabs, **Details**, **Rig & Pose** and **Export**; in 2D mode, **Details** and **Export**.
+- **The right column** is two stacked panels, not one scrolling column. The upper panel is the
+  inspector: everything about the selected asset. In 3D mode it is three tabs, **Details**, **Rig &
+  Pose** and **Export**; in 2D mode, **Details** and **Export**. The lower panel is the asset
+  library — every job you have ever run, with its filters. The divider between them can be dragged;
+  the sidebar itself is a fixed width.
 
 At the far right of the top bar are two small controls. The **?** button opens the keyboard
 shortcut list, which is also reproduced in [Keyboard shortcuts](09-shortcuts.md). Beside it is the

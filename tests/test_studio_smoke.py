@@ -568,13 +568,14 @@ def test_toasts_and_dialogs_build(app_ctx, imgui_ctx):
 def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
     """The real layout: three panes side by side, as main.py assembles them.
 
-    Through ``layout.pane_child`` rather than ``begin_child``, because that is
-    what main.py calls now and a style var pushed and popped around begin is
-    exactly the kind of thing that only fails inside a real frame. The right
-    column is two stacked panes (inspector over library) since the library
-    moved off the left sidebar onto the right one, under the inspector.
+    Through ``layout.pane_child`` for the left sidebar and viewport, and
+    through ``main._right_column`` -- the same function ``App._build_ui``
+    calls -- for the right one, rather than a second hand-copy of its
+    inspector/library split sitting next to the function that exists to
+    prevent exactly that.
     """
     from warlock.studio import layout as layout_mod
+    from warlock.studio import main as main_mod
     from warlock.studio.panes import inspector, library, overlay, settings_2d
 
     _seeded(app_ctx)
@@ -590,55 +591,61 @@ def test_the_whole_frame_builds_at_once(app_ctx, imgui_ctx):
         overlay.placeholder(app_ctx)
         imgui.end_child()
         imgui.same_line()
-        layout_mod.pane_child("inspector", (340, 250))
-        inspector.draw(app_ctx)
-        imgui.end_child()
-        layout_mod.pane_child("library", (340, 0))
-        library.draw(app_ctx)
-        imgui.end_child()
+        lay = layout_mod.Layout(app_ctx.settings)
+        main_mod._right_column(
+            app_ctx, lay, 340.0, inspector_draw=inspector.draw, library_draw=library.draw
+        )
 
     _frame(imgui_ctx, build)
     del renderer
 
 
 def test_the_right_sidebar_splits_inspector_and_library_by_settings_share(app_ctx, imgui_ctx):
-    """The right sidebar's split pins the same arithmetic the left sidebar's
-    settings/library split used before the library moved -- inspector gets
-    ``avail_y * settings_share`` and library gets whatever is left, so a
-    future edit that hardcodes a 50/50 split (or swaps which pane is on top)
-    shows up here rather than only on screen.
+    """Calls ``main._right_column`` directly -- the same function
+    ``App._build_ui`` calls for the right sidebar -- rather than a
+    reimplementation of its arithmetic, so a regression in main.py itself (a
+    hardcoded ratio, or the panes swapped) is caught here rather than only on
+    screen.
+
+    The expected split is computed from the splitter's grip width and the two
+    item-spacing gaps around it, not padded into a wide tolerance: the avail
+    height measured before the split recombines exactly into
+    ``inspector + spacing + grip + spacing + library``, so hardcoding the
+    ratio (or dropping the splitter) throws the measured heights off by more
+    than a pixel.
     """
     from warlock.studio import layout as layout_mod
+    from warlock.studio import main as main_mod
+    from warlock.studio.tokens import sp
 
     imgui, _renderer = imgui_ctx
     lay = layout_mod.Layout(app_ctx.settings)
     assert lay.settings_share == 0.55  # the untouched default this test relies on
 
+    avail_before: list[float] = []
     tops: list[float] = []
     bottoms: list[float] = []
 
     def build():
-        imgui.begin_group()
-        avail_y = imgui.get_content_region_avail().y
-        inspector_height = avail_y * lay.settings_share
-        top = imgui.get_cursor_screen_pos().y
-        if layout_mod.pane_child("inspector", (300, inspector_height)):
-            pass
-        imgui.end_child()
-        tops.append(imgui.get_item_rect_size().y)
-        bottom_start = imgui.get_cursor_screen_pos().y
-        if layout_mod.pane_child("library", (300, 0)):
-            pass
-        imgui.end_child()
-        bottoms.append(imgui.get_item_rect_size().y)
-        imgui.end_group()
-        del top, bottom_start
+        avail_before.append(imgui.get_content_region_avail().y)
+        main_mod._right_column(
+            app_ctx,
+            lay,
+            300.0,
+            inspector_draw=lambda _ctx: tops.append(imgui.get_window_size().y),
+            library_draw=lambda _ctx: bottoms.append(imgui.get_window_size().y),
+        )
 
     _frame(imgui_ctx, build)
 
-    total = tops[0] + bottoms[0]
-    assert tops[0] == pytest.approx(total * 0.55, abs=5.0)
-    assert bottoms[0] == pytest.approx(total * 0.45, abs=5.0)
+    avail_y = avail_before[0]
+    spacing = imgui.get_style().item_spacing.y
+    grip = sp(layout_mod.GRIP)
+    expected_top = avail_y * lay.settings_share
+    expected_bottom = avail_y - expected_top - grip - 2 * spacing
+
+    assert tops[0] == pytest.approx(expected_top, abs=1.0)
+    assert bottoms[0] == pytest.approx(expected_bottom, abs=1.0)
 
 
 def test_the_landing_screen_builds_in_each_of_its_views(app_ctx, imgui_ctx):

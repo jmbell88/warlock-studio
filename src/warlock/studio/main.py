@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,46 @@ def _ui_scale(settings: Any) -> float:
     except (TypeError, ValueError):
         return 1.0
     return min(max(value, lo), hi)
+
+
+def _right_column(
+    ctx: Any,
+    lay: Any,
+    sidebar_w: float,
+    *,
+    inspector_draw: Callable[[Any], None],
+    library_draw: Callable[[Any], None],
+) -> None:
+    """The right sidebar: inspector on top, library on bottom.
+
+    Split by ``lay.settings_share`` -- the same split the left sidebar used to
+    make between settings and library, before the library moved to share this
+    column with the inspector instead. Pulled out of ``App._build_ui`` as a
+    module-level function (no ``self`` needed) so a test can call the exact
+    geometry the frame draws rather than a hand-copied reimplementation of it.
+    """
+    from imgui_bundle import imgui
+
+    from . import layout as layout_mod
+    from . import tokens
+
+    imgui.begin_group()
+    avail_y = imgui.get_content_region_avail().y
+    inspector_height = avail_y * lay.settings_share
+    if layout_mod.pane_child("inspector", (0, inspector_height)):
+        inspector_draw(ctx)
+    imgui.end_child()
+    drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
+    if drag and avail_y > 0:
+        lay.settings_share = min(
+            max(lay.settings_share + drag * tokens.SCALE / avail_y, layout_mod.SHARE_MIN),
+            layout_mod.SHARE_MAX,
+        )
+        lay.save()
+    if layout_mod.pane_child("library", (0, 0)):
+        library_draw(ctx)
+    imgui.end_child()
+    imgui.end_group()
 
 
 class App:
@@ -143,6 +184,9 @@ class App:
         )
         pygame.display.gl_set_attribute(pygame.GL_DOUBLEBUFFER, 1)
         pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
+        icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
+        if icon_path.is_file():
+            pygame.display.set_icon(pygame.image.load(str(icon_path)))
         # The window is in physical pixels (Per-Monitor-V2): a persisted size
         # is already physical, and the first-run default scales by the primary
         # monitor so 1600x950 means the same amount of screen everywhere.
@@ -1022,7 +1066,6 @@ class App:
         # against) and the right column is the two-scroller stack that used to
         # live on the left.
         from . import layout as layout_mod
-        from . import tokens
         from .tokens import sp
 
         lay = self.layout
@@ -1038,23 +1081,9 @@ class App:
         self._viewport_pane()
         imgui.same_line()
 
-        imgui.begin_group()
-        avail_y = imgui.get_content_region_avail().y
-        inspector_height = avail_y * lay.settings_share
-        if layout_mod.pane_child("inspector", (0, inspector_height)):
-            inspector.draw(ctx)
-        imgui.end_child()
-        drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
-        if drag and avail_y > 0:
-            lay.settings_share = min(
-                max(lay.settings_share + drag * tokens.SCALE / avail_y, layout_mod.SHARE_MIN),
-                layout_mod.SHARE_MAX,
-            )
-            lay.save()
-        if layout_mod.pane_child("library", (0, 0)):
-            library.draw(ctx)
-        imgui.end_child()
-        imgui.end_group()
+        _right_column(
+            ctx, lay, sidebar_w, inspector_draw=inspector.draw, library_draw=library.draw
+        )
 
         imgui.end()
         self._overlays(viewport)

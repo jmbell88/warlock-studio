@@ -1,7 +1,7 @@
 # Generating references
 
 A reference is the picture the mesh will be reconstructed from. Everything in this chapter lives in
-the **2D reference** mode's settings pane, in the upper half of the left sidebar.
+the **2D reference** mode's settings pane, in the left sidebar.
 
 ## The prompt
 
