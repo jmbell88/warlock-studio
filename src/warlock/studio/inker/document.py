@@ -14,7 +14,7 @@ accumulated rectangle to whoever is uploading pixels to the GPU and clears it;
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,20 @@ import numpy as np
 from . import composite as cp
 from . import gradient as grad
 from . import transform as tf
+from .anim_edits import (
+    AnimateEdit,
+    CelSetEdit,
+    FrameAddEdit,
+    FrameDurationEdit,
+    FrameMoveEdit,
+    FrameRemoveEdit,
+    TagsEdit,
+    TrackAddEdit,
+    TrackMoveEdit,
+    TrackPropsEdit,
+    TrackRemoveEdit,
+)
+from .animation import Animation, Frame, Tag, Track, clamp_duration
 from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
 from .layers import Layer, LayerStack, new_uid
 from .selection import Clipboard, FloatingBuffer, SelectionMask, magic_wand
@@ -46,7 +60,22 @@ OPAQUE_WHITE: RGBA = (255, 255, 255, 255)
 
 SHAPES = ("line", "rect", "ellipse")
 
-__all__ = ["Document", "RGBA", "TRANSPARENT", "OPAQUE_WHITE", "SHAPES", "normalise_rect"]
+#: Ceiling on the per-frame flatten cache. Sized against the undo budget it
+#: sits beside (192 MiB) rather than against a frame count: at 2048 square a
+#: frame is 16 MiB, so this is eight of them, and at sprite sizes it is
+#: thousands. A count would have been generous at one size and ruinous at the
+#: other.
+FRAME_CACHE_BYTES = 128 * 1024 * 1024
+
+__all__ = [
+    "FRAME_CACHE_BYTES",
+    "Document",
+    "RGBA",
+    "TRANSPARENT",
+    "OPAQUE_WHITE",
+    "SHAPES",
+    "normalise_rect",
+]
 
 
 def normalise_rect(p0: tuple[int, int], p1: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -93,12 +122,37 @@ class Document:
     floating: FloatingBuffer | None = None
     clipboard: Clipboard = field(default_factory=Clipboard)
     history: UndoStack = field(default_factory=UndoStack)
+    anim: Animation | None = None
 
     _composite: np.ndarray = field(init=False, repr=False)
+    #: Per-frame change counters, keyed by frame uid, for the flatten cache.
+    #: A plain dict rather than a field on ``Frame`` so a frame carries only
+    #: what a *save* carries -- a stamp is cache bookkeeping and has no
+    #: business round-tripping through a file.
+    _frame_stamps: dict[int, int] = field(default_factory=dict, repr=False)
     _below: np.ndarray | None = field(init=False, default=None, repr=False)
     _dirty: tuple[int, int, int, int] | None = field(init=False, default=None, repr=False)
     _stroke: StrokeState | None = field(init=False, default=None, repr=False)
     _full: bool = field(init=False, default=True, repr=False)
+    #: Cels autovivified by writes that have not yet been committed. They ride
+    #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
+    #: frame is one Ctrl+Z rather than two. A *list* rather than one slot: the
+    #: convention is that every write commits before the next one autovivifies,
+    #: and while that holds there is never more than one -- but the cost of the
+    #: convention being broken was a second write landing on the shared
+    #: read-only placeholder plane and raising out of the middle of a stroke,
+    #: which is not a failure mode worth keeping in exchange for a scalar.
+    _pending_cels: list[Any] = field(init=False, default_factory=list, repr=False)
+    #: frame uid -> (stamp it was built at, pixels), least-recently-used first
+    #: in ``_frame_order``. See :meth:`frame_flat`.
+    _frame_cache: dict[int, tuple[int, np.ndarray]] = field(
+        default_factory=dict, repr=False
+    )
+    _frame_order: list[int] = field(default_factory=list, repr=False)
+    #: Frames that have gone, for whoever is holding a *texture* keyed on one.
+    #: Plain ints and a drain, so the document goes on knowing nothing about GL:
+    #: see ``panes/inker_textures.release_dropped``.
+    _dropped_frames: list[int] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.stack.size
@@ -195,10 +249,26 @@ class Document:
         rectangle on top of pixels that no longer exist. Undo is how this
         happens in practice -- a patch is addressed by uid and can land
         anywhere in the stack, however the active layer has moved since.
+
+        On an animated document the named layer may not be in the current
+        stack at all: a patch addresses a *cel*, and undo can be pressed after
+        the playhead has moved off the frame the edit was made on. That is not
+        an error and it is not a no-op either -- the pixels really did change,
+        just not any that are on screen -- so the frames carrying that cel have
+        their flatten caches stamped and nothing is recomposited. Reaching
+        ``index_of`` with such a uid is what used to raise ``KeyError`` out of
+        the middle of an undo.
         """
         if rect is None:
             self.invalidate_all()
             return
+        if layer_uid is not None:
+            self._stamp_layer(layer_uid)
+            if self.anim is not None and not self._in_stack(layer_uid):
+                self.rev += 1
+                return
+        else:
+            self._stamp_current()
         box = self.clip(rect)
         if box is None:
             self.rev += 1
@@ -220,6 +290,16 @@ class Document:
         Full recompositing is O(layers x canvas) -- at 2048 square by ten
         layers, a fraction of a second. That is affordable *because* it only
         happens on a click (reorder, hide, switch layer), never on a stroke.
+
+        It stamps **no** frame. This is about the *composite* -- the cache of
+        what is on screen -- and most of what reaches it changes no pixels at
+        all: switching layer, switching frame, rebuilding the view after an
+        edit that has already stamped what it touched. Stamping here instead
+        looked conservative and was the opposite of a cache: every step of the
+        playhead threw away every frame's flatten, so onion skinning
+        recomposited its neighbours on every keypress. The callers that really
+        do change every frame -- a grid edit, a matte, a whole-canvas geometry
+        op, a snapshot restore -- say so themselves with ``_stamp_all``.
         """
         self._below = self.stack.composite_below()
         width, height = self.size
@@ -256,6 +336,645 @@ class Document:
         rect, self._dirty = self._dirty, None
         return rect
 
+    # -- the animation grid -------------------------------------------------
+
+    @property
+    def animated(self) -> bool:
+        return self.anim is not None
+
+    def _in_stack(self, layer_uid: int) -> bool:
+        return any(layer.uid == layer_uid for layer in self.stack)
+
+    def _released(self, layers: Any) -> frozenset[int]:
+        """Which of these the grid no longer holds, by ``id()``.
+
+        Called *after* a removal, and it is the answer the byte budget wants:
+        the history pins pixels only where nothing else does, so a cel still
+        linked into another frame costs the budget nothing however the step is
+        undone. See ``anim_edits.charged``.
+        """
+        live = (
+            set()
+            if self.anim is None
+            else {id(layer) for layer in self.anim.cels.values()}
+        )
+        return frozenset(
+            id(layer) for layer in layers if layer is not None and id(layer) not in live
+        )
+
+    def layer_by_uid(self, uid: int) -> Layer:
+        """The layer a uid names, on *any* frame.
+
+        The current stack first, because that is the overwhelmingly common case
+        and it is also the only correct answer when a placeholder and a cel
+        could both match. Only then the grid, which is what makes an undo issued
+        after the playhead moved land on the cel the edit was made to rather
+        than raising.
+        """
+        try:
+            return self.stack.by_uid(uid)
+        except KeyError:
+            if self.anim is None:
+                raise
+        for layer in self.anim.unique_cel_layers():
+            if layer.uid == uid:
+                return layer
+        raise KeyError(uid)
+
+    def frame_stamp(self, frame_uid: int) -> int:
+        return self._frame_stamps.get(frame_uid, 0)
+
+    def frame_flat(self, frame_uid: int) -> np.ndarray | None:
+        """One frame's flattened RGBA, cached against that frame's stamp.
+
+        Onion skinning asks for two or four of these every frame the app draws,
+        and playback asks for one per tick, so it has to be a lookup rather than
+        a composite. The cache is keyed on the *stamp* and not on ``rev``,
+        because ``rev`` moves for any change anywhere and would throw away every
+        frame's flatten each time the user drew a single dab on one of them.
+
+        Bounded by bytes and evicted least-recently-used, which is the right
+        policy here and not the one ``UndoStack`` uses: history has to keep the
+        *newest* steps and drops from the old end, while a cache should keep
+        whatever is being looked at -- and during playback that is a window
+        sweeping round the timeline, which oldest-first eviction would evict
+        exactly one tick before it came round again.
+        """
+        anim = self.anim
+        if anim is None:
+            return None
+        try:
+            frame = anim.frames[anim.frame_index(frame_uid)]
+        except KeyError:
+            return None
+        stamp = self.frame_stamp(frame_uid)
+        hit = self._frame_cache.get(frame_uid)
+        if hit is not None and hit[0] == stamp:
+            self._frame_order.remove(frame_uid)
+            self._frame_order.append(frame_uid)
+            return hit[1]
+        flat = LayerStack(anim.layers_for(frame, self.size), 0).flatten()
+        self._frame_cache[frame_uid] = (stamp, flat)
+        if frame_uid in self._frame_order:
+            self._frame_order.remove(frame_uid)
+        self._frame_order.append(frame_uid)
+        self._evict_frames()
+        return flat
+
+    def _evict_frames(self) -> None:
+        # Never the entry just stored, however big it is: a single frame over
+        # the whole budget must still be returnable, or a large canvas caches
+        # nothing and recomposites on every draw.
+        total = sum(pixels.nbytes for _stamp, pixels in self._frame_cache.values())
+        while total > FRAME_CACHE_BYTES and len(self._frame_order) > 1:
+            oldest = self._frame_order.pop(0)
+            entry = self._frame_cache.pop(oldest, None)
+            if entry is not None:
+                total -= entry[1].nbytes
+
+    def frame_cache_bytes(self) -> int:
+        return sum(pixels.nbytes for _stamp, pixels in self._frame_cache.values())
+
+    def _forget_frame(self, frame_uid: int) -> None:
+        """Drop everything keyed on a frame that no longer exists.
+
+        The stamp and the cache entry go **together**, which is the whole point
+        of doing this in one method. Dropping the stamp alone restarts that
+        frame's counter at zero, and a frame uid that comes back -- an undone
+        delete re-inserts the same ``Frame`` object -- would then match a cache
+        entry built before it was removed and show pixels from another edit.
+        """
+        self._frame_cache.pop(frame_uid, None)
+        if frame_uid in self._frame_order:
+            self._frame_order.remove(frame_uid)
+        self._frame_stamps.pop(frame_uid, None)
+        self._dropped_frames.append(frame_uid)
+
+    def _forget_all_frames(self) -> None:
+        for uid in set(self._frame_stamps) | set(self._frame_cache):
+            self._forget_frame(uid)
+
+    def take_dropped_frames(self) -> list[int]:
+        """The frames that have gone since the last call, and clear the list.
+
+        A drain rather than a set difference recomputed every draw: a pane that
+        holds one texture per frame needs to know which ones to release, and
+        walking the live grid to find out would be a per-frame scan to answer a
+        question that is almost always "none".
+        """
+        gone, self._dropped_frames = self._dropped_frames, []
+        return gone
+
+    def _stamp(self, frame_uids: Any) -> None:
+        for uid in frame_uids:
+            self._frame_stamps[uid] = self._frame_stamps.get(uid, 0) + 1
+
+    def _stamp_current(self) -> None:
+        if self.anim is not None and self.anim.frames:
+            self._stamp((self.anim.frame.uid,))
+
+    def _stamp_layer(self, layer_uid: int) -> None:
+        """Stamp every frame a write to this layer changes.
+
+        The current frame is included unconditionally: the layer may be a
+        placeholder, which is in no ``cels`` entry and so answers the grid query
+        with nothing, and a caller that has just written to the visible canvas
+        must not be told its flatten is unchanged.
+        """
+        if self.anim is None:
+            return
+        uids = self.anim.frame_uids_of_layer(layer_uid)
+        if self.anim.frames:
+            uids.add(self.anim.frame.uid)
+        self._stamp(uids)
+
+    def _stamp_all(self) -> None:
+        if self.anim is not None:
+            self._stamp([frame.uid for frame in self.anim.frames])
+
+    def ensure_animation(self) -> Animation:
+        """Turn a still document into a one-frame animation, in place.
+
+        Nothing is copied and nothing is renumbered: each existing ``Layer``
+        *becomes* the first frame's cel and each ``Track`` takes that layer's
+        uid, so every patch already on the undo stack goes on addressing the
+        same pixels. That is what lets the first "Add frame" be undone back to a
+        plain document without the history underneath it noticing.
+        """
+        if self.anim is not None:
+            return self.anim
+        frame = Frame()
+        tracks = [Track.of(layer) for layer in self.stack]
+        self.anim = Animation(
+            tracks=tracks,
+            frames=[frame],
+            cels={
+                (track.uid, frame.uid): layer
+                for track, layer in zip(tracks, self.stack, strict=True)
+            },
+            current=0,
+        )
+        return self.anim
+
+    def drop_animation(self) -> None:
+        """Back to a still document showing whatever frame is current.
+
+        The undo hook for ``AnimateEdit``. The stack is left exactly as it
+        stands, which is right because ``ensure_animation`` did not build it --
+        on the only path that matters (animate, then undo) it is still the
+        original layer objects.
+        """
+        self.anim = None
+        self._forget_all_frames()
+
+    def _materialize_frame(self, *, active: int | None = None) -> None:
+        """Rebuild ``stack`` as the view of the current frame.
+
+        This is the join between the two models, and the reason the rest of the
+        editor needed almost no changes: panes, tools, the floating buffer, the
+        selection, the ``_below`` cache and the compositor all go on seeing an
+        ordinary ``LayerStack``, because that is genuinely what they are handed.
+        """
+        if self.anim is None or not self.anim.frames:
+            return
+        layers = self.anim.layers_for(self.anim.frame, self.size)
+        if not layers:
+            # A grid with no tracks. ``LayerStack`` has no empty form, so the
+            # previous frame's list stays -- which is only ever reached while an
+            # edit is midway through rebuilding the rows, and the edit ends with
+            # another ``_anim_changed``.
+            return
+        index = self.stack.active_index if active is None else active
+        self.stack = LayerStack(layers, max(0, min(index, len(layers) - 1)))
+
+    def set_current_frame(self, index: int) -> None:
+        """Move the playhead. Not undoable -- it is view state, like the
+        active layer, and a document that asked to be saved because the user
+        looked at another frame would make ``dirty`` a lie."""
+        if self.anim is None:
+            return
+        index = max(0, min(int(index), len(self.anim.frames) - 1))
+        if index == self.anim.current:
+            return
+        self.commit_floating()
+        self.anim.current = index
+        self._materialize_frame()
+        self.invalidate_all()
+
+    def _anim_changed(self, *, active: int | None = None) -> None:
+        """What every grid edit ends with: rebuild the view, recomposite.
+
+        Unconditional rather than "when the current frame is affected". Working
+        out whether it was means asking whether a track property, a reorder or a
+        link touched the frame on screen, and the cost of being wrong is a
+        viewport showing pixels the document no longer has -- against a full
+        recomposite on a click, which ``invalidate_all`` already argues is
+        affordable.
+
+        Every frame is stamped, for the reason ``invalidate_all`` deliberately
+        does not: a track is authoritative over every frame it appears in, so a
+        hide or an opacity change really does alter every cached flatten in the
+        document.
+        """
+        self._stamp_all()
+        self._materialize_frame(active=active)
+        self.invalidate_all()
+
+    # -- raw grid mutation, for the edits to call --------------------------
+
+    def _set_animation(self, anim: Animation | None) -> None:
+        self.anim = anim
+        if anim is None:
+            self._forget_all_frames()
+        self._anim_changed()
+
+    def _put_frame(self, index: int, frame: Frame, cels: dict[int, Layer]) -> None:
+        anim = self.anim
+        assert anim is not None
+        anim.frames.insert(max(0, min(index, len(anim.frames))), frame)
+        for track_uid, layer in cels.items():
+            anim.cels[(track_uid, frame.uid)] = layer
+        self._anim_changed()
+
+    def _drop_frame(self, frame: Frame) -> None:
+        anim = self.anim
+        assert anim is not None
+        # The floor is the public wrappers' -- ``remove_frame`` refuses the last
+        # frame, and the only other caller is ``FrameAddEdit.undo``, whose add
+        # was made against a grid that already had one. Stated here because
+        # everything below assumes ``anim.frame`` still answers.
+        assert len(anim.frames) > 1, "a grid keeps at least one frame"
+        anim.frames.pop(anim.frame_index(frame.uid))
+        for key in [key for key in anim.cels if key[1] == frame.uid]:
+            del anim.cels[key]
+        anim.forget_placeholders(frame_uid=frame.uid)
+        self._forget_frame(frame.uid)
+        anim.current = max(0, min(anim.current, len(anim.frames) - 1))
+        self._anim_changed()
+
+    def _move_frame(self, frame_uid: int, to: int) -> None:
+        anim = self.anim
+        assert anim is not None
+        frame = anim.frames.pop(anim.frame_index(frame_uid))
+        anim.frames.insert(max(0, min(to, len(anim.frames))), frame)
+        anim.current = anim.frame_index(frame_uid)
+        self._anim_changed()
+
+    def _set_duration(self, frame_uid: int, ms: int) -> None:
+        anim = self.anim
+        assert anim is not None
+        anim.frames[anim.frame_index(frame_uid)].duration_ms = clamp_duration(ms)
+        self.rev += 1
+
+    def _put_track(self, index: int, track: Track, cels: dict[int, Layer]) -> None:
+        anim = self.anim
+        assert anim is not None
+        index = max(0, min(index, len(anim.tracks)))
+        anim.tracks.insert(index, track)
+        for frame_uid, layer in cels.items():
+            anim.cels[(track.uid, frame_uid)] = layer
+        self._anim_changed(active=index)
+
+    def _drop_track(self, track: Track) -> None:
+        anim = self.anim
+        assert anim is not None
+        # As in ``_drop_frame``: ``remove_layer`` refuses the last row and
+        # ``TrackAddEdit.undo`` can only reverse an add made above one.
+        assert len(anim.tracks) > 1, "a grid keeps at least one track"
+        index = anim.track_index(track.uid)
+        anim.tracks.pop(index)
+        for key in [key for key in anim.cels if key[0] == track.uid]:
+            del anim.cels[key]
+        anim.forget_placeholders(track_uid=track.uid)
+        self._anim_changed(active=min(index, len(anim.tracks) - 1))
+
+    def _move_track(self, track_uid: int, to: int) -> None:
+        anim = self.anim
+        assert anim is not None
+        track = anim.tracks.pop(anim.track_index(track_uid))
+        to = max(0, min(to, len(anim.tracks)))
+        anim.tracks.insert(to, track)
+        self._anim_changed(active=to)
+
+    def _set_track_props(self, track_uid: int, props: dict) -> None:
+        anim = self.anim
+        assert anim is not None
+        track = anim.tracks[anim.track_index(track_uid)]
+        for key, value in props.items():
+            setattr(track, key, value)
+        self._anim_changed()
+
+    def _set_cel(self, track_uid: int, frame_uid: int, layer: Layer | None) -> None:
+        anim = self.anim
+        assert anim is not None
+        if layer is None:
+            anim.cels.pop((track_uid, frame_uid), None)
+        else:
+            anim.cels[(track_uid, frame_uid)] = layer
+        # No targeted stamp: ``_anim_changed`` stamps every frame, this one
+        # included, and a second bump of the same counter buys nothing.
+        self._anim_changed()
+
+    # -- frames -------------------------------------------------------------
+
+    def add_frame(
+        self, index: int | None = None, *, link: bool = False, copy: bool = False
+    ) -> Frame:
+        """Append or insert a frame, optionally carrying the current one's cels.
+
+        Three shapes in one entry point because they differ only in what goes
+        into ``cels``: blank (nothing), duplicate-linked (the same objects, so
+        editing either frame edits both) and duplicate-copied (fresh copies).
+
+        The first call on a still document is one ``CompoundEdit`` of
+        ``AnimateEdit`` and this ``FrameAddEdit``, so a single Ctrl+Z goes all
+        the way back to a plain document rather than leaving a one-frame
+        animation nobody asked for.
+        """
+        self.commit_floating()
+        edits: list[Any] = []
+        if self.anim is None:
+            edits.append(AnimateEdit(self.ensure_animation()))
+        anim = self.anim
+        assert anim is not None
+        source = anim.frame
+        at = len(anim.frames) if index is None else max(0, min(int(index), len(anim.frames)))
+        frame = Frame(duration_ms=source.duration_ms)
+        cels: dict[int, Layer] = {}
+        if link or copy:
+            for track in anim.tracks:
+                cel = anim.cels.get((track.uid, source.uid))
+                if cel is not None:
+                    cels[track.uid] = cel if link else cel.copy(name=cel.name)
+        # The playhead moves *before* the insert, so ``_put_frame``'s own
+        # ``_anim_changed`` materialises the new frame -- rather than after it,
+        # which meant rebuilding the whole view twice for one click.
+        anim.current = at
+        self._put_frame(at, frame, cels)
+        # ``pinned`` only when this op allocated pixels of its own. A linked
+        # duplicate holds objects the grid is keeping alive anyway, and charging
+        # for them again would evict real history to make room for a number that
+        # describes no memory.
+        edits.append(FrameAddEdit(at, frame, cels, pinned=copy))
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        return frame
+
+    def remove_frame(self, index: int | None = None) -> bool:
+        anim = self.anim
+        if anim is None or len(anim.frames) <= 1:
+            return False
+        self.commit_floating()
+        index = anim.current if index is None else max(0, min(int(index), len(anim.frames) - 1))
+        frame = anim.frames[index]
+        cels = {
+            track.uid: anim.cels[(track.uid, frame.uid)]
+            for track in anim.tracks
+            if (track.uid, frame.uid) in anim.cels
+        }
+        self._drop_frame(frame)
+        self.history.push(
+            FrameRemoveEdit(index, frame, cels, pinned=self._released(cels.values()))
+        )
+        return True
+
+    def move_frame(self, index: int, to: int) -> bool:
+        anim = self.anim
+        if anim is None:
+            return False
+        to = max(0, min(int(to), len(anim.frames) - 1))
+        if to == index or not 0 <= index < len(anim.frames):
+            return False
+        self.commit_floating()
+        uid = anim.frames[index].uid
+        self._move_frame(uid, to)
+        self.history.push(FrameMoveEdit(uid, index, to))
+        return True
+
+    def set_frame_duration(self, index: int, ms: int) -> bool:
+        anim = self.anim
+        if anim is None or not 0 <= index < len(anim.frames):
+            return False
+        frame = anim.frames[index]
+        before, after = frame.duration_ms, clamp_duration(ms)
+        if before == after:
+            return False
+        self._set_duration(frame.uid, after)
+        self.history.push(FrameDurationEdit(frame.uid, before, after))
+        return True
+
+    # -- cels ---------------------------------------------------------------
+
+    def _slot(self, track_index: int | None, frame_index: int | None) -> tuple[Track, Frame] | None:
+        anim = self.anim
+        if anim is None:
+            return None
+        ti = self.stack.active_index if track_index is None else track_index
+        fi = anim.current if frame_index is None else frame_index
+        if not (0 <= ti < len(anim.tracks) and 0 <= fi < len(anim.frames)):
+            return None
+        return anim.tracks[ti], anim.frames[fi]
+
+    def clear_cel(self, track_index: int | None = None, frame_index: int | None = None) -> bool:
+        slot = self._slot(track_index, frame_index)
+        if slot is None:
+            return False
+        track, frame = slot
+        assert self.anim is not None
+        before = self.anim.cels.get((track.uid, frame.uid))
+        if before is None:
+            return False
+        self.commit_floating()
+        self._set_cel(track.uid, frame.uid, None)
+        # Clearing one slot of a linked cel releases nothing: the object is
+        # alive in the frames it is still linked into.
+        self.history.push(
+            CelSetEdit(
+                track.uid, frame.uid, before, None, pinned=bool(self._released([before]))
+            )
+        )
+        return True
+
+    def link_cel(
+        self, source_frame: int, track_index: int | None = None, frame_index: int | None = None
+    ) -> bool:
+        """Point a slot at another frame's cel, so the two share one object."""
+        slot = self._slot(track_index, frame_index)
+        anim = self.anim
+        if slot is None or anim is None or not 0 <= source_frame < len(anim.frames):
+            return False
+        track, frame = slot
+        source = anim.cels.get((track.uid, anim.frames[source_frame].uid))
+        before = anim.cels.get((track.uid, frame.uid))
+        if source is None or source is before:
+            return False
+        self.commit_floating()
+        self._set_cel(track.uid, frame.uid, source)
+        # ``pinned=False``: the shared object is alive in the frame it came
+        # from whatever the history does with this step.
+        self.history.push(CelSetEdit(track.uid, frame.uid, before, source, pinned=False))
+        return True
+
+    def unlink_cel(self, track_index: int | None = None, frame_index: int | None = None) -> bool:
+        """Give a linked slot a private copy, so editing it stops editing the
+        other frames.
+
+        The copy -- and therefore its uid -- is made **once, here**, and the
+        edit holds it. A redo that copied again would mint a new identity and
+        strand every patch recorded against the first one, which is the same
+        rule ``flatten_layers`` follows when it draws its uid up front.
+        """
+        slot = self._slot(track_index, frame_index)
+        anim = self.anim
+        if slot is None or anim is None:
+            return False
+        track, frame = slot
+        if not anim.is_linked(track.uid, frame.uid):
+            return False
+        before = anim.cels[(track.uid, frame.uid)]
+        self.commit_floating()
+        copy = before.copy(name=before.name)
+        self._set_cel(track.uid, frame.uid, copy)
+        self.history.push(CelSetEdit(track.uid, frame.uid, before, copy, pinned=True))
+        return True
+
+    # -- tags ---------------------------------------------------------------
+
+    def _set_tags(self, tags: list[Tag]) -> None:
+        """Undo hook for every tag op. Installs *copies*.
+
+        The edit holds the lists it was given and undo/redo may run any number
+        of times, so handing the document the same ``Tag`` objects would let the
+        next rename write through into the step that is meant to reverse it.
+        """
+        anim = self.anim
+        if anim is None:
+            return
+        anim.tags = [replace(tag) for tag in tags]
+        self.rev += 1
+
+    def _clamped_tag(self, tag: Tag) -> Tag:
+        """A tag with its span inside the timeline and its ends the right way up."""
+        anim = self.anim
+        assert anim is not None
+        last = len(anim.frames) - 1
+        start = max(0, min(int(tag.start), last))
+        end = max(0, min(int(tag.end), last))
+        return replace(
+            tag,
+            name=(tag.name.strip() or "tag"),
+            start=min(start, end),
+            end=max(start, end),
+            loop=bool(tag.loop),
+        )
+
+    def _push_tags(self, tags: list[Tag]) -> bool:
+        """Install a new tag list as one undo step, or nothing if it is the same.
+
+        The no-op check is the rule every other op here follows: dirty is a
+        comparison against ``history.head``, so a step that changes nothing
+        makes a saved document ask to be saved. ``Tag`` is a plain dataclass, so
+        ``==`` is the value comparison this wants.
+        """
+        anim = self.anim
+        if anim is None:
+            return False
+        before = [replace(tag) for tag in anim.tags]
+        after = [self._clamped_tag(tag) for tag in tags]
+        if before == after:
+            return False
+        self._set_tags(after)
+        self.history.push(TagsEdit(before, after))
+        return True
+
+    def add_tag(
+        self, name: str, start: int, end: int | None = None, *, loop: bool = True
+    ) -> bool:
+        """A named span of frames. Overlaps are allowed -- ``active_tag`` picks
+        the innermost, which is what makes a short "hit" inside a long "combat"
+        the useful arrangement rather than an ambiguous one."""
+        if self.anim is None:
+            return False
+        span = Tag(name=name, start=start, end=start if end is None else end, loop=loop)
+        return self._push_tags([*self.anim.tags, span])
+
+    def remove_tag(self, index: int) -> bool:
+        anim = self.anim
+        if anim is None or not 0 <= index < len(anim.tags):
+            return False
+        return self._push_tags([t for i, t in enumerate(anim.tags) if i != index])
+
+    def set_tag(self, index: int, **props: Any) -> bool:
+        """Rename, retime or re-loop one tag. Unnamed keys are left alone."""
+        anim = self.anim
+        if anim is None or not 0 <= index < len(anim.tags):
+            return False
+        edited = replace(anim.tags[index], **props)
+        return self._push_tags(
+            [edited if i == index else t for i, t in enumerate(anim.tags)]
+        )
+
+    # -- autovivify ---------------------------------------------------------
+
+    def _ensure_cel_for(self, layer_uid: int) -> None:
+        """Turn the placeholder a write is about to land on into a real cel.
+
+        Called by every path that writes pixels, immediately before it does, and
+        keyed by uid rather than by "the active layer" because committing a
+        floating buffer writes to whichever layer it was lifted from.
+
+        The new cel keeps the placeholder's uid, which was already stable, so a
+        caller holding the uid across this call is unaffected -- and the layer
+        is swapped into the stack *in place* rather than by re-materialising,
+        because the caller is generally one line away from reading
+        ``stack.active`` and would otherwise get the object it just replaced.
+
+        An already-pending cel does not stop a second one: the convention is
+        that every write commits before the next autovivifies, so there is
+        normally at most one, and refusing here in the case where there is not
+        left the second write pointed at the shared read-only placeholder plane
+        -- a ``ValueError`` out of the middle of a gesture rather than a cel.
+        """
+        anim = self.anim
+        if anim is None:
+            return
+        try:
+            index = self.stack.index_of(layer_uid)
+        except KeyError:
+            return
+        placeholder = self.stack[index]
+        if not anim.is_placeholder(placeholder) or index >= len(anim.tracks):
+            return
+        track, frame = anim.tracks[index], anim.frame
+        width, height = self.size
+        real = Layer(
+            pixels=cp.empty(width, height),
+            name=track.name,
+            opacity=track.opacity,
+            visible=track.visible,
+            blend=track.blend,
+            uid=placeholder.uid,
+        )
+        anim.cels[(track.uid, frame.uid)] = real
+        self.stack.layers[index] = real
+        self._pending_cels.append(
+            CelSetEdit(track.uid, frame.uid, None, real, pinned=True)
+        )
+
+    def _ensure_active_cel(self) -> None:
+        if self.anim is not None:
+            self._ensure_cel_for(self.stack.active.uid)
+
+    def _discard_pending_cel(self) -> None:
+        """Undo an autovivify whose write never happened, pushing nothing.
+
+        "A step that changes nothing is not pushed" applies to the cel as much
+        as to the pixels: a brush-down with no drag would otherwise leave a
+        blank cel behind and a document asking to be saved.
+        """
+        pending, self._pending_cels = self._pending_cels, []
+        for edit in reversed(pending):
+            self._set_cel(edit.track_uid, edit.frame_uid, None)
+
     # -- geometry helpers ---------------------------------------------------
 
     def clip(self, rect: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
@@ -287,11 +1006,22 @@ class Document:
     def _commit_patch(
         self, layer: Layer, rect: tuple[int, int, int, int], before: np.ndarray
     ) -> None:
-        """Push one undo step for a region already written, and recomposite."""
+        """Push one undo step for a region already written, and recomposite.
+
+        On an animated document the step may be two things that must undo
+        together: the cel this write brought into existence, and the write
+        itself. A no-op write takes the cel back out again and pushes nothing,
+        which is the same rule the selection ops follow -- a step that changes
+        nothing must not move the history head, or the document asks to be saved
+        for a gesture that did not happen.
+        """
         after = layer.pixels[rect[1] : rect[3], rect[0] : rect[2]].copy()
         if np.array_equal(before, after):
+            self._discard_pending_cel()
             return
-        self.history.push(PatchEdit(layer.uid, rect, before, after))
+        pending, self._pending_cels = self._pending_cels, []
+        edit: Any = PatchEdit(layer.uid, rect, before, after)
+        self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
         self.invalidate(rect, layer_uid=layer.uid)
 
     def _weights(self, rect: tuple[int, int, int, int], weight: np.ndarray) -> np.ndarray:
@@ -309,6 +1039,7 @@ class Document:
         box = self.clip(rect)
         if box is None:
             return False
+        self._ensure_active_cel()
         layer = self.stack.active
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
@@ -335,6 +1066,7 @@ class Document:
         symmetry: str = "none",
     ) -> None:
         self.end_stroke()
+        self._ensure_active_cel()
         layer = self.stack.active
         self._stroke = StrokeState(
             layer_uid=layer.uid,
@@ -370,9 +1102,14 @@ class Document:
         """Close the stroke and make it exactly one undo step."""
         stroke, self._stroke = self._stroke, None
         if stroke is None or stroke.dirty is None:
+            # A brush-down with no dab. ``begin_stroke`` may have autovivified a
+            # cel for it, and nothing below will reach ``_commit_patch`` to
+            # decide the cel's fate, so it is decided here.
+            self._discard_pending_cel()
             return False
         box = self.clip(stroke.dirty)
         if box is None:
+            self._discard_pending_cel()
             return False
         layer = self.stack.by_uid(stroke.layer_uid)
         x0, y0, x1, y1 = box
@@ -464,6 +1201,7 @@ class Document:
             return False
         rgba, weight = grad.render((width, height), p0, p1, start, end, kind)
         x0, y0, x1, y1 = box
+        self._ensure_active_cel()
         layer = self.stack.active
         before = layer.pixels[y0:y1, x0:x1].copy()
         crop = rgba[y0:y1, x0:x1]
@@ -501,7 +1239,11 @@ class Document:
         return self.history.redo(self)
 
     def restore_snapshot(
-        self, layers: list[Layer], size: tuple[int, int], active: int
+        self,
+        layers: list[Layer],
+        size: tuple[int, int],
+        active: int,
+        grid: dict[str, Any] | None = None,
     ) -> None:
         """Undo hook for a whole-canvas operation.
 
@@ -509,9 +1251,27 @@ class Document:
         and a later stroke must not write into it) but they keep their uids: an
         undo restores the document's *state*, not a set of new layers, and
         every patch recorded before this one addresses those uids.
+
+        ``grid`` is the animated form of the same argument one level up. The
+        copies are made once and shared back into the slots by index, so two
+        frames that held one object hold one object again.
         """
-        self.stack = LayerStack([layer.copy(uid=layer.uid) for layer in layers], active)
+        copies = [layer.copy(uid=layer.uid) for layer in layers]
         width, height = size
+        if grid is None or self.anim is None:
+            self.stack = LayerStack(copies, active)
+        else:
+            anim = self.anim
+            anim.frames = list(grid["frames"])
+            anim.tracks = list(grid["tracks"])
+            anim.cels = {key: copies[i] for key, i in grid["slots"].items()}
+            anim.current = max(0, min(grid["current"], len(anim.frames) - 1))
+            anim._blank = None
+            self.stack = LayerStack(anim.layers_for(anim.frame, size), active)
+        # After the grid is back, not before: the frames being stamped are the
+        # restored ones, and a frame the snapshot brings back would otherwise
+        # keep a cached flatten from before it was removed.
+        self._stamp_all()
         self._composite = np.zeros((height, width, 4), dtype=np.uint8)
         self.invalidate_all()
 
@@ -591,6 +1351,7 @@ class Document:
         box = self.clip(bounds) if bounds else None
         if box is None:
             return False
+        self._ensure_active_cel()
         layer = self.stack.active
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
@@ -605,7 +1366,15 @@ class Document:
         layer.pixels[y0:y1, x0:x1] = cut
 
         after = layer.pixels[y0:y1, x0:x1].copy()
-        edit = PatchEdit(layer.uid, box, before, after)
+        edit: Any = PatchEdit(layer.uid, box, before, after)
+        # The buffer names the step that is actually *on the stack*, because
+        # ``cancel_floating`` revokes it by identity. Wrapping the patch in a
+        # compound and then naming the bare patch would leave the revoke
+        # searching for something the stack does not hold -- the alpha-cut would
+        # stay and the lifted pixels would be dropped.
+        pending, self._pending_cels = self._pending_cels, []
+        if pending:
+            edit = CompoundEdit([*pending, edit])
         self.floating = FloatingBuffer(
             pixels=pixels, mask=crop.copy(), offset=(x0, y0), layer_uid=layer.uid,
             lift_edit=edit,
@@ -630,6 +1399,10 @@ class Document:
         if box is None:
             self.rev += 1
             return True
+        # Keyed by the buffer's own layer, not the active one: a paste chooses
+        # its target when it is made, and the user may have selected another row
+        # while it floated.
+        self._ensure_cel_for(floating.layer_uid)
         layer = self.stack.by_uid(floating.layer_uid)
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
@@ -685,6 +1458,7 @@ class Document:
         box = self.clip(bounds) if bounds else None
         if box is None:
             return False
+        self._ensure_active_cel()
         layer = self.stack.active
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
@@ -806,6 +1580,16 @@ class Document:
         width, height = self.size
         placed = tf.resize_canvas(pixels, (width, height))
         layer = Layer(pixels=placed, name=f"Pasted {len(self.stack) + 1}")
+        if self.anim is not None:
+            # A track carrying one cel, on the current frame only: the pasted
+            # pixels are a thing that happens at a moment, not a thing that is
+            # true for the whole clip.
+            index = self.stack.active_index + 1
+            track = Track(name=layer.name)
+            cels = {self.anim.frame.uid: layer}
+            self._put_track(index, track, cels)
+            self.history.push(TrackAddEdit(index, track, cels, pinned=True))
+            return True
         index = self.stack.insert(self.stack.active_index + 1, layer)
         self.history.push(LayerAddEdit(index, layer))
         self.invalidate_all()
@@ -824,7 +1608,25 @@ class Document:
     # -- layers -------------------------------------------------------------
 
     def add_layer(self, name: str | None = None) -> Layer:
+        """A new empty layer, or on an animated document a new empty *track*.
+
+        The five layer ops below each grow one of these branches, and they all
+        take the same shape: a track index and a stack index are the same
+        number, because ``Animation.tracks`` mirrors ``LayerStack`` bottom-first
+        on purpose. That is what lets the layers panel go on calling these
+        methods with the indices it already has.
+
+        A new track gets no cels at all rather than one empty cel per frame. The
+        grid is sparse, "empty everywhere" is the absence of keys, and the first
+        stroke on any frame autovivifies exactly the one cel it needs.
+        """
         self.commit_floating()
+        if self.anim is not None:
+            index = self.stack.active_index + 1
+            track = Track(name=name or f"Layer {len(self.anim.tracks) + 1}")
+            self._put_track(index, track, {})
+            self.history.push(TrackAddEdit(index, track, {}, pinned=False))
+            return self.stack[self.stack.active_index]
         width, height = self.size
         layer = Layer.empty(width, height, name or f"Layer {len(self.stack) + 1}")
         index = self.stack.insert(self.stack.active_index + 1, layer)
@@ -835,6 +1637,37 @@ class Document:
     def duplicate_layer(self, index: int | None = None) -> Layer:
         self.commit_floating()
         index = self.stack.active_index if index is None else index
+        if self.anim is not None:
+            track = self.anim.tracks[index]
+            copy_track = Track(
+                name=f"{track.name} copy",
+                opacity=track.opacity,
+                visible=track.visible,
+                blend=track.blend,
+            )
+            # Copies, not links -- *from* the original: duplicating a layer to
+            # paint a variation on it and having every stroke land on the
+            # original too would be the opposite of what the button says.
+            #
+            # But one copy per distinct cel, not one per slot. A cel linked
+            # across three frames is one object, and copying it three times
+            # gives the duplicate three independent frames where the original
+            # has one -- the link silently gone, and three times the memory.
+            # This is ``unique_cel_layers``'s rule applied to a single row.
+            copies: dict[int, Layer] = {}
+            cels: dict[int, Layer] = {}
+            for frame in self.anim.frames:
+                cel = self.anim.cels.get((track.uid, frame.uid))
+                if cel is None:
+                    continue
+                copy = copies.get(id(cel))
+                if copy is None:
+                    copy = cel.copy(name=copy_track.name)
+                    copies[id(cel)] = copy
+                cels[frame.uid] = copy
+            self._put_track(index + 1, copy_track, cels)
+            self.history.push(TrackAddEdit(index + 1, copy_track, cels, pinned=True))
+            return self.stack[self.stack.active_index]
         copy = self.stack.duplicate(index)
         self.history.push(LayerAddEdit(index + 1, copy))
         self.invalidate_all()
@@ -845,6 +1678,18 @@ class Document:
             return False
         self.commit_floating()
         index = self.stack.active_index if index is None else index
+        if self.anim is not None:
+            track = self.anim.tracks[index]
+            cels = {
+                frame.uid: cel
+                for frame in self.anim.frames
+                if (cel := self.anim.cels.get((track.uid, frame.uid))) is not None
+            }
+            self._drop_track(track)
+            self.history.push(
+                TrackRemoveEdit(index, track, cels, pinned=self._released(cels.values()))
+            )
+            return True
         gone = self.stack.remove(index)
         self.history.push(LayerRemoveEdit(index, gone))
         self.invalidate_all()
@@ -855,6 +1700,11 @@ class Document:
         if to == index:
             return False
         self.commit_floating()
+        if self.anim is not None:
+            uid = self.anim.tracks[index].uid
+            self._move_track(uid, to)
+            self.history.push(TrackMoveEdit(uid, index, to))
+            return True
         uid = self.stack[index].uid
         self.stack.move(index, to)
         self.history.push(LayerMoveEdit(uid, index, to))
@@ -882,19 +1732,43 @@ class Document:
         the tab compares against to decide whether the document is dirty.
         """
         index = self.stack.active_index if index is None else index
-        layer = self.stack[index]
+        # The track when there is one: it is authoritative, so writing the
+        # property onto the materialised layer instead would last exactly until
+        # the next time that frame was rebuilt.
+        target = self.anim.tracks[index] if self.anim is not None else self.stack[index]
         source = {} if was is None else was
-        before = {key: source.get(key, getattr(layer, key)) for key in props}
+        before = {key: source.get(key, getattr(target, key)) for key in props}
         if before == props:
             return False
         for key, value in props.items():
-            setattr(layer, key, value)
-        self.history.push(LayerPropsEdit(layer.uid, before, dict(props)))
+            setattr(target, key, value)
+        if self.anim is not None:
+            self.history.push(TrackPropsEdit(target.uid, before, dict(props)))
+            self._anim_changed()
+            return True
+        self.history.push(LayerPropsEdit(target.uid, before, dict(props)))
         self.invalidate_all()
         return True
 
+    @property
+    def can_restructure(self) -> bool:
+        """Whether merge-down and flatten are available.
+
+        They are not, on an animated document. Both are defined over *one*
+        stack, and an animated document has one per frame -- so the honest
+        versions are "merge these two tracks across every frame", which has to
+        decide what a merge of a linked cel with an unlinked one even means, and
+        "flatten this frame", which throws away every other frame's cels. Both
+        are real features and neither is v1. Refusing is the answer that cannot
+        silently destroy an animation; the layers panel reads this to disable
+        the buttons rather than letting the user find out by pressing them.
+        """
+        return self.anim is None
+
     def merge_down(self, index: int | None = None) -> bool:
         """Flatten a layer into the one beneath it, honouring its blend mode."""
+        if not self.can_restructure:
+            return False
         index = self.stack.active_index if index is None else index
         if index == 0:
             return False
@@ -942,7 +1816,7 @@ class Document:
 
     def flatten_layers(self) -> None:
         """Collapse the stack to one layer. Undoable as a canvas-level op."""
-        if len(self.stack) == 1:
+        if len(self.stack) == 1 or not self.can_restructure:
             return
         self.commit_floating()
         # Replay must be a pure function of the document, and minting a uid is
@@ -956,7 +1830,9 @@ class Document:
         """Fold a cutout into the document's alpha, as one undoable step.
 
         ``alpha`` is a canvas-sized uint8 plane: 255 keeps a pixel, 0 cuts it.
-        It is multiplied into *every* layer rather than into the composite,
+        It is multiplied into *every* layer -- every cel of every frame, on an
+        animated document, since a cutout describes the drawing rather than a
+        moment of it -- rather than into the composite,
         because the composite is a cache and there is nowhere else for it to
         live -- and with the binary matte this is given, multiplying each
         layer's alpha and multiplying the normal-blended result are the same
@@ -979,7 +1855,17 @@ class Document:
         rect = (0, 0, width, height)
         edits: list[Any] = []
         weight = alpha.astype(np.float32) / 255.0
-        for layer in self.stack:
+        # Every distinct cel in the *whole grid*, not the current frame's stack.
+        # A cutout is a statement about the drawing, and mattes applied to one
+        # frame of a clip while ``_stamp_all`` announced that all of them had
+        # changed is the worst of both -- the other frames keep their un-matted
+        # alpha and every cached flatten is thrown away saying otherwise.
+        # ``unique_cel_layers`` because a linked cel must be multiplied once:
+        # twice would square the matte along its soft edge.
+        targets = (
+            list(self.stack) if self.anim is None else list(self.anim.unique_cel_layers())
+        )
+        for layer in targets:
             before = layer.pixels.copy()
             layer.pixels[:, :, 3] = np.clip(
                 layer.pixels[:, :, 3].astype(np.float32) * weight + 0.5, 0, 255
@@ -991,6 +1877,9 @@ class Document:
             return False
         self.history.push(CompoundEdit(edits))
         self.matte = None
+        # Every cel in the grid was written -- so this is one of the few places
+        # that has to say so, ``invalidate_all`` having stopped guessing.
+        self._stamp_all()
         self.invalidate_all()
         return True
 
@@ -1013,7 +1902,11 @@ class Document:
         else -- flips, rotations and rescales are pure functions of the
         document, with nothing accumulated and nothing random.
         """
-        snapshot = [layer.copy(uid=layer.uid) for layer in self.stack]
+        grid = self._grid_snapshot()
+        snapshot = [
+            layer.copy(uid=layer.uid)
+            for layer in (self.stack if grid is None else self.anim.unique_cel_layers())
+        ]
         size = self.size
         active = self.stack.active_index
         mask = None if self.mask is None else self.mask.mask.copy()
@@ -1023,14 +1916,56 @@ class Document:
             run()
             doc.invalidate_all()
 
-        self.history.push(ReplayEdit(snapshot, size, active, replay, mask))
+        self.history.push(ReplayEdit(snapshot, size, active, replay, mask, grid))
         self.invalidate_all()
 
+    def _grid_snapshot(self) -> dict[str, Any] | None:
+        """Enough of the grid to put the link structure back, by position.
+
+        The cel slots are recorded as *indices into the snapshot list* rather
+        than as layers, which is the whole trick: two slots holding one index
+        come back as two slots holding one object, so a linked cel is still
+        linked after an undo. Recording layers would restore two equal copies
+        and quietly break the link -- and the user would only find out on the
+        next stroke, when one frame changed and the other did not.
+        """
+        anim = self.anim
+        if anim is None:
+            return None
+        order = {id(layer): i for i, layer in enumerate(anim.unique_cel_layers())}
+        return {
+            "frames": list(anim.frames),
+            "tracks": list(anim.tracks),
+            "slots": {key: order[id(layer)] for key, layer in anim.cels.items()},
+            "current": anim.current,
+        }
+
     def _map_planes(self, fn: Any) -> None:
-        for layer in self.stack:
-            layer.pixels = fn(layer.pixels)
         if self.mask is not None:
             self.mask = SelectionMask(fn(self.mask.mask))
+        anim = self.anim
+        if anim is None:
+            for layer in self.stack:
+                layer.pixels = fn(layer.pixels)
+            return
+        # Each *distinct* cel exactly once. Walking the stack, or the slots,
+        # would rotate a background linked across three frames three times.
+        for layer in anim.unique_cel_layers():
+            layer.pixels = fn(layer.pixels)
+        self._stamp_all()
+        anim._blank = None
+        probe = next(anim.unique_cel_layers(), None)
+        if probe is not None:
+            size = probe.size
+        else:
+            # A grid with no cels at all: nothing was mapped, so the new canvas
+            # size has to be asked for rather than observed.
+            width, height = self.size
+            plane = fn(cp.empty(width, height))
+            size = (plane.shape[1], plane.shape[0])
+        # Rebuilt against ``size`` rather than through ``_materialize_frame``,
+        # whose ``self.size`` still reads the old canvas off a stale stack.
+        self.stack = LayerStack(anim.layers_for(anim.frame, size), self.stack.active_index)
 
     def flip(self, axis: str) -> None:
         self.commit_floating()

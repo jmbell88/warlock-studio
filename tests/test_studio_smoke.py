@@ -994,6 +994,95 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     inker_mode.release_all(app_ctx)
 
 
+def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, imgui_ctx):
+    """The timeline strip, onion skinning and the playback draw path.
+
+    Onion and playback each upload a texture per frame under the same
+    ``inker_tex:{uid}:`` prefix the composite uses, which is the whole reason
+    they were put there -- a fifty-frame tab is fifty textures, and the release
+    at the end is what says the prefix sweep really does collect them.
+    """
+    from warlock.studio import inker, inker_mode
+    from warlock.studio.panes import (
+        inker_bridge,
+        inker_canvas,
+        inker_colors,
+        inker_layers,
+        inker_timeline,
+        inker_tools,
+    )
+
+    job_id = _reference_job(app_ctx)
+    app_ctx.state.mode = "inker"
+    state = inker_mode.ensure(app_ctx)
+
+    def build() -> None:
+        inker_tools.draw(app_ctx)
+        inker_colors.draw(app_ctx)
+        inker_canvas.draw(app_ctx)
+        inker_layers.draw(app_ctx)
+        inker_bridge.draw(app_ctx)
+        inker_timeline.draw(app_ctx)
+
+    loaded = inker_mode._load_job(app_ctx.svc, job_id)
+    inker_mode.on_task_done(app_ctx, _done(f"inker-open:{job_id}", loaded))
+    tab = state.active
+    assert tab is not None
+
+    # Still: the timeline draws nothing at all, which is what keeps a
+    # non-animated document's layout byte-for-byte what it always was.
+    _frame(imgui_ctx, build)
+    assert not [k for k in app_ctx.state.preview if ":frame" in k]
+
+    inker_mode.animate(app_ctx, tab)
+    assert tab.doc.anim is not None and len(tab.doc.anim.frames) == 2
+    tab.doc.add_frame(link=True)
+    tab.doc.anim.tags.append(inker.Tag(name="walk", start=0, end=2))
+    _frame(imgui_ctx, build)
+
+    # Onion on: the neighbours upload.
+    state.onion = True
+    _frame(imgui_ctx, build)
+    assert [k for k in app_ctx.state.preview if ":frame" in k]
+
+    # Playing: the canvas draws a cached flatten instead of the composite, and
+    # every editing control is refused.
+    inker_mode.toggle_play(app_ctx, tab)
+    assert tab.playing and tab.busy
+    for _ in range(3):
+        _frame(imgui_ctx, build)
+    inker_mode.stop_play(tab)
+    assert not tab.playing
+    _frame(imgui_ctx, build)
+
+    # The tag row's rename field, which replaces the label in place rather than
+    # opening a modal -- so it is a widget that only exists on some frames and
+    # would otherwise never be built by anything.
+    state.tag_editing = 0
+    state.tag_name = "walk"
+    _frame(imgui_ctx, build)
+    state.tag_editing = -1
+    _frame(imgui_ctx, build)
+
+    # A deleted frame's texture is released rather than living until the tab is
+    # closed: a clip built up and cut down over a session leaks one full-canvas
+    # texture per frame that ever went. The drain is read in ``composite``, so
+    # it takes one drawn frame.
+    gone = tab.doc.anim.frames[-1].uid
+    assert any(f"frame{gone}" in key for key in app_ctx.state.preview)
+    tab.doc.remove_frame(len(tab.doc.anim.frames) - 1)
+    _frame(imgui_ctx, build)
+    assert not [key for key in app_ctx.state.preview if f"frame{gone}" in key]
+
+    uid = tab.uid
+    inker_mode.request_close(app_ctx, tab)
+    if app_ctx.confirms.pending is not None:
+        app_ctx.confirms.pending.on_confirm()
+        app_ctx.confirms.pending = None
+    assert not [k for k in app_ctx.state.preview if k.startswith(f"inker_tex:{uid}:")]
+    inker_mode.release_all(app_ctx)
+
+
 def test_a_finished_mesh_is_not_offered_paint(app_ctx, imgui_ctx):
     """Paint edits the *generated reference*, and a mesh job's input.png is
     whatever it was reconstructed from."""

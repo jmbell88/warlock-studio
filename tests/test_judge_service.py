@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from warlock import judge
 from warlock.service import judge as svc_judge
@@ -198,3 +199,87 @@ def test_the_probes_state_is_readable_without_training_anything(svc, monkeypatch
     assert state["labels"] == 1
     assert state["trained"] is False
     assert state["needed"] == judge.MIN_PER_CLASS
+
+
+# --- the boundary the mesh probe does not cross ------------------------------
+
+
+def test_the_mesh_probe_cannot_be_trained_on_reference_pixels(svc, monkeypatch):
+    """``_image_for`` answers with ``reference.png``/``input.png``, so nothing
+    in this module can produce a rendered view -- and ``train(svc, "model")``
+    would quietly fit the mesh probe to 2D images and write it under the name
+    the mesh question will want. ``db.LABEL_POPULATION`` refuses the same
+    question on the listing side; this is the other half.
+    """
+    _fake_embeddings(monkeypatch, {})
+    for call in (
+        lambda: svc_judge.train(svc, "model"),
+        lambda: svc_judge.status(svc, "model"),
+        lambda: svc_judge.score_job(svc, "whatever", "model"),
+        lambda: svc_judge.score_jobs(svc, ["whatever"], "model"),
+    ):
+        with pytest.raises(ValueError, match="declared"):
+            call()
+
+
+def test_the_trainable_stages_are_the_verdict_tables_image_stages(svc):
+    """Imported, never restated: a second spelling of one list is how the two
+    come to disagree, and the drift would show up as a probe trained on the
+    wrong population."""
+    assert svc_judge.TRAINABLE_STAGES is svc_verdicts.IMAGE_STAGES
+    assert set(svc_judge.TRAINABLE_STAGES) < set(judge.STAGES)
+
+
+def test_an_unknown_stage_is_refused_rather_than_writing_a_stray_probe(svc):
+    with pytest.raises(ValueError):
+        svc_judge.train(svc, "mesh")
+
+
+# --- scoring many rows -------------------------------------------------------
+
+
+def test_scoring_many_jobs_loads_the_probe_once(svc, monkeypatch):
+    """``score_job`` rebuilds the probe from disk per call, which is a file read
+    per row on a review grid of a hundred."""
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    _fake_embeddings(monkeypatch, mapping)
+    svc_judge.train(svc, "blank")
+
+    loads: list[int] = []
+    real_load = judge.load
+    monkeypatch.setattr(judge, "load", lambda path: (loads.append(1), real_load(path))[1])
+
+    scores = svc_judge.score_jobs(svc, list(mapping), "blank")
+
+    assert len(loads) == 1
+    assert set(scores) == set(mapping)
+    assert all(isinstance(v, float) for v in scores.values())
+
+
+def test_scoring_many_jobs_with_no_probe_is_an_empty_answer(svc, monkeypatch):
+    job_id = _labelled(svc, "accept")
+    _fake_embeddings(monkeypatch, {job_id: _vector(1.0)})
+
+    assert svc_judge.score_jobs(svc, [job_id], "blank") == {}
+
+
+def test_a_row_with_no_pixels_scores_none_beside_rows_that_do(svc, monkeypatch):
+    """One pruned row must not cost the other eighty their scores -- the rule
+    ``train`` already follows for its own corpus."""
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    good = next(iter(mapping))
+    pruned = _labelled(svc, "accept")
+    (svc.job_dir(pruned) / "reference.png").unlink()
+    _fake_embeddings(monkeypatch, mapping)
+    svc_judge.train(svc, "blank")
+
+    scores = svc_judge.score_jobs(svc, [good, pruned], "blank")
+
+    assert scores[pruned] is None
+    assert isinstance(scores[good], float)

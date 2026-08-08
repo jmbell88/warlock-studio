@@ -63,7 +63,7 @@ def test_observation_metrics_omits_keys_rather_than_guessing():
 
 
 def test_a_refused_reference_is_a_measurement_like_any_other():
-    """TODO item 3. The 17 refusals in the 2026-08-07 rogue sweep produced zero
+    """Observations on refusal. The 17 refusals in the 2026-08-07 sweep produced zero
     observations rows, so "this checkpoint draws character sheets 60% of the
     time" -- the single most useful thing that sweep measured about
     ``base_model`` -- lived only in the jobs table and died with

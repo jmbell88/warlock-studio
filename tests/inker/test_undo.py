@@ -21,6 +21,12 @@ class FakeDoc:
         self.selection = None
         self.dirty: list = []
 
+    def layer_by_uid(self, uid):
+        # The real document looks in the animation grid when the uid is not in
+        # the current stack; a still document, which is all this stub models,
+        # has nowhere else to look and so is exactly ``stack.by_uid``.
+        return self.stack.by_uid(uid)
+
     def invalidate(self, rect, *, layer_uid=None):
         self.dirty.append(rect)
 
@@ -30,7 +36,7 @@ class FakeDoc:
     def set_selection_mask(self, mask):
         self.selection = mask
 
-    def restore_snapshot(self, layers, size, active):
+    def restore_snapshot(self, layers, size, active, grid=None):
         self.stack = LayerStack(list(layers), active)
 
 

@@ -32,6 +32,30 @@ from .core import WarlockService
 
 log = logging.getLogger(__name__)
 
+# The stages this half may act on, **imported rather than restated**: a second
+# spelling of the same list is how the two come to disagree.
+#
+# ``judge.STAGES`` declares three questions and ``model`` is the one that is
+# declared and unbuilt. It matters here and not in ``judge.py`` because this is
+# the half that knows where the pixels are: ``_image_for`` answers with
+# ``reference.png``/``input.png``, so ``train(svc, "model")`` would quietly fit
+# the *mesh* probe to 2D reference images -- a probe pointed at a population it
+# was not fitted to, which is exactly what one file per stage exists to prevent.
+# ``db.LABEL_POPULATION`` already refuses the same question on the listing side;
+# this is the other half of that guard.
+TRAINABLE_STAGES = verdicts_mod.IMAGE_STAGES
+
+
+def _check_stage(stage: str) -> str:
+    if stage not in TRAINABLE_STAGES:
+        raise ValueError(
+            f"stage must be one of {list(TRAINABLE_STAGES)}; {stage!r} is declared "
+            "and unbuilt -- the mesh probe pools over rendered views and cannot "
+            "be fitted to a reference image"
+        )
+    return stage
+
+
 # Where a probe lives: beside ``findings.json``, because it is the same kind of
 # thing -- a derived artifact of the verdict corpus, rebuilt from the DB and
 # disposable. Not in the data dir: that holds assets, and a probe is not one.
@@ -74,9 +98,7 @@ def train(
     use. It never raises for an ordinary shortage: "not enough labels yet" is the
     normal state of a corpus being built.
     """
-    if stage not in judge_mod.STAGES:
-        raise ValueError(f"stage must be one of {list(judge_mod.STAGES)}")
-
+    _check_stage(stage)
     rows = _labels(svc, stage, source)
     embeddings: list[Any] = []
     labels: list[float] = []
@@ -121,7 +143,12 @@ def train(
 
 
 def probe(svc: WarlockService, stage: str) -> Any:
-    """The probe on disk for one question, or None."""
+    """The probe on disk for one question, or None.
+
+    Not stage-checked: reading a file that is not there is already None, and a
+    caller asking whether the mesh probe exists deserves that answer rather than
+    an exception.
+    """
     return judge_mod.load(judge_mod.probe_path(probe_dir(svc), stage))
 
 
@@ -132,6 +159,7 @@ def score_job(svc: WarlockService, job_id: str, stage: str) -> float | None:
     weights, an unreadable file. A judge failure must never fail its caller --
     ``Worker._record_observation``'s rule, and here the caller is a frame.
     """
+    _check_stage(stage)
     fitted = probe(svc, stage)
     if fitted is None:
         return None
@@ -142,6 +170,33 @@ def score_job(svc: WarlockService, job_id: str, stage: str) -> float | None:
     if vector is None:
         return None
     return judge_mod.score(fitted, vector)
+
+
+def score_jobs(
+    svc: WarlockService, job_ids: Any, stage: str
+) -> dict[str, float | None]:
+    """Many jobs, one probe load. Task thread only.
+
+    ``score_job`` reads the probe off disk and rebuilds it per call, which is
+    fine for one job and is a file read per row for a review grid of a hundred.
+    The result is a plain dict so the caller can merge it onto whatever it is
+    holding; a missing entry and a ``None`` entry mean the same thing and both
+    are honest -- ``{}`` when there is no probe at all.
+
+    No threshold and no verdict, exactly as ``score_job`` files none. A score is
+    an ordering, and turning one into an accept needs a constant the stored
+    corpus would then be keyed on.
+    """
+    _check_stage(stage)
+    fitted = probe(svc, stage)
+    if fitted is None:
+        return {}
+    scores: dict[str, float | None] = {}
+    for job_id in job_ids:
+        image = _image_for(svc, job_id)
+        vector = None if image is None else judge_mod.embed(image, svc.config)
+        scores[job_id] = None if vector is None else judge_mod.score(fitted, vector)
+    return scores
 
 
 def status(
@@ -156,6 +211,7 @@ def status(
     draws. ``trained_at`` is the probe file's mtime: the ``warlockc`` staleness
     rule says a probe should say *when*, and the file already knows.
     """
+    _check_stage(stage)
     fitted = probe(svc, stage)
     path = judge_mod.probe_path(probe_dir(svc), stage)
     rows = _labels(svc, stage, source)

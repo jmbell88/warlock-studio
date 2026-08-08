@@ -124,7 +124,7 @@ class Config:
     # sweep, a source and a seed, so that baseline was one side of nine
     # prospective pairs and every one went with it.
     #
-    # 2, per TODO item 2. The reroll holds ``mesh_seed`` fixed and moves only
+    # 2, and the reroll holds ``mesh_seed`` fixed and moves only
     # the reference seed, which is the point: a unit's identity in the corpus
     # is its config vector and its mesh seed, and which of three reference
     # draws avoided a character sheet is not a setting anyone is measuring.

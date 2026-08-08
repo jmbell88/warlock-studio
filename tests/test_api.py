@@ -810,7 +810,8 @@ def test_promote_without_overrides_inherits_the_reference(svc):
 
 
 def test_a_job_gets_the_learned_matte_when_its_weights_are_on_disk(svc):
-    """TODO item 0, end to end: the gate is applied where a job is actually
+    """The default-matte decision, end to end: the gate is applied where a job is
+    actually
     created, not only in ``guidance``. ``auto`` went 0 for 80 in the 2026-08-07
     review and every accept was birefnet, so this is the default the queue must
     see -- there is no point in the constant moving if ``create_job`` does not

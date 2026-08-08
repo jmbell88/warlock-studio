@@ -36,7 +36,7 @@ def draw(ctx: Any) -> None:
     # stack on a task thread. The canvas already refuses strokes mid-save for
     # the same reason; disabling is the panel's version of that, and it says so
     # on screen rather than swallowing clicks.
-    imgui.begin_disabled(tab.saving)
+    imgui.begin_disabled(tab.busy)
     _actions(ctx, doc)
     imgui.dummy((0, 4))
 
@@ -55,11 +55,17 @@ def _actions(ctx: Any, doc: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Delete", len(doc.stack) > 1):
         doc.remove_layer()
-    if widgets.disabled_button("Merge down", doc.stack.active_index > 0):
+    # Both are refused outright on an animated document -- they are defined over
+    # one stack and an animated document has one per frame. Disabling says so
+    # before the click rather than after it.
+    restructure = doc.can_restructure
+    if widgets.disabled_button("Merge down", restructure and doc.stack.active_index > 0):
         doc.merge_down()
     imgui.same_line()
-    if widgets.disabled_button("Flatten", len(doc.stack) > 1):
+    if widgets.disabled_button("Flatten", restructure and len(doc.stack) > 1):
         doc.flatten_layers()
+    if not restructure:
+        widgets.muted("Merge and flatten are unavailable while animated.")
 
     layer = doc.stack.active
     imgui.set_next_item_width(-1)

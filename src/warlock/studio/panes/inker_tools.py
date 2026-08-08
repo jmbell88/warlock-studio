@@ -142,7 +142,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     # push a history step and Crop rebinds every layer's pixels -- so it waits
     # for the save the same way the canvas, the layers panel and the keyboard
     # shortcuts already do.
-    imgui.begin_disabled(tab.saving)
+    imgui.begin_disabled(tab.busy)
     if tool in SELECT_TOOLS or doc.mask is not None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)

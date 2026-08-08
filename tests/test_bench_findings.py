@@ -182,7 +182,8 @@ def _scoped_doc(pooled, per_prompt):
 
 
 def test_hint_prefers_this_subject_and_says_so(tmp_path):
-    """TODO item 4. A hint that silently mixes subjects is worse than no hint,
+    """Per-subject scoping. A hint that silently mixes subjects is worse than no
+    hint,
     because it is trusted -- so when a subject-scoped answer exists it wins,
     and either way the line says which corpus it came from."""
     doc = _scoped_doc(

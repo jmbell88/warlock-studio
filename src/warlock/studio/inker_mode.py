@@ -14,10 +14,13 @@ state (``InkerDoc.saving``) rather than a function call that returns.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
+from ..pipelines import sheet as sheetlib
 from . import dialogs, inker_state
+from .inker import animation
 from .inker_state import InkerDoc, InkerState
 
 log = logging.getLogger(__name__)
@@ -297,6 +300,63 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
         dest.write_bytes(doc.png_bytes())
+        return {"exported": dest}
+
+    _start(ctx, tab, f"inker-export:{tab.uid}", run)
+
+
+def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """An animated document as a packed PNG plus its JSON sidecar.
+
+    Mirrors ``export_png`` exactly -- gated, floating buffer committed first, one
+    task under the same key so the two can never run at once, and
+    ``{"exported": path}`` back so the existing completion branch toasts it
+    unchanged. What differs is only what gets written.
+
+    With one addition the other exports do not need: the frames are read off the
+    document **here**, on the frame thread, and only the encode goes to the
+    task. ``_write`` gets away with encoding the live document because the
+    encoders only read; flattening a clip does not, since it fills and evicts
+    the document's frame cache and copies track properties down onto cels --
+    the same structures the onion-skin draw is walking sixty times a second.
+    The cost is a flatten per frame at click time, most of which the playback
+    cache has already paid for.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.busy or tab.doc.anim is None:
+        return
+    doc = tab.doc
+    doc.commit_floating()
+    suggested = tab.path.stem if tab.path else "untitled"
+    from .inker import sheetout
+
+    frames, durations, tags = sheetout.snapshot(doc)
+
+    def run() -> dict[str, Any] | None:
+        import json
+
+        dest = dialogs.save_file("Export sprite sheet", f"{suggested}.png", PNG_FILTER)
+        if dest is None:
+            return None
+        if dest.suffix.lower() != ".png":
+            dest = dest.with_suffix(".png")
+        image, plan, extra = sheetout.compose(frames, durations, tags, name=suggested)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            image.save(dest, "PNG")
+        finally:
+            image.close()
+        meta = sheetlib.sidecar(
+            plan,
+            sheet_id=dest.stem,
+            source_job=tab.job_id,
+            image=dest.name,
+            created=time.time(),
+            name=suggested,
+            trims=extra["trims"],
+            animation=extra["animation"],
+        )
+        dest.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
@@ -764,6 +824,83 @@ TOOL_KEYS = {
 }
 
 
+# --- playback ----------------------------------------------------------------
+
+#: A tick longer than this is treated as a stall rather than as elapsed time.
+#: Without the clamp, a two-second hitch (a dialog, a texture upload storm)
+#: fast-forwards the clip through twenty frames at once, which reads as a
+#: glitch rather than as the catch-up it technically is.
+MAX_TICK_MS = 250.0
+
+
+def toggle_play(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Start or stop playback. Refused while a save is encoding."""
+    tab = tab or active(ctx)
+    if tab is None or tab.doc.anim is None or tab.saving:
+        return
+    if tab.playing:
+        stop_play(tab)
+        return
+    # The float is committed *before* playback rather than when it ends: while
+    # playing, the canvas draws cached frame flattens, and a floating buffer is
+    # in no layer and therefore in no flatten -- it would simply vanish for the
+    # duration and reappear at the end.
+    tab.doc.commit_floating()
+    tab.playing = True
+    tab.play_index = tab.doc.anim.current
+    tab.play_accum_ms = 0.0
+
+
+def stop_play(tab: InkerDoc) -> None:
+    """Stop, and leave the playhead where the eye last saw it."""
+    if not tab.playing:
+        return
+    tab.playing = False
+    tab.doc.set_current_frame(tab.play_index)
+    tab.play_accum_ms = 0.0
+
+
+def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
+    """One frame's worth of time.
+
+    Deliberately does *not* call ``set_current_frame``: that re-materialises the
+    stack and recomposites the whole canvas, sixty times a second, to show a
+    picture the frame cache already has. The playhead on the document stays put
+    and the canvas draws ``play_index``'s cached flatten instead; stopping is
+    the one moment the document catches up.
+    """
+    anim = tab.doc.anim
+    if not tab.playing or anim is None:
+        return
+    durations = [frame.duration_ms for frame in anim.frames]
+    index, accum, playing = animation.advance(
+        durations,
+        tab.play_index,
+        tab.play_accum_ms,
+        min(float(dt_ms), MAX_TICK_MS),
+        anim.loop_range(tab.play_index),
+    )
+    tab.play_index, tab.play_accum_ms = index, accum
+    if not playing:
+        stop_play(tab)
+
+
+def step_frame(ctx: Any, delta: int, tab: InkerDoc | None = None) -> None:
+    tab = tab or active(ctx)
+    if tab is None or tab.doc.anim is None or tab.busy:
+        return
+    anim = tab.doc.anim
+    tab.doc.set_current_frame((anim.current + delta) % len(anim.frames))
+
+
+def animate(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """The entry point: turn a still document into a two-frame animation."""
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return
+    tab.doc.add_frame()
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """Inker's shortcuts. -> whether the key was consumed.
 
@@ -821,13 +958,24 @@ def handle_key(ctx: Any, event: Any) -> bool:
             state.hardness = min(1.0, state.hardness + 0.05)
         else:
             state.brush_size = inker_state.step_size(state.brush_size, +1)
+    elif doc.anim is not None and event.key in (pygame.K_COMMA, pygame.K_PERIOD):
+        # Matched on the key constant, not on ``pygame.key.name``: the spelling
+        # of a punctuation key comes from SDL and has changed between versions.
+        step_frame(ctx, -1 if event.key == pygame.K_COMMA else 1, tab)
+    elif doc.anim is not None and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        # Reachable only past the transform branch above, which consumes Enter
+        # first and returns -- applying a half-finished transform must not be
+        # ambiguous with starting playback.
+        toggle_play(ctx, tab)
     elif event.key == pygame.K_DELETE:
-        if not tab.saving:
+        if not tab.busy:
             doc.delete_selection()
     elif event.key == pygame.K_ESCAPE:
         # Never leaves the mode: Esc means "drop what I am doing", and losing a
         # workspace full of tabs to a stray keypress is not that.
-        if not tab.saving:
+        if tab.playing:
+            stop_play(tab)
+        elif not tab.saving:
             if doc.floating is not None:
                 doc.cancel_floating()
             elif doc.mask is not None:
@@ -851,7 +999,9 @@ def _ctrl_key(
 ):
     import pygame
 
-    if tab.saving and name in _MUTATING_CTRL:
+    # ``busy``, not ``saving``: playback is the second reason the document may
+    # not be restructured, and it is the same list of keys for the same reason.
+    if tab.busy and name in _MUTATING_CTRL:
         return True
 
     if name == "z":

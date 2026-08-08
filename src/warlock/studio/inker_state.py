@@ -189,6 +189,26 @@ class InkerDoc:
     link_kind: str = ""  # "" | "reference-edit"
     has_original: bool = False
 
+    # Playback, and it is deliberately transient per tab rather than on the
+    # document: the playhead is view state and this is view state *about* the
+    # playhead, so neither belongs in a file. ``play_accum_ms`` is the leftover
+    # time carried between ticks, because a frame's duration is per-frame and a
+    # clip is therefore not a rate.
+    playing: bool = False
+    play_index: int = 0
+    play_accum_ms: float = 0.0
+
+    @property
+    def busy(self) -> bool:
+        """Whether the document may be edited right now.
+
+        One question with two answers behind it -- a save is encoding the layer
+        stack off-thread, or playback is running and every control that would
+        change the document is refused. Callers ask this rather than ``saving``
+        so a third reason can never be added in one place and forgotten in nine.
+        """
+        return self.saving or self.playing
+
     @property
     def dirty(self) -> bool:
         return self.doc.history.head != self.saved_head
@@ -243,6 +263,24 @@ class InkerState:
     symmetry: str = "none"
     grid: bool = False
     grid_size: int = 16
+
+    # Onion skinning: app-level, like every other tool setting, because it is a
+    # property of how the user works rather than of the drawing. Tinted red
+    # behind and green ahead, which is the convention every 2D animation tool
+    # has used for thirty years -- picking differently would be a novelty the
+    # user has to learn for nothing.
+    # Which tag the timeline is renaming, and the text being typed. Pure view
+    # state -- not persisted, pushes no undo step -- for the same reason the
+    # playhead is: a document must not ask to be saved because a name is being
+    # typed. -1 is "nothing being renamed"; the buffer is only meaningful with
+    # it set.
+    tag_editing: int = -1
+    tag_name: str = ""
+
+    onion: bool = False
+    onion_before: int = 1
+    onion_after: int = 1
+    onion_alpha: float = 0.35
     fg: tuple[int, int, int, int] = (0, 0, 0, 255)
     bg: tuple[int, int, int, int] = (255, 255, 255, 255)
     swatches: list[tuple[int, int, int, int]] = field(

@@ -217,16 +217,6 @@ def save(probe: Probe, path: Path) -> Path:
     return path
 
 
-def stage_is_known(stage: str) -> bool:
-    """Whether a probe can be fitted for this label stage at all.
-
-    ``verdicts.STAGES`` and ``judge.STAGES`` hold the same three words and must
-    keep holding them; ``tests/test_judge.py`` asserts the two sets are equal
-    rather than trusting a comment to keep them so.
-    """
-    return stage in STAGES
-
-
 def load(path: Path) -> Probe | None:
     """Read a probe, or None -- missing, unreadable, or from another schema."""
     path = Path(path)

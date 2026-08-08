@@ -116,7 +116,7 @@ def hint(
     decimals, which absorbs float32's error (~1e-7 relative) while still
     telling "0.6" apart from "0.65".
 
-    ``prompt_hash`` scopes the lookup to one subject (TODO item 4). A verdict
+    ``prompt_hash`` scopes the lookup to one subject. A verdict
     crediting every ``param: value`` in its vector is a confound this project
     accepts -- the price of letting daily use feed the hints at all -- but
     pooling across *subjects* is a different bargain: what makes a good wooden

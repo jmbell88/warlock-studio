@@ -41,14 +41,39 @@ def draw(ctx: Any) -> None:
         widgets.muted("not part of a job")
 
     imgui.dummy((0, 8))
+    _animation(ctx, tab)
+    imgui.dummy((0, 8))
     _pipeline(ctx, tab)
     imgui.dummy((0, 8))
     _canvas_ops(ctx, tab)
 
 
+def _animation(ctx: Any, tab: Any) -> None:
+    """The one door into animating a document.
+
+    Deliberately a button rather than a mode or a checkbox: animating is an
+    *edit* -- one undo step that turns the layers into the first frame's cels --
+    so it belongs on the same footing as adding a layer, and Ctrl+Z takes it
+    back. Once the document is animated this row goes quiet and the timeline
+    strip owns everything else.
+    """
+    widgets.section("animation")
+    if tab.doc.anim is None:
+        if widgets.disabled_button("Animate", not tab.busy, (-1, 0)):
+            inker_mode.animate(ctx, tab)
+        widgets.help_marker(
+            "Turns this drawing into frame one of an animation and adds a second"
+            " frame. The layers become tracks; Ctrl+Z undoes the whole thing."
+        )
+        return
+    anim = tab.doc.anim
+    widgets.muted(f"{len(anim.frames)} frames, {len(anim.tracks)} tracks")
+    widgets.muted(f"{anim.duration_ms()} ms total")
+
+
 def _pipeline(ctx: Any, tab: Any) -> None:
     widgets.section("pipeline")
-    busy = tab.saving
+    busy = tab.busy
     if not tab.linked:
         if widgets.disabled_button("Save as reference", not busy, (-1, 0)):
             inker_mode.save_as_reference(ctx, tab)
@@ -75,7 +100,7 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     # mid-save produces an archive whose parts disagree about the canvas size.
     # The canvas, the layers panel and the keyboard path all gate on this
     # flag; this panel was the hole.
-    imgui.begin_disabled(tab.saving)
+    imgui.begin_disabled(tab.busy)
     if imgui.button("Flip H"):
         doc.flip("horizontal")
     imgui.same_line()
@@ -120,7 +145,7 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
     imgui.dummy((0, 4))
-    imgui.begin_disabled(tab.saving)
+    imgui.begin_disabled(tab.busy)
     if imgui.button("Scale image", (180, 0)):
         tab.doc.scale((max(1, width), max(1, height)))
         tab.view.fitted = False

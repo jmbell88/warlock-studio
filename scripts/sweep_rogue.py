@@ -35,7 +35,7 @@ fan-out does not produce.
 
 Why these axes. ``jobs`` is empty, the eight stored verdicts are all rejects
 against an unrelated ``environment``/``wood`` prompt, and ``bench/findings.json``
-is a stub still carrying the legacy ``platform: "pc"``. There is no prior
+held almost nothing, still carrying the legacy ``platform: "pc"``. There is no prior
 evidence for a *character* prompt at all, which argues for breadth over depth:
 ten configurations at five seeds each, twice, rather than two configurations at
 twenty-five.

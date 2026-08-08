@@ -203,7 +203,7 @@ def test_bg_removal_defaults_to_birefnet_and_rejects_unknown():
 
 
 def test_the_bg_removal_default_is_gated_on_the_weights_being_on_disk(tmp_path):
-    """TODO item 0. birefnet is the learned matte and the only thing the
+    """The default matte. birefnet is the learned one and the only thing the
     2026-08-07 review found any signal for -- 3 accepts in 83, all of them
     birefnet, ``auto`` 0 for 80 -- but ``auto`` is still the right answer on a
     host that never downloaded ``birefnet.gguf``, where the server has nothing

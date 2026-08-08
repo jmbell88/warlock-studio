@@ -116,11 +116,11 @@ DEFAULT_FORM_3D: dict[str, Any] = {
     "platform": "",
     "profile": "raw",
     # Deliberately without a widget. A triangle budget only means anything for
-    # profile "custom", and every decimating tier needs vendor/gltfpack, which
-    # is not present -- so a control here would offer a number that "raw"
+    # profile "custom", and the generate form offers ``raw`` alone until a tier
+    # has been qualified -- so a control here would offer a number that "raw"
     # ignores. The plumbing through _payload is kept because it is correct the
-    # moment a tier is qualified and exposed; the retarget control on a
-    # finished mesh is where a budget is actually chosen today.
+    # moment a tier is exposed; the retarget control on a finished mesh is where
+    # a budget is actually chosen today.
     "custom_triangles": 0,
     "size_m": 0.0,
     "bg_removal": "",
@@ -474,6 +474,11 @@ class AppState:
     # the rest. A stage string rather than a bool because a labelling pass is
     # about one question at a time, and the training run needs to know which.
     judge_dirty: str | None = None
+    # Whether the open review's units need scoring by the judge. The same flag
+    # pattern for the third time, and the third time for the same reason: a
+    # score request follows every scan and every retrain, and a direct submit
+    # would drop whichever one arrived while the previous run was still going.
+    review_scores_dirty: bool = False
     # The promote flow's matte preview and its cutout cache, built on first use
     # by ``matte_preview.ensure``. Untyped and None here for the reason
     # ``clay``/``review`` are, and never persisted: a stored cutout would be a

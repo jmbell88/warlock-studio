@@ -54,7 +54,7 @@ BG_REMOVAL = ("auto", "birefnet", "threshold")
 #
 # Gated, though, and default_bg_removal below is the gate: on a host that never
 # downloaded birefnet.gguf there is nothing to load, and `auto` is still right
-# there. n=4 is thin and the blind confirmation TODO item 0 asks for has not
+# there. n=4 is thin and the blind confirmation the roadmap asks for has not
 # been run; what tips it is that the alternative is a default already measured
 # at 0 for 80.
 DEFAULT_BG_REMOVAL = "birefnet"

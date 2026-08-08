@@ -997,6 +997,138 @@ async def test_a_restyle_of_a_deleted_sheet_fails_rather_than_inventing_one(work
     assert row["status"] == "error"
 
 
+# --- the non-square seam ------------------------------------------------------
+#
+# ``Plan`` grew ``frame_w``/``frame_h`` so an Inker animation -- whose frame is a
+# canvas the user chose, not a camera -- can be packed by the same code. Every
+# one of those changes is behaviour-preserving by construction (``frame_w or
+# frame_size``), and the pin below is what says so from outside the module.
+
+#: ``json.dumps(sidecar(...))`` captured from HEAD before the non-square fields
+#: were added. One string equality covers the values, the key *order* and --
+#: the part a field-by-field check would miss -- the absence of any new key.
+SQUARE_SIDECAR = (
+    '{"version": 1, "id": "cccccccccccc", "name": "n", "source_job": "dddddddddddd",'
+    ' "created": 1.5, "image": "c.png", "frame_size": 64, "columns": 3, "rows": 1,'
+    ' "width": 192, "height": 64, "elevation": 25.0, "lighting": "lit",'
+    ' "yaws": [0.0, 120.0, 240.0], "poses": [{"id": "aaaaaaaaaaaa", "name": "idle"}],'
+    ' "cells": [{"index": 0, "row": 0, "column": 0, "x": 0, "y": 0, "w": 64, "h": 64,'
+    ' "pose": "aaaaaaaaaaaa", "pose_name": "idle", "yaw": 0.0, "frame": 0,'
+    ' "pivot_x": 32.0, "pivot_y": 64.0, "trim": {"x": 1, "y": 2, "w": 3, "h": 4}},'
+    ' {"index": 1, "row": 0, "column": 1, "x": 64, "y": 0, "w": 64, "h": 64,'
+    ' "pose": "aaaaaaaaaaaa", "pose_name": "idle", "yaw": 120.0, "frame": 0,'
+    ' "pivot_x": 32.0, "pivot_y": 64.0, "trim": null},'
+    ' {"index": 2, "row": 0, "column": 2, "x": 128, "y": 0, "w": 64, "h": 64,'
+    ' "pose": "aaaaaaaaaaaa", "pose_name": "idle", "yaw": 240.0, "frame": 0,'
+    ' "pivot_x": 32.0, "pivot_y": 64.0, "trim": null}]}'
+)
+
+
+def _square_sidecar() -> dict:
+    layout = sheetlib.plan(
+        [{"id": "a" * 12, "name": "idle"}],
+        frame_size=64,
+        elevation=25.0,
+        lighting="lit",
+        yaws=3,
+    )
+    return sheetlib.sidecar(
+        layout,
+        sheet_id="c" * 12,
+        source_job="d" * 12,
+        image="c.png",
+        created=1.5,
+        name="n",
+        trims={0: {"x": 1, "y": 2, "w": 3, "h": 4}},
+    )
+
+
+def test_a_square_sidecar_is_byte_for_byte_what_it_always_was():
+    assert json.dumps(_square_sidecar()) == SQUARE_SIDECAR
+
+
+def test_plan_never_produces_a_non_square_grid():
+    """Which is what makes every ``cell_w``/``cell_h`` substitution above a
+    no-op for the 3D path: ``frame_w or frame_size`` is ``frame_size``."""
+    layout = sheetlib.plan([], frame_size=128, yaws=4)
+    assert (layout.frame_w, layout.frame_h) == (0, 0)
+    assert (layout.cell_w, layout.cell_h) == (128, 128)
+    assert (layout.width, layout.height) == (512, 128)
+
+
+def _oblong(**kwargs) -> sheetlib.Plan:
+    cells = tuple(
+        sheetlib.Cell(
+            index=i, row=i // 3, column=i % 3, x=(i % 3) * 50, y=(i // 3) * 80,
+            pose=None, pose_name="rest", yaw=0.0, frame=i,
+        )
+        for i in range(6)
+    )
+    return sheetlib.Plan(
+        frame_size=0, columns=3, rows=2, yaws=(0.0,), elevation=0.0,
+        lighting="flat", poses=({"id": None, "name": "rest"},), cells=cells,
+        frame_w=50, frame_h=80, **kwargs,
+    )
+
+
+def test_a_non_square_plan_sizes_its_atlas_from_the_cell():
+    layout = _oblong()
+    assert (layout.cell_w, layout.cell_h) == (50, 80)
+    assert (layout.width, layout.height) == (150, 160)
+
+
+def test_a_non_square_sidecar_says_frame_size_zero_and_carries_the_real_one():
+    """Zero is a loud wrong answer. Putting the width in ``frame_size`` would
+    let an importer that reads only that key slice the atlas correctly across
+    and wrongly down, which is worse than failing."""
+    meta = sheetlib.sidecar(
+        _oblong(), sheet_id="s", source_job="j", image="s.png", created=0.0
+    )
+    assert meta["frame_size"] == 0
+    assert (meta["frame_w"], meta["frame_h"]) == (50, 80)
+    assert all(cell["w"] == 50 and cell["h"] == 80 for cell in meta["cells"])
+    # The pivot follows the cell, not the (absent) square size.
+    assert (meta["cells"][0]["pivot_x"], meta["cells"][0]["pivot_y"]) == (25.0, 80.0)
+
+
+def test_a_square_sidecar_carries_no_frame_w_at_all():
+    assert "frame_w" not in _square_sidecar()
+
+
+def test_the_animation_block_is_absent_unless_it_is_given():
+    assert "animation" not in _square_sidecar()
+    meta = sheetlib.sidecar(
+        _oblong(),
+        sheet_id="s", source_job="j", image="s.png", created=0.0,
+        animation={"frames": [], "tags": []},
+    )
+    assert meta["animation"] == {"frames": [], "tags": []}
+    assert list(meta)[-1] == "animation"
+
+
+def test_pack_composites_non_square_cells(tmp_path: Path):
+    layout = _oblong()
+    frames = {}
+    for cell in layout.cells:
+        path = tmp_path / f"{cell.index}.png"
+        Image.new("RGBA", (50, 80), (cell.index * 40, 0, 0, 255)).save(path)
+        frames[cell.index] = path
+
+    sheetlib.pack(layout, frames, tmp_path / "atlas.png")
+
+    with Image.open(tmp_path / "atlas.png") as atlas:
+        assert atlas.size == (150, 160)
+        assert atlas.getpixel((0, 0)) == (0, 0, 0, 255)
+        # Column 100//50 = 2, row 100//80 = 1, so cell 1*3+2 = 5.
+        assert atlas.getpixel((100, 100)) == (200, 0, 0, 255)
+
+
+def test_the_extracted_atlas_guard_is_the_one_plan_uses():
+    with pytest.raises(ValueError, match="8192"):
+        sheetlib.check_atlas_size(sheetlib.MAX_ATLAS_PX + 1, 10)
+    sheetlib.check_atlas_size(sheetlib.MAX_ATLAS_PX, sheetlib.MAX_ATLAS_PX)
+
+
 @pytest.mark.asyncio
 async def test_every_band_is_generated_under_one_seed(worker):
     """Twelve rows is two bands, and one identity down the whole atlas is the

@@ -8,6 +8,7 @@ ORA that Krita opens as blank.
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
@@ -16,6 +17,8 @@ import numpy as np
 from PIL import Image
 
 from warlock.studio import inker
+from warlock.studio.inker import animation
+from warlock.studio.inker.animation import Tag
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
@@ -203,3 +206,260 @@ def test_the_topmost_layer_is_the_active_one_when_a_document_opens(tmp_path: Pat
     doc = inker.Document.load(_saved(tmp_path))
     assert doc.stack.active_index == len(doc.stack) - 1
     assert doc.stack.active.name == "Top"
+
+
+# --- animated documents ------------------------------------------------------
+
+
+def _animated(size=(8, 8)):
+    """Two frames over two tracks: a linked background and a per-frame top."""
+    doc = inker.Document.blank(*size)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = RED
+    doc.add_layer("Top")
+    doc.invalidate_all()
+    doc.ensure_animation()
+    anim = doc.anim
+    anim.frames[0].duration_ms = 40
+    doc.set_active_layer(1)
+    doc.write_colour((0, 0, 4, 4), BLUE, np.ones((4, 4), dtype=np.float32))
+    # Frame two: the background stays *linked* (one object, two slots) while the
+    # top gets a cel of its own, painted differently.
+    doc.add_frame(link=True)
+    doc.set_frame_duration(1, 120)
+    doc.unlink_cel(track_index=1, frame_index=1)
+    doc.set_current_frame(1)
+    doc.set_active_layer(1)
+    doc.write_colour((4, 4, 8, 8), BLUE, np.ones((4, 4), dtype=np.float32))
+    doc.anim.tags.append(Tag(name="walk", start=0, end=1, loop=True))
+    doc.set_current_frame(0)
+    return doc
+
+
+def test_an_animated_document_round_trips_its_whole_grid(tmp_path: Path):
+    original = _animated()
+    path = tmp_path / "anim.ora"
+    inker.write_ora(original, path)
+
+    doc = inker.Document.load(path)
+
+    assert doc.animated
+    assert [f.duration_ms for f in doc.anim.frames] == [40, 120]
+    assert [t.name for t in doc.anim.tracks] == ["Background", "Top"]
+    assert [(t.name, t.start, t.end, t.loop) for t in doc.anim.tags] == [
+        ("walk", 0, 1, True)
+    ]
+    assert len(doc.anim.cels) == len(original.anim.cels)
+
+
+def test_a_link_is_still_a_link_after_a_save_and_a_reload(tmp_path: Path):
+    """Decoding per slot would give equal pixels in separate objects. The break
+    only shows on the next stroke -- one frame changes and the other does not --
+    which arrives as a bug report about drawing, three sessions later."""
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    anim = inker.Document.load(path).anim
+    back, top = anim.tracks[0], anim.tracks[1]
+
+    assert anim.cel(back.uid, anim.frames[0].uid) is anim.cel(
+        back.uid, anim.frames[1].uid
+    )
+    # ...and the top track, deliberately unlinked, is still not shared.
+    assert anim.cel(top.uid, anim.frames[0].uid) is not anim.cel(
+        top.uid, anim.frames[1].uid
+    )
+
+
+def test_a_linked_cel_is_stored_once(tmp_path: Path):
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    with zipfile.ZipFile(path) as zf:
+        cels = [name for name in zf.namelist() if name.startswith("data/cel")]
+        payload = json.loads(zf.read("animation.json"))
+
+    # Three distinct cels (one shared background, two tops) across four slots.
+    assert len(cels) == 3
+    assert len(payload["cels"]) == 4
+    assert len({c["data"] for c in payload["cels"] if c["track"] == 0}) == 1
+
+
+def test_frames_after_the_first_are_written_hidden(tmp_path: Path):
+    """So Krita, GIMP and this reader's own fallback show frame 1 rather than
+    the whole clip stacked on top of itself."""
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    with zipfile.ZipFile(path) as zf:
+        root = ElementTree.fromstring(zf.read("stack.xml"))
+    groups = root.find("stack").findall("stack")
+
+    assert [g.get("name") for g in groups] == ["frame:0001", "frame:0002"]
+    assert groups[0].get("visibility") == "visible"
+    assert groups[1].get("visibility") == "hidden"
+    assert all(layer.get("visibility") == "hidden" for layer in groups[1])
+    assert any(layer.get("visibility") == "visible" for layer in groups[0])
+
+
+def test_the_merged_image_is_frame_one_whatever_the_playhead_is_on(tmp_path: Path):
+    """A save has to be a function of the document, not of where the user
+    happened to be looking, or saving twice gives two different files."""
+    doc = _animated()
+    first, second = tmp_path / "a.ora", tmp_path / "b.ora"
+    inker.write_ora(doc, first)
+    doc.set_current_frame(1)
+    inker.write_ora(doc, second)
+
+    with zipfile.ZipFile(first) as zf:
+        a = zf.read("mergedimage.png")
+    with zipfile.ZipFile(second) as zf:
+        b = zf.read("mergedimage.png")
+    assert a == b
+
+
+def _rewritten(path: Path, dest: Path, edit) -> Path:
+    """A copy of an ORA with ``animation.json`` passed through ``edit``."""
+    with zipfile.ZipFile(path) as src, zipfile.ZipFile(dest, "w") as dst:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "animation.json":
+                data = edit(data)
+                if data is None:
+                    continue
+            dst.writestr(item, data)
+    return dest
+
+
+def test_an_absent_animation_json_reads_exactly_as_it_always_did(tmp_path: Path):
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+    stripped = _rewritten(path, tmp_path / "flat.ora", lambda _data: None)
+
+    doc = inker.Document.load(stripped)
+
+    assert doc.anim is None
+    # Both frames' layers, flattened out of their groups by the tolerant reader.
+    assert len(doc.stack) == 4
+
+
+def test_a_corrupt_animation_json_falls_back_to_the_flat_read(tmp_path: Path):
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+    broken = _rewritten(path, tmp_path / "broken.ora", lambda _data: b"{not json")
+
+    doc = inker.Document.load(broken)
+
+    assert doc.anim is None
+    assert doc.size == (8, 8)
+
+
+def _retagged(data: bytes, **changes) -> bytes:
+    payload = json.loads(data)
+    payload.update(changes)
+    return json.dumps(payload).encode()
+
+
+def test_a_cel_naming_a_missing_png_fails_the_whole_grid(tmp_path: Path):
+    """Not just that cel. Half a timeline is harder to notice than none of one,
+    and the flat fallback at least looks like what it is."""
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    def break_one(data: bytes) -> bytes:
+        payload = json.loads(data)
+        payload["cels"][0]["data"] = "data/nope.png"
+        return json.dumps(payload).encode()
+
+    broken = _rewritten(path, tmp_path / "broken.ora", break_one)
+    assert inker.Document.load(broken).anim is None
+
+
+def test_a_cel_pointing_outside_the_grid_fails_the_whole_grid(tmp_path: Path):
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    def out_of_range(data: bytes) -> bytes:
+        payload = json.loads(data)
+        payload["cels"][0]["frame"] = 99
+        return json.dumps(payload).encode()
+
+    broken = _rewritten(path, tmp_path / "broken.ora", out_of_range)
+    assert inker.Document.load(broken).anim is None
+
+
+def test_a_future_version_is_not_guessed_at(tmp_path: Path):
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+    future = _rewritten(path, tmp_path / "future.ora", lambda d: _retagged(d, version=99))
+    assert inker.Document.load(future).anim is None
+
+
+def test_a_still_document_writes_exactly_the_members_it_always_did(tmp_path: Path):
+    """The regression pin for "plain documents are byte-compatible". Every
+    branch the animation added is gated on ``doc.anim``, and this is what says
+    so from outside the module."""
+    with zipfile.ZipFile(_saved(tmp_path)) as zf:
+        names = zf.namelist()
+
+    assert names == [
+        "mimetype",
+        "stack.xml",
+        "data/layer0.png",
+        "data/layer1.png",
+        "mergedimage.png",
+        "Thumbnails/thumbnail.png",
+    ]
+
+
+def test_the_grid_survives_a_second_save(tmp_path: Path):
+    """Uids are minted per process and the file stores indices, so a reload
+    renumbers everything. That is only safe if writing the reloaded document
+    produces the same grid again."""
+    first, second = tmp_path / "a.ora", tmp_path / "b.ora"
+    inker.write_ora(_animated(), first)
+    inker.write_ora(inker.Document.load(first), second)
+
+    with zipfile.ZipFile(first) as zf:
+        a = json.loads(zf.read("animation.json"))
+    with zipfile.ZipFile(second) as zf:
+        b = json.loads(zf.read("animation.json"))
+    assert a == b
+
+
+def test_a_frame_with_no_duration_gets_the_default_and_not_the_floor(tmp_path: Path):
+    """A hundred times too fast, and silently: a clip that plays is not
+    obviously wrong. Falling through to ``clamp_duration``'s floor gave an
+    absent ``duration_ms`` one millisecond, where a frame that never said what
+    it lasts should last what a new frame lasts."""
+    path = tmp_path / "anim.ora"
+    inker.write_ora(_animated(), path)
+
+    def drop_durations(data: bytes) -> bytes:
+        payload = json.loads(data)
+        for entry in payload["frames"]:
+            entry.pop("duration_ms", None)
+        return json.dumps(payload).encode()
+
+    stripped = _rewritten(path, tmp_path / "nodur.ora", drop_durations)
+    doc = inker.Document.load(stripped)
+
+    assert doc.anim is not None
+    assert [f.duration_ms for f in doc.anim.frames] == [
+        animation.DEFAULT_DURATION_MS
+    ] * len(doc.anim.frames)
+
+
+def test_tags_survive_a_round_trip(tmp_path: Path):
+    """The timeline can create them now, so the file has to carry them: a tag
+    is the only part of the grid a playback engine reads by name."""
+    doc = _animated()  # already carries a hand-built "walk"
+    doc.add_tag("hit", 1, loop=False)
+    path = tmp_path / "tagged.ora"
+    inker.write_ora(doc, path)
+
+    back = inker.Document.load(path)
+    assert [(t.name, t.start, t.end, t.loop) for t in back.anim.tags] == [
+        ("walk", 0, 1, True),
+        ("hit", 1, 1, False),
+    ]

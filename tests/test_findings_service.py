@@ -183,7 +183,8 @@ def _judged_about(svc, prompt, verdict, source="human", **params):
 
 
 def test_the_marginals_are_also_broken_out_per_subject(svc):
-    """TODO item 4. Confounding across *settings* is documented and accepted --
+    """Per-subject scoping. Confounding across *settings* is documented and
+    accepted --
     the price of letting daily use feed the hints. Confounding across
     *subjects* is not the same bargain: what makes a good wooden crate says
     very little about what makes a good character.
@@ -335,7 +336,8 @@ def test_the_machine_evidence_reaches_the_file_with_no_verdict_filed(svc):
 
 
 def test_a_refusal_rate_survives_into_the_document(svc):
-    """TODO item 3's other half, and the half that decides whether it was worth
+    """The recording half's counterpart, and the half that decides whether it was
+    worth
     doing: an appended observation is not a finding until something aggregates
     it. ``_metric_summary`` names the keys it averages, so a metric added to
     ``vectors.observation_metrics`` and not to it is written to the DB, read

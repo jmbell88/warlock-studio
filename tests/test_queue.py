@@ -1230,7 +1230,7 @@ def _bad_then_good(monkeypatch, failures: int):
 
 
 async def test_a_refused_reference_is_rerolled_before_the_job_fails(worker, monkeypatch):
-    """TODO item 2, and the config default is the whole of it.
+    """Reference retries, and the config default is the whole of it.
 
     Seed 11's baseline errored in the 2026-08-07 rogue sweep, which did not
     cost one mesh: ``findings.comparisons`` pairs two rows only when they share
@@ -1264,7 +1264,7 @@ async def test_a_refused_reference_is_rerolled_before_the_job_fails(worker, monk
 
 async def test_without_the_setting_a_bad_reference_is_not_rerolled(worker, monkeypatch):
     # Pins the reroll *off*, rather than trusting the default to be off -- it
-    # is 2 now (TODO item 2) and this test is about the other setting.
+    # is 2 now, and this test is about the other setting.
     monkeypatch.setattr(worker.config, "reference_retries", 0)
     _bad_then_good(monkeypatch, failures=99)
     job_id = worker.store.create("text", "a barrel", {"seed": 5}, stage="reference")
@@ -2112,7 +2112,7 @@ async def test_a_finished_model_job_leaves_one_observation_row(worker, monkeypat
 async def test_a_job_refused_at_the_composition_gate_leaves_an_observation(
     worker, monkeypatch
 ):
-    """TODO item 3. The 17 refusals in the 2026-08-07 rogue sweep wrote nothing
+    """Observations on refusal. The 17 refusals in the 2026-08-07 sweep wrote nothing
     at all, so findings.json could only ever report a checkpoint's accept rate
     *among the references that survived* -- which flatters exactly the
     checkpoints that fail most often. ``sdxl_cfg`` refused 3 of 5 and
@@ -2235,3 +2235,45 @@ async def test_a_failing_observation_write_does_not_fail_the_job(worker, monkeyp
 
     assert worker.store.get(job_id)["status"] == "done"
     assert worker.store.latest_observations() == []
+
+
+async def test_rank_candidates_off_skips_the_anchor_and_keeps_the_composition_score(
+    tmp_path, monkeypatch
+):
+    """``WARLOCK_RANK=off`` had one reader and nothing asserting it.
+
+    The switch is about the *anchor* half only: that half needs a ref.png and an
+    optional DINOv2 download, so it is opportunistic three ways over. The
+    composition half is free -- the report was measured either way -- so turning
+    ranking off must not turn scoring off.
+    """
+    from warlock.bench import metrics
+
+    worker = _make_worker(tmp_path, rank_candidates=False)
+    job_dir = tmp_path / "assets" / "j"
+    job_dir.mkdir(parents=True)
+    (job_dir / "ref.png").write_bytes(b"not read")
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the anchor half ran with ranking off")
+
+    monkeypatch.setattr(metrics, "dino_available", refuse)
+
+    scored = worker._rank_reference(job_dir / "input.png", {"reference_report": {}})
+    assert "cosine" not in scored or scored["cosine"] is None
+    assert scored, "the composition half is free and still reported"
+
+
+async def test_rank_candidates_on_consults_the_anchor_when_one_exists(tmp_path, monkeypatch):
+    from warlock.bench import metrics
+
+    worker = _make_worker(tmp_path, rank_candidates=True)
+    job_dir = tmp_path / "assets" / "j"
+    job_dir.mkdir(parents=True)
+    (job_dir / "ref.png").write_bytes(b"not read")
+
+    asked: list[bool] = []
+    monkeypatch.setattr(metrics, "dino_available", lambda *_a, **_k: asked.append(True))
+
+    worker._rank_reference(job_dir / "input.png", {"reference_report": {}})
+    assert asked == [True]

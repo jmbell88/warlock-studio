@@ -64,11 +64,31 @@ DELETE_KEY = "review-delete"
 FINDINGS_KEY = "review-findings"
 LABELS_KEY = "review-labels"
 TRAIN_KEY = "review-train"
+SCORE_KEY = "review-scores"
 
 # What this reviewer is called. A free string by design -- verdicts are keyed
 # on (job_id, source), so a future judge writing "ai:<model>" sits beside a
 # human's verdict rather than overwriting it.
 SOURCE = verdicts_mod.SOURCE_HUMAN
+
+# The name the judge will file under when it files anything, declared now so it
+# is decided once. **Nothing writes it yet, and that is a decision rather than
+# an omission**: filing a verdict needs a probability-to-accept threshold, and
+# a threshold is a constant the stored corpus is then keyed on, which owes a
+# ``docs/measurements/`` document first (`TODO.md` §10 says what it must
+# contain). The ``(job_id, source, stage)`` seam is already built and tested, so
+# the day that measurement exists this is one call.
+SOURCE_AI = "ai:dino-probe"
+
+# Which probe scores a review unit. A sweep unit is a *model*-stage job, and the
+# mesh probe does not exist -- but the blank question's declared population is
+# exactly these jobs' reference images (``db.LABEL_POPULATION`` maps
+# ``blank -> model``), so this is not a stage mismatch: it is the one question
+# there is evidence for, asked about the picture the mesh was reconstructed
+# from. What is on screen says so, because a number that does not name its
+# question will be read as the one the reader wanted.
+SCORE_STAGE = "blank"
+SCORE_QUESTION = "will this reconstruct"
 
 # 1-5, in the order verdicts.REASONS lists them, so the pane can number the
 # buttons off the same table and the two can never disagree.
@@ -169,6 +189,10 @@ class ReviewState:
     # None rather than a mode flag beside a always-present LabelPass, so there is
     # one answer to "which loop is A pressing" and it cannot be two.
     labels: LabelPass | None = None
+    # The job ids a scoring run was asked about, so its answer lands on exactly
+    # those rows. Not "the units that are open": the user can open another sweep
+    # while the pass runs. Empty means nothing is in flight.
+    score_request: list[str] = field(default_factory=list)
 
 
 def ensure(ctx: Any) -> ReviewState:
@@ -289,6 +313,88 @@ def pump_findings(ctx: Any) -> None:
         ctx.state.findings_dirty = False
 
 
+def request_scores(ctx: Any) -> None:
+    """Ask for the open sweep's units to be scored. Cheap, and safe to spam."""
+    ctx.state.review_scores_dirty = True
+
+
+def unscored(units: list[dict[str, Any]]) -> list[str]:
+    """The job ids with no score yet, in presentation order."""
+    return [u["job_id"] for u in units if "score" not in u]
+
+
+def pump_scores(ctx: Any) -> None:
+    """Score whatever is open, if anything is missing one and nothing is running.
+
+    ``pump_findings``' shape, for ``pump_findings``' reason: ``submit`` refuses
+    a key already in flight and nothing re-arms it, so a direct submit drops the
+    request that arrives while a run is going -- and the request that matters
+    most is the last one.
+
+    Scoring is a DINOv2 forward pass per row, so it is a task and never a frame.
+    A ``blind`` session asks for nothing at all: see ``open_sweep``.
+    """
+    from ..service import judge as judge_mod
+
+    if not ctx.state.review_scores_dirty:
+        return
+    state = ctx.state.review
+    wanted = [] if state is None or state.blind else unscored(state.units)
+    if not wanted:
+        ctx.state.review_scores_dirty = False
+        return
+    if ctx.submit(SCORE_KEY, judge_mod.score_jobs, ctx.svc, wanted, SCORE_STAGE):
+        # What was *asked*, so the answer lands on those rows and no others. The
+        # user can open another sweep while the pass runs, and marking whatever
+        # happens to be open when it returns would tick off units nobody scored
+        # -- which then never get asked about again, since ``unscored`` reads the
+        # same key.
+        state.score_request = list(wanted)
+        ctx.state.review_scores_dirty = False
+
+
+def adopt_scores(state: ReviewState, scores: dict[str, Any]) -> None:
+    """Merge scores onto the rows that were asked about, **reordering nothing**.
+
+    The unit dicts are shared with the ``sweeps`` entries, so a row is found and
+    written once wherever it lives -- which is what makes an answer arriving
+    after the user has moved on still count. The order is deliberately left
+    alone: a list that resorts under the cursor is how the wrong thing gets
+    judged, which is the lesson ``LabelPass`` rows keeping their place already
+    carries. Order is applied once, when a sweep is opened.
+
+    An empty dict is "no probe", not "no scores" -- and every asked row is still
+    written, with None, or the pump requests them again on every frame forever.
+    """
+    asked, state.score_request = state.score_request, []
+    if not asked:
+        return
+    index = {
+        unit["job_id"]: unit
+        for entry in state.sweeps
+        for unit in entry.get("units") or ()
+    }
+    index.update({unit["job_id"]: unit for unit in state.units})
+    for job_id in asked:
+        unit = index.get(job_id)
+        if unit is not None:
+            unit["score"] = scores.get(job_id)
+
+
+def clear_scores(state: ReviewState) -> None:
+    """Forget every score. For a retrain: the probe that produced them is gone,
+    and a stale number is the ``warlockc`` hazard -- an absent one is obvious,
+    one silently computing last week's answer is not."""
+    for entry in state.sweeps:
+        for unit in entry.get("units") or ():
+            unit.pop("score", None)
+    for unit in state.units:
+        unit.pop("score", None)
+    # The run in flight was scored by the probe that has just been replaced, so
+    # its answer must not be adopted when it lands.
+    state.score_request = []
+
+
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
@@ -318,6 +424,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
     if done.key == FINDINGS_KEY:
         return
+    if done.key == SCORE_KEY:
+        adopt_scores(state, done.result if isinstance(done.result, dict) else {})
+        return
     if done.key == LABELS_KEY:
         if state.labels is not None:
             state.labels.loading = False
@@ -343,6 +452,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 f"Trained the {summary.get('stage')} probe on "
                 f"{summary.get('usable')} label(s)."
             )
+            if summary.get("stage") == SCORE_STAGE:
+                # Every score on screen was produced by the probe this just
+                # replaced. Dropping them and asking again is the only honest
+                # option; keeping them would show last week's answer under a
+                # judge that has changed its mind.
+                clear_scores(state)
+                request_scores(ctx)
         # Silent otherwise: "12 more labels to go" is the ordinary state of a
         # corpus being built, and a toast per keypress saying so is noise. The
         # panel carries the count.
@@ -382,6 +498,15 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         state.labels.loading = False
     if done.key == TRAIN_KEY:
         ctx.toast("Could not train the probe.", "error")
+    if done.key == SCORE_KEY:
+        # Silent, and the rows are left *unmarked* rather than marked as scored
+        # with nothing. The judge is advisory, so a failure to have an opinion is
+        # not a failure of the review and a toast would make it look like one --
+        # but writing None would tell ``unscored`` these rows had been answered,
+        # and nothing would ever ask again. Unmarked, the next trigger (a
+        # retrain, reopening the sweep) picks them up; and since nothing re-arms
+        # the flag by itself, this cannot become a retry loop either.
+        state.score_request = []
 
 
 # --- the open sweep ----------------------------------------------------------
@@ -421,11 +546,16 @@ def open_sweep(ctx: Any, sweep_id: str) -> None:
     units = list(entry["units"]) if entry is not None else []
     # Presentation order only: the ``sweeps`` entry keeps its own list, which
     # is what ``_recount`` tallies, and the dicts are shared either way.
-    state.units = blind_order(units) if state.blind else units
+    # Blind wins wholesale, and hides the score as well as choosing the order.
+    # A score-derived order is a quality channel that re-identifies the arms a
+    # blind review exists to hide, and a judge's opinion on screen anchors the
+    # independent human judgement it exists to collect.
+    state.units = blind_order(units) if state.blind else by_score(units)
     state.pending_reject = False
     state.index = next(
         (i for i, unit in enumerate(state.units) if unit["verdict"] is None), 0
     )
+    request_scores(ctx)
 
 
 def current(state: ReviewState) -> dict[str, Any] | None:
@@ -896,6 +1026,28 @@ def label(state: ReviewState, unit: dict[str, Any]) -> str:
     if state.blind:
         return f"#{str(unit.get('job_id') or '')[:6]}"
     return str(unit.get("label") or unit.get("job_id") or "")
+
+
+def score_line(state: ReviewState, unit: dict[str, Any]) -> str:
+    """What the judge thinks, or "" for nothing to say.
+
+    It names its question. A bare percentage beside a mesh will be read as an
+    opinion about the mesh, and this probe has never seen one -- it was fitted
+    to reference images labelled "would this reconstruct", which is the only
+    question the corpus has evidence for.
+
+    Takes the state positionally for ``label``'s reason, and answers "" under
+    blinding for ``open_sweep``'s: an AI opinion on screen anchors the
+    independent human judgement a blind review exists to collect.
+
+    Basic-Latin only (imgui's default atlas), so ``·`` and no arrows.
+    """
+    if state.blind:
+        return ""
+    score = unit.get("score")
+    if not isinstance(score, (int, float)):
+        return ""
+    return f"judge: {round(float(score) * 100)}% - {SCORE_QUESTION}"
 
 
 # --- keys --------------------------------------------------------------------

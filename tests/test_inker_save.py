@@ -344,15 +344,27 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
     whose ``stack.xml``, merged image and layer PNGs disagree about the canvas
     size.
 
+    ``busy`` counts as the gate as well as ``saving``, and is now what these
+    panels actually use: it is ``saving or playing``, so it is strictly the
+    stronger claim. Accepting both is what stops this test forcing the weaker
+    spelling back in the day a third reason is added.
+
     Asserted structurally: driving these needs a live imgui frame, but what
     went wrong is the *absence* of a call, which a frame cannot show either.
     """
     import ast
     import inspect
 
-    from warlock.studio.panes import inker_bridge, inker_tools
+    from warlock.studio.panes import inker_bridge, inker_timeline, inker_tools
 
-    for func in (inker_bridge._canvas_ops, inker_bridge._resize_popup, inker_tools._options):
+    targets = (
+        inker_bridge._canvas_ops,
+        inker_bridge._resize_popup,
+        inker_tools._options,
+        inker_timeline._frame_menu,
+        inker_timeline._cell_menu,
+    )
+    for func in targets:
         tree = ast.parse(inspect.getsource(func).lstrip())
         gates = [
             call
@@ -361,12 +373,25 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
             and isinstance(call.func, ast.Attribute)
             and call.func.attr == "begin_disabled"
             and any(
-                isinstance(node, ast.Attribute) and node.attr == "saving"
+                isinstance(node, ast.Attribute) and node.attr in ("saving", "busy")
                 for arg in call.args
                 for node in ast.walk(arg)
             )
         ]
         assert gates, f"{func.__qualname__} mutates the document with no save gate"
+
+
+def test_busy_is_saving_or_playing():
+    """The gate every panel above reads. Both halves make restructuring the
+    document unsafe -- a save is encoding the layer stack off-thread, and
+    playback is showing a cached flatten of some other frame -- so they are one
+    question, asked once."""
+    tab = _tab("")
+    assert not tab.busy
+    tab.saving = True
+    assert tab.busy
+    tab.saving, tab.playing = False, True
+    assert tab.busy
 
 
 def test_a_failed_save_clears_the_saving_flag():

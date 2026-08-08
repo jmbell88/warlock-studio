@@ -14,6 +14,8 @@ The modules, bottom up:
 ``brush``      cached coverage stamps and the spacing walk of one stroke
 ``gradient``   linear and radial ramps
 ``transform``  flip, rotate, scale, crop, canvas resize
+``animation``  the frames-by-tracks grid, and the sparse cel map in it
+``anim_edits`` undo steps for that grid
 ``ora``        OpenRaster read and write
 ``document``   the one type that knows about all of the above
 
@@ -23,6 +25,15 @@ Everything a caller needs is re-exported here, so ``from .. import inker`` and
 
 from __future__ import annotations
 
+from .animation import (
+    DEFAULT_DURATION_MS,
+    MAX_DURATION_MS,
+    MIN_DURATION_MS,
+    Animation,
+    Frame,
+    Tag,
+    Track,
+)
 from .brush import (
     DEFAULT_SPACING,
     MAX_BRUSH,
@@ -52,10 +63,15 @@ from .undo import UNDO_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
 __all__ = [
     "BLEND_MODES",
     "COMBINE_OPS",
+    "DEFAULT_DURATION_MS",
+    "MAX_DURATION_MS",
+    "MIN_DURATION_MS",
+    "Animation",
     "Clipboard",
     "DEFAULT_SPACING",
     "Document",
     "FloatingBuffer",
+    "Frame",
     "GRADIENT_KINDS",
     "Layer",
     "LayerStack",
@@ -69,6 +85,8 @@ __all__ = [
     "SelectionMask",
     "StrokeState",
     "TRANSPARENT",
+    "Tag",
+    "Track",
     "UNDO_BYTES",
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",

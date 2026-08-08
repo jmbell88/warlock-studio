@@ -800,6 +800,9 @@ class App:
         # Same shape, same reason: a burst of image labels must not train once on
         # the set as it stood at the first keypress.
         review_mode.pump_judge(ctx)
+        # And once more: scoring is a DINOv2 pass per unit, so it is a task, and
+        # the request following a retrain is the one with nothing after it.
+        review_mode.pump_scores(ctx)
         self._check_worker()
 
     def _check_worker(self) -> None:
@@ -1495,6 +1498,7 @@ class App:
             inker_canvas,
             inker_colors,
             inker_layers,
+            inker_timeline,
             inker_tools,
         )
         from .tokens import sp
@@ -1502,6 +1506,8 @@ class App:
         ctx = self.app_ctx
         lay = self.layout
         sidebar_w = sp(layout_mod.SIDEBAR_W)
+        tab = None if ctx.state.inker is None else ctx.state.inker.active
+        animated = tab is not None and tab.doc.anim is not None
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
         if layout_mod.pane_child("inker-tools", (sidebar_w, tools_height)):
@@ -1515,9 +1521,25 @@ class App:
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("inker-centre", (width, 0), flags):
+        imgui.begin_group()
+        # A *positive* height, never a bottom offset, and only when there is a
+        # timeline to reserve for: with little room left a negative height
+        # collapses the canvas child to nothing and the canvas -- and its
+        # texture uploads -- silently stops being drawn. Same rule the status
+        # bar inside ``inker_canvas`` already follows. A still document takes
+        # the untouched branch, so its layout is what it always was.
+        centre_h = 0.0
+        if animated:
+            strip = sp(inker_timeline.STRIP_H)
+            centre_h = max(imgui.get_content_region_avail().y - strip, sp(120))
+        if layout_mod.pane_child("inker-centre", (width, centre_h), flags):
             inker_canvas.draw(ctx)
         imgui.end_child()
+        if animated:
+            if layout_mod.pane_child("inker-timeline", (width, 0)):
+                inker_timeline.draw(ctx)
+            imgui.end_child()
+        imgui.end_group()
 
         imgui.same_line()
         imgui.begin_group()
@@ -1696,8 +1718,9 @@ class App:
         else:
             widgets.muted("no probe yet")
         widgets.hint_text(
-            "Advisory only: a probe sorts this list and files a verdict beside "
-            "yours. It never refuses or deletes anything."
+            "Advisory only. A trained probe scores each unit and sorts the "
+            "review best-first; it never hides, refuses or deletes anything, "
+            "and it files no verdict of its own yet."
         )
 
     def _review_runs(self, ctx: Any, state: Any, review_mode: Any) -> None:
@@ -1950,6 +1973,13 @@ class App:
 
         for line in review_mode.mesh_lines(unit):
             widgets.muted(line)
+
+        # Below the measurements and named as a judgement, because it is one and
+        # the measurements are not. Empty when there is no probe, when the judge
+        # had nothing to say about this row, and always under blinding.
+        judged = review_mode.score_line(state, unit)
+        if judged:
+            widgets.muted(judged)
 
         imgui.separator()
         enabled = not state.scanning

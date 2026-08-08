@@ -49,7 +49,7 @@ def _scoped_doc(prompt):
 
 
 def test_the_pane_scopes_its_hints_to_the_prompt_in_the_form(tmp_path):
-    """TODO item 4's last mile. The pane owns the prompt, so it always knows
+    """Per-subject scoping's last mile. The pane owns the prompt, so it always knows
     its subject -- and this is the half a service-level test cannot reach: the
     form key is ``form_2d``, and reading the wrong one would silently hand
     ``prompt_hash("")`` to every lookup and pool everything forever, with no

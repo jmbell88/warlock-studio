@@ -55,15 +55,18 @@ class Cell:
     yaw: float            # degrees clockwise from front (-Y in Blender axes)
     frame: int            # always 0 today; the seam animated clips arrive on
 
-    def as_dict(self, size: int) -> dict[str, Any]:
+    def as_dict(self, w: int, h: int | None = None) -> dict[str, Any]:
+        """``h`` defaults to ``w``: a 3D sheet's cells are square by
+        construction, and the one caller that is not (an Inker clip, whose
+        cells are the canvas) passes both."""
         return {
             "index": self.index,
             "row": self.row,
             "column": self.column,
             "x": self.x,
             "y": self.y,
-            "w": size,
-            "h": size,
+            "w": w,
+            "h": w if h is None else h,
             "pose": self.pose,
             "pose_name": self.pose_name,
             "yaw": self.yaw,
@@ -81,14 +84,30 @@ class Plan:
     lighting: str
     poses: tuple[dict[str, Any], ...]
     cells: tuple[Cell, ...]
+    # Non-square cells, for a source whose frame is a canvas rather than a
+    # camera: an Inker animation is 300x180 because that is what the user drew
+    # on. Zero means "square, i.e. ``frame_size``", and ``plan()`` never sets
+    # them -- so every 3D sheet takes the same arithmetic it always did, to the
+    # character. Trailing and defaulted because ``Plan`` is a frozen slots
+    # dataclass whose earlier fields have no defaults.
+    frame_w: int = 0
+    frame_h: int = 0
+
+    @property
+    def cell_w(self) -> int:
+        return self.frame_w or self.frame_size
+
+    @property
+    def cell_h(self) -> int:
+        return self.frame_h or self.frame_size
 
     @property
     def width(self) -> int:
-        return self.columns * self.frame_size
+        return self.columns * self.cell_w
 
     @property
     def height(self) -> int:
-        return self.rows * self.frame_size
+        return self.rows * self.cell_h
 
 
 def yaw_angles(count: int = DEFAULT_YAWS) -> tuple[float, ...]:
@@ -181,6 +200,22 @@ def interpolate(
     return out
 
 
+def check_atlas_size(width: int, height: int) -> None:
+    """Refuse an atlas an engine would refuse, before anything renders.
+
+    Extracted from ``plan`` so the other builder of a ``Plan`` -- the Inker
+    exporter, which cannot use ``plan`` because its job is poses by yaws --
+    applies the same limit rather than its own approximation of it. The message
+    is unchanged, deliberately: it is what the existing test matches on and what
+    a user has seen before.
+    """
+    if max(width, height) > MAX_ATLAS_PX:
+        raise ValueError(
+            f"that sheet would be {width}x{height}px; the limit is {MAX_ATLAS_PX}px "
+            "-- use a smaller frame size or fewer poses"
+        )
+
+
 def plan(
     poses: Sequence[Mapping[str, Any]],
     *,
@@ -205,12 +240,7 @@ def plan(
         raise ValueError("a sheet needs at least one view direction")
 
     rows_in = list(poses) or [{"id": None, "name": REST_POSE_NAME}]
-    width, height = yaws * frame_size, len(rows_in) * frame_size
-    if max(width, height) > MAX_ATLAS_PX:
-        raise ValueError(
-            f"that sheet would be {width}x{height}px; the limit is {MAX_ATLAS_PX}px "
-            "-- use a smaller frame size or fewer poses"
-        )
+    check_atlas_size(yaws * frame_size, len(rows_in) * frame_size)
 
     angles = yaw_angles(yaws)
     cells: list[Cell] = []
@@ -274,7 +304,7 @@ def pack(
     """
     from PIL import Image
 
-    size = sheet.frame_size
+    size = (sheet.cell_w, sheet.cell_h)
     atlas = Image.new("RGBA", (sheet.width, sheet.height), (0, 0, 0, 0))
     trims: dict[int, dict[str, int] | None] = {}
     try:
@@ -284,8 +314,8 @@ def pack(
                 raise ValueError(f"no rendered frame for cell {cell.index}")
             with Image.open(path) as frame:
                 frame = frame.convert("RGBA")
-                if frame.size != (size, size):
-                    frame = frame.resize((size, size), Image.LANCZOS)
+                if frame.size != size:
+                    frame = frame.resize(size, Image.LANCZOS)
                 trims[cell.index] = measure_trim(frame)
                 atlas.paste(frame, (cell.x, cell.y))
         out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -305,6 +335,7 @@ def sidecar(
     name: str = "",
     pivot: tuple[float, float] | None = None,
     trims: Mapping[int, dict[str, int] | None] | None = None,
+    animation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The engine-neutral description of the atlas next to it.
 
@@ -312,23 +343,33 @@ def sidecar(
     -- just pixel rectangles and what each one shows, in the plainest JSON that
     can carry it. Anything more opinionated would have to be rewritten for the
     second engine anyone tries.
+
+    ``animation``, when given, adds one ``"animation"`` key: ``frames``, each a
+    ``{cell_index, duration_ms}``, and ``tags``. It is only ever built by the
+    Inker exporter, and this stays the only writer of the format so ``version:
+    1`` cannot come to mean two subtly different documents.
+
+    On a non-square plan ``frame_size`` is emitted as **0** and ``frame_w`` /
+    ``frame_h`` carry the truth. Zero is a loud wrong answer rather than a quiet
+    one: putting the width in ``frame_size`` would let an importer that reads
+    only that key slice the atlas correctly across and wrongly down. Every cell
+    also carries its own ``w``/``h``, so a cell-driven importer needs none of
+    this.
     """
     # The projected ground origin, in pixels within a cell. Identical for every
     # cell by construction: the camera is framed once from the rest bbox and
     # only spins, so the subject's origin lands in the same place in every
     # direction. That stability is the property an engine needs to place a
     # sprite without it drifting as the character turns.
-    px, py = (
-        pivot if pivot is not None else (sheet.frame_size / 2.0, float(sheet.frame_size))
-    )
+    px, py = pivot if pivot is not None else (sheet.cell_w / 2.0, float(sheet.cell_h))
     cells = []
     for c in sheet.cells:
-        entry = c.as_dict(sheet.frame_size)
+        entry = c.as_dict(sheet.cell_w, sheet.cell_h)
         entry["pivot_x"] = px
         entry["pivot_y"] = py
         entry["trim"] = (trims or {}).get(c.index)
         cells.append(entry)
-    return {
+    payload = {
         "version": SHEET_VERSION,
         "id": sheet_id,
         "name": name or sheet_id,
@@ -351,3 +392,8 @@ def sidecar(
         ],
         "cells": cells,
     }
+    if sheet.frame_w or sheet.frame_h:
+        payload["frame_w"], payload["frame_h"] = sheet.cell_w, sheet.cell_h
+    if animation is not None:
+        payload["animation"] = dict(animation)
+    return payload

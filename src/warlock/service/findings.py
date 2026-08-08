@@ -70,8 +70,8 @@ __all__ = [
 # metrics / comparisons sections exist. Readers tolerate v1 files (hint falls
 # back to the bare "accept 6/8" when wilson_low is absent).
 # 3: the ``prompts`` section -- the same marginals again, one set per subject
-# (TODO item 4) -- and the ``refused*`` metrics the composition gate now
-# records (item 3). Both are additive: every v2 key keeps its meaning and its
+# -- and the ``refused*`` metrics the composition gate now records. Both are
+# additive: every v2 key keeps its meaning and its
 # value, so a reader that knows nothing about either is correct on a v3 file,
 # and ``hint`` asked for a subject it cannot find simply falls back to the
 # pooled answer.

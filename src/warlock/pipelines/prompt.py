@@ -37,7 +37,7 @@ from typing import Any
 # sheet is the canonical form of the genre this asked for: the template was
 # requesting the failure. And "single object centered" became "a single subject
 # centered ... no other objects", stating the constraint rather than implying
-# it. Positive side deliberately, per TODO item 1: `sdxl_cfg` -- full CFG at 30
+# it. Positive side deliberately: `sdxl_cfg` -- full CFG at 30
 # steps, where negative adherence is *strongest* -- refused most of all, which
 # points at the positive prompt driving the layout; and the negative prompt is
 # a field the user can empty, so a constraint living only there is one the

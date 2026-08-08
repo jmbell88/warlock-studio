@@ -252,8 +252,8 @@ MIGRATIONS: list[list[str]] = [
 # template is correct for the one statement it was copied from but wrong for
 # anything a future migration might legally write, and a miss means a fresh
 # database tries to re-add an existing column and fails to start. This regex
-# removes the class rather than the instance -- match _check_job_id in
-# app.py for the same reasoning applied to job ids. It hardened again for
+# removes the class rather than the instance -- see ``service.jobs``'s job-id
+# checks for the same reasoning applied to identifiers. It hardened again for
 # migration 5, which is the first to ALTER a table other than jobs: a
 # jobs-only pattern would have let a fresh DB replay the verdicts ALTERs
 # against columns _SCHEMA already created.

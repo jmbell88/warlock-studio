@@ -17,6 +17,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "inker-tools": ("06-inker", "tools"),
     "inker-layers": ("06-inker", "layers"),
     "inker-bridge": ("06-inker", "pipeline-bridges"),
+    "inker-timeline": ("06-inker", "animation"),
     "clay-tools": ("07-clay", "transforming"),
     "clay-props": ("07-clay", "materials"),
     "clay-outliner": ("07-clay", "adding-a-primitive"),

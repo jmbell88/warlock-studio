@@ -595,7 +595,25 @@ embed + fit + score, the labelling grid, and both image probes. Ends with a
 held-out accuracy figure. This is the whole of the value for 2D mode and the
 cheapest useful gate for 3D.
 
-**All of that is built; the held-out accuracy figure is not, and cannot be.** It
+**All of that is built and wired.** The scoring seam was the last piece and it is
+in: `service.judge.score_jobs` scores a whole review in one probe load,
+`review_mode` requests it through the `findings_dirty`/`judge_dirty` flag idiom
+(a direct submit drops whichever request lands while a run is going), the units
+carry a `score`, `open_sweep` presents them through `by_score`, and the verdict
+panel shows one muted line that names the question it answers. A retrain of the
+`blank` probe clears every score and asks again, because a number computed by a
+probe that has since changed its mind is the `warlockc` staleness hazard. Blind
+wins wholesale — no sort, no score — since a score-derived order re-identifies
+the arms and an opinion on screen anchors the judgement a blind review exists to
+collect.
+
+**Filing an `ai:` verdict is deliberately not part of it.** The name is decided
+(`review_mode.SOURCE_AI`) and the `(job_id, source, stage)` seam is built and
+tested, so the day §10's document exists this is one call. What it is waiting on
+is the threshold: a probability-to-accept cut is a constant the stored corpus is
+then keyed on, and that owes a measurement first.
+
+**The held-out accuracy figure is not built, and cannot be.** It
 is a measurement over labels that do not exist yet, and it is what §10 specifies —
 so the remaining Phase 1 work is: run a labelling session, then write the
 measurement document. One thing was added on the way that the scope list did not
@@ -625,7 +643,9 @@ precisely because everything except the matte is held constant.
 
 Only after §10's numbers exist. Candidates, in increasing order of risk:
 
-1. Sorting Review by score (already in Phase 1).
+1. Sorting Review by score — **done**, and the least risky thing here for the
+   reason it always was: sorting shows the same set in a better order and costs
+   nothing when the judge is wrong.
 2. A bounded reference-seed re-roll on a predicted-bad blank. The mechanism is
    already there and already on — `Config.reference_retries` is 2 and the loop
    holds `mesh_seed` fixed — so this is only a matter of letting the probe, not
@@ -746,6 +766,8 @@ character meshes, with a QA note on bake fidelity before any UI default moves.
 | `seam.SEAM_MAX = 2.0` uncalibrated (`pipelines/seam.py`) | Open, low priority. Needs stone / plaster / gravel / fabric tiles eyeballed. Corpus-keyed, so it owes a measurement doc before it moves. |
 | `docs/measurements/2026-08-06-pixel-art-xl.md` — "run not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). Independent of everything — good use of idle GPU time alongside §2. |
 | Fused brush dab kernel (`warlockc_dab_u8`) | Deferred on purpose; the gate is "the brush shows up in a profile first". ABI 5, four kernels shipped. |
+| Merge-down and flatten on an animated Inker document | Refused rather than approximated (`Document.can_restructure`). Both are defined over one layer stack and an animated document has one per frame, so the honest versions are "merge these two tracks across every frame" — which has to decide what merging a linked cel with an unlinked one means — and "flatten this frame", which discards every other frame's cels. Real features; neither is v1. |
+| Cel thumbnails in the Inker timeline | Dots and chain glyphs instead. A per-cel texture on a grid that can be fifty columns wide is `viewer/sheet.StripRender`'s problem at a larger scale — worth doing on a per-frame upload budget, not worth doing by accident. The `layer_thumb` stamp pattern extends to it when it is. |
 | `studio/clay/ops_topo.py` hole-fill UV | Documented, deliberate approximation. |
 | View-matched reference ranking | Not built on purpose; the Scattered verdict *is* the deliverable (`docs/measurements/2026-08-04-view-calibration.md`). |
 

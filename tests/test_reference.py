@@ -126,7 +126,7 @@ def test_prepare_is_idempotent(tmp_path):
 
 
 def test_every_refusal_carries_a_machine_readable_code():
-    """TODO item 3. ``reasons`` are sentences written for a person -- the
+    """Refusal codes. ``reasons`` are sentences written for a person -- the
     corpus needs a key it can count, and parsing English back out of a stored
     report is how a reworded sentence silently empties a bucket."""
     two = _subject(box=(20, 100, 90, 170))

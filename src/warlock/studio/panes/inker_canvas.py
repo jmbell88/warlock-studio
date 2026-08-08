@@ -54,7 +54,7 @@ def _file_row(ctx: Any, state: Any) -> None:
     doc = tab.doc if tab is not None else None
     # Undo can rebind the stack mid-write; the saving gate here matches the
     # keyboard path (_MUTATING_CTRL) and the bridge panel's own pair.
-    idle = tab is not None and not tab.saving
+    idle = tab is not None and not tab.busy
     if widgets.icon_button(
         icons.UNDO, "Undo (Ctrl+Z)", enabled=idle and doc.history.can_undo
     ):
@@ -78,7 +78,7 @@ def _file_row(ctx: Any, state: Any) -> None:
     imgui.same_line()
     # A save commits the floating buffer, so saving mid-transform would land
     # the transform with no confirm and leave the mode pointing at nothing.
-    busy = tab is not None and (tab.saving or state.transforming)
+    busy = tab is not None and (tab.busy or state.transforming)
     if widgets.disabled_button("Save", tab is not None and not busy):
         inker_mode.save(ctx, tab)
     imgui.same_line()
@@ -91,6 +91,8 @@ def _file_row(ctx: Any, state: Any) -> None:
         imgui.same_line()
         if tab.saving:
             widgets.muted("saving...")
+        elif tab.playing:
+            widgets.muted("playing...")
         elif tab.dirty:
             widgets.text_colored(theme.WARN, "unsaved")
     imgui.separator()
@@ -284,9 +286,11 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
     if state.drag_kind == "pan" and not (imgui.is_mouse_down(2) or imgui.is_mouse_down(0)):
         state.drag_kind = ""
 
-    if tab.saving:
+    if tab.busy:
         # A save is encoding the live document; letting a stroke land in the
-        # middle of it would put half a stroke in the file.
+        # middle of it would put half a stroke in the file. Playback is the
+        # other half of ``busy``: the canvas is showing a cached flatten of some
+        # other frame, so a stroke would land invisibly on the frame underneath.
         return
     if state.transforming and tab.doc.floating is not None:
         _transform_input(state, tab, origin, point, active=active)
@@ -563,6 +567,53 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
 
 # --- drawing ----------------------------------------------------------------
 
+#: Onion tints. Red behind, green ahead -- the convention every 2D animation
+#: tool has used for decades, so picking differently would be a novelty the user
+#: has to learn in exchange for nothing.
+ONION_BACK = 0xE05050
+ONION_FORWARD = 0x50C060
+
+
+def _onion(ctx: Any, state: Any, tab: Any, draw_list, top_left, bottom_right) -> None:
+    """Neighbouring frames, tinted and faded, beneath the live one.
+
+    Furthest first so the nearest neighbour ends up on top, and each step
+    fainter than the last: the point is to see where a drawing *came from*, and
+    three equally solid ghosts are just a mess.
+    """
+    anim = tab.doc.anim
+    if anim is None:
+        return
+    current = anim.current
+    for offset in range(max(state.onion_before, state.onion_after), 0, -1):
+        for delta, colour in ((-offset, ONION_BACK), (offset, ONION_FORWARD)):
+            limit = state.onion_before if delta < 0 else state.onion_after
+            index = current + delta
+            if offset > limit or not 0 <= index < len(anim.frames):
+                continue
+            texture = inker_textures.frame_texture(ctx, tab, anim.frames[index].uid)
+            if texture is None:
+                continue
+            fade = state.onion_alpha / offset
+            draw_list.add_image(
+                widgets.texture_ref(texture),
+                top_left,
+                bottom_right,
+                (0.0, 0.0),
+                (1.0, 1.0),
+                _u32(colour, fade),
+            )
+
+
+def _playback_frame(ctx: Any, tab: Any, draw_list, top_left, bottom_right) -> None:
+    anim = tab.doc.anim
+    if anim is None or not anim.frames:
+        return
+    index = max(0, min(tab.play_index, len(anim.frames) - 1))
+    texture = inker_textures.frame_texture(ctx, tab, anim.frames[index].uid)
+    if texture is not None:
+        draw_list.add_image(widgets.texture_ref(texture), top_left, bottom_right)
+
 
 def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     doc = tab.doc
@@ -573,6 +624,19 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     bottom_right = inker_state.to_screen(view, origin, width, height)
 
     _checkerboard(ctx, draw_list, view, top_left, bottom_right)
+    # Before the composite and before its ``None`` early-out, so the strip is
+    # genuinely beneath the live drawing rather than sometimes instead of it.
+    if state.onion and not tab.playing:
+        _onion(ctx, state, tab, draw_list, top_left, bottom_right)
+
+    if tab.playing:
+        # The cached flatten of the frame being played, not the document's
+        # composite: the playhead on the document deliberately does not move
+        # during playback, so the composite is still frame one.
+        _playback_frame(ctx, tab, draw_list, top_left, bottom_right)
+        draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
+        return
+
     texture = inker_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
     if texture is None:
         return

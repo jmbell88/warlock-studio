@@ -58,10 +58,34 @@ def _cached(ctx: Any, key: str, size: tuple[int, int], data: Callable[[], bytes]
     return texture
 
 
+def release_dropped(ctx: Any, tab: Any) -> None:
+    """Free the textures of frames the document no longer has.
+
+    A deleted frame is simply never asked for again, so without this its
+    texture lives until the tab is closed -- a clip built up and cut down over a
+    session leaks one full-canvas texture per frame that was ever deleted.
+    ``Document.take_dropped_frames`` is a drain, so the usual frame costs one
+    empty list.
+
+    Called from :func:`composite`, which every drawn frame of the active tab
+    goes through. A background tab's deletions therefore wait until it is
+    activated or closed, and ``release_doc``'s prefix sweep covers the close.
+    """
+    if ctx.viewer is None:
+        return
+    for frame_uid in tab.doc.take_dropped_frames():
+        key = _slot(tab.uid, f"frame{frame_uid}")
+        texture = ctx.state.preview.pop(key, None)
+        ctx.state.preview.pop(f"{key}:rev", None)
+        if texture is not None:
+            _forget(ctx, texture)
+
+
 def composite(ctx: Any, tab: Any, *, nearest: bool) -> Any:
     """The document's composite, uploaded only where it changed."""
     if ctx.viewer is None:
         return None
+    release_dropped(ctx, tab)
     doc = tab.doc
     key = _slot(tab.uid, "composite")
     rev_key = f"{key}:rev"
@@ -95,6 +119,38 @@ def floating(ctx: Any, tab: Any, *, nearest: bool) -> Any:
         texture.write(buf.pixels.tobytes())
     ctx.state.preview[rev_key] = buf.rev
     mode = ctx.viewer.ctx.NEAREST if nearest else ctx.viewer.ctx.LINEAR
+    texture.filter = (mode, mode)
+    return texture
+
+
+def frame_texture(ctx: Any, tab: Any, frame_uid: int) -> Any:
+    """One animation frame's flatten, for onion skinning and playback.
+
+    Inside the existing ``inker_tex:{uid}:`` naming on purpose, so
+    ``release_doc``'s prefix sweep collects a closed tab's frames without
+    knowing they exist -- a tab left open on a fifty-frame clip is fifty
+    textures, which is exactly the accumulation that sweep is for.
+
+    Keyed on the *frame's* stamp rather than on ``doc.rev``: rev moves for any
+    change anywhere, so every onion-skinned neighbour would re-upload on every
+    dab the user made on the frame between them.
+    """
+    if ctx.viewer is None:
+        return None
+    doc = tab.doc
+    pixels = doc.frame_flat(frame_uid)
+    if pixels is None:
+        return None
+    key = _slot(tab.uid, f"frame{frame_uid}")
+    rev_key = f"{key}:rev"
+    stamp = doc.frame_stamp(frame_uid)
+    height, width = pixels.shape[:2]
+    fresh = ctx.state.preview.get(key) is None
+    texture = _cached(ctx, key, (width, height), pixels.tobytes)
+    if not fresh and ctx.state.preview.get(rev_key) != stamp:
+        texture.write(pixels.tobytes())
+    ctx.state.preview[rev_key] = stamp
+    mode = ctx.viewer.ctx.NEAREST
     texture.filter = (mode, mode)
     return texture
 

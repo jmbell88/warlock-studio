@@ -8,9 +8,10 @@ long time -- the 409 gating, the derived-artifact sweep, the reapplied grounding
 transform, the stale-rig report -- and had no caller once the HTTP API was
 removed. This is that caller.
 
-Two things it refuses to hide. Every named tier needs ``vendor/gltfpack``,
-which is not shipped, so without the binary only ``raw`` is offered and the
-reason is on screen. And a retarget makes a rig, its poses and its sheets
+Two things it refuses to hide. Every named tier needs ``vendor/gltfpack``, so
+without the binary only ``raw`` is offered and the reason is on screen -- it is
+present today, which is what makes this panel the qualification path rather
+than a dormant one. And a retarget makes a rig, its poses and its sheets
 describe a mesh that no longer exists; the service reports them rather than
 deleting them, so the report is shown *before* the button, not after.
 """

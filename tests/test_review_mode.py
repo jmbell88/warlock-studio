@@ -1093,3 +1093,238 @@ def test_a_mesh_that_will_not_open_is_reported_once(ctx, svc):
 
     assert len(ctx.toasts) == 1
     assert ctx.toasts[0][1] == "error"
+
+
+# --- the judge, wired in -----------------------------------------------------
+#
+# The helper's ``score_jobs`` was reachable from nothing and pinned by a test
+# that called it on a literal list, which is false confidence: the sort worked
+# and no unit ever carried a score. These are about the wiring.
+
+
+def test_opening_a_sweep_asks_for_scores_rather_than_computing_them(ctx, svc):
+    """A DINOv2 pass per unit is a task, never a frame -- and a flag, never a
+    direct submit, for ``findings_dirty``'s reason."""
+    _sweep(svc)
+    state = _scanned(ctx)
+    ctx.submitted.clear()
+
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+
+    assert ctx.state.review_scores_dirty is True
+    assert review_mode.SCORE_KEY not in ctx.submitted
+
+
+def test_the_score_request_is_only_cleared_once_a_submit_is_accepted(svc):
+    """The ``pump_findings`` bug, which this is the third instance of: a refused
+    submit that cleared the flag dropped the request with nothing to re-arm it,
+    and the request that matters is the last one."""
+    ctx = FakeCtx(svc)
+    _sweep(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+
+    ctx.accept = False
+    review_mode.pump_scores(ctx)
+    assert ctx.state.review_scores_dirty is True
+
+    ctx.accept = True
+    review_mode.pump_scores(ctx)
+    assert ctx.state.review_scores_dirty is False
+
+
+def test_with_no_probe_the_pump_asks_once_and_stops(ctx, svc):
+    """``score_jobs`` answers ``{}`` when there is nothing fitted, and every
+    unit is marked as asked -- otherwise the pump requests the same rows on
+    every frame for the rest of the session."""
+    _sweep(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+
+    review_mode.pump_scores(ctx)
+    review_mode.on_task_done(ctx, _Done(review_mode.SCORE_KEY, ctx.result))
+
+    assert ctx.result == {}
+    assert all(unit["score"] is None for unit in state.units)
+    assert review_mode.unscored(state.units) == []
+
+
+def test_scores_merge_onto_the_open_units_without_reordering_them(ctx, svc):
+    """The ``LabelPass`` lesson: a list that resorts under the cursor is how the
+    wrong thing gets judged. Order is applied when a sweep is opened, once."""
+    _sweep(svc, n=3)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    before = [unit["job_id"] for unit in state.units]
+
+    state.score_request = list(before)
+    review_mode.adopt_scores(
+        state, {before[0]: 0.1, before[1]: 0.9, before[2]: 0.5}
+    )
+
+    assert [unit["job_id"] for unit in state.units] == before
+    assert [unit["score"] for unit in state.units] == [0.1, 0.9, 0.5]
+
+
+def test_a_score_written_here_is_visible_on_the_sweep_entry_too(ctx, svc):
+    """The unit dicts are shared with the ``sweeps`` list on purpose -- which is
+    also why ``clear_scores`` has to sweep both."""
+    _sweep(svc, n=2)
+    state = _scanned(ctx)
+    entry = state.sweeps[-1]
+    review_mode.open_sweep(ctx, entry["id"])
+    state.score_request = [state.units[0]["job_id"]]
+    review_mode.adopt_scores(state, {state.units[0]["job_id"]: 0.75})
+
+    assert any(unit.get("score") == 0.75 for unit in entry["units"])
+
+    review_mode.clear_scores(state)
+    assert all("score" not in unit for unit in entry["units"])
+
+
+def test_with_no_scores_the_order_is_character_for_character_what_it_was(ctx, svc):
+    """The no-probe case is the common one, so it has to be a no-op: ``by_score``
+    over score-less rows is a stable sort and must not move anything."""
+    _sweep(svc, n=3)
+    state = _scanned(ctx)
+    entry = state.sweeps[-1]
+    expected = [unit["job_id"] for unit in entry["units"]]
+
+    review_mode.open_sweep(ctx, entry["id"])
+
+    assert [unit["job_id"] for unit in state.units] == expected
+
+
+def test_a_blind_review_neither_sorts_by_score_nor_shows_one(ctx, svc):
+    """A score-derived order is a quality channel that re-identifies the arms,
+    and an AI opinion on screen anchors the independent judgement a blind review
+    exists to collect. So blinding wins wholesale."""
+    _sweep(svc, n=3)
+    state = _scanned(ctx)
+    entry = state.sweeps[-1]
+    for unit in entry["units"]:
+        unit["score"] = 0.9 if unit is entry["units"][-1] else 0.1
+
+    review_mode.set_blind(ctx, True)
+    review_mode.open_sweep(ctx, entry["id"])
+
+    assert [u["job_id"] for u in state.units] == [
+        u["job_id"] for u in review_mode.blind_order(entry["units"])
+    ]
+    assert review_mode.score_line(state, state.units[0]) == ""
+
+    # And it asks for nothing, so a blind session never spends a forward pass
+    # producing a number it may not show.
+    ctx.submitted.clear()
+    review_mode.request_scores(ctx)
+    review_mode.pump_scores(ctx)
+    assert review_mode.SCORE_KEY not in ctx.submitted
+
+
+def test_the_score_line_names_the_question_it_answers(ctx, svc):
+    """A bare percentage beside a mesh reads as an opinion about the mesh, and
+    this probe has never seen one."""
+    _sweep(svc, n=1)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    state.units[0]["score"] = 0.82
+
+    line = review_mode.score_line(state, state.units[0])
+
+    assert "82%" in line
+    assert review_mode.SCORE_QUESTION in line
+    assert line.isascii(), "imgui's default atlas is Basic Latin plus Latin-1"
+
+
+def test_a_row_the_judge_had_no_opinion_about_shows_nothing(ctx, svc):
+    _sweep(svc, n=1)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    state.units[0]["score"] = None
+    assert review_mode.score_line(state, state.units[0]) == ""
+
+
+def test_retraining_the_blank_probe_throws_every_score_away_and_asks_again(ctx, svc):
+    """The ``warlockc`` staleness rule: an absent answer is obvious, one
+    silently computed by a probe that has since changed its mind is not."""
+    _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    state.score_request = [state.units[0]["job_id"]]
+    review_mode.adopt_scores(state, {state.units[0]["job_id"]: 0.6})
+    ctx.state.review_scores_dirty = False
+
+    review_mode.on_task_done(
+        ctx,
+        _Done(review_mode.TRAIN_KEY, {"stage": review_mode.SCORE_STAGE,
+                                      "trained": True, "usable": 40, "labels": 40}),
+    )
+
+    assert all("score" not in unit for unit in state.units)
+    assert ctx.state.review_scores_dirty is True
+
+
+def test_the_judge_files_no_verdict_of_its_own_yet(ctx, svc):
+    """Deliberate, and a decision rather than an omission: filing needs a
+    probability-to-accept threshold, and a threshold is a constant the stored
+    corpus is then keyed on, which owes a measurement document first. The name
+    it will file under is decided now so it is decided once."""
+    _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    review_mode.pump_scores(ctx)
+    review_mode.on_task_done(ctx, _Done(review_mode.SCORE_KEY, ctx.result))
+
+    assert review_mode.SOURCE_AI.startswith("ai:")
+    assert all(row["source"] != review_mode.SOURCE_AI for row in svc.store.latest_verdicts())
+
+
+def test_a_failed_scoring_run_is_silent_and_leaves_no_scores(ctx, svc):
+    """Advisory: a failure to have an opinion is not a failure of the review,
+    and a toast would make it look like one.
+
+    The rows are left *unmarked* rather than marked as scored-with-nothing, or
+    ``unscored`` would call them answered and nothing would ever ask again."""
+    _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, state.sweeps[-1]["id"])
+    review_mode.pump_scores(ctx)
+    ctx.toasts.clear()
+
+    review_mode.on_task_failed(ctx, _Done(review_mode.SCORE_KEY))
+
+    assert ctx.toasts == []
+    assert all("score" not in unit for unit in state.units)
+    assert review_mode.unscored(state.units) == [u["job_id"] for u in state.units]
+
+
+def test_a_score_lands_on_the_rows_it_was_asked_about_not_on_whatever_is_open(
+    ctx, svc
+):
+    """The user can open another sweep while the pass runs.
+
+    Marking whatever happens to be open when the answer returns ticks off units
+    nobody scored -- and ``unscored`` reads the same key, so those rows are then
+    never asked about again. The request is carried instead, and because the
+    unit dicts are shared with the ``sweeps`` entries the answer still lands on
+    the sweep the user has moved away from.
+    """
+    _sweep(svc, label="first", n=2)
+    _sweep(svc, label="second", n=2)
+    state = _scanned(ctx)
+    first, second = state.sweeps[1], state.sweeps[2]
+
+    review_mode.open_sweep(ctx, first["id"])
+    review_mode.pump_scores(ctx)
+    asked = list(state.score_request)
+    assert asked == [u["job_id"] for u in first["units"]]
+
+    # Away before the answer comes back.
+    review_mode.open_sweep(ctx, second["id"])
+    review_mode.on_task_done(
+        ctx, _Done(review_mode.SCORE_KEY, {job_id: 0.5 for job_id in asked})
+    )
+
+    assert all(unit.get("score") == 0.5 for unit in first["units"])
+    assert all("score" not in unit for unit in second["units"])
+    assert review_mode.unscored(state.units) == [u["job_id"] for u in second["units"]]

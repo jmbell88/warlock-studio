@@ -73,6 +73,7 @@ class _Doc:
         self.image = image
         self.rev = 1
         self._region: tuple[int, int, int, int] | None = None
+        self.dropped: list[int] = []
 
     def mark(self, region: tuple[int, int, int, int] | None) -> None:
         self.rev += 1
@@ -81,6 +82,10 @@ class _Doc:
     def take_dirty(self) -> tuple[int, int, int, int] | None:
         region, self._region = self._region, None
         return region
+
+    def take_dropped_frames(self) -> list[int]:
+        gone, self.dropped = self.dropped, []
+        return gone
 
 
 def _tab(doc: Any) -> Any:

@@ -41,6 +41,10 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_POSE_TIMEOUT` | `300` | Seconds for one pose bake. Much tighter, because a bake runs inline rather than on the job queue. |
 | `WARLOCK_SHEET_TIMEOUT` | `1800` | Seconds for one sprite-sheet render. Generous because the cell count is yours to choose, but still bounded. |
 | `WARLOCK_LOG_LEVEL` | `INFO` | Logging level for the console and the rotating log file. |
+| `WARLOCK_POSE_FIT` | `on` | Whether a rig may measure its joint positions off the reference image rather than taking the template's. Off falls back to the template everywhere. A kill switch, not an opt-in: any doubt already refuses the whole fit. |
+| `WARLOCK_DEFORM_QA` | `on` | Whether a finished rig is rendered in a battery of test poses (`rig_qa.png` beside the rig). Nothing scores it — the point is a picture you look at. Off skips the render. |
+| `WARLOCK_NATIVE` | `1` | Whether the optional native kernels are used at all. `0` forces the numpy fallbacks, which is what the parity tests and an A/B timing run want. The fallbacks are never deleted, so this changes speed and nothing else. |
+| `WARLOCK_NATIVE_DLL` | unset | Path to the compiled kernel library, overriding `vendor/warlockc/warlockc.dll`. |
 
 The three timeouts are ceilings on hangs, not performance targets. Automatic weights on a
 300,000-face mesh are genuinely minutes of CPU, and a hung Blender holds the single-worker queue

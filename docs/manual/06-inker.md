@@ -94,6 +94,55 @@ cut with no buffer left to restore.
 or the whole layer when there is no selection. It is modal: while transforming, **Enter** applies
 and **Esc** cancels, and nothing else can change the tool out from under a half-finished transform.
 
+## Animation
+
+A drawing can become a frame-by-frame animation. Press **Animate** in the document panel: the
+layers you have become *tracks*, the drawing becomes frame one, and a second empty frame is added.
+It is a single edit — one `Ctrl+Z` turns the document back into the still image it was.
+
+Once a document is animated a **timeline** strip appears under the canvas: frames across, tracks
+down, one square per cell. A filled square is a drawing, `=` is a linked cel, and an empty outline
+is a frame that track has nothing on. Clicking a square selects that track and moves to that frame;
+right-clicking one offers link, unlink and clear. Right-clicking a frame number offers insert,
+duplicate, reorder and delete. `,` and `.` step back and forward a frame.
+
+**Cels are created by drawing on them.** There is no "add cel" button: the grid is empty until you
+paint, and the first stroke on a blank frame creates the cel it needs. That is still one undo step,
+and a stroke that changes nothing leaves nothing behind.
+
+**Linked cels are one drawing in several frames.** *+ Link* adds a frame that shares the current
+one's cels rather than copying them, so a background held across twenty frames is stored — and
+edited — once. Painting on any of them paints on all of them, which is the point. **Unlink** gives
+that one frame a private copy from then on. *+ Copy* is the other choice: an independent duplicate
+you can diverge immediately.
+
+**Durations are per frame**, in milliseconds, in the box on the transport row — so a held pose and
+a fast blink live in the same clip without anything having to be a frame rate.
+
+**Onion skin** shows the neighbouring frames beneath the one you are drawing, the previous tinted
+red and the next tinted green. Toggle it on the transport row; while it is on, **back**, **ahead**
+and **fade** set how many frames either side are drawn and how strongly. Both counts may be zero,
+which is how you see only what is behind or only what is ahead.
+
+**Playback** is the Play button or `Enter`; `Esc` or Play again stops it, leaving the playhead where
+you last saw it. While playing, the document is read-only — the canvas is showing a cached picture
+of another frame, so a stroke would land somewhere you cannot see. If a **tag** covers the current
+frame, playback loops inside that tag rather than over the whole timeline.
+
+**Tags** name a span of frames — "walk", "idle", "hit". Right-click a frame number and choose
+**New tag here** to make a one-frame tag, then right-click the tag's name in the band under the grid
+to rename it, to set either end to wherever the playhead is, to turn its looping off, or to delete
+it. Tags may overlap, and playback follows the innermost one containing the playhead — which is what
+makes a short **hit** inside a long **combat** the useful arrangement rather than an ambiguous one.
+Tags are saved with the document and written into a sprite sheet's sidecar.
+
+Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
+defined over one layer stack and an animated document has one per frame, so rather than guess which
+frame you meant, the buttons say so.
+
+Moving the playhead is not an edit. It pushes no undo step and does not make the document unsaved —
+looking at another frame is looking, not drawing.
+
 ## Saving
 
 Inker saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that both Krita and GIMP read
@@ -111,6 +160,21 @@ write pixels in place. If a save fails, the tab is released again and a toast sa
 
 Closing a tab or quitting with unsaved changes asks first. Every dialog in Inker runs off the frame
 thread, so the window never freezes behind one.
+
+An animated document saves into the same `.ora`. The frames are written as nested groups, so Krita
+and GIMP open the file and show frame one rather than refusing it; the timeline itself — durations,
+tags and which cels are shared — rides along in a member those editors ignore. Opening such a file
+in anything that does not understand that member, **including an older build of Warlock**, and then
+saving it, writes the file back flat and loses the animation.
+
+**Export sheet** packs an animated document into one PNG atlas plus a JSON sidecar, one cell per
+frame, wrapping into rows when a single row would be wider than an engine will accept as a texture.
+The sidecar names each cell, its duration and any tags, in the same format the 3D sprite sheets use.
+Two things about it are worth knowing. A cel linked across three frames becomes three identical
+cells, because the engine playing it back knows nothing about links. And the cells keep their
+transparency rather than being flattened onto the document's matte, which is what a sheet wants
+almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
+composited over whatever is behind it in the game.
 
 ## Pipeline bridges
 

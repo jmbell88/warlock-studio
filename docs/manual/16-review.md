@@ -92,10 +92,24 @@ useful negatives there are: the picture exists, something was wrong with it, and
 only ever seen images the rules already liked has learned the rules rather than the quality.
 
 Once there are enough of both answers the app trains a small classifier per question from your
-labels — seconds of work, off the frame thread, and it retrains as you go. It is **advisory only**:
-it files an opinion beside yours and sorts what Review shows you. It never refuses a job, deletes
-anything or retries. It also only ever *sorts*: a judge that hid what it disliked would make its own
-mistakes invisible, and you would never learn it was wrong.
+labels — seconds of work, off the frame thread, and it retrains as you go.
+
+What that classifier does today is score and sort. Every unit in a sweep is scored on the **Good to
+reconstruct?** question, the verdict panel shows the number and says which question it answers, and
+the review is presented best-scoring first. Unscored units come last rather than first, because "no
+opinion" is not "bad". It is **advisory only**: it never refuses a job, deletes anything or retries,
+and it only ever *sorts* — a judge that hid what it disliked would make its own mistakes invisible,
+and you would never learn it was wrong.
+
+It also does not file a verdict of its own yet. Doing that means picking a probability above which
+the app says "accept", and that number would then be baked into everything already recorded, so it
+waits on a measurement rather than on a guess. The **Good 2D asset?** question and the mesh judge are
+the two still to come; the mesh one needs enough accepted meshes to learn from, which is what the
+review loop is building.
+
+Turning **Blind** on switches the judge off entirely for that session: no score is shown and the
+order goes back to the blind one. A score is a quality signal that would identify the arms, and an
+opinion on screen anchors the independent judgement a blind review exists to collect.
 
 ## What works
 

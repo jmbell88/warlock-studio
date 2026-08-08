@@ -154,7 +154,7 @@ def test_the_tile_field_list_is_a_real_subset_of_the_taxonomy():
 
 
 def test_the_object_template_does_not_ask_for_concept_art():
-    """TODO item 1. Every one of the 17 refusals in the 2026-08-07 rogue sweep
+    """The template rewrite. Every one of the 17 refusals in the 2026-08-07 sweep
     was the multi-object rule, and the family was concept-art layouts: character
     sheets, turnarounds, multi-view plates. "game asset concept art" is a
     request for exactly that -- a sheet is the canonical form of the genre --
@@ -166,7 +166,7 @@ def test_the_object_template_does_not_ask_for_concept_art():
 
 
 def test_the_object_template_asks_for_one_subject_and_nothing_beside_it():
-    """The positive half of TODO item 1, and positive on purpose: a user is
+    """The positive half of the template rewrite, and positive on purpose: a user is
     free to empty ``negative_prompt``, so a constraint that lives only there is
     one the composed prompt can lose."""
     from warlock.pipelines import prompt as prompt_mod

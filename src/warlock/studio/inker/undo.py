@@ -95,8 +95,13 @@ class PatchEdit(Edit):
         self.cost = int(self.before.nbytes + self.after.nbytes)
 
     def _put(self, doc: Any, pixels: np.ndarray) -> None:
+        # ``layer_by_uid``, not ``stack.by_uid``: on an animated document the
+        # cel this patch was recorded against may be on a frame the playhead has
+        # since moved off, and it must still be written. ``invalidate`` is the
+        # other half -- it stamps that frame's cached flatten and recomposites
+        # nothing, because none of those pixels are on screen.
         x0, y0, x1, y1 = self.rect
-        layer = doc.stack.by_uid(self.layer_uid)
+        layer = doc.layer_by_uid(self.layer_uid)
         layer.pixels[y0:y1, x0:x1] = pixels
         doc.invalidate(self.rect, layer_uid=self.layer_uid)
 
@@ -235,13 +240,19 @@ class ReplayEdit(Edit):
     active: int
     replay: Callable[[Any], None]
     selection: Any = None
+    #: The animation grid as it stood, or None on a still document. Trailing
+    #: and defaulted, so every existing construction site is unchanged. It
+    #: carries the *slot* structure, without which an undo would restore two
+    #: equal copies where the document had one shared object and silently
+    #: break every link in it.
+    grid: Any = None
 
     def __post_init__(self) -> None:
         self.selection = _pack(self.selection)
         self.cost = sum(int(layer.pixels.nbytes) for layer in self.snapshot)
 
     def undo(self, doc: Any) -> None:
-        doc.restore_snapshot(self.snapshot, self.size, self.active)
+        doc.restore_snapshot(self.snapshot, self.size, self.active, self.grid)
         doc.set_selection_mask(_unpack(self.selection))
 
     def redo(self, doc: Any) -> None:
