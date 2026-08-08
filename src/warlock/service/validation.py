@@ -77,6 +77,7 @@ DERIVED_PARAMS = (
     "optimize",
     "transform",
     "weighting",
+    "weighting_reason",
     "bone_count",
     "sheet_id",
     "cells",
