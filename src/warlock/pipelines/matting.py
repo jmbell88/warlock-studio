@@ -143,7 +143,25 @@ def unload() -> None:
     sentinel, so a user who repairs a half-downloaded checkpoint gets another
     attempt without restarting the app.
     """
+    global _last_error
+
     _cache.clear()
+    _last_error = None
+
+
+def last_error() -> str | None:
+    """The words of the most recent failed load, or None.
+
+    ``_FAILED`` is enough to stop a second attempt but it is an anonymous
+    object: a reader could learn from it that matting is broken and never how.
+    ``doctor`` runs in this process, so a module-level string is the whole
+    mechanism needed -- no IPC, no file -- and it is what turns a green
+    weights row above a silent fall-back to the flood fill into a red one that
+    names the ModuleNotFoundError. Reset by ``unload`` with the sentinel it
+    describes, or repairing an install leaves doctor reporting a failure that
+    no longer happens.
+    """
+    return _last_error
 
 
 class _AlreadyFailed(RuntimeError):
@@ -156,8 +174,12 @@ _FAILED = object()
 
 _cache: dict[str, Any] = {}
 
+_last_error: str | None = None
+
 
 def _load(path: Path, device: str):
+    global _last_error
+
     from transformers import AutoModelForImageSegmentation
 
     key = f"{path}|{device}"
@@ -180,10 +202,24 @@ def _load(path: Path, device: str):
         )
         model.eval()
         model = model.to(device)
-    except Exception:
+        if device == "cpu":
+            # The published checkpoint stores fp16 weights, and half precision
+            # on the CPU is emulated rather than native: the real BiRefNet
+            # measured 73 s a frame at fp16 against 11.5 s at fp32 on this
+            # machine. This module's whole bargain is "a second or two of host
+            # compute per export instead of VRAM taken from the models
+            # producing the asset", and only the cast keeps it. A CUDA device
+            # is deliberately left alone -- there half is correct *and* faster.
+            model = model.float()
+    except Exception as exc:
         _cache[key] = _FAILED
+        # The type as well as the message: "No module named 'einops'" and a
+        # shape mismatch are two entirely different repairs, and a bare str()
+        # of an ImportError names neither.
+        _last_error = f"{type(exc).__name__}: {exc}"
         raise
     _cache[key] = model
+    _last_error = None
     return model
 
 
@@ -201,11 +237,22 @@ def _model_mask(image: PILImage, path: Path, device: str):
     small = image.convert("RGB").resize((INPUT_SIZE, INPUT_SIZE), Image.BILINEAR)
     array = np.asarray(small, dtype=np.float32) / 255.0
     array = (array - np.asarray(_MEAN, dtype=np.float32)) / np.asarray(_STD, dtype=np.float32)
-    tensor = torch.from_numpy(array.transpose(2, 0, 1)).unsqueeze(0).to(device)
+    # The dtype comes off the model rather than being assumed. The arithmetic
+    # above is numpy's, i.e. float32, while the published checkpoint's weights
+    # are fp16 -- and the two met at the first conv as "Input type (float) and
+    # bias type (struct c10::Half)", raised inside mask()'s blanket except, so
+    # every export on a host that *had* the weights fell back to the corner
+    # fill and looked exactly like a host that did not.
+    weights_dtype = next(model.parameters()).dtype
+    tensor = (
+        torch.from_numpy(array.transpose(2, 0, 1))
+        .unsqueeze(0)
+        .to(device=device, dtype=weights_dtype)
+    )
     with torch.no_grad():
         # The published model returns a list of maps at descending scales; the
         # last is the full-resolution one, which is what its own demo reads.
-        out = model(tensor)[-1].sigmoid().cpu()
+        out = model(tensor)[-1].sigmoid().float().cpu()
     probability = out[0].squeeze()
     resized = Image.fromarray((probability.numpy() * 255).astype(np.uint8)).resize(
         image.size, Image.BILINEAR

@@ -32,6 +32,23 @@ text2image = [
     "peft>=0.13",
     "sentencepiece>=0.2",
     "protobuf>=4.0",
+    # The host matting stack (pipelines/matting.py). BiRefNet is loaded with
+    # trust_remote_code, so the modelling code that builds it is the
+    # checkpoint's own and its imports are not visible to any resolver:
+    # einops, kornia and timm are what that code reaches for, and without them
+    # _load raised ModuleNotFoundError on a machine where doctor could see
+    # every weight on disk. Declared here rather than left to the "you may
+    # also need" line in models.MATTING_MODELS, which was the only thing
+    # keeping the fallback-to-corner-fill from being permanent.
+    "einops>=0.8",
+    "kornia>=0.7",
+    "timm>=1.0",
+    # Not only BiRefNet's: transformers builds its fast image processors on
+    # torchvision, which is the import bench/metrics._dino_model needs and
+    # queue._rank_candidate silently swallows -- candidate ranking degrades to
+    # composition alone with nothing on screen to say why. It was present in
+    # the venv and absent from this file, so any `uv sync` removed it.
+    "torchvision>=0.20",
 ]
 # The desktop app: one window, one GL context, no browser. imgui-bundle draws
 # the panels and moderngl draws the viewport into an FBO the panels then show
@@ -84,6 +101,10 @@ packages = ["src/warlock"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
+# From the same index as torch, and not optional: a torchvision built against
+# another CUDA build of torch fails at import with an operator-registry error,
+# which reads as a broken install rather than a mismatched wheel.
+torchvision = [{ index = "pytorch-cu128" }]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
