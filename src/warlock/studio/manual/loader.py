@@ -13,10 +13,21 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+# Chapter numbers decide both the order and the part, so a new chapter means
+# renumbering rather than an appended one -- which is what happened when Home,
+# Profiles and app-Settings were written (G60-G62). The alternative was three
+# chapters at 17-19 wearing a part label they do not belong to, or a second
+# "Using Warlock Studio" heading further down the contents; every cross-link,
+# every HELP_TARGETS entry and the index are asserted in both directions by
+# ``tests/manual/test_docs.py``, so the rename is mechanical and checked.
+#
+# Review moved with them, out of Architecture and into the user chapters, where
+# it always belonged: it is a mode with a keyboard loop, not a note about how
+# the app is built.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 9)),
-    ("Setup & operations", range(9, 13)),
-    ("Architecture", range(13, 17)),
+    ("Using Warlock Studio", range(1, 12)),
+    ("Setup & operations", range(12, 17)),
+    ("Architecture", range(17, 20)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

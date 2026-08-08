@@ -241,7 +241,13 @@ class Ctx:
             # half -- runs on the task thread with the save (D41).
             image = self.viewer.screenshot()
         except Exception:
+            # Toasted, not merely logged (E47): the user pressed a button and
+            # the only evidence of the outcome is the card's picture, which
+            # already looked like whatever it looked like a moment ago. Points
+            # at the log because a GL readback failing is not something the
+            # message could usefully summarise.
             log.exception("could not capture a thumbnail")
+            self.toast("Could not capture the thumbnail.", "error", "log")
             return
 
         def run() -> Any:

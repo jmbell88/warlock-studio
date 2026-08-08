@@ -111,6 +111,23 @@ def muted(text: str) -> None:
     text_colored(theme.MUTED, text)
 
 
+def cost_note(text: str) -> None:
+    """What pressing the button next to this will cost (S138).
+
+    Its own function rather than a bare ``muted`` so the three submissions that
+    carry one look alike and can be found together. The rule for the wording is
+    that it says what *this app* knows -- whether the work is queued behind the
+    GPU or derived on the spot, and roughly how much of it there is -- and never
+    a wall-clock estimate the app has never measured. "About two minutes" would
+    be a number, and a wrong one on someone else's card.
+
+    No icon: the atlas is a pinned lucide subset, and a glyph it does not carry
+    renders as the missing-glyph box -- the same rule that keeps these strings
+    inside imgui's Basic-Latin+Latin-1 range.
+    """
+    muted(text)
+
+
 def section(label: str) -> None:
     """A small heading with breathing room above it."""
     imgui.dummy((0, sp(tokens.SP_1)))
@@ -180,6 +197,13 @@ def stage_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     _chip(f"{icon} {label}", theme.rgba(theme.MUTED), 0.10)
 
 
+# Below this the silhouette audit has found nothing, and that is the whole of
+# what it means (P120). Lives here rather than in the inspector because this is
+# the lower layer of the two and the inspector imports it; it used to be the
+# boundary of a *green* verdict, which is the claim that had to go.
+AUDIT_UNINFORMATIVE = 0.02
+
+
 def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     """The mesh's verdict, from mesh_report if there is one.
 
@@ -222,7 +246,25 @@ def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     audit = params.get("mesh_audit")
     if isinstance(audit, dict) and audit.get("worst") is not None:
         ratio = float(audit["worst"])
-        colour = theme.OK if ratio < 0.02 else theme.WARN if ratio < 0.08 else theme.ERR
+        # **No green branch** (P120). This used to paint ``theme.OK`` below 2%,
+        # which is the ``hole_worst`` inversion drawn on a card: AUC(hole_worst
+        # -> reject) is 0.115 over the reviewed corpus -- not weakly
+        # informative, *backwards* -- because the dominant failure mode is a
+        # solid slab, and a slab has no visible openings at all. 48 of 81
+        # rejected meshes measured exactly 0.0 and would have worn a green
+        # badge; none of the 3 accepted ones did.
+        #
+        # A high reading is still real evidence of a hole, so the escalation
+        # stays. What is gone is the claim in the other direction: below the
+        # threshold the badge is muted, which says "nothing seen through" and
+        # not "good". See TODO.md §2 and judge.py's module docstring.
+        colour = (
+            theme.MUTED
+            if ratio < AUDIT_UNINFORMATIVE
+            else theme.WARN
+            if ratio < 0.08
+            else theme.ERR
+        )
         if inline:
             imgui.same_line()
         text_colored(colour, f"{ratio * 100:.1f}% open")

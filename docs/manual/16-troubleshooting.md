@@ -5,10 +5,40 @@ appears across the top of the window, and the diagnostics popup names the check 
 chapter is the other half — what each of those means and what to do about it.
 
 The banner holds every outstanding failure, one line each, rather than only the most recent — a
-launch that both failed a check and lost its worker says so twice. **Dismiss** clears all of them
-and **Copy details** copies all of them. Separately, a toast for a failure with no message of its
-own carries an **Open log** button, so the log it tells you to read is one press away rather than
-inside the diagnostics popup.
+launch that both failed a check and lost its worker says so twice. **Copy details** copies all of
+them and **Troubleshooting** opens this chapter. Separately, a toast for a failure with no message
+of its own carries an **Open log** button, so the log it tells you to read is one press away rather
+than inside the diagnostics popup.
+
+**Dismiss** takes the banner off the screen without destroying what it said. Each of the three
+things that write a banner message writes it exactly once — the startup check sweep and the two
+worker checks — so clearing the list would leave a coloured dot as the only surviving evidence. The
+text moves into the diagnostics popup under a **Dismissed** heading instead.
+
+## The health dot and the diagnostics popup
+
+The dot at the top right is green when every check passed, amber when a non-fatal one failed, and
+red for a fatal one or a dead worker. When something is failing it also carries the word *Issue* or
+*Issues*, and hovering it lists the failing rows by name — enough to tell a missing style LoRA from
+a held engine port without opening anything.
+
+Clicking it opens the diagnostics popup, which holds four things:
+
+- **Every check**, passing and failing, with its detail and its remedy.
+- **Effective configuration** — every setting this process is running on, with the ones that came
+  from an environment variable named and highlighted first. An install whose behaviour disagrees
+  with the manual almost always disagrees because something in its environment says so, and this is
+  the fastest way to see it. `warlock doctor` prints the same block.
+- **Dismissed**, when a banner has been dismissed this session.
+- **Copy details**, **Run checks again**, **Open the log** and **Troubleshooting**.
+
+**Run checks again** is worth knowing about. Most of the checks are only computed once, at startup —
+they cannot change without the disk changing — so having just installed something the popup says is
+missing, nothing short of a restart would otherwise change its mind. This button re-runs everything.
+
+A first run that has downloaded nothing yet is better served by the **Diagnostics / Set up models**
+row on the [Home screen](02-home.md), which opens the model list and its Download buttons rather
+than this read-only list.
 
 ## Out of memory
 
@@ -23,11 +53,11 @@ raises the other side.
 
 **Fix.** Set `WARLOCK_VRAM_EXCLUSIVE=1` and restart. Text jobs then run sequentially — the engine is
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
-job and buys back roughly 7 GB of headroom. See [VRAM modes](11-configuration.md#vram-modes).
+job and buys back roughly 7 GB of headroom. See [VRAM modes](14-configuration.md#vram-modes).
 
 If it still fails, drop the geometry resolution: **Detail** in the 3D pane, choosing "2D" rather
 than "3D" — see
-[the mapping](03-generating-meshes.md#mesh-parameters).
+[the mapping](04-generating-meshes.md#mesh-parameters).
 
 **Afterwards.** A hard crash inside CUDA or the allocator never reaches a Python handler, so it will
 not be in `warlock.log`. Look in `crash.log` instead — see
@@ -43,7 +73,7 @@ one-time manual download. The app never fetches anything at runtime, by design.
 
 **Fix.** Run `uv run warlock doctor`. Each missing item is listed individually with the exact
 command that fetches it, so you can copy the line and run it. The commands are also collected in
-[Model weights](10-installation.md#model-weights).
+[Model weights](13-installation.md#model-weights).
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and
@@ -71,7 +101,7 @@ either way: everything except rigging, posing and sheets works exactly as before
 Bone-heat weighting gives up outright on the kind of non-manifold geometry a reconstruction sometimes
 produces; the worker catches that, falls back to envelope weights, and records which was used in
 `rig.json` rather than failing the job. The result is cruder around joints, not broken. See
-[When rigging is unavailable](04-rigging-and-posing.md#when-rigging-is-unavailable).
+[When rigging is unavailable](05-rigging-and-posing.md#when-rigging-is-unavailable).
 
 ## The GPU worker stopped
 
@@ -162,7 +192,7 @@ matting falls back to a threshold cutout that clips soft edges.
 
 **Related.** The two mesh measurements answer different questions and disagreeing with each other is
 normal — see
-[Mesh audit and mesh report](03-generating-meshes.md#mesh-audit-and-mesh-report).
+[Mesh audit and mesh report](04-generating-meshes.md#mesh-audit-and-mesh-report).
 
 ## The window feels sluggish
 
@@ -202,4 +232,4 @@ When something needs investigating, these are the four places to look:
   sheets.
 
 All four move with `WARLOCK_DATA_DIR` except the store, which has its own `WARLOCK_DB`. The full
-layout is in [Data locations](11-configuration.md#data-locations).
+layout is in [Data locations](14-configuration.md#data-locations).

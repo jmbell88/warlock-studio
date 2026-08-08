@@ -16,7 +16,7 @@ from imgui_bundle import imgui
 from .. import fonts, icons, theme, widgets
 from ..tokens import sp
 from . import loader, parser
-from .targets import HELP_TARGETS
+from .targets import HELP_TARGETS, TROUBLESHOOTING
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,23 @@ def help_button(ctx: Any, pane: str) -> None:
     if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
         ctx.state.mode = "manual"
         ctx.state.manual.open_at(*target)
+
+
+def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
+    """Switch to the manual at ``target``. What ``help_button`` does, without
+    the button -- for the three surfaces that lead to troubleshooting from a
+    control of their own (F57)."""
+    ctx.state.mode = "manual"
+    ctx.state.manual.open_at(*target)
+
+
+def troubleshooting_button(ctx: Any, label: str = "Troubleshooting") -> bool:
+    """A small button onto chapter 12. -> whether it was pressed, so a caller
+    that wants to close a popup first can."""
+    if not imgui.small_button(label):
+        return False
+    open_at(ctx, TROUBLESHOOTING)
+    return True
 
 
 def draw_body(ctx: Any) -> None:

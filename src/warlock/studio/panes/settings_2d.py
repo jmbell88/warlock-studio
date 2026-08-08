@@ -409,6 +409,14 @@ def _preview(ctx: Any) -> None:
         return
     if imgui.tree_node("Prompt actually sent"):
         imgui.text_wrapped(preview.get("prompt") or "")
+        # Advisory, never a refusal (P124): a deliberate clash is a legitimate
+        # thing to ask a sampler for. What was wrong was composing it silently
+        # -- ``art_style=snes`` contributes "vivid saturated colours" over a
+        # brief that named black and silver and blue, and the only way to
+        # notice was to read the sentence above and know which words were the
+        # user's.
+        for conflict in preview.get("conflicts") or []:
+            widgets.text_colored(theme.WARN, conflict)
         tokens, chunks = preview.get("tokens"), preview.get("chunks")
         if tokens is not None:
             # Chunks, not a truncation warning: the composed prompt is split on

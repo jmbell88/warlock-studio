@@ -63,6 +63,36 @@ The result is `rig.glb` and `rig.json`, written **beside the `model.glb` they we
 into the rig job's own directory. The rig belongs to the mesh. Rigging a mesh a second time replaces
 the previous rig; cancelling a re-rig leaves the previous one intact.
 
+### Where the joints come from
+
+By default a skeleton is fitted by proportion: the template's landmarks are scaled onto the mesh's
+bounding box, so a shoulder lands where the template says a shoulder is in a body of that height.
+That is right for a subject standing in a T-pose and increasingly wrong the further from one it is.
+
+For **humanoid** rigs there is a better first guess, and it is on by default when the pose model is
+installed. Warlock measures the subject's joints off the reference image the mesh was reconstructed
+from — the premise being that the mesh *is* that picture in three dimensions — and uses those as
+the template. They are still scaled onto the mesh by the same fitter, so nothing else about rigging
+changes; what changes is where the fitter starts from.
+
+Two things about it are worth knowing:
+
+- **It is all or nothing.** If any landmark is unconvincing — low confidence, missing, outside the
+  subject's silhouette, or a figure whose knees came out above its hips — the whole measurement is
+  discarded and the template is used. A skeleton with a measured arm and an assumed shoulder is not
+  half-right; it is inconsistent in a way nothing later can detect.
+- **Depth is always the template's.** One image fixes left–right and up–down and says nothing about
+  front–back.
+
+`rig.json` records which was used, so a rig can be told apart afterwards. Without the pose model the
+bbox fit is used and nothing about your rigs changes — see
+[Model weights](13-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
+force the template everywhere, whatever is installed; it is a kill switch rather than an opt-in,
+because the measurement already refuses itself whenever it is unsure.
+
+Joints you have corrected by hand always win over both. See **Adjust joints** under
+[Posing](#posing).
+
 ## Posing
 
 Once a mesh is rigged, the inspector's **Pose** panel offers **Edit pose**. Pressing it swaps the
@@ -107,7 +137,7 @@ existing rig. **Revert** undoes your unapplied moves; **Back to posing** returns
 mode asks first if you have an unsaved pose, since a leftover rotation would put the markers where
 the posed bones are rather than where the rest skeleton is.
 
-Rigged meshes are also what [Sprite sheets](05-sprite-sheets.md) render rows from.
+Rigged meshes are also what [Sprite sheets](06-sprite-sheets.md) render rows from.
 
 ## When rigging is unavailable
 

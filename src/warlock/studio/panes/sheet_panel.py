@@ -224,6 +224,14 @@ def _summary(ctx: Any, form: dict[str, Any]) -> None:
         else max(len(form["poses"]), 1)
     )
     widgets.muted(sheetlib.summary(rows, form["yaws"], form["frame_size"], form["clip"]))
+    # The line above says what comes out; this says what it costs (S138). The
+    # cell count is the honest unit -- each one is a separate Blender render --
+    # and it is already computed here, so the sentence carries a real number
+    # rather than a wall-clock guess about someone else's machine.
+    widgets.cost_note(
+        f"Queued like a generation: {rows * form['yaws']} Blender renders, "
+        "waiting behind anything already running."
+    )
     del ctx
 
 

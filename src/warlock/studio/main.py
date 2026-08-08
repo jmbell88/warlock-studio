@@ -1403,7 +1403,16 @@ class App:
             # thread (D41), exactly as ctx.capture_thumbnail does.
             image = self.clay_view.screenshot()
         except Exception:
+            # A warning rather than an error (E48): the export itself succeeded
+            # and the asset is in the library -- what failed is its picture. The
+            # card falls back to the placeholder, which on its own reads as "the
+            # build produced nothing".
             log.exception("could not capture a thumbnail for built asset %s", job_id)
+            # Level ``info``, not ``error``: the export succeeded and only the
+            # picture did not, and there is exactly one level above info until
+            # H68 adds the middle one -- claiming ``error`` here would put a red
+            # dismissable card over a build that worked.
+            ctx.toast("The asset was built, but its thumbnail could not be made.", "info", "log")
             return
 
         def run() -> Any:
@@ -1434,7 +1443,10 @@ class App:
             png = self._render_clay_reference(tab)
         except Exception:
             log.exception("could not render the build reference")
-            ctx.toast("That document could not be rendered.", "error")
+            # The remedy is in the log, so say so (E48): the causes are a lost
+            # GL context and a document the renderer choked on, and the message
+            # cannot tell the user which without reading it.
+            ctx.toast("That document could not be rendered.", "error", "log")
             return
         settings_3d.upload_bytes(ctx, png)
 
@@ -2283,6 +2295,19 @@ class App:
         # of wrapping -- a control drawn out there is simply gone, which is the
         # bug that once hid seven of them -- and the text's width is a function
         # of the DPI scale, the font and how many digits the readings have.
+        # What the health control says and how wide it is (F58). A 16 px
+        # invisible button with a 9 px circle drawn under it is not a control:
+        # it is under the 24 px minimum anything is comfortably clickable at,
+        # it has no label, and on a host where something is actually wrong it
+        # looks exactly like a decoration. So when a check is failing the dot
+        # gains a word and a real button-sized hit area; when everything passes
+        # it stays a dot, because a permanent "OK" badge is noise.
+        failing = [c for c in checks if not c.ok]
+        health_label = "" if not failing else ("Issue" if len(failing) == 1 else "Issues")
+        health_w = sp(24) if not health_label else (
+            sp(22) + imgui.calc_text_size(health_label).x + imgui.get_style().frame_padding.x * 2
+        )
+
         line, tip = overlay.status_text(ctx, self.fps)
         spacing = imgui.get_style().item_spacing.x
         strip = (
@@ -2290,7 +2315,7 @@ class App:
             + spacing
             + imgui.get_frame_height()  # the ? button is square
             + spacing
-            + sp(16)  # the health dot's invisible button
+            + health_w
         )
         widgets.same_line_or_wrap(strip)
         avail = imgui.get_content_region_avail().x
@@ -2308,12 +2333,33 @@ class App:
         pos = imgui.get_cursor_screen_pos()
         centre_y = pos.y + imgui.get_frame_height() * 0.5
         imgui.get_window_draw_list().add_circle_filled(
-            (pos.x + sp(8), centre_y), sp(4.5), imgui.get_color_u32(theme.rgba(colour)), 16
+            (pos.x + sp(11), centre_y), sp(4.5), imgui.get_color_u32(theme.rgba(colour)), 16
         )
-        if imgui.invisible_button("##health", (sp(16), imgui.get_frame_height())):
+        if imgui.invisible_button("##health", (health_w, imgui.get_frame_height())):
             imgui.open_popup("diagnostics")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("System status - click for details")
+        hovered = imgui.is_item_hovered()
+        if health_label:
+            # Drawn over the button rather than beside it, so the word is part
+            # of the same hit area instead of a second thing to aim at.
+            imgui.get_window_draw_list().add_text(
+                (pos.x + sp(20), pos.y + imgui.get_style().frame_padding.y),
+                imgui.get_color_u32(theme.rgba(colour)),
+                health_label,
+            )
+        if hovered:
+            # The failing rows by name (N110). "System status - click for
+            # details" made the click mandatory to learn whether the amber dot
+            # meant a missing style LoRA or a held trellis port -- one is worth
+            # ignoring for the rest of the session and the other is not.
+            imgui.set_tooltip(
+                "Everything checks out - click for details"
+                if not failing
+                else "\n".join(
+                    ["Click for details:"]
+                    + [f"  {'!' if c.fatal else '-'} {c.name}" for c in failing[:8]]
+                    + ([f"  ... and {len(failing) - 8} more"] if len(failing) > 8 else [])
+                )
+            )
         self._diagnostics_popup(checks)
 
     # Every binding the app answers to, in one place the user can find. The
@@ -2442,6 +2488,19 @@ class App:
             imgui.pop_style_color()
         if not checks:
             widgets.muted("No checks ran.")
+        self._effective_config_section(ctx)
+        if ctx.state.dismissed_errors:
+            # What Dismiss took off the banner (F59). Here rather than nowhere:
+            # every writer of ``state.errors`` fires once, so clearing the list
+            # used to destroy the only copy of the text -- and a dead worker is
+            # reported through that list and through no doctor row at all, so it
+            # was recoverable from nothing.
+            imgui.separator()
+            widgets.section("Dismissed")
+            for message in ctx.state.dismissed_errors:
+                widgets.text_colored(theme.ERR, "!")
+                imgui.same_line()
+                imgui.text_wrapped(message)
         imgui.separator()
         if imgui.button("Copy details"):
             imgui.set_clipboard_text(
@@ -2450,10 +2509,61 @@ class App:
                 )
             )
         imgui.same_line()
+        # Re-ask rather than wait out the poll (N111). The static half is only
+        # recomputed on ``force``, which is what makes this button worth having
+        # at all: having just installed the missing weights the popup names,
+        # nothing short of a restart would otherwise change its mind.
+        if imgui.button("Run checks again"):
+            from ..service import system as svc_system
+
+            ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
+        imgui.same_line()
         log_path = Path(ctx.runtime.config.data_dir) / "warlock.log"
         if widgets.disabled_button("Open the log", log_path.exists()):
             ctx.open_log()
+        imgui.same_line()
+        # Chapter 12 (F57). The popup names the failing rows and their remedies;
+        # what it cannot hold is what to do when a remedy does not take.
+        from .manual import render as manual_render
+
+        if manual_render.troubleshooting_button(ctx):
+            imgui.close_current_popup()
         imgui.end_popup()
+
+    def _effective_config_section(self, ctx: Any) -> None:
+        """What this process is running on, with the overridden rows marked.
+
+        Collapsed by default and overridden rows first (S140). Thirty settings
+        is a wall of text nobody reads; the two or three a host has actually
+        changed are the whole diagnostic value, so they are what is visible when
+        the section is opened, and the rest is there to confirm a suspicion
+        rather than to be read through.
+
+        Shares ``config.effective`` with ``warlock doctor``, which is the point
+        of building the data source once: the copy a user pastes into an issue
+        and the list they read on screen are the same answer.
+        """
+        from imgui_bundle import imgui
+
+        from ..config import effective
+        from . import theme, widgets
+
+        if not imgui.collapsing_header("Effective configuration"):
+            return
+        settings = effective(ctx.runtime.config)
+        overridden = [s for s in settings if s.from_env]
+        widgets.muted(
+            "Everything at its default."
+            if not overridden
+            else f"{len(overridden)} of {len(settings)} set by the environment."
+        )
+        for setting in sorted(settings, key=lambda s: (not s.from_env, s.name)):
+            if setting.from_env:
+                widgets.text_colored(theme.ACCENT, setting.env)
+            else:
+                widgets.muted(setting.name)
+            imgui.same_line()
+            imgui.text_wrapped(setting.value)
 
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui

@@ -13,6 +13,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import inker_mode, widgets
+from ..manual import render as manual_render
 
 SWATCH = (20.0, 20.0)
 FLAGS = imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value
@@ -35,6 +36,10 @@ def _vec(colour: tuple[int, int, int, int]) -> Any:
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     widgets.section("colour")
+    # After the heading, never before it: help_button is a same_line, and
+    # same_line returns to the previous row unconditionally -- called first it
+    # lands on whatever the pane above drew.
+    manual_render.help_button(ctx, "inker-colors")
 
     changed, value = imgui.color_edit4("Foreground", _vec(state.fg), FLAGS)
     if changed:

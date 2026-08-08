@@ -93,7 +93,7 @@ def _run_sweep(args: argparse.Namespace) -> None:
 
 
 def _run_doctor() -> None:
-    from .config import get_config
+    from .config import effective, get_config
     from .doctor import run_checks
 
     config = get_config()
@@ -101,5 +101,14 @@ def _run_doctor() -> None:
     for check in checks:
         status = "OK" if check.ok else ("FATAL" if check.fatal else "WARN")
         print(f"[{status}] {check.name}: {check.detail}")
+    # After the checks, not before (S140): the checks are the answer and this is
+    # the context for it. A host whose rows disagree with the documentation
+    # usually disagrees because something in its environment says so, and the
+    # env column is what makes that visible without asking the user to dump
+    # their shell.
+    print("\nEffective configuration:")
+    for setting in effective(config):
+        where = f"  <- {setting.env}" if setting.from_env else ""
+        print(f"  {setting.name} = {setting.value}{where}")
     if any(not c.ok and c.fatal for c in checks):
         raise SystemExit(1)

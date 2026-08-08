@@ -83,9 +83,69 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "_config", None)
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    # And then the *generative* half of that root is populated with empty files
+    # at exactly the paths ``fetch.present`` probes (F55). ``create_job`` now
+    # refuses a text job whose selected weights are not on the host, which is
+    # the right answer for a user and the wrong default for a suite: with the
+    # root pinned empty above, every text job in every test would be refused
+    # for a reason none of them is about.
+    #
+    # Deliberately not the matting, pose or metric models, which the guard does
+    # not probe and whose *absence* several tests depend on -- the comment above
+    # is explicit that a real BiRefNet load is what pinning this root exists to
+    # prevent, and materialising one would put a directory back where those
+    # tests look for nothing. A test about a missing download deletes what it
+    # wants gone; a test about a job that runs no longer has to know any of
+    # this exists.
+    _materialize_generative_weights(config)
     s = JobStore(config.db_path)
     yield WarlockService(config, s)
     s.close()
+
+
+@pytest.fixture
+def materialize_weights():
+    """:func:`_materialize_generative_weights`, for the files that build their
+    own ``Config`` instead of taking ``svc`` and so need the same treatment."""
+    return _materialize_generative_weights
+
+
+def _materialize_generative_weights(config) -> None:
+    """Empty files at every path ``fetch.present`` probes for a *selectable*
+    model: the checkpoints, their step-distillation LoRAs, the style LoRAs, the
+    IP-Adapters and the ControlNets.
+
+    Empty on purpose -- nothing here is ever loaded, and a probe is an existence
+    test. Driven off the registries rather than a hardcoded list, so adding a
+    model to ``models.py`` does not silently start refusing every text job in
+    the suite.
+    """
+    from warlock import fetch, models
+
+    root = config.t2i_model_root
+
+    def touch(path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_bytes(b"")
+
+    for spec in models.BASE_MODELS.values():
+        base = fetch.base_model_dir(config, spec)
+        touch(base / "model_index.json")
+        variant = f".{spec.variant}" if spec.variant else ""
+        for rel in spec.probe or (f"unet/diffusion_pytorch_model{variant}.safetensors",):
+            touch(base / rel)
+        if spec.base_lora:
+            touch(root / "loras" / spec.base_lora)
+    for lora in models.STYLE_LORAS.values():
+        touch(root / "loras" / lora.filename)
+    for adapter in models.IP_ADAPTERS.values():
+        touch(root / adapter.dir_name / adapter.subfolder / adapter.weight_name)
+        touch(root / adapter.dir_name / adapter.image_encoder_dir / "config.json")
+    for cn in models.CONTROLNETS.values():
+        variant = f".{cn.variant}" if cn.variant else ""
+        touch(root / cn.dir_name / "config.json")
+        touch(root / cn.dir_name / f"diffusion_pytorch_model{variant}.safetensors")
 
 
 @pytest.fixture(scope="session")

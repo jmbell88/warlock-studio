@@ -59,6 +59,27 @@ class TooLarge(ServiceError):
     status = 413
 
 
+def invalid_from(exc: Exception, context: str, *, field: str | None = None) -> Invalid:
+    """Wrap a library ``ValueError`` in a sentence that says what was refused.
+
+    The service layer used to re-raise these as ``Invalid(str(exc))`` (E49),
+    which put library text written for whoever wrote the library straight in
+    front of the user: *joints payload requires a non-empty 'bones' list* is
+    precise, mentions no control that exists on screen, and names a wire format
+    the user has never seen. The detail is kept -- it is the only part that says
+    *which* value -- but framed by a sentence naming the thing being done.
+
+    ``field`` defaults to whatever the exception carries: :class:`~warlock.
+    guidance.GuidanceError` names the control it came from, and passing the
+    address through is the whole reason it does (S137). An explicit ``field``
+    wins, for the callers that know better than the library does.
+    """
+    detail = str(exc).strip()
+    carried = getattr(exc, "field", None)
+    message = f"{context}: {detail}" if detail else context
+    return Invalid(message, field=field or (carried if isinstance(carried, str) else None))
+
+
 class Failed(ServiceError):
     """A subprocess or conversion that should have worked, didn't.
 

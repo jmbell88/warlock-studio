@@ -570,12 +570,18 @@ class Worker:
             mem = vram_gib()
             headroom += mem[1] if mem is not None else vram.SDXL_GIB
         if need > headroom:
+            # The submit-time refusal's remedies, shared rather than restated
+            # (N113): this is the check that fires *after* the user has waited
+            # in the queue, and it used to be the one with the least to say
+            # about what to change.
             raise RuntimeError(
-                f"this job needs about {need:.1f} GiB of VRAM and only "
-                f"{headroom:.1f} GiB is available to it "
-                f"({device.free_gib:.1f} GiB free plus "
-                f"{headroom - device.free_gib:.1f} GiB in models Warlock "
-                "already holds). Close other GPU applications and try again."
+                vram.dispatch_shortfall_message(
+                    need,
+                    headroom,
+                    device.free_gib,
+                    job.get("params") or {},
+                    exclusive=bool(self.config.vram_exclusive),
+                )
             )
 
     async def _process(self, job: dict[str, Any]) -> None:

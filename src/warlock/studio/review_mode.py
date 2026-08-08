@@ -1008,9 +1008,16 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
             lines.append(f"{int(materials)} material(s)")
     audit = params.get("mesh_audit")
     if isinstance(audit, dict):
-        verdict = audit.get("verdict")
-        if verdict:
-            lines.append(f"silhouette: {verdict}")
+        # ``verdict`` was read here and nothing has ever written it -- the
+        # worker stores worst/mean/faces/resolution, so this branch was dead
+        # from the day it was typed, the same way ``report["verdict"]`` was in
+        # ``widgets.quality_badge``. Replaced with the reading that exists,
+        # worded so it cannot be read as a quality score (P120): a low figure
+        # is what a solid slab measures, and AUC(worst -> reject) over the
+        # reviewed corpus is 0.115, which is backwards rather than weak.
+        worst = audit.get("worst")
+        if isinstance(worst, (int, float)):
+            lines.append(f"see-through at worst view: {float(worst) * 100:.1f}%")
     return lines
 
 

@@ -37,7 +37,7 @@ from the second encoder's output on the first chunk only, matching what the stoc
 
 A prompt that fits in one chunk — the common case — takes a path that is bit-identical to the old
 direct-string one. Chunking removed the hard ceiling, not the soft one. See
-[The prompt](02-generating-references.md#the-prompt).
+[The prompt](03-generating-references.md#the-prompt).
 
 ## From reference to mesh
 
@@ -50,7 +50,7 @@ then normalising the result. That order is load-bearing in one direction. The op
 node graph, and normalisation inserts a node carrying the scale and translation, so optimising after
 normalising would throw the grounding transform away. A retarget at a new budget therefore reapplies
 the transform itself, for exactly that reason. See
-[Triangle budget](03-generating-meshes.md#triangle-budget).
+[Triangle budget](04-generating-meshes.md#triangle-budget).
 
 Normalisation does three things and only the first is conditional. It scales the mesh, if and only
 if you asked for a real-world size. Then it centres the model in X and Z and puts its lowest point
@@ -185,7 +185,7 @@ twelve hexadecimal characters. Overwriting a pose deletes its cached GLB, becaus
 the rotations you just replaced. The bake itself is derived on demand under the same per-artifact
 lock as the mesh exports rather than being queued: it is roughly a one-second subprocess, and
 putting it behind the serial GPU queue would make it wait on a reconstruction. See
-[Posing](04-rigging-and-posing.md#posing).
+[Posing](05-rigging-and-posing.md#posing).
 
 ## Sheet planning
 
@@ -209,5 +209,5 @@ Three details are easy to undo by accident:
 - Cells arrive grouped by row, so the worker re-poses once per pose rather than once per frame.
 
 Column zero is the front view. Yaw zero looks along `+Y` in Blender, and every skeleton template
-puts the subject's forward direction at `-Y`. See [The grid](05-sprite-sheets.md#the-grid) and
-[The sidecar](05-sprite-sheets.md#the-sidecar).
+puts the subject's forward direction at `-Y`. See [The grid](06-sprite-sheets.md#the-grid) and
+[The sidecar](06-sprite-sheets.md#the-sidecar).

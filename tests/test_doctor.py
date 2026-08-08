@@ -249,18 +249,26 @@ def _matting_weights(tmp_path):
 
 
 def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path, monkeypatch):
-    # All the row has done is stat a directory and ask whether four modules
-    # resolve. Whether the model then loads depends on code Warlock does not
-    # ship, so a green row that said "ready" would be a promise it never made.
+    # The row states what it has established and no more. It used to stat a
+    # directory and ask whether four modules resolve, and said "not checked:
+    # whether the model loads" -- which was honest and was the wrong amount of
+    # honesty, because a green row above a silent fall-back to the corner fill
+    # is the one outcome the row exists to prevent. Since N112 it tries the
+    # load; the claim is still exactly what was checked, it is simply a bigger
+    # check. ``probe_slow=False`` is the startup path, where the slow probe has
+    # deliberately not run yet -- so the row says it is still checking.
     monkeypatch.setattr(doctor, "_missing_modules", lambda names: [])
     monkeypatch.setattr(matting, "last_error", lambda: None)
     root = _matting_weights(tmp_path)
-    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    checks = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=root), probe_slow=False)
+    }
     for spec in model_registry.MATTING_MODELS.values():
         row = checks[f"host matting: {spec.label}"]
         assert row.ok is True
         assert "weights present" in row.detail
-        assert "not checked" in row.detail
+        assert "still checking" in row.detail
         # trust_remote_code is disclosed where the user can see it, in the
         # words it deserves: not "loads modelling code", which reads as
         # loading weights, but that other people's Python runs in this process.
@@ -388,11 +396,108 @@ def test_pose_model_row_is_not_fatal_and_names_the_consequence(tmp_path):
 
 
 def test_pose_model_row_goes_green_on_weights(tmp_path):
+    """``probe_slow=False``, which is the startup path: the weights decide the
+    row and the load probe has deliberately not run. With the probe on, a
+    ``config.json`` containing ``{}`` is not a checkpoint and the row is
+    correctly red -- which is the whole of N112 and is pinned below."""
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
     root = tmp_path / "t2i" / spec.dir_name
     root.mkdir(parents=True)
     (root / "config.json").write_text("{}", encoding="utf-8")
     checks = {
-        c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
+        c.name: c
+        for c in run_checks(
+            _config(tmp_path, t2i_model_root=tmp_path / "t2i"), probe_slow=False
+        )
     }
     assert checks[f"pose model: {spec.label}"].ok is True
+
+
+def test_a_checkpoint_that_will_not_load_is_red_once_the_probe_runs(tmp_path):
+    """N112. The failure mode both model rows exist for: every file in place,
+    a green row, and the pipeline silently falling back on every job. Only an
+    attempted load settles it, so the row attempts one -- off the startup path
+    and once per process."""
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    root = tmp_path / "t2i" / spec.dir_name
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}", encoding="utf-8")
+    row = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
+    }[f"pose model: {spec.label}"]
+    assert row.ok is False
+    assert row.fatal is False  # a missing pose model costs joint placement, not a job
+
+
+def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path):
+    """Not on the kind. The bpy answer can be a bare global because it is a
+    fact about the interpreter; this is a fact about a path, and
+    ``WARLOCK_T2I_ROOT`` moves it -- so a kind-keyed cache would answer the
+    second config with the first one's result."""
+    from warlock.pipelines import pose2d
+
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    good, bad = tmp_path / "good", tmp_path / "bad"
+    for root in (good, bad):
+        (root / spec.dir_name).mkdir(parents=True)
+        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+
+    doctor._probes[("pose", str(pose2d.model_dir(_config(tmp_path, t2i_model_root=good))))] = (
+        True,
+        "loads",
+    )
+    rows = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=bad))
+    }
+    assert rows[f"pose model: {spec.label}"].ok is False
+
+
+# --- N112: the load probe, and why it is a child process --------------------
+
+
+def test_the_load_probe_child_reports_a_failure_as_a_sentence(tmp_path):
+    """It must never raise out of the child: a probe that does turns a red row
+    into a traceback in a log nobody is reading yet."""
+    from warlock.pipelines import loadprobe
+
+    ok, detail = loadprobe.probe("pose", tmp_path / "nothing-here")
+    assert ok is False
+    assert detail  # names the exception type as well as its message
+    assert ":" in detail
+
+
+def test_the_load_probe_child_refuses_an_unknown_kind(capsys):
+    from warlock.pipelines import loadprobe
+
+    assert loadprobe.main(["nonsense", "x"]) == 2
+    assert capsys.readouterr().out.startswith("fail usage:")
+
+
+def test_a_probe_that_prints_nothing_is_a_failure_naming_what_it_said(monkeypatch, tmp_path):
+    """The child can die before it prints -- an OOM kill, a DLL that will not
+    load. Its stderr is the only thing that knows why."""
+    from types import SimpleNamespace
+
+    weights = tmp_path / "weights"
+    weights.mkdir()
+    monkeypatch.setattr(
+        doctor.winjob, "run",
+        lambda *a, **k: SimpleNamespace(stdout="", stderr="ImportError: DLL load failed"),
+    )
+    ok, detail = doctor._run_load_probe("matting", weights)
+    assert ok is False
+    assert "DLL load failed" in detail
+
+
+def test_the_probe_does_not_run_at_all_without_weights(monkeypatch, tmp_path):
+    """No spawn, no seconds, no torch import -- the cheap answer first, which is
+    the ordering every model path in the repo follows."""
+    def boom(*a, **k):
+        raise AssertionError("should not have spawned anything")
+
+    monkeypatch.setattr(doctor.winjob, "run", boom)
+    ok, detail = doctor._run_load_probe("matting", tmp_path / "absent")
+    assert ok is False
+    assert "not on disk" in detail

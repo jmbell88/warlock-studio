@@ -10,7 +10,7 @@ from typing import Any
 
 from .. import doctor, guidance, models
 from .core import WarlockService
-from .errors import Invalid, NotFound
+from .errors import Invalid, NotFound, invalid_from
 from .validation import MAX_PROMPT
 
 # Health used to run the full doctor suite -- a socket bind, a disk stat and a
@@ -135,7 +135,7 @@ def prompt_preview(
             raw, bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "Those generation settings are not usable") from exc
 
     style = models.STYLE_LORAS.get(params.get("style_lora") or "")
     # Same gate the real run applies (text2image.generate only prepends a
@@ -171,6 +171,12 @@ def prompt_preview(
         "negative_prompt": params["negative_prompt"],
         "tokens": tokens,
         "chunks": chunks,
+        # What the taxonomy is contributing that argues with itself, or with
+        # the brief (P124). Computed here rather than in the pane because it is
+        # a fact about the *normalized* params -- the same ones the job will
+        # compose from -- and because ``guidance`` is where the fragments that
+        # do the arguing are written.
+        "conflicts": guidance.colour_conflicts(params, prompt),
     }
 
 

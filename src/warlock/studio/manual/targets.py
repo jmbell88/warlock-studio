@@ -7,22 +7,40 @@ entry against the real chapters and anchors.
 from __future__ import annotations
 
 HELP_TARGETS: dict[str, tuple[str, str | None]] = {
-    "settings-2d": ("02-generating-references", None),
-    "settings-3d": ("03-generating-meshes", None),
-    "library": ("08-library-and-jobs", None),
-    "inspector": ("03-generating-meshes", "exports"),
-    "retarget": ("03-generating-meshes", "triangle-budget"),
-    "pose": ("04-rigging-and-posing", "posing"),
-    "sheet": ("05-sprite-sheets", None),
-    "inker-tools": ("06-inker", "tools"),
-    "inker-layers": ("06-inker", "layers"),
-    "inker-bridge": ("06-inker", "pipeline-bridges"),
-    "inker-timeline": ("06-inker", "animation"),
-    "clay-tools": ("07-clay", "transforming"),
-    "clay-props": ("07-clay", "materials"),
-    "clay-outliner": ("07-clay", "adding-a-primitive"),
-    "clay-bridge": ("07-clay", "the-two-ways-out"),
-    "profiles": ("08-library-and-jobs", "profiles"),
-    "review": ("16-review", None),
-    "app-settings": ("11-configuration", "in-app-settings"),
+    "settings-2d": ("03-generating-references", None),
+    "settings-3d": ("04-generating-meshes", None),
+    "library": ("09-library-and-jobs", None),
+    "inspector": ("04-generating-meshes", "exports"),
+    "retarget": ("04-generating-meshes", "triangle-budget"),
+    "pose": ("05-rigging-and-posing", "posing"),
+    "sheet": ("06-sprite-sheets", None),
+    "inker-tools": ("07-inker", "tools"),
+    "inker-layers": ("07-inker", "layers"),
+    "inker-bridge": ("07-inker", "pipeline-bridges"),
+    "inker-timeline": ("07-inker", "animation"),
+    # Found by the O118 coverage sweep: two panes a user reads and neither had
+    # a way into the chapter that describes it.
+    "inker-colors": ("07-inker", "colour"),
+    "candidates": ("04-generating-meshes", "candidates"),
+    "clay-tools": ("08-clay", "transforming"),
+    "clay-props": ("08-clay", "materials"),
+    "clay-outliner": ("08-clay", "adding-a-primitive"),
+    "clay-bridge": ("08-clay", "the-two-ways-out"),
+    "profiles": ("10-profiles", None),
+    "review": ("11-review", None),
+    "app-settings": ("15-app-settings", None),
+    # The chooser the app opens on (F56/O118): the one pane a first run
+    # certainly sees, and the only one that had no way into the manual at all.
+    "home": ("02-home", None),
 }
+
+# Where "something is wrong and I do not know what" goes.
+#
+# Deliberately *not* a HELP_TARGETS entry, though it is the same shape. That
+# dict is the pane-(?)-button map and is asserted against the call sites in both
+# directions (``test_help_button_call_sites_match_help_targets``) precisely so a
+# dead button or dead data fails a test -- and the three surfaces that lead here
+# are a red banner, a popup and a Home row, none of which is a pane with a (?).
+# Named once rather than spelled at each of the three, so a chapter that moved
+# does not have to be found in three places (F57).
+TROUBLESHOOTING: tuple[str, str | None] = ("16-troubleshooting", None)

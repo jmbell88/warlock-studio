@@ -492,15 +492,23 @@ def test_the_thumbnail_id_is_the_job_id(ctx, svc):
 def test_the_mesh_summary_is_read_off_the_jobs_own_params(ctx, svc):
     """No archived job.json any more: the row *is* the record, so there is
     nothing to cache and nothing to go stale."""
+    # ``mesh_audit`` as the worker actually writes it. This used to pass
+    # ``{"verdict": "clean"}`` and assert the line it produced, which pinned a
+    # branch nothing has ever fed: ``queue._audit_mesh`` stores worst, mean,
+    # faces and resolution, so the reader was dead from the day it was typed
+    # (P120, and the same mistake ``report["verdict"]`` made in the badge).
     _mesh(
         svc, "a chest",
         mesh_report={"triangles": 12000, "watertight": True, "materials": 2},
-        mesh_audit={"verdict": "clean"},
+        mesh_audit={"worst": 0.0304, "mean": 0.01, "faces": 12000, "resolution": 1024},
     )
     state = _scanned(ctx)
     lines = review_mode.mesh_lines(review_mode.current(state))
     assert lines == [
-        "12,000 triangles", "watertight: yes", "2 material(s)", "silhouette: clean"
+        "12,000 triangles",
+        "watertight: yes",
+        "2 material(s)",
+        "see-through at worst view: 3.0%",
     ]
 
 

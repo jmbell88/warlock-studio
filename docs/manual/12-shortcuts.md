@@ -115,4 +115,4 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 
 Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
 to the current one, and **Alt** subtracts. Both are described in
-[Selections and transform](06-inker.md#selections-and-transform).
+[Selections and transform](07-inker.md#selections-and-transform).

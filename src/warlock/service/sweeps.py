@@ -45,7 +45,7 @@ from typing import Any
 from .. import guidance
 from . import jobs as jobs_mod
 from .core import WarlockService
-from .errors import Invalid, NotFound
+from .errors import Invalid, NotFound, invalid_from
 from .validation import (
     ALLOWED_RESOLUTIONS,
     MAX_PROMPT,
@@ -271,7 +271,7 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
             bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir),
         )
     except ValueError as exc:
-        raise Invalid(str(exc)) from exc
+        raise invalid_from(exc, "A sweep unit's settings are not usable") from exc
     # A sweep unit is submitted with no reference upload, so a conditioning
     # selection can never have an image to condition on -- create_job would
     # refuse it, but only after the sweep row was minted.
@@ -324,8 +324,14 @@ def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> No
             key = _check_unit(svc, plan, unit)
         except Invalid as exc:
             # Named, because "one of your twelve units is bad" is not something
-            # anyone can act on.
-            raise Invalid(f"{unit_label(unit)}: {exc}", field=exc.field) from exc
+            # anyone can act on. And the *field* is named too when the message
+            # does not already carry it (S136): a sweep refusal is read against
+            # a plan the user wrote in a script rather than against a form they
+            # can see highlighted, so the address has to be in the words.
+            where = ""
+            if exc.field and exc.field not in str(exc):
+                where = f" (from {exc.field})"
+            raise Invalid(f"{unit_label(unit)}{where}: {exc}", field=exc.field) from exc
         first = seen.get(key)
         if first is not None:
             raise Invalid(

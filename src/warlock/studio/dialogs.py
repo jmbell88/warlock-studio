@@ -20,6 +20,7 @@ from typing import Any
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
+from ..service.errors import Failed
 from . import widgets
 
 log = logging.getLogger(__name__)
@@ -43,22 +44,31 @@ ARTIFACT_FILTERS = {
 
 
 def open_file(title: str, filters: list[str] | None = None) -> Path | None:
-    """Blocking; call from a task thread."""
+    """Blocking; call from a task thread.
+
+    ``None`` means **the user cancelled**, and nothing else (E44). A picker that
+    failed to open raises instead: both used to return ``None``, so a portable-
+    file-dialogs failure -- no zenity on the host, a destroyed parent window --
+    was indistinguishable from Escape, and the caller correctly did nothing
+    about it. Every call site is inside a task closure, so the raise arrives as
+    the ordinary failure toast rather than as a crash.
+    """
     try:
         picked = pfd.open_file(title, "", filters or ["All files", "*"]).result()
-    except Exception:
+    except Exception as exc:
         log.exception("the file picker failed")
-        return None
+        raise Failed("The file picker did not open. See the log for details.") from exc
     return Path(picked[0]) if picked else None
 
 
 def save_file(title: str, default_name: str, filters: list[str] | None = None) -> Path | None:
-    """Blocking; call from a task thread."""
+    """Blocking; call from a task thread. ``None`` is a cancel; see
+    :func:`open_file` for why a failure raises rather than joining it."""
     try:
         picked = pfd.save_file(title, default_name, filters or ["All files", "*"]).result()
-    except Exception:
+    except Exception as exc:
         log.exception("the save picker failed")
-        return None
+        raise Failed("The save dialog did not open. See the log for details.") from exc
     return Path(picked) if picked else None
 
 

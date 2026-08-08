@@ -333,6 +333,93 @@ class Config:
         return self.data_dir / job_id
 
 
+# Which environment variable each field answers to (S140). A table rather than
+# something derived, because the derivation does not exist: every default is a
+# ``default_factory`` lambda closing over its own variable name, and there is no
+# way to ask a dataclass field which string its factory read.
+#
+# The pairing is asserted in both directions by a test -- a field with no entry
+# and an entry naming no field both fail -- which is what keeps this from
+# becoming the usual stale second copy. ``vram_exclusive_explicit`` is the one
+# deliberate omission: it is not configured, it is *derived* by the startup
+# resolve, and listing it beside real settings would present a computed answer
+# as something the user set.
+SETTINGS: tuple[tuple[str, str], ...] = (
+    ("data_dir", "WARLOCK_DATA_DIR"),
+    ("db_path", "WARLOCK_DB"),
+    ("bench_dir", "WARLOCK_BENCH_DIR"),
+    ("palette_dir", "WARLOCK_PALETTE_DIR"),
+    ("export_dir", "WARLOCK_EXPORT_DIR"),
+    ("trellis_server_exe", "WARLOCK_TRELLIS_EXE"),
+    ("trellis_models_dir", "WARLOCK_TRELLIS_MODELS"),
+    ("trellis_port", "WARLOCK_TRELLIS_PORT"),
+    ("trellis_idle_timeout", "WARLOCK_TRELLIS_IDLE"),
+    ("trellis_webp", "WARLOCK_TRELLIS_WEBP"),
+    ("trellis_tex_res", "WARLOCK_TRELLIS_TEX_RES"),
+    ("trellis_band", "WARLOCK_TRELLIS_BAND"),
+    ("gltfpack_exe", "WARLOCK_GLTFPACK"),
+    ("mesh_profile", "WARLOCK_MESH_PROFILE"),
+    ("mesh_retries", "WARLOCK_MESH_RETRIES"),
+    ("mesh_hole_max", "WARLOCK_MESH_HOLE_MAX"),
+    ("reference_retries", "WARLOCK_REFERENCE_RETRIES"),
+    ("rank_candidates", "WARLOCK_RANK"),
+    ("t2i_model", "WARLOCK_T2I_MODEL"),
+    ("t2i_model_root", "WARLOCK_T2I_ROOT"),
+    ("t2i_turbo_dir", "WARLOCK_T2I_DIR"),
+    ("vram_exclusive", "WARLOCK_VRAM_EXCLUSIVE"),
+    ("vram_budget_gib", "WARLOCK_VRAM_BUDGET"),
+    ("vram_total_gib", "WARLOCK_VRAM_TOTAL"),
+    ("pose_fit", "WARLOCK_POSE_FIT"),
+    ("pose_timeout", "WARLOCK_POSE_TIMEOUT"),
+    ("rig_template", "WARLOCK_RIG_TEMPLATE"),
+    ("rig_timeout", "WARLOCK_RIG_TIMEOUT"),
+    ("deform_qa", "WARLOCK_DEFORM_QA"),
+    ("sheet_timeout", "WARLOCK_SHEET_TIMEOUT"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Setting:
+    """One configured value, and where it came from."""
+
+    name: str
+    env: str
+    value: str
+    from_env: bool
+
+
+def effective(config: Config | None = None) -> list[Setting]:
+    """What this process is actually running on, field by field (S140).
+
+    The point is the ``from_env`` column, not the values: "trellis port 17971"
+    is not a diagnosis, and "trellis port 17971, set by WARLOCK_TRELLIS_PORT"
+    is -- a host whose behaviour disagrees with the documentation almost always
+    disagrees because something in its environment says so, and until this
+    there was no way to see that from inside the app.
+
+    Reads the environment rather than comparing against a freshly constructed
+    ``Config``: the comparison would report "default" for a variable explicitly
+    set to the default value, which is exactly the case where a user is asking
+    whether their setting took.
+
+    Pure, in the ``vram.py`` sense -- stdlib only, no imports from ``service``,
+    ``queue`` or ``studio`` -- because both the CLI and a pane read it.
+    """
+    config = config or get_config()
+    out: list[Setting] = []
+    for name, env in SETTINGS:
+        value = getattr(config, name, None)
+        out.append(
+            Setting(
+                name=name,
+                env=env,
+                value="(unset)" if value is None else str(value),
+                from_env=env in os.environ,
+            )
+        )
+    return out
+
+
 _config: Config | None = None
 
 

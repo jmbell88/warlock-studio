@@ -12,22 +12,22 @@ from warlock.studio.state import AppState, ManualState
 def tree(tmp_path: Path) -> Path:
     (tmp_path / "00-index.md").write_text("# Warlock Studio Manual\n", encoding="utf-8")
     (tmp_path / "01-overview.md").write_text("# Overview\n\nHello.\n", encoding="utf-8")
-    (tmp_path / "10-installation.md").write_text("# Installation\n", encoding="utf-8")
-    (tmp_path / "13-architecture.md").write_text("# Architecture\n", encoding="utf-8")
+    (tmp_path / "13-installation.md").write_text("# Installation\n", encoding="utf-8")
+    (tmp_path / "17-architecture.md").write_text("# Architecture\n", encoding="utf-8")
     return tmp_path
 
 
 def test_chapters_sorted_titled_and_grouped(tree: Path):
     chapters = loader.chapters(root=tree)
     assert [c.key for c in chapters] == [
-        "00-index", "01-overview", "10-installation", "13-architecture",
+        "00-index", "01-overview", "13-installation", "17-architecture",
     ]
     by_key = {c.key: c for c in chapters}
     assert by_key["01-overview"].title == "Overview"
     assert by_key["00-index"].part == ""
     assert by_key["01-overview"].part == "Using Warlock Studio"
-    assert by_key["10-installation"].part == "Setup & operations"
-    assert by_key["13-architecture"].part == "Architecture"
+    assert by_key["13-installation"].part == "Setup & operations"
+    assert by_key["17-architecture"].part == "Architecture"
 
 
 def test_every_real_chapter_lands_in_a_part():
@@ -61,7 +61,7 @@ def test_manual_state_open_at():
     open_at deliberately does not carry a second visibility flag."""
     state = AppState()
     assert isinstance(state.manual, ManualState)
-    state.manual.open_at("03-generating-meshes", "exports")
+    state.manual.open_at("04-generating-meshes", "exports")
     assert not hasattr(state.manual, "open")
-    assert state.manual.chapter == "03-generating-meshes"
+    assert state.manual.chapter == "04-generating-meshes"
     assert state.manual.pending_anchor == "exports"

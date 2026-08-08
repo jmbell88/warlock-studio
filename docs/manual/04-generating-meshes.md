@@ -26,7 +26,7 @@ the promotion inherit whatever the reference happened to record.
 Derived values never carry across. Anything the worker recorded about the *source* run's artifacts
 — the composed prompt, the mesh report, the applied transform — is stripped, so a new job never
 wears a quality verdict about a mesh that does not exist yet. See
-[Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
 
 ## Checking the cutout
 
@@ -49,7 +49,7 @@ Three buttons:
   arguing about. What you must not do is spend two minutes of GPU by accident.
 - **Fix matte** opens the reference in Inker with the cutout already folded into its alpha, as one
   undoable step. The eraser and the brush then edit the matte directly; see
-  [Inker](06-inker.md#fixing-a-matte).
+  [Inker](07-inker.md#fixing-a-matte).
 - **Cancel** leaves everything as it was.
 
 A matte you edited and saved travels to the engine as the image's own alpha, and the job records
@@ -75,7 +75,7 @@ Nothing is ever deleted on your behalf, and declining leaves you with ordinary a
 hidden ones.
 
 Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
-See [Review](16-review.md).
+See [Review](11-review.md).
 
 The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
 
@@ -137,7 +137,7 @@ sees it. It is off by default: the engine does its own cropping, and whether doi
 hurts has not been measured. Treat it as an experiment rather than an improvement.
 
 The **Rig** section, present only when Blender is installed, holds **Rig when the mesh lands** and a
-skeleton picker. See [Rigging and posing](04-rigging-and-posing.md).
+skeleton picker. See [Rigging and posing](05-rigging-and-posing.md).
 
 ## Triangle budget
 
@@ -190,6 +190,14 @@ The **mesh audit** answers a different question: *can you see through it*. It is
 "visible openings" and a percentage. That is what a player actually notices, and it is not the same
 property as watertightness at all. A mesh can be watertight and still look wrong, and vice versa.
 
+**Read that percentage in one direction only.** A high reading means a hole, and it means it
+reliably. A *low* one means no hole was seen, which is not the same as a good mesh — the most common
+way reconstruction fails is a solid, featureless slab, and a slab has no openings at all. Measured
+against 84 reviewed meshes, the accepted ones had *more* visible openings than the median discarded
+one, so a near-zero reading is close to no information. The app says so where it shows one: nothing
+in the interface paints a low figure as a pass, and the inspector adds "a solid, featureless mesh
+scores this too" underneath it.
+
 Neither measurement can fail your job. If either cannot be computed, the failure is logged and the
 job still completes: the GLB is already on disk, and a missing verdict is better than a lost mesh.
 
@@ -220,7 +228,7 @@ job. A missing button would be a mystery; a disabled one with a reason is inform
 
 This table is the *mesh* half. A finished reference has its own Export tab offering the cutouts,
 the pixel-art reductions and the manifest — see
-[2D exports](02-generating-references.md#2d-exports).
+[2D exports](03-generating-references.md#2d-exports).
 
 For bulk export of several assets at once, and for the storage those files occupy, see
-[The library and jobs](08-library-and-jobs.md#storage-and-pruning).
+[The library and jobs](09-library-and-jobs.md#storage-and-pruning).

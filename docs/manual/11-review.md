@@ -135,5 +135,5 @@ it, and before that "holes 3% · watertight 71% (21 runs)" from the automatic me
 every finished mesh contributes those, reviewed or not. Verdicts, measurements and matched pairs
 all survive pruning and sweep deletion; the corpus outlives the assets it was learned from.
 
-Next: [Keyboard shortcuts](09-shortcuts.md) has the full Review table, and
-[The library and jobs](08-library-and-jobs.md) covers where sweep units do and do not appear.
+Next: [Keyboard shortcuts](12-shortcuts.md) has the full Review table, and
+[The library and jobs](09-library-and-jobs.md) covers where sweep units do and do not appear.

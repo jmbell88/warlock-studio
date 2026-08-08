@@ -18,6 +18,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import fonts, icons, profiles, theme, widgets
+from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d
 from ..tokens import sp
 from . import library, profiles_panel
@@ -99,6 +100,10 @@ def _choose(ctx: Any) -> None:
         centred("Warlock Studio")
     with fonts.small(imgui):
         centred("A prompt becomes a reference image; a reference becomes a mesh.", theme.MUTED)
+    # On the subtitle's line, which is where ``help_button`` puts it: it
+    # right-aligns onto whatever line is current, and the tile stack below is a
+    # column of full-width cards with no line to share.
+    manual_render.help_button(ctx, "home")
     imgui.dummy((0, sp(20)))
 
     if _tile(ctx, "2d", icons.IMAGE, "New 2D Image", "Compose a prompt and generate a reference."):
@@ -125,10 +130,63 @@ def _choose(ctx: Any) -> None:
     if _tile(ctx, "profiles", icons.SLIDERS, "Profiles", caption):
         ctx.state.landing_view = "profiles"
 
+    imgui.dummy((0, sp(8)))
+    _setup_entry(ctx)
+
     if ctx.state.errors:
         imgui.dummy((0, sp(16)))
         for message in ctx.state.errors:
             centred(message, theme.ERR)
+
+
+def _setup_entry(ctx: Any) -> None:
+    """"Diagnostics / Set up models", on the screen the app opens on (F56).
+
+    A first run reaches Home with nothing downloaded, presses New 2D Image, and
+    is refused at the door -- correctly, and now with the download command in
+    the message (F55) -- but Home itself offered four ways to start work and no
+    way to find out whether this install can do any of it. The row is small and
+    sits under the tiles rather than beside them: it is not a fifth thing to do,
+    it is the thing to do when one of the four did not work.
+
+    It counts what is failing rather than saying "Diagnostics", because the
+    number is the whole reason to press it, and it is drawn in the same colours
+    the header dot uses so the two obviously refer to one answer.
+    """
+    checks = list(getattr(ctx.runtime, "checks", []) or [])
+    failing = [c for c in checks if not c.ok]
+    fatal = [c for c in failing if c.fatal]
+    if not checks:
+        label = "Diagnostics - still checking"
+        colour = theme.MUTED
+    elif not failing:
+        label = "Diagnostics - everything checks out"
+        colour = theme.MUTED
+    else:
+        what = (
+            "1 thing needs attention"
+            if len(failing) == 1
+            else f"{len(failing)} things need attention"
+        )
+        label = f"Diagnostics / Set up models - {what}"
+        colour = theme.ERR if fatal else theme.WARN
+    _centre(imgui.calc_text_size(label).x + imgui.get_style().frame_padding.x * 2)
+    imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(colour)))
+    clicked = imgui.small_button(f"{label}##landing-doctor")
+    imgui.pop_style_color()
+    if imgui.is_item_hovered():
+        imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
+        imgui.set_tooltip(
+            "What this install can and cannot do, and the command to download "
+            "anything that is missing."
+        )
+    if clicked:
+        # App-Settings rather than the header popup: the popup is a read-only
+        # list, and the model rows with their Download buttons are what someone
+        # pressing this actually needs. The popup is still one click away from
+        # the dot, which is where "what is wrong right now" belongs.
+        ctx.state.mode = "settings"
+        _leave(ctx)
 
 
 def start_2d(ctx: Any) -> None:
