@@ -258,6 +258,64 @@ def test_a_platform_override_drops_the_resolution_it_implied(svc):
     assert params["resolution"] == 1024
 
 
+def test_a_2d_reference_never_promotes_at_half_the_geometry_resolution(svc):
+    """The 512 promote trap. ``platform`` is two selects that share one params
+    key: the 2D pane's is a prompt fragment (``2d`` means "flat and readable"),
+    the 3D pane's is the geometry resolution. Copying the reference's params
+    wholesale carried the 2D pane's 512 onto the reconstruction, so every
+    promotion of a 2D-styled reference ran at half resolution and said nothing.
+    """
+    ref = _reference(svc, guidance_fields={"platform": "2d"})
+    assert svc.store.get(ref)["params"]["resolution"] == 512
+    out = svc_jobs.promote_to_model(svc, ref)
+    params = svc.store.get(out["id"])["params"]
+    # Absent means the worker's own 1024 default; present must be 1024.
+    assert params.get("resolution", 1024) == 1024
+    # The 2D taxonomy itself is still what the reference recorded -- this is
+    # about the geometry resolution, not about relabelling the prompt.
+    assert params["platform"] == "2d"
+
+
+def test_an_explicit_promote_resolution_survives_untouched(svc):
+    ref = _reference(svc, guidance_fields={"platform": "2d"})
+    out = svc_jobs.promote_to_model(svc, ref, resolution=1536)
+    assert svc.store.get(out["id"])["params"]["resolution"] == 1536
+    # And an explicit 512 is a request, not an inheritance.
+    out = svc_jobs.promote_to_model(svc, ref, resolution=512)
+    assert svc.store.get(out["id"])["params"]["resolution"] == 512
+    with pytest.raises(Invalid):
+        svc_jobs.promote_to_model(svc, ref, resolution=777)
+
+
+def test_a_platform_override_still_beats_the_model_side_default(svc):
+    ref = _reference(svc, guidance_fields={"platform": "3d"})
+    out = svc_jobs.promote_to_model(svc, ref, platform="2d")
+    params = svc.store.get(out["id"])["params"]
+    # capture_base's rule: the 3D-side platform wins, whatever it says.
+    assert params["platform"] == "2d"
+    assert params["resolution"] == 512
+
+
+def test_a_sweep_unit_is_unchanged_by_the_promote_resolution_rule(svc):
+    """A sweep goes through create_job and never through promote_to_model, so
+    its units must still get exactly what their own vector asks for -- 512
+    included, when that is the vector being measured."""
+    from warlock.service import sweeps as svc_sweeps
+
+    for platform, expected in (("2d", 512), ("3d", 1024)):
+        plan = svc_sweeps.SweepPlan(
+            label=f"p-{platform}",
+            prompt="a wooden chest",
+            seeds=(1,),
+            base={"platform": platform},
+        )
+        sweep = svc_sweeps.create_sweep(svc, plan)
+        for job_id in sweep["jobs"]:
+            params = svc.store.get(job_id)["params"]
+            assert params["resolution"] == expected
+            assert params["platform"] == platform
+
+
 def test_an_explicit_false_clears_an_inherited_rig_request(svc):
     ref = _reference(svc)
     svc.store.merge_params(ref, {"rig": True, "rig_template": "biped"})
