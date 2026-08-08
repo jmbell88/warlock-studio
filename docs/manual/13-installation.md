@@ -53,7 +53,7 @@ The reconstruction engine is `trellis-server.exe`, a compiled CUDA binary from
 that `vendor/trellis/trellis-server.exe` exists.
 
 The vendored build is **v0.5.4** (2026-07-27). If you keep the binary somewhere else, point
-`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](11-configuration.md#environment-variables).
+`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](14-configuration.md#environment-variables).
 
 A missing binary is one of only two **fatal** startup checks: no reconstruction engine means no
 mesh, and there is nothing to degrade to.
@@ -138,13 +138,13 @@ uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
   --include "*.json" --include "*fp16.safetensors" --local-dir models/controlnet-canny-sdxl
 ```
 
-See [Conditioning on an image](02-generating-references.md#conditioning-on-an-image) for what these
+See [Conditioning on an image](03-generating-references.md#conditioning-on-an-image) for what these
 actually do.
 
 FLUX is not offered. Both `dev` and `schnell` are click-through gated on Hugging Face, and 12B
 parameters will not coexist with the reconstruction engine on one card. Using a local copy anyway is
 possible but constrained — see
-[Using a different image model](11-configuration.md#using-a-different-image-model).
+[Using a different image model](14-configuration.md#using-a-different-image-model).
 
 ## Checking the install
 

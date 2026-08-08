@@ -14,7 +14,7 @@ middle, layers and the pipeline panel on the right. Several documents stay open 
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
-[Keyboard shortcuts](09-shortcuts.md).
+[Keyboard shortcuts](12-shortcuts.md).
 
 | Tool | Key | What it does |
 | --- | --- | --- |
@@ -45,6 +45,18 @@ gradient tool chooses its **Shape** and whether it fades **To transparent**.
 
 Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
 left/right, top/bottom, or both. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels.
+
+## Colour
+
+Two colours, not one: **Foreground** and **Background**. The gradient tool needs both ends, and `X`
+swaps them — universal muscle memory from every other raster editor. Both carry an alpha bar, so a
+semi-transparent brush is a colour rather than a separate mode.
+
+Below them is a row of **swatches**. Clicking one makes it the foreground; the row is saved with
+your settings rather than reset each session, because a project has a palette and retyping it every
+time is the kind of small friction that makes a tool feel unfinished.
+
+The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
 ## Layers
 
@@ -197,7 +209,7 @@ losing them.
 
 ### Fixing a matte
 
-**Fix matte**, in the [Check the cutout](03-generating-meshes.md#checking-the-cutout) panel, is the
+**Fix matte**, in the [Check the cutout](04-generating-meshes.md#checking-the-cutout) panel, is the
 same hand-off with one difference: the document opens with the cutout already folded into its alpha,
 as a single undoable step. Every layer keeps its own pixels — the cut is multiplied into each of
 them — so a layered reference stays layered, and the eraser and the brush now edit the matte itself.
@@ -229,4 +241,4 @@ A painted reference is a real job row that never ran on the worker: the image al
 queueing a run to reproduce what you just drew would be two minutes of GPU for nothing. It is
 created finished, at the reference stage, which is exactly what promotion consumes. It cannot be
 rerolled — there is no generator behind it for a new seed to change — but it can be remeshed. See
-[Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).

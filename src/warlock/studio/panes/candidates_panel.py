@@ -30,6 +30,7 @@ from imgui_bundle import imgui
 from ...service import jobs as svc_jobs
 from .. import candidates as candidates_mod
 from .. import dialogs, widgets
+from ..manual import render as manual_render
 from . import library
 
 
@@ -39,6 +40,7 @@ def draw(ctx: Any) -> None:
     if group is None:
         return
     widgets.section("Candidates")
+    manual_render.help_button(ctx, "candidates")
     if group.finished:
         widgets.muted(f"{len(group.members)} meshes from one reference. Keep one.")
     else:

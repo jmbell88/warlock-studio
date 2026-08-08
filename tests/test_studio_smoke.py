@@ -727,7 +727,11 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     from warlock.studio.manual import render
 
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
-    app_ctx.state.manual.open_at("08-shortcuts", None)
+    # A real chapter key. This said "08-shortcuts", which has never been the
+    # name of anything -- ``open_at`` stores whatever it is given and the drawn
+    # page falls back, so the second frame below was exercising the not-found
+    # path rather than the renderer it exists to smoke.
+    app_ctx.state.manual.open_at("12-shortcuts", None)
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
 
 

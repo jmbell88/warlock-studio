@@ -38,7 +38,7 @@ set to `reference`. Going straight from a prompt to a mesh would spend two minut
 image nobody has looked at.
 
 If you already have a picture, you can skip the first stage entirely and upload it — see
-[Starting from an upload](03-generating-meshes.md#starting-from-an-upload).
+[Starting from an upload](04-generating-meshes.md#starting-from-an-upload).
 
 ## The modes
 
@@ -52,19 +52,19 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
 
 - **2D reference.** Owns the prompt and every control that composes it: the guidance selects, the
   negative prompt, the image model and style LoRA, the seed and the candidate count. Covered in
-  [Generating references](02-generating-references.md).
+  [Generating references](03-generating-references.md).
 - **3D asset.** Owns no prompt controls at all. A 3D job starts either from a finished 2D asset or
   from an uploaded image, and this pane holds only the mesh, rig, pose and sprite-sheet decisions.
-  Covered in [Generating meshes](03-generating-meshes.md).
+  Covered in [Generating meshes](04-generating-meshes.md).
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
-  [Inker](06-inker.md).
+  [Inker](07-inker.md).
 - **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
-  export a `.glb` or import the document as an asset. Covered in [Clay](07-clay.md).
+  export a `.glb` or import the document as an asset. Covered in [Clay](08-clay.md).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](16-review.md).
+  works" findings the verdicts add up to. Covered in [Review](11-review.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](11-configuration.md#in-app-settings).
+  [In-app settings](14-configuration.md#in-app-settings).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
@@ -96,7 +96,7 @@ Once you are in the workspace, the window is three columns:
   the sidebar itself is a fixed width.
 
 At the far right of the top bar are two small controls. The **?** button opens the keyboard
-shortcut list, which is also reproduced in [Keyboard shortcuts](09-shortcuts.md). Beside it is the
+shortcut list, which is also reproduced in [Keyboard shortcuts](12-shortcuts.md). Beside it is the
 **health dot**: green when every startup check passed, amber when a non-fatal check failed (missing
 optional weights, no gltfpack, no CUDA), and red when something fatal failed or the worker died.
 Clicking it opens the full diagnostics list.

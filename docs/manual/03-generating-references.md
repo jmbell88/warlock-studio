@@ -18,7 +18,7 @@ Beside the box, a **Recent** button opens your last twenty prompts, most recent 
 deduplicated — it appears once you have generated at least one reference, so there is history to
 show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
+menu instead, which is described in [Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
 
 Under **Advanced** there is a second box, **Negative**, listing what the image must not contain. It
 is pre-filled with the things that most often ruin a reconstruction:
@@ -167,7 +167,7 @@ startup and is deliberately not remembered between sessions — otherwise every 
 the same seed and a first Generate would reproduce last week's image.
 
 The mesh stage has its own separate seed, on the 3D pane. See
-[Mesh parameters](03-generating-meshes.md#mesh-parameters).
+[Mesh parameters](04-generating-meshes.md#mesh-parameters).
 
 ## Conditioning on an image
 
@@ -210,12 +210,12 @@ about.
 
 If the image is nearly right, you can fix it by hand: **Open in Inker** on the viewport toolbar
 opens the reference as a layered document, and saving writes it back in place. See
-[Pipeline bridges](06-inker.md#pipeline-bridges).
+[Pipeline bridges](07-inker.md#pipeline-bridges).
 
 When you are happy, press **Make 3D** on the card (or select the reference and switch to 3D mode).
 That carries the reference and everything it recorded into the mesh stage, where you can override
 the mesh-side settings before committing. The next chapter,
-[Generating meshes](03-generating-meshes.md), picks up from there.
+[Generating meshes](04-generating-meshes.md), picks up from there.
 
 ## 2D exports
 
@@ -247,7 +247,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`palettes/` by default — see
-[Configuration](11-configuration.md)), in either of the two formats palette sites publish: Lospec's
+[Configuration](14-configuration.md)), in either of the two formats palette sites publish: Lospec's
 `.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
 RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being

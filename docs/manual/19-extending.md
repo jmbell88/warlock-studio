@@ -40,11 +40,11 @@ without the UI knowing anything about either.
 
 Only one base model is resident at a time. Selecting a different one unloads the previous pipeline
 before building the next, because the card holds the reconstruction engine plus one SDXL-class
-pipeline and not two. See [VRAM modes](11-configuration.md#vram-modes).
+pipeline and not two. See [VRAM modes](14-configuration.md#vram-modes).
 
 A registry entry is also the right answer when `WARLOCK_T2I_DIR` is not — that variable redirects
 where the built-in `turbo` entry loads from and changes nothing about how it is run. See
-[Using a different image model](11-configuration.md#using-a-different-image-model).
+[Using a different image model](14-configuration.md#using-a-different-image-model).
 
 ## Adding a style LoRA
 
@@ -65,8 +65,8 @@ produces one kind of error from one place, but they contribute nothing to the co
 text is byte-identical with and without any of them.
 
 A missing LoRA file is skipped at load time rather than failing the job, and the diagnostics name it.
-See [Models and style LoRAs](02-generating-references.md#models-and-style-loras) and
-[Optional image models and style LoRAs](10-installation.md#optional-image-models-and-style-loras).
+See [Models and style LoRAs](03-generating-references.md#models-and-style-loras) and
+[Optional image models and style LoRAs](13-installation.md#optional-image-models-and-style-loras).
 
 ## Adding a palette
 
@@ -97,6 +97,26 @@ proportions say it should, not where anatomy says it should. That is why the fit
 written into `rig.json`: a later adjustment pass can correct a joint without re-solving the rig, and
 the record of where each joint actually ended up is the input it needs.
 
+For the `humanoid` template there is a second source of landmarks, and it does not replace the
+fitter — it replaces the *template*. When a pose model is installed, `pipelines/pose2d.refit` reads
+the subject's joints off the reference image and returns them in exactly the template's own format:
+the same names, the same parentage, still normalised into a unit box. `fit_template` then scales
+those onto the mesh exactly as it scales the shipped ones, so bounding-box scaling stays owned by
+one function and nothing downstream learns a second way a joint can be placed. Depth is always the
+template's: one view fixes `x` and `z` and says nothing about `y`.
+
+Any doubt refuses the whole measurement rather than part of it — a landmark below the confidence
+floor, one the detector never produced, a figure whose knees come out above its hips, a landmark
+outside the subject's silhouette. A skeleton half-measured and half-assumed is not partly better; it
+is internally inconsistent in a way nothing downstream can detect. `rig.json` records which source
+was used in its `fit` field.
+
+Extending this to another template means a detector for that anatomy and a mapping onto its
+landmarks: `pose2d.POSE_FIT_TEMPLATES` is the list, and it names `humanoid` alone because COCO-17 is
+a human keypoint set. A quadruped needs an AP-10K model and its own mapping. Adding a template
+without one is entirely normal — it simply gets the bbox fit, which is what every template got
+before this existed.
+
 Mirroring is not inferred from the geometry. `mirror_pairs` is an explicit array of two-element
 `[left, right]` name pairs, and it is the only thing that makes the pose editor's Mirror control do
 anything: `rigging.mirror_pose` copies each posed bone onto its named partner reflected, and a bone
@@ -112,7 +132,7 @@ Two conventions are worth honouring for consistency with the templates already t
 should be placed mirror-symmetrically about `X`, because the reflection `mirror_pose` applies assumes
 that plane.
 
-See [Templates](04-rigging-and-posing.md#templates).
+See [Templates](05-rigging-and-posing.md#templates).
 
 ## The derived-params rule
 
@@ -134,7 +154,7 @@ adapter that cannot have run is a lie about provenance.
 Inputs are bounded at the door rather than deep in the pipeline: an upload is size-checked before it
 is decoded and pixel-checked from its header before pixels are allocated, prompts are length-capped,
 and every service entry point that accepts a seed range-checks it. See
-[Rerun and promotion](08-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
 
 ## Pure-module boundaries
 
@@ -149,7 +169,7 @@ what makes every rule about pixels assertable headlessly — and there are a lot
 undo is addressed by layer uid rather than index precisely so that an undo issued after a reorder
 still lands on the layer the edit was made to.
 
-**Sheet planning.** As described in [Sheet planning](14-pipelines.md#sheet-planning), the grid is
+**Sheet planning.** As described in [Sheet planning](18-pipelines.md#sheet-planning), the grid is
 decided in a module with no Blender and no GPU, so the layout can be tested exhaustively and the
 preview cannot drift from the render.
 

@@ -122,4 +122,4 @@ which is exactly what a prop needs for a 2D game.
 Only posed rows and animated clips need a rigged mesh, and the panel says so before the button if
 you ask for one without a rig. Sheets themselves still need Blender, so they live behind the same
 optional extra as rigging — see
-[When rigging is unavailable](04-rigging-and-posing.md#when-rigging-is-unavailable).
+[When rigging is unavailable](05-rigging-and-posing.md#when-rigging-is-unavailable).

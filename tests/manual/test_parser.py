@@ -44,8 +44,8 @@ def test_paragraph_joins_lines_and_parses_spans():
 
 
 def test_link_span_carries_target():
-    [para] = parser.parse("See [Rigging](04-rigging-and-posing.md#templates).\n")
-    assert Span("link", "Rigging", "04-rigging-and-posing.md#templates") in para.spans
+    [para] = parser.parse("See [Rigging](05-rigging-and-posing.md#templates).\n")
+    assert Span("link", "Rigging", "05-rigging-and-posing.md#templates") in para.spans
 
 
 def test_code_block():

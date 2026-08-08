@@ -21,7 +21,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_IDLE` | `600` | Seconds of queue inactivity before resident models are evicted to free VRAM. |
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
-| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](12-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
+| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](16-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
 | `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary, vendored and present. Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
 | `WARLOCK_BENCH_DIR` | `bench/` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
@@ -33,7 +33,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
 | `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |
 | `WARLOCK_RANK` | `on` | Whether a finished reference is scored against its composition report (and its style anchor when one exists). |
-| `WARLOCK_REFERENCE_RETRIES` | `0` | Extra redraws a text job may spend when the composition report refuses its reference. `1` is the setting that pays for itself. |
+| `WARLOCK_REFERENCE_RETRIES` | `2` | Extra redraws a text job may spend when the composition report refuses its reference. It was `0`; the 2026-08-07 sweep refused 17 references in 100 and every one of those was a whole mesh job's GPU time lost to a picture that took four seconds to redraw. Set it to `0` to get the old behaviour. |
 | `WARLOCK_MESH_RETRIES` | `0` | Extra trellis runs when the finished mesh audits worse than `WARLOCK_MESH_HOLE_MAX`. The best attempt is kept, not the last. |
 | `WARLOCK_MESH_HOLE_MAX` | `0.07` | The worst-view see-through fraction past which a mesh is worth redoing. Measured, not guessed — see the hole-rate baseline in `docs/measurements/`. |
 | `WARLOCK_RIG_TEMPLATE` | `humanoid` | Skeleton template a rig request falls back to when it does not name one. |
@@ -45,6 +45,19 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_DEFORM_QA` | `on` | Whether a finished rig is rendered in a battery of test poses (`rig_qa.png` beside the rig). Nothing scores it — the point is a picture you look at. Off skips the render. |
 | `WARLOCK_NATIVE` | `1` | Whether the optional native kernels are used at all. `0` forces the numpy fallbacks, which is what the parity tests and an A/B timing run want. The fallbacks are never deleted, so this changes speed and nothing else. |
 | `WARLOCK_NATIVE_DLL` | unset | Path to the compiled kernel library, overriding `vendor/warlockc/warlockc.dll`. |
+
+### Seeing which of these are actually set
+
+`warlock doctor` prints an **Effective configuration** block after its checks, and the diagnostics
+popup behind the health dot carries the same list. Both mark the rows that came from the
+environment rather than from a default, which is the only part that diagnoses anything: an install
+whose behaviour disagrees with this table almost always disagrees because something in its
+environment says so.
+
+Three variables are deliberately absent from that list, because they are not settings the app holds
+— they are read once, where they are used, and nothing keeps them: `WARLOCK_LOG_LEVEL`,
+`WARLOCK_NATIVE` and `WARLOCK_NATIVE_DLL`. `warlock doctor`'s **warlockc** row reports the last two
+directly.
 
 The three timeouts are ceilings on hangs, not performance targets. Automatic weights on a
 300,000-face mesh are genuinely minutes of CPU, and a hung Blender holds the single-worker queue
@@ -126,7 +139,7 @@ So the variable is the right tool for exactly one case: swapping in another dist
 that wants the same sampler settings. A model that needs different settings wants a registry entry
 in `models.py` instead, which carries its own image size, step count, guidance scale, variant,
 scheduler and always-on step-distillation LoRA — because those are properties of the checkpoint, not
-of the user's preference. [Adding an image model](15-extending.md#adding-an-image-model) is the
+of the user's preference. [Adding an image model](19-extending.md#adding-an-image-model) is the
 procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
@@ -134,40 +147,6 @@ entry declares.
 
 ## In-app settings
 
-**Settings** in the mode switch holds the handful of preferences that are the app's rather than a
-job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
-of them need a variable set before launch.
-
-**Interface.** *UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
-is, from 0.5× to 2×. On a display that is already heavily scaled the slider stops short of 2× and
-says so, because the combined scale is capped — the control only offers zooms it can actually
-apply. It takes effect as you drag it, but the font atlas is baked once at startup, so
-text only becomes properly crisp at the new size after a restart — everything is drawn at the right
-size immediately either way. *Show frame rate* is the same toggle as `F10`.
-
-**Layout.** *Reset pane sizes* puts the split between the inspector and the library — both now on
-the right sidebar — back to its default, undoing any dragging of that divider. The sidebars
-themselves are a fixed 300 px and are not draggable. *Reset collapsed sections* re-opens every
-section that has been collapsed anywhere in the app.
-
-**Models.** Every model the app knows about — image models, style LoRAs, the conditioning adapters,
-and the matting, pose and measurement models — with a tick beside the ones whose weights are on disk
-and a **Download** button beside the ones that are missing, plus whether rigging is available. It is
-the same information the startup diagnostics report, in a place you can look at without opening the
-log. Tick several rows and *Download selected* fetches them together; four of the image models share
-one set of SDXL 1.0 weights, and picking all four downloads them once.
-
-Downloading does not make the app itself online. The button starts a separate process that fetches
-one repository and exits, into a staging folder beside the destination that is only moved into place
-if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
-directory that looks finished. Free disk is checked against the whole selection first, and the whole
-selection is refused if it will not fit. Everything is still equally installable by hand — see
-[Model weights](10-installation.md#model-weights) and
-[Adding an image model](15-extending.md#adding-an-image-model).
-
-Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
-saved profiles and settings presets, the sidebar's internal split, and the pixel-art export
-preferences — the
-size and palette set in an asset's [Pixel art](02-generating-references.md#pixel-art) section, which
-are the app's preferences rather than any one job's and so apply to whichever asset you look at
-next.
+The handful of preferences that are the app's rather than a job's -- UI scale, pane layout, and the
+model list with its Download buttons -- have a chapter of their own: [App
+settings](15-app-settings.md).

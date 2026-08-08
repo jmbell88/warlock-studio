@@ -112,7 +112,7 @@ remesh never runs the image model and a row claiming an adapter that could not h
 lie about how the asset was made.
 
 **Make 3D** — promotion — is the ordinary path from a reference to a mesh, covered in
-[Starting from a reference](03-generating-meshes.md#starting-from-a-reference).
+[Starting from a reference](04-generating-meshes.md#starting-from-a-reference).
 
 All three share one rule: **derived values never survive into the new job.** Anything the worker
 recorded about the finished job's *artifacts* is stripped before the new row is written — the
@@ -128,47 +128,9 @@ conditioning strengths, which prompt history alone never did.
 
 ## Profiles
 
-A **profile** is a saved house style. It is the *look* half of the 2D form, stored under a name, so
-someone who works on two kinds of asset does not re-pick the same settings each time they switch.
-
-A profile stores exactly nine fields:
-
-| Field | Why |
-| --- | --- |
-| base model | Which checkpoint the look depends on. |
-| style LoRA | And its adapter. |
-| LoRA strength | How hard the adapter is applied. |
-| negative prompt | Part of the house style, not of one image. |
-| platform | The prompt-side detail hint. |
-| genre | A style choice. |
-| era style | A style choice. |
-| setting | A style choice. |
-| palette | A style choice. |
-
-What it deliberately does **not** store is the per-generation half: the prompt, the seed, the seed
-lock and the candidate count are about one submit rather than about a look. Nor does it store the
-taxonomy fields that describe the *subject* — category, silhouette, material, condition, emissive,
-rarity and mood — which change per asset and would otherwise be dragged along by every profile
-switch.
-
-Profiles are managed in two places.
-
-In the 2D pane, a **profile** picker sits beside the preset picker. Choosing one fills the fields
-and makes it active, and the picker shows "Custom" once you edit past it. **Save as...** asks for a
-name and captures the current form's profile fields.
-
-From **Home**, the landing screen's profiles view is the full manager. **New profile** starts from
-whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and how many
-style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form** and
-**Delete** — the active profile hides **Set active**.
-
-The editor works on a *draft*, not on the live form, so editing a profile never changes what your
-next Generate would send. Renaming a profile in the editor moves it rather than forking it — a typo
-correction does not leave you with a duplicate. Applying a profile only touches the keys the profile
-actually holds, so a profile saved before a field existed leaves that new field alone rather than
-blanking it.
-
-Deleting a profile removes only the profile. Nothing already generated changes.
+A **profile** is a saved house style — the *look* half of the 2D form, stored under a name, with an
+optional anchor image every generation under it is conditioned on. It has a chapter of its own:
+[Style profiles](10-profiles.md).
 
 ## Storage and pruning
 

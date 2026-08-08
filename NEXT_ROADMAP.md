@@ -145,96 +145,49 @@ reliable change signal on Windows).
 
 ---
 
-## Phase 2 — Clarity: errors surfaced, onboarding, doctor, docs
+## Phase 2 — Clarity: errors surfaced, onboarding, doctor, docs — **done**
 
-*Makes failures diagnosable before Phase 3 adds interaction surface. Nothing here
-changes behaviour on the happy path; almost all of it is message plumbing, doctor
-wiring, and manual pages — cheap individually, compounding together.*
+*A record, not a queue. What each item concluded is in `CLAUDE.md` and in the comments at each
+site; the tests are `tests/test_error_surfacing.py`, `tests/test_onboarding.py`,
+`tests/test_message_clarity.py`, `tests/test_evidence_clarity.py` and `tests/manual/test_coverage.py`.
+All 38 items landed. Six things are worth carrying forward because they are decisions rather than
+edits:*
 
-**Implementation order:** E (errors reaching the user) → F (first-run/doctor) → S+N
-(message polish on the now-surfaced errors) → G+O118 (manual pages last, so they
-document the improved behaviour, gated by `tests/manual/test_docs.py`).
+- **`guidance.GuidanceError` is a `ValueError` subclass that names its own control** (E49/S137), so
+  every `except ValueError` in the repo is unchanged and the nine `Invalid(str(exc))` passthroughs
+  could gain a field without a translation table. `errors.invalid_from` frames library text in a
+  sentence and carries the field through.
+- **`validation.check_weights` refuses a text job whose selected weights are absent**, at the door,
+  beside `check_vram` and for its reason. The style LoRA is the case that mattered: `_load_loras`
+  *skips* a missing style adapter, so the job used to finish wearing a `style_lora` param that never
+  ran and join the findings corpus as evidence about it. `tests/conftest.py` materialises the probe
+  paths, so the suite's pinned-empty model root does not refuse every text job.
+- **`config.effective` is the one data source** for the diagnostics popup and `warlock doctor`
+  (S140, and the thing K100 in Phase 3 reads). Its value is the `from_env` column, and it reads the
+  environment rather than diffing against a fresh `Config`: a variable explicitly set to its default
+  is exactly when somebody is asking whether their setting took. `config.SETTINGS` is asserted
+  against the dataclass in both directions.
+- **P120 removed a claim rather than adding one.** `AUC(hole_worst → reject) = 0.115` over the
+  reviewed corpus, so the quality badge's green branch below 2% is gone — 48 of 81 rejected meshes
+  measured exactly 0.0 and would have worn it, and none of the 3 accepted ones did. The escalation
+  stays, because a *high* reading is still real evidence. `widgets.AUDIT_UNINFORMATIVE` is the one
+  threshold. Two dead readers turned up on the way (`mesh_audit["verdict"]` in `review_mode`, whose
+  test pinned a shape the worker has never written).
+- **N112's load probes are keyed on the resolved weights directory, not on the kind.** The bpy
+  answer can be a bare module global because it is a fact about the interpreter; these are facts
+  about a path, and `WARLOCK_T2I_ROOT` moves it.
+- **The manual was renumbered** to fit Home, Style profiles and App settings in the right places
+  (01→19; Review moved out of Architecture into the user chapters). Chapter numbers decide both
+  order and part, so a new chapter *is* a renumbering — and every cross-link, the index and
+  `HELP_TARGETS` are asserted in both directions, which is what made it mechanical.
+  `tests/manual/test_coverage.py` now also fails a pane with neither a (?) nor a stated exemption,
+  which is the gap the O118 sweep found (inker-colors, candidates).
 
-### E. Errors surfaced, not just logged
-
-1. **E43** — Silent job-count failure (`jobs_cache.py:90`): warning state instead of a
-   vanished "Load older".
-2. **E44** — Distinguish picker crash from user cancel (`dialogs.py:50, 60`); toast the
-   failure.
-3. **E45** — Surface storage-measurement failure (`jobs_cache.py:117`).
-4. **E46** — Show `ctx.cache.error`'s text and offer Retry in the library
-   (`library.py:41`).
-5. **E47** — Toast thumbnail-capture failures (`app_ctx.py:213`).
-6. **E48** — Surface Clay thumbnail / reference-render failures (`main.py:1122, 1144`).
-7. **E49** — Wrap the `raise Invalid(str(exc))` passthroughs (`jobs.py:48`,
-   `rig.py:48/86/128`, `sheets.py:98/112/242`) so raw library text never reaches the
-   user.
-8. **E50** — Fix `f"reference is {job['status']}"` — map the status enum to a sentence.
-9. **E51** — Make "file not ready" actionable (three sites in `derive.py`).
-10. **E52** — Point Failed errors at the log via the existing `TOAST_ACTIONS["log"]`.
-11. **E53** — List accepted formats in "that is not a readable image".
-
-### F. Onboarding & doctor
-
-12. **F54** — Give the two fatal doctor checks (trellis exe, GGUF weights) a remedy —
-    download command or manual pointer, like every non-fatal model row already has.
-13. **F55** — Submit-time guard on missing weights in `create_job` (`jobs.py:198`);
-    refuse with the download command the doctor already knows.
-14. **F56** — "Diagnostics / Set up models" entry on the Home screen.
-15. **F57** — Link `docs/manual/12-troubleshooting.md` (and `uv run warlock doctor`)
-    from the red banner and diagnostics popup.
-16. **F58** — Make the health dot a real control: bigger target, label/badge when
-    failing.
-17. **F59** — Residual affordance after banner dismissal.
-
-### S/N/D/O/P. Message polish and evidence clarity
-
-18. **S136** — Sweep admission errors name unit label + offending field + value.
-19. **S137** — `Invalid` carries `field=` wherever a control exists (audits the E49
-    passthroughs, which lose it by construction).
-20. **S138** — A "what will this cost" line on rig/sheet/pose submissions.
-21. **S139** — Name the stale-artifact consequence at the point of action: pose
-    overwrite (deletes the cached bake) and reference re-generation (marks `paint.ora`
-    stale) get the retarget panel's before-not-after pattern.
-22. **S140** — "Effective configuration" section in the diagnostics popup and
-    `warlock doctor` (pairs with K100 in Phase 3; build the data source once here).
-23. **N110** — Health-dot hover tooltip summarizing failing checks.
-24. **N111** — "Run checks again" button in the diagnostics popup (natural follow-on to
-    C31's static/volatile split).
-25. **N112** — One-time deferred load-check for matting/pose models.
-26. **N113** — Match dispatch-time refusal messages (`Worker._check_resources`) to
-    `vram.shortfall_message`'s number-plus-remedy pattern.
-27. **N114** — "Copy error" on the inspector's error box.
-28. **D42** — Surface skipped textures (`gltf.py:441-477`): "loaded untextured: N
-    textures skipped".
-29. **O117** — Distinct message for the honest empty-path case before the
-    deliberately-ambiguous "unknown file" / "no such job".
-30. **P120** — Audit every reader of `hole_worst` for the inversion (AUC 0.115; a slab
-    has no holes): anywhere the UI implies low-hole = good is wrong until the metric is
-    gated on "not a slab". See TODO §2.
-31. **P124** — Flag style-vs-palette conflicts in the "Prompt actually sent" tree
-    (e.g. `art_style=snes`'s "vivid saturated colours" against an explicit
-    black-and-silver brief).
-
-### G. Manual & docs (last within the phase)
-
-32. **G60** — Manual page for the Home chooser (`panes/landing.py`).
-33. **G61** — Manual page for app-Settings (`panes/app_settings.py`).
-34. **G62** — Manual page for Profiles (`panes/profiles_panel.py`).
-35. **G63** — Document landmark-informed rigging (incl. `WARLOCK_POSE_FIT`); fix
-    `15-extending.md`'s old bbox-fit description.
-36. **G64** — Fix stale `11-configuration.md` entries (`WARLOCK_GLTFPACK`,
-    `WARLOCK_REFERENCE_RETRIES`, `WARLOCK_MESH_PROFILE`).
-37. **G65** — Document the retarget panel as a user feature.
-38. **O118** — HELP_TARGETS coverage audit (`manual/targets.py`) alongside the new
-    pages.
-
-**Phase 2 verification:** `uv run pytest` (the manual integrity tests in
-`tests/manual/test_docs.py` gate G60–G65); every new user-facing string stays inside
-imgui's Basic-Latin+Latin-1 atlas range (`CLAUDE.md`'s `·`-not-`≥` rule); E-section
-items exercised by forcing each failure (bad file, unreadable image, missing weights).
-
----
+Two items were already satisfied and are recorded as such rather than re-done: G65 (the retarget
+panel was documented as a user feature) and the reference-regeneration half of S139 — a reroll
+creates a *new* job and copies `input.png` across, so it never rewrites the source job's reference
+and leaves no `paint.ora` stale. The one path that does rewrite it in place is Inker's Revert, whose
+confirm now names the layered document instead of "every edit".
 
 ## Phase 3 — UX: keyboard, notifications, library, forms, layout
 
