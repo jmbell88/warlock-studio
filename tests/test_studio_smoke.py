@@ -1459,16 +1459,39 @@ def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
 
     _seeded(app_ctx)
     rects: list[tuple[str, tuple[float, float, float, float]]] = []
+    # (name, left, right, frame_padding.x, button_text_align.x, em) captured
+    # *inside* the helper, because the whole question is what it pushes.
+    geometry: list[tuple[str, float, float, float, float, float]] = []
     real = widgets_mod.icon_button
+    real_small = widgets_mod.small_icon_button
+    real_button = imgui.button
 
-    def spy(label, *args, **kwargs):
-        result = real(label, *args, **kwargs)
+    def button_spy(label, *args, **kwargs):
+        style = imgui.get_style()
+        pad_x = float(style.frame_padding.x)
+        align_x = float(style.button_text_align.x)
+        em = float(imgui.get_font_size())
+        result = real_button(label, *args, **kwargs)
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
-        rects.append((label.split("##")[-1], (lo.x, lo.y, hi.x, hi.y)))
+        geometry.append((label.split("##")[-1], lo.x, hi.x, pad_x, align_x, em))
         return result
 
-    widgets_mod.icon_button = spy
-    manual_render.widgets.icon_button = spy
+    def _watch(fn):
+        def spy(label, *args, **kwargs):
+            imgui.button = button_spy
+            try:
+                result = fn(label, *args, **kwargs)
+            finally:
+                imgui.button = real_button
+            lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+            rects.append((label.split("##")[-1], (lo.x, lo.y, hi.x, hi.y)))
+            return result
+
+        return spy
+
+    widgets_mod.icon_button = _watch(real)
+    widgets_mod.small_icon_button = _watch(real_small)
+    manual_render.widgets.icon_button = widgets_mod.icon_button
     try:
         imgui.new_frame()
         imgui.set_next_window_size((sp(layout_mod.SIDEBAR_W) + 24, 900))
@@ -1480,7 +1503,33 @@ def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
         imgui.render()
     finally:
         widgets_mod.icon_button = real
+        widgets_mod.small_icon_button = real_small
         manual_render.widgets.icon_button = real
+        imgui.button = real_button
+
+    # Where the glyph actually lands inside the square, by imgui's own rule:
+    # the label gets ``width - 2 * frame_padding.x``, and ``RenderTextClipped``
+    # clamps the alignment offset at zero rather than centring into a gap that
+    # has gone negative. A Lucide glyph advances about a full em, so an em is
+    # what the square has to be able to hold -- the theme's 9 px of horizontal
+    # padding leaves less than that, which pinned every icon in the app to the
+    # left edge of its button with its right-hand pixels clipped off. The
+    # headless atlas has no Lucide in it, so this measures the *rule* against a
+    # full-em glyph rather than against whichever box this machine substitutes.
+    assert geometry, "no icon button was drawn; the spy is measuring nothing"
+    for name, x0, x1, pad_x, align_x, em in geometry:
+        inner = (x1 - x0) - 2 * pad_x
+        assert inner >= em - 0.5, (
+            f"{name}: {inner:.1f} px of text rect in a {x1 - x0:.1f} px button "
+            f"cannot hold a {em:.1f} px glyph; it is clipped on the right"
+        )
+        offset = max(0.0, align_x * (inner - em))
+        glyph_centre = x0 + pad_x + offset + em * 0.5
+        assert abs(glyph_centre - (x0 + x1) * 0.5) <= 0.5, (
+            f"{name}: a glyph lands centred on {glyph_centre:.1f} in a button "
+            f"spanning {x0:.1f}..{x1:.1f}, which is off-centre by "
+            f"{glyph_centre - (x0 + x1) * 0.5:.1f} px"
+        )
 
     for i, (name_a, a) in enumerate(rects):
         for name_b, b in rects[i + 1 :]:
@@ -1489,3 +1538,149 @@ def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
                 f"{name_a} at {a} and {name_b} at {b} occupy the same pixels; "
                 "the one drawn second takes the click"
             )
+
+
+@pytest.mark.parametrize("stage", ["reference", "tile", "model", "rig", "sheet"])
+def test_a_library_card_says_which_kind_of_asset_it_is(app_ctx, imgui_ctx, stage):
+    """The card never read ``stage``, and the only tells were a 72 px
+    thumbnail, the "from a reference" note and the *absence* of a quality
+    badge -- so a picture and the mesh made from it looked the same at a
+    glance. Asserted through the chip the card actually draws rather than
+    through the table it reads: a badge nothing calls is the failure here."""
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import layout as layout_mod
+    from warlock.studio import theme
+    from warlock.studio import widgets as widgets_mod
+    from warlock.studio.panes import library
+    from warlock.studio.tokens import sp
+
+    job_id = _seeded(app_ctx)
+    app_ctx.svc.store.set_stage(job_id, stage)
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+
+    chips: list[tuple[str, tuple[float, ...]]] = []
+    real = widgets_mod._chip
+
+    def spy(label, colour, fill):
+        chips.append((label, tuple(colour)))
+        return real(label, colour, fill)
+
+    widgets_mod._chip = spy
+    try:
+        _frame(
+            imgui_ctx,
+            lambda: (
+                layout_mod.pane_child("library", (sp(layout_mod.SIDEBAR_W), 0))
+                and library.draw(app_ctx),
+                imgui.end_child(),
+            ),
+        )
+    finally:
+        widgets_mod._chip = real
+
+    icon, word = widgets_mod.STAGE_BADGES[stage]
+    drawn = dict(chips)
+    assert f"{icon} {word}" in drawn, f"no {stage} badge among {list(drawn)}"
+    # Colour is the status pill's encoding and only its: two hues side by side
+    # on one line fight rather than add, so the kind chip is always muted.
+    assert drawn[f"{icon} {word}"] == tuple(theme.rgba(theme.MUTED))
+
+
+def test_the_stage_badges_tell_pixels_from_geometry_by_glyph():
+    """The icon is what carries the distinction, so no glyph may serve both
+    sides of it -- and the words stay ASCII, because imgui's default atlas is
+    Basic Latin plus Latin-1 and anything outside it renders as a box."""
+    from warlock.studio import widgets
+
+    flat = {widgets.STAGE_BADGES[k][0] for k in ("reference", "tile")}
+    solid = {widgets.STAGE_BADGES[k][0] for k in ("model", "rig", "sheet")}
+    assert not (flat & solid), "a glyph means both an image and a mesh"
+    glyphs = [icon for icon, _ in widgets.STAGE_BADGES.values()]
+    assert len(set(glyphs)) == len(glyphs), "two stages share one glyph"
+    for _icon, word in widgets.STAGE_BADGES.values():
+        assert word.isascii() and word.islower()
+
+
+def _overflow_labels(app_ctx, imgui_ctx) -> list[str]:
+    """Every menu item the library's overflow popup offers for the one card.
+
+    The popup is opened from inside the frame rather than clicked: imgui lets
+    ``open_popup`` and ``begin_popup`` happen in one frame under the same id
+    stack, which is what the ellipsis button already relies on.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import layout as layout_mod
+    from warlock.studio.panes import library
+    from warlock.studio.tokens import sp
+
+    labels: list[str] = []
+    real_overflow = library._overflow
+    real_menu = imgui.menu_item
+
+    def menu_spy(label, *args, **kwargs):
+        labels.append(label)
+        return real_menu(label, *args, **kwargs)
+
+    def overflow_spy(ctx, job):
+        imgui.open_popup("more")
+        imgui.menu_item = menu_spy
+        try:
+            real_overflow(ctx, job)
+        finally:
+            imgui.menu_item = real_menu
+
+    library._overflow = overflow_spy
+    try:
+        _frame(
+            imgui_ctx,
+            lambda: (
+                layout_mod.pane_child("library", (sp(layout_mod.SIDEBAR_W), 0))
+                and library.draw(app_ctx),
+                imgui.end_child(),
+            ),
+        )
+    finally:
+        library._overflow = real_overflow
+        imgui.menu_item = real_menu
+    return labels
+
+
+def test_the_library_offers_a_finished_reference_to_the_inker(app_ctx, imgui_ctx):
+    """The 2D half of Edit in Clay. Inker could already open a job's reference
+    and reuse an open tab for it; nothing in the library said so."""
+    from warlock.studio import inker_mode
+
+    job_id = _seeded(app_ctx)
+    app_ctx.svc.store.set_stage(job_id, "reference")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    assert inker_mode.can_edit_job(app_ctx, app_ctx.cache.get(job_id))
+    assert "Open in Inker" in _overflow_labels(app_ctx, imgui_ctx)
+
+
+def test_the_library_does_not_offer_the_inker_a_mesh(app_ctx, imgui_ctx):
+    """Never offer an action the loader would refuse: Inker opens the pixels a
+    reference *is*, and a model-stage job's ``input.png`` is the input to a
+    mesh, not the asset. Edit in Clay is the item that belongs on that card."""
+    job_id = _seeded(app_ctx)
+    app_ctx.svc.store.set_stage(job_id, "model")
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    labels = _overflow_labels(app_ctx, imgui_ctx)
+    assert "Open in Inker" not in labels
+    assert "Edit in Clay" in labels
+
+
+def test_editing_a_big_mesh_in_clay_still_asks_first(app_ctx):
+    """trellis output is 177k-299k triangles, so this confirm fires on nearly
+    every reconstruction -- which is the feature, not a nuisance. Raising the
+    threshold past what the pipeline produces would delete it while leaving it
+    in the file."""
+    from warlock.studio import clay_mode
+
+    assert clay_mode.SLOW_TRIANGLES == 200_000
+    asked: list = []
+    app_ctx.confirms = SimpleNamespace(ask=asked.append)
+    clay_mode._adopt_import(app_ctx, {"doc": None, "title": "big", "triangles": 250_000})
+    assert asked and "250,000 faces" in asked[0].message

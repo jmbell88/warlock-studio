@@ -14,7 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import fonts, motion, theme, tokens
+from . import fonts, icons, motion, theme, tokens
 from .tokens import sp
 
 # Every artifact the downloads section offers, in the order it offers them:
@@ -119,12 +119,13 @@ def section(label: str) -> None:
     imgui.separator()
 
 
-def status_pill(status: str) -> None:
-    """A rounded chip: colour *and* a glyph, because a pill that differs only
-    by hue is unreadable to a chunk of people and useless in a screenshot."""
-    glyph = theme.STATUS_GLYPHS.get(status, "?")
-    label = f"{glyph} {status}"
-    colour = theme.status_color(status)
+def _chip(label: str, colour: tuple[float, float, float, float], fill: float) -> None:
+    """One rounded chip, sized to its own text and laid out as a single item.
+
+    The layout half matters as much as the paint: the cursor is put back where
+    it started and a ``dummy`` of the chip's full size is what advances it, so
+    a caller's ``same_line`` lands beside the chip rather than inside it.
+    """
     pad_x, pad_y = sp(8), sp(3)
     with fonts.small(imgui):
         size = imgui.calc_text_size(label)
@@ -133,13 +134,50 @@ def status_pill(status: str) -> None:
         draw.add_rect_filled(
             pos,
             (pos.x + size.x + pad_x * 2, pos.y + size.y + pad_y * 2),
-            imgui.get_color_u32((colour[0], colour[1], colour[2], 0.16)),
+            imgui.get_color_u32((colour[0], colour[1], colour[2], fill)),
             (size.y + pad_y * 2) * 0.5,
         )
         imgui.set_cursor_screen_pos((pos.x + pad_x, pos.y + pad_y))
         imgui.text_colored(imgui.ImVec4(*colour), label)
         imgui.set_cursor_screen_pos((pos.x, pos.y))
         imgui.dummy((size.x + pad_x * 2, size.y + pad_y * 2))
+
+
+def status_pill(status: str) -> None:
+    """A rounded chip: colour *and* a glyph, because a pill that differs only
+    by hue is unreadable to a chunk of people and useless in a screenshot."""
+    glyph = theme.STATUS_GLYPHS.get(status, "?")
+    _chip(f"{glyph} {status}", theme.status_color(status), 0.16)
+
+
+# What each stage *is*, as a glyph and a word. The glyph carries the
+# distinction -- an image for the two that end at pixels, a cube for the three
+# that end at geometry -- because colour is spoken for: the status pill next to
+# this one is the only chip on a card allowed to mean anything by its hue, and
+# two colour encodings side by side fight rather than add.
+STAGE_BADGES: dict[str, tuple[str, str]] = {
+    "reference": (icons.IMAGE, "reference"),
+    "tile": (icons.GRID, "tile"),
+    "model": (icons.BOX, "model"),
+    "rig": (icons.BONE, "rig"),
+    "sheet": (icons.FILM, "sheet"),
+}
+
+
+def stage_badge(job: dict[str, Any], *, inline: bool = False) -> None:
+    """What kind of asset this is, beside what state it is in.
+
+    A card never said: the thumbnail, the "from a reference" note and the
+    *absence* of a quality badge were the only tells, so a 2D reference and the
+    mesh made from it were told apart by squinting at a 72 px picture. Unlike
+    :func:`quality_badge` this always draws something, so the plain ``inline``
+    is honest here -- a ``same_line`` issued for it is always spent.
+    """
+    stage = str(job.get("stage") or "")
+    icon, label = STAGE_BADGES.get(stage, (icons.CIRCLE, stage or "asset"))
+    if inline:
+        imgui.same_line()
+    _chip(f"{icon} {label}", theme.rgba(theme.MUTED), 0.10)
 
 
 def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
@@ -160,13 +198,17 @@ def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
     """
     params = job.get("params") or {}
     report = params.get("mesh_report")
-    if isinstance(report, dict) and report.get("verdict"):
-        verdict = str(report["verdict"])
-        colour = {"good": theme.OK, "usable": theme.WARN}.get(verdict, theme.ERR)
-        if inline:
-            imgui.same_line()
-        text_colored(colour, verdict)
-        return
+    # There is deliberately no ``verdict`` branch above this one. There was:
+    # it read ``report["verdict"]`` and painted good/usable/anything-else, and
+    # nothing has ever written that key -- ``meshreport.build`` writes
+    # ``status`` (ready / review / invalid), so every mesh fell through it to
+    # the silhouette audit and the branch was dead from the day it was typed.
+    # Wiring it to ``status`` rather than deleting it would have been worse
+    # than nothing: ``status`` is "does this file have any reason at all",
+    # pooling the triangle budget, the UV set, both PBR maps and the pivot into
+    # one word, and it would have sat *above* the welded-watertight branch and
+    # suppressed it for every mesh. The compound answer is the inspector's job,
+    # where the reasons are listed; a card gets the one-word topology tell.
     # The welded flag, never the raw one: `meshreport` loads with process=False
     # so the UV and material checks see the unwelded mesh, which makes every
     # xatlas seam split a boundary edge -- a badge keyed on that says "not
@@ -522,11 +564,29 @@ def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bo
     return clicked, value
 
 
-def icon_button(
-    icon: str, tooltip: str = "", *, danger: bool = False, enabled: bool = True
+def _glyph_button(
+    icon: str, side: float, tooltip: str, *, danger: bool = False, enabled: bool = True
 ) -> bool:
-    """A square glyph button with its meaning in the tooltip."""
-    side = imgui.get_frame_height()
+    """A square button holding one glyph, centred in it.
+
+    The centring is the whole reason this is not four lines inline. imgui gives
+    a button's label the rect ``side - 2 * frame_padding.x``, and the theme's
+    horizontal padding (``theme.py``: 9 design px) is over half of a square
+    that is only ``frame_padding.y`` taller than the text -- so a Lucide glyph,
+    which advances about a full em, does not fit. ``RenderTextClipped`` then
+    clamps the alignment offset to zero rather than centring into a negative
+    gap, and the icon is pinned to the left edge with a sliver of space on the
+    right and its own right-hand pixels clipped off. Every icon in the app was
+    drawn that way.
+
+    So the padding is pushed to zero *for this button only* -- which hands the
+    glyph the whole square -- and the alignment is stated rather than inherited,
+    because the whole point is where the glyph lands inside a rect it now fits.
+    ``side`` is measured before the push: frame height is a function of the
+    padding this is about to change. Neither ``ICON_OFFSET`` (font metrics --
+    it is what makes an icon sit right vertically) nor the global padding (it
+    shapes every text button and every modal) is any part of the fix.
+    """
     pushed = 0
     if danger:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
@@ -536,13 +596,39 @@ def icon_button(
         pushed = 2
     if not enabled:
         imgui.begin_disabled()
+    imgui.push_style_var(imgui.StyleVar_.frame_padding.value, imgui.ImVec2(0.0, 0.0))
+    imgui.push_style_var(imgui.StyleVar_.button_text_align.value, imgui.ImVec2(0.5, 0.5))
     clicked = imgui.button(icon, (side, side))
+    imgui.pop_style_var(2)
     if not enabled:
         imgui.end_disabled()
     imgui.pop_style_color(pushed)
     if tooltip and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip(tooltip)
     return clicked and enabled
+
+
+def icon_button(
+    icon: str, tooltip: str = "", *, danger: bool = False, enabled: bool = True
+) -> bool:
+    """A square glyph button with its meaning in the tooltip."""
+    return _glyph_button(
+        icon, imgui.get_frame_height(), tooltip, danger=danger, enabled=enabled
+    )
+
+
+def small_icon_button(icon: str, tooltip: str = "") -> bool:
+    """The same button at ``small_button`` height, for a card's action row.
+
+    Its own entry point rather than a flag, but *not* its own drawing code: the
+    two call sites this replaced were bare ``imgui.small_button(icons.…)``,
+    which is the un-centred, un-square shape ``_glyph_button`` exists to
+    correct, and an idiom that governs everywhere except two cards governs
+    nothing. The side is the text line height, which is what ``small_button``
+    makes its own height (it draws with zero vertical padding), so an icon
+    still lines up with the labelled small buttons beside it.
+    """
+    return _glyph_button(icon, imgui.get_text_line_height(), tooltip)
 
 
 def field_label(label: str) -> None:
