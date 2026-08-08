@@ -167,6 +167,16 @@ def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
             imgui.same_line()
         text_colored(colour, verdict)
         return
+    # The welded flag, never the raw one: `meshreport` loads with process=False
+    # so the UV and material checks see the unwelded mesh, which makes every
+    # xatlas seam split a boundary edge -- a badge keyed on that says "not
+    # watertight" about every textured mesh ever reconstructed.
+    if isinstance(report, dict) and isinstance(report.get("welded_watertight"), bool):
+        sealed = bool(report["welded_watertight"])
+        if inline:
+            imgui.same_line()
+        text_colored(theme.OK if sealed else theme.WARN, "watertight" if sealed else "open")
+        return
     audit = params.get("mesh_audit")
     if isinstance(audit, dict) and audit.get("worst") is not None:
         ratio = float(audit["worst"])

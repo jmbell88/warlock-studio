@@ -134,7 +134,11 @@ def observation_metrics(params: dict[str, Any]) -> dict[str, Any]:
                 out[dst] = float(value)
     report = params.get("mesh_report")
     if isinstance(report, dict):
-        watertight = report.get("watertight")
+        # The welded figure when the report carries one: the raw one counts
+        # every xatlas UV-seam split as a boundary, so on a textured mesh it
+        # measures seams rather than holes. Rows written before the welded
+        # analysis existed keep contributing their raw flag under the same key.
+        watertight = report.get("welded_watertight", report.get("watertight"))
         if isinstance(watertight, bool):
             out["watertight"] = watertight
         triangles = report.get("triangles")

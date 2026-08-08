@@ -23,6 +23,26 @@ def test_the_badge_falls_back_to_the_audits_worst_fraction(monkeypatch):
     assert drawn == ["5.0% open"]
 
 
+def test_the_badge_reads_the_welded_watertight_flag_not_the_raw_one(monkeypatch):
+    """The report wins over the audit, and within the report the welded flag
+    wins over the raw one: ``meshreport`` loads with ``process=False`` so the
+    UV checks see split vertices, and the raw flag therefore says "not
+    watertight" about every textured mesh trellis has ever produced."""
+    drawn: list[str] = []
+    monkeypatch.setattr(widgets, "text_colored", lambda colour, label: drawn.append(label))
+
+    widgets.quality_badge(
+        {
+            "params": {
+                "mesh_audit": {"worst": 0.05},
+                "mesh_report": {"watertight": False, "welded_watertight": True},
+            }
+        }
+    )
+
+    assert drawn == ["watertight"]
+
+
 def test_an_audit_without_a_measurement_draws_no_badge(monkeypatch):
     drawn: list[str] = []
     monkeypatch.setattr(widgets, "text_colored", lambda colour, label: drawn.append(label))

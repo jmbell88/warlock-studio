@@ -34,6 +34,18 @@ def test_observation_metrics_with_only_a_report():
     }
 
 
+def test_the_watertight_metric_is_the_welded_one_when_the_report_has_it():
+    """``meshreport`` loads unwelded, so the raw flag counts every UV-seam
+    split as a boundary edge. The corpus wants the welded answer under the key
+    it already uses; a row written before the welded analysis existed still
+    contributes its raw flag rather than nothing."""
+    welded = {"status": "ready", "watertight": False, "welded_watertight": True}
+    assert vectors.observation_metrics({"mesh_report": welded})["watertight"] is True
+
+    legacy = {"status": "ready", "watertight": True}
+    assert vectors.observation_metrics({"mesh_report": legacy})["watertight"] is True
+
+
 def test_observation_metrics_omits_keys_rather_than_guessing():
     """The audit is advisory and can be absent, partial, or -- after a JSON
     round trip of something that went wrong -- the wrong shape entirely. Every
