@@ -324,8 +324,14 @@ def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> No
             key = _check_unit(svc, plan, unit)
         except Invalid as exc:
             # Named, because "one of your twelve units is bad" is not something
-            # anyone can act on.
-            raise Invalid(f"{unit_label(unit)}: {exc}", field=exc.field) from exc
+            # anyone can act on. And the *field* is named too when the message
+            # does not already carry it (S136): a sweep refusal is read against
+            # a plan the user wrote in a script rather than against a form they
+            # can see highlighted, so the address has to be in the words.
+            where = ""
+            if exc.field and exc.field not in str(exc):
+                where = f" (from {exc.field})"
+            raise Invalid(f"{unit_label(unit)}{where}: {exc}", field=exc.field) from exc
         first = seen.get(key)
         if first is not None:
             raise Invalid(

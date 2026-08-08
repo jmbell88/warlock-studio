@@ -37,6 +37,13 @@ def draw(ctx: Any, job: Any) -> None:
             widgets.muted("Posing needs Blender, which is not installed.")
             return
         widgets.muted("Posing needs a rig.")
+        # S138. Rigging is a real queued job -- Blender out of process, behind
+        # whatever the serial worker is already doing -- and looked from here
+        # like a button that does something immediately.
+        widgets.cost_note(
+            "Rigging is queued like a generation: it runs Blender in a separate "
+            "process and waits behind anything already running."
+        )
         rig_key = f"rig:{job['id']}"
         if widgets.disabled_button("Rig this mesh", not ctx.busy(rig_key)):
             ctx.submit(
@@ -196,6 +203,14 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
                 # rotations need the same confirm as any other discard.
                 guard(ctx, "apply a preset", lambda p=preset: viewer.apply_preset(p))
 
+    if viewer.editor.current:
+        # Before the button, the retarget panel's rule (S139): saving over an
+        # existing pose deletes its cached bake, because the GLB on disk depicts
+        # the rotations that are about to be replaced. The service is right to
+        # delete it and wrong to be the only thing that mentions it.
+        widgets.text_colored(
+            theme.WARN, "Saving under the same name replaces that pose and its saved GLB."
+        )
     if imgui.button("Save pose...", (-1, 0)):
         _save(ctx, job, viewer)
     if viewer.editor.fitted and imgui.button("Adjust joints", (-1, 0)):
@@ -257,6 +272,11 @@ def _saved_list(ctx: Any, job: Any) -> None:
     if not poses:
         return
     widgets.section("Saved poses")
+    # S138, and the interesting half of it: a pose bake is deliberately *not*
+    # queued -- it is a one-second Blender subprocess derived on request, for
+    # the same reason the STL and OBJ exports are -- so saying so is what stops
+    # "Save GLB..." reading like another two-minute wait.
+    widgets.cost_note("Saving a posed GLB runs on the spot; it does not join the queue.")
     job_id = job["id"]
     for pose in poses:
         pose_id = pose["id"]

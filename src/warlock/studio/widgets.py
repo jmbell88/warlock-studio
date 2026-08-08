@@ -111,6 +111,23 @@ def muted(text: str) -> None:
     text_colored(theme.MUTED, text)
 
 
+def cost_note(text: str) -> None:
+    """What pressing the button next to this will cost (S138).
+
+    Its own function rather than a bare ``muted`` so the three submissions that
+    carry one look alike and can be found together. The rule for the wording is
+    that it says what *this app* knows -- whether the work is queued behind the
+    GPU or derived on the spot, and roughly how much of it there is -- and never
+    a wall-clock estimate the app has never measured. "About two minutes" would
+    be a number, and a wrong one on someone else's card.
+
+    No icon: the atlas is a pinned lucide subset, and a glyph it does not carry
+    renders as the missing-glyph box -- the same rule that keeps these strings
+    inside imgui's Basic-Latin+Latin-1 range.
+    """
+    muted(text)
+
+
 def section(label: str) -> None:
     """A small heading with breathing room above it."""
     imgui.dummy((0, sp(tokens.SP_1)))

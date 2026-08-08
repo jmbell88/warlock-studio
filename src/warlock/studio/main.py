@@ -2488,6 +2488,7 @@ class App:
             imgui.pop_style_color()
         if not checks:
             widgets.muted("No checks ran.")
+        self._effective_config_section(ctx)
         if ctx.state.dismissed_errors:
             # What Dismiss took off the banner (F59). Here rather than nowhere:
             # every writer of ``state.errors`` fires once, so clearing the list
@@ -2528,6 +2529,41 @@ class App:
         if manual_render.troubleshooting_button(ctx):
             imgui.close_current_popup()
         imgui.end_popup()
+
+    def _effective_config_section(self, ctx: Any) -> None:
+        """What this process is running on, with the overridden rows marked.
+
+        Collapsed by default and overridden rows first (S140). Thirty settings
+        is a wall of text nobody reads; the two or three a host has actually
+        changed are the whole diagnostic value, so they are what is visible when
+        the section is opened, and the rest is there to confirm a suspicion
+        rather than to be read through.
+
+        Shares ``config.effective`` with ``warlock doctor``, which is the point
+        of building the data source once: the copy a user pastes into an issue
+        and the list they read on screen are the same answer.
+        """
+        from imgui_bundle import imgui
+
+        from ..config import effective
+        from . import theme, widgets
+
+        if not imgui.collapsing_header("Effective configuration"):
+            return
+        settings = effective(ctx.runtime.config)
+        overridden = [s for s in settings if s.from_env]
+        widgets.muted(
+            "Everything at its default."
+            if not overridden
+            else f"{len(overridden)} of {len(settings)} set by the environment."
+        )
+        for setting in sorted(settings, key=lambda s: (not s.from_env, s.name)):
+            if setting.from_env:
+                widgets.text_colored(theme.ACCENT, setting.env)
+            else:
+                widgets.muted(setting.name)
+            imgui.same_line()
+            imgui.text_wrapped(setting.value)
 
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui

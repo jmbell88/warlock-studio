@@ -560,7 +560,15 @@ def revert(ctx: Any, tab: InkerDoc | None = None) -> None:
     ctx.confirms.ask(
         dialogs.Confirm(
             title="Revert to the original?",
-            message="The generated image comes back and every edit to it is lost.",
+            # Names the *layers* rather than "every edit" (S139). The two are
+            # not the same claim: what ``run`` deletes is ``paint.ora``, so a
+            # revert loses the layered document itself and not merely the
+            # flattened pixels -- reopening this asset afterwards gives back one
+            # layer. Stated before the button, the retarget panel's rule.
+            message=(
+                "The generated image comes back. The layered document is deleted "
+                "with it, so reopening this asset gives back a single flat layer."
+            ),
             confirm_label="Revert",
             cancel_label="Keep editing",
             on_confirm=go,

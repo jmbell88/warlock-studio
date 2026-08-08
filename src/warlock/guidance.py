@@ -402,7 +402,9 @@ def _number(raw: dict[str, Any], field: str, *, default: float, low: float, high
     except (TypeError, ValueError) as exc:
         raise GuidanceError(f"{field} must be a number, got {value!r}", field=field) from exc
     if not low <= value <= high:
-        raise GuidanceError(f"{field} must be between {low} and {high}", field=field)
+        raise GuidanceError(
+            f"{field} must be between {low} and {high}, got {value!r}", field=field
+        )
     return value
 
 
@@ -445,7 +447,9 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
             ) from exc
         if not SIZE_MIN_M <= size_m <= SIZE_MAX_M:
             raise GuidanceError(
-                f"size_m must be between {SIZE_MIN_M} and {SIZE_MAX_M} metres", field="size_m"
+                f"size_m must be between {SIZE_MIN_M} and {SIZE_MAX_M} metres, "
+                f"got {size_m!r}",
+                field="size_m",
             )
 
     base_model = chosen["base_model"] or models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
@@ -465,7 +469,7 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         if not models.LORA_WEIGHT_MIN <= lora_weight <= models.LORA_WEIGHT_MAX:
             raise GuidanceError(
                 f"lora_weight must be between {models.LORA_WEIGHT_MIN} "
-                f"and {models.LORA_WEIGHT_MAX}",
+                f"and {models.LORA_WEIGHT_MAX}, got {lora_weight!r}",
                 field="lora_weight",
             )
 
@@ -519,7 +523,10 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
     # otherwise reach trellis-server unchecked -- the one path where "the
     # server decides" is not a safe answer.
     if str(bg_removal) not in BG_REMOVAL:
-        raise GuidanceError(f"bg_removal must be one of {list(BG_REMOVAL)}", field="bg_removal")
+        raise GuidanceError(
+            f"bg_removal must be one of {list(BG_REMOVAL)}, got {bg_removal!r}",
+            field="bg_removal",
+        )
 
     # Unlike bg_removal, a missing key and an explicit "" are NOT the same
     # thing here: missing means "use the game-asset default", an explicit
