@@ -504,6 +504,270 @@ def test_the_mesh_summary_is_read_off_the_jobs_own_params(ctx, svc):
     ]
 
 
+# --- blind review ------------------------------------------------------------
+#
+# The 2026-08-07 review that produced the bg_removal signal was unblinded and
+# single-reviewer, and the pane shows a unit's arm in two places (the unit list
+# and the verdict header). A confirm run has to hide both -- and the *order*,
+# because ``sweeps.expand`` enqueues the baseline first and then one unit per
+# axis value, so position alone names the arm in a two-arm sweep.
+
+
+def test_a_units_presented_name_is_its_arm_when_the_review_is_open(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    assert [review_mode.label(state, u) for u in state.units] == ["unit0", "unit1"]
+
+
+def test_a_blind_review_shows_no_units_arm_anywhere(ctx, svc):
+    sweep_id, ids = _sweep(svc, n=4)
+    state = _scanned(ctx)
+    review_mode.set_blind(ctx, True)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    shown = [review_mode.label(state, u) for u in state.units]
+    assert all("unit" not in name for name in shown)
+    # Still one name per unit, and distinct, or a reviewer cannot say which of
+    # four they are looking at.
+    assert len(set(shown)) == 4
+    assert all(any(name.endswith(job_id[:6]) for job_id in ids) for name in shown)
+
+
+def test_the_blind_order_does_not_depend_on_the_order_units_were_queued(ctx, svc):
+    """``expand`` puts the baseline first, so queue order names the arm."""
+    units = [{"job_id": f"job{i:02x}"} for i in range(8)]
+
+    assert review_mode.blind_order(units) == review_mode.blind_order(units[::-1])
+
+
+def test_the_blind_order_is_the_same_in_every_process(ctx, svc):
+    """A stable digest, not ``hash()``, which is salted per process: a reviewer
+    resuming tomorrow would get a different order, and the order is what makes
+    "#3f2a1b" mean the same unit as it did yesterday.
+
+    The expected order is recomputed here rather than pasted, so the assertion
+    is about *which* digest is used and not about a literal nobody can check.
+    """
+    import hashlib
+
+    units = [{"job_id": f"job{i:02x}"} for i in range(8)]
+    expected = sorted(units, key=lambda u: hashlib.sha1(u["job_id"].encode()).digest())
+
+    assert review_mode.blind_order(units) == expected
+    # And it genuinely is a reordering of this fixture, not a no-op sort.
+    assert review_mode.blind_order(units) != units
+
+
+def test_turning_blinding_on_reorders_the_open_sweep(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=8)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    queued = [u["job_id"] for u in state.units]
+
+    review_mode.set_blind(ctx, True)
+
+    assert [u["job_id"] for u in state.units] != queued
+    assert sorted(u["job_id"] for u in state.units) == sorted(queued)
+    # And back: the toggle is not one-way.
+    review_mode.set_blind(ctx, False)
+    assert [u["job_id"] for u in state.units] == queued
+
+
+def test_a_rescan_keeps_the_blind_order_it_was_showing(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=8)
+    state = _scanned(ctx)
+    review_mode.set_blind(ctx, True)
+    review_mode.open_sweep(ctx, sweep_id)
+    shown = [u["job_id"] for u in state.units]
+
+    _scanned(ctx)
+
+    assert [u["job_id"] for u in state.units] == shown
+
+
+def test_blinding_does_not_hide_the_verdicts_already_recorded(ctx, svc):
+    """What is hidden is the arm, not the reviewer's own answers -- the unit
+    list's marks are how a session is resumed."""
+    sweep_id, ids = _sweep(svc, n=4)
+    svc_verdicts.record_verdict(svc, ids[0], verdict="accept")
+    state = _scanned(ctx)
+    review_mode.set_blind(ctx, True)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    recorded = {u["job_id"]: u["verdict"] for u in state.units}
+    assert recorded[ids[0]] == "accept"
+
+
+def test_blinding_is_not_persisted(ctx, svc):
+    """``ReviewState`` persists nothing, and a stored blind flag would be the
+    first thing to reach for -- a review resumed unblinded without saying so
+    is worse than one that starts unblinded every time."""
+    _sweep(svc, n=2)
+    _scanned(ctx)
+    review_mode.set_blind(ctx, True)
+
+    assert ctx.settings.store == {}
+    assert review_mode.ReviewState().blind is False
+
+
+# --- the labelling pass ------------------------------------------------------
+#
+# `TODO.md` §7's UI half. A grid of images with two keys, in Review beside the
+# verdict loop, because the judge is meant to improve as the corpus is reviewed
+# -- the analogue of a vision system's teach mode. Four rules from the plan are
+# asserted here and every one of them is a bug that has already happened once
+# somewhere else in this app.
+
+
+def _image_job(svc, stage="model", status="done", prompt="a rogue"):
+    job_id = svc.store.create("image", prompt, {}, stage=stage, status=status)
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "reference.png").write_bytes(b"png-not-really")
+    return job_id
+
+
+def _labels_open(ctx, stage="blank"):
+    """A whole open: the submit, and the listing coming back. ``open_labels``
+    only does the first half -- applying the result is ``on_task_done``'s job,
+    exactly as it is for a scan."""
+    review_mode.open_labels(ctx, stage)
+    review_mode.on_task_done(ctx, _Done(review_mode.LABELS_KEY, ctx.result))
+    return ctx.state.review.labels
+
+
+def test_a_labelling_pass_lists_the_images_that_question_has_not_reached(ctx, svc):
+    first, second = _image_job(svc), _image_job(svc)
+    state = _scanned(ctx)
+
+    _labels_open(ctx)
+
+    assert state.labels is not None
+    assert {row["job_id"] for row in state.labels.rows} == {first, second}
+    assert state.labels.stage == "blank"
+
+
+def test_a_and_r_label_with_no_reason_step(ctx, svc):
+    """Five reason classes is far more than a first corpus can support, and
+    reasons are a mesh-stage concept: what a blank probe learns is one bit."""
+    job_id = _image_job(svc)
+    _scanned(ctx)
+    _labels_open(ctx)
+
+    assert _press(ctx, "a") is True
+
+    row = svc.store.latest_verdicts()[0]
+    assert (row["job_id"], row["verdict"], row["stage"]) == (job_id, "accept", "blank")
+    assert row["reasons"] == []
+
+
+def test_labelling_advances_and_a_labelled_image_is_marked_not_removed(ctx, svc):
+    """Removed would renumber the grid under the cursor mid-pass, which at the
+    rate this is meant to be worked through is how the wrong image gets judged."""
+    ids = [_image_job(svc) for _ in range(3)]
+    _scanned(ctx)
+    _labels_open(ctx)
+    order = [row["job_id"] for row in ctx.state.review.labels.rows]
+
+    _press(ctx, "a")
+
+    labels = ctx.state.review.labels
+    assert [row["job_id"] for row in labels.rows] == order
+    assert labels.rows[0]["verdict"] == "accept"
+    assert labels.index == 1
+    assert set(order) == set(ids)
+
+
+def test_labelling_asks_for_a_retrain_through_a_flag_never_a_submit(ctx, svc):
+    """``TaskRunner.submit`` refuses a key already in flight and nothing re-arms
+    it, so a burst of labels used to train once on the set as it stood at the
+    first press and drop the rest. It is the ``findings_dirty`` bug exactly, and
+    the fix is the same: mark, and let the frame loop pump it."""
+    _image_job(svc)
+    _scanned(ctx)
+    _labels_open(ctx)
+
+    _press(ctx, "a")
+
+    assert ctx.state.judge_dirty == "blank"
+    assert review_mode.TRAIN_KEY not in ctx.submitted
+
+
+def test_the_pump_submits_once_and_only_clears_the_flag_when_accepted(ctx, svc):
+    ctx.state.judge_dirty = "blank"
+
+    review_mode.pump_judge(ctx)
+    assert ctx.submitted.count(review_mode.TRAIN_KEY) == 1
+    assert ctx.state.judge_dirty is None
+
+    # And a refused submit leaves the request standing, for the next frame.
+    ctx.state.judge_dirty = "blank"
+    ctx.accept = False
+    review_mode.pump_judge(ctx)
+    assert ctx.state.judge_dirty == "blank"
+
+
+def test_thumbnails_are_uploaded_one_per_frame(ctx, svc):
+    """``viewer/sheet.StripRender``'s lesson, larger: a draw plus a synchronous
+    upload sixteen times in one frame is a visible freeze, and this grid is a
+    hundred cells."""
+    for _ in range(5):
+        _image_job(svc)
+    _scanned(ctx)
+    _labels_open(ctx)
+    labels = ctx.state.review.labels
+
+    assert review_mode.next_thumbnail(labels) is not None
+    assert labels.uploaded == 1
+    for _ in range(4):
+        review_mode.next_thumbnail(labels)
+    assert labels.uploaded == 5
+    # Nothing left to do, and asking again is free rather than an error.
+    assert review_mode.next_thumbnail(labels) is None
+
+
+def test_the_review_list_sorts_by_the_judges_score_and_never_filters_by_it(ctx, svc):
+    """The filter-bubble guard, structurally: if a judge hid what it disliked,
+    its mistakes would become invisible and nobody would learn it was wrong.
+    Sorting shows the same set in a more useful order."""
+    units = [
+        {"job_id": "a", "verdict": None, "score": 0.1},
+        {"job_id": "b", "verdict": None, "score": None},
+        {"job_id": "c", "verdict": None, "score": 0.9},
+    ]
+
+    ordered = review_mode.by_score(units)
+
+    assert [u["job_id"] for u in ordered] == ["c", "a", "b"]
+    assert len(ordered) == len(units)
+
+
+def test_labelling_keys_do_nothing_when_no_pass_is_open(ctx, svc):
+    """The verdict loop owns A and R the rest of the time."""
+    _mesh(svc, "a chest")
+    _scanned(ctx)
+
+    _press(ctx, "a")
+
+    row = svc.store.latest_verdicts()[0]
+    assert row["stage"] == "model"
+
+
+def test_closing_a_labelling_pass_returns_to_the_verdict_loop(ctx, svc):
+    _image_job(svc)
+    _mesh(svc, "a chest")
+    _scanned(ctx)
+    _labels_open(ctx)
+
+    review_mode.close_labels(ctx)
+
+    assert ctx.state.review.labels is None
+    assert _press(ctx, "a") is True
+    assert svc.store.latest_verdicts()[0]["stage"] == "model"
+
+
 # --- launching ---------------------------------------------------------------
 
 

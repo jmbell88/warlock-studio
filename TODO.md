@@ -18,15 +18,37 @@ right**.
 
 **Implementation state, 2026-08-08.** Night 1 shipped fourteen packages (0a–0f,
 9a–9d, 9h, 9i) and Night 2 shipped four (the matte preview, mesh candidates,
-weld-before-heat rigging, and the model downloader). Master is at `84b7e4f`:
-**3464 passed / 7 skipped** with native kernels on, **3344 / 127** with
-`WARLOCK_NATIVE=0`, lint clean. What those packages concluded is recorded in
-`CLAUDE.md` and in the comments at each site, not here.
+weld-before-heat rigging, and the model downloader). What those packages
+concluded is recorded in `CLAUDE.md` and in the comments at each site, not here.
 
-What remains below is what is genuinely still open: **verification debt from work
-that shipped without ever touching a GPU or the network (§1)**, the two GPU
-sessions nobody has run (§2), three items waiting on their output (§3, §4, §5), a
-small UI decision (§6), and the quality judge (§7–§10).
+**Night 3 shipped the four GPU-free packages that were left**, which is why
+several sections below now describe a *run to perform* rather than code to write:
+
+- **§2's preparation.** `scripts/sweep_confirm.py` (the blind 10-unit matte
+  confirm) and `scripts/sweep_rebaseline.py` (the render sweep re-run over a
+  birefnet baseline, carrying the framing axis), both on a shared
+  `scripts/_campaign.py` submitter, both validated headlessly by
+  `tests/test_campaign_specs.py`. Review gained a **Blind** toggle, which renames
+  every unit *and reorders them*, because `expand` enqueues the baseline first
+  and position names the arm as plainly as a label does.
+- **§3's harness.** `warlock/tiercheck.py` (pure: reads both GLBs' JSON chunks
+  and names every loss) plus `scripts/qualify_tiers.py`, which defaults its
+  corpus to the accepted meshes and refuses to run when there are none. Still
+  unqualified, because that corpus is still empty — the run is §2's output.
+- **§6, all three.** The weighting verdict now reads `rig.json` beside the
+  selected mesh (mtime-cached under the racily-clean rule), `rig_qa.png` has a
+  thumbnail in the rig section, and the duplicate "Open in Inker" is resolved:
+  the viewport toolbar owns it where it exists, the inspector everywhere else,
+  written as complements so they can be neither both nor neither.
+- **§7 in full, code-complete.** Migration **7** (`verdicts.stage`),
+  `db.unlabelled_references`, the findings stage filter, `warlock/judge.py`,
+  `service/judge.py`, and the labelling grid in Review with both image probes.
+
+What remains below is what is genuinely still open, and **all of it now needs a
+GPU, a network or a human rather than code**: verification debt from work that
+shipped without ever touching a GPU or the network (§1), the two GPU sessions
+nobody has run (§2), three items waiting on their output (§3, §4, §5), and the
+labelling pass the judge is now waiting for (§7–§10).
 
 ---
 
@@ -193,12 +215,28 @@ it has been run against a chest, a sword and a rock and shown to keep UVs, both
 PBR maps and material assignment. `Config.mesh_profile` stays `raw` until then,
 and the generate forms still offer only `raw`.
 
-**Harness:** run draft/standard/detailed through the existing
-`pipelines/optimize.py` + `service.jobs.optimize_job` path, with automated
-per-tier checks (UVs survive, both PBR maps survive, material assignment
-survives) plus a before/after render sheet. On pass, expose the tiers in
-`panes/settings_3d.PROFILES`. Leave `Config.mesh_profile` at `raw` — the default
-flip is a separate decision.
+**The harness exists — what is missing is the corpus to point it at.**
+`scripts/qualify_tiers.py` runs draft/standard/detailed through `optimize.run`
+(the same binary and flags a job uses) and `warlock/tiercheck.py` reads both
+GLBs' JSON chunks and names every loss: a primitive that lost `TEXCOORD_0`, a
+material count that fell, a primitive that came back unassigned, either PBR map
+gone, or an output requiring an extension the source did not. `--sheets` adds the
+before/after picture through the one sheet pipeline. Every rule is "not worse
+than the source" rather than "identical to an ideal", so an untextured rock is a
+legitimate input; the accepted cost is that a run could pass by preserving
+nothing, which is why a source already missing something is reported in the
+`notes` beside the verdict.
+
+Two things it deliberately does **not** do. It never drives
+`service.jobs.optimize_job` — that rewrites `model.glb` in place and deletes the
+derived artifacts describing the old mesh, so it would consume the accepted
+meshes the qualification needs, and a harness that destroys its inputs can be run
+once. And it does not touch `panes/settings_3d.PROFILES`: on a pass, exposing the
+tiers is a decision, and `Config.mesh_profile` stays `raw` regardless — the
+default flip is a separate one again.
+
+Run today it prints *no accepted meshes to qualify against* and exits 1, which is
+the correct answer: the accepts it wants are §2's output.
 
 **The qualification corpus is not this sweep.** 80 of the 83 meshes were
 rejected, and a tier test needs meshes worth keeping: whether a tier *preserves*
@@ -283,50 +321,84 @@ verdicts or the image probe (§7) regardless.
 
 ---
 
-## 6. Three small UI decisions that are really one
+## 6. Three small UI decisions that are really one — decided
 
-All three land in the same corner of the 3D inspector, so they are worth deciding
-together rather than one at a time. None blocks anything.
+All three landed together, in the same corner of the 3D inspector, and the
+decisions taken were:
 
-- **Where 0d's rig-weighting verdict shows.** It is written onto the *rig* job,
-  but the Rig & Pose tab normally opens on the **model** job, so the natural
-  selection shows nothing. Two fixes: an mtime-cached `rig.json` read on the
-  frame thread (needs a new `AppState` slot, and must follow the `MTIME_RACE_NS`
-  racily-clean rule), or make `queue._rig` a second writer onto a row the worker
-  owns. The former is preferable — it does not add a writer to a row with a
-  single-owner invariant.
-- **The deformation QA sheet has no button.** `rig_qa.png` reaches
-  `job["files"]` through `LISTED` and is exportable by name, but the inspector's
-  download grid is a hardcoded list, so nothing appears. A thumbnail in the rig
-  section, beside the weighting line above, is the obvious home.
-- **Duplicate "Open in Inker"** — it exists in both the inspector and the
-  viewport toolbar. Keeping both is defensible (the same argument that kept F10
-  beside the status bar); it just needs deciding.
+- **The rig-weighting verdict reads `rig.json` beside the selected mesh.**
+  `inspector.rig_meta` caches it per job on the directory's mtime, under the
+  racily-clean rule `files.attach_files` documents and with its constant imported
+  rather than restated — a re-rig lands in a directory whose mtime may not move,
+  so a stamp is only remembered once it is safely in the past. The row still wins
+  where it has an answer, so a *rig* job selected in the library answers for
+  itself. The rejected alternative was making `queue._rig` a second writer onto
+  the model job's row: that row has one owner and `set_params` is
+  last-write-wins.
+- **The deformation sheet has a thumbnail** in the rig section beside the
+  weighting line, gated on `rig_qa.json` for the reason `rig.glb` is gated on
+  `rig.json`. Its caption says nothing scores it, because nothing does and the
+  wording is the feature.
+- **The duplicate "Open in Inker" is resolved by ownership**, not by removing
+  either: `overlay.offers_inker` is the toolbar's gate and
+  `inspector.offers_inker` is written as its **complement**, so exactly one is on
+  screen for every mode. The toolbar wins where it exists (adjacency to the pixels
+  is its whole advantage) and the inspector covers the rest — a reference selected
+  in 3D, whose toolbar hides the button because the thing on screen is a mesh.
+  This is *not* the F10 resolution: two readouts saying different amounts about
+  different things is defensible, two identical buttons invoking one function on
+  one job is not.
 
 ---
 
 # The quality judge ("CAMERA")
 
 Named for the analogy that produced it: an industrial vision system is shown good
-parts and bad parts, learns the boundary, then inspects on its own. **Nothing
-described below exists yet** — verified absent: no `src/warlock/judge.py`, no
-`verdicts.stage`, no `db.unlabelled_references`. Implement the written design;
-do not re-design it.
+parts and bad parts, learns the boundary, then inspects on its own.
+
+**The code described below now exists and is unused.** Migration 7
+(`verdicts.stage`), `db.unlabelled_references`, the findings stage filter,
+`warlock/judge.py`, `service/judge.py` and the labelling grid in Review all
+shipped, and the design was implemented as written rather than re-designed —
+including the parts that read as fussy, because each of them is the difference
+between a probe that means something and one that is merely believed. The
+end-to-end path was verified against real DINOv2 weights (768-d CLS embeddings,
+fit, save, load, score) rather than only against stubs.
+
+**What it is blocked on is a human.** No probe exists on this machine because
+nobody has labelled anything: the corpus is 3 accepts against 81 rejects, all of
+them mesh verdicts. `fit` returns `None` below `MIN_PER_CLASS` of each class on
+purpose. So §7 below is now a description of a *session to run*, not of code to
+write, and §8's gate is unchanged: positives in the tens, from §2's re-run.
 
 *(The build plan's Phase 6.)*
 
-## 7. Phase 1 — the 2D judge
+## 7. Phase 1 — the 2D judge — built, and waiting for labels
 
-Its code prerequisites are done. What it is still blocked on is **a labelling
-pass** — and, for the mesh half, §8's corpus.
+**Everything in this section is implemented.** What it is blocked on is **a
+labelling pass** — and, for the mesh half, §8's corpus.
 
-### Why this is cheaper than it looks
+How to run one: open Review, and under the sweep list pick one of the two passes
+under *Teach the judge*. The centre column becomes a grid; `A` is good, `R` is
+bad, there is no reason step, and the pass owns the keyboard while it is open so a
+keypress about a picture can never be filed as a verdict about a mesh. Retraining
+happens as you go, off the frame thread. Do **both** passes over the same images
+if you want both probes: they are different questions and neither answer implies
+the other.
 
-The seam is already built and tested, not hypothetical:
+Two things to expect, both deliberate. Nothing appears for a while at the top of a
+large grid — thumbnails upload one per frame, which is `StripRender`'s rule at a
+hundred cells. And images marked as refused are in the list on purpose: they are
+the most informative negatives available.
+
+### Why this was cheaper than it looked
+
+The seam was already built and tested, not hypothetical:
 
 - `verdicts.source` is a free string, never an enum, and `latest_verdicts` keys
-  on `(job_id, source)`. A judge's opinion sits *beside* a human's and can never
-  overwrite it.
+  on `(job_id, source, stage)`. A judge's opinion sits *beside* a human's and can
+  never overwrite it — and, since migration 7, an answer to one question can
+  never overwrite the answer to another about the same image.
 - `db.unverdicted_models(source=...)` filters per source, so a judge run resumes
   where it stopped; `tests/test_verdicts_db.py` already exercises
   `source="ai:demo"`.
@@ -466,6 +538,34 @@ This applies in two places, not one — the per-subject `prompts` section is bui
 by the same `_marginals` helper, so the stage filter belongs *there* rather than
 at either call site.
 
+> **As built, three deliberate departures from the text above.** Each is a case
+> where following the plan literally would have left a hole.
+>
+> 1. **The stage filter is at the top of `aggregate`, not inside `_marginals`.**
+>    The reasoning above is right about `_marginals` covering both call sites and
+>    incomplete about who else reads that list: `vectors` would advertise an image
+>    label as a *ranked mesh configuration*, and `_comparisons` pairs rows sharing
+>    a sweep and a seed whose vectors differ in one key — which a blank label and
+>    a mesh verdict **on the same unit** satisfy, yielding a matched "pair"
+>    comparing two different questions. One filter covers all four consumers.
+> 2. **`latest_verdicts` groups by `(job_id, source, stage)`.** Not stated above
+>    and not optional: without stage in the grouping, labelling the same image
+>    under both intents makes the second answer supersede the first, which is
+>    exactly what the column exists to prevent.
+> 3. **The mesh probe's stage is spelled `model`, not `mesh`.** The probe table
+>    says `mesh`; the label column says `model`. Two names for one thing needs a
+>    translation table, and the drift would surface as a probe trained on the
+>    wrong population, so `judge.STAGES == verdicts.STAGES` is asserted by a test.
+>
+> Also new and not in the plan: **`db.unlabelled_references` derives the
+> population it lists from the label stage** (`LABEL_POPULATION`), because the
+> probe table is explicit that the product question is about a *reference*-stage
+> job's image and the blank question about a *model*-stage job's — a single
+> listing would have trained each probe on the other's population. And
+> `record_verdict`'s `status == 'done'` rule became a rule about **the artifact a
+> verdict judges**: an image label needs the image (a refused job has one), while
+> the mesh side is untouched.
+
 ### User interface
 
 A labelling surface in Review mode, beside the existing verdict loop.
@@ -494,6 +594,16 @@ Migration 7, `unlabelled_references`, the findings stage filter, `judge.py` with
 embed + fit + score, the labelling grid, and both image probes. Ends with a
 held-out accuracy figure. This is the whole of the value for 2D mode and the
 cheapest useful gate for 3D.
+
+**All of that is built; the held-out accuracy figure is not, and cannot be.** It
+is a measurement over labels that do not exist yet, and it is what §10 specifies —
+so the remaining Phase 1 work is: run a labelling session, then write the
+measurement document. One thing was added on the way that the scope list did not
+name, and it earns its place: `judge.fit` returns **`None`** rather than a probe
+below `MIN_PER_CLASS` (8) of each class, so a corpus of 3 accepts against 81
+rejects produces no probe at all instead of one that has learned "reject" and
+scores 96% doing it. A missing probe is visible in the panel; a confident useless
+one is not.
 
 ## 8. Phase 2 — the mesh judge
 

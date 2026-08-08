@@ -19,6 +19,20 @@ from .. import fonts, icons, theme, widgets
 from ..state import format_duration
 
 
+def offers_inker(ctx: Any, job: Any) -> bool:
+    """Whether this toolbar is the thing offering Open in Inker.
+
+    Named rather than inlined because the inspector's copy of the button is
+    defined as *the complement of this* -- one control per action per object, and
+    the toolbar wins wherever it exists because it sits against the pixels the
+    button edits. Two spellings of "is it 2D" is how that guarantee would rot
+    back into two buttons; see ``inspector.offers_inker``.
+    """
+    from .. import inker_mode
+
+    return ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job)
+
+
 def toolbar(ctx: Any) -> None:
     """The viewer's own controls, along the top of the viewport."""
     from .. import inker_mode
@@ -28,7 +42,7 @@ def toolbar(ctx: Any) -> None:
     if viewer is None:
         return
     job = ctx.job()
-    if ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job):
+    if offers_inker(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
         if imgui.button(f"{icons.BRUSH} Open in Inker"):

@@ -35,6 +35,19 @@ otherwise act on a viewport that is not on screen.
 | Left / Right | Previous / next unit |
 | Esc | Cancel a pending reject |
 
+## Review — labelling images
+
+While a labelling pass is open it owns these keys, and the verdict bindings above do not apply:
+one loop at a time, so a keypress about a picture can never be filed as a verdict about a mesh.
+
+| Keys | Action |
+| --- | --- |
+| A | Good |
+| R | Bad — no reason step |
+| S | Skip to the next unanswered image |
+| Left / Right | Previous / next image |
+| Esc | Close the pass |
+
 ## Clay
 
 | Keys | Action |

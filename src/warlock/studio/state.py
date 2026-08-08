@@ -467,6 +467,13 @@ class AppState:
     # thread by a component that cannot submit anything, so the frame loop
     # notices the job finishing and marks this instead.
     findings_dirty: bool = False
+    # Which probe question needs retraining, or None. The ``findings_dirty``
+    # pattern exactly, and for the identical reason -- ``TaskRunner.submit``
+    # refuses a key already in flight and nothing re-arms it, so a burst of
+    # labels would train once on the set as it stood at the first press and drop
+    # the rest. A stage string rather than a bool because a labelling pass is
+    # about one question at a time, and the training run needs to know which.
+    judge_dirty: str | None = None
     # The promote flow's matte preview and its cutout cache, built on first use
     # by ``matte_preview.ensure``. Untyped and None here for the reason
     # ``clay``/``review`` are, and never persisted: a stored cutout would be a
@@ -486,6 +493,17 @@ class AppState:
     # file in it. A palette added while the app runs appears on the next frame,
     # because dropping a file moves the directory's own mtime.
     palettes: Any = None
+    # The selected asset's ``rig.json``, as ``{job id: (mtime stamp, data)}``.
+    # A rig is recorded on the *rig* job's row but written into the **source**
+    # job's directory, and the Rig & Pose tab opens on that source job -- so the
+    # file is the only place the selection on screen can learn how its own mesh
+    # was bound. Read on the frame thread and therefore cached, under the same
+    # racily-clean rule ``files.attach_files`` documents: a re-rig lands inside
+    # a directory whose mtime may not move, so a stamp is only remembered once
+    # it is safely in the past. Keyed by job rather than one slot, because the
+    # inspector is not the only reader and a one-slot cache thrashes the moment
+    # two are alive. Never persisted: it describes a file, not a preference.
+    rig_meta_cache: dict[str, Any] = field(default_factory=dict)
 
     # -- the status strip ---------------------------------------------------
 

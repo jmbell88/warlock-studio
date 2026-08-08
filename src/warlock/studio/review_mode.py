@@ -32,10 +32,22 @@ one way for a mesh to be right.
 **The advance is to the next thing to do, not the next row.** A session is
 resumed far more often than it is started, so opening a sweep lands on its
 first unverdicted unit and recording steps past everything already answered.
+
+**Blinding hides the arm, and that means the order too.** The review that
+produced the ``bg_removal`` signal was unblinded and single-reviewer, which is
+why `TODO.md` §2 asks for a small blind confirm before anything is leaned on.
+``blind`` is therefore a property of the *session*, not of a sweep: it renames
+every unit to a neutral id prefix and presents them in an order derived from a
+stable digest of the job id. Hiding the label alone would not be blinding at
+all -- ``sweeps.expand`` enqueues the baseline first and then one unit per axis
+value, so in a two-arm sweep position names the arm as plainly as the label
+does. It is not persisted, for the reason nothing else here is: a review
+resumed blinded without saying so is worse than one that starts unblinded.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +62,8 @@ log = logging.getLogger(__name__)
 SCAN_KEY = "review-scan"
 DELETE_KEY = "review-delete"
 FINDINGS_KEY = "review-findings"
+LABELS_KEY = "review-labels"
+TRAIN_KEY = "review-train"
 
 # What this reviewer is called. A free string by design -- verdicts are keyed
 # on (job_id, source), so a future judge writing "ai:<model>" sits beside a
@@ -93,6 +107,35 @@ class SweepForm:
 
 
 @dataclass
+class LabelPass:
+    """One labelling pass over the images no probe-question has reached yet.
+
+    A separate loop from the verdict one and deliberately so: a mesh verdict
+    takes ~15 s of orbiting and carries a reason, while an image label is ~2 s
+    and one bit. Same corpus, same table, different pace -- which is why this is
+    a grid with two keys rather than a second copy of the verdict panel.
+    """
+
+    stage: str
+    # [{job_id, prompt, image, verdict}] -- ``image`` is the path to show. Rows
+    # keep their place once answered rather than being removed: a shrinking grid
+    # renumbers itself under the cursor mid-pass, which is how the wrong image
+    # gets judged at the rate this is meant to be worked through.
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    index: int = 0
+    # How many thumbnails have been handed to the GPU. One per frame -- see
+    # ``next_thumbnail``.
+    uploaded: int = 0
+    loading: bool = False
+    # ``judge.status``' answer as of the last task that read it -- how many labels
+    # this question has, how many it needs, whether a probe exists. A snapshot
+    # rather than a live call: ``status`` is a ``latest_verdicts`` scan plus a
+    # file stat, and the frame loop may not do that per frame. Kept current by
+    # arithmetic here and replaced wholesale when a training run reports back.
+    status: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ReviewState:
     """One review session: which sweeps exist, which one is open, where in it.
 
@@ -118,7 +161,14 @@ class ReviewState:
     # shared viewer is showing is ``viewer.path``, and a second copy of that
     # answer is a way for the two to disagree -- see ``main._review_viewport``.
     scanning: bool = False
+    # Whether the arm each unit ran is hidden -- see the module docstring. A
+    # session flag, never persisted, and it reorders as well as renames.
+    blind: bool = False
     form: SweepForm = field(default_factory=SweepForm)
+    # The open labelling pass, or None for "the verdict loop owns the keyboard".
+    # None rather than a mode flag beside a always-present LabelPass, so there is
+    # one answer to "which loop is A pressing" and it cannot be two.
+    labels: LabelPass | None = None
 
 
 def ensure(ctx: Any) -> ReviewState:
@@ -268,6 +318,35 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
     if done.key == FINDINGS_KEY:
         return
+    if done.key == LABELS_KEY:
+        if state.labels is not None:
+            state.labels.loading = False
+            if isinstance(done.result, dict):
+                state.labels.rows = list(done.result.get("rows") or ())
+                state.labels.status = dict(done.result.get("status") or {})
+                state.labels.index = 0
+                state.labels.uploaded = 0
+        return
+    if done.key == TRAIN_KEY:
+        summary = done.result if isinstance(done.result, dict) else {}
+        if state.labels is not None and summary.get("stage") == state.labels.stage:
+            # The authoritative counts, from the run that just read them.
+            state.labels.status.update(
+                {
+                    "trained": bool(summary.get("trained")),
+                    "trained_labels": summary.get("usable", 0),
+                    "labels": summary.get("labels", 0),
+                }
+            )
+        if summary.get("trained"):
+            ctx.toast(
+                f"Trained the {summary.get('stage')} probe on "
+                f"{summary.get('usable')} label(s)."
+            )
+        # Silent otherwise: "12 more labels to go" is the ordinary state of a
+        # corpus being built, and a toast per keypress saying so is noise. The
+        # panel carries the count.
+        return
     if done.key != SCAN_KEY:
         return
     state.scanning = False
@@ -297,9 +376,37 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         state.scanning = False
     if done.key == DELETE_KEY:
         ctx.toast("Could not delete that sweep.", "error")
+    if done.key == LABELS_KEY and state.labels is not None:
+        # ``loading`` gates the grid's empty state; leaving it set is what makes
+        # a failed listing look like a pass that is still starting, forever.
+        state.labels.loading = False
+    if done.key == TRAIN_KEY:
+        ctx.toast("Could not train the probe.", "error")
 
 
 # --- the open sweep ----------------------------------------------------------
+
+
+def blind_order(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The units in an order that says nothing about how they were queued.
+
+    Sorted by a digest of the job id: independent of enqueue order (which names
+    the arm -- ``expand`` puts the baseline first), and the *same* order in
+    every process. ``hash()`` is salted per interpreter run, so a session
+    resumed tomorrow would present the same units in a different order under
+    different names, which is not a blind review of anything.
+    """
+    return sorted(units, key=lambda u: hashlib.sha1(str(u["job_id"]).encode()).digest())
+
+
+def set_blind(ctx: Any, blind: bool) -> None:
+    """Turn blinding on or off, and re-present whatever is open under it."""
+    state = ensure(ctx)
+    if state.blind == bool(blind):
+        return
+    state.blind = bool(blind)
+    if state.sweep_id is not None:
+        open_sweep(ctx, state.sweep_id)
 
 
 def open_sweep(ctx: Any, sweep_id: str) -> None:
@@ -311,7 +418,10 @@ def open_sweep(ctx: Any, sweep_id: str) -> None:
     state = ensure(ctx)
     entry = next((s for s in state.sweeps if s["id"] == sweep_id), None)
     state.sweep_id = sweep_id
-    state.units = list(entry["units"]) if entry is not None else []
+    units = list(entry["units"]) if entry is not None else []
+    # Presentation order only: the ``sweeps`` entry keeps its own list, which
+    # is what ``_recount`` tallies, and the dicts are shared either way.
+    state.units = blind_order(units) if state.blind else units
     state.pending_reject = False
     state.index = next(
         (i for i, unit in enumerate(state.units) if unit["verdict"] is None), 0
@@ -393,6 +503,176 @@ def _recount(state: ReviewState) -> None:
     for sweep in state.sweeps:
         if sweep["id"] == state.sweep_id:
             sweep["todo"] = sum(1 for unit in sweep["units"] if unit["verdict"] is None)
+
+
+# --- the labelling pass ------------------------------------------------------
+
+
+def _label_rows(svc: Any, stage: str) -> dict[str, Any]:
+    """The images this question has not reached, plus the probe's state.
+
+    Both in one task and one result, because both are DB reads and the pane needs
+    them together -- and because ``judge.status`` on the frame thread would be a
+    ``latest_verdicts`` scan and a file stat *per frame*, which is precisely the
+    class of work the frame loop may not do. The counts are kept current
+    afterwards by arithmetic on this snapshot rather than by re-reading.
+    """
+    from ..service import judge as judge_mod
+    from ..service import verdicts as verdicts_mod
+
+    out: list[dict[str, Any]] = []
+    for job in svc.store.unlabelled_references(stage=stage, source=SOURCE):
+        job_dir = svc.job_dir(job["id"])
+        image = next(
+            (job_dir / name for name in verdicts_mod.IMAGE_NAMES if (job_dir / name).exists()),
+            None,
+        )
+        if image is None:
+            # A refused job whose picture never landed, or a pruned directory.
+            # There is nothing to look at, so there is nothing to label.
+            continue
+        out.append(
+            {
+                "job_id": job["id"],
+                "prompt": job.get("name") or job.get("prompt") or job["id"],
+                "status": job.get("status"),
+                "image": image,
+                "verdict": None,
+            }
+        )
+    return {"rows": out, "status": judge_mod.status(svc, stage, source=SOURCE)}
+
+
+def open_labels(ctx: Any, stage: str) -> None:
+    """Begin a labelling pass over one question.
+
+    The listing walks a directory per row, so it goes on a task thread -- but the
+    pass itself is created immediately, because a mode that shows nothing until a
+    task returns reads as broken.
+    """
+    state = ensure(ctx)
+    state.labels = LabelPass(stage=stage, loading=True)
+    if not ctx.submit(LABELS_KEY, _label_rows, ctx.svc, stage):
+        state.labels.loading = False
+
+
+def close_labels(ctx: Any) -> None:
+    """End the pass and give the keyboard back to the verdict loop."""
+    state = ensure(ctx)
+    state.labels = None
+
+
+def current_label(state: ReviewState) -> dict[str, Any] | None:
+    labels = state.labels
+    if labels is None or not (0 <= labels.index < len(labels.rows)):
+        return None
+    return labels.rows[labels.index]
+
+
+def record_label(ctx: Any, verdict: str) -> bool:
+    """Record one image label and step to the next unanswered row.
+
+    Named ``record_label`` rather than ``label`` because ``label(state, unit)``
+    below is the *display* name of a unit -- one module cannot hold both, and the
+    collision is silent: the later definition simply wins, and a keypress then
+    calls a formatter.
+
+    Inline on the frame thread, exactly as ``record`` is and for the same reason:
+    one INSERT under the store's lock, and a keypress whose effect arrives some
+    frames later reorders labels against navigation at the rate these are pressed.
+    """
+    from ..service.errors import ServiceError
+
+    state = ensure(ctx)
+    row = current_label(state)
+    if row is None or state.labels is None:
+        return False
+    try:
+        verdicts_mod.record_verdict(
+            ctx.svc, row["job_id"], verdict=verdict, source=SOURCE,
+            stage=state.labels.stage,
+        )
+    except (ServiceError, OSError):
+        log.exception("could not label %s", row["job_id"])
+        ctx.toast("Could not record that label.", "error")
+        return False
+    row["verdict"] = verdict
+    # The snapshot, kept current by arithmetic rather than by a re-read: this runs
+    # on the frame thread and ``status`` is a whole-table scan.
+    key = "positives" if verdict == "accept" else "negatives"
+    status = state.labels.status
+    status[key] = int(status.get(key, 0)) + 1
+    status["labels"] = int(status.get("labels", 0)) + 1
+    _advance_labels(state.labels)
+    # A flag, never a submit. ``TaskRunner.submit`` refuses a key already in
+    # flight and nothing re-arms it, so a burst of labels trained once on the set
+    # as it stood at the first press and silently dropped the rest -- the
+    # ``findings_dirty`` bug, in a loop designed to be pressed even faster.
+    ctx.state.judge_dirty = state.labels.stage
+    return True
+
+
+def _advance_labels(labels: LabelPass) -> None:
+    """Forward to the next row with no answer, wrapping, then staying put."""
+    order = list(range(labels.index + 1, len(labels.rows))) + list(range(labels.index))
+    ahead = next((i for i in order if labels.rows[i]["verdict"] is None), None)
+    if ahead is not None:
+        labels.index = ahead
+    else:
+        labels.index = min(labels.index + 1, max(len(labels.rows) - 1, 0))
+
+
+def pump_judge(ctx: Any) -> None:
+    """Submit a pending retrain if there is one and nothing is in flight.
+
+    The ``pump_findings`` shape, for the same reason: the flag is cleared only
+    when the submit is *accepted*, so a request that arrives while a training run
+    is going survives to the next frame instead of being dropped -- and because
+    training reads the labels when it starts, one pass absorbs however many
+    presses piled up behind it.
+    """
+    from ..service import judge as judge_mod
+
+    stage = ctx.state.judge_dirty
+    if not stage:
+        return
+    if ctx.submit(TRAIN_KEY, judge_mod.train, ctx.svc, stage):
+        ctx.state.judge_dirty = None
+
+
+def next_thumbnail(labels: LabelPass) -> dict[str, Any] | None:
+    """The next row whose thumbnail may be uploaded this frame, or None.
+
+    **One per frame**, which is ``viewer/sheet.StripRender``'s lesson at a larger
+    scale: a draw plus a synchronous upload, sixteen times in one frame, is a
+    visible freeze, and this grid is a hundred cells. The already-uploaded ones
+    keep drawing from the cache; the rest simply appear over the next second.
+    """
+    if labels.uploaded >= len(labels.rows):
+        return None
+    row = labels.rows[labels.uploaded]
+    labels.uploaded += 1
+    return row
+
+
+def by_score(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The same units, best-scoring first. **Sorted, never filtered.**
+
+    The filter-bubble guard, and it is structural rather than a promise: if a
+    judge hid what it disliked, its mistakes would become invisible and nobody
+    would ever learn it was wrong -- the failure factories manage by auditing
+    *passed* parts on a schedule. Sorting shows the same set in a more useful
+    order and costs nothing if the judge is wrong. Unscored rows sort last rather
+    than as 0.0, because "no opinion" is not "bad".
+    """
+    return sorted(
+        units,
+        key=lambda u: (u.get("score") is None, -(u.get("score") or 0.0)),
+    )
+
+
+def cache_id_for_label(row: dict[str, Any]) -> str:
+    return f"label:{row['job_id']}"
 
 
 # --- launching a sweep -------------------------------------------------------
@@ -604,9 +884,17 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
     return lines
 
 
-def label(unit: dict[str, Any]) -> str:
+def label(state: ReviewState, unit: dict[str, Any]) -> str:
     """One line naming this unit -- its sweep label, or whatever an ordinary
-    asset is called."""
+    asset is called. Under blinding, an id prefix instead.
+
+    It takes the state rather than a keyword flag on purpose: a call site that
+    forgot to pass the flag would draw an unblinded label inside a blind review
+    and nothing would say so, whereas a missing positional argument is a
+    TypeError the first frame Review is drawn.
+    """
+    if state.blind:
+        return f"#{str(unit.get('job_id') or '')[:6]}"
     return str(unit.get("label") or unit.get("job_id") or "")
 
 
@@ -631,6 +919,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return False
 
     name = pygame.key.name(event.key)
+    if state.labels is not None:
+        # The labelling pass owns the keyboard while it is open, and it is a
+        # *different* loop: two keys, no reason step, and its own cursor. Handled
+        # before anything below so a label can never be mistaken for a mesh
+        # verdict -- which would file an accept about a mesh from a keypress
+        # about a picture.
+        return _label_key(ctx, state, event, name)
     if event.key == pygame.K_ESCAPE:
         state.pending_reject = False
         return True
@@ -652,4 +947,36 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if name in REASON_KEYS and state.pending_reject:
         record(ctx, "reject", (REASON_KEYS[name],))
         return True
+    return False
+
+
+def _label_key(ctx: Any, state: ReviewState, event: Any, name: str) -> bool:
+    """The labelling pass's own keys. -> whether the key was consumed.
+
+    Two answers and no reason step: reasons are a mesh-stage concept, and five
+    classes is far more than a first corpus can support. What a blank probe
+    learns from a label is one bit, so one bit is what the keyboard offers.
+    """
+    import pygame
+
+    labels = state.labels
+    if labels is None:
+        return False
+    if event.key == pygame.K_ESCAPE:
+        close_labels(ctx)
+        return True
+    if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+        if labels.rows:
+            delta = -1 if event.key == pygame.K_LEFT else 1
+            labels.index = min(max(labels.index + delta, 0), len(labels.rows) - 1)
+        return True
+    if name == "a":
+        return record_label(ctx, "accept")
+    if name == "r":
+        return record_label(ctx, "reject")
+    if name == "s":
+        _advance_labels(labels)
+        return True
+    # Everything else is swallowed, not passed down: the verdict loop's keys act
+    # on a mesh nobody is looking at while this grid is on screen.
     return False

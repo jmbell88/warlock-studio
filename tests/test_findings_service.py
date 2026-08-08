@@ -4,6 +4,7 @@ compatibility contract with the readers that predate this module."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from warlock.bench import findings as bench_findings
 from warlock.service import findings as svc_findings
@@ -87,6 +88,92 @@ def test_a_verdict_credits_every_param_in_its_vector(svc):
     assert doc["params"]["platform"]["mobile"]["accepts"] == 0
     # ``stage`` is in the vector but is not a knob anyone sets on a form.
     assert "stage" not in doc["params"]
+
+
+def test_an_image_label_never_reaches_the_mesh_findings(svc):
+    """§7's stage filter, and it is the *whole document* rather than only the
+    marginals §7 names.
+
+    The marginals are the obvious half: an image label counting into the same
+    accept/reject rate as a mesh verdict would put "accept 6/8" under a prompt
+    control that silently averages two different questions. But ``vectors``
+    would also advertise an image label as a ranked mesh configuration, and
+    ``comparisons`` pairs rows that share a sweep and a seed and differ in one
+    key -- which is satisfied by a blank label and a mesh verdict on the same
+    unit, producing a matched "pair" comparing two different claims. One filter
+    at the top covers all four consumers; four filters would be four chances to
+    forget one.
+    """
+    job_id = svc.store.create(
+        "image", "a chest", {"lora_weight": 0.9}, stage="model", status="done"
+    )
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "reference.png").write_bytes(b"png-not-really")
+    svc_verdicts.record_verdict(svc, job_id, verdict="reject", reasons=("holes",))
+    # The same job's *blank* judged the opposite way: a fine image to
+    # reconstruct, which happened to reconstruct badly. Both are true.
+    svc_verdicts.record_verdict(svc, job_id, verdict="accept", stage="blank")
+
+    doc = svc_findings.aggregate(svc.store)
+    assert doc["params"]["lora_weight"]["0.9"] == {
+        "n": 1,
+        "accepts": 0,
+        "accept_rate": 0.0,
+        "wilson_low": svc_findings.wilson_low(0, 1),
+        "sources": {"human": {"accept": 0, "reject": 1}},
+        "top_reasons": [["holes", 1]],
+    }
+    assert [v["n"] for v in doc["vectors"]] == [1]
+    assert doc["comparisons"] == {}
+
+
+def test_a_blank_label_is_recordable_against_a_job_that_was_refused(svc):
+    """The most informative negative there is, and ``record_verdict``'s
+    ``status == 'done'`` rule would refuse it. That rule is about the artifact a
+    verdict judges, not about the status word: a mesh verdict needs a mesh, and
+    an image label needs the image -- which a job refused at the composition
+    gate has, because the gate runs *after* the picture is drawn."""
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="error")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "reference.png").write_bytes(b"png-not-really")
+
+    svc_verdicts.record_verdict(svc, job_id, verdict="reject", stage="blank")
+
+    assert svc.store.latest_verdicts()[0]["stage"] == "blank"
+
+
+def test_a_blank_label_still_needs_an_image_to_be_about(svc):
+    """The other half of the same rule: no picture, no label."""
+    from warlock.service.errors import Invalid
+
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="error")
+    svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(Invalid):
+        svc_verdicts.record_verdict(svc, job_id, verdict="reject", stage="blank")
+
+
+def test_a_mesh_verdict_still_needs_a_finished_job(svc):
+    """Unchanged, and it must stay that way: filing an accept against a mesh
+    that never existed poisons the corpus permanently, because the vector
+    snapshot outlives the job."""
+    from warlock.service.errors import Invalid
+
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="error")
+
+    with pytest.raises(Invalid):
+        svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+
+
+def test_a_verdict_names_a_stage_the_vocabulary_knows(svc):
+    from warlock.service.errors import Invalid
+
+    job_id = _judged(svc, "accept")
+
+    with pytest.raises(Invalid):
+        svc_verdicts.record_verdict(svc, job_id, verdict="accept", stage="mesh")
 
 
 def _judged_about(svc, prompt, verdict, source="human", **params):

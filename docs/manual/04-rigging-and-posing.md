@@ -48,6 +48,17 @@ failure and falls back to envelope weights rather than failing your job, and rec
 was used in `rig.json`. Envelope weights are cruder — expect more distortion at joints — so the
 record is worth checking if a pose deforms strangely.
 
+You do not have to open the file for that. The **Rig & Pose** tab names the method at the top —
+`weighting: automatic`, `weighting: automatic-welded`, or `weighting: envelope - needs review` in
+warning colour, with the reason on hover. It reads the rig beside the selected mesh, so it answers
+for the asset you have selected rather than for the rig job that produced it.
+
+Under it, when the rig has one, is the **deformation review** sheet: the skeleton put through a
+battery of test poses — a squat, arms overhead, elbow and knee at 90°, a torso twist — and rendered
+as one image. It is there to be looked at, and nothing scores it: what you are looking for is skin
+tearing or collapsing at the joints, which is a judgement no measurement in the app has earned yet.
+The battery ships for the humanoid skeleton only.
+
 The result is `rig.glb` and `rig.json`, written **beside the `model.glb` they were fitted to**, not
 into the rig job's own directory. The rig belongs to the mesh. Rigging a mesh a second time replaces
 the previous rig; cancelling a re-rig leaves the previous one intact.

@@ -48,6 +48,20 @@ TARGET_FPS = 60
 # exactly, and the partition is the guard on ``_build_ui``'s dispatch.
 _SINGLE_PANE_MODES = ("home", "manual", "settings")
 
+# The two image-labelling passes, named as the questions they are. Wording is the
+# feature here: the same PNG is a *product* in 2D mode and a *blank* on the way to
+# trellis, and "good" means opposite things -- a dramatic plate with pillars and a
+# cast shadow is a better asset and a worse blank. A reviewer who cannot tell
+# which question is on screen labels the average of the two.
+_LABEL_TITLES = {
+    "reference": "Label: good 2D asset?",
+    "blank": "Label: good to reconstruct?",
+}
+_LABEL_QUESTIONS = {
+    "reference": "Judge it as the finished picture: composition, style, drama.",
+    "blank": "Judge it as input for the mesh: one subject, plain background, neutral pose.",
+}
+
 
 def _min_window_size(monitor_scale: float) -> tuple[int, int]:
     """The resize floor, in physical pixels.
@@ -783,6 +797,9 @@ class App:
         # frame the list did not re-read, and a refused submit has to be
         # retried on some later frame rather than on the next list refresh.
         review_mode.pump_findings(ctx)
+        # Same shape, same reason: a burst of image labels must not train once on
+        # the set as it stood at the first keypress.
+        review_mode.pump_judge(ctx)
         self._check_worker()
 
     def _check_worker(self) -> None:
@@ -1548,15 +1565,140 @@ class App:
 
         imgui.same_line()
         width = layout_mod.centre_width()
-        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        # The labelling grid replaces the viewport rather than sitting beside it:
+        # a mesh on screen under a question about a *picture* is the mismatch that
+        # files an accept about the wrong artifact. It also scrolls, so it must
+        # not inherit the viewport's no-scroll flag.
+        labelling = state.labels is not None
+        flags = 0 if labelling else imgui.WindowFlags_.no_scroll_with_mouse.value
         if layout_mod.pane_child("review-centre", (width, 0), flags):
-            self._review_viewport(state, review_mode, width)
+            if labelling:
+                self._review_labels(ctx, state, review_mode)
+            else:
+                self._review_viewport(state, review_mode, width)
         imgui.end_child()
 
         imgui.same_line()
         if layout_mod.pane_child("review-verdict", (0, 0)):
-            self._review_verdict(ctx, state, review_mode)
+            if labelling:
+                self._review_label_panel(ctx, state, review_mode)
+            else:
+                self._review_verdict(ctx, state, review_mode)
         imgui.end_child()
+
+    # How wide a labelling cell is, in design px. Big enough to judge a
+    # composition by -- which is the whole question -- and small enough that a
+    # sidebar-width column still fits three across at 100% scale.
+    _LABEL_CELL = 132
+
+    def _review_labels(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """The labelling grid: images, two keys, no reason step.
+
+        **One thumbnail upload per frame.** ``review_mode.next_thumbnail`` hands
+        back at most one row per call, and the rest draw a placeholder until
+        their turn comes -- ``viewer/sheet.StripRender``'s rule at a larger scale,
+        because a synchronous upload per cell over a hundred cells is a freeze
+        measured in seconds rather than frames.
+        """
+        from imgui_bundle import imgui
+
+        from . import icons, theme, widgets
+        from .tokens import sp
+
+        labels = state.labels
+        widgets.section(_LABEL_TITLES.get(labels.stage, labels.stage))
+        widgets.hint_text(_LABEL_QUESTIONS.get(labels.stage, ""))
+        if labels.loading:
+            widgets.muted("Reading...")
+            return
+        if not labels.rows:
+            widgets.empty_state(
+                icons.CHECK,
+                "Nothing left to label",
+                "Every image has an answer for this question.",
+            )
+            return
+
+        # Exactly one upload admitted per frame, claimed before the loop so which
+        # cell gets it does not depend on where the scroll happens to be.
+        review_mode.next_thumbnail(labels)
+        side = float(sp(self._LABEL_CELL))
+        per_row = max(int(imgui.get_content_region_avail().x // (side + sp(8))), 1)
+        for i, row in enumerate(labels.rows):
+            if i % per_row:
+                imgui.same_line()
+            imgui.begin_group()
+            texture = None
+            if i < labels.uploaded:
+                texture = ctx.textures.get(
+                    review_mode.cache_id_for_label(row), row["image"]
+                )
+            if texture is not None:
+                imgui.image(widgets.texture_ref(texture), (side, side))
+            else:
+                # A placeholder rather than nothing: the grid must not reflow as
+                # the uploads land, or a click lands on a cell that moved.
+                imgui.dummy((side, side))
+            if imgui.is_item_clicked():
+                labels.index = i
+            mark = {"accept": icons.CHECK, "reject": icons.X}.get(row["verdict"] or "", "")
+            colour = theme.ACCENT if i == labels.index else theme.MUTED
+            widgets.text_colored(colour, f"{mark} {i + 1}")
+            imgui.end_group()
+
+    def _review_label_panel(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """What is being labelled, and what the probe knows so far."""
+        from imgui_bundle import imgui
+
+        from . import widgets
+
+        labels = state.labels
+        row = review_mode.current_label(state)
+        widgets.section("Label")
+        if row is None:
+            widgets.muted("Nothing selected.")
+        else:
+            widgets.muted(str(row["prompt"])[:120])
+            if row.get("status") == "error":
+                # The most informative negatives in the corpus, and worth saying
+                # so: this image was refused at the composition gate.
+                widgets.hint_text("This job was refused; the picture is still judgeable.")
+            texture = ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
+            if texture is not None:
+                side = min(imgui.get_content_region_avail().x, 220.0)
+                imgui.image(widgets.texture_ref(texture), (side, side))
+        imgui.separator()
+        if widgets.primary_button("Good (A)", enabled=row is not None):
+            review_mode.record_label(ctx, "accept")
+        imgui.same_line()
+        if widgets.disabled_button("Bad (R)", row is not None):
+            review_mode.record_label(ctx, "reject")
+        imgui.same_line()
+        if widgets.disabled_button("Skip (S)", row is not None):
+            review_mode._advance_labels(labels)
+        if widgets.disabled_button("Done", True):
+            review_mode.close_labels(ctx)
+
+        # The snapshot the listing task read, kept current by ``record_label``.
+        # Never a live ``judge.status`` call: that is a whole-table scan plus a
+        # stat, and this panel draws every frame.
+        status = labels.status
+        imgui.separator()
+        widgets.section("The probe")
+        answered = sum(1 for r in labels.rows if r["verdict"])
+        widgets.muted(f"{answered} labelled this session")
+        widgets.muted(
+            f"{status.get('positives', 0)} good / {status.get('negatives', 0)} bad, "
+            f"{status.get('needed', 0)} of each needed"
+        )
+        if status.get("trained"):
+            widgets.muted(f"trained on {status.get('trained_labels', 0)} label(s)")
+        else:
+            widgets.muted("no probe yet")
+        widgets.hint_text(
+            "Advisory only: a probe sorts this list and files a verdict beside "
+            "yours. It never refuses or deletes anything."
+        )
 
     def _review_runs(self, ctx: Any, state: Any, review_mode: Any) -> None:
         """The sweep list, and the form that launches a new one."""
@@ -1572,6 +1714,14 @@ class App:
         if state.scanning:
             imgui.same_line()
             widgets.muted("Reading...")
+        # Blinding is a session control rather than a per-sweep one, and it is
+        # here because it belongs beside the list it re-presents. It renames and
+        # *reorders*: see review_mode's docstring on why hiding the label alone
+        # blinds nothing.
+        changed, blind = widgets.toggle("Blind", state.blind, tag="review-blind")
+        if changed:
+            review_mode.set_blind(ctx, blind)
+        widgets.hint_text("Hides which settings each unit ran, and the order.")
         for sweep in state.sweeps:
             todo = sweep["todo"]
             total = len(sweep["units"])
@@ -1581,6 +1731,18 @@ class App:
             widgets.muted(f"   {total - todo}/{total} reviewed")
             if selected and sweep["id"] != review_mode.RECENT_ID:
                 self._review_delete_button(ctx, state, review_mode, sweep)
+        imgui.separator()
+        # The labelling passes, beside the sweep list rather than in a mode of
+        # their own: the judge is meant to improve as the corpus is reviewed,
+        # which is the whole reason the loop lives here.
+        widgets.section("Teach the judge")
+        for stage, title in _LABEL_TITLES.items():
+            open_here = state.labels is not None and state.labels.stage == stage
+            if imgui.selectable(f"{title}##label-{stage}", open_here)[0]:
+                if open_here:
+                    review_mode.close_labels(ctx)
+                else:
+                    review_mode.open_labels(ctx, stage)
         imgui.separator()
         self._review_form(ctx, state, review_mode)
 
@@ -1682,7 +1844,8 @@ class App:
         for i, unit in enumerate(state.units):
             mark = {"accept": icons.CHECK, "reject": icons.X}.get(unit["verdict"] or "", " ")
             if imgui.selectable(
-                f"{mark} {review_mode.label(unit)}##unit-{unit['job_id']}", i == state.index
+                f"{mark} {review_mode.label(state, unit)}##unit-{unit['job_id']}",
+                i == state.index,
             )[0]:
                 review_mode.step(state, i - state.index)
 
@@ -1775,7 +1938,7 @@ class App:
             self._review_findings(ctx)
             return
 
-        widgets.section(review_mode.label(unit))
+        widgets.section(review_mode.label(state, unit))
         widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
 
         reference = review_mode.reference_path(unit)

@@ -27,15 +27,20 @@ from warlock.studio.state import Filters
 def test_the_candidate_columns_are_migration_six(tmp_path):
     """Append-only, and this entry landed first. If it ever stops being index
     5 (version 6), a shipped database has been rewritten rather than added to.
+
+    It used to assert ``len(MIGRATIONS) == 6`` as well, which was a proxy for the
+    same thing and stopped being one the moment a seventh migration was appended
+    -- an addition this test exists to *permit*. What matters is the index, and
+    that a fresh database still runs past it, so both are asserted directly.
     """
-    assert len(MIGRATIONS) == 6
     entry = " ".join(MIGRATIONS[5])
     assert "candidate_group" in entry and "candidate_index" in entry
 
     store = JobStore(tmp_path / "jobs.sqlite")
     store.close()
     conn = sqlite3.connect(tmp_path / "jobs.sqlite")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    assert len(MIGRATIONS) >= 6
     conn.close()
 
 

@@ -10,6 +10,7 @@ as a broken asset rather than as a 2D one.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from imgui_bundle import imgui
@@ -23,7 +24,7 @@ from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
 from ..tokens import sp
-from . import candidates_panel, pose_panel, retarget_panel, sheet_panel
+from . import candidates_panel, overlay, pose_panel, retarget_panel, sheet_panel
 
 # Matches the library card's thumbnail, so the two read as the same kind of
 # object rather than as two different image widgets. Design px: every use of it
@@ -95,6 +96,29 @@ def can_edit_in_clay(job: Any) -> bool:
     return job.get("status") == "done" and "model.glb" in (job.get("files") or [])
 
 
+def offers_inker(ctx: Any, job: Any) -> bool:
+    """Whether *this* pane is the one that offers Open in Inker.
+
+    Not simply ``can_edit_job``: the 2D viewport toolbar offers the same button
+    on the same job, so in 2D both were on screen at once -- two controls calling
+    one function on one object, one of them right above the pixels and one in the
+    sidebar. The toolbar wins where it exists, because adjacency to the image is
+    the whole of its advantage; this pane covers the rest, which is where the
+    button is not otherwise reachable at all (a reference selected in 3D, whose
+    toolbar deliberately hides it because the thing on screen is a mesh).
+
+    Defined as the *complement* of ``overlay.offers_inker`` rather than as its
+    own reading of the mode, so the two can never both be true and never both be
+    false: a second spelling of "is it 2D" is exactly how one action grew two
+    buttons in the first place.
+    """
+    from .. import inker_mode
+
+    if not inker_mode.can_edit_job(ctx, job):
+        return False
+    return not overlay.offers_inker(ctx, job)
+
+
 def _edit_actions(ctx: Any, job: Any) -> None:
     """Take this asset somewhere it can be edited, from where it was made.
 
@@ -107,7 +131,7 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     """
     from .. import clay_mode, icons, inker_mode
 
-    if inker_mode.can_edit_job(ctx, job):
+    if offers_inker(ctx, job):
         if imgui.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
         widgets.hint_text("Paint over the reference; saving updates this asset.")
@@ -133,9 +157,71 @@ def _details_tab(ctx: Any, job: Any) -> None:
 
 def _rig_tab(ctx: Any, job: Any) -> None:
     _weighting(ctx, job)
+    _deform_qa(ctx, job)
     retarget_panel.draw(ctx, job)
     pose_panel.draw(ctx, job)
     sheet_panel.draw(ctx, job)
+
+
+def rig_meta(ctx: Any, job: Any) -> dict[str, Any] | None:
+    """The selected asset's ``rig.json``, or None -- cached per job by mtime.
+
+    Why the file at all, when 0d put ``weighting`` on a row: it put it on the
+    **rig** job's row, and a rig writes its artifacts into the *source* job's
+    directory because the rig belongs to the mesh. The Rig & Pose tab opens on
+    that source job -- it is the asset a user selects -- so the row on screen
+    has no ``weighting`` of its own and the tab showed nothing at all. The
+    alternative was making ``queue._rig`` a second writer onto the model job's
+    row, which is refused: that row has one owner and ``set_params`` is
+    last-write-wins.
+
+    Why the racily-clean rule, in full: the stamp is the directory's mtime, and
+    on Windows that is written from the system clock, whose tick is 15.6 ms --
+    adding a file left it unchanged 155 times in 200 (see
+    ``docs/measurements/2026-08-07-directory-mtime-granularity.md``). A re-rig
+    landing after this read but inside the stamped mtime's own tick would then be
+    invisible **forever**, because every later comparison keeps matching. So a
+    stamp is only remembered once its mtime is comfortably in the past, and the
+    clock is read *after* the file: the hazard needs a write later than our read
+    yet still inside the tick, which cannot exist if the read already finished a
+    tick after the mtime. It is ``files.attach_files``'s rule and its constant,
+    imported rather than restated -- one judgement about one class of hazard.
+    """
+    job_id = job.get("id")
+    if not job_id:
+        return None
+    job_dir = ctx.svc.job_dir(job_id)
+    try:
+        stamp: Any = job_dir.stat().st_mtime_ns
+    except OSError:
+        # No directory: a perfectly good stamp of its own, and the answer is
+        # "no rig". It changes the moment a directory appears.
+        stamp = None
+    cache = ctx.state.rig_meta_cache
+    hit = cache.get(job_id)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    from ... import rigging
+
+    meta = rigging.read_rig(job_dir)
+    if stamp is None or time.time_ns() - stamp > svc_files.MTIME_RACE_NS:
+        cache[job_id] = (stamp, meta)
+    return meta
+
+
+def rig_weighting(ctx: Any, job: Any) -> tuple[int, str] | None:
+    """The weighting line for the asset on screen, from wherever it is recorded.
+
+    The row first, then the rig file. The order matters and only in one
+    direction: a *rig* job selected in the library carries the params and has no
+    ``rig.json`` of its own, while the model job it rigged has the file and no
+    params -- so the two sources are disjoint in practice, and preferring the
+    row means the answer is always about the row the user is looking at.
+    """
+    verdict = weighting_verdict(job.get("params") or {})
+    if verdict is not None:
+        return verdict
+    return weighting_verdict(rig_meta(ctx, job) or {})
 
 
 def weighting_verdict(params: Any) -> tuple[int, str] | None:
@@ -159,15 +245,64 @@ def weighting_verdict(params: Any) -> tuple[int, str] | None:
 
 
 def _weighting(ctx: Any, job: Any) -> None:
-    verdict = weighting_verdict(job.get("params") or {})
+    source: Any = job.get("params") or {}
+    verdict = weighting_verdict(source)
+    if verdict is None:
+        # The ordinary case, not the exception: the tab opens on the mesh, and
+        # the mesh's rig records itself in a file beside it.
+        source = rig_meta(ctx, job) or {}
+        verdict = weighting_verdict(source)
     if verdict is None:
         return
     widgets.text_colored(*verdict)
-    reason = (job.get("params") or {}).get("weighting_reason")
+    reason = source.get("weighting_reason")
     if reason and imgui.is_item_hovered():
         imgui.set_tooltip(str(reason))
     if verdict[0] == theme.WARN:
         widgets.hint_text("Blender's bone-heat solve did not take; hover for why.")
+
+
+def deform_qa_path(svc: Any, job: Any) -> Any:
+    """The deformation review sheet for this asset, or None.
+
+    Gated on the **sidecar** rather than on its own existence, which is
+    ``rig.glb``'s rule and the same hazard: ``sheetlib`` writes the PNG and then
+    the JSON that says what its cells are, so a sheet without its sidecar is a
+    render in progress. Deliberately not in the inspector's download grid --
+    that grid is a hardcoded list of mesh artifacts, which is exactly why
+    ``rig_qa.png`` reached ``job["files"]`` and appeared nowhere.
+    """
+    job_id = job.get("id")
+    if not job_id:
+        return None
+    job_dir = svc.job_dir(job_id)
+    sheet = job_dir / "rig_qa.png"
+    if not (job_dir / "rig_qa.json").exists() or not sheet.exists():
+        return None
+    return sheet
+
+
+def _deform_qa(ctx: Any, job: Any) -> None:
+    """The QA battery as a thumbnail, beside the weighting line it explains.
+
+    **Nothing scores it, and the wording must not imply anything does.** The
+    battery renders a rig in poses nobody would ship an asset in (squat, arms
+    overhead, elbow and knee at 90 degrees, a torso twist) precisely so a person
+    can see where the skin tears. A metric here would be a claim about
+    deformation quality that nothing in the repo has earned yet.
+    """
+    path = deform_qa_path(ctx.svc, job)
+    if path is None:
+        return
+    widgets.field_label("Deformation review")
+    texture = ctx.textures.get(f"rigqa:{job['id']}", path)
+    if texture is None:
+        return
+    side = min(imgui.get_content_region_avail().x, float(sp(THUMB_SIZE * 2)))
+    imgui.image(widgets.texture_ref(texture), (side, side))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(str(path))
+    widgets.hint_text("The rig in five test poses. Look for tearing; nothing scores it.")
 
 
 # --- pieces -----------------------------------------------------------------

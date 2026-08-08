@@ -1,15 +1,26 @@
 """Queue the two "SNES rogue adventurer" sweeps onto the live job queue.
 
-A headless *submitter*, not a runner. It writes 100 ``queued`` rows through
-``service.sweeps.create_sweep`` and exits; the app's worker drains them the
-next time Warlock is launched, and Review mode lists both sweeps for the
-verdict loop. This is the ``worker=None`` path ``service/core.py`` documents --
-"a test (or a headless tool) can exercise the pure-DB half without standing up
-the GPU queue" -- so nothing here touches the card, the trellis port, or the
-event loop. Run it with the app closed all the same: ``JobStore`` opens a plain
-rollback-journal connection with sqlite3's default five-second busy timeout, so
-a second process writing while the app is mid-commit is a narrow but real way
-to lose a submit. ``_require_no_live_writer`` probes for exactly that.
+**This run has already happened** -- 2026-08-07, 100 units, reviewed the same
+day. It is kept because the two later campaigns are defined against it: they
+reuse its prompt, its seeds and its fixed base, and the tension left in that
+base (see below) is still unresolved. `TODO.md` §2 records what it found. The
+successors are ``sweep_confirm.py`` (the blind matte confirm) and
+``sweep_rebaseline.py`` (the render sweep re-run over a learned matte); the
+depiction half is deliberately not re-specced yet, and §2 says why.
+
+A headless *submitter*, not a runner: it writes 100 ``queued`` rows through
+``service.sweeps.create_sweep`` and exits. See ``_campaign.py``, which is that
+half, and run it with the app closed.
+
+**It will not submit again on a host that has ``birefnet.gguf``, and that is
+the rule the successors follow, demonstrated.** Neither plan states
+``bg_removal``, so the baseline takes whatever ``guidance.default_bg_removal``
+resolves against the weights directory -- which was ``auto`` when this ran and
+is ``birefnet`` now. PLAN_A's ``bg_removal=birefnet`` axis therefore duplicates
+its own baseline today, and ``sweeps._validate`` refuses the pair by canonical
+key rather than spending an hour drawing one picture twice. It is left exactly
+as it ran: what the corpus means depends on what the script *did*, and the
+refusal is more informative than a repair would be.
 
 Why two sweeps and not one. ``MAX_UNITS`` is 64, and 100 units is over it. The
 split is along the seam the units already have rather than an arbitrary 50/50:
@@ -47,20 +58,16 @@ count.
 
 from __future__ import annotations
 
-import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parent.parent / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
-from warlock.config import Config  # noqa: E402
-from warlock.db import JobStore  # noqa: E402
+import _campaign  # noqa: E402
+
 from warlock.service import sweeps as sweeps_mod  # noqa: E402
-from warlock.service.core import WarlockService  # noqa: E402
-from warlock.service.errors import ServiceError  # noqa: E402
 
 PROMPT = "a SNES-era rogue adventurer with black and silver and blue color schemes"
 
@@ -129,90 +136,5 @@ PLAN_B = sweeps_mod.SweepPlan(
 PLANS = (PLAN_A, PLAN_B)
 
 
-def _require_no_live_writer(db_path: Path) -> None:
-    """Refuse to run while another process is writing the job database.
-
-    ``BEGIN IMMEDIATE`` takes sqlite's reserved lock, which is exactly what a
-    running app's ``JobStore`` holds mid-commit. It cannot detect an *idle*
-    app, so this is a guard against the dangerous case rather than a proof the
-    app is closed -- hence the message says what to do rather than claiming the
-    coast is clear.
-    """
-    if not db_path.exists():
-        return
-    probe = sqlite3.connect(db_path, timeout=2.0)
-    try:
-        probe.execute("BEGIN IMMEDIATE")
-        probe.rollback()
-    except sqlite3.OperationalError as exc:
-        raise SystemExit(
-            f"{db_path} is locked by another process ({exc}).\n"
-            "Close Warlock Studio and run this again: two processes writing "
-            "one rollback-journal sqlite file is how a submit gets lost."
-        ) from exc
-    finally:
-        probe.close()
-
-
-def _plan_and_validate(svc: WarlockService, plan: sweeps_mod.SweepPlan) -> int:
-    """-> the unit count, having run the same admission ``create_sweep`` will.
-
-    Every unit of *both* plans is checked before either is written, so the
-    all-or-nothing guarantee ``create_sweep`` gives one sweep extends across
-    the pair: the failure this prevents is sweep A queueing fifty jobs and
-    sweep B then being refused, which is a corpus nobody asked for.
-    """
-    units = sweeps_mod.expand(plan)
-    sweeps_mod._validate(svc, plan, units)
-    return len(units)
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="plan and validate both sweeps, write nothing",
-    )
-    args = parser.parse_args()
-
-    config = Config()
-    db_path = Path(config.db_path)
-    _require_no_live_writer(db_path)
-
-    store = JobStore(db_path)
-    svc = WarlockService(config, store)
-    try:
-        counts = []
-        for plan in PLANS:
-            try:
-                count = _plan_and_validate(svc, plan)
-            except ServiceError as exc:
-                print(f"refused: {plan.label}: {exc.message}", file=sys.stderr)
-                return 1
-            counts.append(count)
-            print(f"{plan.label}: {count} units planned")
-        total = sum(counts)
-        print(f"total: {total} units across {len(PLANS)} sweeps -> {db_path}")
-
-        if args.dry_run:
-            print("dry run: nothing written")
-            return 0
-
-        for plan in PLANS:
-            # Reported per sweep rather than as one line at the end: each
-            # create_sweep is independently all-or-nothing, so if the second
-            # fails the first is genuinely queued and the user needs its id.
-            result = sweeps_mod.create_sweep(svc, plan)
-            print(f"queued {result['units']} units as sweep {result['id']} ({plan.label})")
-        print(
-            f"\n{total} jobs queued. Launch Warlock Studio; the worker drains them "
-            "and Review mode lists both sweeps."
-        )
-    finally:
-        store.close()
-    return 0
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_campaign.main(PLANS, __doc__.splitlines()[0]))

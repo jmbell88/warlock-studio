@@ -147,6 +147,25 @@ def _embed(image: Any, config: Any = None, device: str | None = None):
     return torch.nn.functional.normalize(cls, dim=-1)
 
 
+def cls_embedding(image_path: Path, config: Any = None, device: str | None = None):
+    """One image's normalized DINOv2 CLS embedding, as a plain numpy vector.
+
+    The public half of ``_embed``, added for ``judge.py`` -- which is stdlib plus
+    numpy and may not hold a torch tensor, and which would otherwise have needed
+    its own loader. A second loader would be a second answer to "which weights,
+    on which device, offline or not", and this one already has all three right.
+
+    Deliberately the *raw* image rather than ``imageprep.prepare_pair``'s cutout:
+    the probes are asked whether a whole plate is a good asset or a good blank,
+    and background and framing are exactly what those questions are about.
+    """
+    from PIL import Image
+
+    with Image.open(image_path) as image:
+        vector = _embed(image.convert("RGB"), config, device)
+    return vector.detach().to("cpu").numpy().reshape(-1)
+
+
 def dino_cosine(reference_path: Path, render_path: Path, config: Any = None) -> float | None:
     """Cosine similarity of the two DINOv2 CLS embeddings, higher is better.
 

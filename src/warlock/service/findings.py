@@ -108,7 +108,24 @@ def wilson_low(accepts: int, n: int, z: float = WILSON_Z) -> float:
 def aggregate(store: Any) -> dict[str, Any]:
     """The whole findings document, over every source's latest verdicts and
     every job's latest observation."""
-    records = [r for r in store.latest_verdicts() if isinstance(r.get("vector"), dict)]
+    # **Mesh verdicts only, and the filter is here rather than in _marginals.**
+    # §7 asks for it in ``_marginals`` on the grounds that the per-subject
+    # ``prompts`` section is built by the same helper -- true, and not enough.
+    # Two other consumers read this same list. ``vectors`` would advertise an
+    # image label as a ranked mesh configuration, and ``_comparisons`` pairs rows
+    # sharing a sweep and a seed whose vectors differ in one key -- which a blank
+    # label and a mesh verdict on the *same unit* satisfy, yielding a matched
+    # "pair" that compares two different questions. One filter at the top covers
+    # all four; four filters are four chances to forget one.
+    #
+    # Migration 7 is what makes this necessary at all: before it, every row was a
+    # mesh verdict and ``stage`` did not exist. Rows written before it default to
+    # ``model``, so the filter is a no-op over the historical corpus.
+    records = [
+        r
+        for r in store.latest_verdicts()
+        if isinstance(r.get("vector"), dict) and r.get("stage", "model") == "model"
+    ]
     observations = [
         o for o in store.latest_observations() if isinstance(o.get("vector"), dict)
     ]

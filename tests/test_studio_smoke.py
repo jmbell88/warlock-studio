@@ -1313,6 +1313,9 @@ class _ReviewApp:
     _review_units = _main.App._review_units
     _review_verdict = _main.App._review_verdict
     _review_findings = _main.App._review_findings
+    _review_labels = _main.App._review_labels
+    _review_label_panel = _main.App._review_label_panel
+    _LABEL_CELL = _main.App._LABEL_CELL
     _save_vector_preset = _main.App._save_vector_preset
 
 
@@ -1377,6 +1380,111 @@ def test_the_review_panes_build_with_nothing_recorded(app_ctx, imgui_ctx):
             app._review_verdict(app_ctx, state, review_mode),
         ),
     )
+
+
+def _label_pass(ctx, stage="blank", rows=3):
+    """A labelling pass with real images on disk, as the listing task builds it."""
+    import io as _io
+
+    from PIL import Image as _Image
+
+    from warlock.studio import review_mode
+
+    state = review_mode.ensure(ctx)
+    made = []
+    for i in range(rows):
+        job_id = _seeded(ctx)
+        job_dir = ctx.svc.job_dir(job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        image = job_dir / "reference.png"
+        buf = _io.BytesIO()
+        _Image.new("RGBA", (8, 8), (40, 80, 160, 255)).save(buf, "PNG")
+        image.write_bytes(buf.getvalue())
+        made.append(
+            {
+                "job_id": job_id,
+                "prompt": f"a rogue {i}",
+                "status": "error" if i == 0 else "done",
+                "image": image,
+                "verdict": "accept" if i == 1 else None,
+            }
+        )
+    state.labels = review_mode.LabelPass(
+        stage=stage,
+        rows=made,
+        status={"positives": 1, "negatives": 0, "needed": 8, "trained": False},
+    )
+    return state
+
+
+def test_the_labelling_grid_builds_and_uploads_one_cell_per_frame(app_ctx, imgui_ctx):
+    """Three cells, three frames: ``StripRender``'s rule, and the reason the grid
+    draws a placeholder for a cell whose texture has not been uploaded yet."""
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _label_pass(app_ctx)
+
+    for expected in (1, 2, 3):
+        _frame(
+            imgui_ctx,
+            lambda: (
+                app._review_labels(app_ctx, state, review_mode),
+                app._review_label_panel(app_ctx, state, review_mode),
+            ),
+        )
+        assert state.labels.uploaded == expected
+    # And a fourth frame is not an error, it simply has nothing left to admit.
+    _frame(imgui_ctx, lambda: app._review_labels(app_ctx, state, review_mode))
+    assert state.labels.uploaded == 3
+
+
+def test_the_labelling_grid_builds_with_nothing_left_to_label(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _label_pass(app_ctx, rows=0)
+
+    _frame(
+        imgui_ctx,
+        lambda: (
+            app._review_labels(app_ctx, state, review_mode),
+            app._review_label_panel(app_ctx, state, review_mode),
+        ),
+    )
+
+
+def test_the_labelling_grid_builds_while_the_listing_is_still_reading(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _label_pass(app_ctx, rows=0)
+    state.labels.loading = True
+
+    _frame(imgui_ctx, lambda: app._review_labels(app_ctx, state, review_mode))
+
+
+def test_the_runs_pane_offers_both_labelling_passes(app_ctx, imgui_ctx):
+    from warlock.studio import main, review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+
+    seen: list[str] = []
+    imgui, _renderer = imgui_ctx
+    real = imgui.selectable
+
+    def spy(label, *args, **kwargs):
+        seen.append(label)
+        return real(label, *args, **kwargs)
+
+    imgui.selectable = spy
+    try:
+        _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
+    finally:
+        imgui.selectable = real
+    for title in main._LABEL_TITLES.values():
+        assert any(title in text for text in seen), title
 
 
 def test_the_review_pane_builds_a_findings_table(app_ctx, imgui_ctx):

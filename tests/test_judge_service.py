@@ -1,0 +1,200 @@
+"""Training a probe from the labels on disk, and scoring one image with it.
+
+`TODO.md` §7's service half: the seam between the verdict table (which owns the
+labels) and ``judge.py`` (which owns the arithmetic). Three properties matter
+here and none of them is about the maths.
+
+**A label whose pixels are gone cannot train anything.** The verdict corpus is
+denormalized precisely so it outlives ``prune_jobs`` deleting the assets -- which
+is what makes the *marginals* survivable. A probe is trained on pixels, so for
+this consumer a pruned row is simply unusable, and the count it reports has to
+say so rather than quietly training on nine rows while claiming ninety.
+
+**Training never raises into its caller.** It runs on the TaskRunner and its
+failure is a toast, not a dead task thread.
+
+**Nothing is scored against a probe that does not exist.** Absent weights,
+absent probe, too few labels: all of them are ``None``, which the UI renders as
+"no opinion" rather than as a neutral 0.5 that reads like one.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+
+from warlock import judge
+from warlock.service import judge as svc_judge
+from warlock.service import verdicts as svc_verdicts
+
+
+def _labelled(svc, verdict, *, stage="blank", image=True, prompt="a rogue"):
+    """A model-stage job with a reference image and one image label."""
+    job_id = svc.store.create("image", prompt, {}, stage="model", status="done")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    if image:
+        (job_dir / "reference.png").write_bytes(b"png-not-really")
+    svc_verdicts.record_verdict(svc, job_id, verdict=verdict, stage=stage)
+    return job_id
+
+
+def _fake_embeddings(monkeypatch, mapping):
+    """``judge.embed``, replaced by a lookup: the arithmetic is tested in
+    test_judge.py, and what is under test here is which rows reach it."""
+    seen: list[Path] = []
+
+    def embed(path, config=None, device=None):
+        seen.append(Path(path))
+        return mapping.get(Path(path).parent.name)
+
+    monkeypatch.setattr(judge, "embed", embed)
+    return seen
+
+
+def _vector(value: float):
+    return np.full(8, value, dtype=np.float32)
+
+
+# --- gathering ---------------------------------------------------------------
+
+
+def test_training_reads_the_labels_for_one_stage_only(svc, monkeypatch):
+    blank = _labelled(svc, "accept", stage="blank")
+    product = _labelled(svc, "accept", stage="reference")
+    mesh = _labelled(svc, "accept", stage="model")
+
+    seen = _fake_embeddings(monkeypatch, {})
+    svc_judge.train(svc, "blank")
+
+    assert [p.parent.name for p in seen] == [blank]
+    assert product not in [p.parent.name for p in seen]
+    assert mesh not in [p.parent.name for p in seen]
+
+
+def test_a_label_whose_image_was_pruned_is_reported_not_silently_dropped(
+    svc, monkeypatch
+):
+    """The corpus outlives the assets on purpose -- but a probe is trained on
+    pixels, so for *this* consumer a pruned row is unusable. Saying so is the
+    difference between "9 of 90 labels usable" and a probe that claims 90."""
+    kept = _labelled(svc, "accept")
+    pruned = _labelled(svc, "reject")
+    (svc.job_dir(pruned) / "reference.png").unlink()
+
+    _fake_embeddings(monkeypatch, {kept: _vector(1.0)})
+    result = svc_judge.train(svc, "blank")
+
+    assert result["labels"] == 2
+    assert result["usable"] == 1
+    assert result["missing"] == 1
+
+
+def test_too_few_labels_is_a_reported_state_not_a_probe(svc, monkeypatch):
+    ids = {_labelled(svc, "accept"): None for _ in range(3)}
+    _fake_embeddings(monkeypatch, {job_id: _vector(1.0) for job_id in ids})
+
+    result = svc_judge.train(svc, "blank")
+
+    assert result["trained"] is False
+    assert result["needed"] == judge.MIN_PER_CLASS
+    assert svc_judge.probe(svc, "blank") is None
+
+
+def test_a_probe_is_written_once_there_are_enough_of_both(svc, monkeypatch):
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    _fake_embeddings(monkeypatch, mapping)
+
+    result = svc_judge.train(svc, "blank")
+
+    assert result["trained"] is True
+    assert result["positives"] == judge.MIN_PER_CLASS
+    written = svc_judge.probe(svc, "blank")
+    assert written is not None
+    assert written.stage == "blank"
+    assert written.labels == 2 * judge.MIN_PER_CLASS
+
+
+def test_a_probe_lives_beside_the_findings_it_was_learned_from(svc, monkeypatch):
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    _fake_embeddings(monkeypatch, mapping)
+    svc_judge.train(svc, "blank")
+
+    assert judge.probe_path(Path(svc.config.bench_dir), "blank").exists()
+
+
+def test_an_unembeddable_image_is_skipped_rather_than_failing_the_run(svc, monkeypatch):
+    """``judge.embed`` returns None for a machine with no DINOv2 and for a
+    corrupt PNG alike, and one bad row must not cost the other eighty."""
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    broken = _labelled(svc, "accept")
+    mapping[broken] = None
+    _fake_embeddings(monkeypatch, mapping)
+
+    result = svc_judge.train(svc, "blank")
+
+    assert result["trained"] is True
+    assert result["usable"] == 2 * judge.MIN_PER_CLASS
+    assert result["unreadable"] == 1
+
+
+# --- scoring -----------------------------------------------------------------
+
+
+def test_scoring_without_a_probe_is_no_opinion(svc, monkeypatch):
+    job_id = _labelled(svc, "accept")
+    _fake_embeddings(monkeypatch, {job_id: _vector(1.0)})
+
+    assert svc_judge.score_job(svc, job_id, "blank") is None
+
+
+def test_scoring_uses_the_probe_for_the_question_being_asked(svc, monkeypatch):
+    mapping = {}
+    for _ in range(judge.MIN_PER_CLASS):
+        mapping[_labelled(svc, "accept")] = _vector(1.0)
+        mapping[_labelled(svc, "reject")] = _vector(-1.0)
+    subject = _labelled(svc, "accept")
+    mapping[subject] = _vector(1.0)
+    _fake_embeddings(monkeypatch, mapping)
+    svc_judge.train(svc, "blank")
+
+    score = svc_judge.score_job(svc, subject, "blank")
+    assert score is not None and score > 0.5
+    # No product probe has been trained, so there is no opinion to give.
+    assert svc_judge.score_job(svc, subject, "reference") is None
+
+
+def test_a_job_with_no_image_scores_nothing(svc, monkeypatch):
+    """Not reachable through a label -- ``record_verdict`` refuses an image label
+    with no image -- but reachable through pruning, which is the ordinary way a
+    scored row loses its pixels."""
+    job_id = _labelled(svc, "accept")
+    (svc.job_dir(job_id) / "reference.png").unlink()
+    _fake_embeddings(monkeypatch, {})
+
+    assert svc_judge.score_job(svc, job_id, "blank") is None
+
+
+def test_the_probes_state_is_readable_without_training_anything(svc, monkeypatch):
+    """What the pane draws: how many labels are in, how many are needed, and
+    whether a probe exists at all. The staleness half of the ``warlockc`` rule --
+    a probe should say when it was trained."""
+    _labelled(svc, "accept")
+    _fake_embeddings(monkeypatch, {})
+
+    state = svc_judge.status(svc, "blank")
+
+    assert state["stage"] == "blank"
+    assert state["labels"] == 1
+    assert state["trained"] is False
+    assert state["needed"] == judge.MIN_PER_CLASS

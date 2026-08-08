@@ -34,6 +34,13 @@ bad shape, bad texture, wrong style, broken — because a reject without a reaso
 `Esc` cancels an armed reject. `S` skips to the next unverdicted unit, and `Left` / `Right` step
 through the list. The same controls exist as buttons in the verdict panel.
 
+**Blind** hides which settings each unit ran. It renames every unit to a short id and presents them
+in an order derived from the job id rather than the order they were queued — hiding only the label
+would blind nothing, because a sweep queues its baseline first and position alone would name the
+arm. Your own accepts and rejects still show, so a session is still resumable. Turn it on when the
+verdict is the evidence for a decision rather than a note to yourself: knowing which arm you are
+looking at is exactly what a confirming run cannot afford. It is per-session and starts off.
+
 Verdicts are append-only and the latest one per job wins, so changing your mind is filing again,
 not editing. And each verdict carries its own copy of the settings it judged — the learning corpus
 survives the assets it was learned from, so pruning old jobs costs no knowledge.
@@ -61,6 +68,34 @@ does not bury your real assets; Review is where they live.
 
 Deleting a sweep deletes its jobs and meshes but keeps every verdict filed on them — what the
 sweep taught outlives what it built.
+
+## Teaching the judge
+
+Under the sweep list are two labelling passes. They are a different kind of work from judging a
+mesh: an image takes about two seconds to answer and carries no reason, so the centre column becomes
+a grid of pictures and `A` / `R` mean good and bad. While a pass is open it owns the keyboard, so
+there is never any doubt which question a keypress answered.
+
+There are two passes because the same image is two different things, and "good" means opposite
+things about them:
+
+- **Good 2D asset?** — judge the finished picture: composition, style, drama.
+- **Good to reconstruct?** — judge it as input for the mesh: one subject, plain background, a
+  neutral pose.
+
+A dramatic plate with pillars and a cast shadow is a better asset and a worse blank, which is why
+one label cannot stand in for the other. Both live on the same job, independently, and a mesh
+verdict on that job says nothing about either.
+
+Images that were **refused** at the composition gate appear here too, marked. They are the most
+useful negatives there are: the picture exists, something was wrong with it, and a judge that has
+only ever seen images the rules already liked has learned the rules rather than the quality.
+
+Once there are enough of both answers the app trains a small classifier per question from your
+labels — seconds of work, off the frame thread, and it retrains as you go. It is **advisory only**:
+it files an opinion beside yours and sorts what Review shows you. It never refuses a job, deletes
+anything or retries. It also only ever *sorts*: a judge that hid what it disliked would make its own
+mistakes invisible, and you would never learn it was wrong.
 
 ## What works
 

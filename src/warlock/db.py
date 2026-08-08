@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS verdicts (
     sweep_id    TEXT,                           -- denormalized: pairs outlive delete_sweep
     sweep_unit  TEXT NOT NULL DEFAULT '',       -- display label only; pairing never parses it
     seed        INTEGER,                        -- params["seed"] at record time
-    prompt_hash TEXT NOT NULL DEFAULT ''        -- sha1[:12]; counts distinct prompts, nothing else
+    prompt_hash TEXT NOT NULL DEFAULT '',       -- sha1[:12]; counts distinct prompts, nothing else
+    stage       TEXT NOT NULL DEFAULT 'model'   -- 'reference' | 'blank' | 'model': which question
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id);
 
@@ -212,6 +213,34 @@ MIGRATIONS: list[list[str]] = [
         "ALTER TABLE jobs ADD COLUMN candidate_group TEXT",
         "ALTER TABLE jobs ADD COLUMN candidate_index INTEGER NOT NULL DEFAULT 0",
         "CREATE INDEX IF NOT EXISTS idx_jobs_candidate ON jobs(candidate_group)",
+    ],
+    # 7 -- which question a verdict answers. Three values, 'reference' |
+    # 'blank' | 'model', and the third value is the load-bearing one.
+    #
+    # The instinct is a two-value column mirroring ``jobs.stage`` (already
+    # exactly 'reference' | 'model') and recovering the intent by joining back
+    # to the job. That breaks for the reason ``verdicts.vector`` is
+    # denormalized at all: ``prune_jobs`` deletes job rows, and the corpus has
+    # to outlive the assets it was learned from. A label whose meaning depends
+    # on a row that no longer exists is uninterpretable exactly when it
+    # matters. So intent is stored, not derived.
+    #
+    # Two of the values are *intents over the same artifact*: in 2D mode the
+    # image is the deliverable, and the same PNG is sometimes the product and
+    # sometimes the input to the next machine -- where "good" means opposite
+    # things (rich and dramatic against single-subject on plain background). A
+    # reference-stage image therefore takes two independent labels, which is
+    # also why intent may not live in ``source``: ``latest_verdicts`` keys on
+    # (job_id, source) and one answer would silently overwrite the other.
+    #
+    # The DEFAULT backfills every existing row to 'model', which is what every
+    # verdict recorded to date is about.
+    #
+    # This is the entry `TODO.md` and BUILD_PLAN both called "migration 6".
+    # Migration 6 is the candidate columns above: it landed first, and
+    # migrations are append-only and never renumbered.
+    [
+        "ALTER TABLE verdicts ADD COLUMN stage TEXT NOT NULL DEFAULT 'model'",
     ],
 ]
 
@@ -718,21 +747,25 @@ class JobStore:
         sweep_unit: str = "",
         seed: int | None = None,
         prompt_hash: str = "",
+        stage: str = "model",
     ) -> int:
         """Append one verdict. Append-only: a changed mind is a new row, and
-        ``latest_verdicts`` takes the highest id per (job, source), so the
+        ``latest_verdicts`` takes the highest id per (job, source, stage), so the
         history of what a reviewer thought survives the correction.
 
         The sweep context is denormalized for the same reason the vector is:
         matched-pair comparisons must survive ``delete_sweep`` taking the job
         rows. Rows recorded before migration 5 have no context and simply
         never enter a comparison.
+
+        ``stage`` defaults to ``'model'`` because every existing caller records a
+        mesh verdict and every row written before migration 7 is one.
         """
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO verdicts (job_id, source, verdict, reasons, vector,"
-                " created_at, sweep_id, sweep_unit, seed, prompt_hash)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " created_at, sweep_id, sweep_unit, seed, prompt_hash, stage)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     source,
@@ -744,36 +777,52 @@ class JobStore:
                     sweep_unit,
                     seed,
                     prompt_hash,
+                    stage,
                 ),
             )
             self._conn.commit()
             return int(cur.lastrowid or 0)
 
     def latest_verdicts(self) -> list[dict[str, Any]]:
-        """One row per (job_id, source) -- the newest, by id.
+        """One row per (job_id, source, stage) -- the newest, by id.
 
         ``id`` rather than ``created_at``: the column is an AUTOINCREMENT
         rowid, so it is strictly increasing even when two verdicts land inside
         one ``time.time()`` tick, which at the rate a reviewer presses A they
         genuinely do.
+
+        ``stage`` joined the grouping with migration 7 and had to: the same
+        reference image takes two independent labels (is it a good 2D asset, will
+        it reconstruct), and grouping without stage would let one answer
+        supersede the other. The consequence for readers is that a job can now
+        contribute more than one row, which is why ``findings`` filters by stage
+        rather than averaging whatever it finds.
         """
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM verdicts WHERE id IN ("
-                " SELECT MAX(id) FROM verdicts GROUP BY job_id, source)"
+                " SELECT MAX(id) FROM verdicts GROUP BY job_id, source, stage)"
                 " ORDER BY id"
             ).fetchall()
         return [self._verdict_to_dict(r) for r in rows]
 
-    def verdicts_for(self, job_ids: list[str], *, source: str | None = None) -> dict[
-        tuple[str, str], dict[str, Any]
-    ]:
+    def verdicts_for(
+        self, job_ids: list[str], *, source: str | None = None, stage: str | None = None
+    ) -> dict[tuple[str, str], dict[str, Any]]:
         """``{(job_id, source): latest verdict}`` for the jobs named.
 
         Chunked because sqlite caps a statement at SQLITE_MAX_VARIABLE_NUMBER
         (999 on the builds Python ships); a sweep of a few hundred units is
         already within one chunk, but the ceiling is not this module's to
         assume.
+
+        The key stays ``(job_id, source)`` rather than growing a third element,
+        so ``stage`` is a filter rather than a dimension: every caller is asking
+        one question at a time (Review asks about meshes, the labelling grid
+        about one intent), and a caller that passed nothing would otherwise get
+        two answers under one key and keep whichever the row order handed it
+        last. Passing nothing therefore means *every* stage, which only a caller
+        with one stage in play may do.
         """
         out: dict[tuple[str, str], dict[str, Any]] = {}
         ids = list(job_ids)
@@ -785,12 +834,16 @@ class JobStore:
                 marks = ",".join("?" * len(chunk))
                 sql = (
                     f"SELECT * FROM verdicts WHERE job_id IN ({marks})"
-                    " AND id IN (SELECT MAX(id) FROM verdicts GROUP BY job_id, source)"
+                    " AND id IN (SELECT MAX(id) FROM verdicts"
+                    " GROUP BY job_id, source, stage)"
                 )
                 args: list[Any] = list(chunk)
                 if source is not None:
                     sql += " AND source = ?"
                     args.append(source)
+                if stage is not None:
+                    sql += " AND stage = ?"
+                    args.append(stage)
                 for row in self._conn.execute(sql, args).fetchall():
                     record = self._verdict_to_dict(row)
                     out[(record["job_id"], record["source"])] = record
@@ -809,9 +862,61 @@ class JobStore:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE status = 'done' AND stage = 'model'"
                 " AND sweep_id IS NULL"
-                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?)"
+                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?"
+                " AND stage = 'model')"
                 " ORDER BY created_at DESC, id DESC LIMIT ?",
                 (source, limit),
+            ).fetchall()
+        return [self._to_dict(r) for r in rows]
+
+    # Which population each image label is a question *about*. Not decoration:
+    # in 2D mode the image is the deliverable, so a reference-stage job's image
+    # is a product ("rich, styled, dramatic"), while a model-stage job's is the
+    # blank trellis consumed ("single subject, nothing else, plain background").
+    # The two definitions of good are opposed -- a dramatic plate with pillars
+    # and a cast shadow is a better asset and a worse blank -- so a probe pointed
+    # at the wrong population learns the average of two opposed objectives and is
+    # useless for each.
+    LABEL_POPULATION = {"reference": "reference", "blank": "model"}
+
+    def unlabelled_references(
+        self, *, stage: str, source: str = "human", limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Images with no label under ``stage`` yet, newest first.
+
+        Deliberately **not** ``unverdicted_models`` with a parameter, and it
+        cannot be fixed with one. That query filters ``status = 'done' AND stage
+        = 'model' AND sweep_id IS NULL``, which excludes the two things a
+        labelling pass most needs:
+
+        * **Errored jobs.** A reference refused at the composition gate for
+          multi-object is the most informative negative available, and it is a
+          model-stage job that *failed* -- so ``status = 'done'`` throws away
+          precisely the rows a blank probe has to learn from.
+        * **Sweep units.** They are the entire corpus this work is built on.
+
+        ``queued`` and ``running`` are still excluded: there is nothing to look
+        at yet. And the exclusion is per ``(source, stage)``, so a mesh verdict
+        on a job leaves its blank still waiting to be judged -- two different
+        claims about one row, which is the whole reason ``stage`` is a column.
+        """
+        population = self.LABEL_POPULATION.get(stage)
+        if population is None:
+            # ``model`` is the mesh question and ``unverdicted_models`` is its
+            # query. Answering it here would be a second, subtly different
+            # spelling of one listing.
+            raise ValueError(
+                f"unlabelled_references does not serve stage {stage!r}; "
+                f"expected one of {sorted(self.LABEL_POPULATION)}"
+            )
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE stage = ?"
+                " AND status IN ('done', 'error')"
+                " AND id NOT IN (SELECT job_id FROM verdicts WHERE source = ?"
+                " AND stage = ?)"
+                " ORDER BY created_at DESC, id DESC LIMIT ?",
+                (population, source, stage, limit),
             ).fetchall()
         return [self._to_dict(r) for r in rows]
 

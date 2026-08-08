@@ -28,9 +28,30 @@ phases were built on top of. Read it for *why*, never for *what is outstanding*.
   `HF_HUB_OFFLINE=0` in its own environment only.
 - **Phase 2 took migration 6**, so the DINOv2 judge's `verdicts.stage` column —
   described below as migration 6 — is now **migration 7**. The plan text is left
-  as it was written; this note is the correction.
-- **Phases 3, 5, 6, 7 and 8 are not started.** They are carried, with everything
-  learned since, in `TODO.md` §2, §3, §7–§10, §11 and §12 respectively.
+  as it was written; this note is the correction, and Night 3 duly shipped the
+  column as migration 7.
+- **Night 3 executed everything left in Phases 3, 5 and 6 that does not need a
+  GPU, a network or a human**, which is all of their code:
+  - *Phase 3* — both sweep specs exist (`scripts/sweep_confirm.py`,
+    `scripts/sweep_rebaseline.py`, on a shared `scripts/_campaign.py`), and Review
+    gained the **Blind** toggle the blinded confirm asks for. The GPU time is
+    still the user's.
+  - *Phase 5* — the qualification harness exists (`warlock/tiercheck.py`,
+    `scripts/qualify_tiers.py`) and refuses to run until there are accepted meshes
+    to qualify against, which is Phase 3's output. No tier is qualified and
+    `settings_3d.PROFILES` is untouched.
+  - *Phase 6* — the whole of the judge's Phase 1: migration 7, the
+    `unlabelled_references` query, the findings stage filter, `warlock/judge.py`,
+    `service/judge.py` and the labelling grid in Review with both image probes. It
+    waits on a labelling session, not on code.
+  - Also Phase 9's three leftover inspector decisions (`TODO.md` §6), decided and
+    shipped.
+- **Phases 7 and 8 are not started**, and are carried in `TODO.md` §11 and §12.
+  Phases 3, 5 and 6's remaining halves are in `TODO.md` §2, §3 and §7–§10, which
+  now describe *runs to perform* rather than code to write. Three places where the
+  Phase 6 text below was implemented differently — each because following it
+  literally left a hole — are recorded in `TODO.md` §7 under "As built" rather
+  than corrected here.
 
 Two known defects in the text below, both left in place rather than silently
 edited: the numbering collides with `TODO.md`'s own `§` numbers (they are
