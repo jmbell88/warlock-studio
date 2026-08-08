@@ -189,94 +189,52 @@ creates a *new* job and copies `input.png` across, so it never rewrites the sour
 and leaves no `paint.ora` stale. The one path that does rewrite it in place is Inker's Revert, whose
 confirm now names the layered document instead of "every edit".
 
-## Phase 3 — UX: keyboard, notifications, library, forms, layout
+## Phase 3 — UX: keyboard, notifications, library, forms, layout — **done**
 
-*Interaction polish on a fast (Phase 1) and honest (Phase 2) base. Ordered
-keyboard-first because I75–I78 (shortcuts, Esc, modal keys, real dialog queueing) are
-prerequisites several later items lean on — a command palette or context menu is only
-worth adding once modals and focus behave.*
+*A record, not a queue. What each item concluded is in `CLAUDE.md` and in the comments at each
+site; the tests are `tests/test_mode_keys.py`, `tests/test_palette.py`,
+`tests/test_notifications.py`, `tests/test_library_browsing.py`, `tests/test_forms_and_layout.py`,
+and the additions to `tests/test_studio_smoke.py`. All 43 items landed. Nine things are worth
+carrying forward because they are decisions rather than edits:*
 
-### I. Keyboard & input
+- **The mode switch is `Alt`+1..8, not Ctrl.** It has to be checked *above* Inker, Clay and Review,
+  which consume every key they are given — so whatever it names, it takes from them permanently.
+  Inker already bound Ctrl+0/Ctrl+1 to its zoom and Phase 4's Clay17 wants Ctrl+1/3/7. The digits
+  come from `modes.MODES` positionally, so the binding is the picture on screen.
+- **`previous_mode` is sampled once per key event, not once per frame** (`App._note_mode`). F1
+  changes the mode from inside `_shortcut`, so a frame-start sample would still hold the mode from
+  before it and Esc would go two steps back. Home is the floor rather than a place you escape from.
+- **`ConfirmQueue`/`PromptQueue` are real queues and `pending` is read-only.** Assigning `None` to
+  it was how a caller cancelled, which on a queue discards everything behind it too (`dismiss()`).
+  `_request_quit`'s three hand-nested lambdas became a list walked by index — the *chain* stays,
+  because cancelling the first must not leave two more questions to dismiss.
+- **A modal owns the keyboard while it is up**, so the frame loop stops dispatching shortcuts:
+  otherwise one Esc both cancels the dialog and leaves the mode behind it. Releases still pass,
+  because Inker's space-to-pan is a hold.
+- **Four toast levels as a table of dwell times, and the ladder is reading time rather than
+  severity** — which is why success and info share one. An unknown level renders as an ordinary
+  notice, the rule `action` already followed. A sweep raises exactly *one* toast, judged against
+  the loaded window, which fails in the safe direction.
+- **`parse_query` treats an unrecognised prefix as free text.** Silently reinterpreting a colon
+  somebody typed on purpose is how a search starts returning nothing with no explanation. Field
+  terms *add* to the combos rather than overriding them.
+- **Every sort buckets its unanswerable rows last, in both directions** — the rule `best` already
+  followed for an unranked job, generalised. "Unknown" is not a value at one end of a scale.
+- **The trash is migration 9's `deleted_at`, and card Delete stopped asking**: the trash is the
+  confirmation and a better one. Trashing a *queued* job cancels it, because deleting used to remove
+  the row so the worker never saw it. Prune deliberately still deletes from disk.
+- **The theme hook is a PEP 562 `__getattr__` on `theme`**, so `theme.ACCENT` — written at dozens of
+  call sites — is a live lookup. A module constant would have repainted imgui's style and left every
+  hand-drawn rect on the old colours. Two palettes of the same names; the light one keeps the
+  elevation *roles* rather than inverting the numbers.
 
-1. **I75** — Mode-switch shortcuts (Ctrl+1..8) (`main.py:868`).
-2. **I76** — Esc leaves Home/Manual/Settings.
-3. **I77** — Modal keyboard access: Enter-to-confirm, Esc-to-cancel, default focus on
-   Confirm.
-4. **I78** — Make `ConfirmQueue`/`PromptQueue` actually queue (`dialogs.py:96, 145`);
-   remove `_request_quit`'s hand-nested guards (`main.py:969`).
-5. **I79** — Arrow-key navigation in the library.
-6. **I81** — Label the shortcuts button (`main.py:1812`); say on screen that F1 opens
-   the Manual.
-7. **I82** — Right-click context menu on library cards.
-8. **I80** — Command palette / quick-open (largest item; after the above so it has
-   commands to bind).
-9. **I83** — Drag a library card onto the 3D source slot.
-10. **I84** — Drag-reorder Inker layers; multi-select in the Clay outliner.
+Two items were already satisfied and are recorded as such rather than re-done: **I84** (Inker's
+layer drag-reorder and the Clay outliner's Ctrl/Shift multi-select both existed, and both are gated
+on `busy`). K94's *disable-with-reason* landed; offering more tiers stays gated on R133.
 
-### H. Notifications & feedback
-
-11. **H68** — Success/warning toast levels (do first — H67/H69 build on the levels).
-12. **H67** — Toast history view (bell icon or diagnostics popup).
-13. **H69** — Pause toast TTL on hover; "+N more" over the 5-visible cap.
-14. **H70** — Drop-target visual feedback (`main.py:934`).
-15. **H71** — Fix the wrong-mode drop message (`main.py:954`): in 2D a drop is a
-    conditioning reference, not a mesh.
-16. **H72** — Placeholder glyph for missing thumbnails (`library.py:236`).
-17. **H73** — Extend `empty_state` to the six lists lacking one (Inker layers,
-    Profiles, sheet panel, pose panel, Review's run list, manual search).
-18. **H74** — Add an `inker` key to `overlay.placeholder` and upgrade to the
-    icon+title+hint style.
-19. **N108** — Extend `TOAST_ACTIONS` beyond "log": job-transition toasts get "Show"
-    (selects the job in the library).
-20. **N109** — Aggregate sweep-completion toasts into one "Sweep finished — N done,
-    M refused" with a "Review" action.
-
-### J/O. Library & browsing
-
-21. **J85** — More sort options (`library.py:131`): name, size, duration, kind,
-    asc/desc.
-22. **J87** — Filter syntax (`state.py:167`): `tag:` / `status:` / `kind:` prefixes.
-23. **J88** — Resolve "filters only apply to the loaded window" (`library.py:65`).
-24. **J86** — Search boxes for the small lists (Clay outliner, Inker layers, Profiles,
-    Review runs, pose list).
-25. **J89** — Compact/list density toggle; date grouping.
-26. **J90** — Full-name tooltip on truncated card labels (`library.py:243`).
-27. **J91** — Soft-delete / trash for library deletes.
-28. **N115** — "Open folder in Explorer" and "Copy job id" on card overflow/inspector.
-29. **O116** — Configurable prune keep-count (spinner in the confirm).
-30. **O119** — "Jump back to newest" reset for the grown library window
-    (`jobs_cache.py:64`).
-
-### K/M/L. Forms, panes, layout
-
-31. **K92** — Sticky submit footer on the 2D form.
-32. **K93** — Tooltip coverage for the dense panes (inspector, landing, app-settings,
-    profiles, pose, retarget, inker-layers, clay-props/outliner, sheet).
-33. **K94** — Disable-with-reason on the one-option Budget combo (`settings_3d.py`).
-    *Offering more tiers is gated on R133 (Phase 4, gated).*
-34. **K95** — Add the missing `custom_triangles` widget (`state.py:118`) or remove the
-    state.
-35. **K96** — Slider / unit-hinted drag for 3D "Size (m)".
-36. **K97** — Route the ~15 hardcoded pixel sizes through `sp()` (`dialogs.py`,
-    `profiles_panel.py`, `inker_canvas.py`, `inker_bridge.py`, `settings_2d.py`,
-    `settings_3d.py`, `inker_colors.py`).
-37. **K98** — Derive the library footer reservation from the bulk bar's real height
-    (`library.py:45`).
-38. **K99** — Rebuild the font atlas on UI-scale change (`app_settings.py:63`).
-39. **K100** — In-UI "effective configuration" table (reads the data source S140
-    built; editable config is a later follow-on).
-40. **M106** — Sidebar width option (narrow/default/wide) (`layout.py`).
-41. **M107** — Keyboard navigation on the Home tiles (with I75/I76).
-42. **M105** — Light theme / theme hook (`tokens.py:82`) — last; the palette is
-    centralized so this is mostly sweep work, but it touches everything visually.
-43. **L104** — Progress on the sprite-sheet direction strip (filled/remaining count
-    from the existing `viewer.stripping` state).
-
-**Phase 3 verification:** `uv run pytest`; the smoke tests in
-`tests/test_studio_smoke.py` guard the `same_line`-past-the-edge class of layout bug —
-extend them for new controls; `sp()` items checked at 150–200 % display scale; dialog
-queueing (I78) gets a regression test for the double-ask case `_request_quit` worked
-around.
+**Not visually verified.** Everything here has GL smoke coverage — every pane builds, in both
+palettes, at every sort and density — but no human has looked at a running window. The light theme
+and the compact library row are the two most likely to want an eye.
 
 ---
 
