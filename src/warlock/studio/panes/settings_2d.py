@@ -59,12 +59,16 @@ def draw(ctx: Any) -> None:
     _submit(ctx, form)
 
 
-# The eleven optional taxonomies, grouped by what they describe. Grouping and
+# The twelve optional taxonomies, grouped by what they describe. Grouping and
 # per-field labels are the fix for the old column of identical unlabelled
 # combos, where a chosen value ("worn", "brass") no longer said which question
 # it answered.
 GUIDANCE_GROUPS = (
-    ("Subject", ("category", "genre", "setting", "silhouette")),
+    # ``framing`` sits here rather than in the 3D pane: it is a clause of the
+    # SDXL prompt, so the one-owner rule puts it with the pane that owns the
+    # prompt. It is not in TILE_FIELDS, so guidance_groups drops it for a tile,
+    # which is right -- TILE_TEMPLATE has a framing of its own.
+    ("Subject", ("category", "genre", "setting", "silhouette", "framing")),
     ("Style", ("art_style", "palette", "mood", "rarity")),
     ("Surface", ("material", "condition", "emissive")),
 )

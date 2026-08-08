@@ -44,9 +44,16 @@ from typing import Any
 # composed prompt can lose. It also keeps `negative_prompt` -- which is in
 # vectors.VECTOR_PARAMS -- unchanged, so no stored vector is re-keyed and every
 # unit recorded before today still pairs in findings.comparisons.
+#
+# The view clause is a ``{view}`` slot rather than a literal, filled from
+# ``guidance.FRAMINGS`` (see view_clause below). Whether a front-orthographic
+# plate reconstructs better than a 3/4 view is a question a sweep answers, not
+# one this constant should decide -- and the default fragment *is* the literal
+# that used to be here, so the composed default is byte-identical and
+# PROMPT_VERSION stays at 4.
 PROMPT_TEMPLATE = (
     "{prompt}, a single subject centered on a plain light gray background, "
-    "no other objects, 3/4 perspective view, studio lighting, game asset render, "
+    "no other objects, {view}, studio lighting, game asset render, "
     "full object in frame, no cropping, no text, no watermark"
 )
 
@@ -95,6 +102,14 @@ TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_styl
 # object path's output genuinely moves, which is the case this counter exists
 # for: an object recipe recorded under 1-3 no longer reproduces byte-for-byte,
 # and a benchmark comparing across the bump is comparing two compilers.
+#
+# Deliberately *not* bumped for the ``framing`` field: the view clause moved out
+# of PROMPT_TEMPLATE into guidance.FRAMINGS, and the default fragment is the
+# string that used to be inline, so every recipe recorded under 4 still
+# reproduces byte-for-byte. A recipe that *asks* for front_ortho is a different
+# configuration, not a different compiler -- that is what a vector records, and
+# vectors.VECTOR_PARAMS carries the key. tests/test_prompt.py pins the default
+# composition as a literal, which is the whole argument for leaving this at 4.
 PROMPT_VERSION = 4
 
 _tokenizer_cache: dict[Path, list[Any]] = {}
@@ -233,6 +248,20 @@ def pad_pair(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
     return (a + [""] * (n - len(a)), b + [""] * (n - len(b)))
 
 
+def view_clause(framing: Any = None) -> str:
+    """The fragment PROMPT_TEMPLATE's ``{view}`` slot takes for a framing key.
+
+    A thin forward to guidance.framing_clause, imported lazily exactly as
+    build() imports compose_prompt: this module stays importable with no
+    taxonomy loaded, and text2image.py -- which already imports the templates
+    from here -- gets the clause from the same place the preview does, so the
+    two can never disagree about what a stored ``framing`` means.
+    """
+    from .. import guidance
+
+    return guidance.framing_clause(framing)
+
+
 def build(
     user_prompt: str, params: dict[str, Any], *, trigger: str = "", tile: bool = False
 ) -> str:
@@ -251,5 +280,8 @@ def build(
         user_prompt, params, fields=TILE_FIELDS if tile else None
     )
     template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
-    text = template.format(prompt=composed)
+    # ``view`` is passed to both templates and consumed by one: TILE_TEMPLATE
+    # has its own flat top-down framing, so the field is inert on a tile rather
+    # than composing two cameras into one prompt.
+    text = template.format(prompt=composed, view=view_clause(params.get("framing")))
     return f"{trigger}, {text}" if trigger else text

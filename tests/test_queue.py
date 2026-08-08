@@ -1896,9 +1896,15 @@ async def test_the_prompt_preview_mirror_agrees_with_the_worker_and_the_pipeline
     assert prompt_lib.build("cobblestone", params, tile=True) == (
         prompt_lib.TILE_TEMPLATE.format(prompt=tile_composed)
     )
+    # ``view`` is the other half of what the worker hands generate(): the
+    # framing clause travels beside the composed subject rather than inside it,
+    # so the mirror has to apply the same field the worker passed along.
     assert prompt_lib.build("cobblestone", params) == (
-        prompt_lib.PROMPT_TEMPLATE.format(prompt=ref_composed)
+        prompt_lib.PROMPT_TEMPLATE.format(
+            prompt=ref_composed, view=prompt_lib.view_clause(params.get("framing"))
+        )
     )
+    assert worker._text2image.framings == [str(params.get("framing") or "")] * 2
 
 
 async def test_a_tile_is_measured_for_seams_not_for_composition(worker, monkeypatch):

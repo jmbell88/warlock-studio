@@ -185,6 +185,10 @@ class FakeText2Image:
         self.conditionings: list = []
         self.tiles: list[bool] = []
         self.sheets: list[bool] = []
+        # The framing key travels beside the composed prompt rather than inside
+        # it -- it fills PROMPT_TEMPLATE's view slot -- so it is recorded here
+        # rather than being readable off ``prompts``.
+        self.framings: list[str] = []
         self.last_prompt = ""
         self.last_recipe: dict = {}
 
@@ -203,10 +207,12 @@ class FakeText2Image:
         cancel_event=None,
         tile=False,
         sheet=False,
+        framing="",
     ):
         self.prompts.append(prompt)
         self.tiles.append(tile)
         self.sheets.append(sheet)
+        self.framings.append(framing)
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
