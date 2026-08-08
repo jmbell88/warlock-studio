@@ -1,78 +1,95 @@
 # TODO
 
-Consolidated 2026-08-07 from `SUGGESTIONS.md`, `CAMERA.md` and `ANALYSIS.md`,
-which this file replaces. Everything here is grounded in something observed —
-the 100-unit SNES-rogue sweep (`scripts/sweep_rogue.py`, sweeps `b5c47248e13d`
-"rogue - render" and `8340cd0b2f5a` "rogue - depiction") or the QA audit of the
-same day — not in a reading of the code alone.
+The live roadmap. Consolidated 2026-08-07 from `SUGGESTIONS.md`, `CAMERA.md` and
+`ANALYSIS.md`, which this file replaces; revised 2026-08-08 after the Night 1 and
+Night 2 build runs. Everything here is grounded in something observed — the
+100-unit SNES-rogue sweep (`scripts/sweep_rogue.py`, sweeps `b5c47248e13d`
+"rogue - render" and `8340cd0b2f5a` "rogue - depiction"), the QA audit of
+2026-08-07, or the two build runs since — not in a reading of the code alone.
 
-**Sweep state.** Both sweeps ran to completion: 100 attempted, 83 done, 17
-refused, 3.7 h GPU. All 17 refusals had one cause — more than one object in the
-reference — and the occupancy and edge-runoff gates never fired once. **The 83
-meshes were reviewed on 2026-08-07** (88 latest-wins verdicts in the DB, 84 of
-them sweep-scoped, an 11.3 h session). **Three were accepted.**
+**Two numbering schemes exist and they are not the same.** This file's `§`
+numbers are its own. The overnight build plan (pasted into a session, never
+written to disk — recover it from the transcript, see the
+`warlock-master-plan-location` memory) numbers its work `Phase 0`–`Phase 9`.
+Where an item here corresponds to one of those phases, it says so. Nothing in
+this file is named after the phase numbers alone, because two of them collided
+once already.
 
-**Implementation state, 2026-08-07 (later the same day).** Items 0 (the code
-half), 1, 2, 3, 4 and 6 are **done and removed from this file**; what they
-concluded is now recorded in `CLAUDE.md` and in the comments at each site. What
-remains below is what is genuinely still open: two GPU sessions nobody has run
-(§0), a note waiting on their numbers (§7), a qualification pass waiting on the
-same (§5), and the quality judge (§8–§11). §12 is a closed record.
+**Implementation state, 2026-08-08.** Night 1 shipped fourteen packages (0a–0f,
+9a–9d, 9h, 9i) and Night 2 shipped four (the matte preview, mesh candidates,
+weld-before-heat rigging, and the model downloader). Master is at `84b7e4f`:
+**3464 passed / 7 skipped** with native kernels on, **3344 / 127** with
+`WARLOCK_NATIVE=0`, lint clean. What those packages concluded is recorded in
+`CLAUDE.md` and in the comments at each site, not here.
 
-The removed items, one line each, so an old reference can be chased:
-
-- **0 (partial)** — `guidance.DEFAULT_BG_REMOVAL` is `birefnet`, gated on
-  `birefnet.gguf` via `guidance.default_bg_removal`, applied in `create_job`,
-  `promote_to_model`, the sweep admission check, the prompt preview and the
-  form's own defaults. The two GPU halves are **not** done and are §0 below.
-- **1** — `PROMPT_TEMPLATE` no longer says "game asset concept art" (a
-  character sheet is the canonical form of the genre it was asking for) and now
-  says "a single subject … no other objects". `PROMPT_VERSION` 3 → 4.
-  `negative_prompt` was deliberately left alone, so no stored vector is
-  re-keyed and every unit recorded before today still pairs.
-- **2** — `Config.reference_retries` 0 → 2. The reroll machinery already
-  existed and already held `mesh_seed` fixed; only the default was wrong.
-- **3** — `reference.REFUSAL_CODES` + `Report.codes`;
-  `vectors.observation_metrics` emits `refused` and `refused_<code>` as 0.0/1.0
-  so the mean is a rate; `_process` records an observation on `error` as well
-  as `done` (never on cancel); `_metric_summary` averages them and the hint
-  tier renders `"refused 50% (6 references)"`.
-- **4** — `findings.json` v3 gains a `prompts` section, and
-  `bench.findings.hint(..., prompt_hash=…)` prefers this subject, falls back to
-  the pooled corpus, and says which. Both generate panes pass their subject.
-- **6** — `MAX_UNITS`'s comment now says what it is (a runaway-fan-out guard),
-  not what it never measured (a time budget).
-
-One thing found while doing them, since it was not in any of the source
-documents: **`vendor/gltfpack/gltfpack.exe` is now present.** Two admission
-tests had been asserting a named tier is refused "while gltfpack is absent"
-against the machine's real `vendor/` directory, and went red the moment it
-arrived. The `svc` fixture now pins `WARLOCK_GLTFPACK` — and
-`WARLOCK_TRELLIS_MODELS`, which the new matte gate reads — at empty tmp paths,
-which is the rule `CLAUDE.md` already states for `warlockc.dll`.
+What remains below is what is genuinely still open: **verification debt from work
+that shipped without ever touching a GPU or the network (§1)**, the two GPU
+sessions nobody has run (§2), three items waiting on their output (§3, §4, §5), a
+small UI decision (§6), and the quality judge (§7–§10).
 
 ---
 
-## 0. Two GPU sessions, and nothing else in this file should start before them
+## 1. Verification debt — three runs, and none of them are optional
 
-The code change is done (see above). Neither of the two runs it was meant to
-enable has happened, and **items 5, 7 and 9 are all waiting on them.**
+Night 2's four packages were built and tested entirely headless. Every claim
+below is proven at the level of bookkeeping, arithmetic and imgui frames
+building, and **unproven at the level of the thing actually working**. This is
+the newest item in the file and the one with the shortest path to an unpleasant
+surprise.
+
+1. **One real N-candidate promote.** Candidates 1/2/3 is proven as columns,
+   seeds, admission, dissolve, filter and picker. Nothing has ever reconstructed
+   three meshes. What is untested is the *feel*: three real two-minute runs
+   queueing in order, the picker updating as each lands, and the viewport
+   swapping between finished candidates through `_sync_viewer`'s off-thread
+   parse. That last one is where a bug would actually live.
+2. **One real download.** Every test stubs `snapshot_download`. Unverified:
+   resume semantics, whether `allow_patterns` with an exact path behaves like
+   `hf download <file>`, and whether the merged IP-Adapter pattern really fetches
+   both halves. The staging-directory contract (a failure leaves nothing behind)
+   was tested with a stub that raises, not with a real network drop. Also
+   untested live: that the child dies with the app — verified structurally, by
+   the package-wide `winjob.assign` scan, but nobody has killed the app mid-fetch.
+3. **One rig of a real trellis mesh.** This is the big one. **Phase 4's central
+   hypothesis — that welding lets `ARMATURE_AUTO` succeed where it currently
+   falls back to envelope weights — has never been tested against a real
+   reconstruction.** What *is* now measured (and was not, until the Night 2
+   integration run made the test actually execute) is that the weld is
+   **invisible**: per-loop UVs, face count and exported texture bytes come back
+   identical across it. Invisible is not the same as effective. Until a real
+   trellis mesh goes through it, the weld is a well-argued change with a parity
+   proof attached, not a fix.
+
+Also unmeasured, and cheap to fix when convenient: roughly half the `size_gib`
+figures behind the downloader's disk-space refusal are estimates rather than
+measured sizes (IP-Adapter, ControlNet, BiRefNet, DINOv2/ViTPose and the style
+LoRAs). Understating only ever weakens the refusal, never causes a wrong one, so
+this is untidiness rather than a bug — but they should not be quoted as facts.
+
+---
+
+## 2. Two GPU sessions, and the measurement items still wait on them
+
+*(The build plan's Phase 3. Code work is sweep-spec preparation; the GPU time is
+the user's. §3, §4 and §5 are all waiting on the output.)*
+
+The code changes these were meant to enable are done. Neither run has happened.
 
 ### What the review found
 
 **3 accepts in 83.** All three are `bg_removal=birefnet`; `auto` went 0 for 80.
-It is the only signal in the corpus — `bench/findings.json` has `bg_removal` as
-the **sole** comparison with a non-zero win count (`a_wins=0, b_wins=3,
-ties=1`). Every other axis, in both sweeps, is all ties: base_model, style_lora,
-silhouette, palette, condition, mood.
+It is the only signal in the corpus — `bg_removal` is the **sole** comparison
+with a non-zero win count (`a_wins=0, b_wins=3, ties=1`). Every other axis, in
+both sweeps, is all ties: base_model, style_lora, silhouette, palette, condition,
+mood.
 
 At n=4 that would normally be a curiosity. Three things make it more:
 
 - **The matched pairs are byte-identical upstream.** `input.png` hashes the same
   for `baseline s23` and `bg_removal=birefnet s23`, and for s42, s77 and s101.
   Same reference image, same seed, one knob — `bg_removal` is passed to
-  trellis-server at reconstruction time (`trellis.py:392`), so nothing about the
-  picture differs. This is a controlled A/B, not a confounded marginal.
+  trellis-server at reconstruction time, so nothing about the picture differs.
+  This is a controlled A/B, not a confounded marginal.
 - **The failure mode changes, not just the rate.** 58 of 80 `auto` rejects are
   tagged `broken`; 0 of 4 birefnet are (its one reject is `bad-shape`). A rate
   shift at n=4 is weak evidence; a rate shift plus the disappearance of the
@@ -80,12 +97,20 @@ At n=4 that would normally be a curiosity. Three things make it more:
 - **It is not review drift.** The accepts land at review positions **46, 48 and
   83** of 84, with 34 consecutive rejects between the second and the third.
 
-**The mechanism.** `doctor.py:118` — without `birefnet.gguf` matting "falls back
-to a threshold cutout" — and `auto` "lets the server decide" (`trellis.py:397`).
-A threshold cutout on a deliberately dark brief ("black and silver and blue")
-leaves background attached, and TRELLIS reconstructs it into a solid slab.
-`models/trellis2-gguf/birefnet.gguf` is present, so the learned matte was
-available the whole time and simply was not being asked for.
+**The mechanism.** Without `birefnet.gguf`, matting falls back to a threshold
+cutout, and `auto` lets the server decide. A threshold cutout on a deliberately
+dark brief ("black and silver and blue") leaves background attached, and TRELLIS
+reconstructs it into a solid slab. `models/trellis2-gguf/birefnet.gguf` is
+present, so the learned matte was available the whole time and simply was not
+being asked for.
+
+**One caveat on the evidence trail, found during Night 1.** The suite was
+destroying `bench/findings.json` on every run — silently, because the file is
+derived and nothing recomputed it. The bench directory is pinned by a fixture
+now and the file has been regenerated (299,768 bytes, and it survives a full
+suite). The figures above were re-derived from the verdicts in the DB, which is
+where they always lived; the denormalized `vector` column is exactly what made
+that recovery possible after `prune_jobs` took the job rows.
 
 ### The two runs
 
@@ -96,13 +121,20 @@ available the whole time and simply was not being asked for.
    single-reviewer, and the app shows the params. 8–12 units, birefnet against
    auto, labels hidden, is cheap next to a 3.7 h sweep.
 2. **Re-run the render sweep with birefnet as the baseline**, check the accept
-   rate is workable, and only then re-run the depiction axes on top of it.
+   rate is workable, and only then re-run the depiction axes on top of it. The
+   re-run now also carries the **framing axis** for character subjects, which
+   Night 1's 0e made expressible (front-ortho A/T-pose against global 3/4).
 
-Note that the re-run measures a *second* change as well now: `PROMPT_TEMPLATE`
-moved (item 1), so a unit from the new run is not comparable with one from the
-old on the prompt axis either. Both changes are deliberate and both land before
-the re-run, which is the right order — a sweep around a broken base measures the
-brokenness — but the re-run is the first corpus in which either is measured.
+Note the re-run measures more than one change: `PROMPT_TEMPLATE` moved
+(`PROMPT_VERSION` 3 → 4), so a unit from the new run is not comparable with one
+from the old on the prompt axis either. All the changes are deliberate and all
+land before the re-run, which is the right order — a sweep around a broken base
+measures the brokenness — but the re-run is the first corpus in which any of them
+is measured.
+
+**After verdicts:** write the framing measurement doc. If `front_ortho` wins for
+characters, flip the per-category default *then* — that is the `PROMPT_VERSION`
+4 → 5 moment, and the findings-corpus split is the documented cost.
 
 ### `hole_worst` is not weakly informative. It is backwards.
 
@@ -115,22 +147,24 @@ median hole_worst — rejects 0.0000, accepts 0.0304
 
 The accepted meshes have *more* measured holes than the median discarded one,
 because a slab has no holes: `meshaudit` scores the dominant failure mode as
-perfect. This is the calibration case item 8 was written to find, and it came
-out inverted from what that document assumed. Anywhere below that reads a low
-hole fraction as evidence of quality is wrong, and is corrected in place.
+perfect. Anywhere that reads a low hole fraction as evidence of quality is wrong.
+This supersedes `docs/measurements/2026-08-04-hole-rate-baseline.md`, which the
+re-run's measurement doc should say explicitly.
+
+Note this is `meshaudit` (the silhouette question), **not** `meshreport` (the
+importer question) — see §3 for what happened to the other one.
 
 ### Sweep B measured nothing, and the design is the lesson
 
 45 units, four axes, zero accepts, every comparison a tie. `bg_removal` was
 pinned at `auto` throughout, so the variable that dominates the verdict was held
-fixed at its bad value while the axes under study varied. That is a floor
-effect: OFAT around a baseline that fails ~96% of the time has no headroom to
-detect an improvement in anything. Roughly half the GPU time bought one finding
-about a knob that was an afterthought in the design.
+fixed at its bad value while the axes under study varied. That is a floor effect:
+OFAT around a baseline that fails ~96% of the time has no headroom to detect an
+improvement in anything. Roughly half the GPU time bought one finding about a
+knob that was an afterthought in the design.
 
 **The rule that follows: establish a baseline that produces acceptable output at
-a workable rate before fanning out.** A sweep around a broken base measures the
-brokenness.
+a workable rate before fanning out.**
 
 ### What the review says about the checkpoints: nothing yet
 
@@ -141,84 +175,93 @@ worst meshes (0.48 and 0.61 worst-view hole fraction). But every checkpoint ran
 under `auto`, so all of them were being judged through the same defect. Neither
 number picks a checkpoint, and the re-run is what settles it.
 
-**The re-run will now say this itself**, which it could not before: item 3 makes
-a refusal an observation, so `findings.json` carries `refused_multi_object` as a
-per-checkpoint rate and the hint under the base-model select reads it. The
-refusal half of that contradiction stops being something only a human trawling
-the jobs table can see.
+**The re-run will now say this itself**, which it could not before: a refusal is
+an observation, so `findings.json` carries `refused_multi_object` as a
+per-checkpoint rate and the hint under the base-model select reads it.
 
 ---
 
-## 5. Qualify the gltfpack tiers
+## 3. Qualify the gltfpack tiers
 
-**The binary is vendored now** — `vendor/gltfpack/gltfpack.exe` arrived on
-2026-08-07 — so `pipelines/optimize.py`, the config field, the doctor check and
-the retarget panel's full tier list are all live. What is *not* done is the
-qualification: a tier stays unqualified until it has been run against a chest, a
-sword and a rock and shown to keep UVs, both PBR maps and material assignment.
-`Config.mesh_profile` stays `raw` until then, and the generate forms still offer
-only `raw`.
+*(The build plan's Phase 5. Binary present; corpus from §2.)*
 
-**Observed.** All 83 meshes: 177k–299k triangles, 0 of 83 watertight, unmoved by
-any sweep axis — `gltfpack` being absent rather than a settings effect.
+`vendor/gltfpack/gltfpack.exe` arrived on 2026-08-07, so `pipelines/optimize.py`,
+the config field, the doctor check and the retarget panel's full tier list are
+all live. What is *not* done is the qualification: a tier stays unqualified until
+it has been run against a chest, a sword and a rock and shown to keep UVs, both
+PBR maps and material assignment. `Config.mesh_profile` stays `raw` until then,
+and the generate forms still offer only `raw`.
 
-**The qualification corpus is not this sweep.** 80 of these 83 meshes were
-rejected, and a tier test needs meshes worth keeping: the question is whether a
-tier preserves UVs, both PBR maps and material assignment, which cannot be
-judged on output that is already broken. Qualify against the **re-run** (§0).
-The three accepted birefnet meshes are a start and are not enough.
+**Harness:** run draft/standard/detailed through the existing
+`pipelines/optimize.py` + `service.jobs.optimize_job` path, with automated
+per-tier checks (UVs survive, both PBR maps survive, material assignment
+survives) plus a before/after render sheet. On pass, expose the tiers in
+`panes/settings_3d.PROFILES`. Leave `Config.mesh_profile` at `raw` — the default
+flip is a separate decision.
 
-## 6. Judge the landmark-informed rig against a real reference
+**The qualification corpus is not this sweep.** 80 of the 83 meshes were
+rejected, and a tier test needs meshes worth keeping: whether a tier *preserves*
+something cannot be judged on output that is already broken. Qualify against §2's
+re-run. The three accepted birefnet meshes are a start and are not enough.
 
-**The code is done and the model half is exercised.** `pipelines/pose2d.py`, the
-`template_bones` seam through `rig_spec`/`op_rig`, the `_wants_landmarks` gates,
-the doctor row and `WARLOCK_POSE_FIT` all landed on 2026-08-07 with 50 tests,
-including one that runs a landmark-fitted rig through a real Blender.
-`models/vitpose-base` was downloaded the same day and the whole production path
-was run once by hand against `assets/test/player.png` — a front-facing armoured
-biped with its arms **down**, which is the case the feature exists for:
+**Correction — the old triangle/watertight figures here were measuring the wrong
+thing.** This section used to record "177k–299k triangles, **0 of 83
+watertight**, unmoved by any sweep axis". The triangle counts stand. The
+watertight figure does not: Night 1's 0c package found `meshreport` was counting
+**xatlas UV-seam splits** as holes, so it was answering a question about the
+atlas rather than about the mesh. `meshreport` now welds by position
+(`WELD_TOLERANCE`, quantised onto a lattice) before judging. **Every watertight
+number recorded before 2026-08-08 is void**, including the "0 of 83" that was
+offered as a Phase-3 baseline. Re-measure on the re-run; do not carry the old
+figure forward.
 
-- all 17 landmarks detected, worst required score 0.822, mean 0.910;
-- `_landmark_bones` → 19 bones and
-  `fit={"method": "pose2d", "model": "vitpose", "confidence": 0.91,
-  "confidence_min": 0.822}`, through `rig_spec` into a real `op_rig`, with
-  `rig.json` carrying it and `weighting: automatic`;
-- with the model root pointed elsewhere, the same job produced a spec with
-  neither key and `fit: {"method": "bbox"}` — the old path exactly;
-- the placement is right where the template is worst: this subject's shoulders
-  sit at x ±0.274 against the template's ±0.100 and its feet at ±0.25 against
-  ±0.07, so the bbox fit was putting both arms and both legs *inside the
-  torso*.
+---
 
-**What is still not verified, and it is the one that would be invisible.** The
-mapping takes COCO's anatomical left to the template's +X (`humanoid.json`: "+X
-is the subject's left"), on the reasoning that a subject facing the camera has
-their left at the larger pixel x. The image half of that is now confirmed on a
-real detection, and
-`test_a_subjects_left_arm_lands_on_the_templates_positive_x_side` pins the
-convention — but whether **trellis reconstructs with the same handedness** is a
-fact about the exe, and the check above used a symmetric box as its stand-in
-mesh because `jobs.sqlite` is empty and no reconstruction survives. A mirrored
-skeleton looks perfectly plausible in a still. So: on the first mesh out of the
-§0 re-run, rig an *asymmetric* subject and look at which side the skeleton's
-`.L` bones came out on. Nothing else in this file depends on the answer, and a
-flip is a one-line sign change if it is wrong.
+## 4. The rig questions
 
-Also unjudged, because it needs meshes worth rigging: whether the placement
-actually improves the **skin weights**, which is the only reason any of this
-matters. The detector tracks the inner edge of bulky armour rather than the
-limb's centre line, which is visible in the overlay and may or may not cost
-anything once Blender's automatic weights run.
+*(Rig handedness and weight quality. The build plan's Phase 4 shipped the weld
+chain; these are what it did not settle.)*
 
-Two further things are deliberately out of scope and stay that way until the §0
-re-run: skeleton-conditioned *generation* (ControlNet OpenPose, so the reference
-is drawn in a pose rather than measured after the fact) and non-humanoid
-templates (a quadruped needs an AP-10K model and its own mapping;
-`pose2d.POSE_FIT_TEMPLATES` is the extension point).
+**Weld-before-heat is in and its parity is proven; its effectiveness is not.**
+See §1.3 — this is the same item, listed there because it is verification debt
+and here because it is the rigging thread. `_skin` now runs weld → verify →
+unwelded heat → envelope, with the decision carved into a bpy-free
+`_skin_steps` so it is testable without Blender, and `automatic-welded` joined
+the `rig_meta` vocabulary 0d surfaces.
 
-## 7. `art_style=snes` fights an explicit colour brief
+**Handedness is still unverified, and it is the one that would be invisible.**
+The mapping takes COCO's anatomical left to the template's +X (`humanoid.json`:
+"+X is the subject's left"), on the reasoning that a subject facing the camera
+has their left at the larger pixel x. The image half is confirmed on a real
+detection and `test_a_subjects_left_arm_lands_on_the_templates_positive_x_side`
+pins the convention — but whether **trellis reconstructs with the same
+handedness** is a fact about the exe, and the check used a symmetric box as its
+stand-in because no reconstruction survives in `jobs.sqlite`. A mirrored skeleton
+looks perfectly plausible in a still. So: on the first mesh out of §2's re-run,
+rig an *asymmetric* subject and look at which side the `.L` bones came out on.
+Nothing else depends on the answer, and a flip is a one-line sign change.
 
-**No code change yet — this is a note for whoever reads the sweep results.**
+**Whether landmark placement improves the actual skin weights is unjudged**,
+which is the only reason any of it matters. The detector tracks the inner edge of
+bulky armour rather than the limb's centre line, visible in the overlay, and may
+or may not cost anything once Blender's automatic weights run. The deformation
+battery (`templates/deform_qa/humanoid.json` — squat, arms overhead, elbow and
+knee 90°, torso twist, rendered through the existing sheet pipeline as
+`rig_qa.png`) is the artifact for judging this by eye. Scoring waits for the
+judge (§7).
+
+Deliberately out of scope until the re-run: skeleton-conditioned *generation*
+(ControlNet OpenPose, so the reference is drawn in a pose rather than measured
+after the fact) and non-humanoid templates (a quadruped needs an AP-10K model and
+its own mapping; `pose2d.POSE_FIT_TEMPLATES` is the extension point). The
+deformation battery ships for `humanoid` only, for the same reason — a squat
+means nothing to a fish.
+
+---
+
+## 5. `art_style=snes` fights an explicit colour brief
+
+**No code change yet — this is a note for whoever reads the re-run's results.**
 
 The brief asked for "black and silver and blue"; the composed prompt reads "…
 grim dark mood, **vivid saturated colours**, bold simple shapes, …", contributed
@@ -227,31 +270,54 @@ sweep's base deliberately rather than edited out, but it argues against the
 stated colours.
 
 Sweep B's `palette` axis (`steel` baseline against `mono`, `muted`, `vibrant`)
-was meant to measure the tension directly. If `mono` or `muted` wins clearly,
-the era fragments are over-specifying colour and should describe *shape and
-shading* language only, leaving colour to `palette` and the user's own words.
-That would be a real finding about `guidance.py`, and it is worth waiting for
-the numbers rather than adjusting the fragment on taste.
+was meant to measure the tension directly and returned 0 accepts and all ties —
+the floor effect in §2, not a null result about colour. The question is untouched
+and rides on the re-run. If `mono` or `muted` wins clearly, the era fragments are
+over-specifying colour and should describe *shape and shading* language only,
+leaving colour to `palette` and the user's own words.
 
-**Still unmeasured.** Sweep B returned 0 accepts and all ties on every palette
-comparison — the floor effect in §0, not a null result about colour. The
-question is untouched and rides on the re-run. Note also that a colour finding
-is one of the few things `meshaudit` could never have answered even had the
-meshes been sound: it is a texture judgement, so it needs human verdicts or the
-image probe (§8) regardless.
+Note a colour finding is one of the few things `meshaudit` could never answer
+even had the meshes been sound: it is a texture judgement, so it needs human
+verdicts or the image probe (§7) regardless.
+
+---
+
+## 6. Three small UI decisions that are really one
+
+All three land in the same corner of the 3D inspector, so they are worth deciding
+together rather than one at a time. None blocks anything.
+
+- **Where 0d's rig-weighting verdict shows.** It is written onto the *rig* job,
+  but the Rig & Pose tab normally opens on the **model** job, so the natural
+  selection shows nothing. Two fixes: an mtime-cached `rig.json` read on the
+  frame thread (needs a new `AppState` slot, and must follow the `MTIME_RACE_NS`
+  racily-clean rule), or make `queue._rig` a second writer onto a row the worker
+  owns. The former is preferable — it does not add a writer to a row with a
+  single-owner invariant.
+- **The deformation QA sheet has no button.** `rig_qa.png` reaches
+  `job["files"]` through `LISTED` and is exportable by name, but the inspector's
+  download grid is a hardcoded list, so nothing appears. A thumbnail in the rig
+  section, beside the weighting line above, is the obvious home.
+- **Duplicate "Open in Inker"** — it exists in both the inspector and the
+  viewport toolbar. Keeping both is defensible (the same argument that kept F10
+  beside the status bar); it just needs deciding.
 
 ---
 
 # The quality judge ("CAMERA")
 
 Named for the analogy that produced it: an industrial vision system is shown good
-parts and bad parts, learns the boundary, then inspects on its own. Nothing
-described below exists yet.
+parts and bad parts, learns the boundary, then inspects on its own. **Nothing
+described below exists yet** — verified absent: no `src/warlock/judge.py`, no
+`verdicts.stage`, no `db.unlabelled_references`. Implement the written design;
+do not re-design it.
 
-## 8. Phase 1 — the 2D judge
+*(The build plan's Phase 6.)*
 
-**Its two code prerequisites (old items 3 and 4) are now done.** What it is
-still blocked on is **a labelling pass** — and, for the mesh half, §9's corpus.
+## 7. Phase 1 — the 2D judge
+
+Its code prerequisites are done. What it is still blocked on is **a labelling
+pass** — and, for the mesh half, §8's corpus.
 
 ### Why this is cheaper than it looks
 
@@ -259,43 +325,41 @@ The seam is already built and tested, not hypothetical:
 
 - `verdicts.source` is a free string, never an enum, and `latest_verdicts` keys
   on `(job_id, source)`. A judge's opinion sits *beside* a human's and can never
-  overwrite it (`service/verdicts.py:15-18`).
-- `db.py:733 unverdicted_models(source=...)` filters per source, so a judge run
-  resumes where it stopped; `tests/test_verdicts_db.py:76` already exercises
+  overwrite it.
+- `db.unverdicted_models(source=...)` filters per source, so a judge run resumes
+  where it stopped; `tests/test_verdicts_db.py` already exercises
   `source="ai:demo"`.
 - Verdicts are append-only, latest-wins by max rowid, and carry a
   **denormalized** `vector`, `prompt_hash` and sweep context — which is what lets
   the corpus outlive `prune_jobs` deleting the assets it was learned from.
-- `models/dinov2-base` is downloaded and wired: `bench/metrics.py:145` extracts
-  the normalized CLS token, `_dino_model` (`:96`) caches per `(path, device)`.
-- `service/verdicts.py:38` already defines the vocabulary:
+- `models/dinov2-base` is downloaded and wired: `bench/metrics.py` extracts the
+  normalized CLS token and caches the model per `(path, device)`.
+- `service/verdicts.py` already defines the vocabulary:
   `REASONS = ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")`.
-- **And the corpus is now scoped and carries refusals** — the two things the
-  old items 4 and 3 were prerequisites *for*. `findings.json` v3 breaks
-  marginals out per `prompt_hash`, and a reference refused at the gate is an
-  observation rather than a silent hole in the record.
+- The corpus is scoped per subject and carries refusals: `findings.json` v3
+  breaks marginals out per `prompt_hash`, and a reference refused at the gate is
+  an observation rather than a silent hole in the record.
 
 The missing piece is **calibration**. `meshaudit` and `meshreport` measure holes,
-watertightness, triangles and pivot on every job, and nothing anywhere has ever
+watertightness, triangles and pivot on every job, and nothing has ever
 established that `hole_worst = 0.04` means *reject*. Labelled verdicts are what
 convert a measurement into a decision boundary.
 
 **And the first calibration result is that the boundary runs the wrong way.**
-Against the 84 reviewed meshes, `AUC(hole_worst → reject) = 0.115` — not
-uninformative, inverted (§0). 59% of rejects scored exactly 0.0 and no
-accept did. Two consequences for anything built here. A probe must be trained on
-**pixels**, never on the audit scalars, which would have to be sign-flipped to
-beat a coin and would then be fitting the slab artefact rather than quality. And
-`hole_worst` is disqualified as a sanity check *on* the probe: a probe that
-disagrees with it is, on this evidence, more likely to be right.
+`AUC(hole_worst → reject) = 0.115` — not uninformative, inverted (§2). Two
+consequences. A probe must be trained on **pixels**, never on the audit scalars,
+which would have to be sign-flipped to beat a coin and would then be fitting the
+slab artefact rather than quality. And `hole_worst` is disqualified as a sanity
+check *on* the probe: a probe that disagrees with it is, on this evidence, more
+likely to be right.
 
 ### Where the factory analogy breaks
 
 **Break 1 — two products, not one product and one blank.** In 2D mode the image
-*is* the deliverable: jobs run with `output="reference"`,
-`service.jobs.import_reference` mints one as a finished asset, users export it.
-So the same PNG is sometimes the product and sometimes the input to the next
-machine, and "good" means opposite things:
+*is* the deliverable: jobs run with `output="reference"`, `import_reference`
+mints one as a finished asset, users export it. So the same PNG is sometimes the
+product and sometimes the input to the next machine, and "good" means opposite
+things:
 
 | | Good as a 2D deliverable | Good as a TRELLIS blank |
 |---|---|---|
@@ -315,8 +379,7 @@ blind spots included. `baseline s23` **passed** the rules and is still a poor
 blank; no self-labelled dataset contains that case, and it is precisely the case
 a learned judge exists to catch. **Labels must be human.** What makes the 2D half
 attractive is not free data but *cheap* data: ~2 s to judge an image against
-~15 s for a mesh (load, orbit, assess silhouette and texture) — same label count,
-a fifth of the wall-clock.
+~15 s for a mesh — same label count, a fifth of the wall-clock.
 
 ### Decisions already taken
 
@@ -324,7 +387,7 @@ a fifth of the wall-clock.
 |---|---|---|
 | Authority | **Advisory only** | Files a verdict and sorts Review; never refuses, deletes or retries. The only mode in which its accuracy can be measured before it is trusted. Mirrors the `native.py` doctrine that an optimisation never replaces the reference it is checked against. |
 | Labelling and training | **In-app, in Review mode** | One loop, so the judge improves as the corpus is reviewed — the analogue of the camera's teach mode. |
-| Label storage | **`verdicts`, new typed `stage` column** | A real column, not a naming convention on `source`. Costs migration 6. |
+| Label storage | **`verdicts`, new typed `stage` column** | A real column, not a naming convention on `source`. |
 | Scope | **Both 2D images and 3D meshes** | Non-negotiable requirement. |
 
 ### Three probes, one artifact pipeline
@@ -335,7 +398,7 @@ Intent, not artifact type, separates the models:
 |---|---|---|---|
 | `image-as-product` | `reference.png` from a `reference`-stage job | Is this a good 2D asset? | a labelling pass |
 | `image-as-blank` | `reference.png` from a `model`-stage job | Will this reconstruct? | a labelling pass |
-| `mesh` | 8 rendered views of `model.glb` | Is this a good mesh? | **a corpus with positives in it** — see §9 |
+| `mesh` | 8 rendered views of `model.glb` | Is this a good mesh? | **a corpus with positives in it** — see §8 |
 
 All three are **linear probes over frozen DINOv2 CLS embeddings** — logistic
 regression on a 768-d vector. Tens to low hundreds of examples per class rather
@@ -361,39 +424,46 @@ mesh classifier would be learning camera pose, not quality. See
   `MIN_SECOND_COMPONENT` (0.08) and `MAX_ASPECT` (8.0) are not replaced. They
   remain the fallback when no probe is trained *and* the reference the probe's
   accuracy is reported against — the `native.py` rule that the reference
-  implementation is never deleted. `REFUSAL_CODES` is now the vocabulary that
+  implementation is never deleted. `REFUSAL_CODES` is the vocabulary that
   comparison is spelled in.
 - **Fully offline.** DINOv2 loads from a local path with `local_files_only=True`.
-  The probe weights are ours. Nothing downloads at runtime, ever.
+  The probe weights are ours. Nothing downloads at runtime — and note the model
+  *downloader* does not change this: it is a separate process, reachable from one
+  button, and never from the job path.
 - **A judge failure must never fail a job.** Inference logs and swallows, exactly
   as `Worker._record_observation` does, and for the same reason.
 
 ### Data model
 
-**Migration 6: `verdicts.stage`**, three values — `'reference' | 'blank' |
-'model'`. Three rather than two, and the third is load-bearing. The instinct is a
-two-value column mirroring `jobs.stage` (already exactly `'reference' | 'model'`,
-`db.py:270`) and recovering intent by joining to the job. That breaks:
-`prune_jobs` deletes job rows, and the sole reason `verdicts.vector` is
-denormalized is that the corpus must outlive the assets. A label whose meaning
-depends on a row that no longer exists is uninterpretable the moment it matters.
-Existing rows backfill to `'model'` — every verdict to date is about a mesh.
+**Migration 7: `verdicts.stage`**, three values — `'reference' | 'blank' |
+'model'`. **This was written down as migration 6 and is not: Night 2's candidate
+columns took 6 by landing first.** Migrations are append-only and never edited
+once shipped, so confirm `len(MIGRATIONS)` before writing the entry rather than
+trusting this line.
+
+Three values rather than two, and the third is load-bearing. The instinct is a
+two-value column mirroring `jobs.stage` (already exactly `'reference' | 'model'`)
+and recovering intent by joining to the job. That breaks: `prune_jobs` deletes
+job rows, and the sole reason `verdicts.vector` is denormalized is that the
+corpus must outlive the assets. A label whose meaning depends on a row that no
+longer exists is uninterpretable the moment it matters. Existing rows backfill to
+`'model'` — every verdict to date is about a mesh.
 
 **New query, `db.unlabelled_references()`.** `unverdicted_models` cannot be
 reused and cannot be fixed with a parameter: it filters `status = 'done' AND
-stage = 'model' AND sweep_id IS NULL` (`db.py:745-747`), excluding the two things
-a labelling pass most needs — **errored jobs** (a reference refused for
-multi-object is the most informative negative available) and **sweep units**
-(the entire corpus this work is built on).
+stage = 'model' AND sweep_id IS NULL`, excluding the two things a labelling pass
+most needs — **errored jobs** (a reference refused for multi-object is the most
+informative negative available) and **sweep units** (the entire corpus this work
+is built on).
 
 **`findings.py` must filter by stage.** `aggregate` runs over every source's
 latest verdicts. Matched pairs group by `(sweep_id, source)` and stay clean, but
 the **marginals do not**: an image label would count into the same accept/reject
 rate as a mesh verdict, and `"accept 6/8"` under a prompt control would silently
 average two different questions. Mesh findings must read `stage = 'model'` only.
-Note this now applies in two places, not one — the per-subject `prompts` section
-is built by the same `_marginals` helper, so a stage filter belongs *there*
-rather than at either call site.
+This applies in two places, not one — the per-subject `prompts` section is built
+by the same `_marginals` helper, so the stage filter belongs *there* rather than
+at either call site.
 
 ### User interface
 
@@ -413,38 +483,36 @@ A labelling surface in Review mode, beside the existing verdict loop.
   the exact bug `AppState.findings_dirty` / `pump_findings` exists to prevent.
   Reuse that pattern.
 - **Review sorts by judge score rather than filtering by it** — the filter-bubble
-  guard, see §10.
+  guard, see §9.
 - Training runs on `TaskRunner`. A DINOv2 forward pass over a hundred images plus
   a logistic fit is seconds, and seconds on the frame thread is a freeze.
 
 ### Scope of Phase 1
 
-Migration 6, `unlabelled_references`, the findings stage filter, `judge.py` with
+Migration 7, `unlabelled_references`, the findings stage filter, `judge.py` with
 embed + fit + score, the labelling grid, and both image probes. Ends with a
 held-out accuracy figure. This is the whole of the value for 2D mode and the
 cheapest useful gate for 3D.
 
-## 9. Phase 2 — the mesh judge
+## 8. Phase 2 — the mesh judge
 
 Reuses `bench/views.py`'s 8-view render, adds the pooling adapter and the third
 probe.
 
-**No longer blocked on labelling — blocked on a corpus that contains acceptable
-meshes.** The review is done and produced **3 positives against 81 negatives**.
-That is not a thin corpus, it is an unusable one: a linear probe fitted to it
-learns "reject" and scores 96% accuracy doing so. The risk section below flagged
-17 negatives as thin; 3 positives is the worse end of the same problem.
+**Not blocked on labelling — blocked on a corpus that contains acceptable
+meshes.** The review produced **3 positives against 81 negatives**. That is not a
+thin corpus, it is an unusable one: a linear probe fitted to it learns "reject"
+and scores 96% accuracy doing so.
 
-So the ordering has changed. This phase now sits behind §0's re-run, and the
-gate on starting it is a positive count in the tens, not a total label count.
-The 84 existing labels are not wasted — they are a clean negative set, and the
-matched pairs (identical `input.png`, opposite verdict) are the most useful
-training rows in the corpus precisely because everything except the matte is
-held constant.
+So this phase sits behind §2's re-run, and the gate on starting it is a positive
+count in the tens, not a total label count. The 84 existing labels are not
+wasted — they are a clean negative set, and the matched pairs (identical
+`input.png`, opposite verdict) are the most useful training rows in the corpus
+precisely because everything except the matte is held constant.
 
-## 10. Phase 3 — earned authority
+## 9. Phase 3 — earned authority
 
-Only after §11's numbers exist. Candidates, in increasing order of risk:
+Only after §10's numbers exist. Candidates, in increasing order of risk:
 
 1. Sorting Review by score (already in Phase 1).
 2. A bounded reference-seed re-roll on a predicted-bad blank. The mechanism is
@@ -462,17 +530,17 @@ Only after §11's numbers exist. Candidates, in increasing order of risk:
   advisory-only through Phase 2, Review **sorts** rather than filters, and a
   sampled share of the judge's own rejects keeps surfacing for human review.
 - **Scope.** A probe trained on this sweep learns "good SNES rogue", not "good
-  asset". Pointed at a wooden crate it is confidently wrong. The corpus is
-  scoped by `prompt_hash` now and the hints say which subject they came from;
-  the *probe* is not, and giving it the same treatment is a decision this phase
-  still owes. A judge with no notion of subject is worse than no judge, because
-  it is trusted.
-- **Label volume — measured, and worse than feared.** The estimate here was 83
-  passing and 17 refused references, with seventeen negatives called thin. The
+  asset". Pointed at a wooden crate it is confidently wrong. The corpus is scoped
+  by `prompt_hash` now and the hints say which subject they came from; the
+  *probe* is not, and giving it the same treatment is a decision this phase still
+  owes. A judge with no notion of subject is worse than no judge, because it is
+  trusted.
+- **Label volume — measured, and worse than feared.** The original estimate was
+  83 passing and 17 refused references, with seventeen negatives called thin. The
   review came back **3 accepts and 81 rejects**, so the *positive* class is the
-  scarce one and the mesh probe is unbuildable on this corpus (§9). The
-  deliberate labelling session this predicted is now confirmed necessary, and it
-  has to run against output worth accepting.
+  scarce one and the mesh probe is unbuildable on this corpus (§8). The
+  deliberate labelling session this predicted is confirmed necessary, and it has
+  to run against output worth accepting.
 - **Confounded marginals, inherited.** A verdict credits every `param: value` in
   its vector — the accepted price of letting daily use feed the hints. A judge
   trained on those labels inherits the confound. The unconfounded answers stay
@@ -484,7 +552,7 @@ Only after §11's numbers exist. Candidates, in increasing order of risk:
   should carry the corpus size, the label count and a schema version, and the UI
   should say when it was trained.
 
-## 11. What "it works" has to mean
+## 10. What "it works" has to mean
 
 The threshold is a constant the stored corpus is keyed on, so by this repo's own
 rule it gets a **measurement document under `docs/measurements/`** before it is
@@ -499,14 +567,14 @@ Report, on a held-out split:
 - **Agreement with `reference.py`'s rules**, on the blank probe specifically. If
   agreement is ~100%, the probe has learned to imitate the rules and has added
   nothing. Genuine value shows up as *disagreement that a human sides with the
-  probe on* — `baseline s23` is the canonical test case. Agreement is now
-  cheap to compute per rule rather than in aggregate, since a refusal is an
-  observation carrying `refused_<code>`.
+  probe on* — `baseline s23` is the canonical test case. Agreement is cheap to
+  compute per rule rather than in aggregate, since a refusal is an observation
+  carrying `refused_<code>`.
 - **Per-subject breakdown by `prompt_hash`**, or the scope risk is unmeasured.
 - **Beat `hole_worst`, which is a floor of 0.115 AUC and therefore no floor at
-  all.** Its inversion (§0) means the honest baseline to beat is a coin
-  flip, and any probe that merely correlates with the audit scalars has learned
-  the slab artefact. Report the probe against the human labels directly.
+  all.** Its inversion (§2) means the honest baseline to beat is a coin flip, and
+  any probe that merely correlates with the audit scalars has learned the slab
+  artefact. Report the probe against the human labels directly.
 
 ### Open questions
 
@@ -524,55 +592,67 @@ Report, on a held-out split:
 
 ---
 
-## 12. Closed — the 2026-08-07 QA audit (no action outstanding)
+# Later, and specced only in outline
 
-Recorded here only so the deleted `ANALYSIS.md` does not take its conclusions
-with it. Base `master` @ `4fc9927` plus the then-uncommitted working tree. Ran in
-two passes: seven layout defects fixed, then five deferred items all closed after
-review. Tests went 3091 → 3110 passed, 7 skipped, lint clean; every new test was
-verified red before its fix.
+## 11. Retopo + bake prototype
 
-**One bug shape recurred seven times, and it is worth remembering:**
+*(The build plan's Phase 7. Needs §4's rigging thread; characters only.)*
 
-> `imgui.same_line()` after an item drawn at full width leaves the cursor **on**
-> the content region's right edge, and an imgui child window *clips* rather than
-> wraps. Whatever is drawn next is not squeezed — it is gone.
+A new `blender_worker` op producing a *deformation* mesh from the immutable
+source: remesh (voxel or QuadriFlow, explicitly labelled a preview/proxy), UV
+unwrap (smart-project first), bake base colour / metallic-roughness / tangent
+normals from the source, then rig it through the weld-before-heat path.
 
-Four controls were living outside the panel: the library's favourites star, the
-select-all tick, the Prune button, and every evidence hint and `(?)` in the two
-generate panes. Nothing logged, nothing threw, and each looked exactly like a
-feature nobody had built — the favourites feature was unusable end to end.
+Output is a new labelled artifact (e.g. `deform.glb`), derived on demand under
+the `_convert_locks` idiom, **never replacing `model.glb`** — the `source.glb` /
+`model.glb` invariant applies unchanged. UI labels matter here: *Reconstruction*
+/ *Static game-ready* / *Preview riggable* / *Deformation-ready*, so a decimated
+reconstruction is never presented as real retopology. Prototype on 2–3 accepted
+character meshes, with a QA note on bake fidelity before any UI default moves.
 
-Fixed by `widgets.same_line_or_wrap(width)` and `widgets.hint_text(text)`, plus
-two standing guards:
-`test_no_pane_continues_a_line_that_has_no_room_left` (spies on `same_line` while
-building all sixteen sidebar panes) and
-`test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other` (collects
-every icon button's rect through a real frame). The second exists because the
-first cannot see a control drawn *on top of* another — which is how the restored
-library `(?)` came to occupy the select-all tick's exact pixels, so pressing
-select-all opened the manual.
+## 12. External backend A/B
 
-Also fixed: `clay_ops.format_for(param)` derives a numeric format downwards from
-the step and the default, because both weld distances default to `1e-4` and
-imgui's implicit `"%.3f"` drew them as `0.000`; the Clay snap grid drew 1/16 m as
-`0.063`; and `quality_badge(job, inline=True)` now issues its own `same_line`
-only in the branches where it draws, because a `same_line` in front of a call
-that draws nothing is inherited by whatever comes next.
+*(The build plan's Phase 8. Last, and it gets its own spec first.)*
 
-**The one correctness bug was not a layout bug**: `CLAUDE.md` asserted something
-about the filesystem that is false on Windows. A directory's mtime did **not**
-move after adding a file 155 times in 200 on this machine, so `attach_files`'
-`(status, job-dir mtime)` stamp could serve a stale file list permanently — the
-rig-into-the-source-job case the mtime half exists for. Fixed with git's
-racily-clean rule (`MTIME_RACE_NS`), written up at
-`docs/measurements/2026-08-07-directory-mtime-granularity.md`, and the `CLAUDE.md`
-clause corrected. The flaky test then passed 20/20.
+- **SkinTokens/TokenRig** as an isolated out-of-process worker — the
+  `trellis-server` / `blender_worker` pattern, kill-on-close job, weights by
+  one-time manual download or through the new fetcher, doctor reporting absence
+  non-fatally. Run in existing-skeleton mode against Warlock's template so bone
+  names and animation compatibility hold. A/B against the welded heat weights on
+  a fixed rig corpus using the deformation battery, verdicts through Review.
+- **Hunyuan3D 2.1** as an optional isolated reconstruction backend, same
+  isolation rules, benchmarked on the curated references from §2 — human
+  acceptance, silhouette, runtime, VRAM. It must fit the coexist/exclusive
+  `vram.plan` machinery: a new backend declares its GiB cost in the cost table.
+- **Explicitly out:** MeshAnything V2 as a retopo path (sub-1600-face target).
 
-The four remaining deferred items — the merge's weld distance being in local
-units while labelled metres (now divided by the largest absolute scale
-component, `max` because that is the bound holding per axis); merge silently
-absorbing hidden objects (fixed in `_select_all`/`_invert` rather than in the op);
-the library `(?)` restored; and the bulk bar now saying `12 selected (4 not
-shown)` — are all closed and covered by tests. The Clay object merge itself was
-reviewed and found sound.
+---
+
+## Deferred by decision — not open work
+
+| Item | Status |
+|---|---|
+| `seam.SEAM_MAX = 2.0` uncalibrated (`pipelines/seam.py`) | Open, low priority. Needs stone / plaster / gravel / fabric tiles eyeballed. Corpus-keyed, so it owes a measurement doc before it moves. |
+| `docs/measurements/2026-08-06-pixel-art-xl.md` — "run not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). Independent of everything — good use of idle GPU time alongside §2. |
+| Fused brush dab kernel (`warlockc_dab_u8`) | Deferred on purpose; the gate is "the brush shows up in a profile first". ABI 5, four kernels shipped. |
+| `studio/clay/ops_topo.py` hole-fill UV | Documented, deliberate approximation. |
+| View-matched reference ranking | Not built on purpose; the Scattered verdict *is* the deliverable (`docs/measurements/2026-08-04-view-calibration.md`). |
+
+---
+
+## Closed
+
+The 2026-08-07 QA audit section that used to close this file has been removed:
+every item in it was fixed, tested and recorded where it belongs — the
+`same_line`-past-the-edge bug in `widgets.same_line_or_wrap` plus two standing
+guards in `tests/test_studio_smoke.py`, and the Windows directory-mtime finding
+in `CLAUDE.md` and
+`docs/measurements/2026-08-07-directory-mtime-granularity.md`. A finished plan is
+deleted rather than ticked, by this repo's own rule; `git log` keeps it, and the
+code is the record.
+
+Likewise removed: the six items this file listed as done on 2026-08-07 (the
+`bg_removal` default, `PROMPT_TEMPLATE`, `reference_retries`, refusal codes, the
+per-subject findings section, and the `MAX_UNITS` comment), and the eighteen
+packages of the Night 1 and Night 2 build runs. `git log --graph` reads as
+identifiable `--no-ff` merges, one per package.
