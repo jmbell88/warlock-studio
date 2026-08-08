@@ -161,16 +161,15 @@ class App:
 
     # -- setup -------------------------------------------------------------
 
-    def setup(self) -> None:
-        """The three phases in order, with nothing drawn between them.
-
-        ``run`` does not call this -- it draws a splash over the middle phase
-        -- but the composition is what the phases mean, and a caller that
-        wants a window with no ceremony still has one call for it.
-        """
-        self.setup_window()
-        self.setup_runtime()
-        self.setup_context()
+    # There is deliberately no ``setup()`` composing the three phases. It
+    # existed briefly and had no caller: ``run`` drives the phases itself so it
+    # can draw a splash over the middle one. What it did have was users in the
+    # tests, which stubbed ``app.setup`` to isolate ``run`` -- and once ``run``
+    # stopped calling it those stubs silently became no-ops, so ``run`` fell
+    # through into the real ``setup_window``, initialised pygame for real, and
+    # left a live display behind that broke every GL test that ran after it (74
+    # errors, none of them in the code that changed). A convenience method with
+    # no caller is not free; this one cost a seam the tests were relying on.
 
     def setup_window(self) -> None:
         """Everything that needs the main thread and the one GL context.

@@ -12,7 +12,7 @@ from __future__ import annotations
 # -- DPI ---------------------------------------------------------------------
 
 # Physical-pixels-per-design-pixel. 1.0 on a 96 DPI monitor, 1.5 at 150 %.
-# Set once by main.setup() before any font or style is built; a mid-session
+# Set once by main.App.setup_window() before any font or style is built; a mid-session
 # monitor change does not re-sample it (the atlas would need a rebuild).
 SCALE = 1.0
 

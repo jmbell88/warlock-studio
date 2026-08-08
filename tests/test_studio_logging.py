@@ -235,7 +235,12 @@ def test_the_two_crash_phases_get_different_lines(caplog, monkeypatch):
     def bad_setup():
         raise RuntimeError("no OpenGL 3.3")
 
-    app.setup = bad_setup
+    # The phases, not App.setup: run() calls setup_window / _startup_with_splash
+    # / setup_context directly so the splash can be drawn over the middle one.
+    # Stubbing `setup` here used to isolate run() and silently stopped doing so
+    # -- run() then fell through into the *real* setup_window, which initialises
+    # pygame for real and left a live display behind for every GL test after it.
+    app.setup_window = bad_setup
     with caplog.at_level(logging.ERROR):
         assert app.run() == 1
     assert any("could not start" in (r.getMessage()) for r in caplog.records)
@@ -243,7 +248,9 @@ def test_the_two_crash_phases_get_different_lines(caplog, monkeypatch):
     caplog.clear()
     app = _bare_app()
     app.runtime = SimpleNamespace(shutdown=lambda: shutdowns.append(1))
-    app.setup = lambda: None
+    app.setup_window = lambda: None
+    app._startup_with_splash = lambda: True
+    app.setup_context = lambda: None
 
     def bad_frame(dt):
         raise ZeroDivisionError("nan in the pose")

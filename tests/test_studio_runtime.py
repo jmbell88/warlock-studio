@@ -158,7 +158,10 @@ def test_run_tears_down_when_setup_fails(runtime, monkeypatch):
         runtime.start()
         raise RuntimeError("no OpenGL 3.3")
 
-    app.setup = setup
+    # setup_window rather than setup: run() calls the three phases directly so
+    # the splash can be drawn over the middle one, which makes an `app.setup`
+    # stub a silent no-op that lets run() reach the real pygame init.
+    app.setup_window = setup
     # Reported, not re-raised: the traceback goes to warlock.log, and the exit
     # code is what the caller acts on.
     assert app.run() == 1
