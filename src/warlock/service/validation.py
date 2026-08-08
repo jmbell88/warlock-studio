@@ -235,6 +235,68 @@ def check_vram(svc: Any, kind: str, stage: str, params: dict[str, Any]) -> None:
         raise Invalid(vram.shortfall_message(need, plan, params))
 
 
+def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
+    """Refuse a job whose selected weights are not on this host (F55).
+
+    Beside ``check_vram`` and for exactly its reason: the worker is the wrong
+    place to find this out. Without the guard the job queues, waits its turn
+    behind whatever else is running, loads, and dies with a diffusers traceback
+    that names a directory -- and the row goes to ``error`` carrying a
+    ``base_model`` the user then has to work out was never downloaded. The
+    doctor has known the answer, and the exact ``hf download`` line that fixes
+    it, since it was written; this is that answer, at the door.
+
+    Only text jobs, because only they touch SDXL: an image job's reference is
+    its upload and no image model is loaded at all.
+
+    Deliberately *not* checked here: the trellis exe and the GGUF weights. Those
+    are the two fatal doctor rows, and a host missing them has a red banner at
+    startup rather than a per-job surprise -- re-refusing every submit would say
+    the same thing a second time in a worse place.
+    """
+    if kind != "text":
+        return
+    from .. import fetch, models
+
+    base = models.BASE_MODELS.get(str(params.get("base_model") or ""))
+    if base is not None:
+        ok, missing_lora = fetch.base_model_state(svc.config, base)
+        if not ok:
+            what = (
+                f"its step-distillation LoRA is missing at {missing_lora}"
+                if missing_lora is not None
+                else "its weights are not downloaded"
+            )
+            raise Invalid(
+                f"The image model {base.label!r} cannot run: {what}. "
+                f"Download it with:\n  {base.download}",
+                field="base_model",
+            )
+    # The three optional selections, each refused the same way. A style LoRA is
+    # the one that would otherwise fail *silently* rather than loudly --
+    # ``_load_loras`` skips a missing style adapter -- so the job would finish,
+    # look wrong, and carry a ``style_lora`` param claiming a style that never
+    # ran. That row would then join the findings corpus as evidence about it.
+    #
+    # ``normalize`` stores the resolved *key*, not the spec object, so each
+    # field is looked back up in the registry it came from -- the same tables
+    # ``guidance`` validated it against, so a key that reaches here is known.
+    optional = (
+        ("style_lora", "lora", models.STYLE_LORAS),
+        ("ip_adapter", "adapter", models.IP_ADAPTERS),
+        ("control", "control", models.CONTROLNETS),
+    )
+    for field, kindname, table in optional:
+        spec = table.get(str(params.get(field) or ""))
+        if spec is None or fetch.present(svc.config, kindname, spec):
+            continue
+        raise Invalid(
+            f"{spec.label!r} is selected but not downloaded. "
+            f"Download it with:\n  {spec.download}",
+            field=field,
+        )
+
+
 def random_seed() -> int:
     """A fresh seed for a re-roll. 31-bit so it round-trips through an sqlite
     INTEGER (and a JS number, for as long as anything speaks JSON) unchanged."""

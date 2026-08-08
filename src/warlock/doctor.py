@@ -158,9 +158,36 @@ def _probe_blender() -> Check:
     return Check("Blender (rigging)", True, f"bpy {proc.stdout.strip()}", fatal=False)
 
 
+# The remedies for the only two fatal rows (F54). Every non-fatal model row has
+# carried its exact ``hf download`` line since it was written; the two rows that
+# actually stop the app said "not found at <path>" and stopped -- so the two
+# failures a first run is most likely to hit were the two with no way forward.
+#
+# They are different *kinds* of remedy, which is why neither is a Fetch entry.
+# The exe is a third-party release zip unpacked by hand (a fetcher would have to
+# know how to unzip a GitHub release, and ``fetch_worker`` speaks one protocol,
+# to one host); the GGUF weights are an ordinary ``hf download`` that is
+# deliberately not in ``models.FETCHES`` because the app is unusable without
+# them, so they belong in the install instructions rather than behind a button
+# in a pane that cannot be reached until the app starts.
+TRELLIS_EXE_HINT = (
+    "download trellis-cuda-windows-x64.zip from "
+    "https://github.com/pwilkin/trellis.cpp/releases and unpack it there "
+    "(vendored build: v0.5.4), or point WARLOCK_TRELLIS_EXE at your own copy"
+)
+TRELLIS_GGUF_HINT = (
+    'uvx hf download ilintar/trellis2-gguf --include "*.gguf" '
+    '--exclude "q4/*" --exclude "q8/*" --local-dir models/trellis2-gguf'
+)
+
+
 def _exe_check(config: Config) -> Check:
     ok = config.trellis_server_exe.exists()
-    detail = str(config.trellis_server_exe) if ok else f"not found at {config.trellis_server_exe}"
+    detail = (
+        str(config.trellis_server_exe)
+        if ok
+        else f"not found at {config.trellis_server_exe} -- {TRELLIS_EXE_HINT}"
+    )
     return Check("trellis-server.exe", ok, detail, fatal=True)
 
 
@@ -169,7 +196,8 @@ def _gguf_check(config: Config) -> Check:
     detail = (
         str(config.trellis_models_dir)
         if ok
-        else f"no *.gguf found in {config.trellis_models_dir}"
+        else f"no *.gguf found in {config.trellis_models_dir} -- download with:\n"
+        f"  {TRELLIS_GGUF_HINT}"
     )
     return Check("TRELLIS GGUF weights", ok, detail, fatal=True)
 

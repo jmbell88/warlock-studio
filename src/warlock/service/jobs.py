@@ -30,6 +30,7 @@ from .validation import (
     check_trellis_band,
     check_trellis_tex_res,
     check_vram,
+    check_weights,
     normalize_tags,
     not_done_message,
     random_seed,
@@ -245,6 +246,7 @@ def create_job(
     # Last of the door checks and still before any write, so a refused job
     # leaves no input.png: the projected peak is a function of the normalized
     # params (conditioning, resolution), which is why it cannot run any earlier.
+    check_weights(svc, kind, params)
     check_vram(svc, kind, "model" if output == "model" else output, params)
 
     def _decode(raw: bytes, field: str) -> bytes:

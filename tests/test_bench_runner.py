@@ -19,8 +19,8 @@ from warlock.config import Config
 
 
 @pytest.fixture
-def config(tmp_path):
-    return Config(
+def config(tmp_path, materialize_weights):
+    cfg = Config(
         data_dir=tmp_path / "assets",
         db_path=tmp_path / "assets" / "jobs.sqlite",
         trellis_server_exe=tmp_path / "missing.exe",
@@ -28,6 +28,12 @@ def config(tmp_path):
         t2i_model_root=tmp_path / "t2i",
         bench_dir=tmp_path / "bench",
     )
+    # This file builds its own Config rather than taking the ``svc`` fixture, so
+    # it needs the same treatment: ``create_job`` refuses a text job whose
+    # checkpoint is not on the host (F55), and a bench run submits real text
+    # jobs through the front door on purpose.
+    materialize_weights(cfg)
+    return cfg
 
 
 # --- planning (no GPU, no runtime) -------------------------------------------

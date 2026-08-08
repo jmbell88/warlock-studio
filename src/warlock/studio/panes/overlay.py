@@ -251,6 +251,8 @@ def doctor_banner(ctx: Any) -> None:
     """
     if not ctx.state.errors:
         return
+    from ..manual import render as manual_render
+
     imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.25)))
     flags = imgui.ChildFlags_.borders.value | imgui.ChildFlags_.auto_resize_y.value
     if imgui.begin_child("doctor", (-1, 0), flags):
@@ -259,6 +261,11 @@ def doctor_banner(ctx: Any) -> None:
         imgui.same_line()
         if imgui.small_button("Copy details"):
             imgui.set_clipboard_text(ctx.state.error_text)
+        imgui.same_line()
+        # The banner names conditions and, since F54, their remedies -- but
+        # neither says what to do when the remedy does not take. Chapter 12 is
+        # where that lives, and before this the banner was a dead end (F57).
+        manual_render.troubleshooting_button(ctx)
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
         for message in ctx.state.errors:
             imgui.text_wrapped(message)

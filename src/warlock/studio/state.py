@@ -436,6 +436,13 @@ class AppState:
     # assigned to that slot, so a launch that failed two checks reported
     # whichever wrote last and lost the other with nothing to say it had.
     errors: list[str] = field(default_factory=list)
+    # What Dismiss took off screen, kept rather than dropped (F59). Every writer
+    # of ``errors`` fires exactly once -- the startup doctor sweep, and the two
+    # one-shot worker checks -- so clearing the list destroyed the only copy of
+    # the text, and the sole remaining trace of a launch that failed two checks
+    # was a coloured dot. The diagnostics popup shows these, which is what makes
+    # Dismiss "put it away" rather than "forget it".
+    dismissed_errors: list[str] = field(default_factory=list)
     # The Home screen's sub-view. Not persisted: Home always opens on the
     # chooser rather than on whichever list was last being browsed.
     landing_view: str = "choose"  # choose | open | profiles
@@ -548,6 +555,8 @@ class AppState:
             self.errors.append(text)
 
     def dismiss_errors(self) -> None:
+        """Off the banner, into the popup -- never out of existence (F59)."""
+        self.dismissed_errors.extend(m for m in self.errors if m not in self.dismissed_errors)
         self.errors.clear()
 
     @property

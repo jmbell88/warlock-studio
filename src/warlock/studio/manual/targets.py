@@ -25,4 +25,18 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "profiles": ("08-library-and-jobs", "profiles"),
     "review": ("16-review", None),
     "app-settings": ("11-configuration", "in-app-settings"),
+    # The chooser the app opens on (F56/O118): the one pane a first run
+    # certainly sees, and the only one that had no way into the manual at all.
+    "home": ("01-overview", None),
 }
+
+# Where "something is wrong and I do not know what" goes.
+#
+# Deliberately *not* a HELP_TARGETS entry, though it is the same shape. That
+# dict is the pane-(?)-button map and is asserted against the call sites in both
+# directions (``test_help_button_call_sites_match_help_targets``) precisely so a
+# dead button or dead data fails a test -- and the three surfaces that lead here
+# are a red banner, a popup and a Home row, none of which is a pane with a (?).
+# Named once rather than spelled at each of the three, so a chapter that moved
+# does not have to be found in three places (F57).
+TROUBLESHOOTING: tuple[str, str | None] = ("12-troubleshooting", None)
