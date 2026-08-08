@@ -36,7 +36,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 5
+#define WARLOCKC_ABI 6
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -58,12 +58,13 @@ WARLOCKC_API void warlockc_rasterise(const double *ax, const double *ay,
                                      const double *area2, int64_t n,
                                      int32_t resolution, uint8_t *covered);
 
-/* Separable blend modes, in the order of composite.BLEND_MODES.
+/* Separable blend modes: the numbers composite._MODE_IDS hands over.
  *
  * The names live in Python and the numbers live here, which means adding a
  * mode is one entry in BLEND_MODES, one in composite._MODE_IDS and one case in
- * blend_channel. The order is the coupling, so it is spelled out in both
- * places rather than inferred in either. */
+ * blend_channel. The *number* is the coupling, so it is spelled out in both
+ * places rather than inferred in either -- and deliberately not the position in
+ * BLEND_MODES, which is menu order and is free to be regrouped. */
 enum {
   /* Not a blend mode: "this layer replaces what is under it", which is what
    * over()'s early-out does for an opaque normal layer at full opacity. That
@@ -75,7 +76,14 @@ enum {
   WARLOCKC_BLEND_MULTIPLY = 1,
   WARLOCKC_BLEND_SCREEN = 2,
   WARLOCKC_BLEND_OVERLAY = 3,
-  WARLOCKC_BLEND_ADD = 4
+  WARLOCKC_BLEND_ADD = 4,
+  WARLOCKC_BLEND_DARKEN = 5,
+  WARLOCKC_BLEND_LIGHTEN = 6,
+  WARLOCKC_BLEND_COLOR_DODGE = 7,
+  WARLOCKC_BLEND_COLOR_BURN = 8,
+  WARLOCKC_BLEND_HARD_LIGHT = 9,
+  WARLOCKC_BLEND_SOFT_LIGHT = 10,
+  WARLOCKC_BLEND_DIFFERENCE = 11
 };
 
 /* Composite `source` onto `backdrop`, straight alpha, float32, 0..1, four

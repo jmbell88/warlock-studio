@@ -57,6 +57,31 @@ def test_compositing_onto_nothing_keeps_the_sources_colour():
         ("overlay", 0.75, 0.5, 0.75),  # cb  > 0.5 -> 1 - 2(1-cb)(1-cs)
         ("add", 0.6, 0.6, 1.0),  # clamped, not wrapped
         ("normal", 0.3, 0.9, 0.9),
+        ("darken", 0.3, 0.7, 0.3),
+        ("darken", 0.7, 0.3, 0.3),
+        ("lighten", 0.3, 0.7, 0.7),
+        ("difference", 0.3, 0.7, 0.4),
+        ("difference", 0.7, 0.3, 0.4),  # symmetric: it is |Cb - Cs|
+        ("hard-light", 0.5, 0.25, 0.25),  # cs <= 0.5 -> 2·cb·cs
+        ("hard-light", 0.5, 0.75, 0.75),  # cs  > 0.5 -> 1 - 2(1-cb)(1-cs)
+        # The spec's three cases, in its order. An empty backdrop stays empty
+        # under a full source, which is the case a naive `min(1, Cb/(1-Cs))`
+        # gets wrong by dividing zero by zero.
+        ("color-dodge", 0.0, 1.0, 0.0),
+        ("color-dodge", 0.5, 1.0, 1.0),
+        ("color-dodge", 0.4, 0.5, 0.8),
+        ("color-dodge", 0.9, 0.5, 1.0),  # clamped at one
+        ("color-burn", 1.0, 0.0, 1.0),
+        ("color-burn", 0.5, 0.0, 0.0),
+        ("color-burn", 0.6, 0.5, 0.2),  # 1 - min(1, 0.4/0.5)
+        ("color-burn", 0.1, 0.5, 0.0),  # clamped at zero
+        # Soft light: a mid-grey source is the identity, and either end pulls
+        # the backdrop toward black or white without ever reaching it.
+        ("soft-light", 0.4, 0.5, 0.4),
+        ("soft-light", 0.25, 0.0, 0.25 - 0.25 * 0.75),
+        ("soft-light", 0.36, 1.0, 0.36 + (0.6 - 0.36)),  # D(Cb) = sqrt(Cb)
+        ("soft-light", 0.0, 1.0, 0.0),
+        ("soft-light", 1.0, 0.0, 1.0),
     ],
 )
 def test_blend_formulas_match_the_svg_spec(mode, cb, cs, expected):
@@ -79,6 +104,73 @@ def test_a_blend_only_applies_where_the_backdrop_exists():
 def test_every_named_mode_has_an_ora_op_and_round_trips():
     for mode in cp.BLEND_MODES:
         assert cp.OPS_ORA[cp.ORA_OPS[mode]] == mode
+
+
+def test_every_ora_op_is_the_name_krita_and_gimp_write():
+    """The interop contract, spelled out rather than trusted to a pattern.
+
+    ``.ora`` is a real exchange format and the composite-op strings are the
+    whole of what another editor reads a blend mode from, so a name invented
+    here would round-trip perfectly through this app and open as normal
+    everywhere else. ``add`` is the one that is not derivable from ours: it is
+    ``svg:plus``, a compositing operator rather than a blend mode.
+    """
+    assert cp.ORA_OPS == {
+        "normal": "svg:src-over",
+        "darken": "svg:darken",
+        "multiply": "svg:multiply",
+        "color-burn": "svg:color-burn",
+        "lighten": "svg:lighten",
+        "screen": "svg:screen",
+        "color-dodge": "svg:color-dodge",
+        "add": "svg:plus",
+        "overlay": "svg:overlay",
+        "hard-light": "svg:hard-light",
+        "soft-light": "svg:soft-light",
+        "difference": "svg:difference",
+    }
+    assert set(cp.ORA_OPS) == set(cp.BLEND_MODES)
+
+
+def test_every_mode_the_kernel_knows_is_a_mode_that_exists():
+    """``_MODE_IDS`` is written out, which is what stops a new mode from
+    silently compositing as normal -- but the numbers still have to name real
+    modes, and each one has to be unique or two modes share a C case."""
+    assert set(cp._MODE_IDS) <= set(cp.BLEND_MODES)
+    assert len(set(cp._MODE_IDS.values())) == len(cp._MODE_IDS)
+    assert cp._MODE_REPLACE not in cp._MODE_IDS.values()
+
+
+def test_hard_light_is_overlay_with_the_operands_swapped():
+    """Not a coincidence to be preserved -- it is how both paths are written.
+
+    The reference calls ``blend(source, backdrop, "overlay")`` and the kernel
+    calls ``blend_channel(OVERLAY, cs, cb)``, so the identity is exact rather
+    than exact-to-a-rounding, and asserting it here is what stops somebody
+    "simplifying" either side into a hand-expanded formula that agrees only to
+    within an ulp.
+    """
+    rng = np.random.default_rng(4)
+    cb = rng.random((16, 16, 3), dtype=np.float32)
+    cs = rng.random((16, 16, 3), dtype=np.float32)
+    assert np.array_equal(cp.blend(cb, cs, "hard-light"), cp.blend(cs, cb, "overlay"))
+
+
+@pytest.mark.parametrize("mode", cp.BLEND_MODES)
+def test_no_mode_produces_a_warning_or_a_nan_on_ordinary_pixels(mode, recwarn):
+    """Every formula is fed the values it actually branches on.
+
+    Zero and one are not edge cases here: ``1 - Cs`` is exactly zero for a
+    saturated channel, which is most of a white stroke, and colour-dodge would
+    divide by it. A RuntimeWarning out of a paint stroke is a bug even when the
+    pixel it produces happens to be right.
+    """
+    values = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32)
+    cb, cs = np.meshgrid(values, values)
+    with np.errstate(all="raise"):
+        out = cp.blend(cb.astype(np.float32), cs.astype(np.float32), mode)
+    assert np.all(np.isfinite(out)), mode
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 
 
 # --- conversions ------------------------------------------------------------

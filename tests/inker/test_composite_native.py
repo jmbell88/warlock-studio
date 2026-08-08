@@ -14,6 +14,8 @@ is what changes.
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
@@ -149,19 +151,25 @@ def _layers(rng, height, width, count):
 
 @needs_dll
 def test_a_whole_stack_composites_identically(monkeypatch):
-    """The integration shape: six layers folded bottom-first, every mode in
+    """The integration shape: a deep stack folded bottom-first, every mode in
     play, which is what ``invalidate_all`` runs and the reason any of this
-    exists."""
+    exists.
+
+    **One layer per mode, derived** -- a hand-written list of six was six
+    because there were five modes, and adding one turned this into a zip-length
+    error rather than into coverage of the new case.
+    """
     rng = np.random.default_rng(77)
-    entries = [
-        (pixels, opacity, mode)
-        for pixels, opacity, mode in zip(
-            _layers(rng, 40, 40, 6),
-            (1.0, 0.5, 0.9, 0.25, 1.0, 0.66),
-            (*cp.BLEND_MODES, "normal"),
-            strict=True,
+    opacities = itertools.cycle((1.0, 0.5, 0.9, 0.25, 0.66))
+    entries = list(
+        zip(
+            _layers(rng, 40, 40, len(cp.BLEND_MODES)),
+            opacities,
+            cp.BLEND_MODES,
+            strict=False,
         )
-    ]
+    )
+    assert len(entries) == len(cp.BLEND_MODES)
 
     fast, slow = _both(lambda: cp.stack_region(entries, (4, 6, 36, 33)), monkeypatch)
     assert np.array_equal(fast, slow)

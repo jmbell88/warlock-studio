@@ -28,7 +28,26 @@ from ... import native
 # Names are ours; the ORA op is what goes on disk. ``add`` is svg:plus, which
 # is a *compositing* op rather than a blend mode in the spec -- for opaque
 # layers the two agree, and no other writer spells additive differently.
-BLEND_MODES: tuple[str, ...] = ("normal", "multiply", "screen", "overlay", "add")
+#
+# The order is the *menu* order, grouped by what each family does to the
+# backdrop -- darkening, lightening, contrast, comparison -- which is the order
+# every raster editor a user has met puts them in. Nothing keys on the position:
+# ``_MODE_IDS`` is written out, ORA stores the op name and ``animation.json``
+# stores ours, so this list is free to be readable.
+BLEND_MODES: tuple[str, ...] = (
+    "normal",
+    "darken",
+    "multiply",
+    "color-burn",
+    "lighten",
+    "screen",
+    "color-dodge",
+    "add",
+    "overlay",
+    "hard-light",
+    "soft-light",
+    "difference",
+)
 
 # The kernel takes a mode as a number, and the enum in native/warlockc.h spells
 # the same ones out. Written here rather than derived from ``enumerate`` on
@@ -36,13 +55,21 @@ BLEND_MODES: tuple[str, ...] = ("normal", "multiply", "screen", "overlay", "add"
 # BLEND_MODES and forgetting the C case costs a little speed, whereas an
 # automatic index would hand the kernel a number it does not know and get
 # ``normal`` back for it -- silently, which is the one thing a fallback path
-# must never be.
+# must never be. Written-out also means the numbers are free of the list's
+# order, so the menu above could be regrouped without invalidating a DLL.
 _MODE_IDS: dict[str, int] = {
     "normal": 0,
     "multiply": 1,
     "screen": 2,
     "overlay": 3,
     "add": 4,
+    "darken": 5,
+    "lighten": 6,
+    "color-dodge": 7,
+    "color-burn": 8,
+    "hard-light": 9,
+    "soft-light": 10,
+    "difference": 11,
 }
 
 # Not a mode: what ``over``'s early-out does, spelled so the fused stack kernel
@@ -56,6 +83,13 @@ ORA_OPS: dict[str, str] = {
     "screen": "svg:screen",
     "overlay": "svg:overlay",
     "add": "svg:plus",
+    "darken": "svg:darken",
+    "lighten": "svg:lighten",
+    "color-dodge": "svg:color-dodge",
+    "color-burn": "svg:color-burn",
+    "hard-light": "svg:hard-light",
+    "soft-light": "svg:soft-light",
+    "difference": "svg:difference",
 }
 
 # Read side only, and deliberately lossy: an op we cannot reproduce becomes
@@ -80,6 +114,47 @@ def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
         )
     if mode == "add":
         return np.minimum(backdrop + source, 1.0)
+    if mode == "darken":
+        return np.minimum(backdrop, source)
+    if mode == "lighten":
+        return np.maximum(backdrop, source)
+    if mode == "difference":
+        return np.abs(backdrop - source)
+    if mode == "hard-light":
+        # *Literally* overlay with the operands swapped, rather than the same
+        # formula written out with the tests inverted. The two are equal on
+        # paper and a hand-written copy would be equal to within a rounding of
+        # the products, which is not the bar the kernel is held to -- and the
+        # kernel says it the same way, so the relationship is true by
+        # construction on both paths rather than checked on one.
+        return blend(source, backdrop, "overlay")
+    if mode == "color-dodge":
+        # The spec's three cases, in its order: an empty backdrop stays empty
+        # even under a full source. Dividing is guarded rather than clipped
+        # afterwards because ``1 - Cs`` is exactly zero for a saturated channel,
+        # which is most of a white brush stroke.
+        denom = 1.0 - source
+        ratio = np.minimum(backdrop / np.where(denom > 0.0, denom, 1.0), 1.0)
+        return np.where(backdrop <= 0.0, 0.0, np.where(source >= 1.0, 1.0, ratio))
+    if mode == "color-burn":
+        ratio = np.minimum((1.0 - backdrop) / np.where(source > 0.0, source, 1.0), 1.0)
+        return np.where(backdrop >= 1.0, 1.0, np.where(source <= 0.0, 0.0, 1.0 - ratio))
+    if mode == "soft-light":
+        # D(Cb): the spec's quartic below a quarter, a square root above it.
+        # The clamp under the root is not defensive about the spec -- Cb is a
+        # composited channel and ``over``'s divide is not clipped, so a value a
+        # hair below zero would otherwise raise an invalid-value warning out of
+        # a paint stroke.
+        d = np.where(
+            backdrop <= 0.25,
+            ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop,
+            np.sqrt(np.maximum(backdrop, 0.0)),
+        )
+        return np.where(
+            source <= 0.5,
+            backdrop - (1.0 - 2.0 * source) * backdrop * (1.0 - backdrop),
+            backdrop + (2.0 * source - 1.0) * (d - backdrop),
+        )
     raise ValueError(f"unknown blend mode {mode!r}")
 
 

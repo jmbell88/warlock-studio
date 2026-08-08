@@ -63,9 +63,25 @@ The `I` **Pick** tool samples a colour from the canvas into the foreground.
 The layers panel shows the stack top-first, the way every editor shows it.
 
 Each layer has a visibility checkbox, a thumbnail, a name, an **Opacity** slider and a **Blend**
-mode: `normal`, `multiply`, `screen`, `overlay` or `add`. Above the list are **Add**, **Copy**,
-**Delete**, **Merge down** and **Flatten**. Dragging the opacity slider previews live but records a
-single undo step when you let go, rather than one step per pixel of drag.
+mode. Above the list are **Add**, **Copy**, **Delete**, **Merge down** and **Flatten**. Dragging the
+opacity slider previews live but records a single undo step when you let go, rather than one step
+per pixel of drag.
+
+The blend modes are the twelve separable ones, listed in the order every editor groups them —
+darkening, then lightening, then contrast, then comparison:
+
+| | |
+|---|---|
+| `normal` | the layer, over what is under it |
+| `darken`, `multiply`, `color-burn` | can only darken the backdrop |
+| `lighten`, `screen`, `color-dodge`, `add` | can only lighten it |
+| `overlay`, `hard-light`, `soft-light` | darken the dark half and lighten the light half |
+| `difference` | the distance between the two colours |
+
+These are the W3C formulas, which is what OpenRaster's composite operators are defined against — so
+a document saved here and reopened in Krita or GIMP composites identically rather than approximately.
+The four *non-separable* modes (hue, saturation, colour, luminosity) are not implemented; a file
+that arrives using one opens with that layer set to `normal` rather than being refused.
 
 One rule about erasing is worth stating plainly, because it differs from some editors. **The eraser
 makes pixels transparent.** It does not paint the background colour. The background colour — the

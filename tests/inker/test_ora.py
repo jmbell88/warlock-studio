@@ -129,6 +129,35 @@ def test_blend_modes_are_written_as_svg_composite_ops(tmp_path: Path):
     assert ops == ["svg:multiply", "svg:src-over"]
 
 
+def test_every_blend_mode_survives_a_real_file_round_trip(tmp_path: Path):
+    """One layer per mode, written and reopened.
+
+    ``ORA_OPS``/``OPS_ORA`` agreeing with each other is one test; this is the
+    other half -- that the op string actually reaches ``stack.xml`` and comes
+    back as the same mode through the encoder and the parser, which is what a
+    user opening their file in Krita is relying on.
+    """
+    from warlock.studio.inker import composite as cp
+
+    doc = inker.Document.blank(8, 8)
+    for index, mode in enumerate(cp.BLEND_MODES):
+        if index >= len(doc.stack):
+            doc.add_layer(f"L{index}")
+        doc.stack[index].blend = mode
+    path = tmp_path / "modes.ora"
+    inker.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        root = ElementTree.fromstring(zf.read("stack.xml"))
+    written = {element.get("composite-op") for element in root.iter("layer")}
+    assert written == {cp.ORA_OPS[mode] for mode in cp.BLEND_MODES}
+
+    reopened = inker.Document.load(path)
+    assert [layer.blend for layer in reopened.stack] == [
+        layer.blend for layer in doc.stack
+    ]
+
+
 def test_the_image_element_carries_the_canvas_size(tmp_path: Path):
     with zipfile.ZipFile(_saved(tmp_path)) as zf:
         root = ElementTree.fromstring(zf.read("stack.xml"))
@@ -155,9 +184,17 @@ def _foreign(path: Path, layers: str, *, w=8, h=8, extra=None) -> None:
 
 
 def test_a_composite_op_we_cannot_reproduce_becomes_normal(tmp_path: Path):
-    """A file that opens slightly wrong is a file the user still has."""
+    """A file that opens slightly wrong is a file the user still has.
+
+    ``svg:hue`` is one of the four *non-separable* modes -- they mix the three
+    channels rather than acting on each independently, which is a different
+    shape of formula from everything ``blend`` holds. The separable ones are
+    all implemented now, so the example here has to be a mode we genuinely
+    cannot reproduce or the test would be asserting the fallback of something
+    that no longer falls back.
+    """
     path = tmp_path / "foreign.ora"
-    _foreign(path, '<layer name="L" src="data/a.png" composite-op="svg:color-dodge"/>')
+    _foreign(path, '<layer name="L" src="data/a.png" composite-op="svg:hue"/>')
     assert inker.Document.load(path).stack[0].blend == "normal"
 
 

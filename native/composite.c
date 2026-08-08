@@ -17,6 +17,8 @@
 
 #include "warlockc.h"
 
+#include <math.h>
+
 /* B(Cb, Cs) for one channel. `mode` is an index into composite.BLEND_MODES,
  * which is where the mapping is kept; anything unrecognised is normal, and the
  * Python side never sends one (an unknown mode falls back to numpy, which
@@ -38,6 +40,71 @@ static float blend_channel(int32_t mode, float cb, float cs) {
          * comparison that is *false* for NaN and therefore returns the sum.
          * `sum < 1.0f ? sum : 1.0f` would quietly turn a NaN into 1. */
         return sum > 1.0f ? 1.0f : sum;
+    }
+    case WARLOCKC_BLEND_DARKEN:
+        /* np.minimum propagates NaN and a bare `cb < cs ? cb : cs` does not:
+         * a NaN operand compares false and the *other* one comes back. Same
+         * trap as the add clamp above, moved from the bound to the operand. */
+        if (cb != cb) {
+            return cb;
+        }
+        if (cs != cs) {
+            return cs;
+        }
+        return cb < cs ? cb : cs;
+    case WARLOCKC_BLEND_LIGHTEN:
+        if (cb != cb) {
+            return cb;
+        }
+        if (cs != cs) {
+            return cs;
+        }
+        return cb > cs ? cb : cs;
+    case WARLOCKC_BLEND_DIFFERENCE: {
+        const float diff = cb - cs;
+        return diff < 0.0f ? -diff : diff;
+    }
+    case WARLOCKC_BLEND_HARD_LIGHT:
+        /* Overlay with the operands swapped, which is what it *is* -- and
+         * saying so rather than writing the formula out inverted is what makes
+         * the identity exact rather than exact-to-a-rounding. The reference
+         * spells it the same way, for the same reason. */
+        return blend_channel(WARLOCKC_BLEND_OVERLAY, cs, cb);
+    case WARLOCKC_BLEND_COLOR_DODGE: {
+        /* The spec's three cases in its order: an empty backdrop stays empty
+         * even under a full source, so the Cb test comes first. The reference
+         * guards the divisor rather than clipping an infinity afterwards,
+         * because 1 - Cs is *exactly* zero for a saturated channel. */
+        if (cb <= 0.0f) {
+            return 0.0f;
+        }
+        if (cs >= 1.0f) {
+            return 1.0f;
+        }
+        const float ratio = cb / (1.0f - cs);
+        return ratio > 1.0f ? 1.0f : ratio;
+    }
+    case WARLOCKC_BLEND_COLOR_BURN: {
+        if (cb >= 1.0f) {
+            return 1.0f;
+        }
+        if (cs <= 0.0f) {
+            return 0.0f;
+        }
+        const float ratio = (1.0f - cb) / cs;
+        return 1.0f - (ratio > 1.0f ? 1.0f : ratio);
+    }
+    case WARLOCKC_BLEND_SOFT_LIGHT: {
+        if (cs <= 0.5f) {
+            return cb - ((1.0f - 2.0f * cs) * cb) * (1.0f - cb);
+        }
+        /* D(Cb). The clamp under the root matches np.maximum in the reference
+         * and is not defensive about the spec: Cb is a composited channel and
+         * over()'s divide is not clipped, so a value a hair below zero is
+         * reachable and sqrtf of it is a NaN the reference does not produce. */
+        const float d = cb <= 0.25f ? ((16.0f * cb - 12.0f) * cb + 4.0f) * cb
+                                    : sqrtf(cb < 0.0f ? 0.0f : cb);
+        return cb + (2.0f * cs - 1.0f) * (d - cb);
     }
     default:
         return cs;
