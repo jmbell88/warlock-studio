@@ -104,10 +104,12 @@ The control is in the inspector, on the **Rig & Pose** tab, under the collapsed 
 header. It appears only on jobs that have a `source.glb` — older jobs and rig jobs do not.
 
 Five tiers exist in the code: Raw (full density), Draft (20k), Standard (50k), Detailed (100k) and
-Custom. **Today only Raw is offered.** Every decimating tier needs `gltfpack`, a vendored binary
-that is not yet shipped, and the panel says so on screen rather than presenting a button that can
-only fail. When the binary is present, the whole list appears and Custom gains a triangle-count
-field with its own valid range.
+Custom. `gltfpack` — the vendored binary every decimating tier runs through — is present now, so
+this panel offers the whole list, and Custom gains a triangle-count field with its own valid range.
+**The generate form still offers Raw alone**, because none of the decimating tiers has been
+qualified yet: a tier is only exposed there once it has been run against a chest, a sword and a rock
+and shown to keep UVs, both PBR maps and material assignment. This panel is where that qualifying
+happens, on a mesh that already exists rather than on a job you are about to wait two minutes for.
 
 Two things the panel will not hide from you. A retarget refuses to run on a job that is still queued
 or running, because its write would collide with the worker's. And a retarget makes a rig, its saved
@@ -128,6 +130,14 @@ The **mesh report** answers *will an importer accept this, and will it sit on th
 topology-and-metadata check: triangle count, material count, whether the surface is **watertight**,
 and whether the pivot is at the model's feet. It also carries the pass/fail badge and its reasons.
 Only this measurement may use the word watertight, because only this one proves it.
+
+The watertight figure is measured on a **welded** copy of the mesh — vertices at the same position
+merged first. The file itself is read unwelded, because the UV and material checks need to see the
+split vertices, but a UV atlas splits a vertex at every seam and each of those splits reads as a
+boundary edge. Unwelded, the check was mostly counting texture seams and calling almost every mesh
+open. When the report says a mesh is not watertight it names the boundary edges and components it
+found *after* welding; the raw unwelded counts are still recorded, because how badly a file is split
+is its own question for a rig or an exporter.
 
 The **mesh audit** answers a different question: *can you see through it*. It is a silhouette check
 — render the mesh from several angles and measure how much of the subject is holes — reported as
