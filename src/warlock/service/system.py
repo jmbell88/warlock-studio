@@ -28,14 +28,24 @@ TRELLIS_LOG_TAIL = 64 * 1024
 _health_lock = threading.Lock()
 
 
-def cached_checks(svc: WarlockService, trellis_running: bool) -> list[doctor.Check]:
+def cached_checks(
+    svc: WarlockService, trellis_running: bool, *, force: bool = False
+) -> list[doctor.Check]:
+    """``force`` skips the TTL, for the one caller that knows the disk changed.
+
+    The TTL exists because none of these answers can change second to second --
+    which stopped being true the moment a download could put weights on disk
+    while the app runs. A fetch that finished inside the window would otherwise
+    leave the pane reporting the model missing for another five seconds and
+    the toast saying it had arrived.
+    """
     # The cache hangs off the service, not this module: it describes one
     # process's config and store, and a module-level dict would outlive them
     # and answer for the wrong one.
     cache = svc.health_cache
     now = time.monotonic()
     with _health_lock:
-        if (
+        if not force and (
             cache.get("running") == trellis_running
             and now - cache.get("at", 0.0) < HEALTH_TTL
         ):
@@ -46,7 +56,7 @@ def cached_checks(svc: WarlockService, trellis_running: bool) -> list[doctor.Che
     return checks
 
 
-def current_checks(svc: WarlockService) -> list[doctor.Check]:
+def current_checks(svc: WarlockService, *, force: bool = False) -> list[doctor.Check]:
     """The doctor's rows as of now, through the TTL cache.
 
     What the header health dot polls from a task thread: the trellis flag is
@@ -55,7 +65,7 @@ def current_checks(svc: WarlockService) -> list[doctor.Check]:
     """
     worker = svc.worker
     running = bool(worker is not None and worker.trellis.running)
-    return cached_checks(svc, running)
+    return cached_checks(svc, running, force=force)
 
 
 def health(svc: WarlockService) -> dict[str, Any]:

@@ -337,6 +337,7 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
 
     from warlock.studio import layout as layout_mod
     from warlock.studio.panes import (
+        app_settings,
         clay_bridge,
         clay_outliner,
         clay_props,
@@ -361,7 +362,12 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
     app_ctx.rigging_available = True
     app_ctx.state.form_3d["rig"] = True
     job = app_ctx.cache.get(job_id)
+    app_ctx.model_rows = _model_rows()
     panes = [
+        # Joined the list when its model list stopped being read-only: a row is
+        # now a checkbox, a coloured label and a button, and the sidebar it is
+        # drawn in is 300 px.
+        ("app-settings", lambda: app_settings.draw(app_ctx)),
         ("settings-2d", lambda: settings_2d.draw(app_ctx)),
         ("settings-3d", lambda: settings_3d.draw(app_ctx)),
         ("library", lambda: library.draw(app_ctx)),
@@ -672,18 +678,79 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
 
 
+def _model_rows() -> list[dict]:
+    """One row of each shape the pane draws: present, missing-and-fetchable,
+    and missing-with-nothing-to-fetch."""
+    return [
+        {
+            "row_key": "base:turbo",
+            "kind": "base",
+            "key": "turbo",
+            "label": "SDXL-Turbo (fast)",
+            "present": True,
+            "size_gib": 7.0,
+            "downloadable": True,
+        },
+        {
+            "row_key": "base:flux_klein",
+            "kind": "base",
+            "key": "flux_klein",
+            "label": "FLUX.2 klein-base 4B (full CFG)",
+            "present": False,
+            "size_gib": 16.0,
+            "downloadable": True,
+        },
+        {
+            "row_key": "lora:pixelxl",
+            "kind": "lora",
+            "key": "pixelxl",
+            "label": "Pixel art (pixel-art-xl)",
+            "present": False,
+            "size_gib": 0.2,
+            "downloadable": True,
+        },
+        {
+            "row_key": "matting:none",
+            "kind": "matting",
+            "key": "none",
+            "label": "Something with no fetch",
+            "present": False,
+            "size_gib": 0.0,
+            "downloadable": False,
+        },
+    ]
+
+
 def test_the_settings_pane_builds(app_ctx, imgui_ctx):
-    """Twice: once bare, once after the model lists are populated, because the
-    pane reads them off the Ctx with getattr and both shapes must build."""
+    """Three times: bare, populated, and with a download in flight, because the
+    pane reads its lists off the Ctx with getattr and all three must build."""
     from warlock.studio.panes import app_settings
 
     app_ctx.base_models = []
     app_ctx.style_loras = []
+    app_ctx.model_rows = []
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
     app_ctx.base_models = [("turbo", "SDXL-Turbo"), ("x", "X - weights missing")]
     app_ctx.style_loras = [("", "no style LoRA"), ("ink", "Ink")]
+    app_ctx.model_rows = _model_rows()
+    app_ctx.model_picks.add("lora:pixelxl")
     app_ctx.rigging_available = True
     _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+
+    # The in-flight branch: a busy row draws a bar instead of its button, and
+    # every other row's button is disabled. Submitted through the real runner
+    # so the progress dict is exercised the way the pane reads it.
+    import threading
+
+    gate = threading.Event()
+    key = "download:base:flux_klein"
+    assert app_ctx.tasks.submit(key, gate.wait)
+    app_ctx.tasks.set_progress(key, 42.0, "6.7 of ~16.0 GB")
+    assert app_ctx.tasks.progress(key)["percent"] == 42.0
+    try:
+        _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    finally:
+        gate.set()
 
 
 def test_the_settings_pane_help_button_stays_inside_the_pane(app_ctx, imgui_ctx, monkeypatch):

@@ -73,6 +73,16 @@ def derive_key(job_id: str, name: str) -> str:
     return f"derive:{job_id}:{name}"
 
 
+def download_key(row_key: str) -> str:
+    """The task key for "fetch this model's weights".
+
+    Its own namespace, and the prefix is load-bearing: ``any_busy("download:")``
+    is what disables every other row's button while one fetch is running, which
+    is the whole of the app-Settings pane's concurrency policy.
+    """
+    return f"download:{row_key}"
+
+
 @dataclass
 class Ctx:
     svc: Any
@@ -85,8 +95,15 @@ class Ctx:
     textures: Any = None
     confirms: dialogs.ConfirmQueue = field(default_factory=dialogs.ConfirmQueue)
     prompts: dialogs.PromptQueue = field(default_factory=dialogs.PromptQueue)
-    # Answers from doctor + the rig-template probe, read once at startup: none
-    # of them can change while the app runs without a restart.
+    # Answers from doctor + the rig-template probe, read at startup. Rigging is
+    # genuinely fixed for the life of the process -- the bpy probe is a
+    # subprocess whose answer cannot change without a restart.
+    #
+    # The *model* answers below are not, and used to say they were. A download
+    # started from the app-Settings pane makes weights appear while the app
+    # runs, so ``base_models``/``style_loras``/``model_rows`` are recomputed
+    # from a fresh ``doctor.run_checks`` when a fetch finishes -- the same
+    # wholesale replacement the health poll already does to ``runtime.checks``.
     rigging_available: bool = False
     rig_templates: list[dict[str, Any]] = field(default_factory=list)
     rig_default: str = ""
@@ -108,6 +125,13 @@ class Ctx:
     layout: Any = None
     base_models: list[tuple[str, str]] = field(default_factory=list)
     style_loras: list[tuple[str, str]] = field(default_factory=list)
+    # Every downloadable registry row, with a real ``present`` flag rather than
+    # the word "missing" inside a label -- see ``service.downloads.rows``.
+    model_rows: list[dict[str, Any]] = field(default_factory=list)
+    # Which rows the app-Settings pane has ticked. Frame-thread state and
+    # deliberately not persisted: it is a selection for one action, and a
+    # remembered one would offer to re-download something already on disk.
+    model_picks: set[str] = field(default_factory=set)
 
     # -- shorthands --------------------------------------------------------
 
@@ -145,6 +169,11 @@ class Ctx:
 
     def submit(self, key: str, fn: Any, *args: Any, tag: Any = None, **kwargs: Any) -> bool:
         return self.tasks.submit(key, fn, *args, tag=tag, **kwargs)
+
+    def progress(self, key: str) -> dict[str, Any] | None:
+        """How far a running task has got, or None. Same shape as
+        ``Runtime.progress``, so a pane draws either with one call."""
+        return self.tasks.progress(key)
 
     def artifact_busy(self, job_id: str, name: str) -> bool:
         """Whether *either* half is working on this artifact.

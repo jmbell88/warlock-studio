@@ -110,6 +110,13 @@ being fetched. That is the whole reason installation has a manual download step 
 [Model weights](10-installation.md#model-weights) and
 [Offline by design](10-installation.md#offline-by-design).
 
+There is one exception and it is deliberately shaped so that it changes nothing above. The Settings
+pane's **Download** button spawns a separate process, which sets `HF_HUB_OFFLINE=0` in its own
+environment, fetches one repository and exits. The app process never sets that variable to anything
+but `1`, and nothing on the generation path can reach the fetcher. A subprocess rather than a
+temporary flag flip precisely because `huggingface_hub` reads the variable at import time: in
+process, "is this offline" would become a question about import order instead of about one line.
+
 ## The GL context
 
 There is one moderngl context, and both the 3D viewport and the imgui panels draw through it.

@@ -70,6 +70,17 @@ class TaskRunner:
     def __init__(self, workers: int = WORKERS) -> None:
         self._pool = ThreadPoolExecutor(workers, thread_name_prefix="warlock-task")
         self._pending: dict[str, _Pending] = {}
+        # Live progress per key, written by whatever thread is running the task
+        # and read on the frame thread. Under the same lock as _pending: the
+        # frame loop asks "is this busy" and "how far" in consecutive lines, and
+        # an answer assembled from two locks can say "not busy, 40%".
+        #
+        # A dict rather than a protocol, for the reason the worker's ProgressBus
+        # is one: the reader is in the same process and the writer is a
+        # callback, so anything more is a message queue nobody needed. Done
+        # arrives only at completion, which is enough for a two-second export
+        # and not for a 16 GB download.
+        self._progress: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def submit(self, key: str, fn: Callable[..., Any], *args: Any, tag: Any = None, **kwargs: Any):
@@ -82,9 +93,34 @@ class TaskRunner:
         with self._lock:
             if key in self._pending:
                 return False
+            # Cleared here rather than only on collection: a key reused after a
+            # finished run would otherwise open showing the last run's bar.
+            self._progress.pop(key, None)
             future = self._pool.submit(fn, *args, **kwargs)
             self._pending[key] = _Pending(future=future, tag=tag)
         return True
+
+    def set_progress(self, key: str, percent: float, label: str = "") -> None:
+        """Report how far ``key`` has got. Safe from any thread.
+
+        Only recorded while the key is actually in flight: a task thread that
+        reports one last time as it finishes must not resurrect an entry the
+        frame loop has already collected and stopped drawing.
+        """
+        with self._lock:
+            if key not in self._pending:
+                return
+            self._progress[key] = {
+                "percent": max(0.0, min(100.0, float(percent))),
+                "label": str(label),
+            }
+
+    def progress(self, key: str) -> dict[str, Any] | None:
+        """``{"percent": float, "label": str}`` or None -- the shape
+        ``Runtime.progress`` returns, so a pane draws either the same way."""
+        with self._lock:
+            found = self._progress.get(key)
+            return dict(found) if found is not None else None
 
     def is_busy(self, key: str) -> bool:
         with self._lock:
@@ -110,6 +146,7 @@ class TaskRunner:
             ready = [(k, p) for k, p in self._pending.items() if p.future.done()]
             for key, _pending in ready:
                 del self._pending[key]
+                self._progress.pop(key, None)
         for key, pending in ready:
             error = pending.future.exception()
             if error is None:
@@ -152,6 +189,7 @@ class TaskRunner:
             self._pool.shutdown(wait=wait, cancel_futures=not wait)
             with self._lock:
                 self._pending.clear()
+                self._progress.clear()
             return True
 
         with self._lock:
@@ -170,4 +208,5 @@ class TaskRunner:
             _threads_queues.pop(thread, None)
         with self._lock:
             self._pending.clear()
+            self._progress.clear()
         return not not_done

@@ -9,9 +9,8 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
-from . import guidance, models, native, rigging, vram, winjob
+from . import fetch, guidance, models, native, rigging, vram, winjob
 from .config import Config
 
 # Cheap: matting itself imports nothing heavier than models and reference, both
@@ -235,10 +234,12 @@ def _port_check(config: Config, trellis_running: bool = False) -> Check:
     return Check("trellis port", ok, detail, fatal=False)
 
 
-def _base_model_dir(config: Config, spec: models.BaseModel) -> Path:
-    if spec.key == models.DEFAULT_BASE_MODEL and config.t2i_turbo_dir is not None:
-        return config.t2i_turbo_dir
-    return config.t2i_model_root / spec.dir_name
+# The path rule and every presence probe live in warlock.fetch now, because the
+# download button has to answer exactly the same questions and a second copy of
+# "where does turbo live" is how the two would come to disagree. What stays here
+# is the *wording*: a Check's detail is a sentence for a person, and that is
+# doctor's business rather than the planner's.
+_base_model_dir = fetch.base_model_dir
 
 
 def _t2i_checks(config: Config) -> list[Check]:
@@ -252,29 +253,7 @@ def _t2i_checks(config: Config) -> list[Check]:
     checks: list[Check] = []
     for spec in models.BASE_MODELS.values():
         path = _base_model_dir(config, spec)
-        # model_index.json is the diffusers layout marker; the unet shard is the
-        # biggest file and the one a partial/wrong-variant download would miss.
-        #
-        # A spec may name its own probe files instead, because that formula is
-        # an SDXL fact: FLUX.2 klein has no unet/ at all, and its text encoder
-        # is half the download -- so a probe that looked only at the transformer
-        # would call a half-fetched model present.
-        variant = f".{spec.variant}" if spec.variant else ""
-        wanted = spec.probe or (f"unet/diffusion_pytorch_model{variant}.safetensors",)
-        ok = (path / "model_index.json").exists() and all(
-            (path / rel).exists() for rel in wanted
-        )
-        # The step-distillation LoRA counts as part of the checkpoint, because
-        # _load_loras *raises* on a missing one where a style LoRA is merely
-        # skipped. Without this the row called the model ready and the job then
-        # failed at load time with the checkpoint already in VRAM -- which is
-        # the one thing this file exists to find out about first.
-        missing_lora = None
-        if ok and spec.base_lora:
-            lora_path = config.t2i_model_root / "loras" / spec.base_lora
-            if not lora_path.exists():
-                ok = False
-                missing_lora = lora_path
+        ok, missing_lora = fetch.base_model_state(config, spec)
         if ok:
             detail = str(path)
         elif missing_lora is not None:
@@ -288,7 +267,7 @@ def _t2i_checks(config: Config) -> list[Check]:
         checks.append(Check(f"image model: {spec.label}", ok, detail, fatal=False))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename
-        ok = path.exists()
+        ok = fetch.present(config, "lora", lora)
         detail = (
             str(path)
             if ok
@@ -301,8 +280,7 @@ def _t2i_checks(config: Config) -> list[Check]:
         # Both halves, deliberately: weights without the CLIP vision encoder
         # load fine and then fail at the first call, which is not a failure a
         # user can read back to a missing download.
-        encoder = root / adapter.image_encoder_dir / "config.json"
-        ok = weights.exists() and encoder.exists()
+        ok = fetch.present(config, "adapter", adapter)
         if ok:
             detail = str(root)
         else:
@@ -314,10 +292,7 @@ def _t2i_checks(config: Config) -> list[Check]:
         checks.append(Check(f"IP-Adapter: {adapter.label}", ok, detail, fatal=False))
     for cn in models.CONTROLNETS.values():
         path = config.t2i_model_root / cn.dir_name
-        variant = f".{cn.variant}" if cn.variant else ""
-        ok = (path / "config.json").exists() and (
-            path / f"diffusion_pytorch_model{variant}.safetensors"
-        ).exists()
+        ok = fetch.present(config, "control", cn)
         detail = (
             str(path)
             if ok
@@ -338,7 +313,7 @@ def _metric_checks(config: Config) -> list[Check]:
     checks: list[Check] = []
     for spec in models.METRIC_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
-        ok = (path / "config.json").exists()
+        ok = fetch.present(config, "metric", spec)
         # Weights present is not the same claim as "ranking is on", and the two
         # used to be indistinguishable here. queue._rank_candidate catches
         # every exception out of metrics.reference_cosine and scores on
@@ -382,7 +357,7 @@ def _pose_checks(config: Config) -> list[Check]:
     checks: list[Check] = []
     for spec in models.POSE_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
-        ok = (path / "config.json").exists()
+        ok = fetch.present(config, "pose", spec)
         detail = (
             f"weights present at {path} -- rig joints are read off the reference image "
             "when the detection is confident, and fall back to the bbox fit when it is not"
@@ -450,7 +425,7 @@ def _matting_checks(config: Config) -> list[Check]:
     checks: list[Check] = []
     for spec in models.MATTING_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
-        ok = (path / "config.json").exists()
+        ok = fetch.present(config, "matting", spec)
         if ok:
             detail = f"weights present at {path} -- not checked: whether the model loads"
             if spec.remote_code:

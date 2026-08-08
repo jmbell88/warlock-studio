@@ -62,8 +62,8 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
   export a `.glb` or import the document as an asset. Covered in [Clay](07-clay.md).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
   works" findings the verdicts add up to. Covered in [Review](16-review.md).
-- **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and a
-  read-only list of the models it loaded. See
+- **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
+  list of models it loaded, from which a missing one can be downloaded. See
   [In-app settings](11-configuration.md#in-app-settings).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is

@@ -183,3 +183,10 @@ The consequence is worth stating plainly, because it is a design decision rather
 a missing set of weights produces a clear error and a `doctor` warning naming the exact command to
 fetch it, never a silent download. There is no provider API, no account, and nothing about your
 prompts or your images leaves the machine.
+
+Every optional model on this page can also be fetched from **Settings → Models**, and that does not
+weaken any of the above. The button spawns a separate process which is allowed online, fetches one
+repository into a staging folder beside its destination, moves the files in only on success, and
+exits; the app process keeps `HF_HUB_OFFLINE=1` for its whole life and nothing on the generation
+path can start a fetch. It is the same download you would run by hand, run for you, once, because
+you asked.

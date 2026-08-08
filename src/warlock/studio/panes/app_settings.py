@@ -5,10 +5,17 @@ owns a job's parameters. Nothing here belongs to a job; everything here
 survives a restart, and the child id says ``app-settings`` for exactly that
 reason -- ``settings`` is already taken.
 
-The model list is read-only on purpose. Weights are one-time manual
-``hf download``s (the app is offline by contract), so there is nothing here to
-click; what the pane is for is answering "does it know about the model I
-downloaded", which used to require reading the log.
+The model list answers "does it know about the model I downloaded", which used
+to require reading the log -- and now also downloads it. It was read-only by
+design for as long as the app had no way to fetch anything; the app still has
+none, and that is the point of how the button works: it plans the fetch here
+(``warlock.fetch``, pure) and hands it to a child process
+(``pipelines/fetch_worker``) that sets ``HF_HUB_OFFLINE=0`` in its own
+environment and dies. Nothing in this process ever becomes online-capable, and
+nothing in the generation pipeline can reach any of it.
+
+Everything else on the pane is still the app's own settings rather than a
+job's, and still read-only where the answer is not the user's to change.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, theme, tokens, widgets
+from .. import app_ctx, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -123,34 +130,136 @@ def _layout(ctx: Any) -> None:
 # --- models -----------------------------------------------------------------
 
 
+# The order rows are grouped in, and the heading each group gets. Written out
+# rather than taken from whatever order the rows arrive in, so a registry
+# gaining a table cannot silently append an unlabelled block.
+_GROUPS = (
+    ("base", "Image models"),
+    ("lora", "Style LoRAs"),
+    ("adapter", "Conditioning"),
+    ("control", "Conditioning"),
+    ("metric", "Measurement"),
+    ("pose", "Measurement"),
+    ("matting", "Measurement"),
+)
+
+
 def _models(ctx: Any) -> None:
     widgets.section("Models")
-    base = list(getattr(ctx, "base_models", None) or [])
-    loras = list(getattr(ctx, "style_loras", None) or [])
-    if not base:
+    rows = list(getattr(ctx, "model_rows", None) or [])
+    if not rows:
         widgets.muted("No image models registered.")
-    for _key, label in base:
-        _row(label)
-    if loras:
-        imgui.dummy((0, sp(tokens.SP_1)))
-        for key, label in loras:
-            if key:
-                _row(label)
+        return
+    # One fetch at a time across the whole pane. Two concurrent children can
+    # legitimately want the same destination -- sdxl and sdxl_cfg are one
+    # download -- and the staging-directory rule in the worker protects the
+    # *destination*, not two writers of one staging tree.
+    busy = ctx.tasks.any_busy("download:")
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_kind.setdefault(str(row.get("kind")), []).append(row)
+
+    heading = ""
+    for kind, label in _GROUPS:
+        group = by_kind.get(kind) or []
+        if not group:
+            continue
+        if label != heading:
+            heading = label
+            imgui.dummy((0, sp(tokens.SP_1)))
+            widgets.muted(label)
+        for row in group:
+            _row(ctx, row, busy)
+
+    imgui.dummy((0, sp(tokens.SP_1)))
+    picks = {r["row_key"] for r in rows if r["row_key"] in ctx.model_picks and not r["present"]}
+    if widgets.disabled_button(
+        f"Download selected ({len(picks)})", bool(picks) and not busy
+    ):
+        _start(ctx, sorted(picks), key="download:selection")
+    _selection_progress(ctx)
+
     imgui.dummy((0, sp(tokens.SP_1)))
     if getattr(ctx, "rigging_available", False):
-        _row("Rigging (bpy) available")
+        widgets.text_colored(theme.MUTED, f"{icons.CIRCLE} Rigging (bpy) available")
     else:
         widgets.muted("Rigging (bpy) not installed.")
     imgui.dummy((0, sp(tokens.SP_1)))
-    # What this list is, rather than what it is not yet. A promise about a
-    # future release is the one thing a UI string cannot keep, and this pane
-    # was the only place in the app making one.
+    # What the button does and does not do. The offline contract is the app's
+    # single most load-bearing property, so the one place that breaks it says so
+    # rather than leaving the user to infer it.
     widgets.muted(
-        "Read-only. Weights are one-time manual downloads; the startup "
-        "diagnostics give the exact command for a missing one."
+        "A download runs in a separate process; this one stays offline. The "
+        "startup diagnostics still give the exact command for a missing model."
     )
 
 
-def _row(label: str) -> None:
-    missing = "missing" in label
-    widgets.text_colored(theme.WARN if missing else theme.MUTED, f"{icons.CIRCLE} {label}")
+def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
+    row_key = str(row["row_key"])
+    present = bool(row.get("present"))
+    label = str(row.get("label") or row_key)
+    if present:
+        widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} {label}")
+        return
+    if not row.get("downloadable"):
+        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label} - weights missing")
+        return
+
+    ticked = row_key in ctx.model_picks
+    changed, ticked = imgui.checkbox(f"##pick-{row_key}", ticked)
+    if changed:
+        # Only a missing row can be ticked, and the set is pruned as rows
+        # arrive present, so it can never name something already on disk.
+        if ticked:
+            ctx.model_picks.add(row_key)
+        else:
+            ctx.model_picks.discard(row_key)
+    imgui.same_line()
+    size = float(row.get("size_gib") or 0.0)
+    suffix = f" ({size:.1f} GB)" if size else ""
+    widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}{suffix}")
+
+    key = app_ctx.download_key(row_key)
+    running = ctx.tasks.is_busy(key)
+    if running:
+        found = ctx.progress(key)
+        widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
+        if found and found.get("label"):
+            widgets.muted(str(found["label"]))
+        return
+    # Its own line rather than same_line after full-width text: the label is
+    # long and the sidebar is 300 px, and a button drawn past the edge is gone
+    # rather than squeezed.
+    if widgets.disabled_button(f"{icons.DOWNLOAD} Download##{row_key}", not busy):
+        _start(ctx, [row_key], key=key)
+
+
+def _selection_progress(ctx: Any) -> None:
+    key = "download:selection"
+    if not ctx.tasks.is_busy(key):
+        return
+    found = ctx.progress(key)
+    widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
+    if found and found.get("label"):
+        widgets.muted(str(found["label"]))
+
+
+def _start(ctx: Any, row_keys: list[str], *, key: str) -> None:
+    """Submit the fetch. The progress callback is bound to the task key here.
+
+    Closed over on the frame thread and called from the task thread --
+    ``TaskRunner.set_progress`` is the thread-safe half, and it drops a report
+    for a key that is no longer in flight, so a child's last line landing after
+    collection cannot resurrect a bar.
+    """
+    from ...service import downloads as svc_downloads
+
+    def run() -> Any:
+        return svc_downloads.download(
+            ctx.svc,
+            row_keys,
+            on_progress=lambda percent, label: ctx.tasks.set_progress(key, percent, label),
+        )
+
+    if ctx.submit(key, run):
+        ctx.toast("Downloading...")
