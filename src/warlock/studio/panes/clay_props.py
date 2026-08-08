@@ -267,6 +267,7 @@ def _material(doc: Any, obj: Any) -> None:
     if not doc.materials:
         widgets.muted("the palette is empty")
         return
+    _palette_row(doc, obj)
     options = [(str(i), m.name or f"slot {i}") for i, m in enumerate(doc.materials)]
     picked = widgets.labeled_combo("slot", str(obj.material), options)
     widgets.help_marker(
@@ -303,6 +304,39 @@ def _material(doc: Any, obj: Any) -> None:
             roughness_factor=float(roughness),
         )
         doc.set_material(index, fresh)
+
+
+def _palette_row(doc: Any, obj: Any) -> None:
+    """Add, rename and remove palette entries.
+
+    Add appends -- never inserts -- because a slot *is* an index that every
+    mesh's per-face ``material`` array names, and inserting one in the middle
+    would renumber those arrays in every object in the document.
+
+    Remove is offered only for an entry no face uses, and says so rather than
+    reassigning those faces somewhere. Reassigning is a silent change to how
+    part of the model looks, which is exactly the kind of thing a user
+    discovers three edits later with no idea what did it.
+    """
+    index = min(max(int(obj.material), 0), len(doc.materials) - 1)
+    users = doc.material_users(index)
+    if imgui.small_button(f"{icons.PLUS} Add##matadd"):
+        doc.set_props(obj.uid, material=doc.add_material())
+    imgui.same_line()
+    removable = users == 0 and len(doc.materials) > 1
+    if widgets.disabled_button("Remove##matdel", removable):
+        doc.remove_material(index)
+        doc.set_props(obj.uid, material=min(index, len(doc.materials) - 1))
+    if not removable and len(doc.materials) > 1:
+        widgets.muted(f"{users} face(s) use this slot")
+
+    name = widgets.input_text("slot name##matname", doc.materials[index].name or "", max_length=60)
+    if name != (doc.materials[index].name or ""):
+        from dataclasses import replace
+
+        # A replacement, never an in-place edit, for the reason the colour
+        # fields below state: identity is what every cache de-duplicates on.
+        doc.set_material(index, replace(doc.materials[index], name=name))
 
 
 TEXTURE_SLOTS = ("base_color", "metallic_roughness", "normal", "emissive", "occlusion")

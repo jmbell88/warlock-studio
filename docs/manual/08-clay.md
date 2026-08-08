@@ -224,6 +224,22 @@ The slot's **base colour**, **metallic** and **roughness** are edited there too,
 reaches every object using that slot at once — which is the point of a palette rather than a
 material per object.
 
+**Add** appends a new slot and **Remove** drops one — but only a slot no face is using, and the
+panel says how many faces are in the way when it will not. Reassigning those faces to some other
+slot is the alternative, and it is a silent change to how part of the model looks. A slot is an
+index that every face names, so adding always appends rather than inserting; removing one renumbers
+the slots above it, and an undo puts the numbering back.
+
+**Shade Smooth** and **Shade Flat** set how faces are shaded — the whole object in object mode, the
+selected faces in face mode. **Shade Auto** decides per face from the angle between neighbours: a
+sphere or a torus comes out smooth, a box stays flat.
+
+One thing about Shade Auto is worth knowing before it surprises you: **a capped cylinder comes out
+entirely flat.** Shading here is a per-face flag, so a face is smooth only when it has no sharp edge
+at all — and every side quad of a cylinder meets a cap at a right angle. That is also the right
+answer for this renderer rather than a gap: smoothing the band while the caps stayed flat would
+average the cap normals into the rim and round the very edge the caps are there to define.
+
 Clay paints no textures — but it **carries** them. A material that arrived with an imported asset
 keeps its baked maps: they render in the viewport, they are stored in the `.wblk`, and they are
 written back into an exported GLB. The properties panel shows which slots a material carries as a

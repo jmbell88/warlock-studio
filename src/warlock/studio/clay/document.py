@@ -77,13 +77,15 @@ from ..viewer import gltf
 from ..viewer import math3d as m3
 from . import elements as el
 from . import mesh as bm
-from .edits import (
+from .edits import (  # noqa: F401
     MaterialEdit,
+    MaterialListEdit,
     MeshEdit,
     ObjectAddEdit,
     ObjectPropsEdit,
     ObjectRemoveEdit,
     TransformEdit,
+    _shift_materials,
 )
 
 _uids = itertools.count(1)
@@ -444,6 +446,70 @@ class ClayDoc:
         self.materials[index] = material
         self.history.push(MaterialEdit(index, before, material))
         self.touch()
+        return True
+
+    def add_material(self, material: gltf.Material | None = None) -> int:
+        """Append a palette entry and return its index.
+
+        Appended, never inserted: a slot is an index that every mesh's per-face
+        ``material`` array names, so inserting in the middle would renumber
+        those arrays in every object in the document. An append renumbers
+        nothing.
+        """
+        index = len(self.materials)
+        entry = material if material is not None else default_material(f"Material {index + 1}")
+        self.materials.append(entry)
+        self.history.push(MaterialListEdit(index, entry, added=True))
+        self.touch()
+        return index
+
+    def material_users(self, index: int) -> int:
+        """How many faces across the document point at this slot."""
+        return sum(int((obj.mesh.material == index).sum()) for obj in self.objects)
+
+    def remove_material(self, index: int) -> bool:
+        """Drop an *unused* palette entry. -> whether it went.
+
+        Refused while any face points at it, and refused for the last entry.
+        Reassigning those faces to some other slot is the alternative, and it
+        is a silent change to how part of the model looks -- which is exactly
+        the kind of thing a user discovers three edits later. Refusing lets the
+        panel say which objects are in the way.
+        """
+        if not 0 <= index < len(self.materials) or len(self.materials) <= 1:
+            return False
+        if self.material_users(index):
+            return False
+        entry = self.materials[index]
+        del self.materials[index]
+        _shift_materials(self, index, -1)
+        self.history.push(MaterialListEdit(index, entry, added=False))
+        self.touch()
+        return True
+
+    def set_shading(self, uid: int, faces: Any, smooth: bool) -> bool:
+        """Set the per-face shading flag on some of one object's faces.
+
+        Shading is not geometry -- the positions and the topology are untouched
+        -- so this keeps the object's generator, exactly as an unwrap does. A
+        smooth-shaded box is still a box.
+        """
+        import numpy as np
+
+        obj = self.by_uid(uid)
+        flags = np.array(obj.mesh.smooth, dtype=bool)
+        if faces is None:
+            flags[:] = smooth
+        else:
+            picked = np.asarray(faces, dtype="i8")
+            if not len(picked):
+                return False
+            flags[picked] = smooth
+        if np.array_equal(flags, obj.mesh.smooth):
+            return False
+        from dataclasses import replace as _replace
+
+        self.set_mesh(uid, _replace(obj.mesh, smooth=flags), keep_generator=True)
         return True
 
     # -- selection (not undoable) ------------------------------------------

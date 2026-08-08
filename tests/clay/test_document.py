@@ -715,3 +715,150 @@ def test_a_merge_that_absorbs_nothing_and_changes_nothing_pushes_no_step() -> No
     doc.mark_saved()
     assert not doc.join_objects(a.uid, a.mesh, [])
     assert not doc.dirty
+
+
+# --- the palette as a list (Clay15) -------------------------------------------
+
+
+def test_a_palette_entry_is_appended_never_inserted() -> None:
+    """A slot *is* an index that every mesh's per-face array names, so an
+    insertion in the middle would renumber those arrays in every object."""
+    doc = bd.ClayDoc()
+    before = len(doc.materials)
+    index = doc.add_material()
+    assert index == before
+    assert len(doc.materials) == before + 1
+
+
+def test_adding_a_palette_entry_undoes() -> None:
+    doc = bd.ClayDoc()
+    before = len(doc.materials)
+    doc.add_material()
+    doc.undo()
+    assert len(doc.materials) == before
+
+
+def test_an_entry_a_face_uses_is_refused_rather_than_reassigned() -> None:
+    """Reassigning those faces is a silent change to how part of the model
+    looks, which a user discovers three edits later."""
+    doc = bd.ClayDoc()
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=bp.box()))
+    doc.add_material()
+    assert doc.material_users(0) > 0
+    assert doc.remove_material(0) is False
+    assert len(doc.materials) == 2
+
+
+def test_the_last_entry_is_never_removable() -> None:
+    doc = bd.ClayDoc()
+    assert doc.remove_material(0) is False
+
+
+def test_removing_an_unused_entry_renumbers_the_faces_above_it() -> None:
+    import numpy as np
+
+    doc = bd.ClayDoc()
+    doc.add_material()  # slot 1
+    doc.add_material()  # slot 2
+    mesh = bp.box()
+    from dataclasses import replace
+
+    doc.add_object(
+        bd.Obj(
+            uid=bd.new_uid(),
+            name="A",
+            mesh=replace(mesh, material=np.full(6, 2, dtype="i4")),
+        )
+    )
+    assert doc.remove_material(1) is True
+    obj = doc.objects[0]
+    assert int(obj.mesh.material.max()) == 1, "slot 2 became slot 1"
+
+    doc.undo()
+    assert len(doc.materials) == 3
+    assert int(doc.objects[0].mesh.material.max()) == 2, "and back again"
+
+
+# --- shading (Clay16) ---------------------------------------------------------
+
+
+def test_shading_a_whole_object_keeps_its_generator() -> None:
+    """Shading is not geometry: a smooth-shaded box is still a box."""
+    doc = bd.ClayDoc()
+    obj = doc.add_object(
+        bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box(), generator="box", params={})
+    )
+    assert doc.set_shading(obj.uid, None, True) is True
+    assert bool(doc.by_uid(obj.uid).mesh.smooth.all())
+    assert doc.by_uid(obj.uid).generator == "box"
+
+
+def test_shading_some_faces_leaves_the_others_alone() -> None:
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    doc.set_shading(obj.uid, [0, 2], True)
+    flags = doc.by_uid(obj.uid).mesh.smooth
+    assert flags[0] and flags[2]
+    assert not flags[1] and not flags[3]
+
+
+def test_shading_that_changes_nothing_pushes_no_step() -> None:
+    """The rule every write in this document follows: a step that changes
+    nothing must not move the history head."""
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    depth = len(doc.history)
+    assert doc.set_shading(obj.uid, None, False) is False
+    assert len(doc.history) == depth
+
+
+def test_auto_shading_smooths_a_closed_curved_surface() -> None:
+    """A sphere's bands are 22 degrees apart, well inside the threshold."""
+    from warlock.studio import clay_ops
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(
+        bd.Obj(uid=bd.new_uid(), name="S", mesh=bp.uv_sphere(segments=16, rings=8))
+    )
+    doc.select([obj.uid])
+    clay_ops.run(None, doc, clay_ops.get("shade-auto"), angle=30.0)
+    assert bool(doc.by_uid(obj.uid).mesh.smooth.all())
+
+
+def test_auto_shading_leaves_a_box_flat() -> None:
+    from warlock.studio import clay_ops
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    doc.select([obj.uid])
+    clay_ops.run(None, doc, clay_ops.get("shade-auto"), angle=30.0)
+    assert not bool(doc.by_uid(obj.uid).mesh.smooth.any())
+
+
+def test_a_capped_cylinder_comes_out_flat_and_that_is_the_right_answer() -> None:
+    """The stated limitation of a per-face flag, pinned so it is a decision
+    rather than a surprise.
+
+    Every side quad meets a cap at a right angle, so no side quad is
+    everywhere-agreeing and the whole object stays flat. Smoothing the band
+    anyway would average the cap normals into the rim vertices and round the
+    very edge the caps define -- Blender avoids this with per-edge split
+    normals, which is a different mesh format.
+    """
+    from warlock.studio import clay_ops
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="C", mesh=bp.cylinder(segments=24)))
+    doc.select([obj.uid])
+    clay_ops.run(None, doc, clay_ops.get("shade-auto"), angle=30.0)
+    assert not bool(doc.by_uid(obj.uid).mesh.smooth.any())
+
+
+def test_auto_shading_at_a_wide_angle_smooths_everything() -> None:
+    from warlock.studio import clay_ops
+
+    doc = bd.ClayDoc()
+    obj = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    doc.select([obj.uid])
+    clay_ops.run(None, doc, clay_ops.get("shade-auto"), angle=179.0)
+    assert bool(doc.by_uid(obj.uid).mesh.smooth.all())

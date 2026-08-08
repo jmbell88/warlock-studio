@@ -218,3 +218,58 @@ class MaterialEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         self._put(doc, self.after)
+
+
+@dataclass
+class MaterialListEdit(Edit):
+    """A palette entry added or removed.
+
+    A slot *is* an index -- every mesh's per-face ``material`` array names it --
+    so adding or removing one in the middle would renumber the array in every
+    object in the document. That is why the document only ever appends, and only
+    ever removes a slot **no face uses**: an append renumbers nothing, and a
+    removal shifts the indices above it down, which is a pure index arithmetic
+    the undo reverses exactly by shifting them back up. No mesh pixels or
+    positions are stored here at all, which is what keeps a palette edit's undo
+    cost at one material object.
+    """
+
+    index: int
+    material: Any
+    added: bool
+
+    def _insert(self, doc: Any) -> None:
+        doc.materials.insert(self.index, self.material)
+        _shift_materials(doc, self.index, +1)
+        doc.touch()
+
+    def _remove(self, doc: Any) -> None:
+        del doc.materials[self.index]
+        _shift_materials(doc, self.index, -1)
+        doc.touch()
+
+    def undo(self, doc: Any) -> None:
+        self._remove(doc) if self.added else self._insert(doc)
+
+    def redo(self, doc: Any) -> None:
+        self._insert(doc) if self.added else self._remove(doc)
+
+
+def _shift_materials(doc: Any, index: int, delta: int) -> None:
+    """Renumber every face index at or above *index*.
+
+    Skipped entirely when the slot is the last one, which is the append case
+    and the common one: there is nothing above it to move, and rebuilding every
+    mesh in the document to change nothing would throw away the whole GPU cache
+    on every palette add.
+    """
+    from dataclasses import replace as _replace
+
+    import numpy as np
+
+    for i, obj in enumerate(doc.objects):
+        material = obj.mesh.material
+        if not len(material) or int(material.max()) < index:
+            continue
+        moved = np.where(material >= index, material + delta, material)
+        doc.objects[i] = _replace(obj, mesh=_replace(obj.mesh, material=moved))
