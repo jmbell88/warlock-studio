@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import socket
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import guidance, models, native, rigging, vram, winjob
 from .config import Config
+
+# Cheap: matting itself imports nothing heavier than models and reference, both
+# of which keep torch, cv2 and numpy inside the functions that need them. It is
+# imported for last_error() alone -- doctor runs in this process, so the answer
+# is a module attribute rather than anything that has to be carried.
+from .pipelines import matting
 
 MIN_FREE_DISK_GB = 5.0
 
@@ -331,8 +339,22 @@ def _metric_checks(config: Config) -> list[Check]:
     for spec in models.METRIC_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
         ok = (path / "config.json").exists()
+        # Weights present is not the same claim as "ranking is on", and the two
+        # used to be indistinguishable here. queue._rank_candidate catches
+        # every exception out of metrics.reference_cosine and scores on
+        # composition alone, so a torchvision that will not import costs the
+        # anchor similarity with nothing on screen to say so. Now that
+        # torchvision is a declared dependency rather than something that
+        # happened to be in the venv, this row names what it did not check
+        # instead of pretending the distinction does not exist.
+        #
+        # Deliberately words and not a second import probe: unlike host
+        # matting, nothing in the metric path records a real load failure, so a
+        # probe here would be a guess with nothing to corroborate it -- and the
+        # matting row already probes transformers on the same host.
         detail = (
-            str(path)
+            f"{path} -- not checked: whether the model loads "
+            "(transformers and torchvision must import)"
             if ok
             else f"not found at {path} -- benchmark metric unavailable; download with:\n"
             f"  {spec.download}"
@@ -372,8 +394,36 @@ def _pose_checks(config: Config) -> list[Check]:
     return checks
 
 
+# What BiRefNet's own modelling code reaches for, plus the package that runs
+# it. Named here rather than derived from an import, because the whole point is
+# to answer the question without paying for the import: importing timm imports
+# torch, and this runs at startup before anything is on screen.
+_MATTING_IMPORTS = ("einops", "kornia", "timm", "transformers")
+
+
+def _missing_modules(names: Sequence[str]) -> list[str]:
+    """Which of these do not resolve, without importing any of them.
+
+    ``find_spec`` locates a top-level module without executing it, which is
+    what keeps this cheap and keeps a startup check from dragging torch into
+    the process. It raises rather than returns None for a dotted name whose
+    parent is absent (and a package with broken metadata can raise anything at
+    all), so every answer is wrapped: a probe that takes the app down at
+    startup is strictly worse than a red row.
+    """
+    missing: list[str] = []
+    for name in names:
+        try:
+            found = importlib.util.find_spec(name) is not None
+        except Exception:  # noqa: BLE001 -- a probe must never raise out of run_checks
+            found = False
+        if not found:
+            missing.append(name)
+    return missing
+
+
 def _matting_checks(config: Config) -> list[Check]:
-    """The host-side matting *weights*, non-fatal -- and only the weights.
+    """The host-side matting stack, non-fatal: weights, imports, last failure.
 
     Missing, every 2D export still works -- the corner flood fill in
     pipelines/reference.py produces the alpha instead, with visibly rougher
@@ -381,13 +431,22 @@ def _matting_checks(config: Config) -> list[Check]:
     difference the user should be able to see the cause of, which is what this
     row is for.
 
-    A green row deliberately claims less than "matting is ready". All it has
-    looked at is a directory: whether the model then loads depends on imports
-    inside the repo's own modelling code, which are that repo's business and
-    not packages this project declares. Saying "ready" on the strength of a
-    stat would turn a real failure into a silent fall-back to the flood fill
-    with a green row above it, which is the worst of both answers.
+    The weights alone were not enough to see it by. BiRefNet is loaded with
+    trust_remote_code, so what builds it is the checkpoint's own modelling code
+    and its imports are invisible to any resolver -- which is exactly how this
+    row came to be green on a host where ``_load`` raised
+    ModuleNotFoundError on every export. So the three packages that code
+    reaches for are probed by name, and ``matting.last_error`` -- the words of
+    a load that already failed this session -- is reported beside them. A row
+    that agrees with the filesystem and disagrees with the program is the worst
+    of both answers.
+
+    A green row still claims less than "matting is ready": the probe says the
+    modules resolve, not that the checkpoint loads, and only an attempted load
+    settles that.
     """
+    missing = _missing_modules(_MATTING_IMPORTS)
+    failure = matting.last_error()
     checks: list[Check] = []
     for spec in models.MATTING_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
@@ -399,6 +458,15 @@ def _matting_checks(config: Config) -> list[Check]:
                     "; loading it executes third-party Python from this directory "
                     "in this process (transformers runs the repo's own modelling code)"
                 )
+            if missing:
+                ok = False
+                detail += (
+                    "; cannot import " + ", ".join(missing) + " -- 2D exports fall back to "
+                    "the corner fill; install with:\n  uv sync --extra text2image"
+                )
+            if failure:
+                ok = False
+                detail += f"; last load failed: {failure}"
         else:
             detail = (
                 f"not found at {path} -- 2D exports fall back to the corner fill; "

@@ -56,6 +56,17 @@ def svc(tmp_path, monkeypatch):
     # job's matte depend on which weights this machine happens to have
     # downloaded. Empty here; a test that wants the learned matte writes the file.
     monkeypatch.setenv("WARLOCK_TRELLIS_MODELS", str(tmp_path / "trellis-models"))
+    # And the host model root, for the third time and the same reason. This one
+    # hid behind a bug: pipelines/matting fed a float32 tensor to an fp16
+    # checkpoint, so every "model" matte raised and fell back to the corner
+    # fill in milliseconds. With that fixed, leaving this pointed at
+    # PROJECT_ROOT/models means any 2D export in the suite does a real ~12 s
+    # BiRefNet inference per image on a machine that happens to have the
+    # weights -- tests/test_derive_2d.py alone burned 4624 CPU-seconds -- and,
+    # worse, produces a *different matte* there than on one that does not.
+    # Empty here; a test that wants the model writes the files or patches
+    # matting.available, which tests/test_inspector_exports.py already does.
+    monkeypatch.setenv("WARLOCK_T2I_ROOT", str(tmp_path / "t2i-models"))
     monkeypatch.setattr(config_mod, "_config", None)
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)

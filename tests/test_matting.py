@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -165,3 +166,112 @@ def test_a_checkpoint_that_will_not_load_is_only_tried_once(tmp_path, monkeypatc
     matting.unload()
     matting.mask(_subject(), _config(tmp_path))
     assert len(calls) == 2
+
+
+def test_a_failed_load_is_remembered_where_doctor_can_read_it(tmp_path, monkeypatch):
+    # The failure sentinel in _cache is enough to stop a second attempt, but it
+    # is an anonymous object: doctor could see "matting is broken" from it and
+    # never "how". A green weights row above a silent fall-back to the flood
+    # fill is the exact confusion this module's docstring exists to prevent, so
+    # the words of the exception are kept, not just the fact of one.
+    _weights(tmp_path)
+    assert matting.last_error() is None
+
+    def boom(*a, **k):
+        raise RuntimeError("No module named 'einops'")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoModelForImageSegmentation=SimpleNamespace(from_pretrained=boom)
+        ),
+    )
+    matting.mask(_subject(), _config(tmp_path))
+    recorded = matting.last_error()
+    assert recorded is not None
+    assert "einops" in recorded
+    # Named, so the reader can tell an import from a corrupt safetensors.
+    assert "RuntimeError" in recorded
+    # And forgotten with the model, or repairing the install leaves doctor
+    # reporting a failure that no longer happens.
+    matting.unload()
+    assert matting.last_error() is None
+
+
+def test_the_service_fixture_does_not_inherit_this_machines_matting_weights(svc):
+    # The same rule the svc fixture already applies to WARLOCK_TRELLIS_MODELS
+    # and WARLOCK_GLTFPACK, and it went unnoticed only because matting was
+    # broken: with the dtype bug fixed, every 2D export in the suite that ran
+    # on a machine with models/birefnet downloaded started doing a real
+    # ~12 s BiRefNet inference per image -- tests/test_derive_2d.py alone
+    # burned 4624 CPU-seconds. Which matte a test gets must be a property of
+    # the test, not of what the developer happened to download.
+    assert matting.available(svc.config) is False
+
+
+def test_the_input_tensor_carries_the_loaded_models_dtype(tmp_path, monkeypatch):
+    # The published BiRefNet checkpoint stores fp16 weights, and the
+    # preprocessing here is hand-rolled numpy, which is float32. The two met at
+    # the first conv as "Input type (float) and bias type (struct c10::Half)"
+    # -- caught by mask()'s blanket except, so every export on a host with the
+    # weights present fell back to the corner fill and looked like no model.
+    torch = pytest.importorskip("torch")
+    seen: dict[str, object] = {}
+
+    class Stub(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = torch.nn.Conv2d(3, 1, 1)
+
+        def forward(self, x):
+            seen["dtype"] = x.dtype
+            return [self.conv(x)]
+
+    stub = Stub().half()
+    monkeypatch.setattr(matting, "_load", lambda path, device: stub)
+    out = matting._model_mask(_subject(), tmp_path, "cpu")
+    assert seen["dtype"] is torch.float16
+    assert out.shape == (96, 96)
+
+
+def test_a_model_kept_on_the_cpu_is_cast_to_float32(tmp_path, monkeypatch):
+    # Half precision on the CPU is emulated: the real checkpoint took 73 s a
+    # frame against 11.5 s at float32 on this machine. This module's whole
+    # bargain is "a second or two of host compute per export instead of VRAM",
+    # so the cast is what keeps that bargain true. A CUDA device is left alone
+    # -- there half is both correct and faster.
+    torch = pytest.importorskip("torch")
+    _weights(tmp_path)
+
+    class Stub(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = torch.nn.Conv2d(3, 1, 1)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoModelForImageSegmentation=SimpleNamespace(
+                from_pretrained=lambda *a, **k: Stub().half()
+            )
+        ),
+    )
+    model = matting._load(tmp_path / "birefnet", "cpu")
+    assert next(model.parameters()).dtype is torch.float32
+
+
+def test_the_packages_birefnets_modelling_code_imports_are_declared(tmp_path):
+    # BiRefNet's own modelling code -- which trust_remote_code runs out of the
+    # checkpoint directory -- imports these, and transformers reaches for
+    # torchvision to build the fast image processor DINOv2 ranking uses. None
+    # of them were declared, so _load failed on a machine that had every weight
+    # on disk and `uv sync` would remove torchvision from one that worked.
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    extra = data["project"]["optional-dependencies"]["text2image"]
+    names = {req.split(">")[0].split("=")[0].split(";")[0].strip() for req in extra}
+    assert {"einops", "kornia", "timm", "torchvision", "transformers"} <= names

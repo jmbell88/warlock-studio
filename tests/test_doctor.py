@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import socket
 
+from warlock import doctor
 from warlock import models as model_registry
 from warlock.config import Config
 from warlock.doctor import run_checks
+from warlock.pipelines import matting
 
 
 def _free_port() -> int:
@@ -236,14 +238,21 @@ def test_a_missing_matting_model_is_non_fatal_and_says_what_happens_instead(tmp_
         assert "you may also need" in row.detail
 
 
-def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path):
-    # All the row has done is stat a directory. Whether the model then loads
-    # depends on imports inside code Warlock does not ship, so a green row that
-    # said "ready" would be a promise it never checked.
+def _matting_weights(tmp_path):
     root = tmp_path / "t2i"
     for spec in model_registry.MATTING_MODELS.values():
         (root / spec.dir_name).mkdir(parents=True)
         (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+    return root
+
+
+def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path, monkeypatch):
+    # All the row has done is stat a directory and ask whether four modules
+    # resolve. Whether the model then loads depends on code Warlock does not
+    # ship, so a green row that said "ready" would be a promise it never made.
+    monkeypatch.setattr(doctor, "_missing_modules", lambda names: [])
+    monkeypatch.setattr(matting, "last_error", lambda: None)
+    root = _matting_weights(tmp_path)
     checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
     for spec in model_registry.MATTING_MODELS.values():
         row = checks[f"host matting: {spec.label}"]
@@ -254,6 +263,65 @@ def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path):
         # words it deserves: not "loads modelling code", which reads as
         # loading weights, but that other people's Python runs in this process.
         assert ("third-party Python" in row.detail) is spec.remote_code
+
+
+def test_matting_names_the_modules_that_do_not_resolve(tmp_path, monkeypatch):
+    # The whole failure mode this row exists for: every weight on disk, a green
+    # row, and _load raising ModuleNotFoundError on the first export. Stating
+    # the weights alone made the row agree with the filesystem and disagree
+    # with the program, so the imports are probed and the missing ones named.
+    monkeypatch.setattr(doctor, "_missing_modules", lambda names: ["einops", "kornia"])
+    monkeypatch.setattr(matting, "last_error", lambda: None)
+    root = _matting_weights(tmp_path)
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    for spec in model_registry.MATTING_MODELS.values():
+        row = checks[f"host matting: {spec.label}"]
+        assert row.ok is False
+        assert row.fatal is False
+        assert "einops" in row.detail and "kornia" in row.detail
+
+
+def test_matting_reports_a_load_that_already_failed_this_session(tmp_path, monkeypatch):
+    # A checkpoint can be complete, every import can resolve, and the load can
+    # still fail -- half a download, a shape mismatch. matting.py already
+    # refuses to retry it; without this the user's only evidence is a log line
+    # that scrolled past and edges that got worse.
+    monkeypatch.setattr(doctor, "_missing_modules", lambda names: [])
+    monkeypatch.setattr(matting, "last_error", lambda: "RuntimeError: half a download")
+    root = _matting_weights(tmp_path)
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    for spec in model_registry.MATTING_MODELS.values():
+        row = checks[f"host matting: {spec.label}"]
+        assert row.ok is False
+        assert "last load failed: RuntimeError: half a download" in row.detail
+
+
+def test_no_probe_can_raise_out_of_run_checks(tmp_path):
+    # The probe runs at startup, before anything is on screen. A module whose
+    # metadata is broken enough that find_spec raises must cost a red row and
+    # not the app.
+    assert doctor._missing_modules(["warlock", "einops.no.such.thing", "definitely_not_here"]) == [
+        "einops.no.such.thing",
+        "definitely_not_here",
+    ]
+
+
+def test_the_metric_row_says_it_has_not_checked_that_the_model_loads(tmp_path):
+    # torchvision is a declared dependency now rather than something that
+    # happened to be in the venv, which makes "the weights are there" and
+    # "ranking is on" two different claims: queue._rank_candidate catches the
+    # ImportError and scores on composition alone, silently. The row says which
+    # of the two it checked.
+    root = tmp_path / "t2i"
+    for spec in model_registry.METRIC_MODELS.values():
+        (root / spec.dir_name).mkdir(parents=True)
+        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    for spec in model_registry.METRIC_MODELS.values():
+        row = checks[f"metric model: {spec.label}"]
+        assert row.ok is True
+        assert "not checked" in row.detail
+        assert "torchvision" in row.detail
 
 
 def test_the_two_birefnet_rows_are_told_apart(tmp_path):
