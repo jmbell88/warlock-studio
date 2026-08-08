@@ -53,6 +53,23 @@ IDLE_FPS = 12
 # exactly, and the partition is the guard on ``_build_ui``'s dispatch.
 _SINGLE_PANE_MODES = ("home", "manual", "settings")
 
+# The mode-switch digits (I75), built lazily because pygame is imported inside
+# the functions that need it -- importing it at module scope would drag SDL in
+# for every test that touches this file. Both rows are bound: a laptop's number
+# row and the numpad are the same digit to the user.
+_DIGIT_KEYS: dict[int, int] = {}
+
+
+def _digit_keys() -> dict[int, int]:
+    global _DIGIT_KEYS
+    if not _DIGIT_KEYS:
+        import pygame
+
+        _DIGIT_KEYS = {
+            getattr(pygame, f"K_{n}"): n for n in range(1, 10)
+        } | {getattr(pygame, f"K_KP{n}"): n for n in range(1, 10)}
+    return _DIGIT_KEYS
+
 # The two image-labelling passes, named as the questions they are. Wording is the
 # feature here: the same PNG is a *product* in 2D mode and a *blank* on the way to
 # trellis, and "good" means opposite things -- a dramatic plate with pillars and a
@@ -1093,7 +1110,15 @@ class App:
                 continue
             imgui_backend.process_event(event)
             if event.type in (pygame.KEYDOWN, pygame.KEYUP):
-                if not io.want_text_input:
+                # A modal owns the keyboard while it is up (I77): Esc cancels
+                # it and Enter confirms it, and letting the same press through
+                # here would also leave the mode behind the dialog, or submit
+                # the form the dialog is a question about. Releases still pass,
+                # because Inker's space-to-pan is a hold and would otherwise
+                # latch on whenever a dialog opened mid-drag.
+                if not io.want_text_input and not (
+                    event.type == pygame.KEYDOWN and self._modal_open()
+                ):
                     self._shortcut(event)
                 continue
             # Clay owns its own centre pane, so its viewport takes the mouse
@@ -1132,12 +1157,85 @@ class App:
         if hovered or self.clay_view._grab is not None:
             self.clay_view.handle_event(tab.doc, event, hovered)
 
+    def _modal_open(self) -> bool:
+        """Whether a confirm or a prompt is on screen and owns the keyboard."""
+        ctx = self.app_ctx
+        return ctx.confirms.pending is not None or ctx.prompts.pending is not None
+
+    def _note_mode(self, state: Any) -> None:
+        """Sample ``mode`` so Esc knows where it came from.
+
+        Once per key event rather than once per frame, and that is the whole
+        reason it works: F1 changes the mode from inside this very function, so
+        a frame-start sample would still be holding the mode from before it and
+        Esc would go two steps back. Sampling here means every change made
+        since the previous keypress -- by a landing tile, a library card, a
+        drop, or F1 a moment ago -- has already landed.
+        """
+        if state.mode != state.mode_observed:
+            state.previous_mode = state.mode_observed
+            state.mode_observed = state.mode
+
+    def _set_mode(self, key: str) -> None:
+        """The one way a *shortcut* changes mode, so Home's reset is not a
+        second spelling of the switch's."""
+        state = self.app_ctx.state
+        if key == state.mode:
+            return
+        state.previous_mode = state.mode
+        state.mode_observed = key
+        state.mode = key
+        if key == "home":
+            state.landing_view = "choose"
+
+    def _escape_mode(self) -> None:
+        """Esc out of a mode you only pass through, back to the work you left.
+
+        Home is the floor rather than a place you escape from: the app opens on
+        it, so there is routinely nothing behind it, and bouncing to a stale
+        ``previous_mode`` would be a mode switch nobody asked for.
+        """
+        from . import modes
+
+        state = self.app_ctx.state
+        if state.mode == "home":
+            return
+        target = state.previous_mode
+        if target == state.mode or target not in modes.KEYS:
+            target = "home"
+        self._set_mode(target)
+
     def _shortcut(self, event: Any) -> None:
         import pygame
 
+        from . import modes
+
         ctx = self.app_ctx
+        self._note_mode(ctx.state)
+        # Alt+1..8, before everything: it is the only binding that must work in
+        # *every* mode, and Inker, Clay and Review each consume whatever
+        # reaches them. See ``modes.mode_for_digit`` for why the modifier is
+        # Alt and not Ctrl.
+        if event.type == pygame.KEYDOWN and pygame.key.get_mods() & pygame.KMOD_ALT:
+            digit = _digit_keys().get(event.key)
+            target = modes.mode_for_digit(digit) if digit is not None else None
+            if target is not None:
+                self._set_mode(target)
+                return
+        # Ctrl+K, beside the mode digits and for the same reason: the palette
+        # is reachable from every mode or it is not a palette. K is bound by
+        # neither Inker nor Clay, so no workspace binding is displaced.
+        if (
+            event.type == pygame.KEYDOWN
+            and event.key == pygame.K_k
+            and pygame.key.get_mods() & pygame.KMOD_CTRL
+        ):
+            from .panes import palette
+
+            palette.toggle(ctx)
+            return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
-            ctx.state.mode = "manual"
+            self._set_mode("manual")
             return
         # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
@@ -1145,12 +1243,15 @@ class App:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
             ctx.state.show_fps = not ctx.state.show_fps
             return
-        from . import modes
 
         if ctx.state.mode not in modes.WORK_MODES:
             # Home, the Manual and Settings have no form to submit and no
             # viewport to frame; every one of these would act on a pane that is
-            # not on screen.
+            # not on screen. Esc is the one exception, and it is about the mode
+            # rather than about anything in it: these are the three modes with
+            # nothing of their own for Esc to drop.
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self._escape_mode()
             return
         if ctx.state.mode == "clay":
             from . import clay_mode
@@ -1204,6 +1305,13 @@ class App:
                 self.viewer.exit_compare()
             elif self.viewer.pose_mode:
                 pose_panel.guard(ctx, "leave edit mode", lambda: pose_panel.leave(ctx))
+        elif event.key in (pygame.K_UP, pygame.K_DOWN):
+            # The library is the sidebar in both generate modes, so the arrows
+            # are unambiguous here; Review owns Left/Right for its own list and
+            # is returned above. Nothing else in 2D/3D reads an arrow key.
+            from .panes import library
+
+            library.select_relative(ctx, -1 if event.key == pygame.K_UP else 1)
         elif event.key == pygame.K_f:
             self.viewer.frame()
         elif event.key == pygame.K_w:
@@ -1251,21 +1359,27 @@ class App:
     def _request_quit(self) -> None:
         """One chain, in order: painted pixels, then built geometry, then a pose.
 
-        Nested rather than asked side by side, because ``ConfirmQueue`` holds a
-        single pending question: three at once would silently drop two, and the
-        user would lose whichever they were not shown.
+        A list walked by index rather than three lambdas nested by hand (I78).
+        ``ConfirmQueue`` is a real queue now, so the old reason for the nesting
+        -- three questions at once would have dropped two -- is gone; the chain
+        stays because it is the *semantics*, not the workaround. Asking all
+        three side by side and quitting once all three said yes would mean
+        clicking "Keep editing" on the first still left two more questions to
+        dismiss, after the user has already said they are not quitting.
         """
         from . import clay_mode, inker_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
-        inker_mode.guard(
-            ctx,
-            "quit",
-            lambda: clay_mode.guard(
-                ctx, "quit", lambda: pose_panel.guard(ctx, "quit", self._quit)
-            ),
-        )
+        guards = (inker_mode.guard, clay_mode.guard, pose_panel.guard)
+
+        def step(index: int) -> None:
+            if index == len(guards):
+                self._quit()
+                return
+            guards[index](ctx, "quit", lambda: step(index + 1))
+
+        step(0)
 
     def _quit(self) -> None:
         self._running = False
@@ -1290,6 +1404,12 @@ class App:
         # mode but 3D returns without drawing it, so it stays false there and
         # the viewer gets no events at all.
         self._viewport_hovered = False
+        # The dragged asset (I83) mirrors imgui's own drag state rather than
+        # being cleared by whoever accepts it: a drag released over nothing
+        # accepts nowhere, and a flag only the drop target clears would leave
+        # every slot outlined for the rest of the session.
+        if imgui.get_drag_drop_payload_py_id() is None:
+            ctx.state.dragging_job = None
         # Arriving in a viewport mode is a change the cache will not announce:
         # the job list has not changed, so nothing else would ask the viewer
         # to show what was just picked.
@@ -2205,7 +2325,7 @@ class App:
         which is why this is not inline in either.
         """
         from . import widgets
-        from .panes import overlay, settings_3d
+        from .panes import overlay, palette, settings_3d
 
         ctx = self.app_ctx
         overlay.fps_meter(ctx, self.fps)
@@ -2219,6 +2339,11 @@ class App:
         # Before the confirms, because it is the same kind of thing and the
         # earlier one wins the single modal slot imgui gives a frame.
         settings_3d.matte_modal(ctx)
+        # Above the confirms it can raise (Delete asks): the palette closes
+        # itself in the same frame it runs a command, so the question it asks
+        # takes the modal slot on the frame after, with nothing to contend
+        # with.
+        palette.draw(ctx)
         ctx.confirms.draw()
         ctx.prompts.draw()
 
@@ -2268,9 +2393,7 @@ class App:
                 )
             )
         elif selected != state.mode:
-            state.mode = selected
-            if selected == "home":
-                state.landing_view = "choose"
+            self._set_mode(selected)
 
         # Right-aligned health dot: green when everything passed, amber when a
         # non-fatal check failed, red for a fatal one or a dead worker. Click
@@ -2326,7 +2449,11 @@ class App:
             imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - strip)
         overlay.status_readout(line, tip)
         imgui.same_line()
-        if widgets.icon_button("?", "Keyboard shortcuts"):
+        # The tooltip carries F1 (I81): the popup lists it, but the popup is
+        # the thing you have to already know about. A "?" that says only
+        # "Keyboard shortcuts" leaves the one binding that opens the
+        # documentation reachable exclusively from the documentation.
+        if widgets.icon_button("?", "Keyboard shortcuts - F1 opens the Manual"):
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
         imgui.same_line()
@@ -2384,11 +2511,21 @@ class App:
                     imgui.text(what)
                 imgui.end_table()
 
+        from . import modes
+
         imgui.dummy((sp(420), 0))
+        # The digit range comes from the mode list, not from the number 8: a
+        # ninth mode would otherwise gain a working binding this list denies.
         table(
             "Everywhere",
             [
+                (
+                    f"Alt+1 - Alt+{len(modes.MODES)}",
+                    "Switch mode, in the order the switch draws them",
+                ),
+                ("Ctrl+K", "Command palette -- type a command, or an asset"),
                 ("F1", "Switch to the Manual"),
+                ("Esc", "Leave Home, the Manual or Settings"),
                 ("F10", "Toggle the frame-rate readout"),
             ],
         )
@@ -2396,6 +2533,8 @@ class App:
             "2D / 3D",
             [
                 ("Ctrl+Enter", "Generate / Make 3D"),
+                ("Up / Down", "Previous / next asset in the library"),
+                ("Right-click a card", "Its actions menu"),
                 ("F", "Frame the model"),
                 ("W", "Toggle wireframe"),
                 ("S", "Toggle turntable"),

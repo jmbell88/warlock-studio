@@ -21,6 +21,7 @@ from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, matte_preview, theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 MATTE_TITLE = "Check the cutout"
 
@@ -148,20 +149,62 @@ def _bg_options(ctx: Any) -> list[tuple[str, str]]:
 
 
 def _source(ctx: Any) -> None:
-    """The 2D asset this job starts from, or an upload."""
+    """The 2D asset this job starts from, or an upload.
+
+    The whole block is one drag-and-drop target (I83): a card dragged out of
+    the library lands here. A *group* rather than a child window, because a
+    child clips and this content grows a line whenever a source is picked --
+    the target has to be exactly the area the user is aiming at, at every
+    display scale.
+    """
+    from . import library
+
     state = ctx.state
     source = ctx.cache.get(state.source_job)
+    dragging = library.dragged_job(ctx)
+    imgui.begin_group()
+    origin = imgui.get_cursor_screen_pos()
     if source is not None:
         imgui.text_wrapped(source.get("name") or source.get("prompt") or source["id"])
         widgets.muted(f"reference - {source['id']}")
         if imgui.button("Clear"):
             state.source_job = None
+    elif dragging is not None:
+        # The invitation replaces the instruction only while something is in
+        # the air: a line about dropping, with nothing to drop, is noise.
+        widgets.muted("Drop it here to use it as the source.")
     else:
         widgets.muted("Pick a finished reference in the library, or:")
     busy = ctx.busy("upload")
     if widgets.disabled_button("Open an image...", not busy):
         ctx.submit("upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER)
     widgets.muted("...or drop an image on the window.")
+    imgui.end_group()
+    if dragging is not None:
+        # H70's rule applied to the in-app drag: a target the pointer is over
+        # says so, and one that is merely *available* says that too but more
+        # quietly. Drawn after the group so the outline is not clipped by it.
+        end = imgui.get_item_rect_max()
+        hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_blocked_by_active_item.value)
+        colour = theme.ACCENT if hovered else theme.MUTED
+        imgui.get_window_draw_list().add_rect(
+            (origin.x - sp(4), origin.y - sp(4)),
+            (end.x + sp(4), end.y + sp(4)),
+            imgui.get_color_u32(theme.rgba(colour, 0.9 if hovered else 0.4)),
+            sp(4),
+            thickness=sp(2 if hovered else 1),
+        )
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id(library.DRAG_JOB)
+        if payload is not None and state.dragging_job:
+            # Through ``library.select`` rather than by assigning ``source_job``
+            # here: that function is what also moves the selection, so a
+            # dropped card is the selected card and the inspector on the right
+            # is showing the thing the form now names.
+            library.select(ctx, state.dragging_job)
+            state.source_job = state.dragging_job
+            state.dragging_job = None
+        imgui.end_drag_drop_target()
 
 
 def _rig(ctx: Any, form: dict[str, Any]) -> None:

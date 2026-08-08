@@ -25,6 +25,14 @@ class _Flags:
     enter_returns_true = _Enum()
 
 
+class _Key:
+    """Named keys, as opaque tokens -- the fake never presses one."""
+
+    enter = object()
+    keypad_enter = object()
+    escape = object()
+
+
 class _FakeImgui:
     """Enough imgui to run ``PromptQueue.draw`` once.
 
@@ -36,6 +44,7 @@ class _FakeImgui:
     Cond_ = _Flags
     WindowFlags_ = _Flags
     InputTextFlags_ = _Flags
+    Key = _Key
 
     def __init__(self, *, typed: str, enter: bool = False, press: str | None = None) -> None:
         self.typed = typed
@@ -61,6 +70,11 @@ class _FakeImgui:
 
     def button(self, label: str, _size: Any = None) -> bool:
         return label == self.press
+
+    def is_key_pressed(self, _key: Any) -> bool:
+        # Esc and Enter are read from imgui because the frame loop stops
+        # dispatching shortcuts while a modal is up. Nothing here presses one.
+        return False
 
     def same_line(self) -> None: ...
     def close_current_popup(self) -> None:

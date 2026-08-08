@@ -13,6 +13,7 @@ The confirmations are ordinary imgui modals for the same reason.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -91,20 +92,70 @@ class Confirm:
     cancel_label: str = "Keep editing"
     on_confirm: Any = None
     _open: bool = field(default=False, repr=False)
+    _focused: bool = field(default=False, repr=False)
+
+
+def _enter_pressed() -> bool:
+    """Enter or numpad Enter, as a *press* rather than a repeat.
+
+    Read from imgui rather than from pygame because a modal is imgui's: the
+    frame loop stops dispatching shortcuts entirely while one is up (otherwise
+    Esc both cancels the dialog and leaves the mode behind it), so this is the
+    only layer that still sees the key.
+    """
+    return imgui.is_key_pressed(imgui.Key.enter) or imgui.is_key_pressed(
+        imgui.Key.keypad_enter
+    )
+
+
+def _escape_pressed() -> bool:
+    return imgui.is_key_pressed(imgui.Key.escape)
 
 
 class ConfirmQueue:
-    """At most one question at a time, drawn as a modal."""
+    """A queue of yes/no questions, drawn one modal at a time.
+
+    It really is a queue (I78). It used to keep a single slot and drop anything
+    that arrived while one was up, on the reasoning that questions come from
+    user actions and the user cannot act twice between frames -- which is true
+    of *clicks* and false of everything else that asks. A quit asks three
+    questions in a row (painted pixels, built geometry, an unsaved pose) and
+    had to hand-nest them through callbacks to survive; a finished task and a
+    click landing in one frame are two questions with no user double-action
+    involved at all. Dropping the second was silent, and what it dropped was
+    the offer to save someone's work.
+    """
 
     def __init__(self) -> None:
-        self.pending: Confirm | None = None
+        self._queue: deque[Confirm] = deque()
+
+    @property
+    def pending(self) -> Confirm | None:
+        """The question on screen, or ``None``. Read by the frame loop to know
+        a modal is up; it is the head of the queue, never a second field."""
+        return self._queue[0] if self._queue else None
+
+    @property
+    def waiting(self) -> int:
+        """How many questions are behind the one on screen."""
+        return max(0, len(self._queue) - 1)
 
     def ask(self, confirm: Confirm) -> None:
-        # A second question while one is open is dropped rather than stacked:
-        # they only ever come from a user action, and the user cannot have
-        # taken two actions between frames.
-        if self.pending is None:
-            self.pending = confirm
+        self._queue.append(confirm)
+
+    def dismiss(self) -> None:
+        """Drop the question on screen without answering it, outside a draw.
+
+        ``pending`` is the head of the queue and so is deliberately read-only:
+        assigning ``None`` to it used to be how a caller said this, and on a
+        queue that would silently throw away everything behind it too.
+        """
+        if self._queue:
+            self._queue.popleft()
+
+    def _answered(self) -> None:
+        imgui.close_current_popup()
+        self._queue.popleft()
 
     def draw(self) -> None:
         confirm = self.pending
@@ -121,18 +172,33 @@ class ConfirmQueue:
         if not opened:
             return
         imgui.text_wrapped(confirm.message)
+        if self.waiting:
+            widgets.muted(f"{self.waiting} more to answer")
         imgui.dummy((0, 6))
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.
-        if widgets.destructive_button(confirm.confirm_label, (150, 0)):
-            imgui.close_current_popup()
-            self.pending = None
+        confirmed = widgets.destructive_button(confirm.confirm_label, (150, 0))
+        # Focus lands on the confirming button (I77) so Enter is unambiguous
+        # and so a keyboard user can see where they are. Only on the frame the
+        # modal appears: re-focusing every frame would fight the Tab key.
+        if not confirm._focused:
+            imgui.set_item_default_focus()
+            confirm._focused = True
+        imgui.same_line()
+        cancelled = imgui.button(confirm.cancel_label, (150, 0))
+        # Esc cancels, Enter confirms. Enter is read here rather than left to
+        # imgui's own nav activation because keyboard nav is not enabled: with
+        # it off, a focused button is drawn as focused and does nothing.
+        if _escape_pressed():
+            cancelled = True
+        elif _enter_pressed():
+            confirmed = True
+        if confirmed:
+            self._answered()
             if confirm.on_confirm is not None:
                 confirm.on_confirm()
-        imgui.same_line()
-        if imgui.button(confirm.cancel_label, (150, 0)):
-            imgui.close_current_popup()
-            self.pending = None
+        elif cancelled:
+            self._answered()
         imgui.end_popup()
 
 
@@ -148,12 +214,29 @@ class Prompt:
 
 
 class PromptQueue:
+    """A queue, for the reason :class:`ConfirmQueue` is one."""
+
     def __init__(self) -> None:
-        self.pending: Prompt | None = None
+        self._queue: deque[Prompt] = deque()
+
+    @property
+    def pending(self) -> Prompt | None:
+        return self._queue[0] if self._queue else None
+
+    @property
+    def waiting(self) -> int:
+        return max(0, len(self._queue) - 1)
 
     def ask(self, prompt: Prompt) -> None:
-        if self.pending is None:
-            self.pending = prompt
+        self._queue.append(prompt)
+
+    def dismiss(self) -> None:
+        if self._queue:
+            self._queue.popleft()
+
+    def _answered(self) -> None:
+        imgui.close_current_popup()
+        self._queue.popleft()
 
     def draw(self) -> None:
         prompt = self.pending
@@ -182,15 +265,15 @@ class PromptQueue:
             prompt.label, prompt.value, imgui.InputTextFlags_.enter_returns_true.value
         )
         prompt.value = value
+        if self.waiting:
+            widgets.muted(f"{self.waiting} more to answer")
         accepted = entered or imgui.button("Save", (150, 0))
         imgui.same_line()
-        cancelled = imgui.button("Cancel", (150, 0))
+        cancelled = imgui.button("Cancel", (150, 0)) or _escape_pressed()
         if accepted and prompt.value.strip():
-            imgui.close_current_popup()
-            self.pending = None
+            self._answered()
             if prompt.on_accept is not None:
                 prompt.on_accept(prompt.value.strip())
         elif cancelled:
-            imgui.close_current_popup()
-            self.pending = None
+            self._answered()
         imgui.end_popup()

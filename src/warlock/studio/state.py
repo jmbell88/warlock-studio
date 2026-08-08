@@ -401,7 +401,35 @@ class AppState:
     # launch rather than only the first ever; no mode is ever persisted
     # (``test_no_mode_is_persisted_anywhere`` pins that).
     mode: str = "home"
+    # Where Esc goes from a mode you only pass through (Home, the Manual, app
+    # Settings): back to the work you left, not to the chooser. ``mode_observed``
+    # is the other half and exists because ``mode`` is assigned from a dozen
+    # places (landing tiles, library cards, Inker's own open path) -- rather
+    # than funnel all of them through a setter, ``App._note_mode`` samples the
+    # pair once per key event, which is both the only place ``previous_mode``
+    # is read and late enough to have seen a change made by a click, by a drop
+    # or by F1 earlier in the very same frame. Neither is persisted: no mode is
+    # (``test_no_mode_is_persisted_anywhere``), so a remembered one would be a
+    # write with no reader across launches.
+    previous_mode: str = "home"
+    mode_observed: str = "home"
     selected: str | None = None
+    # The job the library list should scroll into view on the next frame it is
+    # drawn, set by arrow-key navigation and cleared by the card that answers
+    # it. A one-shot rather than a standing position: a sticky value would drag
+    # the list back every frame while the user is dragging the scrollbar.
+    library_scroll_to: str | None = None
+    # The asset currently being dragged, if any. imgui's Python drag-and-drop
+    # payload is an integer, so the job id travels here instead; one drag is in
+    # flight at a time by construction. See ``library.DRAG_JOB``.
+    dragging_job: str | None = None
+    # The command palette (I80). Three plain fields rather than a state object:
+    # it holds a query, a cursor and whether it is up, and nothing about it
+    # survives being closed -- reopening on the last query would make Ctrl+K
+    # act on a search the user has forgotten typing.
+    palette_open: bool = False
+    palette_query: str = ""
+    palette_index: int = 0
     comparing: str | None = None
     # Which asset the inspector's Reject button is armed for, waiting on a
     # reason. Keyed by job id rather than being a bare flag, so selecting a

@@ -669,6 +669,12 @@ def test_inker_mode_never_leaks_a_key_to_the_viewport(monkeypatch):
         app_ctx=SimpleNamespace(state=state, cache=SimpleNamespace(get=lambda _id: None)),
         viewer=viewer,
     )
+    # The mode helpers are the real ones: ``_shortcut`` samples the mode on
+    # every key event so Esc knows where it came from (I76).
+    from types import MethodType
+
+    for name in ("_note_mode", "_set_mode", "_escape_mode"):
+        setattr(app, name, MethodType(getattr(main.App, name), app))
 
     for key in (pygame.K_f, pygame.K_w, pygame.K_s, pygame.K_RETURN):
         main.App._shortcut(app, pygame.event.Event(pygame.KEYDOWN, key=key))

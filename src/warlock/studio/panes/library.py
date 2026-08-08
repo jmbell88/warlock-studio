@@ -24,6 +24,47 @@ from ..tokens import sp
 CARD_HEIGHT = 92.0
 THUMB_SIZE = 72.0
 
+# The drag-and-drop type a library card offers (I83). imgui's Python binding
+# carries an *integer* payload -- ``id(object)``, in its own documentation --
+# and a job id is a string whose ``id()`` is the address of a temporary. So the
+# payload's data_id is a constant marker and the job it names travels in
+# ``AppState.dragging_job``: one drag is in flight at a time by construction,
+# and the state field is what the drop target and the highlight both read.
+DRAG_JOB = "warlock-job"
+_DRAG_MARKER = 1
+
+
+def draggable_source(ctx: Any, job: Any) -> None:
+    """Offer the last-drawn item as a draggable asset.
+
+    Called on the card, and only ever for a job something can be *dropped on*:
+    a drag that no target accepts is a gesture the user has to discover is
+    pointless, so a card that is not a finished reference simply does not lift.
+    """
+    if not can_drag(job):
+        return
+    if imgui.begin_drag_drop_source():
+        ctx.state.dragging_job = job["id"]
+        imgui.set_drag_drop_payload_py_id(DRAG_JOB, _DRAG_MARKER)
+        imgui.text(job.get("name") or job.get("prompt") or job["id"])
+        imgui.end_drag_drop_source()
+
+
+def can_drag(job: Any) -> bool:
+    """A finished 2D reference, which is what the 3D source slot takes.
+
+    The same predicate the slot accepts by, stated once: a card that lifts and
+    a slot that refuses it is worse than a card that does not lift.
+    """
+    return job.get("stage") == "reference" and job.get("status") == "done"
+
+
+def dragged_job(ctx: Any) -> Any:
+    """The row being dragged, or ``None``. Read by a drop target that wants to
+    highlight itself before the mouse is released."""
+    job_id = getattr(ctx.state, "dragging_job", None)
+    return ctx.cache.get(job_id) if job_id else None
+
 
 def draw(ctx: Any) -> None:
     # Resolved before the filter row rather than after it, because the row's
@@ -238,10 +279,22 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     imgui.push_id(job_id)
     if selected:
         imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    # Keyboard navigation asks the list to bring the selection into view (I79).
+    # Before ``begin_child`` and not inside it: ``set_scroll_here_y`` scrolls
+    # the *current* window, and inside the card that is the card. Consumed here
+    # so a scroll is a one-frame event rather than a position the list keeps
+    # snapping back to while the user drags the scrollbar.
+    if state.library_scroll_to == job_id:
+        state.library_scroll_to = None
+        imgui.set_scroll_here_y(0.5)
     origin = imgui.get_cursor_screen_pos()
     if imgui.begin_child("card", (0, sp(CARD_HEIGHT)), imgui.ChildFlags_.borders.value):
         _card_body(ctx, job, queue_pos)
     imgui.end_child()
+    # The child window is the item a drag lifts, so this has to follow
+    # ``end_child`` and precede the click test below -- imgui treats a started
+    # drag as not-a-click, which is what stops a drag from also selecting.
+    draggable_source(ctx, job)
     if selected:
         imgui.pop_style_color()
         # The accent edge is the selection mark; a raised fill alone reads as
@@ -314,6 +367,21 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
     else:
         _card_actions(ctx, job)
     imgui.end_group()
+    # Right-click anywhere on the card opens the same menu the ellipsis does
+    # (I82) -- the same menu, drawn once, rather than a second list of actions
+    # that would drift from it the first time one is added.
+    #
+    # Drawn from here rather than from ``_card_actions``, which a *running* job
+    # replaces with its progress bar: the overflow was unreachable for the whole
+    # length of a job, which is exactly when Cancel and Delete are wanted.
+    # ``open_popup`` and ``begin_popup`` have to share an ID stack, so both the
+    # detection and the menu live inside the card's own child window.
+    if imgui.is_window_hovered() and imgui.is_mouse_clicked(1):
+        # Right-clicking selects first: a menu acting on a card other than the
+        # marked one is how the wrong asset gets deleted.
+        select(ctx, job_id)
+        imgui.open_popup("more")
+    _overflow(ctx, job)
 
 
 def _card_actions(ctx: Any, job: Any) -> None:
@@ -344,7 +412,6 @@ def _card_actions(ctx: Any, job: Any) -> None:
         )
     if favourite:
         imgui.pop_style_color()
-    _overflow(ctx, job)
 
 
 def _overflow(ctx: Any, job: Any) -> None:
@@ -430,6 +497,33 @@ def select(ctx: Any, job_id: str) -> None:
     # mesh to look at it does not silently change what Make 3D would submit.
     if job.get("stage") == "reference" and job.get("status") == "done":
         ctx.state.source_job = job_id
+
+
+def select_relative(ctx: Any, delta: int) -> None:
+    """Move the selection ``delta`` cards through the list on screen (I79).
+
+    *The list on screen*: the same filtered, sorted sequence the cards are
+    drawn from, so Down always goes to the card below and never to whatever the
+    unfiltered order would have put there.
+
+    Clamped rather than wrapped. The list is the newest N of M and the ends
+    mean something -- one press at the top landing on the oldest asset the
+    window happens to hold is a jump the user cannot undo by pressing the other
+    arrow, because the wrap is not symmetric once the window grows.
+    """
+    jobs = ctx.cache.visible(ctx.state.filters)
+    if not jobs:
+        return
+    ids = [job["id"] for job in jobs]
+    current = ctx.state.selected
+    if current in ids:
+        index = min(max(ids.index(current) + delta, 0), len(ids) - 1)
+    else:
+        # Nothing selected, or a selection the filters no longer show: enter the
+        # list from the end the key is travelling away from.
+        index = 0 if delta > 0 else len(ids) - 1
+    select(ctx, ids[index])
+    ctx.state.library_scroll_to = ids[index]
 
 
 def _copy_settings(ctx: Any, job: Any) -> None:

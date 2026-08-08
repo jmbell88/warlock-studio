@@ -50,6 +50,32 @@ WORKSPACE_MODES = frozenset({"inker", "clay", "review"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
+# Alt+1..8, positionally: the nth segment of the switch is the nth digit, so
+# the binding is the picture on screen rather than a second table to keep in
+# agreement with it.
+#
+# **Alt, not Ctrl.** Mode switching is the one binding that has to fire in
+# every mode -- including Inker and Clay, whose ``handle_key`` consumes
+# everything unconditionally -- so it is checked before them, which means it
+# takes whatever it names away from them for good. Inker already binds Ctrl+0
+# and Ctrl+1 to fit and 100% zoom, and Clay's axis views want Ctrl+1/3/7, so
+# Ctrl+digit was a key the workspace modes were already using. Alt+digit is
+# used by nothing here.
+def mode_for_digit(digit: int) -> str | None:
+    """``1`` -> ``"home"``, ``8`` -> ``"settings"``; ``None`` past the end."""
+    if 1 <= digit <= len(MODES):
+        return MODES[digit - 1][0]
+    return None
+
+
+def digit_for_mode(key: str) -> int | None:
+    """The inverse, for the shortcut list. ``None`` for a mode that is not in
+    the switch (there is none today; ``QUIT`` is not a mode)."""
+    for index, (mode_key, _label, _icon) in enumerate(MODES, start=1):
+        if mode_key == key:
+            return index
+    return None
+
 # Drawn in the switch, deliberately *not* in MODES. Quitting is an action, not
 # a place: it never lands in ``AppState.mode``, it has no pane, and the three
 # categories above have to partition KEYS exactly (``_build_ui``'s dispatch

@@ -25,6 +25,11 @@ NO_HELP_BUTTON = {
     "inker_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
     "overlay",  # the viewport toolbar and placeholders
+    # A search box over whatever is on screen: it has no titled section to hang
+    # a (?) beside, and a help button inside a list the arrow keys walk is a
+    # row the arrow keys would have to skip. Documented in chapter 12, which is
+    # where a reader looks for a keyboard binding.
+    "palette",
 }
 
 

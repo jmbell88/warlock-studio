@@ -10,16 +10,43 @@ otherwise act on a viewport that is not on screen.
 
 ## Everywhere
 
+These four work in every mode, including Inker, Clay and Review — they are checked before any mode
+sees the key, which is the one exception to the rule above.
+
 | Keys | Action |
 | --- | --- |
+| Alt+1 … Alt+8 | Switch mode, in the order the switch draws them |
+| Ctrl+K | Open the command palette |
 | F1 | Switch to the Manual |
+| Esc | Leave Home, the Manual or app Settings, back to the mode you came from |
 | F10 | Toggle the frame-rate readout |
+
+**Why Alt and not Ctrl.** Inker already uses Ctrl+0 and Ctrl+1 for its zoom, and a binding checked
+above the modes takes whatever it names away from them for good.
+
+**Esc.** In a mode with something to drop — a comparison, a pose edit, a floating selection — Esc
+drops that and stays put. It only leaves a mode that has nothing of its own to cancel. Home is
+where it stops: the app opens there, so there is usually nothing behind it.
+
+## The command palette
+
+`Ctrl+K` opens a search box over whatever is on screen. Type a few letters — initials work, so
+`gtc` finds *Go to Clay* — then Up/Down to move and Enter to run. Esc closes it.
+
+It lists every mode, the generate action, the viewport toggles and the actions for the selected
+asset. A command that cannot run right now is still listed, greyed: an empty result would not tell
+you the command exists or which mode owns it.
+
+Typing also searches your assets by name, prompt or job id; picking one selects it and opens it in
+the pane that made it.
 
 ## 2D and 3D
 
 | Keys | Action |
 | --- | --- |
 | Ctrl+Enter | Generate / Make 3D |
+| Up / Down | Previous / next asset in the library |
+| Right-click a card | The same actions menu the `...` button opens |
 | F | Frame the model |
 | W | Toggle wireframe |
 | S | Toggle turntable |

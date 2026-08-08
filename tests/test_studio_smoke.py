@@ -992,7 +992,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     inker_mode.request_close(app_ctx, tab)
     assert app_ctx.confirms.pending is not None
     app_ctx.confirms.pending.on_confirm()
-    app_ctx.confirms.pending = None
+    app_ctx.confirms.dismiss()
     assert state.active is None
     assert not [k for k in app_ctx.state.preview if k.startswith(f"inker_tex:{uid}:")]
     inker_mode.release_all(app_ctx)
@@ -1082,7 +1082,7 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
     inker_mode.request_close(app_ctx, tab)
     if app_ctx.confirms.pending is not None:
         app_ctx.confirms.pending.on_confirm()
-        app_ctx.confirms.pending = None
+        app_ctx.confirms.dismiss()
     assert not [k for k in app_ctx.state.preview if k.startswith(f"inker_tex:{uid}:")]
     inker_mode.release_all(app_ctx)
 
@@ -2054,3 +2054,97 @@ def test_editing_a_big_mesh_in_clay_still_asks_first(app_ctx):
     app_ctx.confirms = SimpleNamespace(ask=asked.append)
     clay_mode._adopt_import(app_ctx, {"doc": None, "title": "big", "triangles": 250_000})
     assert asked and "250,000 faces" in asked[0].message
+
+
+# --- section I: the palette, the library keyboard and the drop target --------
+
+
+def test_the_command_palette_builds_and_runs_a_command(app_ctx, imgui_ctx):
+    """A modal drawn over whatever mode is up, so it has to build from a mode
+    that owns its whole window as well as from a generate mode."""
+    from warlock.studio.panes import palette
+
+    _seeded(app_ctx)
+    for mode in ("home", "3d", "inker"):
+        app_ctx.state.mode = mode
+        palette.toggle(app_ctx)
+        assert app_ctx.state.palette_open
+        _frame(imgui_ctx, lambda: palette.draw(app_ctx))
+        app_ctx.state.palette_query = "wire"
+        _frame(imgui_ctx, lambda: palette.draw(app_ctx))
+        # An asset row as well, which is the other half of the list.
+        app_ctx.state.palette_query = "barrel"
+        _frame(imgui_ctx, lambda: palette.draw(app_ctx))
+        palette.close(app_ctx)
+        _frame(imgui_ctx, lambda: palette.draw(app_ctx))
+        assert not app_ctx.state.palette_open
+
+
+def test_the_palette_rows_put_the_commands_above_the_assets(app_ctx):
+    from warlock.studio.panes import palette
+
+    _seeded(app_ctx)
+    app_ctx.state.palette_query = "barrel"
+    kinds = [kind for kind, _item in palette.rows(app_ctx)]
+    assert "asset" in kinds
+    assert kinds.index("asset") == kinds.count("command")
+
+
+def test_arrow_keys_walk_the_library_and_ask_it_to_scroll(app_ctx):
+    """I79. The list walked is the one on screen -- filtered and sorted -- so
+    Down always goes to the card below."""
+    from warlock.studio.panes import library
+
+    first = _seeded(app_ctx)
+    second = _seeded(app_ctx)
+    order = [job["id"] for job in app_ctx.cache.visible(app_ctx.state.filters)]
+    assert set(order) == {first, second}
+
+    app_ctx.state.select(order[0])
+    library.select_relative(app_ctx, 1)
+    assert app_ctx.state.selected == order[1]
+    assert app_ctx.state.library_scroll_to == order[1]
+    # Clamped at both ends rather than wrapped.
+    library.select_relative(app_ctx, 1)
+    assert app_ctx.state.selected == order[1]
+    library.select_relative(app_ctx, -1)
+    library.select_relative(app_ctx, -1)
+    assert app_ctx.state.selected == order[0]
+
+
+def test_arrow_keys_with_nothing_selected_enter_from_the_near_end(app_ctx):
+    from warlock.studio.panes import library
+
+    _seeded(app_ctx)
+    _seeded(app_ctx)
+    order = [job["id"] for job in app_ctx.cache.visible(app_ctx.state.filters)]
+    app_ctx.state.select(None)
+    library.select_relative(app_ctx, 1)
+    assert app_ctx.state.selected == order[0]
+    app_ctx.state.select(None)
+    library.select_relative(app_ctx, -1)
+    assert app_ctx.state.selected == order[-1]
+
+
+def test_only_a_finished_reference_can_be_dragged(app_ctx):
+    """A card that lifts and a slot that refuses it is worse than a card that
+    does not lift -- so the predicate is stated once and both use it."""
+    from warlock.studio.panes import library
+
+    assert library.can_drag({"stage": "reference", "status": "done"})
+    assert not library.can_drag({"stage": "reference", "status": "running"})
+    assert not library.can_drag({"stage": "model", "status": "done"})
+
+
+def test_the_3d_source_slot_builds_while_a_drag_is_in_flight(app_ctx, imgui_ctx):
+    """The outline is drawn from the group's rect, which only exists after
+    ``end_group`` -- a frame with a drag in flight is the one that exercises
+    it."""
+    from warlock.studio.panes import settings_3d
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "3d"
+    app_ctx.state.dragging_job = job_id
+    _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
+    app_ctx.state.dragging_job = None
+    _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
