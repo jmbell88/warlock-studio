@@ -31,32 +31,54 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import dialogs, profiles, theme, vector_presets, widgets
+from .. import dialogs, profiles, theme, tokens, vector_presets, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 from ..widgets import field_options as _options
 
 PREVIEW_DEBOUNCE = 0.3
+
+
+# What the submit block took last frame, in design pixels (K92). The same
+# measure-last-frame idiom the library's footer uses, and for the same reason:
+# the block's height is a function of the theme, the UI scale and how many
+# problems it is currently reporting, so no constant is right for all of them.
+# Seeded at roughly one button plus its cost note, so the first frame reserves
+# something sane rather than nothing.
+_submit_px = [96.0]
 
 
 def draw(ctx: Any) -> None:
     state = ctx.state
     form = state.form_2d
 
-    _presets(ctx, form)
-    _vector_presets(ctx)
-    _profiles(ctx, form)
-    _output(ctx, form)
-    widgets.section("Prompt")
-    manual_render.help_button(ctx, "settings-2d")
-    _prompt(ctx, form)
-    _history(ctx, form)
-    _preview(ctx)
+    # The form scrolls; Generate does not (K92). This pane is twelve
+    # collapsible sections tall, and the one control every visit ends with sat
+    # at the bottom of all of them -- so a session was: type a prompt, scroll
+    # past the taxonomy, press Generate, scroll back up. It is also where the
+    # refusals are drawn, which is worse: a form that cannot be submitted said
+    # why in a place the user had to go looking for.
+    if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
+        _presets(ctx, form)
+        _vector_presets(ctx)
+        _profiles(ctx, form)
+        _output(ctx, form)
+        widgets.section("Prompt")
+        manual_render.help_button(ctx, "settings-2d")
+        _prompt(ctx, form)
+        _history(ctx, form)
+        _preview(ctx)
 
-    _guidance(ctx, form)
-    _reference(ctx, form)
-    _advanced(ctx, form)
-    _run_controls(ctx, form)
+        _guidance(ctx, form)
+        _reference(ctx, form)
+        _advanced(ctx, form)
+        _run_controls(ctx, form)
+    imgui.end_child()
+    top = imgui.get_cursor_pos_y()
     _submit(ctx, form)
+    height = imgui.get_cursor_pos_y() - top
+    if height > 0:
+        _submit_px[0] = height / max(tokens.SCALE, 0.01)
 
 
 # The twelve optional taxonomies, grouped by what they describe. Grouping and
@@ -710,7 +732,7 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
         if imgui.radio_button(f"{count}##count", form["count"] == count):
             form["count"] = count
 
-    imgui.set_next_item_width(120)
+    imgui.set_next_item_width(sp(120))
     changed, seed = imgui.input_int("Seed", int(form["seed"]), 0, 0)
     if changed:
         form["seed"] = max(0, seed)

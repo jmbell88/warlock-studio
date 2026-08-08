@@ -21,6 +21,7 @@ from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
 from .. import dialogs, matte_preview, theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 MATTE_TITLE = "Check the cutout"
 
@@ -65,12 +66,9 @@ def draw(ctx: Any) -> None:
         "The geometry resolution sent to trellis. The 2D pane's platform is a "
         "separate thing -- a hint in the prompt."
     )
-    form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
-    _hint(ctx, "profile", form["profile"])
+    _budget(ctx, form)
 
-    changed, size = imgui.input_float("Size (m)", float(form["size_m"]), 0.0, 0.0, "%.2f")
-    if changed:
-        form["size_m"] = max(0.0, size)
+    _size(form)
     # Deliberately unhinted, unlike every other control here: size_m is
     # continuous, so its buckets are keyed on "0.35" and "0.36" separately and
     # a threshold of five would essentially never be met.
@@ -79,7 +77,7 @@ def draw(ctx: Any) -> None:
     form["bg_removal"] = widgets.labeled_combo("Background", form["bg_removal"], _bg_options(ctx))
     _hint(ctx, "bg_removal", form["bg_removal"])
 
-    imgui.set_next_item_width(120)
+    imgui.set_next_item_width(sp(120))
     changed, seed = imgui.input_int("Mesh seed", int(form["mesh_seed"]), 0, 0)
     if changed:
         form["mesh_seed"] = max(0, seed)
@@ -134,6 +132,70 @@ def _hint(ctx: Any, param: str, value: Any) -> None:
     if hint is None:
         return
     widgets.hint_text(hint)
+
+
+# "Size (m)" as a drag rather than a slider (K96), and the *ceiling* is why: a
+# slider needs a maximum and there is no largest asset -- a wall section is
+# legitimately 8 m. A drag has the same feel, still honours a double-click for
+# typed entry, and has no upper bound to be wrong about. The speed is what
+# makes it usable: 1 cm per pixel, so the range a prop actually lives in (0.1
+# to 2 m) is two hundred pixels of travel rather than four.
+SIZE_DRAG_SPEED = 0.01
+# ``v_min >= v_max`` is how imgui's drag widgets spell "unbounded". Stated as a
+# named pair rather than as a literal ``0.0, 0.0`` so the intent survives
+# somebody "fixing" it into a range.
+SIZE_NO_BOUND = (0.0, 0.0)
+
+
+def _size(form: dict[str, Any]) -> None:
+    """Metres, as a drag with the unit *in* the readout.
+
+    "Size (m)" put the unit in the label and the number in the box, so a value
+    read at a glance said "0.35" and the label it belonged to was a separate
+    thing to look at. The format string carries it now, and 0 says what it
+    means rather than showing a measurement of zero metres.
+    """
+    value = float(form["size_m"])
+    fmt = "unset - keeps the reference's" if value <= 0.0 else "%.2f m"
+    changed, size = imgui.drag_float("Size", value, SIZE_DRAG_SPEED, *SIZE_NO_BOUND, fmt)
+    if changed:
+        # Floored here rather than by the widget: unbounded means unbounded in
+        # both directions, and a negative size is not a smaller asset.
+        form["size_m"] = max(0.0, size)
+
+
+def _budget(ctx: Any, form: dict[str, Any]) -> None:
+    """The triangle budget, and why it has one option (K94/K95).
+
+    A combo with a single entry is a control that looks broken: the user reads
+    "Raw (no decimation)", opens it, finds nothing else, and has no way to tell
+    a missing feature from a missing file. Disabled with the reason beside it,
+    it says which of the two this is -- and the reason is no longer about a
+    missing binary, which stopped being true when gltfpack was vendored. It is
+    that no tier has been qualified yet, and the retarget control on a
+    finished mesh is where one can be tried.
+    """
+    single = len(PROFILES) == 1
+    imgui.begin_disabled(single)
+    form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
+    imgui.end_disabled()
+    if single:
+        widgets.hint_text(
+            "Only 'raw' here until a decimation tier has been checked against "
+            "real assets. Try one on a finished mesh, under Triangle budget in "
+            "the inspector."
+        )
+        return
+    _hint(ctx, "profile", form["profile"])
+    if form["profile"] == "custom":
+        # The same control the retarget panel draws, appearing under exactly
+        # the same condition (K95). It is the widget ``custom_triangles`` never
+        # had: the field was submitted, validated and recorded with no way to
+        # set it, which is a form field that exists only for the API.
+        imgui.set_next_item_width(sp(140))
+        changed, value = imgui.input_int("Triangles", int(form["custom_triangles"]), 0, 0)
+        if changed:
+            form["custom_triangles"] = max(0, value)
 
 
 def _platform_options(ctx: Any) -> list[tuple[str, str]]:
@@ -426,7 +488,7 @@ def _matte_body(ctx: Any, state: Any) -> None:
     ready = preview is not None
     refused = bool(preview is not None and preview.reasons)
     label = "Build anyway" if refused else "Accept"
-    if widgets.disabled_button(label, ready, (150, 0)):
+    if widgets.disabled_button(label, ready, (sp(150), 0)):
         imgui.close_current_popup()
         state._open = False
         # Read *before* ``accept``, which closes the state before it calls
@@ -438,13 +500,13 @@ def _matte_body(ctx: Any, state: Any) -> None:
         )
         return
     imgui.same_line()
-    if widgets.disabled_button("Fix matte", ready, (150, 0)):
+    if widgets.disabled_button("Fix matte", ready, (sp(150), 0)):
         imgui.close_current_popup()
         state._open = False
         matte_preview.fix(ctx)
         return
     imgui.same_line()
-    if imgui.button("Cancel", (100, 0)):
+    if imgui.button("Cancel", (sp(100), 0)):
         imgui.close_current_popup()
         state._open = False
         matte_preview.close(ctx)

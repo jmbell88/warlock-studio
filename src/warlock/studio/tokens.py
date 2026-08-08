@@ -79,22 +79,80 @@ TEXT_TITLE = 16.0
 DUR_FAST = 0.12
 DUR_BASE = 0.20
 
-# -- palette (sRGB hex, dark only) -------------------------------------------
+# -- palette (sRGB hex) ------------------------------------------------------
 
 # Near-black neutrals with one indigo accent: the Final Cut register. The
 # elevation ramp replaces "everything is PANEL with a border" -- a surface says
 # how high it sits by which step it fills with, not by drawing an outline.
-BG = 0x0F1014  # the window floor
-PANEL = 0x16171C  # sidebars, inspector: ELEV_0
-ELEV_1 = 0x1D1F26  # cards, fields on a panel
-ELEV_2 = 0x252833  # hovered/raised elements, popups
-EDGE = 0x2A2D38  # the one hairline
-TEXT = 0xE8E8EE
-MUTED = 0x9A9DB0
-ACCENT = 0x7C6CF0
-OK = 0x4CC38A
-ERR = 0xE5484D
-WARN = 0xE5A03D
+#
+# **Two palettes, one set of names** (M105). Every pane reads ``theme.ACCENT``
+# and never a literal, so the whole of a theme is this table plus the module
+# ``__getattr__`` in :mod:`.theme` that resolves the names through it live --
+# module-level constants would have bound at import and a switch would have
+# repainted the imgui style while leaving every hand-drawn rect on the old one.
+#
+# The light palette keeps the *roles* rather than inverting the numbers. An
+# inverted dark theme puts near-white text on near-black cards and calls it
+# light; here PANEL is still "the surface a form sits on" and ELEV_1/ELEV_2 are
+# still steps *away from* the floor, which on a light ground means darker
+# rather than lighter -- so a card still reads as raised. ACCENT keeps its hue
+# and drops in lightness, because the same indigo that reads as a highlight on
+# black is barely visible on white.
+PALETTES: dict[str, dict[str, int]] = {
+    "dark": {
+        "BG": 0x0F1014,  # the window floor
+        "PANEL": 0x16171C,  # sidebars, inspector: ELEV_0
+        "ELEV_1": 0x1D1F26,  # cards, fields on a panel
+        "ELEV_2": 0x252833,  # hovered/raised elements, popups
+        "EDGE": 0x2A2D38,  # the one hairline
+        "TEXT": 0xE8E8EE,
+        "MUTED": 0x9A9DB0,
+        "ACCENT": 0x7C6CF0,
+        "OK": 0x4CC38A,
+        "ERR": 0xE5484D,
+        "WARN": 0xE5A03D,
+    },
+    "light": {
+        "BG": 0xF4F4F7,
+        "PANEL": 0xFBFBFD,
+        "ELEV_1": 0xEDEDF2,
+        "ELEV_2": 0xE1E1EA,
+        "EDGE": 0xD2D2DC,
+        "TEXT": 0x1B1C22,
+        "MUTED": 0x5F6272,
+        "ACCENT": 0x5344C7,
+        "OK": 0x1D7F53,
+        "ERR": 0xC2262B,
+        "WARN": 0x9A6410,
+    },
+}
+
+# Which one is in force. Module state, exactly as ``SCALE`` is, and read
+# through :func:`colour` rather than copied into constants.
+THEME = "dark"
+
+
+def set_theme(name: str) -> str:
+    """Switch palettes. -> the name actually applied.
+
+    An unknown name falls back to dark rather than raising: this comes out of a
+    settings file, and a value written by a build that shipped a third palette
+    must not stop the window opening. The caller still has to re-run
+    ``theme.apply`` -- imgui's style holds *copies* of these numbers.
+    """
+    global THEME
+    THEME = name if name in PALETTES else "dark"
+    return THEME
+
+
+def colour(name: str) -> int:
+    """One palette entry under the current theme."""
+    return PALETTES[THEME][name]
+
+
+# The palette names, so ``theme`` can answer for exactly these and let every
+# other attribute error normally.
+COLOUR_NAMES = frozenset(PALETTES["dark"])
 
 # Shadow alphas for the layered-rect elevation trick (no real blur in the
 # backend): outer wide + inner tight.

@@ -116,6 +116,11 @@ def _transform(doc: Any, obj: Any) -> None:
     edited, scale = imgui.input_float3("scale##bs", list(obj.scale))
     changed |= edited
     edited, rotation = imgui.input_float4("rotation##br", list(obj.rotation))
+    widgets.help_marker(
+        "A quaternion, XYZW -- the same order the viewer and the pose files "
+        "use. Typing one is for a value you already have; the gizmo is the "
+        "way to set one by eye."
+    )
     changed |= edited
     if changed:
         # ``was`` is the values the fields started from. imgui writes the new
@@ -205,6 +210,10 @@ def _material(doc: Any, obj: Any) -> None:
         return
     options = [(str(i), m.name or f"slot {i}") for i, m in enumerate(doc.materials)]
     picked = widgets.labeled_combo("slot", str(obj.material), options)
+    widgets.help_marker(
+        "Which palette entry this object renders and exports with. Editing an "
+        "entry writes a replacement, so every object using it follows."
+    )
     if picked != str(obj.material):
         doc.set_props(obj.uid, material=int(picked))
 

@@ -283,10 +283,15 @@ class App:
         # the monitor's own scale, and the user's multiplier on top of it. The
         # multiplier is folded in *here* rather than applied later so the font
         # atlas is baked at the size it will be drawn at; changing it in the
-        # settings pane rescales everything immediately but only sharpens the
-        # glyphs after a restart.
+        # settings pane rescales everything immediately and re-bakes the atlas
+        # between frames (K99).
         monitor_scale = dpi.window_scale(pygame)
         tokens.set_scale(monitor_scale * _ui_scale(settings))
+        # Before ``theme.apply`` below, which copies the palette into imgui's
+        # style (M105). An unknown stored name falls back to dark rather than
+        # raising: a settings file written by a build with a third palette must
+        # not stop the window opening.
+        tokens.set_theme(str(settings.get("theme") or "dark"))
         self._min_size = _min_window_size(monitor_scale)
 
         self.ctx = moderngl.create_context()
@@ -662,6 +667,15 @@ class App:
         # a zero display size is an assertion rather than a blank frame.
         io.display_size = pygame.display.get_window_size()
         io.display_framebuffer_scale = (1.0, 1.0)
+        # K99, and the position is the whole of it: rebuilding the atlas
+        # invalidates every ImFont handle, and those are pushed and popped all
+        # through ``_build_ui``. Between frames is the only safe moment, so the
+        # scale slider sets a flag and this consumes it.
+        if self.app_ctx.state.fonts_dirty:
+            from . import fonts
+
+            self.app_ctx.state.fonts_dirty = False
+            fonts.reload(imgui)
         imgui.new_frame()
         self._build_ui()
         imgui.render()
@@ -1283,8 +1297,22 @@ class App:
             # not on screen. Esc is the one exception, and it is about the mode
             # rather than about anything in it: these are the three modes with
             # nothing of their own for Esc to drop.
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if event.type != pygame.KEYDOWN:
+                return
+            if event.key == pygame.K_ESCAPE:
                 self._escape_mode()
+                return
+            # Home's tiles take the arrows and Enter (M107). Only on the
+            # chooser: its other two views are lists with their own controls,
+            # and a tile cursor moving invisibly behind them would fire on the
+            # next Enter.
+            if ctx.state.mode == "home" and ctx.state.landing_view == "choose":
+                from .panes import landing
+
+                if event.key in (pygame.K_UP, pygame.K_DOWN):
+                    landing.move(ctx, -1 if event.key == pygame.K_UP else 1)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    landing.activate(ctx, ctx.state.home_index)
             return
         if ctx.state.mode == "clay":
             from . import clay_mode
@@ -2820,25 +2848,17 @@ class App:
         """
         from imgui_bundle import imgui
 
-        from ..config import effective
-        from . import theme, widgets
+        from .panes import app_settings
 
         if not imgui.collapsing_header("Effective configuration"):
             return
-        settings = effective(ctx.runtime.config)
-        overridden = [s for s in settings if s.from_env]
-        widgets.muted(
-            "Everything at its default."
-            if not overridden
-            else f"{len(overridden)} of {len(settings)} set by the environment."
-        )
-        for setting in sorted(settings, key=lambda s: (not s.from_env, s.name)):
-            if setting.from_env:
-                widgets.text_colored(theme.ACCENT, setting.env)
-            else:
-                widgets.muted(setting.name)
-            imgui.same_line()
-            imgui.text_wrapped(setting.value)
+        # The table itself lives in the app-Settings pane (K100), which is
+        # where a user looking for configuration goes. It is drawn from here
+        # too because this popup is where a user looking at a *failure* is,
+        # and those are the same thirty rows -- so it is one function called
+        # twice rather than two lists that would drift the first time a
+        # variable was added.
+        app_settings.config_table(ctx)
 
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui

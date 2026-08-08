@@ -564,6 +564,8 @@ def test_the_sheet_preview_advances_a_cell_per_frame(app_ctx, imgui_ctx):
             self.released = False
             self.image = Image.new("RGBA", (32, 8), (0, 0, 0, 0))
             self.index = 0
+            # The pane reads a "3 of 16" off these two (L104).
+            self.yaws = [0.0, 90.0]
 
         def step(self) -> bool:
             self.steps += 1
@@ -582,6 +584,7 @@ def test_the_sheet_preview_advances_a_cell_per_frame(app_ctx, imgui_ctx):
         assert app_ctx.viewer.stripping is True
         _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
         assert strip.steps == 1, "one cell per frame, not all of them"
+        assert app_ctx.viewer.strip_progress == (0, 2)
         assert app_ctx.viewer.stripping is True
 
         _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
@@ -2245,3 +2248,52 @@ def test_the_panel_search_boxes_build_and_hide_themselves(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     assert widgets.list_filter(app_ctx, "demo", 3) == ""
     assert "demo" not in app_ctx.state.list_filters
+
+
+def test_the_whole_frame_builds_under_the_light_palette(app_ctx, imgui_ctx):
+    """M105. The palette is resolved live through ``theme.__getattr__``, so a
+    switch reaches every hand-drawn rect -- and every one of those call sites
+    is a place a missing name would raise on the frame somebody switched."""
+    from warlock.studio import theme, tokens
+    from warlock.studio.panes import app_settings, inspector, landing, library
+
+    imgui, _renderer = imgui_ctx
+    _seeded(app_ctx)
+    try:
+        tokens.set_theme("light")
+        theme.apply(imgui)
+        for mode, draw in (
+            ("home", lambda: landing.draw(app_ctx)),
+            ("3d", lambda: library.draw(app_ctx)),
+            ("3d", lambda: inspector.draw(app_ctx)),
+            ("settings", lambda: app_settings.draw(app_ctx)),
+        ):
+            app_ctx.state.mode = mode
+            _frame(imgui_ctx, draw)
+    finally:
+        tokens.set_theme("dark")
+        theme.apply(imgui)
+
+
+def test_the_home_tiles_build_with_the_keyboard_cursor_on_each(app_ctx, imgui_ctx):
+    from warlock.studio.panes import landing
+
+    app_ctx.state.mode = "home"
+    app_ctx.state.landing_view = "choose"
+    for index in range(len(landing.TILES)):
+        app_ctx.state.home_index = index
+        _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+
+
+def test_the_3d_form_builds_with_a_custom_budget(app_ctx, imgui_ctx, monkeypatch):
+    """K94/K95: the disabled single-option path *and* the custom-triangles
+    widget, which the shipped tier list never reaches."""
+    from warlock.studio.panes import settings_3d
+
+    app_ctx.state.mode = "3d"
+    _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
+    monkeypatch.setattr(
+        settings_3d, "PROFILES", [("raw", "Raw"), ("custom", "Custom...")]
+    )
+    app_ctx.state.form_3d["profile"] = "custom"
+    _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))

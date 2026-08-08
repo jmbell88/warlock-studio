@@ -58,6 +58,11 @@ def draw(ctx: Any, job: Any) -> None:
         form["profile"] = "raw"
         widgets.muted("Only full density is available: gltfpack is not installed.")
     form["profile"] = widgets.combo("Budget", form["profile"], options)
+    widgets.help_marker(
+        "Rebuilds model.glb from the untouched source.glb, so a budget can be "
+        "retargeted any number of times without another reconstruction. It "
+        "does not re-run trellis."
+    )
 
     if form["profile"] == "custom":
         imgui.set_next_item_width(140)

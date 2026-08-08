@@ -25,9 +25,36 @@ class _Settings:
         self.store[key] = value
 
 
-def test_the_sidebars_are_a_fixed_size():
-    assert layout_mod.SIDEBAR_W == 300.0
+def test_the_sidebars_are_one_of_three_named_sizes():
+    """Named sizes rather than a drag (M106): a form has a width that reads
+    well, and what the old free drag bought was a way to make the app look
+    broken. ``SIDEBAR_W`` is the one in force -- module state, exactly as
+    ``tokens.SCALE`` is, because eight call sites read it directly."""
+    assert layout_mod.SIDEBAR_WIDTHS["default"] == 300.0
+    assert layout_mod.SIDEBAR_W in layout_mod.SIDEBAR_WIDTHS.values()
     assert layout_mod.PANE_PADDING == 5.0
+
+
+def test_an_unknown_stored_width_falls_back_rather_than_stopping_the_window():
+    try:
+        assert layout_mod.set_sidebar("enormous") == "default"
+        assert layout_mod.SIDEBAR_W == 300.0
+        assert layout_mod.set_sidebar("wide") == "wide"
+        assert layout_mod.SIDEBAR_WIDTHS["wide"] == layout_mod.SIDEBAR_W
+    finally:
+        layout_mod.set_sidebar("default")
+
+
+def test_a_stored_width_is_a_name_and_never_a_number():
+    """So a settings file can never carry a size this build does not offer."""
+    settings = _Settings({"sidebar": "wide", "settings_share": 0.4})
+    try:
+        lay = layout_mod.Layout(settings)
+        assert lay.sidebar == "wide"
+        lay.save()
+        assert settings.store["layout"]["sidebar"] == "wide"
+    finally:
+        layout_mod.set_sidebar("default")
 
 
 def test_stored_widths_are_ignored_and_only_the_share_is_read():
@@ -44,7 +71,7 @@ def test_a_save_writes_no_width_key_at_all():
     # stale keys die the first time anything saves rather than lingering.
     settings = _Settings({"sidebar_w": 480.0, "inspector_w": 280.0, "settings_share": 0.4})
     layout_mod.Layout(settings).save()
-    assert settings.store["layout"] == {"settings_share": 0.4}
+    assert settings.store["layout"] == {"settings_share": 0.4, "sidebar": "default"}
 
 
 def test_a_nonsense_share_falls_back_rather_than_raising():

@@ -284,6 +284,10 @@ def _saved_list(ctx: Any, job: Any) -> None:
     # the same reason the STL and OBJ exports are -- so saying so is what stops
     # "Save GLB..." reading like another two-minute wait.
     widgets.cost_note("Saving a posed GLB runs on the spot; it does not join the queue.")
+    widgets.help_marker(
+        "A pose is the joint rotations, saved beside the mesh. Applying one "
+        "replaces whatever the editor is holding."
+    )
     job_id = job["id"]
     needle = widgets.list_filter(ctx, "poses", len(poses))
     for pose in poses:

@@ -14,8 +14,10 @@ from imgui_bundle import imgui
 
 from .. import inker_mode, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
-SWATCH = (20.0, 20.0)
+# One swatch, in *design* pixels -- see ``_swatches``.
+SWATCH = 20.0
 FLAGS = imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value
 
 
@@ -65,10 +67,13 @@ def _swatches(ctx: Any, state: Any) -> None:
     # n * SWATCH + (n - 1) * spacing, and pricing the gap two pixels under the
     # real one bought a swatch that did not fit and was clipped at the edge.
     gap = imgui.get_style().item_spacing.x
-    per_row = max(1, int((avail + gap) // (SWATCH[0] + gap)))
+    # Through sp() (K97): a swatch that stayed 20 physical pixels while the
+    # panel around it grew with the monitor was a grid of dots on a 4K display.
+    side = sp(SWATCH)
+    per_row = max(1, int((avail + gap) // (side + gap)))
     for index, colour in enumerate(list(state.swatches)):
         imgui.push_id(f"swatch{index}")
-        if imgui.color_button("##swatch", _vec(colour), 0, SWATCH):
+        if imgui.color_button("##swatch", _vec(colour), 0, (side, side)):
             state.fg = colour
         # Right-click removes: a swatch row with no way to prune it fills up
         # with mistakes and stops being useful within a session.

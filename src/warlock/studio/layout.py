@@ -21,7 +21,36 @@ from imgui_bundle import imgui
 from . import theme, tokens
 from .tokens import sp
 
-SIDEBAR_W = 300.0
+# The three sidebar widths on offer (M106), in design pixels. Three named
+# options rather than a drag, for the reason the module docstring gives: a form
+# has a width that reads well, and what a free drag bought was a way to make
+# the app look broken. What it did *not* answer is that 300 reads well on a
+# 1600-wide window and wastes a third of a 5120 one -- three sizes is enough to
+# cover that without reopening the drag.
+SIDEBAR_WIDTHS: dict[str, float] = {
+    "narrow": 260.0,
+    "default": 300.0,
+    "wide": 360.0,
+}
+
+# The width in force. Module state, set by ``Layout`` at construction and when
+# the option changes, exactly as ``tokens.SCALE`` is -- eight call sites read
+# this directly and threading a Layout through all of them would put the
+# measurement in eight places instead of one.
+SIDEBAR_W = SIDEBAR_WIDTHS["default"]
+
+
+def set_sidebar(key: str) -> str:
+    """Apply a named sidebar width. -> the key actually applied.
+
+    An unknown key falls back to the default rather than raising: this is read
+    from a settings file, and a value written by a build that offered a fourth
+    size must not stop the window opening.
+    """
+    global SIDEBAR_W
+    key = key if key in SIDEBAR_WIDTHS else "default"
+    SIDEBAR_W = SIDEBAR_WIDTHS[key]
+    return key
 PANE_PADDING = 5.0  # between a pane's border and its content
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
@@ -38,12 +67,22 @@ class Layout:
         except (TypeError, ValueError):
             share = 0.55
         self.settings_share = min(max(share, SHARE_MIN), SHARE_MAX)
+        self.sidebar = set_sidebar(str(stored.get("sidebar", "default")))
+
+    def set_sidebar_width(self, key: str) -> None:
+        self.sidebar = set_sidebar(key)
+        self.save()
 
     def save(self) -> None:
-        # Only the surviving key: Settings.set replaces the whole dict, so the
+        # Only the surviving keys: Settings.set replaces the whole dict, so the
         # stale sidebar_w/inspector_w a settings file may still carry are gone
-        # the first time anything saves.
-        self._settings.set("layout", {"settings_share": round(self.settings_share, 3)})
+        # the first time anything saves. ``sidebar`` is the *name* of a width,
+        # never a number, so a stored value can never be a size this build does
+        # not offer.
+        self._settings.set(
+            "layout",
+            {"settings_share": round(self.settings_share, 3), "sidebar": self.sidebar},
+        )
 
 
 def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -> bool:

@@ -474,6 +474,20 @@ class Viewer:
     def stripping(self) -> bool:
         return self._strip is not None
 
+    @property
+    def strip_progress(self) -> tuple[int, int]:
+        """``(cells done, cells total)`` for the strip in flight, else (0, 0).
+
+        Derived from the renderer rather than counted by the pane (L104): the
+        pane calls ``step`` once per frame and could keep its own tally, but a
+        cancelled-and-restarted strip would leave that tally describing the
+        previous run -- and the state is already here.
+        """
+        strip = self._strip
+        if strip is None:
+            return (0, 0)
+        return (int(strip.index), len(strip.yaws))
+
     def cancel_sheet_strip(self) -> None:
         if self._strip is not None:
             self._strip.release()

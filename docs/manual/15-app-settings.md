@@ -7,14 +7,28 @@ of them need a variable set before launch.
 **Interface.** *UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
 is, from 0.5× to 2×. On a display that is already heavily scaled the slider stops short of 2× and
 says so, because the combined scale is capped — the control only offers zooms it can actually
-apply. It takes effect as you drag it, but the font atlas is baked once at startup, so
-text only becomes properly crisp at the new size after a restart — everything is drawn at the right
-size immediately either way. *Show frame rate* is the same toggle as `F10`.
+apply. It takes effect as you drag it, and the font atlas is re-baked when you let go — between
+frames rather than during one, since a rebuild invalidates every font handle a half-drawn frame is
+holding. Nothing needs a restart.
 
-**Layout.** *Reset pane sizes* puts the split between the inspector and the library — both now on
-the right sidebar — back to its default, undoing any dragging of that divider. The sidebars
-themselves are a fixed 300 px and are not draggable. *Reset collapsed sections* re-opens every
-section that has been collapsed anywhere in the app.
+*Theme* switches the whole palette, including the viewport background, and takes effect at once. The
+light palette keeps the same *roles* as the dark one rather than inverting its numbers: a panel is
+still the surface a form sits on, and the elevation steps still read as raised — which on a light
+ground means slightly darker rather than lighter. *Show frame rate* is the same toggle as `F10`.
+
+**Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
+rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make
+the app look broken — but one number cannot suit a 1600-wide window and a 5120 one. *Reset pane
+sizes* puts the split between the inspector and the library — both on the right sidebar — back to its
+default, undoing any dragging of that divider. *Reset collapsed sections* re-opens every section that
+has been collapsed anywhere in the app.
+
+**Configuration.** *Effective configuration* lists every environment variable the app reads and what
+this process resolved it to, with the ones actually set by the environment first and named by their
+variable. It is the same table `warlock doctor` prints and the same one behind the health dot's
+diagnostics popup, and *Copy as text* puts it on the clipboard for a bug report. It is read-only:
+every entry is consumed at import time, so an editable version would have to say "restart to apply"
+under every field.
 
 **Models.** Every model the app knows about — image models, style LoRAs, the conditioning adapters,
 and the matting, pose and measurement models — with a tick beside the ones whose weights are on disk

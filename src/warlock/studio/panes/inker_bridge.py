@@ -18,6 +18,7 @@ from imgui_bundle import imgui
 
 from .. import inker_mode, theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -137,22 +138,22 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         return
     key = f"inker_resize:{tab.uid}"
     width, height = ctx.state.preview.get(key) or tab.doc.size
-    imgui.set_next_item_width(90)
+    imgui.set_next_item_width(sp(90))
     changed_w, width = imgui.input_int("W", int(width), 0)
     imgui.same_line()
-    imgui.set_next_item_width(90)
+    imgui.set_next_item_width(sp(90))
     changed_h, height = imgui.input_int("H", int(height), 0)
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
-    if imgui.button("Scale image", (180, 0)):
+    if imgui.button("Scale image", (sp(180), 0)):
         tab.doc.scale((max(1, width), max(1, height)))
         tab.view.fitted = False
         imgui.close_current_popup()
     # Two different operations that a single "resize" would conflate: one
     # resamples the picture, the other changes how much room it has.
-    if imgui.button("Resize canvas", (180, 0)):
+    if imgui.button("Resize canvas", (sp(180), 0)):
         tab.doc.resize_canvas((max(1, width), max(1, height)))
         tab.view.fitted = False
         imgui.close_current_popup()

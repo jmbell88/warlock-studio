@@ -115,6 +115,13 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
     if viewer.stripping:
         imgui.same_line()
         widgets.spinner()
+        # L104: a spinner alone says "something is happening" for as many
+        # frames as there are cells, which at 32 yaws is half a second of no
+        # information. The count is already on the renderer.
+        done, total = viewer.strip_progress
+        if total:
+            imgui.same_line()
+            widgets.muted(f"{done} of {total}")
         try:
             finished = viewer.step_sheet_strip()
         except Exception:
@@ -172,6 +179,11 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
     options = ctx.sheet_options or {}
     sizes = [(str(s), f"{s} px") for s in (options.get("frame_sizes") or [64, 128, 256])]
     picked = widgets.combo("Frame", str(form["frame_size"]), sizes)
+    widgets.help_marker(
+        "The size of one cell in the atlas, in pixels. The grid is worked out "
+        "from it and the number of directions, and wraps to stay inside a "
+        "texture an engine will accept."
+    )
     form["frame_size"] = int(picked)
     form["lighting"] = widgets.combo(
         "Lighting",
@@ -202,6 +214,10 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
                 form["poses"].symmetric_difference_update({pose["id"]})
                 del value
         changed, clip = imgui.checkbox("Animated clip", form["clip"])
+        widgets.help_marker(
+            "Interpolates between two saved poses. Each frame becomes more "
+            "cells in the same atlas rather than a second file."
+        )
         if changed:
             form["clip"] = clip
         if form["clip"]:

@@ -111,7 +111,11 @@ class StripRender:
 
         self._renderer = renderer
         self._gpu = gpu
-        self._yaws = list(yaws)
+        # Public: the pane draws "3 of 16" from it (L104), and a strip that
+        # knows how many cells it has is the only thing that does -- the caller
+        # computed the list from a form field that may since have changed.
+        self.yaws = list(yaws)
+        self._yaws = self.yaws
         self._flat = flat
         self._elevation = elevation
         self._cell = cell

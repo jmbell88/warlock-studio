@@ -23,6 +23,7 @@ from imgui_bundle import portable_file_dialogs as pfd
 
 from ..service.errors import Failed
 from . import widgets
+from .tokens import sp
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,12 @@ IMAGE_FILTER = ["Images", "*.png *.jpg *.jpeg *.webp *.bmp"]
 ZIP_FILTER = ["Zip archive (*.zip)", "*.zip"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 JSON_FILTER = ["JSON (*.json)", "*.json"]
+
+# The modal's two fixed measurements, in design pixels (K97). Both used to be
+# raw numbers, so at 200% scale a 150 px button held text drawn at 300% and the
+# label ran off the end of it.
+BUTTON_W = 150.0
+FIELD_W = 320.0
 
 ARTIFACT_FILTERS = {
     ".json": JSON_FILTER,
@@ -186,7 +193,7 @@ class ConfirmQueue:
         imgui.dummy((0, 6))
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.
-        confirmed = widgets.destructive_button(confirm.confirm_label, (150, 0))
+        confirmed = widgets.destructive_button(confirm.confirm_label, (sp(BUTTON_W), 0))
         # Focus lands on the confirming button (I77) so Enter is unambiguous
         # and so a keyboard user can see where they are. Only on the frame the
         # modal appears: re-focusing every frame would fight the Tab key.
@@ -194,7 +201,7 @@ class ConfirmQueue:
             imgui.set_item_default_focus()
             confirm._focused = True
         imgui.same_line()
-        cancelled = imgui.button(confirm.cancel_label, (150, 0))
+        cancelled = imgui.button(confirm.cancel_label, (sp(BUTTON_W), 0))
         # Esc cancels, Enter confirms. Enter is read here rather than left to
         # imgui's own nav activation because keyboard nav is not enabled: with
         # it off, a focused button is drawn as focused and does nothing.
@@ -261,7 +268,7 @@ class PromptQueue:
         )
         if not opened:
             return
-        imgui.set_next_item_width(320)
+        imgui.set_next_item_width(sp(FIELD_W))
         if not imgui.is_any_item_active():
             imgui.set_keyboard_focus_here()
         # ``enter_returns_true`` makes the returned flag mean *Enter was
@@ -276,9 +283,9 @@ class PromptQueue:
         prompt.value = value
         if self.waiting:
             widgets.muted(f"{self.waiting} more to answer")
-        accepted = entered or imgui.button("Save", (150, 0))
+        accepted = entered or imgui.button("Save", (sp(BUTTON_W), 0))
         imgui.same_line()
-        cancelled = imgui.button("Cancel", (150, 0)) or _escape_pressed()
+        cancelled = imgui.button("Cancel", (sp(BUTTON_W), 0)) or _escape_pressed()
         if accepted and prompt.value.strip():
             self._answered()
             if prompt.on_accept is not None:

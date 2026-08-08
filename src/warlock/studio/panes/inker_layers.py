@@ -78,6 +78,10 @@ def _actions(ctx: Any, doc: Any) -> None:
     layer = doc.stack.active
     imgui.set_next_item_width(-1)
     changed, value = imgui.slider_float("Opacity", layer.opacity, 0.0, 1.0)
+    widgets.help_marker(
+        "The active layer's opacity. Dragging previews it live and records one "
+        "undo step when you let go."
+    )
     if changed:
         # Live while dragging, but only one undo step: set the value directly
         # for the preview and record the step when the drag is released. The
@@ -92,6 +96,10 @@ def _actions(ctx: Any, doc: Any) -> None:
         if was is not None:
             doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
     blend = widgets.combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
+    widgets.help_marker(
+        "How this layer combines with everything under it. Saved into the .ora "
+        "so other editors read it the same way."
+    )
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)
 

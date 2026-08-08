@@ -620,16 +620,34 @@ def test_shortcuts_act_on_the_press_and_not_on_the_release():
 
 def test_paint_still_sees_both_edges():
     """The guard has to sit *after* the paint delegation, or space-to-pan
-    latches on and never releases."""
+    latches on and never releases.
+
+    There is a second press-only guard above the delegation now, for Home's
+    tile keys (M107) -- so this checks placement rather than first appearance:
+    the fall-through guard is below the delegation, and every guard above it is
+    inside the branch that has already returned for a work mode.
+    """
     import inspect
 
     from warlock.studio import inker_mode, main
 
     source = inspect.getsource(main.App._shortcut)
-    assert source.index("inker_mode.handle_key") < source.index(
-        "event.type != pygame.KEYDOWN"
-    )
+    head, _, tail = source.partition("inker_mode.handle_key")
+    assert "event.type != pygame.KEYDOWN" in tail
+    gate = head.index("not in modes.WORK_MODES")
+    assert all(
+        index > gate
+        for index in _positions(head, "event.type != pygame.KEYDOWN")
+    ), "a press-only guard above the work-mode gate would swallow paint's release"
     assert "K_SPACE" in inspect.getsource(inker_mode.handle_key)
+
+
+def _positions(text: str, needle: str) -> list[int]:
+    out, start = [], text.find(needle)
+    while start >= 0:
+        out.append(start)
+        start = text.find(needle, start + 1)
+    return out
 
 
 def test_inker_mode_never_leaks_a_key_to_the_viewport(monkeypatch):

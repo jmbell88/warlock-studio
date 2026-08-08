@@ -17,6 +17,7 @@ from ...service import validation
 from ...service.validation import MAX_UPLOAD_BYTES
 from .. import dialogs, icons, profiles, theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 from . import settings_2d
 
 
@@ -34,6 +35,11 @@ def draw(ctx: Any) -> None:
 def _list(ctx: Any) -> None:
     saved = profiles.list_profiles(ctx.settings)
     active = profiles.get_active(ctx.settings)
+    widgets.help_marker(
+        "A profile remembers the model, the LoRA, the negative prompt and the "
+        "core style choices under a name. The prompt, the seed and the "
+        "per-asset guidance are never part of one."
+    )
     if imgui.button("New profile"):
         _open_draft(ctx, "", profiles.capture(ctx.state.form_2d))
     if not saved:
@@ -169,10 +175,10 @@ def _editor(ctx: Any) -> None:
     imgui.dummy((0, 8))
     imgui.separator()
     saveable = bool(ctx.state.profile_draft_name.strip())
-    if widgets.disabled_button("Save", saveable, (150, 0)):
+    if widgets.disabled_button("Save", saveable, (sp(150), 0)):
         _save(ctx)
     imgui.same_line()
-    if imgui.button("Cancel", (150, 0)):
+    if imgui.button("Cancel", (sp(150), 0)):
         _close(ctx)
 
 
@@ -194,7 +200,7 @@ def _anchor(ctx: Any, name: str) -> None:
         if ctx.textures is not None:
             texture = ctx.textures.get(f"anchor:{name}", path)
             if texture is not None:
-                imgui.image(widgets.texture_ref(texture), (96, 96))
+                imgui.image(widgets.texture_ref(texture), (sp(96), sp(96)))
         changed, value = imgui.slider_float(
             "Strength##anchor", float(fields.get("anchor_scale") or 0.6), 0.0, 1.5
         )

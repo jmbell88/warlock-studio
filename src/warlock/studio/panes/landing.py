@@ -37,11 +37,75 @@ def draw(ctx: Any) -> None:
 # --- the four choices -------------------------------------------------------
 
 
-def _tile(ctx: Any, key: str, icon: str, name: str, caption: str) -> bool:
+# The six choices, in the order they are drawn (M107). Data, so the arrow keys
+# and the click path agree about what the third tile *is* -- a hand-written
+# keyboard index over a hand-written column of calls is two orderings, and they
+# drift the first time a tile is inserted. The caption is a function because
+# one of them names the active profile; the action is looked up by key in
+# ``activate`` rather than stored here, so this stays importable data.
+TILES: tuple[tuple[str, str, str], ...] = (
+    ("2d", "IMAGE", "New 2D Image"),
+    ("3d", "BOX", "New 3D Model"),
+    ("inker", "BRUSH", "Inker"),
+    ("clay", "RULER", "Clay"),
+    ("open", "FOLDER_OPEN", "Open Existing"),
+    ("profiles", "SLIDERS", "Profiles"),
+)
+
+_CAPTIONS = {
+    "2d": "Compose a prompt and generate a reference.",
+    "3d": "Start from a finished reference, or drop an image.",
+    "inker": "A canvas, or an image you already have.",
+    "clay": "Block a shape out from primitives, by hand.",
+    "open": "Everything already generated.",
+}
+
+
+def tiles(ctx: Any) -> list[tuple[str, str, str, str]]:
+    """``(key, icon, name, caption)`` for each tile, in drawing order."""
+    out = []
+    for key, icon_name, name in TILES:
+        if key == "profiles":
+            active = profiles.get_active(ctx.settings)
+            caption = (
+                f"Saved style settings. Active: {active}."
+                if active
+                else "Saved style settings."
+            )
+        else:
+            caption = _CAPTIONS[key]
+        out.append((key, getattr(icons, icon_name), name, caption))
+    return out
+
+
+def activate(ctx: Any, index: int) -> None:
+    """Do what the ``index``-th tile does. Shared by the click and by Enter."""
+    key = TILES[index % len(TILES)][0]
+    if key == "2d":
+        start_2d(ctx)
+    elif key == "3d":
+        start_3d(ctx)
+    elif key == "inker":
+        start_inker(ctx)
+    elif key == "clay":
+        start_clay(ctx)
+    else:
+        # "open" and "profiles" are sub-views of Home rather than modes.
+        ctx.state.landing_view = key
+
+
+def move(ctx: Any, delta: int) -> None:
+    """Up/Down between the tiles. Wraps, unlike the library's arrow keys: six
+    fixed choices in a ring is a menu, where a two-hundred-row list is not."""
+    ctx.state.home_index = (ctx.state.home_index + delta) % len(TILES)
+
+
+def _tile(ctx: Any, key: str, icon: str, name: str, caption: str, *, focused: bool = False) -> bool:
     """A centred, clickable card: icon left, name and caption right."""
     width, height = sp(380), sp(64)
     _centre(width)
     clicked = False
+    origin = imgui.get_cursor_screen_pos()
     with widgets.card(f"landing/{key}", (width, height)):
         imgui.dummy((0, sp(4)))
         # The icon is one line and the text beside it is two, so drawing both
@@ -70,6 +134,15 @@ def _tile(ctx: Any, key: str, icon: str, name: str, caption: str) -> bool:
         clicked = True
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
+        # Hovering moves the keyboard cursor too, so the two never disagree
+        # about which tile Enter would take.
+        index = next((i for i, t in enumerate(TILES) if t[0] == key), None)
+        if index is not None:
+            ctx.state.home_index = index
+    if focused:
+        widgets.ring(
+            origin, imgui.ImVec2(origin.x + width, origin.y + height), theme.ACCENT, 0.9
+        )
     return clicked
 
 
@@ -106,29 +179,12 @@ def _choose(ctx: Any) -> None:
     manual_render.help_button(ctx, "home")
     imgui.dummy((0, sp(20)))
 
-    if _tile(ctx, "2d", icons.IMAGE, "New 2D Image", "Compose a prompt and generate a reference."):
-        start_2d(ctx)
-    imgui.dummy((0, sp(8)))
-    if _tile(
-        ctx, "3d", icons.BOX, "New 3D Model", "Start from a finished reference, or drop an image."
-    ):
-        start_3d(ctx)
-    imgui.dummy((0, sp(8)))
-    if _tile(ctx, "inker", icons.BRUSH, "Inker", "A canvas, or an image you already have."):
-        start_inker(ctx)
-    imgui.dummy((0, sp(8)))
-    if _tile(
-        ctx, "clay", icons.RULER, "Clay", "Block a shape out from primitives, by hand."
-    ):
-        start_clay(ctx)
-    imgui.dummy((0, sp(8)))
-    if _tile(ctx, "open", icons.FOLDER_OPEN, "Open Existing", "Everything already generated."):
-        ctx.state.landing_view = "open"
-    imgui.dummy((0, sp(8)))
-    active = profiles.get_active(ctx.settings)
-    caption = f"Saved style settings. Active: {active}." if active else "Saved style settings."
-    if _tile(ctx, "profiles", icons.SLIDERS, "Profiles", caption):
-        ctx.state.landing_view = "profiles"
+    focus = ctx.state.home_index % len(TILES)
+    for index, (key, icon, name, caption) in enumerate(tiles(ctx)):
+        if index:
+            imgui.dummy((0, sp(8)))
+        if _tile(ctx, key, icon, name, caption, focused=index == focus):
+            activate(ctx, index)
 
     imgui.dummy((0, sp(8)))
     _setup_entry(ctx)

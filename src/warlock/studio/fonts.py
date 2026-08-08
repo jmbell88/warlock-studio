@@ -38,6 +38,25 @@ MEDIUM: Any = None
 SEMIBOLD: Any = None
 
 
+def reload(imgui: Any) -> None:
+    """Re-bake the atlas at the current ``tokens.SCALE`` (K99).
+
+    **Between frames, never inside one.** ``clear_fonts`` invalidates every
+    ``ImFont`` handle, and the ones this module holds are pushed and popped all
+    over a frame -- rebuilding mid-frame would leave the rest of that frame
+    drawing through freed pointers. ``main`` calls this before ``new_frame``.
+
+    The reason it is needed at all is ``ICON_OFFSET``: the merged icon range's
+    glyph offset is baked as an absolute pixel figure at *load* time, so at any
+    scale but the one the atlas was built at, every icon sits off-centre in its
+    button by a fraction of the difference. The glyph *shapes* would sharpen on
+    their own -- imgui 1.92 rasterises per pushed size -- which is exactly why
+    the old "text sharpens after a restart" note was only half the story.
+    """
+    imgui.get_io().fonts.clear_fonts()
+    load(imgui)
+
+
 def load(imgui: Any) -> None:
     """Build the atlas fonts. Call between context creation and first frame."""
     global REGULAR, MEDIUM, SEMIBOLD

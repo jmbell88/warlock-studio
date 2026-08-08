@@ -131,12 +131,12 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     buf = doc.floating
     if buf is None:
         return
-    imgui.set_next_item_width(160)
+    imgui.set_next_item_width(sp(160))
     changed, angle = imgui.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
     if changed:
         doc.transform_floating(angle=angle)
     imgui.same_line()
-    imgui.set_next_item_width(160)
+    imgui.set_next_item_width(sp(160))
     changed, factor = imgui.slider_float("Scale", buf.scale[0], 0.05, 8.0)
     if changed:
         doc.transform_floating(scale=(factor, factor))
@@ -148,7 +148,7 @@ def _new_popup(ctx: Any) -> None:
         return
     imgui.text("New canvas")
     for width, height in inker_mode.NEW_PRESETS:
-        if imgui.button(f"{width} x {height}", (160, 0)):
+        if imgui.button(f"{width} x {height}", (sp(160), 0)):
             inker_mode.new_document(ctx, width, height)
             imgui.close_current_popup()
     imgui.end_popup()
@@ -176,18 +176,18 @@ def _recent_popup(ctx: Any, state: Any) -> None:
 def _empty(ctx: Any, state: Any) -> None:
     from pathlib import Path
 
-    imgui.dummy((0, 40))
+    imgui.dummy((0, sp(40)))
     imgui.text("Nothing open")
     widgets.muted("Start a canvas, open an image, or send one here from the library.")
-    imgui.dummy((0, 16))
+    imgui.dummy((0, sp(16)))
     for width, height in inker_mode.NEW_PRESETS:
-        if imgui.button(f"New {width} x {height}", (240, 0)):
+        if imgui.button(f"New {width} x {height}", (sp(240), 0)):
             inker_mode.new_document(ctx, width, height)
-    imgui.dummy((0, 8))
-    if imgui.button("Open a file...", (240, 0)):
+    imgui.dummy((0, sp(8)))
+    if imgui.button("Open a file...", (sp(240), 0)):
         inker_mode.ask_open(ctx)
     if state.recent:
-        imgui.dummy((0, 16))
+        imgui.dummy((0, sp(16)))
         widgets.section("recent")
         for path in list(state.recent)[:6]:
             if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:

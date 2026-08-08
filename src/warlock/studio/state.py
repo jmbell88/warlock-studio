@@ -643,6 +643,15 @@ class AppState:
     # because the list it belongs to is short today, would be a panel that
     # silently hides half its contents on launch.
     list_filters: dict[str, str] = field(default_factory=dict)
+    # Set when the UI scale changes, consumed by the frame loop *between*
+    # frames (K99): the atlas rebuild invalidates every ImFont handle, and a
+    # rebuild inside a frame would leave the rest of it drawing through freed
+    # pointers.
+    fonts_dirty: bool = False
+    # Which Home tile the keyboard is on (M107). Not persisted: the app opens
+    # on Home every launch, and a remembered cursor would put Enter on
+    # whichever tile was last hovered a week ago.
+    home_index: int = 0
     palette_open: bool = False
     palette_query: str = ""
     palette_index: int = 0

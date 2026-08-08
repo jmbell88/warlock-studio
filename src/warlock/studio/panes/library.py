@@ -18,7 +18,7 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, icons, jobs_cache, theme, widgets
+from .. import dialogs, icons, jobs_cache, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import ACTIONS, SORTS, card_kind, primary_action
 from ..tokens import sp
@@ -90,10 +90,7 @@ def draw(ctx: Any) -> None:
     _filters(ctx, jobs)
     imgui.separator()
     _read_error(ctx)
-    # Leave room for the footer below: the bulk bar only exists when something
-    # is checked, so the reservation has to change with it or the list either
-    # overlaps the footer or floats above a gap.
-    height = -sp(96) if ctx.state.checked else -sp(34)
+    height = -_footer_reserve()
     # Hoisted out of the card loop (B20): each queued card used to rebuild the
     # whole reversed-list scan to learn its own position.
     queue_pos = {
@@ -118,8 +115,36 @@ def draw(ctx: Any) -> None:
             _card(ctx, job, queue_pos)
         _load_more(ctx)
     imgui.end_child()
+    below = imgui.get_cursor_pos_y()
     _bulk(ctx, jobs)
     _storage(ctx)
+    _measure_footer(below)
+
+
+# What the footer below the list actually took, last frame (K98). The
+# reservation used to be two constants -- 96 with a bulk bar, 34 without --
+# guessed against a bar whose real height is a function of the theme's frame
+# padding, the item spacing, the UI scale and how many buttons the current
+# *view* draws. The trash's bulk bar has two buttons where the workshop's has
+# three, so a constant could not have been right for both.
+#
+# One frame late by construction, and that is fine: the footer's height changes
+# when a tick is added or the view is switched, both of which redraw for many
+# frames afterwards. The seed is the old no-bulk-bar constant, so the very
+# first frame is exactly what it always was.
+_footer_px = [34.0]
+
+
+def _footer_reserve() -> float:
+    return sp(_footer_px[0])
+
+
+def _measure_footer(top: float) -> None:
+    height = imgui.get_cursor_pos_y() - top
+    if height > 0:
+        # Back into design pixels, because ``sp`` is applied on the way out and
+        # the UI scale can change between frames (K99).
+        _footer_px[0] = height / max(tokens.SCALE, 0.01)
 
 
 def _empty(ctx: Any) -> None:

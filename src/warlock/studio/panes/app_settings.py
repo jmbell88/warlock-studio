@@ -38,6 +38,7 @@ def draw(ctx: Any) -> None:
     ):
         _interface(ctx)
         _layout(ctx)
+        _config(ctx)
         _models(ctx)
     imgui.end_child()
 
@@ -56,6 +57,10 @@ def _interface(ctx: Any) -> None:
     stored = _scale_of(ctx)
     imgui.set_next_item_width(sp(260))
     changed, value = imgui.slider_float("UI scale", stored, lo, hi, "%.2fx")
+    widgets.help_marker(
+        "On top of what the monitor already scales by, so 1.00x is the size "
+        "Windows asked for rather than 96 dpi."
+    )
     if changed:
         # Live, so dragging shows what it will look like -- but only committed
         # on release: every intermediate value would otherwise be a settings
@@ -63,17 +68,45 @@ def _interface(ctx: Any) -> None:
         _apply_scale(ctx, value)
     if imgui.is_item_deactivated_after_edit():
         ctx.settings.set("ui_scale", round(float(value), 2))
+        # On release only (K99): re-baking the atlas per mouse-move would be a
+        # font rebuild sixty times a second, and the flag is consumed between
+        # frames rather than here for the reason ``fonts.reload`` gives.
+        ctx.state.fonts_dirty = True
     if hi < tokens.UI_SCALE_RANGE[1]:
         widgets.muted(
             f"This display already scales by {_base(ctx):.2f}x, which leaves room for {hi:.2f}x."
         )
-    widgets.muted("Text sharpens fully after a restart.")
+    widgets.muted("Icons and text re-bake when you let go of the slider.")
+
+    # M105. The palette is a table of names in ``tokens`` and every pane reads
+    # ``theme.NAME``, so switching is this plus a re-``apply`` -- imgui's style
+    # holds *copies* of the numbers, which is the one thing the live lookup
+    # cannot do for it.
+    chosen = widgets.labeled_combo(
+        "Theme",
+        tokens.THEME,
+        [(name, name) for name in tokens.PALETTES],
+    )
+    widgets.help_marker(
+        "The whole palette, including the viewport background. It takes effect "
+        "at once and is remembered."
+    )
+    if chosen != tokens.THEME:
+        _apply_theme(ctx, chosen)
 
     show_fps = bool(ctx.state.show_fps)
     changed, show_fps = imgui.checkbox("Show frame rate (F10)", show_fps)
     if changed:
         ctx.state.show_fps = show_fps
         ctx.settings.set("show_fps", show_fps)
+
+
+def _apply_theme(ctx: Any, name: str) -> None:
+    from .. import theme as theme_mod
+
+    applied = tokens.set_theme(name)
+    theme_mod.apply(imgui)
+    ctx.settings.set("theme", applied)
 
 
 def _base(ctx: Any) -> float:
@@ -92,8 +125,9 @@ def _apply_scale(ctx: Any, value: float) -> None:
 
     ``theme.apply`` reads ``tokens.SCALE`` at call time and is idempotent, so
     calling it again is how a new scale reaches padding and rounding. The font
-    atlas is not rebuilt -- it is baked at startup, which is why the glyphs
-    only get crisper after a restart.
+    atlas is *not* rebuilt here: that has to happen between frames, so the
+    caller raises ``state.fonts_dirty`` on release and the frame loop consumes
+    it (K99).
     """
     from .. import theme as theme_mod
 
@@ -101,6 +135,66 @@ def _apply_scale(ctx: Any, value: float) -> None:
     lo, hi = tokens.ui_scale_bounds(base)
     tokens.set_scale(base * min(max(float(value), lo), hi))
     theme_mod.apply(imgui)
+
+
+# --- effective configuration ------------------------------------------------
+
+
+def _config(ctx: Any) -> None:
+    """K100: what this process is actually running on, in the Settings pane.
+
+    Collapsed, because thirty rows is a wall of text -- and read-only, because
+    every one of these is an environment variable the app process consumed at
+    import time. An editable version would have to say "restart to apply" under
+    every field, which is a settings pane that cannot change a setting.
+    """
+    widgets.section("Configuration")
+    if not imgui.collapsing_header("Effective configuration##app-settings"):
+        return
+    config_table(ctx)
+    if imgui.small_button("Copy as text"):
+        from ...config import effective
+
+        imgui.set_clipboard_text(
+            "\n".join(
+                f"{s.env if s.from_env else s.name} = {s.value}"
+                for s in effective(ctx.runtime.config)
+            )
+        )
+
+
+def config_table(ctx: Any) -> None:
+    """The rows themselves, shared with the diagnostics popup.
+
+    Overridden rows first (S140). The two or three a host has actually changed
+    are the whole diagnostic value, so they are what is visible when the
+    section is opened, and the rest is there to confirm a suspicion rather than
+    to be read through. It shows the *variable name* for an overridden row and
+    the setting's own name otherwise, because an install whose behaviour
+    disagrees with the manual almost always disagrees because something in its
+    environment says so.
+
+    Shares ``config.effective`` with ``warlock doctor``, which is the point of
+    building the data source once: the copy a user pastes into an issue and the
+    list they read on screen are the same answer.
+    """
+    from ...config import effective
+    from .. import theme
+
+    settings = effective(ctx.runtime.config)
+    overridden = [s for s in settings if s.from_env]
+    widgets.muted(
+        "Everything at its default."
+        if not overridden
+        else f"{len(overridden)} of {len(settings)} set by the environment."
+    )
+    for setting in sorted(settings, key=lambda s: (not s.from_env, s.name)):
+        if setting.from_env:
+            widgets.text_colored(theme.ACCENT, setting.env)
+        else:
+            widgets.muted(setting.name)
+        imgui.same_line()
+        imgui.text_wrapped(setting.value)
 
 
 # --- layout -----------------------------------------------------------------
@@ -124,7 +218,16 @@ def _layout(ctx: Any) -> None:
         # default-open when it finds nothing stored.
         ctx.settings.set("panels_open", {})
         ctx.toast("Section states reset.")
-    widgets.muted(f"Sidebars are fixed at {int(layout_mod.SIDEBAR_W)} px.")
+    # M106. Named sizes rather than a drag: the module docstring's argument
+    # against dragging a form's width stands, and what it did not answer is
+    # that one number cannot suit a 1600-wide window and a 5120 one.
+    chosen = widgets.labeled_combo(
+        "Sidebar width",
+        getattr(lay, "sidebar", "default"),
+        [(key, f"{key} ({int(width)} px)") for key, width in layout_mod.SIDEBAR_WIDTHS.items()],
+    )
+    if chosen != getattr(lay, "sidebar", "default"):
+        lay.set_sidebar_width(chosen)
 
 
 # --- models -----------------------------------------------------------------

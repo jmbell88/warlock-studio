@@ -114,12 +114,17 @@ phrase in the prompt. Higher resolutions cost more VRAM and more time, and on a 
 hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
 stops the reconstruction engine while the image model runs.
 
-**Budget** picks the triangle-reduction tier. Only "Raw (no decimation)" is offered here — see
-[Triangle budget](#triangle-budget) for why, and for where a budget can actually be chosen today.
+**Budget** picks the triangle-reduction tier. It is disabled here, with the reason beside it: only
+"Raw (no decimation)" has been qualified, and a combo with one entry that gives no reason is
+indistinguishable from a broken one. See [Triangle budget](#triangle-budget) for where a budget can
+actually be chosen today. Once a tier is offered, picking *Custom* reveals a triangle count beside
+it.
 
-**Size (m)** is the physical size the finished GLB is scaled to, along its largest dimension, from
-0.01 m to 100 m. Zero means "keep whatever the reference recorded", which in turn falls back to the
-category's typical size, or 1 m if no category was chosen.
+**Size** is the physical size the finished GLB is scaled to, along its largest dimension. Drag it —
+about a centimetre per pixel — or double-click to type a figure; the readout carries the unit, and at
+zero it reads *unset*, which means "keep whatever the reference recorded". That in turn falls back to
+the category's typical size, or 1 m if no category was chosen. There is no upper stop, because there
+is no largest asset: a wall section is legitimately 8 m.
 
 Scaling is optional, but **grounding is not**. Every finished mesh is centred on X and Z and has its
 lowest point put at Y = 0, whether or not a size was asked for. A pivot sitting at the centre of the
