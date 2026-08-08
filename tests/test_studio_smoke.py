@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from warlock.service import jobs as svc_jobs
@@ -949,6 +950,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     job_id = _reference_job(app_ctx)
     app_ctx.state.mode = "inker"
     state = inker_mode.ensure(app_ctx)
+    wants_filter: list[int] = []
 
     def build() -> None:
         """Three columns, as the app lays them out -- see the animated test.
@@ -970,6 +972,13 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         if imgui.begin_child("##paint-right", (sp(300), 0)):
             inker_layers.draw(app_ctx)
             inker_bridge.draw(app_ctx)
+            # From inside the same id stack the popup is drawn in: imgui
+            # namespaces a popup id by the stack that opened it, and
+            # ``open_popup`` outside a frame altogether is an access violation
+            # rather than a no-op.
+            if wants_filter:
+                wants_filter.pop()
+                inker_bridge._open_filter(app_ctx, tab)
         imgui.end_child()
 
     # Empty first: the "nothing open" branch is what a user sees on arrival.
@@ -985,6 +994,24 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     for tool, _label, _key in inker_state.TOOLS:
         state.tool = tool
         _frame(imgui_ctx, build)
+
+    # The filter popup: a live preview that runs every frame while it is up,
+    # then a cancel, which has to put the pixels back rather than commit them.
+    state.tool = "brush"
+    before = tab.doc.stack.active.pixels.copy()
+    head = tab.doc.history.head
+    wants_filter.append(1)
+    _frame(imgui_ctx, build)
+    assert state.filter_open
+    state.filter_params[state.filter_name] = {"brightness": 0.4, "contrast": 0.0}
+    _frame(imgui_ctx, build)  # the popup body, and one preview
+    assert not np.array_equal(tab.doc.stack.active.pixels, before), "the preview shows"
+    assert tab.doc.history.head == head, "and pushes nothing while it is only a preview"
+
+    tab.doc.cancel_filter()
+    state.filter_open = False
+    assert np.array_equal(tab.doc.stack.active.pixels, before)
+    assert tab.doc.history.head == head
 
     # A second layer, a selection and a floating buffer: the other textures.
     tab.doc.add_layer()

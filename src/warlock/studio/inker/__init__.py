@@ -54,6 +54,7 @@ from .document import (
     matte_for,
     normalise_rect,
 )
+from .filters import FILTERS
 from .gradient import KINDS as GRADIENT_KINDS
 from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
@@ -62,6 +63,7 @@ from .undo import UNDO_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
 
 __all__ = [
     "BLEND_MODES",
+    "FILTERS",
     "COMBINE_OPS",
     "DEFAULT_DURATION_MS",
     "MAX_DURATION_MS",

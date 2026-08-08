@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from . import composite as cp
+from . import filters
 from . import gradient as grad
 from . import transform as tf
 from .anim_edits import (
@@ -133,6 +134,13 @@ class Document:
     _below: np.ndarray | None = field(init=False, default=None, repr=False)
     _dirty: tuple[int, int, int, int] | None = field(init=False, default=None, repr=False)
     _stroke: StrokeState | None = field(init=False, default=None, repr=False)
+    #: An open filter session: the rect being filtered and the pixels as they
+    #: were before it opened. A live preview recomputes from *those* rather
+    #: than from the last preview, which is the same rule a stroke's coverage
+    #: follows -- filtering the filtered result compounds every slider move.
+    _filter: tuple[tuple[int, int, int, int], np.ndarray] | None = field(
+        init=False, default=None, repr=False
+    )
     _full: bool = field(init=False, default=True, repr=False)
     #: Cels autovivified by writes that have not yet been committed. They ride
     #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
@@ -1073,6 +1081,86 @@ class Document:
         layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True
+
+    # -- filters ------------------------------------------------------------
+
+    def begin_filter(self) -> tuple[int, int, int, int] | None:
+        """Open a filter session over the selection, or the whole layer.
+
+        Returns the rect it will write, or None when there is nothing to
+        filter. Nothing is pushed and nothing is changed: this only takes the
+        copy that :meth:`preview_filter` recomputes from and
+        :meth:`cancel_filter` restores.
+        """
+        self.end_filter()
+        width, height = self.size
+        bounds = self.mask.bounds if self.mask is not None else None
+        box = self.clip(bounds or (0, 0, width, height))
+        if box is None:
+            return None
+        self._ensure_active_cel()
+        x0, y0, x1, y1 = box
+        self._filter = (box, self.stack.active.pixels[y0:y1, x0:x1].copy())
+        return box
+
+    def preview_filter(self, name: str, **params: Any) -> bool:
+        """Show the filter without recording it. Cheap to call every frame.
+
+        The selection is honoured as a *weight*, not as a rectangle: a
+        feathered edge fades the filter in, which is the same rule every other
+        write in this class follows and the reason feathering means one thing
+        across the whole app.
+        """
+        if self._filter is None:
+            return False
+        box, before = self._filter
+        x0, y0, x1, y1 = box
+        filtered = filters.apply_named(name, before, **params)
+        layer = self.stack.active
+        if self.mask is None:
+            layer.pixels[y0:y1, x0:x1] = filtered
+        else:
+            weight = self.mask.mask[y0:y1, x0:x1].astype(np.float32)[..., None] / 255.0
+            blended = before.astype(np.float32) + (
+                filtered.astype(np.float32) - before.astype(np.float32)
+            ) * weight
+            layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(blended)
+        if layer.alpha_lock:
+            layer.pixels[y0:y1, x0:x1, 3] = before[..., 3]
+        self.invalidate(box, layer_uid=layer.uid)
+        return True
+
+    def commit_filter(self) -> bool:
+        """Turn whatever is previewed into exactly one undo step."""
+        if self._filter is None:
+            return False
+        box, before = self._filter
+        self._filter = None
+        # ``_commit_patch`` compares before against after and pushes nothing
+        # when they match, which is what makes opening a filter, moving nothing
+        # and pressing Apply a no-op rather than a step that dirties the file.
+        self._commit_patch(self.stack.active, box, before)
+        return True
+
+    def cancel_filter(self) -> bool:
+        """Put the pixels back. Nothing was ever pushed, so nothing is undone."""
+        if self._filter is None:
+            return False
+        box, before = self._filter
+        self._filter = None
+        x0, y0, x1, y1 = box
+        self.stack.active.pixels[y0:y1, x0:x1] = before
+        self._discard_pending_cel()
+        self.invalidate(box, layer_uid=self.stack.active.uid)
+        return True
+
+    def end_filter(self) -> None:
+        """Abandon a session left open by a pane that went away.
+
+        Cancels rather than commits: an unanswered question is not a yes, and
+        the pixels on screen are a preview the user never approved.
+        """
+        self.cancel_filter()
 
     # -- strokes ------------------------------------------------------------
 

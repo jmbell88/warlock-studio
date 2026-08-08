@@ -339,6 +339,15 @@ class InkerState:
     combine: str = "replace"
     space_held: bool = False
 
+    # The open filter session: which filter, the values every filter was last
+    # run with, and whether the popup is up. Remembered per filter for the
+    # reason Clay's op parameters are -- somebody applying the same levels to
+    # six layers should not retype it six times -- and ``filter_open`` is what
+    # notices imgui closing the popup on a click outside, which is a cancel.
+    filter_name: str = ""
+    filter_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    filter_open: bool = False
+
     # Free transform is a *state*, not a tool: it takes over the canvas until
     # it is committed or cancelled, and every other tool is unavailable while
     # it is on -- which is exactly what "modal" means and why it cannot live in

@@ -115,6 +115,8 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     if imgui.button("Fit view"):
         tab.view.fitted = False
+    if imgui.button("Filter..."):
+        _open_filter(ctx, tab)
 
     imgui.dummy((0, 6))
     if widgets.disabled_button("Undo", doc.history.can_undo):
@@ -131,6 +133,7 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     # same gate on the two buttons that actually resample the document -- a
     # popup already open when a save starts would otherwise still fire them.
     _resize_popup(ctx, tab)
+    _filter_popup(ctx, tab)
 
 
 def _resize_popup(ctx: Any, tab: Any) -> None:
@@ -158,4 +161,93 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         tab.view.fitted = False
         imgui.close_current_popup()
     imgui.end_disabled()
+    imgui.end_popup()
+
+
+# --- filters ----------------------------------------------------------------
+#
+# A live preview rather than an apply-and-look: every one of these is a value
+# nobody can predict, and a filter you have to undo to judge is a filter you
+# stop using. The document owns the session (``begin_filter`` takes the copy
+# every preview recomputes from) so nothing here holds pixels, and the whole
+# thing is one undo step however many times a slider moved.
+
+
+FILTER_POPUP = "inker-filter"
+
+
+def _open_filter(ctx: Any, tab: Any) -> None:
+    from ..inker import filters
+
+    state = inker_mode.ensure(ctx)
+    if tab.busy:
+        return
+    if not state.filter_name:
+        state.filter_name = next(iter(filters.FILTERS))
+    if tab.doc.begin_filter() is None:
+        ctx.toast("There is nothing to filter.", "warning")
+        return
+    state.filter_open = True
+    imgui.open_popup(FILTER_POPUP)
+
+
+def _filter_values(state: Any, name: str) -> dict[str, float]:
+    from ..inker import filters
+
+    got = state.filter_params.get(name)
+    if got is None:
+        got = dict(filters.FILTERS[name][0])
+        state.filter_params[name] = got
+    return got
+
+
+def _filter_popup(ctx: Any, tab: Any) -> None:
+    from ..inker import filters
+
+    state = inker_mode.ensure(ctx)
+    if not imgui.begin_popup(FILTER_POPUP):
+        # imgui closes a popup on a click outside, and the user did not answer
+        # the question -- so the pixels on screen are a preview nobody
+        # approved. Cancel, never commit.
+        if state.filter_open:
+            state.filter_open = False
+            tab.doc.cancel_filter()
+        return
+
+    name = widgets.combo(
+        "Filter", state.filter_name, [(key, key) for key in filters.FILTERS]
+    )
+    if name != state.filter_name:
+        state.filter_name = name
+    values = _filter_values(state, state.filter_name)
+    for key in filters.FILTERS[state.filter_name][0]:
+        low, high = filters.RANGES.get(key, (0.0, 1.0))
+        imgui.set_next_item_width(sp(160))
+        changed, value = imgui.slider_float(key, float(values[key]), low, high)
+        if changed:
+            values[key] = float(value)
+    if imgui.button("Reset##filterreset"):
+        state.filter_params[state.filter_name] = dict(
+            filters.FILTERS[state.filter_name][0]
+        )
+
+    # Every frame, not only on a change: the combo above can switch filters,
+    # and a preview that only ran on a slider move would leave the last
+    # filter's pixels under the new filter's controls.
+    tab.doc.preview_filter(state.filter_name, **_filter_values(state, state.filter_name))
+
+    imgui.dummy((0, 4))
+    imgui.begin_disabled(tab.busy)
+    if imgui.button("Apply", (sp(90), 0)):
+        tab.doc.commit_filter()
+        state.filter_open = False
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    # Never disabled: a save starting while this is open must not leave a modal
+    # the user cannot dismiss -- the trap the params popup in Clay documents.
+    if imgui.button("Cancel", (sp(90), 0)):
+        tab.doc.cancel_filter()
+        state.filter_open = False
+        imgui.close_current_popup()
     imgui.end_popup()

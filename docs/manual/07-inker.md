@@ -116,6 +116,22 @@ depth, alongside canvas operations: **Flip H**, **Flip V**, **Rotate**, **Fit vi
 **Resize...**. The resize popup deliberately offers two different operations — **Scale image**
 resamples the picture, **Resize canvas** changes how much room it has around the picture.
 
+## Filters
+
+**Filter…** in the document panel opens five whole-layer adjustments: brightness/contrast,
+hue/saturation, levels, blur and sharpen. Every one previews live on the canvas as you drag, and
+the whole session — however many sliders you moved and however many times — records as a single
+undo step when you press Apply. Cancel, or clicking away from the popup, puts the pixels back and
+records nothing at all.
+
+Three things about what they do to a layer. They apply to the **selection** if there is one, faded
+by a feathered edge exactly as a brush would be, and to the whole layer if there is not. The colour
+filters never change transparency; blur does, because blurring a layer's edge is most of the reason
+to blur one. And a layer with **Lock alpha** on keeps its transparency under all five.
+
+Every filter opens at settings that change nothing, so the preview is safe to start immediately —
+the picture only moves once you move a slider.
+
 ## Selections and transform
 
 Four tools make selections: the rectangular marquee, the ellipse, the lasso and the wand. Hold
