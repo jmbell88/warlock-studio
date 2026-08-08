@@ -59,6 +59,7 @@ VECTOR_PARAMS = (
     "art_style",
     "palette",
     "platform",
+    "framing",
     "base_model",
     "style_lora",
     "lora_weight",

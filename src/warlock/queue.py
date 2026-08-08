@@ -911,6 +911,11 @@ class Worker:
                             on_step=lambda i, n: self._t2i_step(job_id, i, n),
                             cancel_event=self._cancel.event,
                             tile=is_tile,
+                            # The other half of compose_prompt above: the
+                            # framing field is a clause of PROMPT_TEMPLATE
+                            # rather than of the subject, so it travels beside
+                            # the composed text rather than inside it.
+                            framing=str(params.get("framing") or ""),
                         )
                     )
                     params["composed_prompt"] = t2i.last_prompt or composed

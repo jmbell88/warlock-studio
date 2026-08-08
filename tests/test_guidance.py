@@ -147,7 +147,8 @@ def test_catalog_covers_every_field_and_is_json_safe():
 
     catalog = guidance.catalog()
     assert set(catalog["fields"]) == {
-        "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "genre", "art_style", "category", "platform", "framing",
+        "base_model", "style_lora",
         "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
@@ -373,7 +374,8 @@ def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
 
 def test_form_fields_covers_every_table():
     assert set(guidance.form_fields()) == {
-        "genre", "art_style", "category", "platform", "base_model", "style_lora",
+        "genre", "art_style", "category", "platform", "framing",
+        "base_model", "style_lora",
         "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
@@ -478,3 +480,67 @@ def test_compose_prompt_with_no_subset_is_unchanged():
     assert guidance.compose_prompt("x", params) == guidance.compose_prompt(
         "x", params, fields=None
     )
+
+
+# --- framing ------------------------------------------------------------------
+
+
+def test_framing_defaults_to_the_three_quarter_view():
+    """Legacy params carry no ``framing`` at all -- every job row already on
+    disk was composed under the 3/4 clause that used to be a template literal,
+    so absence has to mean exactly that. No ``_LEGACY_ALIASES`` entry is
+    involved and none is wanted: nothing was *renamed*, a field was added, and
+    an alias maps an old spelling of a value onto a new one rather than filling
+    in a value that was never written."""
+    assert guidance.normalize({})["framing"] == guidance.DEFAULT_FRAMING
+    assert guidance.normalize({"framing": ""})["framing"] == guidance.DEFAULT_FRAMING
+    assert guidance.DEFAULT_FRAMING == "three_quarter"
+    assert "framing" not in guidance._LEGACY_ALIASES
+
+
+def test_a_chosen_framing_survives_into_params():
+    assert guidance.normalize({"framing": "front_ortho"})["framing"] == "front_ortho"
+    with pytest.raises(ValueError, match="framing"):
+        guidance.normalize({"framing": "isometric"})
+
+
+def test_framing_composes_no_subject_fragment():
+    """It is injected into PROMPT_TEMPLATE's view slot, not folded into the
+    subject clause -- so compose_prompt's output must be byte-identical with
+    and without it, exactly as it is for base_model and the conditioning
+    selections."""
+    assert "framing" not in guidance._PROMPT_FIELDS
+    ortho = guidance.normalize({"category": "prop", "framing": "front_ortho"})
+    plain = guidance.normalize({"category": "prop"})
+    assert ortho["framing"] != plain["framing"]
+    assert guidance.compose_prompt("a barrel", ortho) == guidance.compose_prompt(
+        "a barrel", plain
+    )
+
+
+def test_the_framing_clause_falls_back_rather_than_raising():
+    assert guidance.framing_clause(None) == guidance.FRAMINGS["three_quarter"].prompt
+    assert guidance.framing_clause("") == guidance.FRAMINGS["three_quarter"].prompt
+    assert guidance.framing_clause("retired") == guidance.FRAMINGS["three_quarter"].prompt
+    assert guidance.framing_clause("front_ortho") == guidance.FRAMINGS["front_ortho"].prompt
+
+
+def test_framing_is_a_recorded_config_axis():
+    """It changes the image, so a verdict has to be filed against it -- and
+    VECTOR_PARAMS is an allowlist, so it only counts if it is named."""
+    from warlock import vectors
+
+    assert "framing" in vectors.VECTOR_PARAMS
+    vector = vectors.config_vector({"params": guidance.normalize({"framing": "front_ortho"})})
+    assert vector["framing"] == "front_ortho"
+
+
+def test_the_2d_pane_owns_the_framing_control():
+    """It composes the reference prompt, so under the one-owner rule it belongs
+    to the pane that owns the prompt and to no other."""
+    from pathlib import Path
+
+    from warlock.studio.panes import settings_2d, settings_3d
+
+    assert any("framing" in fields for _title, fields in settings_2d.GUIDANCE_GROUPS)
+    assert "framing" not in Path(settings_3d.__file__).read_text(encoding="utf-8")

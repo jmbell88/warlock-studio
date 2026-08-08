@@ -95,12 +95,13 @@ def test_build_reproduces_the_trigger_and_template_order():
     # is about the *order* the three pieces are assembled in, and a literal made
     # it fail for a wording change that left that order exactly as it was.
     text = prompt.build("a barrel", {}, trigger="3d style, 3d render")
-    assert text == f"3d style, 3d render, {prompt.PROMPT_TEMPLATE.format(prompt='a barrel')}"
+    body = prompt.PROMPT_TEMPLATE.format(prompt="a barrel", view=prompt.view_clause())
+    assert text == f"3d style, 3d render, {body}"
 
 
 def test_build_with_no_trigger_has_no_leading_comma():
     text = prompt.build("a barrel", {})
-    assert text == prompt.PROMPT_TEMPLATE.format(prompt="a barrel")
+    assert text == prompt.PROMPT_TEMPLATE.format(prompt="a barrel", view=prompt.view_clause())
     assert not text.startswith(",")
 
 
@@ -137,7 +138,7 @@ def test_the_object_prompt_is_unchanged_by_the_tile_addition():
     from warlock.pipelines import prompt as prompt_mod
 
     assert prompt_mod.build("a barrel", {}) == prompt_mod.PROMPT_TEMPLATE.format(
-        prompt="a barrel"
+        prompt="a barrel", view=prompt_mod.view_clause()
     )
 
 
@@ -196,3 +197,77 @@ def test_no_object_field_leaks_into_the_tile_subset():
     assert set(prompt_mod.TILE_FIELDS).isdisjoint(
         {"category", "silhouette", "rarity", "emissive", "mood", "platform"}
     )
+
+
+# --- framing: the view clause is a field, and the default is byte-identical ---
+
+# The exact object prompt this compiler produced before ``framing`` existed,
+# for the subject "a barrel" and no guidance at all. A literal on purpose --
+# every other prompt test here is deliberately written against the template
+# constant so a wording change does not break it, and this one is the exact
+# opposite: it is the whole safety argument for leaving PROMPT_VERSION at 4
+# through a refactor that moved the view clause out of the template and into a
+# taxonomy field. A test written against the constant cannot make that
+# argument, because it would follow the constant wherever it went.
+DEFAULT_COMPOSITION = (
+    "a barrel, a single subject centered on a plain light gray background, "
+    "no other objects, 3/4 perspective view, studio lighting, game asset render, "
+    "full object in frame, no cropping, no text, no watermark"
+)
+
+
+def test_the_default_composition_is_byte_identical_to_the_pre_framing_one():
+    from warlock.pipelines import prompt as prompt_mod
+
+    assert prompt_mod.build("a barrel", {}) == DEFAULT_COMPOSITION
+    # And the three ways of saying "the default": absent, empty, explicit.
+    assert prompt_mod.build("a barrel", {"framing": ""}) == DEFAULT_COMPOSITION
+    assert prompt_mod.build("a barrel", {"framing": "three_quarter"}) == DEFAULT_COMPOSITION
+    # A value no table carries is skipped exactly as compose_prompt skips one,
+    # so a job row written by a future spelling still composes something.
+    assert prompt_mod.build("a barrel", {"framing": "nonsense"}) == DEFAULT_COMPOSITION
+    assert prompt_mod.PROMPT_VERSION == 4
+
+
+def test_front_ortho_composes_a_different_view_clause():
+    from warlock.pipelines import prompt as prompt_mod
+
+    text = prompt_mod.build("a barrel", {"framing": "front_ortho"})
+    assert text != DEFAULT_COMPOSITION
+    assert "3/4 perspective view" not in text
+    assert "front orthographic view" in text
+    # Only the view clause moves: everything the template says on either side
+    # of it is what it was.
+    head, _, tail = DEFAULT_COMPOSITION.partition(", 3/4 perspective view,")
+    assert text.startswith(head)
+    assert text.endswith(tail)
+
+
+def test_front_ortho_does_not_fight_the_character_pose_fragment():
+    """``category=character`` already asks for "T-pose neutral stance", and a
+    front orthographic camera over a T-pose is the canonical reference plate --
+    which is also the concept-art layout that caused all 17 refusals of the
+    2026-08-07 rogue sweep. So the framing clause is about the *camera* only
+    (it names no pose, and therefore cannot contradict one) and carries its own
+    single-view guard."""
+    from warlock import guidance
+    from warlock.pipelines import prompt as prompt_mod
+
+    clause = guidance.FRAMINGS["front_ortho"].prompt
+    for word in ("pose", "stance", "sheet", "turnaround", "views"):
+        assert word not in clause.lower(), clause
+
+    text = prompt_mod.build("a knight", {"category": "character", "framing": "front_ortho"})
+    assert "T-pose neutral stance" in text
+    assert "one view only" in text
+    assert "single subject" in text
+
+
+def test_a_tile_prompt_takes_no_view_clause():
+    """TILE_TEMPLATE has its own flat top-down framing, so the field is inert
+    there rather than composing two cameras into one prompt."""
+    from warlock.pipelines import prompt as prompt_mod
+
+    plain = prompt_mod.build("mossy cobblestone", {}, tile=True)
+    assert prompt_mod.build("mossy cobblestone", {"framing": "front_ortho"}, tile=True) == plain
+    assert "orthographic" in plain  # the tile's own, not the field's

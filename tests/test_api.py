@@ -207,8 +207,8 @@ def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch
 def test_the_guidance_catalog_is_served(svc):
     body = svc_system.guidance_catalog(svc)
     assert set(body["fields"]) == {
-        "genre", "art_style", "category", "platform", "base_model", "style_lora",
-        "ip_adapter", "control",
+        "genre", "art_style", "category", "platform", "framing",
+        "base_model", "style_lora", "ip_adapter", "control",
         "material", "condition", "setting", "palette", "emissive", "rarity",
         "silhouette", "mood",
     }

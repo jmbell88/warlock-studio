@@ -169,6 +169,33 @@ PLATFORMS = _table(
     ),
 )
 
+# The camera the reference is drawn under, and the one taxonomy table that does
+# *not* compose into the subject clause: its fragment is injected into
+# pipelines/prompt.PROMPT_TEMPLATE's ``{view}`` slot, where the literal "3/4
+# perspective view" used to sit. ``three_quarter`` carries that exact string,
+# which is the whole reason PROMPT_VERSION stays at 4 -- the default
+# composition is byte-identical to the pre-framing one, so no recipe, no
+# prompt_hash and no stored vector is re-keyed.
+#
+# ``front_ortho`` is a measurement axis rather than a new default: whether a
+# straight-on plate reconstructs better than a 3/4 view is a question for a
+# sweep, and TODO's answer is "make it expressible, then measure". Two things
+# about its wording are deliberate. It names a *camera* and never a pose, so it
+# cannot contradict the T-pose fragment CATEGORIES["character"] already
+# carries; and it says "one view only", because front-on plus T-pose is
+# exactly the character-sheet/turnaround layout that caused all 17 refusals of
+# the 2026-08-07 rogue sweep, and that guard is cheaper than the refusal.
+FRAMINGS = _table(
+    Option("three_quarter", "3/4 view", "3/4 perspective view"),
+    Option(
+        "front_ortho", "Front orthographic",
+        "front orthographic view, facing the camera, one view only",
+    ),
+)
+
+# Like DEFAULT_PLATFORM: always written into params, never left to absence.
+DEFAULT_FRAMING = "three_quarter"
+
 MATERIALS = _table(
     Option("wood", "Wood", "wooden construction"),
     Option("iron", "Iron", "iron construction"),
@@ -258,6 +285,7 @@ _OPTION_TABLES: dict[str, dict[str, Option]] = {
     "art_style": ART_STYLES,
     "category": CATEGORIES,
     "platform": PLATFORMS,
+    "framing": FRAMINGS,
     "material": MATERIALS,
     "condition": CONDITIONS,
     "setting": SETTINGS,
@@ -369,6 +397,11 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
     chosen = {field: _lookup(field, raw.get(field)) for field in _TABLES}
 
     platform = chosen["platform"] or PLATFORMS[DEFAULT_PLATFORM]
+    # Written explicitly for the same reason platform is: the prompt compiler
+    # needs a view clause for every text job and must never have to guess one,
+    # and a bucket keyed on "unset" would describe the default population as a
+    # different configuration from the one that names it.
+    framing = chosen["framing"] or FRAMINGS[DEFAULT_FRAMING]
     resolution = raw.get("resolution")
     # An explicit resolution stays an override; otherwise the platform supplies it.
     resolution = int(resolution) if resolution not in (None, "") else platform.resolution
@@ -463,6 +496,7 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         "resolution": resolution,
         "size_m": size_m,
         "platform": platform.key,
+        "framing": framing.key,
         "bg_removal": str(bg_removal),
         "negative_prompt": negative,
         # Always present, unlike the optional fields below: the worker needs a
@@ -483,16 +517,35 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         out["control"] = control.key
         out["control_scale"] = control_scale
         out["control_end"] = control_end
-    # Every optional taxonomy field except platform, which is always written
-    # explicitly above. Derived from _OPTION_TABLES rather than a hand-picked
-    # tuple so a new table can never be silently dropped from params again.
+    # Every optional taxonomy field except platform and framing, which are
+    # always written explicitly above. Derived from _OPTION_TABLES rather than a
+    # hand-picked tuple so a new table can never be silently dropped from
+    # params again.
     for field in _OPTION_TABLES:
-        if field == "platform":
+        if field in ("platform", "framing"):
             continue
         option = chosen[field]
         if option is not None:
             out[field] = option.key
     return out
+
+
+def framing_clause(value: Any) -> str:
+    """The view clause ``PROMPT_TEMPLATE``'s ``{view}`` slot takes.
+
+    Takes the value rather than the params dict, because the two callers hold
+    different things: prompt.build() has the whole params, text2image.generate()
+    has one string handed down beside the composed subject.
+
+    Skips an unknown value rather than raising, for compose_prompt's reason and
+    not _lookup's: this runs at sample time on a job whose row is already
+    written, and a spelling this build does not carry should compose the
+    default view rather than fail a job. Absence means the same thing --
+    ``three_quarter`` is the clause every row on disk was composed under when
+    it was a template literal.
+    """
+    option = FRAMINGS.get(_canonical("framing", str(value or "")))
+    return (option or FRAMINGS[DEFAULT_FRAMING]).prompt
 
 
 def compose_prompt(
@@ -654,6 +707,7 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
         "presets": [dict(p) for p in PRESETS],
         "defaults": {
             "platform": DEFAULT_PLATFORM,
+            "framing": DEFAULT_FRAMING,
             "size_m": DEFAULT_SIZE_M,
             "base_model": models.DEFAULT_BASE_MODEL,
             "lora_weight": models.DEFAULT_LORA_WEIGHT,

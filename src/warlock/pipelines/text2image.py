@@ -26,7 +26,14 @@ from pathlib import Path
 from typing import Any
 
 from .. import models
-from .prompt import PROMPT_TEMPLATE, SHEET_TEMPLATE, TILE_TEMPLATE, chunk, pad_pair
+from .prompt import (
+    PROMPT_TEMPLATE,
+    SHEET_TEMPLATE,
+    TILE_TEMPLATE,
+    chunk,
+    pad_pair,
+    view_clause,
+)
 
 log = logging.getLogger(__name__)
 
@@ -595,6 +602,7 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
+        framing: str = "",
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -699,7 +707,11 @@ class Text2Image:
             template = (
                 SHEET_TEMPLATE if sheet else (TILE_TEMPLATE if tile else PROMPT_TEMPLATE)
             )
-            text = template.format(prompt=prompt)
+            # ``view`` fills PROMPT_TEMPLATE's framing slot and is inert in the
+            # other two, which carry framings of their own. A framing this
+            # build does not carry composes the default rather than raising:
+            # the row is already written by the time we are here.
+            text = template.format(prompt=prompt, view=view_clause(framing))
             if style is not None and style.trigger and lora in self._adapters:
                 text = f"{style.trigger}, {text}"
             self.last_prompt = text

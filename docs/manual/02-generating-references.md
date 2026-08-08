@@ -41,11 +41,11 @@ means loading a tokenizer.
 
 ## Guidance fields
 
-Under the prompt are eleven optional selects, grouped by what they describe:
+Under the prompt are twelve optional selects, grouped by what they describe:
 
 | Group | Fields |
 | --- | --- |
-| Subject | category, genre, setting, silhouette |
+| Subject | category, genre, setting, silhouette, framing |
 | Style | era style, palette, mood, rarity |
 | Surface | material, condition, emissive |
 
@@ -57,6 +57,13 @@ material, condition, rarity, emissive, setting, genre, mood, era style, palette,
 
 Leaving a field unset simply omits its fragment. Nothing is filled in for you except the platform
 default.
+
+**Framing** is the exception to all of that: it is not appended to your prompt but substituted into
+the framing template's view clause, and it always has a value. *3/4 view* is the default and is the
+wording every reference generated before this control existed was drawn under. *Front orthographic*
+swaps in a straight-on plate — a front view, facing the camera, one view only — which is worth
+trying for a character you intend to promote to a mesh, and is a question the sweep tools exist to
+answer rather than one with a settled answer.
 
 Two of these have effects beyond the text. **Category** supplies a default physical size when you
 do not give one — a prop is 0.4 m, a weapon 1 m, a character 1.8 m, a vehicle 4.5 m, an environment
