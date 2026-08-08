@@ -51,8 +51,15 @@ def draw(ctx: Any) -> None:
     # thread. The whole panel is disabled rather than half of it: a list where
     # two of four controls respond is more confusing than one that does not.
     imgui.begin_disabled(tab.saving)
+    # J86. Above the rows and inside the disable, because a search that worked
+    # while a save was running would let the user narrow the list to one object
+    # and then find every control on it refusing the click.
+    needle = widgets.list_filter(ctx, "clay-outliner", len(doc.objects))
     for index in range(len(doc.objects) - 1, -1, -1):
-        _row(state, doc, doc.objects[index], index)
+        obj = doc.objects[index]
+        if needle and needle not in (obj.name or "").lower():
+            continue
+        _row(state, doc, obj, index)
     imgui.end_disabled()
 
 

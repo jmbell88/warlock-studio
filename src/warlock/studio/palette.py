@@ -315,4 +315,9 @@ def assets(ctx: Any, query: str) -> list[Any]:
     """
     if not query.strip():
         return []
-    return rank(query, list(ctx.cache.jobs), asset_label)[:MAX_ASSETS]
+    # Trashed assets are excluded here rather than by ``Filters``: quick-open
+    # does not go through the library's filter bar at all, so without this the
+    # one surface that searches by name would be the one place a deleted asset
+    # still turns up.
+    live = [job for job in ctx.cache.jobs if not job.get("deleted_at")]
+    return rank(query, live, asset_label)[:MAX_ASSETS]

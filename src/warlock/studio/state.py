@@ -144,6 +144,84 @@ DEFAULT_FORM_3D: dict[str, Any] = {
 }
 
 
+# The library's sort keys and what the combo calls them (J85). ``newest`` keeps
+# its name rather than becoming ``date``: it is a *persisted* value, so a
+# rename would need an alias table, and the direction toggle beside the combo
+# is what turns it into oldest-first.
+SORTS: list[tuple[str, str]] = [
+    ("newest", "date"),
+    ("name", "name"),
+    ("kind", "kind"),
+    ("duration", "time taken"),
+    ("size", "size on disk"),
+    ("best", "score"),
+]
+
+# The field prefixes the filter box understands (J87). Each maps onto a
+# predicate over one job row. Free text keeps its old meaning exactly -- a
+# substring of name, prompt, tags or id -- so a query with no colon in it
+# behaves character for character as it did.
+QUERY_FIELDS = ("tag", "status", "kind", "stage", "id", "name")
+
+
+def parse_query(text: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """Split a filter box into ``(free words, [(field, value)])`` (J87).
+
+    ``tag:wood status:error rusty`` is two constraints and one word. A prefix
+    this does not recognise is **not** a constraint -- ``http://x`` stays a
+    free-text search for ``http://x`` -- because the box has always been plain
+    text and silently reinterpreting a colon somebody typed on purpose is how a
+    search starts returning nothing with no explanation.
+
+    Values may be quoted for a space: ``name:"a wooden chest"``.
+    """
+    import shlex
+
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        # An unbalanced quote is not an error the user should see: they are
+        # mid-typing, and the half-written query is `name:"a wo`. Closing it
+        # for them reads it the way they clearly meant it; a plain split would
+        # hand `"a` to the field and leave `wo` as a separate word, which
+        # matches nothing and looks like the box being broken.
+        try:
+            words = shlex.split(text + '"')
+        except ValueError:
+            words = text.split()
+    terms: list[str] = []
+    fields: list[tuple[str, str]] = []
+    for word in words:
+        head, sep, tail = word.partition(":")
+        if sep and head.lower() in QUERY_FIELDS and tail:
+            fields.append((head.lower(), tail.lower()))
+        elif word:
+            terms.append(word.lower())
+    return terms, fields
+
+
+def _field_matches(job: dict[str, Any], field: str, value: str) -> bool:
+    """One ``field:value`` constraint against one row.
+
+    Tags match a whole comma-separated entry rather than a substring, because
+    ``tag:wood`` finding ``driftwood`` makes the prefix useless for the one
+    thing it is for -- narrowing. Everything else is a substring, which is what
+    the plain-text box has always done.
+    """
+    if field == "tag":
+        tags = [t.strip().lower() for t in str(job.get("tags") or "").split(",")]
+        return value in tags
+    if field == "kind":
+        return card_kind(job) == value
+    haystack = {
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "id": job.get("id"),
+        "name": job.get("name") or job.get("prompt"),
+    }.get(field)
+    return value in str(haystack or "").lower()
+
+
 @dataclass
 class Filters:
     """The library's filter bar. Persisted, because a workshop is filtered the
@@ -153,11 +231,28 @@ class Filters:
     status: str = "all"  # all | done | running | error
     kind: str = "all"  # all | reference | model | rig | sheet
     favorites_only: bool = False
-    # newest | best. Persisted with the rest of the filter bar, because a
+    # One of SORTS. Persisted with the rest of the filter bar, because a
     # workshop is browsed the same way every session.
     sort: str = "newest"
+    # Which way that sort runs. True is each key's *own* natural order --
+    # newest, largest, longest, best, and A to Z -- rather than "numerically
+    # descending", because there is no descending order of a name that anybody
+    # means by default. False reverses whatever that is, which is the only
+    # description of this flag that stays true for every key (J85). The default
+    # is the old behaviour for both keys that existed before.
+    descending: bool = True
+    # Whether the list is showing the trash instead of the workshop (J91). A
+    # *view*, not a filter on top of the others: everything else narrows what
+    # you are looking at, and this changes which set you are looking at.
+    trash: bool = False
 
     def matches(self, job: dict[str, Any]) -> bool:
+        # First, and above the sweep/candidate rules: a trashed job is out of
+        # the workshop entirely, and the trash view is out of everything else.
+        # Asked as one equality so the two views can never both show a row or
+        # both hide one.
+        if bool(job.get("deleted_at")) != self.trash:
+            return False
         if job.get("sweep_id"):
             # A sweep's units are dozens of near-identical rows whose whole
             # purpose is to be compared against each other in Review. Left in,
@@ -179,12 +274,23 @@ class Filters:
         if self.kind != "all" and card_kind(job) != self.kind:
             return False
         if self.text:
-            needle = self.text.strip().lower()
-            haystack = " ".join(
-                str(job.get(k) or "") for k in ("name", "prompt", "tags", "id")
-            ).lower()
-            if needle not in haystack:
-                return False
+            terms, fields = parse_query(self.text)
+            # Field constraints are **in addition to** the combos above, never
+            # instead of them: `status:error` with the status combo on "done"
+            # is a contradiction and correctly shows nothing, which is honest
+            # about what the bar is set to. A term that quietly overrode a
+            # visible control would be worse.
+            for field, value in fields:
+                if not _field_matches(job, field, value):
+                    return False
+            if terms:
+                haystack = " ".join(
+                    str(job.get(k) or "") for k in ("name", "prompt", "tags", "id")
+                ).lower()
+                # Every word, not any: typing more narrows, which is what a
+                # filter box is for.
+                if not all(term in haystack for term in terms):
+                    return False
         return True
 
     def failures(self, jobs: list[dict[str, Any]]) -> int:
@@ -201,32 +307,94 @@ class Filters:
         probe = replace(self, status="error")
         return sum(1 for job in jobs if probe.matches(job))
 
-    def order(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """The list in the order the bar asks for.
+    def order(
+        self, jobs: list[dict[str, Any]], sizes: dict[str, int] | None = None
+    ) -> list[dict[str, Any]]:
+        """The list in the order the bar asks for (J85).
 
-        Stable and non-destructive: "newest" returns the query's own order
-        untouched, and "best" is a stable sort, so candidates that share a
-        score stay in submission order rather than shuffling every refresh.
+        Every key is a **stable** sort, so rows that tie -- two assets with the
+        same name, a hundred with no score -- keep the query's own newest-first
+        order rather than shuffling on every refresh half a second apart.
+
+        Every key also sorts its *unanswerable* rows into a second bucket at
+        the end, in both directions. That is the rule "best" already followed
+        for an unranked job, generalised: an asset whose directory has not been
+        measured yet has no size, and putting it at zero would file the whole
+        unmeasured backlog under "smallest" until the storage walk lands.
+
+        ``sizes`` is ``{job dir name: bytes}`` from the storage walk, which is
+        deferred (C32) and may simply not have happened -- hence the bucket.
         """
-        if self.sort != "best":
-            return list(jobs)
+        key = self._sort_key(sizes or {})
+        if key is None:
+            # "newest" descending *is* the query's order; returning it
+            # untouched is both free and exactly stable.
+            return list(jobs) if self.descending else list(reversed(jobs))
+        ordered = sorted(jobs, key=key)
+        if not self.descending:
+            # A plain ``reversed`` would put the unanswerable bucket *first*,
+            # which is wrong in a way that is easy to miss: "unknown" is not a
+            # value at one end of a scale, it is the absence of one, and it
+            # belongs last whichever way the answered rows run.
+            answered = [job for job in ordered if key(job)[0] == 0]
+            unknown = [job for job in ordered if key(job)[0] != 0]
+            ordered = list(reversed(answered)) + unknown
+        return ordered
 
-        def key(job: dict[str, Any]) -> tuple[int, float]:
-            rank = (job.get("params") or {}).get("rank")
-            if not isinstance(rank, dict):
-                # Unranked sorts into its own bucket *below* every scored job,
-                # a refused one included. Most of a workshop predates the
-                # score, so treating "no score" as a middling one would scatter
-                # hundreds of old assets through the ranked candidates the
-                # sort exists to surface -- and treating it as zero would tie
-                # it with the refused, which the bucket keeps distinct.
-                return (1, 0.0)
-            try:
-                return (0, -float(rank.get("score") or 0.0))
-            except (TypeError, ValueError):
-                return (1, 0.0)
+    def _sort_key(self, sizes: dict[str, int]):
+        """The comparison for the current sort, or ``None`` for "as queried".
 
-        return sorted(jobs, key=key)
+        Every key returns ``(bucket, value)`` where bucket 1 means "cannot
+        answer" -- see :meth:`order`. Values are negated where the natural
+        reading is largest-first, so ``descending`` is a plain reverse.
+        """
+        sort = self.sort
+        if sort == "newest":
+            return None
+        if sort == "name":
+            def key(job: dict[str, Any]) -> tuple[int, Any]:
+                # The *displayed* name, which is the prompt when there is no
+                # title -- sorting by a column the card does not show would
+                # look like no sort at all.
+                shown = (job.get("name") or job.get("prompt") or "").strip().lower()
+                return (0, shown) if shown else (1, "")
+
+            return key
+        if sort == "kind":
+            return lambda job: (0, (card_kind(job), -float(job.get("created_at") or 0.0)))
+        if sort == "duration":
+            def key(job: dict[str, Any]) -> tuple[int, Any]:
+                started, finished = job.get("started_at"), job.get("finished_at")
+                if not started or not finished or finished < started:
+                    # Queued, running, or a row that never recorded one of the
+                    # two: no duration exists, rather than a duration of zero.
+                    return (1, 0.0)
+                return (0, -(float(finished) - float(started)))
+
+            return key
+        if sort == "size":
+            def key(job: dict[str, Any]) -> tuple[int, Any]:
+                measured = sizes.get(job["id"])
+                return (1, 0.0) if measured is None else (0, -float(measured))
+
+            return key
+        if sort == "best":
+            def key(job: dict[str, Any]) -> tuple[int, Any]:
+                rank = (job.get("params") or {}).get("rank")
+                if not isinstance(rank, dict):
+                    # Most of a workshop predates the score, so treating "no
+                    # score" as a middling one would scatter hundreds of old
+                    # assets through the ranked candidates this sort exists to
+                    # surface -- and treating it as zero would tie it with the
+                    # refused, which the bucket keeps distinct.
+                    return (1, 0.0)
+                try:
+                    return (0, -float(rank.get("score") or 0.0))
+                except (TypeError, ValueError):
+                    return (1, 0.0)
+
+            return key
+        return None
 
 
 def card_kind(job: dict[str, Any]) -> str:
@@ -468,6 +636,13 @@ class AppState:
     # collapsed by default -- showed nothing at all. See ``widgets.drop_flash``.
     drop_flash_slot: str = ""
     drop_flash_at: float = 0.0
+    # The little search boxes over the panel lists (J86), keyed by pane tag.
+    # One dict rather than a field per pane: they are all the same control with
+    # the same lifetime, and five near-identical fields is five places to
+    # forget to clear. Not persisted -- a filter you cannot see the box for,
+    # because the list it belongs to is short today, would be a panel that
+    # silently hides half its contents on launch.
+    list_filters: dict[str, str] = field(default_factory=dict)
     palette_open: bool = False
     palette_query: str = ""
     palette_index: int = 0

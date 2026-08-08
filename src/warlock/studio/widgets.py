@@ -437,6 +437,27 @@ def thumb_placeholder(size: float, glyph: str) -> None:
         )
 
 
+def list_filter(ctx: Any, tag: str, count: int, *, minimum: int = 8) -> str:
+    """A small search box over a panel list (J86). -> the lowered query.
+
+    Drawn only once the list is long enough to be worth searching, and the
+    query is *cleared* when it is not: a box that appears at eight entries and
+    vanishes at seven would otherwise leave a filter running with nothing on
+    screen to say so, and a panel that has silently hidden half its contents
+    looks like a panel that has lost them.
+
+    The value lives on ``AppState.list_filters`` rather than here -- nothing in
+    this module holds state -- keyed by ``tag`` so every list has its own.
+    """
+    store = ctx.state.list_filters
+    if count < minimum:
+        store.pop(tag, None)
+        return ""
+    imgui.set_next_item_width(-1)
+    store[tag] = input_text(f"##find-{tag}", store.get(tag, ""), max_length=80, hint="Find...")
+    return store[tag].strip().lower()
+
+
 def request_open(persist_key: str) -> None:
     """Open a collapsible section the next time it is drawn.
 

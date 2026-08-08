@@ -55,7 +55,13 @@ what **Make 3D** would submit.
 
 Above the list are four filters and a select-all:
 
-- A free-text box, matched against the job's name, prompt, tags and id.
+- A free-text box, matched against the job's name, prompt, tags and id. Every word has to match,
+  so typing more narrows. It also understands field prefixes: `tag:wood`, `status:error`,
+  `kind:model`, `stage:reference`, `id:ab12` and `name:chest`. Quote a value that contains a space
+  (`name:"a wooden chest"`). A prefix that is not one of those six is searched as ordinary text, so
+  a colon you meant literally still works. Field terms *add* to the combos below rather than
+  overriding them — `status:error` with **Status** on *done* is a contradiction and correctly shows
+  nothing.
 - **Status**: any status, done, running, or failed.
 - **Kind**: any kind, references, meshes, rigs, or sheets. Note that "reference" and "mesh" are
   about what the job *produced*, not what was submitted — a text job that stopped at a reference and
@@ -65,6 +71,26 @@ Above the list are four filters and a select-all:
   rather than *all* deliberately: the list is a window onto the newest N (see below), so a control
   claiming everything would leave the older jobs out of the delete that usually follows. Pressing it
   again once everything shown is ticked clears them.
+
+**Sorting.** The combo offers date, name, kind, time taken, size on disk and score, and the caret
+beside it reverses whichever is chosen. Every sort puts the rows it *cannot* answer for at the end,
+in both directions — a job that never ran has no duration, and an asset whose directory has not been
+measured yet has no size. That is deliberate: "unknown" is not a value at one end of the scale.
+Sizes come from the storage measurement at the foot of the panel, which runs in the background, so
+sorting by size shortly after launch may put everything in that bucket for a moment.
+
+Under the date sort the list is grouped by **today**, **yesterday**, **this week** and then by month.
+The grouping is only shown under that sort: a "today" heading above a list ordered by size would be a
+claim about what separates the rows below it that is not true.
+
+**Density.** The first button on the third row switches between comfortable and compact rows. A
+compact row is the thumbnail, the name and the status pill — about twice as many assets per screen —
+and everything else is one click away in the right-click menu.
+
+**Keyboard and mouse.** In 2D and 3D mode, Up and Down move the selection through the list and scroll
+it into view. Right-clicking a card opens the same actions menu the `...` button does, and works on a
+running job, where the button is replaced by the progress bar. A finished reference can also be
+dragged from the library onto the 3D pane's **Source** slot.
 
 The filters are remembered between sessions, because a workshop tends to be filtered the same way
 every time.
@@ -78,7 +104,10 @@ as they are left out of the list — one failed sweep is dozens of rows the libr
 The library holds a window on your history — the newest 200 jobs by default. When there are more, a
 line at the bottom says "Showing the newest N of M" and a **Load older** button widens the window.
 This matters when searching: the filters apply to what is loaded, so a history longer than the
-window will tell you rather than quietly missing what it never read.
+window will tell you rather than quietly missing what it never read. When a filter *is* on and the
+history is longer than the window, the line says so in amber — "Filtering the newest 200 of 1400" —
+because a filter over a window is not a search of everything. Once the window has been widened,
+**Jump back to the newest** puts it back to one page.
 
 Ticking cards enables the bulk bar: **Export zip...** writes the selected meshes to a single archive,
 **Save to project** copies them into a configured export folder (shown only when one is configured),
@@ -152,10 +181,26 @@ This accumulates. At 5 to 20 MB per GLB, regular use is real disk within weeks �
 foot of the library shows a **storage meter**: how many job directories exist and how many bytes
 they occupy. It is measured on a background thread, so it never stalls the window.
 
-Beside it, **Prune...** deletes everything but the newest twenty jobs, after a confirm. Running jobs
-are never touched. Pruning removes both the database rows and the directories on disk, and it walks
+Beside it, **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm
+carries the count, so N is yours to choose and it starts at twenty every time it is asked. Running
+jobs are never touched. Pruning removes both the database rows and the directories on disk, and it walks
 the whole history rather than only its first page — a history long enough to need pruning is exactly
 the one a single-page prune would fail on.
 
-To remove a single asset, use **Delete** from its overflow menu. It removes the job and everything
-derived from it, and it refuses on a running job — cancel it first.
+## The trash
+
+**Delete** in a card's menu moves the asset to the trash. Nothing is removed from disk and no
+question is asked — the trash *is* the question, and an undo you can take an hour later is a better
+one than a confirm answered in half a second while looking at something else.
+
+The trash icon on the third row of the filter bar switches the list to it. A trashed asset offers
+exactly two actions, **Restore** and **Delete permanently...**, and the bulk bar offers the same two
+for a ticked set. **Empty trash...** at the foot deletes all of it, including anything older than
+the loaded window.
+
+Deleting refuses on a running job — cancel it first — and a *queued* job is cancelled as it goes, so
+the worker never spends two minutes on something you have thrown away.
+
+Prune is the exception and deliberately so: it deletes from disk rather than trashing, because its
+whole purpose is to reclaim space and a prune that moved two hundred jobs into the trash would free
+nothing while reporting that it had.

@@ -2046,7 +2046,12 @@ class App:
                 "Launch one below, or check that the bench directory is where "
                 "you expect.",
             )
+        # J86: a bench directory accumulates a run per experiment and nothing
+        # ever removes one, so this is the panel list that grows fastest.
+        needle = widgets.list_filter(ctx, "sweeps", len(state.sweeps))
         for sweep in state.sweeps:
+            if needle and needle not in str(sweep["label"]).lower():
+                continue
             todo = sweep["todo"]
             total = len(sweep["units"])
             selected = sweep["id"] == state.sweep_id

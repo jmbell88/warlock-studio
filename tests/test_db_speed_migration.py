@@ -69,16 +69,16 @@ def test_migration_8_indexes_exist_on_fresh_and_pre_existing_dbs(tmp_path):
         assert "WHERE sweep_id IS NOT NULL" in _index_sql(path, "idx_jobs_sweep")
 
 
-def test_migration_8_is_the_last_entry(tmp_path):
+def test_migration_9_is_the_last_entry(tmp_path):
     """Append-only bookkeeping: user_version lands on len(MIGRATIONS), and the
-    index entry is number 8 -- anything planned as 'migration 8' elsewhere is
-    now 9."""
-    assert len(MIGRATIONS) == 8
+    index entry is number 9 (the trash's ``deleted_at``) -- anything planned as
+    'migration 9' elsewhere is now 10."""
+    assert len(MIGRATIONS) == 9
     path = tmp_path / "jobs.sqlite"
     store = JobStore(path)
     store.close()
     conn = sqlite3.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
     conn.close()
 
 

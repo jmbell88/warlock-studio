@@ -2188,3 +2188,60 @@ def test_a_card_with_no_thumbnail_builds_its_placeholder(app_ctx, imgui_ctx):
     app_ctx.state.mode = "3d"
     _frame(imgui_ctx, lambda: library.draw(app_ctx))
     assert "thumb.png" not in (app_ctx.cache.get(job_id).get("files") or [])
+
+
+def test_the_library_builds_in_every_view_and_density(app_ctx, imgui_ctx):
+    """J85/J89/J91. The trash view, the compact rows and the date headings are
+    all branches nothing else builds."""
+    from warlock.service import jobs as svc_jobs
+    from warlock.studio.panes import library
+    from warlock.studio.state import SORTS
+
+    job_id = _seeded(app_ctx)
+    app_ctx.state.mode = "3d"
+    for key, _label in SORTS:
+        app_ctx.state.filters.sort = key
+        for descending in (True, False):
+            app_ctx.state.filters.descending = descending
+            _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    app_ctx.state.filters.sort = "newest"
+    app_ctx.settings.set("library_compact", True)
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    app_ctx.settings.set("library_compact", False)
+
+    # And the trash, with something in it and a bulk selection armed.
+    svc_jobs.trash_job(app_ctx.svc, job_id)
+    app_ctx.cache.invalidate()
+    app_ctx.cache.tick()
+    app_ctx.state.filters.trash = True
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    app_ctx.state.checked.add(job_id)
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    app_ctx.state.checked.clear()
+    app_ctx.state.filters.trash = False
+
+
+def test_the_prune_confirm_builds_its_keep_count(app_ctx, imgui_ctx):
+    """O116: a confirm with a widget in it, which nothing else exercises."""
+    from warlock.studio.panes import library
+
+    library._ask_prune(app_ctx)
+    assert app_ctx.confirms.pending is not None
+    _frame(imgui_ctx, lambda: app_ctx.confirms.draw())
+    app_ctx.confirms.dismiss()
+
+
+def test_the_panel_search_boxes_build_and_hide_themselves(app_ctx, imgui_ctx):
+    """J86. The box only appears once a list is long enough to search, and the
+    query is cleared when it is not -- a filter running with nothing on screen
+    to say so looks like a panel that has lost its contents."""
+    from warlock.studio import widgets
+
+    seen: list[str] = []
+    def build():
+        seen.append(widgets.list_filter(app_ctx, "demo", 20))
+    _frame(imgui_ctx, build)
+    app_ctx.state.list_filters["demo"] = "chest"
+    _frame(imgui_ctx, build)
+    assert widgets.list_filter(app_ctx, "demo", 3) == ""
+    assert "demo" not in app_ctx.state.list_filters

@@ -91,6 +91,12 @@ class Confirm:
     confirm_label: str = "Discard"
     cancel_label: str = "Keep editing"
     on_confirm: Any = None
+    # An optional widget drawn between the message and the buttons, for a
+    # question that has a *parameter* rather than only an answer -- the prune
+    # keep-count (O116). Deliberately a callable rather than a declared field
+    # type: a confirm is not a form builder, and the two or three questions
+    # that want one already know how to draw it.
+    body: Any = None
     _open: bool = field(default=False, repr=False)
     _focused: bool = field(default=False, repr=False)
 
@@ -174,6 +180,9 @@ class ConfirmQueue:
         imgui.text_wrapped(confirm.message)
         if self.waiting:
             widgets.muted(f"{self.waiting} more to answer")
+        if confirm.body is not None:
+            imgui.dummy((0, 6))
+            confirm.body()
         imgui.dummy((0, 6))
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.

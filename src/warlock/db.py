@@ -272,6 +272,29 @@ MIGRATIONS: list[list[str]] = [
         "CREATE INDEX IF NOT EXISTS idx_jobs_sweep"
         " ON jobs(sweep_id, status) WHERE sweep_id IS NOT NULL",
     ],
+    # 9 -- the trash (J91). One nullable timestamp: NULL is in the workshop,
+    # set is in the trash. A column rather than a params key for the third time
+    # and the same reason -- the library filters on it, and params is a JSON
+    # string sqlite cannot index into.
+    #
+    # A *timestamp* rather than a flag, because the two questions the trash has
+    # to answer are "is this deleted" and "how long has it been", and the
+    # second is what any future age-based emptying would need. Nothing reads it
+    # as a date today; that is deliberate, not an oversight -- an automatic
+    # empty-after-N-days is a destructive policy nobody has asked for, and
+    # inventing one here would be a rule the user cannot see.
+    #
+    # Deliberately **no index**. The list is one ``SELECT *`` page ordered by
+    # created_at and everything else is filtered in Python (``Filters.matches``),
+    # so an index on this column would serve no query -- unlike sweep_id, whose
+    # tally really is an index-only scan.
+    #
+    # The files stay on disk. That is the whole feature: a trashed asset can be
+    # restored, and a "trash" that had already deleted the mesh would be a
+    # different, worse thing wearing the name.
+    [
+        "ALTER TABLE jobs ADD COLUMN deleted_at REAL",
+    ],
 ]
 
 
@@ -684,6 +707,39 @@ class JobStore:
         with self._lock:
             self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
             self._conn.commit()
+
+    def set_deleted_if_not_running(self, job_id: str, when: float | None) -> bool:
+        """Move a job into or out of the trash (J91). -> whether a row changed.
+
+        One statement under the lock, exactly as ``delete_if_not_running`` is
+        and for the same reason: a caller that checks a snapshot and then
+        writes races the worker's ``claim()`` in the gap. Restoring is the same
+        statement with ``None``, and is guarded the same way -- a running job
+        cannot be in the trash to begin with, so the condition costs nothing
+        there and keeps one code path.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE jobs SET deleted_at = ? WHERE id = ? AND status != 'running'",
+                (when, job_id),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def trashed(self) -> list[dict[str, Any]]:
+        """Every job in the trash, newest-deleted first.
+
+        Its own query rather than a filter over ``list``: emptying the trash
+        has to act on *all* of it, and the list is the newest N of M -- so a
+        version built on the page would silently leave the older half behind
+        while reporting success.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE deleted_at IS NOT NULL"
+                " ORDER BY deleted_at DESC, id DESC"
+            ).fetchall()
+        return [self._row_dict(r) for r in rows]
 
     def delete_if_not_running(self, job_id: str) -> bool:
         """Delete unless the worker owns the row. -> whether the row went.

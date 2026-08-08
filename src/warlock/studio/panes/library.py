@@ -9,6 +9,8 @@ made the old library usable.
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from imgui_bundle import imgui
@@ -16,13 +18,22 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, icons, theme, widgets
+from .. import dialogs, icons, jobs_cache, theme, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, card_kind, primary_action
+from ..state import ACTIONS, SORTS, card_kind, primary_action
 from ..tokens import sp
+
+log = logging.getLogger(__name__)
 
 CARD_HEIGHT = 92.0
 THUMB_SIZE = 72.0
+# The compact row (J89): the same card with the second line of badges and the
+# action row dropped, so twice as many assets fit on a screen. Two constants
+# rather than a scale factor -- a card is a fixed stack of a title, a pill and
+# a button row, and multiplying its height would leave the contents overflowing
+# or floating rather than fitting.
+COMPACT_HEIGHT = 46.0
+COMPACT_THUMB = 32.0
 
 # The drag-and-drop type a library card offers (I83). imgui's Python binding
 # carries an *integer* payload -- ``id(object)``, in its own documentation --
@@ -93,19 +104,68 @@ def draw(ctx: Any) -> None:
     }
     if imgui.begin_child("library-list", (0, height)):
         if not jobs:
-            widgets.empty_state(
-                icons.IMAGE,
-                "Nothing here yet." if not ctx.cache.jobs else "Nothing matches.",
-                "Generated references and meshes appear here."
-                if not ctx.cache.jobs
-                else "Loosen the filters above.",
-            )
+            _empty(ctx)
+        group = ""
         for job in jobs:
+            # Date grouping (J89), and only under the date sort: a "Today"
+            # heading above a list ordered by size would be a lie about what
+            # separates the rows below it.
+            if ctx.state.filters.sort == "newest":
+                heading = date_group(job.get("created_at"))
+                if heading != group:
+                    group = heading
+                    widgets.section(heading)
             _card(ctx, job, queue_pos)
         _load_more(ctx)
     imgui.end_child()
     _bulk(ctx, jobs)
     _storage(ctx)
+
+
+def _empty(ctx: Any) -> None:
+    """Why the list is empty, in the three senses it can be."""
+    if ctx.state.filters.trash:
+        widgets.empty_state(
+            icons.TRASH,
+            "The trash is empty.",
+            "Deleted assets wait here until you empty it.",
+        )
+        return
+    fresh = not ctx.cache.jobs
+    widgets.empty_state(
+        icons.IMAGE,
+        "Nothing here yet." if fresh else "Nothing matches.",
+        "Generated references and meshes appear here."
+        if fresh
+        else "Loosen the filters above.",
+    )
+
+
+# The day boundaries a date grouping uses, as a pure function of two timestamps
+# so the wording is testable without a clock (J89).
+def date_group(created_at: Any, now: float | None = None) -> str:
+    """``today`` / ``yesterday`` / ``this week`` / ``2026-07`` for a row.
+
+    Calendar days, not 24-hour windows: something made at 23:50 last night is
+    "yesterday" at 00:10, and an elapsed-hours rule would call it "today".
+    Older than a week collapses to the month, because a workshop's older half
+    is browsed by roughly-when rather than by exactly-when.
+    """
+    import datetime as dt
+
+    if not created_at:
+        return "undated"
+    now = time.time() if now is None else now
+    then_day = dt.date.fromtimestamp(float(created_at))
+    today = dt.date.fromtimestamp(now)
+    days = (today - then_day).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return "this week"
+    return then_day.strftime("%Y-%m")
 
 
 def _read_error(ctx: Any) -> None:
@@ -125,12 +185,45 @@ def _read_error(ctx: Any) -> None:
         ctx.cache.invalidate()
 
 
+def filtering(filters: Any) -> bool:
+    """Whether anything is narrowing the list right now (J88).
+
+    Read off the fields rather than tracked, so a filter added later is
+    included by construction. ``sort``, ``descending`` and ``trash`` are
+    excluded deliberately: they reorder or re-address, they do not hide.
+    """
+    return bool(
+        filters.text
+        or filters.favorites_only
+        or filters.status != "all"
+        or filters.kind != "all"
+    )
+
+
 def _load_more(ctx: Any) -> None:
     """The window is the newest N of M -- and the filters above apply only to
     that window, so a history longer than it needs to say so rather than let a
     search quietly miss what it never loaded."""
     loaded = len(ctx.cache.jobs)
     total = ctx.cache.total
+    # J88, and it is the whole of that item: a filter applied to a window is
+    # not a search, and the difference is invisible unless something says so at
+    # the exact moment it matters -- which is when a filter is on *and* the
+    # window is short of the history. "Load older" is right there, and pressing
+    # it is what turns the filter into a search of everything loaded.
+    if filtering(ctx.state.filters) and total > loaded:
+        widgets.text_colored(
+            theme.WARN,
+            f"Filtering the newest {loaded} of {total}.",
+        )
+        widgets.muted("Older assets are not searched until they are loaded.")
+    # O119. The window only ever grows, and after a few presses "newest N" is a
+    # page nobody wants to scroll back through -- and the only way back was to
+    # restart the app.
+    if ctx.cache.limit > jobs_cache.LIST_LIMIT and imgui.small_button(
+        "Jump back to the newest##library-reset"
+    ):
+        ctx.cache.reset_window()
     if total <= loaded:
         # A failed COUNT(*) makes ``total`` a floor rather than a total (E43),
         # and on a full page that floor is exactly ``loaded`` -- so the honest
@@ -164,7 +257,20 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     """
     filters = ctx.state.filters
     imgui.set_next_item_width(-1)
-    filters.text = widgets.input_text("##filter", filters.text, max_length=120, hint="Filter...")
+    # The hint carries the syntax (J87). Nowhere else can: the box is
+    # full-width in a 300 px sidebar, so a (?) beside it would push it off the
+    # edge, and a line of help under it would cost a row on every frame to
+    # explain something most queries never use.
+    filters.text = widgets.input_text(
+        "##filter", filters.text, max_length=120, hint="Filter... (tag: status: kind:)"
+    )
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Words narrow by name, prompt, tag or id -- every word must match.\n"
+            "tag:wood  status:error  kind:model  stage:reference  id:ab12  name:chest\n"
+            'Quote a value with a space: name:"a wooden chest".\n'
+            "A prefix that is not one of these is searched as ordinary text."
+        )
     spacing = imgui.get_style().item_spacing.x
     half = (imgui.get_content_region_avail().x - spacing) * 0.5
     filters.status = widgets.combo(
@@ -198,13 +304,38 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     # room for only the star and the tick put it exactly on top of the tick --
     # same pixels, and the later item takes the click, so the select-all opened
     # the manual instead.
-    buttons = 3 * (imgui.get_frame_height() + spacing)
+    # Four square buttons on this row now: the direction toggle joined the
+    # star, the tick and the (?). The reservation is computed rather than
+    # written out for the reason the comment above gives -- a child window
+    # clips, so anything that overruns the fixed 300 px sidebar is neither
+    # visible nor clickable.
+    buttons = 4 * (imgui.get_frame_height() + spacing)
     filters.sort = widgets.combo(
         "##sort",
         filters.sort,
-        [("newest", "newest first"), ("best", "best first")],
+        list(SORTS),
         width=imgui.get_content_region_avail().x - buttons,
     )
+    imgui.same_line()
+    # Direction (J85). A glyph rather than two combo entries per key: "size,
+    # ascending" and "size, descending" as separate options doubles a list the
+    # user reads every time, to express one bit.
+    #
+    # ASCII carets rather than lucide chevrons, and that is not laziness: the
+    # icon atlas is a pinned 0.525.0 subset that carries chevron-down and *not*
+    # chevron-up, and a codepoint the atlas does not hold renders as the
+    # missing-glyph box. Two glyphs that disagree about which family they are
+    # from would be worse than two that agree about being text.
+    down = filters.descending
+    if widgets.icon_button(
+        "v" if down else "^",
+        # "Reverse the order" rather than a list of what each key's two ends
+        # are called: there is no descending order of a *name* anybody means by
+        # default, so the only wording that stays true for every key is the one
+        # that describes the toggle rather than the result.
+        "Sorted the usual way - click to reverse" if down else "Reversed - click to restore",
+    ):
+        filters.descending = not down
     imgui.same_line()
     # A star that lights up, not a checkbox labelled "*".
     lit = filters.favorites_only
@@ -221,7 +352,46 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     # line that is current when it is called, and joining that one would put it
     # on a row that is not always there.
     manual_render.help_button(ctx, "library")
+    _view_row(ctx)
     _failures(ctx)
+
+
+def _view_row(ctx: Any) -> None:
+    """Density and the trash: which *set* is on screen and how tightly (J89/J91).
+
+    Its own row rather than two more squares on the sort row, which is already
+    a computed reservation against a fixed 300 px sidebar that clips. These two
+    are also a different kind of control from the ones above -- everything on
+    the rows above narrows what you are looking at, and these change how it is
+    drawn and which pile it comes from.
+    """
+    filters = ctx.state.filters
+    compact = filters_compact(ctx)
+    if widgets.icon_button(
+        icons.LIST if compact else icons.LAYERS,
+        "Comfortable rows" if compact else "Compact rows",
+    ):
+        ctx.settings.set("library_compact", not compact)
+    imgui.same_line()
+    lit = filters.trash
+    if lit:
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
+    if widgets.icon_button(icons.TRASH, "Show the trash" if not lit else "Back to the library"):
+        filters.trash = not lit
+        # The tick set is per-view: a bulk Delete armed in the library and
+        # fired in the trash would mean something completely different.
+        ctx.state.checked.clear()
+    if lit:
+        imgui.pop_style_color()
+    if lit:
+        imgui.same_line()
+        widgets.text_colored(theme.WARN, "Trash")
+
+
+def filters_compact(ctx: Any) -> bool:
+    """Whether cards are drawn tightly (J89). Persisted, because it is a
+    preference about a workshop rather than about a moment in one."""
+    return bool(ctx.settings.get("library_compact"))
 
 
 def _failures(ctx: Any) -> None:
@@ -288,7 +458,8 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
         state.library_scroll_to = None
         imgui.set_scroll_here_y(0.5)
     origin = imgui.get_cursor_screen_pos()
-    if imgui.begin_child("card", (0, sp(CARD_HEIGHT)), imgui.ChildFlags_.borders.value):
+    height = sp(COMPACT_HEIGHT if filters_compact(ctx) else CARD_HEIGHT)
+    if imgui.begin_child("card", (0, height), imgui.ChildFlags_.borders.value):
         _card_body(ctx, job, queue_pos)
     imgui.end_child()
     # The child window is the item a drag lifts, so this has to follow
@@ -301,7 +472,7 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
         # hover, not choice.
         imgui.get_window_draw_list().add_rect_filled(
             origin,
-            (origin.x + sp(3), origin.y + sp(CARD_HEIGHT)),
+            (origin.x + sp(3), origin.y + height),
             imgui.get_color_u32(theme.rgba(theme.ACCENT)),
             sp(2),
         )
@@ -332,16 +503,18 @@ def thumb_glyph(job: Any) -> str:
 
 def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     job_id = job["id"]
+    compact = filters_compact(ctx)
+    thumb = sp(COMPACT_THUMB if compact else THUMB_SIZE)
     texture = None
     if ctx.textures is not None and "thumb.png" in (job.get("files") or []):
         texture = ctx.textures.get(job_id, ctx.job_dir(job_id) / "thumb.png")
     if texture is not None:
-        imgui.image(widgets.texture_ref(texture), (sp(THUMB_SIZE), sp(THUMB_SIZE)))
+        imgui.image(widgets.texture_ref(texture), (thumb, thumb))
     else:
         # A framed glyph rather than a hole (H72). Every queued job, every
         # failure and every rig row lacks a thumbnail, and an empty square the
         # size of one reads as a broken image instead of a pending one.
-        widgets.thumb_placeholder(sp(THUMB_SIZE), thumb_glyph(job))
+        widgets.thumb_placeholder(thumb, thumb_glyph(job))
     imgui.same_line()
 
     # begin_group returns nothing -- the pair is unconditional, and wrapping it
@@ -349,6 +522,22 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
     imgui.begin_group()
     name = job.get("name") or job.get("prompt") or job_id
     imgui.text_wrapped(name if len(name) <= 46 else name[:43] + "...")
+    # J90. The truncation is what makes a workshop of long prompts navigable at
+    # all, and it is also what makes two assets that differ in their last five
+    # words indistinguishable -- so the whole string is one hover away. Only
+    # when it *was* truncated: a tooltip repeating what is already on screen is
+    # noise on every card.
+    if len(name) > 46 and imgui.is_item_hovered():
+        imgui.set_tooltip(name)
+    if compact:
+        # The status pill alone, on the same line: a compact row is for
+        # scanning names, and the badges below are the detail you switch out of
+        # compact to read.
+        imgui.same_line()
+        widgets.status_pill(job["status"])
+        imgui.end_group()
+        _card_context(ctx, job)
+        return
     widgets.status_pill(job["status"])
     # Between the two, and that order is the rule rather than a preference:
     # ``quality_badge`` may draw nothing and owns its own ``same_line`` for it,
@@ -389,19 +578,25 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
     else:
         _card_actions(ctx, job)
     imgui.end_group()
-    # Right-click anywhere on the card opens the same menu the ellipsis does
-    # (I82) -- the same menu, drawn once, rather than a second list of actions
-    # that would drift from it the first time one is added.
-    #
-    # Drawn from here rather than from ``_card_actions``, which a *running* job
-    # replaces with its progress bar: the overflow was unreachable for the whole
-    # length of a job, which is exactly when Cancel and Delete are wanted.
-    # ``open_popup`` and ``begin_popup`` have to share an ID stack, so both the
-    # detection and the menu live inside the card's own child window.
+    _card_context(ctx, job)
+
+
+def _card_context(ctx: Any, job: Any) -> None:
+    """Right-click anywhere on the card opens the same menu the ellipsis does
+    (I82) -- the same menu, drawn once, rather than a second list of actions
+    that would drift from it the first time one is added.
+
+    Drawn from here rather than from ``_card_actions``, which a *running* job
+    replaces with its progress bar and which a compact row does not draw at
+    all: the overflow was unreachable for the whole length of a job, which is
+    exactly when Cancel and Delete are wanted. ``open_popup`` and
+    ``begin_popup`` have to share an ID stack, so both the detection and the
+    menu live inside the card's own child window.
+    """
     if imgui.is_window_hovered() and imgui.is_mouse_clicked(1):
         # Right-clicking selects first: a menu acting on a card other than the
         # marked one is how the wrong asset gets deleted.
-        select(ctx, job_id)
+        select(ctx, job["id"])
         imgui.open_popup("more")
     _overflow(ctx, job)
 
@@ -441,6 +636,21 @@ def _overflow(ctx: Any, job: Any) -> None:
         return
     job_id = job["id"]
     files = job.get("files") or []
+    if job.get("deleted_at"):
+        # A trashed asset offers exactly two things, and nothing else: every
+        # action below would either fail or quietly resurrect the row into the
+        # workshop without saying so.
+        _trash_menu(ctx, job_id)
+        imgui.end_popup()
+        return
+    # N115: the two "get me out of the app with this" actions, at the top
+    # because they are the ones a user arrives at the menu already looking for.
+    if imgui.menu_item("Copy job id", "", False)[0]:
+        imgui.set_clipboard_text(job_id)
+        ctx.toast("Job id copied.", "success")
+    if imgui.menu_item("Open folder", "", False)[0]:
+        _open_folder(ctx, job_id)
+    imgui.separator()
     if imgui.menu_item("Rename...", "", False)[0]:
         ctx.prompts.ask(
             dialogs.Prompt(
@@ -494,16 +704,50 @@ def _overflow(ctx: Any, job: Any) -> None:
             )
     imgui.separator()
     if imgui.menu_item("Delete", "", False)[0]:
+        # No confirm (J91): the trash *is* the confirmation, and it is a better
+        # one -- an undo the user can take an hour later beats a question they
+        # answer in half a second while looking at something else. The
+        # irreversible delete has kept the question, in the trash.
+        delete_asset(ctx, job_id)
+    imgui.end_popup()
+
+
+def _trash_menu(ctx: Any, job_id: str) -> None:
+    if imgui.menu_item("Restore", "", False)[0]:
+        restore_asset(ctx, job_id)
+    if imgui.menu_item("Delete permanently...", "", False)[0]:
         ctx.confirms.ask(
             dialogs.Confirm(
-                title="Delete this asset?",
-                message="The job and everything derived from it are removed from disk.",
+                title="Delete permanently?",
+                message="The job and everything derived from it are removed from disk. "
+                "This cannot be undone.",
                 confirm_label="Delete",
                 cancel_label="Keep",
-                on_confirm=lambda: delete_asset(ctx, job_id),
+                on_confirm=lambda: purge_asset(ctx, job_id),
             )
         )
-    imgui.end_popup()
+
+
+def _open_folder(ctx: Any, job_id: str) -> None:
+    """Show a job's directory in the OS file manager (N115).
+
+    ``ctx.open_log``'s rule, applied to a directory: hand the path to the
+    shell rather than spawning a browser, so it is not a subprocess and
+    therefore not a kill-on-close-job question. Silent about a missing
+    directory in the sense that it says so as a toast -- a job whose files were
+    removed by hand is a real state, not a fault.
+    """
+    path = ctx.job_dir(job_id)
+    if not path.exists():
+        ctx.toast("That job's folder is not on disk.", "warn")
+        return
+    try:
+        import os
+
+        os.startfile(path)  # noqa: S606 -- a directory, handed to the shell
+    except OSError as exc:
+        log.warning("could not open %s: %s", path, exc)
+        ctx.toast("Could not open the folder. See the log for details.", "error", action="log")
 
 
 # --- actions ----------------------------------------------------------------
@@ -626,17 +870,36 @@ def compare(ctx: Any, job_id: str) -> None:
 
 
 def delete_asset(ctx: Any, job_id: str) -> None:
-    """Remove one asset: the tick, the selection, then the job and its files.
+    """Move one asset to the trash: the tick, the selection, then the row (J91).
 
     Public because the candidate picker offers exactly this for the attempts
     the user did not keep -- through this function rather than a second
-    ``svc_jobs.delete_job`` call, so a loser is removed by the one path that
-    also clears the selection and the tick set.
+    ``svc_jobs`` call, so a loser is removed by the one path that also clears
+    the selection and the tick set.
+
+    It trashes rather than deletes, and every caller keeps its old name: what
+    the user asked for is "get this out of my library", and the *reversibility*
+    of that is a property of the app rather than of each call site. The
+    permanent version is :func:`purge_asset`, and the only thing that reaches
+    it is the trash.
     """
     ctx.state.checked.discard(job_id)
     if ctx.state.selected == job_id:
         ctx.state.select(None)
-    ctx.submit(f"delete:{job_id}", svc_jobs.delete_job, ctx.svc, job_id)
+    ctx.submit(f"delete:{job_id}", svc_jobs.trash_job, ctx.svc, job_id)
+
+
+def restore_asset(ctx: Any, job_id: str) -> None:
+    ctx.state.checked.discard(job_id)
+    ctx.submit(f"restore:{job_id}", svc_jobs.restore_job, ctx.svc, job_id)
+
+
+def purge_asset(ctx: Any, job_id: str) -> None:
+    """Delete one trashed asset for real."""
+    ctx.state.checked.discard(job_id)
+    if ctx.state.selected == job_id:
+        ctx.state.select(None)
+    ctx.submit(f"purge:{job_id}", svc_jobs.delete_job, ctx.svc, job_id)
 
 
 # --- bulk and storage -------------------------------------------------------
@@ -667,6 +930,27 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
     imgui.same_line()
     if imgui.small_button("Clear"):
         ctx.state.checked.clear()
+    if ctx.state.filters.trash:
+        # The trash's own two, and *only* those two: exporting a zip of assets
+        # the user has thrown away is not a thing anybody wants, and offering
+        # it would put "Delete" beside "Export" in the one view where Delete
+        # cannot be taken back.
+        if imgui.button("Restore##bulk"):
+            for job_id in picked:
+                restore_asset(ctx, job_id)
+        imgui.same_line()
+        if widgets.destructive_button("Delete permanently...", (0, 0)):
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Delete permanently?",
+                    message=_delete_message(len(picked), hidden)
+                    + " This cannot be undone.",
+                    confirm_label="Delete",
+                    cancel_label="Keep",
+                    on_confirm=lambda: [purge_asset(ctx, j) for j in picked],
+                )
+            )
+        return
     if imgui.button("Export zip..."):
         _export_zip(ctx, picked)
     if ctx.export_dir:
@@ -680,11 +964,14 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
             )
     imgui.same_line()
     if imgui.button("Delete##bulk"):
+        # The confirm stays here where the per-card one went (J91): a bulk
+        # action's count is the thing worth checking, and "not shown" in that
+        # sentence is the case the whole message exists for.
         ctx.confirms.ask(
             dialogs.Confirm(
-                title="Delete these assets?",
+                title="Move these to the trash?",
                 message=_delete_message(len(picked), hidden),
-                confirm_label="Delete",
+                confirm_label="Move to trash",
                 cancel_label="Keep",
                 on_confirm=lambda: [delete_asset(ctx, j) for j in picked],
             )
@@ -729,13 +1016,59 @@ def _storage(ctx: Any) -> None:
         # which is full width, putting Prune 82 px past the panel's right edge.
         # Unclickable exactly while a new install has nothing else on screen.
         imgui.same_line()
-    if imgui.small_button("Prune..."):
-        ctx.confirms.ask(
-            dialogs.Confirm(
-                title="Prune old assets?",
-                message="Everything but the newest 20 jobs is deleted. Running jobs are kept.",
-                confirm_label="Prune",
-                cancel_label="Cancel",
-                on_confirm=lambda: ctx.submit("prune", svc_jobs.prune_jobs, ctx.svc, 20),
+    if ctx.state.filters.trash:
+        if widgets.destructive_button("Empty trash...", (0, 0)):
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Empty the trash?",
+                    message="Every trashed asset and everything derived from it is "
+                    "removed from disk. This cannot be undone.",
+                    confirm_label="Empty",
+                    cancel_label="Cancel",
+                    on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
+                )
             )
+        return
+    if imgui.small_button("Prune..."):
+        _ask_prune(ctx)
+
+
+# How many jobs a prune keeps, while its question is on screen (O116). Module
+# state rather than AppState because it is the *dialog's* state: it exists for
+# as long as the dialog does, and it is deliberately not persisted -- a
+# destructive default the user set once and forgot is exactly the kind of
+# setting that deletes something they wanted.
+_prune_keep = [20]
+PRUNE_KEEP_DEFAULT = 20
+
+
+def _ask_prune(ctx: Any) -> None:
+    _prune_keep[0] = PRUNE_KEEP_DEFAULT
+
+    def body() -> None:
+        imgui.set_next_item_width(sp(120))
+        changed, value = imgui.input_int("Keep the newest", _prune_keep[0], 1, 10)
+        if changed:
+            # Floored at zero because the service refuses a negative, and a
+            # question that can be answered unanswerably is worse than one that
+            # clamps: the refusal would arrive as a toast after the dialog is
+            # gone, describing a number the user can no longer see.
+            _prune_keep[0] = max(0, value)
+
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Prune old assets?",
+            # *Deleted*, not trashed, and that asymmetry with the card's Delete
+            # is deliberate: prune exists to reclaim disk, and a prune that
+            # moved two hundred jobs into the trash would free nothing while
+            # reporting that it had.
+            message="Everything but the newest N jobs is deleted from disk. "
+            "Running jobs are kept. This cannot be undone.",
+            confirm_label="Prune",
+            cancel_label="Cancel",
+            body=body,
+            on_confirm=lambda: ctx.submit(
+                "prune", svc_jobs.prune_jobs, ctx.svc, _prune_keep[0]
+            ),
         )
+    )

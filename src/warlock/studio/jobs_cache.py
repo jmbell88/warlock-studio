@@ -69,6 +69,9 @@ class JobsCache:
         # {job dir name: bytes} from the last full walk, so a finished job can
         # fold its own directory back in without re-walking everything (C33).
         self._dir_sizes: dict[str, int] = {}
+        # Bumped whenever ``_dir_sizes`` is replaced or amended, so the
+        # ``visible`` memo notices a measurement landing (J85's size sort).
+        self._sizes_generation = 0
         # {job_id: ((status, dir mtime), names)} for attach_files -- the frame
         # loop's largest syscall cost, and the one that grew without limit as
         # "load more" widened the window. Pruned to the page below, so it can
@@ -89,6 +92,20 @@ class JobsCache:
         ceiling on a single read and clamps this.
         """
         self.limit += LIST_LIMIT
+        self.invalidate()
+
+    def reset_window(self) -> None:
+        """Back to the newest page (O119).
+
+        The window only ever grew, and after a few presses of "Load older" the
+        list is thousands of rows the user has to scroll back through -- with
+        restarting the app as the only way to the top. Every per-row cost the
+        widening bought (``attach_files``, the thumbnail cache) shrinks with
+        it, which is the other half of why it is worth having.
+        """
+        if self.limit == LIST_LIMIT:
+            return
+        self.limit = LIST_LIMIT
         self.invalidate()
 
     def tick(self, on_transition: Callable[[dict[str, Any], str | None], None] | None = None):
@@ -161,6 +178,7 @@ class JobsCache:
             return self.storage
         self.storage_error = None
         self._dir_sizes = sizes
+        self._sizes_generation += 1
         return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
     def measure_one(self, job_id: str) -> Any:
@@ -186,6 +204,7 @@ class JobsCache:
             self.storage_error = str(exc)
             return self.storage
         self.storage_error = None
+        self._sizes_generation += 1
         return {"job_dirs": len(sizes), "bytes": sum(sizes.values())}
 
     # -- queries -----------------------------------------------------------
@@ -195,8 +214,17 @@ class JobsCache:
 
     def _filters_key(self, filters: Any) -> Any:
         """A hashable snapshot: the generation plus every filter field. The
-        fields are strings and bools, so ``vars`` is the whole state."""
-        return (self._generation, tuple(sorted(vars(filters).items())))
+        fields are strings and bools, so ``vars`` is the whole state.
+
+        ``_sizes_generation`` joins it because sort-by-size reads the storage
+        walk (J85), which lands on a task thread long after the list did:
+        without it the first measurement would never reorder anything.
+        """
+        return (
+            self._generation,
+            self._sizes_generation,
+            tuple(sorted(vars(filters).items())),
+        )
 
     def visible(self, filters: Any) -> list[dict[str, Any]]:
         """The filtered, ordered list -- memoized per (list generation,
@@ -205,7 +233,9 @@ class JobsCache:
         memo = self._visible_memo
         if memo is not None and memo[0] == key:
             return memo[1]
-        out = filters.order([j for j in self.jobs if filters.matches(j)])
+        out = filters.order(
+            [j for j in self.jobs if filters.matches(j)], sizes=self._dir_sizes
+        )
         self._visible_memo = (key, out)
         return out
 

@@ -285,8 +285,11 @@ def _saved_list(ctx: Any, job: Any) -> None:
     # "Save GLB..." reading like another two-minute wait.
     widgets.cost_note("Saving a posed GLB runs on the spot; it does not join the queue.")
     job_id = job["id"]
+    needle = widgets.list_filter(ctx, "poses", len(poses))
     for pose in poses:
         pose_id = pose["id"]
+        if needle and needle not in str(pose.get("name") or pose_id).lower():
+            continue
         imgui.push_id(pose_id)
         imgui.text(pose.get("name") or pose_id)
         imgui.same_line()

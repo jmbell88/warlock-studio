@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from .. import guidance, models, rigging
 from . import matte
 from .core import WarlockService
 from .errors import Conflict, Failed, Invalid, NotFound, TooLarge, invalid_from
-from .files import ImageTooLarge, attach_files, measure_storage, to_png
+from .files import ImageTooLarge, attach_files, dir_size, measure_storage, to_png
 from .validation import (
     ALLOWED_RESOLUTIONS,
     CONDITIONING_PARAMS,
@@ -615,6 +616,81 @@ def _refuse_if_busy(svc: WarlockService, job_id: str) -> None:
         raise Conflict("cancel the job before deleting it")
     if dependent_jobs(svc, job_id):
         raise Conflict("a rig or sprite sheet for this asset is still running")
+
+
+def trash_job(svc: WarlockService, job_id: str) -> dict[str, Any]:
+    """Move a job to the trash (J91): the row is marked, nothing is removed.
+
+    The same refusals as :func:`delete_job`, and that is the point rather than
+    symmetry for its own sake. Trashing a job whose rig is still running would
+    make it vanish from the library while a subprocess kept writing into its
+    directory, and the user would have no way to explain what they were
+    watching -- the refusal is about the *filesystem*, and the filesystem does
+    not care that this delete is reversible.
+    """
+    check_job_id(job_id)
+    job = svc.require_job(job_id)
+    if job["status"] == "running":
+        raise Conflict("cancel the job before deleting it")
+    _refuse_if_busy(svc, job_id)
+    if job["status"] == "queued":
+        # A queued job has to be *cancelled*, not merely hidden. Deleting one
+        # used to remove the row, so the worker's poll never saw it again; a
+        # trashed row is still a row, and without this the worker would pick up
+        # a job the user has thrown away, spend two minutes of GPU on it and
+        # write a mesh into a directory nothing shows. Best-effort: a claim
+        # landing in the gap is caught by the conditional write below, which
+        # refuses and leaves the job running and untrashed.
+        svc.store.cancel(job_id)
+    if not svc.store.set_deleted_if_not_running(job_id, time.time()):
+        raise Conflict("cancel the job before deleting it")
+    return {"ok": True}
+
+
+def restore_job(svc: WarlockService, job_id: str) -> dict[str, Any]:
+    """Take a job back out of the trash."""
+    check_job_id(job_id)
+    if not svc.store.set_deleted_if_not_running(job_id, None):
+        raise NotFound("no such job")
+    return {"ok": True}
+
+
+def empty_trash(svc: WarlockService) -> dict[str, Any]:
+    """Delete every trashed job for real.
+
+    Reads the whole trash rather than a page (``store.trashed``): "empty"
+    that left the older half behind while reporting success would be the worst
+    possible reading of the word. Each row still goes through the same
+    conditional delete as :func:`delete_job` -- a trashed job cannot be running,
+    but it can have been *restored and resubmitted* between the read and the
+    write, and that job's directory is not this call's to remove.
+    """
+    deleted = 0
+    for job in svc.store.trashed():
+        if worker_is_inside(svc, job["id"]) or dependent_jobs(svc, job["id"]):
+            # Skipped rather than refused, as prune does: one asset with a rig
+            # in flight is no reason to keep the other two hundred.
+            continue
+        if not svc.store.delete_if_not_running(job["id"]):
+            continue
+        shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
+        deleted += 1
+    return {"deleted": deleted}
+
+
+def trash_size(svc: WarlockService) -> dict[str, Any]:
+    """How much the trash is holding. Blocking -- call from a task thread."""
+    rows = svc.store.trashed()
+    total = 0
+    for job in rows:
+        try:
+            total += dir_size(svc.job_dir(job["id"]))
+        except OSError:
+            # A directory that has gone is a job whose files somebody removed
+            # by hand; the row is still restorable-in-name and the figure is
+            # advisory, so this is not worth failing the measurement over.
+            continue
+    return {"count": len(rows), "bytes": total}
 
 
 def delete_job(svc: WarlockService, job_id: str) -> dict[str, Any]:

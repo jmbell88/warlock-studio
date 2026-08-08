@@ -44,8 +44,12 @@ def draw(ctx: Any) -> None:
     _actions(ctx, doc)
     imgui.dummy((0, 4))
 
+    # J86, and inside the disable for the reason everything else here is.
+    needle = widgets.list_filter(ctx, "inker-layers", len(doc.stack))
     # Reversed: the engine's list is painter's order, the panel is not.
     for index in range(len(doc.stack) - 1, -1, -1):
+        if needle and needle not in (doc.stack[index].name or "").lower():
+            continue
         _row(ctx, tab, doc, index)
     imgui.end_disabled()
 
