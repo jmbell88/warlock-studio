@@ -19,8 +19,20 @@ from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_UPLOAD_BYTES, random_seed
-from .. import dialogs, theme, widgets
+from .. import dialogs, matte_preview, theme, widgets
 from ..manual import render as manual_render
+
+MATTE_TITLE = "Check the cutout"
+
+# What each of ``pipelines/matting``'s three sources is called on screen. The
+# distinction matters to the user: the corner fill is a guess a plain
+# background makes work, and BiRefNet is a model -- and "this image already
+# carries one" is the answer that means their own edit is what will be used.
+MATTE_SOURCES = {
+    "alpha": "The reference's own alpha",
+    "birefnet": "BiRefNet cutout",
+    "flood": "Corner fill (BiRefNet's weights are not installed)",
+}
 
 # The only tier the UI offers. gltfpack is vendored now, so the named tiers can
 # run -- but none of them has been qualified (kept UVs, both PBR maps and
@@ -234,37 +246,118 @@ def promote_kwargs(form: dict[str, Any]) -> dict[str, Any]:
 
 
 def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> None:
+    """Put the matte in front of the two minutes of GPU.
+
+    The button no longer submits: it opens the preview, which shows the cutout
+    trellis will reconstruct from and offers Accept / Fix matte / Cancel. The
+    matte is the single decision that most often turns a good reference into a
+    solid slab, and it used to be made inside the exe *after* the user had
+    committed. The composition gate's own verdict moves into the same panel for
+    the same reason -- one place, before the spend, rather than a confirm here
+    and a surprise there.
+    """
     if validate(source):
         return
-    kwargs = promote_kwargs(form)
+    matte_preview.open_for(ctx, source["id"], promote_kwargs(form))
 
-    def go(force: bool = False) -> None:
-        if ctx.state.filters.kind not in ("all", "model"):
-            # Otherwise a filter left on "reference" (the natural way to find
-            # the source image before promoting it) permanently hides the
-            # model job this creates.
-            ctx.state.filters.kind = "all"
-        ctx.submit(
-            "submit", svc_jobs.promote_to_model, ctx.svc, source["id"], force=force, **kwargs
-        )
 
-    report = (source.get("params") or {}).get("reference_report") or {}
-    if report.get("ok") is False:
-        # A confirm rather than a refusal: the rules are heuristics about
-        # composition, and the user can see the image the pane is arguing
-        # about. What they must not do is spend two minutes of GPU by
-        # accident.
-        ctx.confirms.ask(
-            dialogs.Confirm(
-                title="This reference may not reconstruct",
-                message=" ".join(report.get("reasons") or []) + "\n\nBuild it anyway?",
-                confirm_label="Build anyway",
-                cancel_label="Cancel",
-                on_confirm=lambda: go(force=True),
-            )
+def submit_promotion(ctx: Any, job_id: str, kwargs: dict[str, Any], force: bool) -> None:
+    """Queue the mesh job the preview was about. Accept's other half."""
+    if ctx.state.filters.kind not in ("all", "model"):
+        # Otherwise a filter left on "reference" (the natural way to find the
+        # source image before promoting it) permanently hides the model job
+        # this creates.
+        ctx.state.filters.kind = "all"
+    ctx.submit("submit", svc_jobs.promote_to_model, ctx.svc, job_id, force=force, **kwargs)
+
+
+def matte_modal(ctx: Any) -> None:
+    """The promote preview. Drawn beside the confirms, because it is a modal.
+
+    Everything expensive happened elsewhere: ``matte_preview.pump`` submits the
+    cutout to the TaskRunner and the frame thread only uploads the pixels it
+    gets back, through ``ThumbnailCache.from_pixels`` so the texture inherits
+    the deferred-release rule every other image in the UI has.
+    """
+    state = matte_preview.pump(ctx)
+    if state is None:
+        return
+    if not state._open:
+        imgui.open_popup(MATTE_TITLE)
+        state._open = True
+    centre = imgui.get_main_viewport().get_center()
+    imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+    opened, _ = imgui.begin_popup_modal(
+        MATTE_TITLE, None, imgui.WindowFlags_.always_auto_resize.value
+    )
+    if not opened:
+        # Escape dismisses a modal without going through any of the buttons,
+        # and imgui will not reopen a popup whose id it thinks is already open:
+        # without this the modal would vanish once and never come back, with
+        # ``job_id`` still set and every later press of Make 3D doing nothing.
+        state._open = False
+        matte_preview.close(ctx)
+        return
+    _matte_body(ctx, state)
+    imgui.end_popup()
+
+
+def _matte_body(ctx: Any, state: Any) -> None:
+    preview = state.preview
+    if preview is None:
+        widgets.muted("Cutting the subject out...")
+    else:
+        _matte_image(ctx, preview)
+        widgets.muted(f"{MATTE_SOURCES.get(preview.source, preview.source)} - "
+                      f"keeps {preview.coverage * 100:.0f}% of the frame")
+        if preview.approved:
+            widgets.muted("This reference already carries this matte; it will be kept.")
+        for reason in preview.reasons:
+            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+            imgui.text_wrapped(reason)
+            imgui.pop_style_color()
+        for warning in preview.warnings:
+            imgui.text_wrapped(warning)
+    imgui.dummy((0, 6))
+    ready = preview is not None
+    refused = bool(preview is not None and preview.reasons)
+    label = "Build anyway" if refused else "Accept"
+    if widgets.disabled_button(label, ready, (150, 0)):
+        imgui.close_current_popup()
+        state._open = False
+        # Read *before* ``accept``, which closes the state before it calls
+        # back: reading it inside the callback would name the empty string.
+        job_id = state.job_id
+        matte_preview.accept(
+            ctx,
+            lambda kwargs, force: submit_promotion(ctx, job_id, kwargs, force or refused),
         )
         return
-    go()
+    imgui.same_line()
+    if widgets.disabled_button("Fix matte", ready, (150, 0)):
+        imgui.close_current_popup()
+        state._open = False
+        matte_preview.fix(ctx)
+        return
+    imgui.same_line()
+    if imgui.button("Cancel", (100, 0)):
+        imgui.close_current_popup()
+        state._open = False
+        matte_preview.close(ctx)
+
+
+def _matte_image(ctx: Any, preview: Any) -> None:
+    if ctx.textures is None:
+        return
+    texture = ctx.textures.from_pixels(
+        f"matte:{preview.job_id}",
+        float(preview.stamp or 0),
+        (preview.width, preview.height),
+        preview.rgb,
+    )
+    if texture is None:
+        return
+    imgui.image(widgets.texture_ref(texture), (preview.width, preview.height))
 
 
 def upload_bytes(ctx: Any, data: bytes) -> None:

@@ -131,6 +131,19 @@ that keeps it honest: reverting or regenerating a reference rewrites the flat im
 the layers, and resurrecting layers that describe pixels which no longer exist would be worse than
 losing them.
 
+### Fixing a matte
+
+**Fix matte**, in the [Check the cutout](03-generating-meshes.md#checking-the-cutout) panel, is the
+same hand-off with one difference: the document opens with the cutout already folded into its alpha,
+as a single undoable step. Every layer keeps its own pixels — the cut is multiplied into each of
+them — so a layered reference stays layered, and the eraser and the brush now edit the matte itself.
+Erase to cut more away; paint on a layer to put it back.
+
+The tab opens **unsaved**, because the cutout is on screen and in no file. Saving writes it exactly
+as any other linked save does, and the reference then carries that alpha. Promoting it afterwards
+records the matte as approved and tells the reconstruction engine to keep it rather than cutting its
+own.
+
 **Revert to original** puts the generated image back. The untouched original is kept once, as
 `input.orig.png`, the first time you edit a reference — so revert always works — and reverting also
 discards the layered file, because it describes an edit that no longer exists.

@@ -452,6 +452,11 @@ class AppState:
     # thread by a component that cannot submit anything, so the frame loop
     # notices the job finishing and marks this instead.
     findings_dirty: bool = False
+    # The promote flow's matte preview and its cutout cache, built on first use
+    # by ``matte_preview.ensure``. Untyped and None here for the reason
+    # ``clay``/``review`` are, and never persisted: a stored cutout would be a
+    # claim about a file that has had a whole session to change.
+    matte: Any = None
     manual: ManualState = field(default_factory=ManualState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
     # so the Export tab reads and parses it once per version of the file rather

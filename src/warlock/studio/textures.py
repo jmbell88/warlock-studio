@@ -86,6 +86,40 @@ class ThumbnailCache:
         self._evict()
         return texture
 
+    def from_pixels(
+        self, key: str, version: float, size: tuple[int, int], data: bytes, components: int = 3
+    ) -> Any | None:
+        """A texture for pixels that never were a file. -> it, or None.
+
+        The matte preview is computed on a task thread and never touches the
+        disk, so it has no path and no mtime -- but it wants every one of this
+        cache's rules: the same deferred release (a texture handed out during a
+        frame is still in that frame's draw list when the backend draws),
+        ``_supersede`` so a recomputed preview retires the one it replaces
+        rather than leaving it to LRU pressure, and the same registration and
+        ``forget_texture`` pairing. ``version`` plays the mtime's part and is
+        the caller's stamp -- for the preview, ``input.png``'s own mtime, which
+        is exactly what "these pixels are out of date" means.
+        """
+        entry_key = (key, version, False)
+        entry = self._entries.get(entry_key)
+        if entry is not None:
+            self._entries.move_to_end(entry_key)
+            self._touched[entry_key] = self._frame
+            return entry
+        try:
+            texture = self.ctx.texture(size, components, data)
+            texture.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
+            texture.repeat_x = texture.repeat_y = False
+        except Exception:
+            log.debug("could not upload %s", key, exc_info=True)
+            return None
+        self._supersede(key, version)
+        self._entries[entry_key] = texture
+        self._touched[entry_key] = self._frame
+        self._evict()
+        return texture
+
     def _supersede(self, job_id: str, mtime: float) -> None:
         """Retire the *older versions* of one key string.
 

@@ -89,13 +89,19 @@ def _adopt(
     job_id: str = "",
     link_kind: str = "",
     has_original: bool = False,
+    saved_head: int | None = None,
 ) -> InkerDoc:
     tab = InkerDoc(
         doc=doc,
         title=title or inker_state.title_for(path),
         path=path,
         file_format=file_format,
-        saved_head=doc.history.head,
+        # Normally the document as opened *is* what is on disk. The one caller
+        # that passes this is the matte hand-off, which opens a document with
+        # an edit already applied: recording the head after that edit would
+        # call the cutout saved, and closing the tab would discard it without
+        # asking.
+        saved_head=doc.history.head if saved_head is None else saved_head,
         job_id=job_id,
         link_kind=link_kind,
         has_original=has_original,
@@ -158,13 +164,21 @@ def can_edit_job(ctx: Any, job: Any) -> bool:
     )
 
 
-def open_job_reference(ctx: Any, job: Any) -> None:
+def open_job_reference(ctx: Any, job: Any, *, matte: bool = False) -> None:
     """Open a reference's image as a linked document.
 
     Prefers the layered working file when there is a fresh one, so layers
     survive between sessions; falls back to the flat input.png, which is also
     what happens after a revert or a regenerate rewrites the reference behind
     the working file's back.
+
+    ``matte`` is the promote preview's "Fix matte": the document opens with the
+    host's cutout already folded into its alpha as one undoable step, so the
+    eraser and the brush edit the matte directly. A tab that is *already* open
+    for this job is focused rather than re-opened even then -- re-cutting a
+    document the user has been editing would apply a matte measured off
+    ``input.png`` to pixels that have moved on from it, and the alpha is right
+    there to paint.
     """
     state = ensure(ctx)
     job_id = job["id"]
@@ -174,10 +188,10 @@ def open_job_reference(ctx: Any, job: Any) -> None:
         ctx.state.mode = "inker"
         return
     ctx.state.mode = "inker"
-    ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id)
+    ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id, matte=matte)
 
 
-def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
+def _load_job(svc: Any, job_id: str, *, matte: bool = False) -> dict[str, Any]:
     """Blocking; task thread only."""
     from ..service import files as svc_files
     from . import inker
@@ -190,7 +204,7 @@ def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
     # the title, the dedupe and the save all key on the reference.
     doc.path = flat
     edit = svc_files.reference_edit_status(svc, job_id)
-    return {
+    out = {
         "doc": doc,
         "path": flat,
         "format": "ora",
@@ -199,6 +213,30 @@ def _load_job(svc: Any, job_id: str) -> dict[str, Any]:
         "has_original": bool(edit.get("has_original")),
         "title": f"{job_id[:8]} reference",
     }
+    if matte:
+        # Captured before the cut, and handed back as the tab's saved head: the
+        # cutout is an unsaved edit, because nothing has written it to disk.
+        out["saved_head"] = doc.history.head
+        _cut_matte(svc, job_id, doc)
+    return out
+
+
+def _cut_matte(svc: Any, job_id: str, doc: Any) -> bool:
+    """Fold the host's cutout into ``doc``'s alpha. Blocking; task thread only.
+
+    Log-and-swallow, like every other improvement the user did not ask for:
+    the thing they asked for is the reference open in the editor, and BiRefNet
+    failing (or a working file whose canvas has been resized away from the
+    reference's) must not cost them that.
+    """
+    from ..service import matte as svc_matte
+
+    try:
+        alpha, _source = svc_matte.alpha_plane(svc, job_id)
+        return bool(doc.apply_matte(alpha))
+    except Exception:
+        log.exception("could not apply the matte to %s", job_id)
+        return False
 
 
 # --- saving -----------------------------------------------------------------
@@ -491,6 +529,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 job_id=result.get("job_id", ""),
                 link_kind=result.get("link_kind", ""),
                 has_original=bool(result.get("has_original")),
+                saved_head=result.get("saved_head"),
             )
             ctx.state.mode = "inker"
         return

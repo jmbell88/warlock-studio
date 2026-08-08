@@ -627,6 +627,11 @@ class App:
 
             review_mode.on_task_done(ctx, done)
             return
+        if key.startswith("matte-"):
+            from . import matte_preview
+
+            matte_preview.on_task_done(ctx, done)
+            return
         if key == "submit":
             ctx.cache.invalidate()
             # Say where in line it landed: five rapid submits used to produce
@@ -1842,7 +1847,7 @@ class App:
         which is why this is not inline in either.
         """
         from . import widgets
-        from .panes import overlay
+        from .panes import overlay, settings_3d
 
         ctx = self.app_ctx
         overlay.fps_meter(ctx, self.fps)
@@ -1853,6 +1858,9 @@ class App:
             (viewport.work_size.x, viewport.work_size.y),
             on_action=self._toast_action,
         )
+        # Before the confirms, because it is the same kind of thing and the
+        # earlier one wins the single modal slot imgui gives a frame.
+        settings_3d.matte_modal(ctx)
         ctx.confirms.draw()
         ctx.prompts.draw()
 

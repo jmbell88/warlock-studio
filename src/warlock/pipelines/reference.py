@@ -8,10 +8,21 @@ rescale the subject to a target occupancy.
 
 Two rules keep it honest:
 
-* The mask drives *geometry only* and is never written back as alpha.
-  Background removal stays trellis's job. A bad mask therefore mis-crops --
-  visible in reference.png, and caught by the rejection rules -- instead of
-  punching holes in the subject, which is invisible until the mesh is wrong.
+* **This module's** mask drives *geometry only* and is never written back as
+  alpha. A bad mask therefore mis-crops -- visible in reference.png, and caught
+  by the rejection rules -- instead of punching holes in the subject, which is
+  invisible until the mesh is wrong.
+
+  That rule used to end "background removal stays trellis's job", and **that
+  half is no longer true**. A matte can now be written back as alpha, by one
+  path and only one: the user opens the reference in Inker with the host's
+  cutout as its alpha (``service.matte`` computes it, ``inker_mode`` applies
+  it), edits it, and saves -- so what lands in ``input.png`` is a matte a
+  person looked at, not a heuristic's guess. ``service.matte.approve`` then
+  records ``matte: approved`` and pins ``bg_removal`` to the mode that
+  preserves it. Nothing automatic writes alpha, and this module still does not:
+  the distinction the original rule was protecting is between a mask nobody saw
+  and a mask somebody approved, and only the second may become alpha.
 * ``prepare(enabled=False)`` is a byte-exact copy plus a measured report. The
   kill switch is a parameter, not a branch at the call site, so the report
   exists either way.

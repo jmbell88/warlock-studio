@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import guidance, models, rigging
+from . import matte
 from .core import WarlockService
 from .errors import Conflict, Failed, Invalid, NotFound, TooLarge
 from .files import ImageTooLarge, attach_files, measure_storage, to_png
@@ -255,6 +256,13 @@ def create_job(
             raise Invalid(f"could not decode uploaded {field}", field=field) from exc
 
     normalized = _decode(image, "image") if image is not None else None
+    if normalized is not None and output == "model":
+        # An upload that already carries a matte -- Clay's "send to 3D", a
+        # drawing Inker sent straight over, a cutout from anywhere -- is a
+        # matte somebody made, and the server would re-cut it under today's
+        # default. Only a mesh job asks: nothing downstream of a reference or a
+        # tile mattes anything. See service/matte.py for the exe's own rule.
+        matte.approve(params, normalized)
     # Same caps, same order, same pre-write window as input.png.
     normalized_ref = _decode(reference, "reference") if reference is not None else None
 
@@ -888,6 +896,13 @@ def promote_to_model(
         else:
             params.pop("rig", None)
             params.pop("rig_template", None)
+
+    # After the guidance normalize, because it *overrides* the matte mode that
+    # normalize just defaulted: a reference whose alpha is a cutout somebody
+    # approved must not be re-cut by the server. Read off the file rather than
+    # off params, because the alpha is the evidence -- a hand edit in Inker
+    # writes it into input.png and records nothing.
+    matte.approve(params, src_png)
 
     params["mesh_seed"] = mesh_seed if mesh_seed is not None else random_seed()
     params["seed"] = params["mesh_seed"]
