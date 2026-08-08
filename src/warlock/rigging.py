@@ -157,17 +157,36 @@ def catalog() -> list[dict[str, str]]:
 
 PRESET_DIR = TEMPLATE_DIR / "poses"
 
+# The deformation battery: the poses a *rig* is reviewed in. Same format and
+# the same loader as the shipped presets, deliberately -- they are rendered
+# through the same sheet pipeline -- but a separate directory, because these
+# are not poses anybody would ship an asset in and they have no business in the
+# pose library the user picks from.
+BATTERY_DIR = TEMPLATE_DIR / "deform_qa"
+
 _presets: dict[str, list[dict[str, Any]]] | None = None
+_batteries: dict[str, list[dict[str, Any]]] | None = None
 
 
-def _load_presets() -> dict[str, list[dict[str, Any]]]:
+def _load_pose_library(
+    directory: Path, *, with_ids: bool = False
+) -> dict[str, list[dict[str, Any]]]:
     found: dict[str, list[dict[str, Any]]] = {}
-    for path in sorted(PRESET_DIR.glob("*.json")):
+    for path in sorted(directory.glob("*.json")):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            found[path.stem] = [
-                {"name": str(p["name"]), "bones": p["bones"]} for p in raw["poses"]
-            ]
+            rows = []
+            for i, pose in enumerate(raw["poses"]):
+                row = {"name": str(pose["name"]), "bones": pose["bones"]}
+                if with_ids:
+                    # A synthetic id, and only where the library is rendered
+                    # rather than offered: a sheet row is keyed by (pose id,
+                    # frame), so rows that all had no id would put the first
+                    # pose in every row of the sheet. A preset the user picks
+                    # keeps having none -- it is not a saved pose.
+                    row["id"] = f"{path.stem}_{i}"
+                rows.append(row)
+            found[path.stem] = rows
         except Exception:
             # A malformed library costs you that library, not the app -- the
             # same rule _load_templates follows.
@@ -180,8 +199,22 @@ def preset_poses(template_key: str) -> list[dict[str, Any]]:
     global _presets
     get_template(template_key)  # validates the key against the registry
     if _presets is None:
-        _presets = _load_presets()
+        _presets = _load_pose_library(PRESET_DIR)
     return [dict(p) for p in _presets.get(template_key, [])]
+
+
+def deform_battery(template_key: str) -> list[dict[str, Any]]:
+    """The review poses for a template, or [] if it has no battery yet.
+
+    Empty is a normal answer and the caller renders nothing: a battery is
+    authored per skeleton (a squat means nothing to a fish), and a template
+    without one should cost the QA sheet, never the rig.
+    """
+    global _batteries
+    get_template(template_key)  # validates the key against the registry
+    if _batteries is None:
+        _batteries = _load_pose_library(BATTERY_DIR, with_ids=True)
+    return [dict(p) for p in _batteries.get(template_key, [])]
 
 
 # --- fitting ----------------------------------------------------------------
@@ -752,6 +785,38 @@ MAX_SHEET_NAME = 64
 
 def sheet_dir(job_dir: Path) -> Path:
     return job_dir / SHEET_DIR_NAME
+
+
+# --- the deformation QA sheet -----------------------------------------------
+#
+# One per rig, overwritten by the next rig, and deliberately *not* in sheets/:
+# it is a review artifact about the rig, not a sprite sheet the user asked for,
+# so it must not appear in list_sheets, count against MAX_SHEETS or be deleted
+# by delete_sheet. It lands in the source job's directory beside rig.glb for
+# the reason the rig itself does -- it describes that mesh.
+
+RIG_QA_PNG = "rig_qa.png"
+RIG_QA_JSON = "rig_qa.json"
+
+
+def rig_qa_png_path(job_dir: Path) -> Path:
+    return job_dir / RIG_QA_PNG
+
+
+def rig_qa_path(job_dir: Path) -> Path:
+    return job_dir / RIG_QA_JSON
+
+
+def read_rig_qa(job_dir: Path) -> dict[str, Any] | None:
+    """The QA sheet's sidecar, or None. Written last, so it is the marker."""
+    path = rig_qa_path(job_dir)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.exception("unreadable rig QA sidecar at %s", path)
+        return None
 
 
 def sheet_path(job_dir: Path, sheet_id: str) -> Path:

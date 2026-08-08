@@ -38,6 +38,11 @@ MEDIA = {
     "model.fbx": "application/octet-stream",
     "textures.zip": "application/zip",
     "rig.glb": "model/gltf-binary",
+    # The deformation battery rendered against the rig: the poses a rig is
+    # reviewed in, one atlas, written by the rig job into the mesh's own
+    # directory the way rig.glb is. Its sidecar is deliberately not here --
+    # nothing outside the app reads it, and MEDIA is an export allowlist.
+    "rig_qa.png": "image/png",
     "thumb.png": "image/png",
     # The 2D exports. Derived from input.png on a finished reference exactly
     # the way the mesh exports derive from model.glb -- so every reference
@@ -466,6 +471,7 @@ LISTED = (
     "model.glb",
     "source.glb",
     "rig.glb",
+    "rig_qa.png",
     "thumb.png",
     "error.log",
 )
@@ -523,6 +529,12 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # model.glb after the file first appears (queue.py:_apply_scale), and
         # source.glb is the reconstruction the same run produced.
         return job.get("status") == "done" and path.exists()
+    if name == "rig_qa.png":
+        # Gated on its sidecar for the reason rig.glb is gated on rig.json: the
+        # atlas is written first and the sidecar last, by a *different* job
+        # than the one this directory belongs to, so existence alone can hand a
+        # reader an atlas that is still being packed.
+        return (job_dir / "rig_qa.json").exists() and path.exists()
     if name == "rig.glb":
         # Gated on rig.json, not on its own existence and not on this job's
         # status. The rig lands in the *source* job's directory, so this job is
@@ -564,7 +576,7 @@ def attach_files(job: dict[str, Any], job_dir: Path, *, cache: dict | None = Non
 
     ``cache`` is an optional ``{job_id: (stamp, names)}`` the caller owns, and
     it exists because this is the frame loop's single largest syscall cost:
-    ``LISTED`` is nine names and ``ready`` stats one or two files for each, so
+    ``LISTED`` is ten names and ``ready`` stats one or two files for each, so
     a two-hundred row page costs upwards of two thousand ``stat`` calls -- twice
     a second, on the thread that must not block, growing without limit as
     "load more" widens the window.

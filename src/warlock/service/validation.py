@@ -89,6 +89,9 @@ DERIVED_PARAMS = (
     "weighting",
     "weighting_reason",
     "bone_count",
+    # Which battery was rendered against this rig's artifacts. A rerun would
+    # otherwise claim a QA sheet of a mesh it has not bound yet.
+    "deform_qa",
     "sheet_id",
     "cells",
     "reference_report",

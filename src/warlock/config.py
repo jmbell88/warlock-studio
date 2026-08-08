@@ -312,6 +312,16 @@ class Config:
     pose_timeout: float = field(
         default_factory=lambda: float(os.environ.get("WARLOCK_POSE_TIMEOUT", "300"))
     )
+    # Render the deformation battery after a rig. A kill-switch rather than an
+    # opt-in, for the reason pose_fit is one: with it off a rig is byte for
+    # byte what it was before this existed, so there is no state in which
+    # turning it *on* is a risk to accept deliberately -- but it is a dozen
+    # extra EEVEE frames on the serial queue, and a user who does not review
+    # rigs should be able to stop paying for them.
+    deform_qa: bool = field(
+        default_factory=lambda: os.environ.get("WARLOCK_DEFORM_QA", "on").lower()
+        not in ("0", "false", "off", "no")
+    )
     # A sheet is one EEVEE render per cell -- 8 yaws times however many poses.
     # Generous because the cell count is user-chosen, but still bounded: this
     # runs on the serial queue and a hang would block every later job.

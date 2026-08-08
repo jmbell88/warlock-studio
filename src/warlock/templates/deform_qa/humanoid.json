@@ -1,0 +1,44 @@
+{
+  "template": "humanoid",
+  "comment": "The deformation battery: the poses a rig is reviewed in, not poses anybody would ship. Same format and the same convention as templates/poses/*.json -- local joint rotations, XYZW, the order the pose editor saves -- because they go through the same sheet pipeline and the same op_sheet renderer. Chosen to put every joint through the range where a bad weight map shows: hips and knees folded, shoulders at their limit, elbows and knees at a right angle, and the spine twisted about its own axis. Symmetric rows carry L and R as exact mirrors (x, -y, -z, w), which is what rigging.mirror_quaternion means and what the tests check.",
+  "poses": [
+    {
+      "name": "squat",
+      "bones": {
+        "spine": [0.0872, 0.0, 0.0, 0.9962],
+        "thigh.L": [0.5, 0.0, 0.0, 0.8660],
+        "thigh.R": [0.5, 0.0, 0.0, 0.8660],
+        "shin.L": [-0.7071, 0.0, 0.0, 0.7071],
+        "shin.R": [-0.7071, 0.0, 0.0, 0.7071],
+        "foot.L": [0.2588, 0.0, 0.0, 0.9659],
+        "foot.R": [0.2588, 0.0, 0.0, 0.9659]
+      }
+    },
+    {
+      "name": "arms overhead",
+      "bones": {
+        "upper_arm.L": [0.0, 0.0, 0.6088, 0.7934],
+        "upper_arm.R": [0.0, 0.0, -0.6088, 0.7934],
+        "forearm.L": [0.0, 0.0, 0.1305, 0.9914],
+        "forearm.R": [0.0, 0.0, -0.1305, 0.9914]
+      }
+    },
+    {
+      "name": "elbow and knee 90",
+      "bones": {
+        "forearm.L": [-0.7071, 0.0, 0.0, 0.7071],
+        "forearm.R": [-0.7071, 0.0, 0.0, 0.7071],
+        "shin.L": [-0.7071, 0.0, 0.0, 0.7071],
+        "shin.R": [-0.7071, 0.0, 0.0, 0.7071]
+      }
+    },
+    {
+      "name": "torso twist",
+      "bones": {
+        "spine": [0.0, 0.2588, 0.0, 0.9659],
+        "chest": [0.0, 0.2588, 0.0, 0.9659],
+        "head": [0.0, -0.2588, 0.0, 0.9659]
+      }
+    }
+  ]
+}
