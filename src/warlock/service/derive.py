@@ -44,6 +44,15 @@ def get_file(
     an otherwise-fresh file. It is validated against a literal tuple and never
     becomes part of a path.
     """
+    if not name:
+        # Before the allowlist, and a different sentence (O117). "unknown file"
+        # is deliberately ambiguous -- it covers a name that does not exist and
+        # a name that exists and is not servable, and telling those apart leaks
+        # what a job directory holds. An *empty* name leaks nothing, because it
+        # is not a question about this job at all: it is a caller that composed
+        # a request with a blank in it, and answering it with the ambiguous
+        # sentence sent the reader looking for a file nobody asked for.
+        raise NotFound("no file was named")
     if name not in MEDIA:
         raise NotFound("unknown file")
     if pixel_colors is not None and pixel_colors not in files.PIXEL_COLOR_CHOICES:

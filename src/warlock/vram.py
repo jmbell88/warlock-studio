@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -305,25 +306,73 @@ def plan(
     return Plan(total, budget, auto, f"{total:.1f} GiB card, {mode} auto-selected: {why}")
 
 
+def remedies(
+    params: dict[str, Any] | None = None,
+    *,
+    exclusive: bool = False,
+    extra: Sequence[str] = (),
+) -> str:
+    """The "to run it, ..." clause: the things about *this job* that cost VRAM.
+
+    Extracted so the submit-time refusal and the dispatch-time one share it
+    (N113). They were two messages about one condition with two different sets
+    of advice -- the door named the conditioning to turn off and the resolution
+    to drop, and the dispatch check, which is the one that fires after the user
+    has already waited in the queue, said "close other GPU applications" and
+    nothing else. The remedies are a property of the job, not of which check
+    noticed.
+
+    ``extra`` goes first, for the remedy that belongs to one caller only.
+    """
+    params = params or {}
+    out: list[str] = list(extra)
+    if params.get("control"):
+        out.append("turn off ControlNet conditioning")
+    if params.get("ip_adapter"):
+        out.append("turn off the IP-Adapter reference")
+    if _resolution(params) > 1024:
+        out.append("drop the platform preset to a lower resolution")
+    if not exclusive:
+        out.append("set WARLOCK_VRAM_EXCLUSIVE=1 and restart")
+    if not out:
+        out.append("raise WARLOCK_VRAM_BUDGET if this card has more room than reported")
+    if len(out) > 1:
+        out[-1] = "or " + out[-1]
+    return ", ".join(out) if len(out) > 2 else " ".join(out)
+
+
 def shortfall_message(need_gib: float, plan_: Plan, params: dict[str, Any] | None = None) -> str:
     """Why the job was refused, and what to change. One sentence, then remedies."""
-    params = params or {}
     budget = plan_.budget_gib if plan_.budget_gib is not None else 0.0
-    remedies: list[str] = []
-    if params.get("control"):
-        remedies.append("turn off ControlNet conditioning")
-    if params.get("ip_adapter"):
-        remedies.append("turn off the IP-Adapter reference")
-    if _resolution(params) > 1024:
-        remedies.append("drop the platform preset to a lower resolution")
-    if not plan_.exclusive:
-        remedies.append("set WARLOCK_VRAM_EXCLUSIVE=1 and restart")
-    if not remedies:
-        remedies.append("raise WARLOCK_VRAM_BUDGET if this card has more room than reported")
-    if len(remedies) > 1:
-        remedies[-1] = "or " + remedies[-1]
-    tail = ", ".join(remedies) if len(remedies) > 2 else " ".join(remedies)
+    tail = remedies(params, exclusive=plan_.exclusive)
     return (
         f"this job needs about {need_gib:.1f} GiB of VRAM; the budget is "
         f"{budget:.1f} GiB. To run it, {tail}."
+    )
+
+
+def dispatch_shortfall_message(
+    need_gib: float,
+    headroom_gib: float,
+    free_gib: float,
+    params: dict[str, Any] | None = None,
+    *,
+    exclusive: bool = False,
+) -> str:
+    """The same shape for the refusal at dispatch (N113).
+
+    It says a different *thing* from ``shortfall_message`` -- what is free now,
+    rather than what the budget allows -- because that is genuinely the
+    condition it caught: the card was big enough when the job was submitted and
+    something took the room while it waited. But the remedy half is the job's,
+    so it is the same half, plus the one remedy only this check can offer.
+    """
+    tail = remedies(
+        params, exclusive=exclusive, extra=("close other GPU applications and try again",)
+    )
+    held = headroom_gib - free_gib
+    return (
+        f"this job needs about {need_gib:.1f} GiB of VRAM and only "
+        f"{headroom_gib:.1f} GiB is available to it ({free_gib:.1f} GiB free plus "
+        f"{held:.1f} GiB in models Warlock already holds). To run it, {tail}."
     )

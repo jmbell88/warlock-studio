@@ -170,6 +170,32 @@ def last_error() -> str | None:
     return _last_error
 
 
+def probe(config: Any = None) -> tuple[bool, str]:
+    """Actually load the checkpoint once, and say what happened (N112).
+
+    The doctor row has always said "weights present -- **not checked**: whether
+    the model loads", which is honest and is the wrong amount of honesty: a
+    green row above a silent fall-back to the corner fill is the one outcome a
+    diagnostic exists to prevent, and the only thing that settles it is an
+    attempted load. ``last_error`` reports one *after* an export has already
+    fallen back; this is the same answer before the user pays for it.
+
+    Three things make it affordable. It is on the CPU, so it competes with
+    nothing for VRAM -- the trade this whole module is built on. It is
+    idempotent through ``_cache``, so the answer costs one load per process and
+    the load is not wasted: the first real export finds the model resident. And
+    it never raises -- the ``vram.py`` posture, because a probe that takes the
+    diagnostics down is worse than no probe.
+    """
+    if not available(config):
+        return False, "weights are not on disk"
+    try:
+        _load(model_dir(config), "cpu")
+    except Exception as exc:  # noqa: BLE001 -- a probe must never raise
+        return False, _last_error or f"{type(exc).__name__}: {exc}"
+    return True, "loads"
+
+
 class _AlreadyFailed(RuntimeError):
     """This checkpoint was tried once this session and could not be loaded."""
 

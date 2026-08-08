@@ -107,11 +107,18 @@ class Model:
         roots: list[int],
         meshes: list[list[Primitive]],
         skins: list[Skin],
+        skipped_textures: int = 0,
     ) -> None:
         self.nodes = nodes
         self.roots = roots
         self.meshes = meshes
         self.skins = skins
+        # How many of this file's images the loader could not use (D42). The
+        # stated policy is that a texture is a cosmetic loss and never a reason
+        # to refuse a file -- which is right, and left the loss reported only in
+        # the log, so an untextured-looking mesh was indistinguishable from a
+        # mesh that was never textured. This is the count the UI says it with.
+        self.skipped_textures = skipped_textures
         # A joint node is addressed by name everywhere above this layer: a
         # pose is a bone->rotation map, and the browser never saw an index.
         self.by_name: dict[str, int] = {}
@@ -271,7 +278,9 @@ def load(path: Path | bytes) -> Model:
     ]
     skins = [reader.skin(s) for s in gltf.get("skins", [])]
     nodes = [reader.node(n) for n in gltf.get("nodes", [])]
-    return Model(nodes, _roots(gltf, nodes), meshes, skins)
+    return Model(
+        nodes, _roots(gltf, nodes), meshes, skins, skipped_textures=reader.skipped
+    )
 
 
 def _roots(gltf: dict, nodes: list[Node]) -> list[int]:
@@ -302,6 +311,11 @@ class _Reader:
         # the same (w, h, bytes) tuple is shared, which is also what lets the
         # GPU side de-duplicate its uploads by buffer identity.
         self._images: dict[int, tuple[int, int, bytes] | None] = {}
+        # Images this file carries that could not be used (D42). Counted per
+        # *source*, not per material reference, because ``_images`` memoizes:
+        # one unreadable atlas shared by six primitives is one loss, and
+        # counting references would report six.
+        self.skipped = 0
 
     # -- accessors ---------------------------------------------------------
 
@@ -455,6 +469,7 @@ class _Reader:
                 self._check_buffer(view)
             except Exception as exc:
                 log.warning("skipping a texture in an unreachable buffer: %s", exc)
+                self.skipped += 1
                 return None
             start = view.get("byteOffset", 0)
             return self.buffer[start : start + view["byteLength"]]
@@ -467,8 +482,10 @@ class _Reader:
                 return base64.b64decode(payload)
             except Exception:
                 log.warning("a texture's embedded data URI could not be decoded")
+                self.skipped += 1
                 return None
         log.warning("skipping a texture stored in a separate file (%s)", uri or "no uri")
+        self.skipped += 1
         return None
 
     def texture(self, ref: dict | None) -> tuple[int, int, bytes] | None:
@@ -495,6 +512,7 @@ class _Reader:
             # raising here turned one corrupt map into "this file will not
             # open" -- for a mesh that is otherwise entirely intact.
             log.warning("skipping a texture whose image data could not be decoded")
+            self.skipped += 1
             decoded = None
         self._images[source] = decoded
         return decoded

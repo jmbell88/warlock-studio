@@ -312,6 +312,13 @@ def check_job_id(job_id: str) -> None:
     lookup first -- but the check costs nothing and removes the class rather
     than the instance.
     """
+    if not job_id:
+        # The same split ``derive.get_file`` makes for an empty file name
+        # (O117): "no such job" is deliberately ambiguous between a malformed
+        # id and a real one that has been pruned, because saying which leaks
+        # what the store holds. An empty id is neither -- it is a request with a
+        # blank where an id should be, and it says nothing about any job.
+        raise NotFound("no job was named")
     if not JOB_ID_RE.match(job_id):
         raise NotFound("no such job")
 

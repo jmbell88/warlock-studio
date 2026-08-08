@@ -249,18 +249,26 @@ def _matting_weights(tmp_path):
 
 
 def test_a_present_matting_model_claims_the_weights_and_not_readiness(tmp_path, monkeypatch):
-    # All the row has done is stat a directory and ask whether four modules
-    # resolve. Whether the model then loads depends on code Warlock does not
-    # ship, so a green row that said "ready" would be a promise it never made.
+    # The row states what it has established and no more. It used to stat a
+    # directory and ask whether four modules resolve, and said "not checked:
+    # whether the model loads" -- which was honest and was the wrong amount of
+    # honesty, because a green row above a silent fall-back to the corner fill
+    # is the one outcome the row exists to prevent. Since N112 it tries the
+    # load; the claim is still exactly what was checked, it is simply a bigger
+    # check. ``probe_slow=False`` is the startup path, where the slow probe has
+    # deliberately not run yet -- so the row says it is still checking.
     monkeypatch.setattr(doctor, "_missing_modules", lambda names: [])
     monkeypatch.setattr(matting, "last_error", lambda: None)
     root = _matting_weights(tmp_path)
-    checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+    checks = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=root), probe_slow=False)
+    }
     for spec in model_registry.MATTING_MODELS.values():
         row = checks[f"host matting: {spec.label}"]
         assert row.ok is True
         assert "weights present" in row.detail
-        assert "not checked" in row.detail
+        assert "still checking" in row.detail
         # trust_remote_code is disclosed where the user can see it, in the
         # words it deserves: not "loads modelling code", which reads as
         # loading weights, but that other people's Python runs in this process.
@@ -388,11 +396,59 @@ def test_pose_model_row_is_not_fatal_and_names_the_consequence(tmp_path):
 
 
 def test_pose_model_row_goes_green_on_weights(tmp_path):
+    """``probe_slow=False``, which is the startup path: the weights decide the
+    row and the load probe has deliberately not run. With the probe on, a
+    ``config.json`` containing ``{}`` is not a checkpoint and the row is
+    correctly red -- which is the whole of N112 and is pinned below."""
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
     root = tmp_path / "t2i" / spec.dir_name
     root.mkdir(parents=True)
     (root / "config.json").write_text("{}", encoding="utf-8")
     checks = {
-        c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
+        c.name: c
+        for c in run_checks(
+            _config(tmp_path, t2i_model_root=tmp_path / "t2i"), probe_slow=False
+        )
     }
     assert checks[f"pose model: {spec.label}"].ok is True
+
+
+def test_a_checkpoint_that_will_not_load_is_red_once_the_probe_runs(tmp_path):
+    """N112. The failure mode both model rows exist for: every file in place,
+    a green row, and the pipeline silently falling back on every job. Only an
+    attempted load settles it, so the row attempts one -- off the startup path
+    and once per process."""
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    root = tmp_path / "t2i" / spec.dir_name
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}", encoding="utf-8")
+    row = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
+    }[f"pose model: {spec.label}"]
+    assert row.ok is False
+    assert row.fatal is False  # a missing pose model costs joint placement, not a job
+
+
+def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path):
+    """Not on the kind. The bpy answer can be a bare global because it is a
+    fact about the interpreter; this is a fact about a path, and
+    ``WARLOCK_T2I_ROOT`` moves it -- so a kind-keyed cache would answer the
+    second config with the first one's result."""
+    from warlock.pipelines import pose2d
+
+    spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
+    good, bad = tmp_path / "good", tmp_path / "bad"
+    for root in (good, bad):
+        (root / spec.dir_name).mkdir(parents=True)
+        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+
+    doctor._probes[("pose", str(pose2d.model_dir(_config(tmp_path, t2i_model_root=good))))] = (
+        True,
+        "loads",
+    )
+    rows = {
+        c.name: c
+        for c in run_checks(_config(tmp_path, t2i_model_root=bad))
+    }
+    assert rows[f"pose model: {spec.label}"].ok is False

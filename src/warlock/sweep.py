@@ -170,7 +170,17 @@ async def sweep(
 
 def print_table(rows: list[dict[str, Any]], audit_resolution: int) -> None:
     print()
-    print(f"band sweep (hole_fraction @ {audit_resolution}, lower is better)")
+    # Not "lower is better" (P120). Over the 84-verdict review, AUC(worst ->
+    # reject) is 0.115: the *accepted* meshes had more measured holes than the
+    # median discarded one, because the dominant failure is a solid slab and a
+    # slab has no holes. The ranking below is still the right question for a
+    # *band* -- every row here is the same subject at the same seed, so a band
+    # that opens holes in it genuinely is the worse band -- but the header used
+    # to state the inverted rule as a general one, and this table is where
+    # somebody would read it.
+    print(f"band sweep (hole_fraction @ {audit_resolution})")
+    print("lower is better for one subject at one seed; it is not a quality score --")
+    print("a featureless slab measures 0.0000. See TODO.md section 2.")
     print(f"{'band':>6}  {'worst':>8}  {'mean':>8}  {'faces':>9}  {'gen s':>7}")
     for row in rows:
         if "error" in row:

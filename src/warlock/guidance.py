@@ -579,6 +579,85 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
     return out
 
 
+# The colour *character* a fragment can assert, and the words that assert it
+# (P124). Two fragments that assert opposite characters are pulling the sampler
+# apart, and the app composed them silently: `art_style=snes` contributes "vivid
+# saturated colours" and it is a defensible reading of the 16-bit era, but it
+# argues with a `mono` palette and with a brief that names its own colours.
+#
+# Word matching against a small list, deliberately, and only over strings this
+# module composed -- never a general parse of the user's sentence. What is being
+# detected is a disagreement between two *taxonomy selections*, both of whose
+# fragments are written right here, so the vocabulary is closed and known.
+_SATURATION_WORDS: dict[str, tuple[str, ...]] = {
+    "saturated": ("vivid", "saturated", "vibrant"),
+    "desaturated": ("muted", "desaturated", "monochrome", "greyscale", "grayscale"),
+}
+
+# Colour names, for the weaker half of the check: a brief that names two or more
+# specific colours is asking for a palette, and a style fragment that asserts
+# saturation is answering a question the user already answered. Two rather than
+# one, because "a red sword" names a subject's colour and does not describe a
+# scheme.
+_COLOUR_WORDS: frozenset[str] = frozenset({
+    "black", "white", "grey", "gray", "silver", "gold", "bronze", "copper",
+    "brass", "red", "crimson", "scarlet", "orange", "amber", "yellow", "green",
+    "emerald", "verdigris", "teal", "cyan", "blue", "azure", "indigo", "violet",
+    "purple", "magenta", "pink", "brown", "tan", "beige", "ivory", "cream",
+})
+
+MIN_BRIEF_COLOURS = 2
+
+
+def _saturation(text: str) -> str | None:
+    words = set(text.lower().replace(",", " ").split())
+    for character, markers in _SATURATION_WORDS.items():
+        if words & set(markers):
+            return character
+    return None
+
+
+def colour_conflicts(params: dict[str, Any], prompt: str = "") -> list[str]:
+    """Fragments that argue with each other about colour, as sentences.
+
+    Advisory and never a refusal: a deliberate clash is a legitimate thing to
+    ask a sampler for, and this is the taxonomy telling the user what it is
+    contributing on their behalf rather than a rule about what they may want.
+    That is why it lives beside the composed prompt in the *preview* -- the
+    place that already answers "what is actually being sent".
+
+    Pure, and taking the normalized params rather than the form, so it reports
+    on what the job will really compose. Empty list when there is nothing to
+    say, which is the common case.
+    """
+    style = _TABLES["art_style"].get(_canonical("art_style", str(params.get("art_style") or "")))
+    palette = _TABLES["palette"].get(_canonical("palette", str(params.get("palette") or "")))
+    out: list[str] = []
+    style_sat = _saturation(style.prompt) if style else None
+    if style_sat is None:
+        return out
+    palette_sat = _saturation(palette.prompt) if palette else None
+    if palette_sat is not None and palette_sat != style_sat:
+        out.append(
+            f"{style.label} contributes {style_sat} colour and the "
+            f"{palette.label} palette contributes {palette_sat}."
+        )
+        return out
+    # Only when the palette did not already answer it: a stated palette *is* the
+    # user's colour decision, and reporting the brief on top would be two
+    # sentences about one disagreement.
+    if palette is None and style_sat == "saturated":
+        named = {
+            w.strip(".,;:!?").lower() for w in prompt.split()
+        } & _COLOUR_WORDS
+        if len(named) >= MIN_BRIEF_COLOURS:
+            out.append(
+                f"{style.label} contributes saturated colour, and the prompt names "
+                f"its own ({', '.join(sorted(named))})."
+            )
+    return out
+
+
 def framing_clause(value: Any) -> str:
     """The view clause ``PROMPT_TEMPLATE``'s ``{view}`` slot takes.
 

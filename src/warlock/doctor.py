@@ -76,8 +76,8 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         _warlockc_check(),
         _cuda_check(probe=probe_slow),
         *_t2i_checks(config),
-        *_matting_checks(config),
-        *_pose_checks(config),
+        *_matting_checks(config, probe_slow=probe_slow),
+        *_pose_checks(config, probe_slow=probe_slow),
         blender_check(probe=probe_slow),
     ]
 
@@ -431,7 +431,7 @@ def _metric_checks(config: Config) -> list[Check]:
     return checks
 
 
-def _pose_checks(config: Config) -> list[Check]:
+def _pose_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
     """The rig's joint-placement weights, non-fatal -- and only the weights.
 
     Missing, every humanoid rig still happens: ``rigging.fit_template`` scales
@@ -451,15 +451,65 @@ def _pose_checks(config: Config) -> list[Check]:
     for spec in models.POSE_MODELS.values():
         path = config.t2i_model_root / spec.dir_name
         ok = fetch.present(config, "pose", spec)
-        detail = (
-            f"weights present at {path} -- rig joints are read off the reference image "
-            "when the detection is confident, and fall back to the bbox fit when it is not"
-            if ok
-            else f"not found at {path} -- joint placement falls back to the "
-            f"bbox-proportional fit; download with:\n  {spec.download}"
-        )
+        if ok:
+            loaded, note = _load_probe(config, "pose", probe=probe_slow)
+            detail = (
+                f"weights present at {path} -- {note}; rig joints are read off the "
+                "reference image when the detection is confident, and fall back to "
+                "the bbox fit when it is not"
+            )
+            ok = loaded
+        else:
+            detail = (
+                f"not found at {path} -- joint placement falls back to the "
+                f"bbox-proportional fit; download with:\n  {spec.download}"
+            )
         checks.append(Check(f"pose model: {spec.label}", ok, detail, fatal=False))
     return checks
+
+
+# The load probes' answers, cached for the life of the process exactly as the
+# bpy answer is (N112). Two facts make one attempt enough: ``_load`` in both
+# modules caches a ``_FAILED`` sentinel and refuses to retry, and a checkpoint
+# that cannot load cannot start loading. ``unload`` clears both sides, which is
+# the supported way to make a repaired install re-probe.
+#
+# Keyed on the *resolved weights directory*, not on the kind. The bpy answer can
+# be a bare module global because it is a fact about the interpreter; these are
+# facts about a path, and ``WARLOCK_T2I_ROOT`` moves it -- so a kind-keyed cache
+# answers the second config with the first config's result, which is a wrong
+# green row and, in the suite, a wrong green row that depends on test order.
+_probes: dict[tuple[str, str], tuple[bool, str]] = {}
+_probe_lock = threading.Lock()
+
+# What a caller that declines to wait is told. ``ok=True`` for the reason
+# ``_BLENDER_PENDING`` is: still-checking is not a failure, and the amber dot
+# keys on ok.
+_PROBE_PENDING = (True, "still checking in the background whether the model loads")
+
+
+def _load_probe(config: Config, which: str, *, probe: bool = True) -> tuple[bool, str]:
+    """Whether this model actually loads, once per process.
+
+    ``probe=False`` never blocks -- it returns the cached answer or the pending
+    one -- because these are the two slowest probes in the file after bpy: a
+    real ``from_pretrained`` is seconds and drags torch into the process, which
+    is exactly what C29 moved off the startup path. Startup passes
+    ``probe_slow=False``; the first health poll, on a task thread, pays for it.
+    """
+    from .pipelines import pose2d
+
+    module = pose2d if which == "pose" else matting
+    key = (which, str(module.model_dir(config)))
+    hit = _probes.get(key)
+    if hit is not None:
+        return hit
+    if not probe:
+        return _PROBE_PENDING
+    with _probe_lock:
+        if key not in _probes:
+            _probes[key] = module.probe(config)
+        return _probes[key]
 
 
 # What BiRefNet's own modelling code reaches for, plus the package that runs
@@ -490,7 +540,7 @@ def _missing_modules(names: Sequence[str]) -> list[str]:
     return missing
 
 
-def _matting_checks(config: Config) -> list[Check]:
+def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
     """The host-side matting stack, non-fatal: weights, imports, last failure.
 
     Missing, every 2D export still works -- the corner flood fill in
@@ -509,9 +559,12 @@ def _matting_checks(config: Config) -> list[Check]:
     that agrees with the filesystem and disagrees with the program is the worst
     of both answers.
 
-    A green row still claims less than "matting is ready": the probe says the
-    modules resolve, not that the checkpoint loads, and only an attempted load
-    settles that.
+    And since N112 it *does* claim that the checkpoint loads, because it tries:
+    ``_load_probe`` runs a real CPU ``from_pretrained`` once per process, off
+    the startup path and cached like the bpy answer. The import scan above is
+    kept rather than replaced -- it is the cheap answer available before the
+    slow one has run, and it names the missing package where a load failure
+    only names the exception it raised.
     """
     missing = _missing_modules(_MATTING_IMPORTS)
     failure = matting.last_error()
@@ -520,7 +573,12 @@ def _matting_checks(config: Config) -> list[Check]:
         path = config.t2i_model_root / spec.dir_name
         ok = fetch.present(config, "matting", spec)
         if ok:
-            detail = f"weights present at {path} -- not checked: whether the model loads"
+            # No longer "not checked" (N112): the probe attempts a real CPU load
+            # once per process, which is the only thing that settles the
+            # question a green weights row above a silent fall-back could not.
+            loaded, note = _load_probe(config, "matting", probe=probe_slow)
+            detail = f"weights present at {path} -- {note}"
+            ok = ok and loaded
             if spec.remote_code:
                 detail += (
                     "; loading it executes third-party Python from this directory "

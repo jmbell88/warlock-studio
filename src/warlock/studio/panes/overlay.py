@@ -75,6 +75,40 @@ def toolbar(ctx: Any) -> None:
         if imgui.button(f"{icons.X} Exit comparison"):
             state.comparing = None
             viewer.exit_compare()
+    _texture_losses(viewer)
+
+
+def _texture_losses(viewer: Any) -> None:
+    """Say when the mesh on screen is missing maps the file carried (D42).
+
+    The loader's stated policy is that an image is a cosmetic loss and never a
+    reason to refuse a file, which is right and left the loss reported only in
+    the log -- so a mesh that came out grey looked exactly like a mesh that was
+    never textured, and the difference is the difference between "this
+    reconstruction failed" and "this GLB references its images externally".
+
+    On the toolbar rather than in the inspector because it is a fact about what
+    is *rendered*, not about the job: the same asset compared against another
+    can lose textures on one side only.
+    """
+    model = getattr(viewer, "model", None)
+    skipped = getattr(model, "skipped_textures", 0) if model is not None else 0
+    if not skipped:
+        return
+    imgui.same_line()
+    widgets.text_colored(
+        theme.WARN,
+        f"{skipped} texture could not be loaded"
+        if skipped == 1
+        else f"{skipped} textures could not be loaded",
+    )
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "This file references images the viewer could not read -- stored in a "
+            "separate file, in an unreachable buffer, or corrupt. The mesh is "
+            "intact; see the log for which. Exports are unaffected: they are "
+            "derived from the file, not from what is on screen."
+        )
 
 
 def _screenshot(ctx: Any) -> None:

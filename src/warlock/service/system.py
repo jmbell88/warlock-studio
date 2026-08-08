@@ -171,6 +171,12 @@ def prompt_preview(
         "negative_prompt": params["negative_prompt"],
         "tokens": tokens,
         "chunks": chunks,
+        # What the taxonomy is contributing that argues with itself, or with
+        # the brief (P124). Computed here rather than in the pane because it is
+        # a fact about the *normalized* params -- the same ones the job will
+        # compose from -- and because ``guidance`` is where the fragments that
+        # do the arguing are written.
+        "conflicts": guidance.colour_conflicts(params, prompt),
     }
 
 

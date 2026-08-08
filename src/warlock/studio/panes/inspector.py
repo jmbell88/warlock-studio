@@ -376,7 +376,16 @@ def _meta(ctx: Any, job: Any) -> None:
 
 
 def _error(ctx: Any, job: Any) -> None:
-    widgets.text_colored(theme.ERR, job.get("error") or "It failed.")
+    message = job.get("error") or "It failed."
+    widgets.text_colored(theme.ERR, message)
+    # Copy (N114). The one thing anybody does with a failure message is send it
+    # somewhere, and the text is drawn rather than in an input, so it could not
+    # be selected -- retyping a friendly() sentence and its job id was the whole
+    # of "report this". The id goes with it because the message alone is not
+    # enough to find the job's error.log or its row.
+    if imgui.small_button("Copy error"):
+        imgui.set_clipboard_text(f"job {job['id']}\n{message}")
+    imgui.same_line()
     if not imgui.tree_node("Details"):
         return
     key = "trellis-log"
@@ -833,7 +842,21 @@ def _quality(ctx: Any, job: Any) -> None:
         if "grounded" in report:
             widgets.muted(f"pivot at feet: {report['grounded']}")
     if isinstance(audit, dict) and audit.get("worst") is not None:
-        widgets.muted(f"visible openings: {float(audit['worst']) * 100:.1f}%")
+        ratio = float(audit["worst"])
+        widgets.muted(f"visible openings: {ratio * 100:.1f}%")
+        # P120, and only where the number actually misleads. A *high* reading
+        # is real evidence of a hole and needs no caveat; a low one is what a
+        # solid slab measures, which is the dominant failure mode -- over the
+        # reviewed corpus AUC(worst -> reject) is 0.115, backwards rather than
+        # merely weak, and 48 of 81 rejected meshes measured exactly 0.0.
+        #
+        # A second muted line rather than a tooltip on the first: this function
+        # is called with ``widgets.muted`` stubbed and no imgui frame at all
+        # (``tests/test_quality_badge.py``), so raw imgui here is an access
+        # violation rather than a failure -- and a caveat nobody hovers is a
+        # caveat nobody reads anyway.
+        if ratio < widgets.AUDIT_UNINFORMATIVE:
+            widgets.muted("(a solid, featureless mesh scores this too)")
 
     attempts = params.get("mesh_attempts")
     if isinstance(attempts, list) and len(attempts) > 1:
