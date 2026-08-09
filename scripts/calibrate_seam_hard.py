@@ -15,6 +15,14 @@ is wrong and has to move up. If none does, the observed tiled ceiling stands.
 
 There is no plain arm because there is no contrast to establish -- the first
 batch did that, and a second copy of it would only widen an already-settled gap.
+
+Run:  uv run python scripts/calibrate_seam_hard.py --out docs/measurements/data/seam
+
+The same ``--out`` as ``calibrate_seam.py`` on purpose: the two batches are one
+corpus and the measurement document reads them together. This half writes
+``results-hard.json`` beside the other's ``results.json``, so neither overwrites
+the other and re-running one does not invalidate the other. See
+``docs/measurements/2026-08-08-seam-threshold.md``, which both reproduce.
 """
 
 from __future__ import annotations

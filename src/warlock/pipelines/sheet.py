@@ -38,6 +38,14 @@ LIGHTING = ("flat", "lit")
 # renders for two minutes and then cannot be loaded.
 MAX_ATLAS_PX = 8192
 
+# How much room is left around the subject when a cell is framed. One owner,
+# here, because two modules have to agree about it and neither may import the
+# other: ``blender_worker.op_sheet`` frames what is actually rendered, and
+# ``studio.viewer.sheet`` frames the in-app direction preview of it. They were
+# two hand-written 1.12s, so a preview that depicted a sheet nobody would get
+# was one edit away. This module is where they already meet.
+FRAME_MARGIN = 1.12
+
 REST_POSE_NAME = "rest"
 
 

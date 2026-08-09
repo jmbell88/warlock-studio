@@ -9,6 +9,13 @@ as a missing-glyph box, which is cosmetic, not a crash.
 
 The font is merged into every Inter face (:mod:`.fonts`), so an icon is just a
 character in a string: ``f"{icons.STAR} Favourite"``.
+
+**This is a catalogue, and an unreferenced constant here is not dead code.**
+The numbers are transcribed from a named release's ``info.json`` and are only
+ever regenerated wholesale from a later one, so a name with no call site today
+costs nothing and is *correct* -- while re-deriving one by hand when a pane
+finally wants it is precisely the guessing the paragraph above forbids. Do not
+prune this list to what is currently drawn.
 """
 
 from __future__ import annotations

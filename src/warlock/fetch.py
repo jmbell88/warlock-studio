@@ -40,20 +40,51 @@ DISK_HEADROOM_GIB = 2.0
 
 _GIB = float(1024**3)
 
-# What kinds of registry entry there are, and the doctor row-name prefix each
-# one's presence is reported under. Written out rather than derived, for the
-# reason models.py writes its blend-mode ids out: a prefix that stopped
-# matching would silently mark a downloaded model missing forever, and a
-# mismatch is far easier to see in a table than in a format string.
-CHECK_PREFIXES: dict[str, str] = {
-    "base": "image model: ",
-    "lora": "style LoRA: ",
-    "adapter": "IP-Adapter: ",
-    "control": "ControlNet: ",
-    "metric": "metric model: ",
-    "pose": "pose model: ",
-    "matting": "host matting: ",
-}
+# What kinds of registry entry there are, and everything a reader needs to say
+# about one: which registry table it comes from, the prefix doctor reports its
+# presence under, and the heading the app-Settings pane groups it beneath. One
+# table rather than three, because all three were hand-copies of one list and
+# each drifted differently -- the pane's copy dropped a kind by *omitting* it,
+# silently, which is the failure a list of names cannot show you.
+#
+# The order is the order rows appear in, in doctor and in the pane alike.
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class Kind:
+    key: str
+    table: dict[str, Any]
+    check_prefix: str
+    """The ``doctor.Check.name`` prefix rows of this kind are reported under."""
+    group: str
+    """The app-Settings heading rows of this kind sit under. Repeats are
+    deliberate: adapters and ControlNets are both "Conditioning"."""
+
+
+KINDS: tuple[Kind, ...] = (
+    Kind("base", models.BASE_MODELS, "image model: ", "Image models"),
+    Kind("lora", models.STYLE_LORAS, "style LoRA: ", "Style LoRAs"),
+    Kind("adapter", models.IP_ADAPTERS, "IP-Adapter: ", "Conditioning"),
+    Kind("control", models.CONTROLNETS, "ControlNet: ", "Conditioning"),
+    Kind("metric", models.METRIC_MODELS, "metric model: ", "Measurement"),
+    Kind("pose", models.POSE_MODELS, "pose model: ", "Measurement"),
+    Kind("matting", models.MATTING_MODELS, "host matting: ", "Measurement"),
+)
+
+CHECK_PREFIXES: dict[str, str] = {kind.key: kind.check_prefix for kind in KINDS}
+
+GROUPS: tuple[tuple[str, str], ...] = tuple((kind.key, kind.group) for kind in KINDS)
+"""(kind, heading) in display order, for the pane that draws the rows."""
+
+
+def check_name(kind: str, label: str) -> str:
+    """The ``doctor.Check.name`` a row of this kind and label is reported under.
+
+    Doctor composes its own row names through this rather than repeating the
+    prefix in seven f-strings: a prefix that stopped matching would silently
+    mark a downloaded model missing forever.
+    """
+    return f"{CHECK_PREFIXES[kind]}{label}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +103,7 @@ class Entry:
     @property
     def check_name(self) -> str:
         """The ``doctor.Check.name`` this row's presence is reported under."""
-        return f"{CHECK_PREFIXES[self.kind]}{self.label}"
+        return check_name(self.kind, self.label)
 
     def is_present(self, config: Config) -> bool:
         return present(config, self.kind, self.spec)
@@ -85,20 +116,16 @@ class Entry:
 
 
 def entries() -> list[Entry]:
-    """Every registry entry that has something to download, in doctor's order."""
-    tables = (
-        ("base", models.BASE_MODELS),
-        ("lora", models.STYLE_LORAS),
-        ("adapter", models.IP_ADAPTERS),
-        ("control", models.CONTROLNETS),
-        ("metric", models.METRIC_MODELS),
-        ("pose", models.POSE_MODELS),
-        ("matting", models.MATTING_MODELS),
-    )
+    """Every registry entry that has something to download, in doctor's order.
+
+    Walks ``KINDS`` rather than a second list of tables: a registry gaining a
+    kind that this file has not heard of is then absent everywhere at once,
+    which is visible, rather than absent from one of three hand-copied lists.
+    """
     out: list[Entry] = []
-    for kind, table in tables:
-        for key, spec in table.items():
-            out.append(Entry(kind, key, spec.label, spec))
+    for kind in KINDS:
+        for key, spec in kind.table.items():
+            out.append(Entry(kind.key, key, spec.label, spec))
     return out
 
 

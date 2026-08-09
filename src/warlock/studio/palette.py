@@ -9,9 +9,11 @@ Two things here are deliberate and easy to undo.
 
 **The mode commands are derived from** :data:`.modes.MODES`, not written out.
 A palette is a second index of everything the app can do, and a hand-written
-one is a second index that drifts -- a ninth mode would gain a switch segment,
-gain an Alt+9 binding from :func:`.modes.mode_for_digit`, and be missing from
-the one surface whose entire job is telling the user what exists.
+one is a second index that drifts -- an eleventh mode would gain a switch
+segment and an Alt+digit binding from :func:`.modes.mode_for_digit`, and be
+missing from the one surface whose entire job is telling the user what exists.
+For the same reason what a mode command *does* is :func:`.state.set_mode` and
+not four lines of its own: that copy existed, and it had already drifted.
 
 **Every command carries ``enabled``, and a disabled command is *listed*.** The
 tempting version filters the list to what can run right now, which makes the
@@ -26,7 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import modes
+from . import modes, state
 
 # How many assets the quick-open section offers at once. A palette is a
 # shortlist: past a handful the eye is scanning rather than recognising, and
@@ -118,12 +120,16 @@ def rank(query: str, items: list[Any], text_of: Callable[[Any], str]) -> list[An
 
 
 def _go(key: str) -> Callable[[Any], None]:
+    """A mode command, through the app's one mode switch.
+
+    It used to be a second copy of ``App._set_mode``'s four lines, and the two
+    had already drifted: this one had no early return, so choosing the mode you
+    were already in recorded ``previous_mode == mode`` and the next Esc from a
+    pass-through mode fell back to Home instead of to the work you left.
+    """
+
     def run(ctx: Any) -> None:
-        ctx.state.previous_mode = ctx.state.mode
-        ctx.state.mode_observed = key
-        ctx.state.mode = key
-        if key == "home":
-            ctx.state.landing_view = "choose"
+        state.set_mode(ctx.state, key)
 
     return run
 

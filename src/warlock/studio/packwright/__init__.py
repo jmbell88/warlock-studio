@@ -1,16 +1,23 @@
 """Packwright -- the atlas packer's engine.
 
 Pure in the way ``studio/inker/``, ``studio/clay/`` and ``studio/plotter/`` are:
-no imgui, no moderngl, no pygame, no ``service``. Its outward imports are
-:mod:`warlock.studio.undo` (the shared history engine),
-:mod:`warlock.studio.inker` (the document type a clip is enumerated from),
-:mod:`warlock.studio.plotter.tsx` (the one ``.tsx`` writer in the repo) and
-:mod:`warlock.pipelines.sheet` (the authority on the atlas ceiling and on what
-"trim" means) -- pinned exactly by ``tests/packwright/test_imports.py``.
+no imgui, no moderngl, no pygame, no ``service``. It reaches outward exactly
+four times: ``document.py`` for :mod:`warlock.studio.undo` (the shared history
+engine), ``layout.py`` for :mod:`warlock.pipelines.sheet` (the authority on the
+atlas ceiling and on what "trim" means), and ``tsxout.py`` twice, for
+:mod:`warlock.studio.plotter.tileset` and :mod:`warlock.studio.plotter.tsx` (the
+one ``.tsx`` writer in the repo, and the type it writes) -- pinned exactly, and
+at that granularity, by ``tests/packwright/test_packwright_imports.py``.
 
-Two of those four are the ``sheetout.py`` argument repeated: reach for the
+**The raster editor is deliberately not among them.** A clip's frames are read
+through duck typing: :mod:`.sources` takes *a document* and asks it for frames,
+because a packer is routinely handed loose PNG files and no document at all, and
+an import would drag the whole raster editor in for the case that has none.
+
+Three of those four are the ``sheetout.py`` argument repeated: reach for the
 module that *owns* a definition rather than restating it, so there is one answer
-to "how big may an atlas be" and one to "where does the alpha stop".
+to "how big may an atlas be", one to "where does the alpha stop" and one to
+"what does a ``.tsx`` look like".
 
 **A layout is derived, never stored.** The document holds sources and settings;
 the packer is deterministic, so re-deriving is what makes re-export of an

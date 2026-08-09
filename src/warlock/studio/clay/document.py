@@ -85,6 +85,7 @@ from .edits import (  # noqa: F401
     ObjectPropsEdit,
     ObjectRemoveEdit,
     TransformEdit,
+    _material_holders,
     _shift_materials,
 )
 
@@ -464,17 +465,41 @@ class ClayDoc:
         return index
 
     def material_users(self, index: int) -> int:
-        """How many faces across the document point at this slot."""
-        return sum(int((obj.mesh.material == index).sum()) for obj in self.objects)
+        """How many faces point at this slot, over everything an undo can reach.
+
+        The document's own objects, and also every object a step on the stack is
+        holding out of it -- an undone add, a done remove. Those are in no
+        document, so a count over ``self.objects`` alone said zero for a slot
+        that a single Ctrl+Z would put faces back onto, and the removal that
+        answer permitted renumbered those faces onto whichever material had
+        taken the slot's place: the silent reassignment :meth:`remove_material`
+        exists to refuse, arriving later and by a different door.
+
+        The cost is that a palette entry stays undeletable for as long as a
+        deleted object that used it is still undoable. That is the safe
+        direction of a bad trade -- the entry becomes deletable again once the
+        step is evicted or the redo branch is dropped, whereas a face silently
+        repainted is discovered three edits later with nothing to say what did
+        it.
+
+        It counts *faces*, deliberately, and not the ``Obj.material`` default:
+        the properties panel's Remove button offers exactly the selected
+        object's own default slot and re-points it immediately afterwards, so
+        counting defaults would disable the only control that reaches this.
+        """
+        return sum(
+            int((obj.mesh.material == index).sum()) for obj in _material_holders(self)
+        )
 
     def remove_material(self, index: int) -> bool:
         """Drop an *unused* palette entry. -> whether it went.
 
-        Refused while any face points at it, and refused for the last entry.
-        Reassigning those faces to some other slot is the alternative, and it
-        is a silent change to how part of the model looks -- which is exactly
-        the kind of thing a user discovers three edits later. Refusing lets the
-        panel say which objects are in the way.
+        Refused while any face points at it -- including a face on an object
+        only the undo stack is still holding, see :meth:`material_users` -- and
+        refused for the last entry. Reassigning those faces to some other slot
+        is the alternative, and it is a silent change to how part of the model
+        looks, which is exactly the kind of thing a user discovers three edits
+        later. Refusing lets the panel say which objects are in the way.
         """
         if not 0 <= index < len(self.materials) or len(self.materials) <= 1:
             return False

@@ -14,11 +14,13 @@ asserted rather than reviewed.
 Two things it does that a bare ``hf download`` would not:
 
 * It downloads into a **staging directory beside the destination** and moves
-  the files in only once the fetch has returned. A failure -- no network, a
-  gated repo, a full disk -- therefore leaves no half-populated model
-  directory, which matters because every presence probe in ``warlock.fetch``
-  answers "is this here" from a handful of filenames and a partial directory
-  that happened to contain them would read as a finished download forever.
+  the files in only once the fetch has returned -- all of them or none of
+  them, the move itself included (``_move_into`` rolls back). A failure -- no
+  network, a gated repo, a full disk -- therefore leaves no half-populated
+  model directory, which matters because every presence probe in
+  ``warlock.fetch`` answers "is this here" from a handful of filenames and a
+  partial directory that happened to contain them would read as a finished
+  download forever.
 * It reports progress on stdout as one JSON object per line, so the pane can
   draw a bar for a 16 GB fetch. The measurement is bytes-on-disk in the
   staging directory against the declared size, sampled by a helper thread:
@@ -32,6 +34,7 @@ and must not be able to corrupt the answer.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -102,25 +105,60 @@ class _Sampler(threading.Thread):
 
 
 def _move_into(staging: Path, dest: Path) -> list[str]:
-    """Move the staged tree into ``dest``, creating directories as needed.
+    """Move the staged tree into ``dest``: all of it, or none of it.
 
     Per file rather than one directory rename, because a destination
     legitimately already exists and is shared: ``loras/`` holds every adapter,
     and a second fetch into it must add files rather than replace the folder.
+
+    Which is exactly what makes the rollback load-bearing rather than tidy. A
+    per-file move that fails partway -- a full disk, a file another process has
+    open -- leaves the half-populated directory the staging tree exists to
+    prevent, and every presence probe in ``warlock.fetch`` answers "is this
+    here" from a handful of filenames, so such a directory reads as a finished
+    download forever. So each move is undone in reverse: the file back into
+    staging, where the caller's rmtree removes it with the rest of the failed
+    download, and anything it overwrote back out of the backup tree.
     """
-    moved: list[str] = []
-    for src in sorted(staging.rglob("*")):
-        if src.is_dir():
-            continue
-        rel = src.relative_to(staging)
-        target = dest / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # replace(), not move(): an interrupted earlier attempt can leave a
-        # file of the same name, and shutil.move onto an existing file raises
-        # on some platforms and silently differs on others.
-        os.replace(src, target)
-        moved.append(str(rel).replace("\\", "/"))
-    return moved
+    backup = dest.parent / f".{dest.name}.fetch.bak"
+    moved: list[tuple[Path, Path]] = []
+    saved: list[tuple[Path, Path]] = []
+    names: list[str] = []
+    try:
+        for src in sorted(staging.rglob("*")):
+            if src.is_dir():
+                continue
+            rel = src.relative_to(staging)
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                # os.replace destroys what is already there, and "left as it
+                # was" has to include that: a second fetch into loras/ writes
+                # names an earlier, different download put there.
+                kept = backup / rel
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(target, kept)
+                saved.append((kept, target))
+            # replace(), not move(): an interrupted earlier attempt can leave a
+            # file of the same name, and shutil.move onto an existing file raises
+            # on some platforms and silently differs on others.
+            os.replace(src, target)
+            moved.append((src, target))
+            names.append(str(rel).replace("\\", "/"))
+    except BaseException:
+        # Suppressed, every one of them: a rollback that raises would replace
+        # the real failure with a second one and tell the user nothing about
+        # either. Moved files first -- a restore needs its target free.
+        for src, target in reversed(moved):
+            with contextlib.suppress(OSError):
+                os.replace(target, src)
+        for kept, target in reversed(saved):
+            with contextlib.suppress(OSError):
+                os.replace(kept, target)
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
+    return names
 
 
 def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:

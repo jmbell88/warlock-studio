@@ -80,11 +80,21 @@ def box_unwrap(mesh: Mesh) -> Mesh:
     """
     if face_count(mesh) == 0:
         return mesh
-    return _projected(mesh, dominant_axis(_face_normals(mesh)))
+    # Computed once and handed down. ``_projected`` needs the same normals to
+    # decide which corners are mirrored, and asking for them again is a second
+    # full pass over every loop in the mesh for an answer already in hand.
+    normals = _face_normals(mesh)
+    return _projected(mesh, dominant_axis(normals), normals=normals)
 
 
-def _projected(mesh: Mesh, axes: np.ndarray) -> Mesh:
-    """One planar projection per face, into a shared normalised square."""
+def _projected(mesh: Mesh, axes: np.ndarray, *, normals: np.ndarray | None = None) -> Mesh:
+    """One planar projection per face, into a shared normalised square.
+
+    ``normals`` is an optimisation and never a second opinion: a caller that has
+    already measured them passes them in, and one that has not -- the planar
+    unwrap, which picks its axis without looking at a normal -- leaves it None
+    and gets the same array measured here.
+    """
     positions = np.asarray(mesh.positions, dtype="f8")
     if len(positions) == 0:
         return mesh
@@ -102,7 +112,8 @@ def _projected(mesh: Mesh, axes: np.ndarray) -> Mesh:
 
     extent = (positions.max(axis=0) - low) * scale
     uv = np.zeros((len(mesh.loops), 2), dtype="f4")
-    normals = _face_normals(mesh)
+    if normals is None:
+        normals = _face_normals(mesh)
     for axis in range(3):
         which = np.flatnonzero(corner_axis == axis)
         if not len(which):

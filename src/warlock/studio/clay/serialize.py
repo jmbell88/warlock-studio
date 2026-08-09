@@ -191,15 +191,22 @@ def _png_bytes(image: tuple[int, int, bytes]) -> bytes:
     return out.getvalue()
 
 
-def scene_json(doc: ClayDoc) -> str:
+def scene_json(doc: ClayDoc, collected: tuple[list[Any], dict[int, int]] | None = None) -> str:
     """``scene.json``'s text: sorted keys, indented, one object per entry.
 
     Sorted and indented rather than compact because this half of the file
     exists to be *read* -- by a person looking at why a document opens wrong,
     and by a diff. The mesh arrays are the reason the format is a zip; there is
     no size argument left for minifying the small half.
+
+    ``collected`` is :func:`_collect_textures`' answer, passed in by the writer
+    because it needs the same one to decide which PNGs to store: the two must
+    agree about *which* texture is index 3, and a second walk was both a wasted
+    pass over the palette and a second place that could answer differently.
+    Left None -- which is what a caller wanting only the JSON does -- it is
+    worked out here.
     """
-    images, index = _collect_textures(doc)
+    images, index = _collect_textures(doc) if collected is None else collected
     scene: dict[str, Any] = {
         "version": VERSION,
         "materials": [_material_json(m, index) for m in doc.materials],
@@ -216,9 +223,10 @@ def scene_json(doc: ClayDoc) -> str:
 def wblk_bytes(doc: ClayDoc) -> bytes:
     """The document as the bytes of a ``.wblk`` archive."""
     out = io.BytesIO()
-    images, _index = _collect_textures(doc)
+    collected = _collect_textures(doc)
+    images, _index = collected
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(zipfile.ZipInfo(SCENE, _EPOCH), scene_json(doc))
+        zf.writestr(zipfile.ZipInfo(SCENE, _EPOCH), scene_json(doc, collected))
         for obj in doc.objects:
             arrays = {name: getattr(obj.mesh, name) for name in _MESH_FIELDS}
             if obj.mesh.uv is not None:
@@ -285,7 +293,11 @@ def _read_textures(zf: zipfile.ZipFile, scene: dict[str, Any]) -> list[Any]:
             raise ValueError(
                 f"this clay document names a texture the file does not carry ({name})"
             ) from exc
-        image = Image.open(io.BytesIO(raw)).convert("RGBA")
+        # In a ``with``: ``Image.open`` is lazy and holds the file object open
+        # until it is closed, and a document with twenty textures would
+        # otherwise leave twenty of them to the garbage collector.
+        with Image.open(io.BytesIO(raw)) as opened:
+            image = opened.convert("RGBA")
         out.append((image.width, image.height, image.tobytes()))
     return out
 
@@ -317,18 +329,31 @@ def read_wblk(data: bytes) -> ClayDoc:
     """
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
-        scene = json.loads(zf.read(SCENE))
-    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock Clay document") from exc
 
-    version = int(scene.get("version", 0))
-    if version > VERSION:
-        raise ValueError(
-            f"this clay document was written by a newer version of Warlock "
-            f"(format {version}, this build reads {VERSION})"
-        )
-
+    # Everything that can raise is inside the ``with``, the version check
+    # included. It used to sit in the gap between the open and the ``with``,
+    # where a refusal -- the one thing that block exists to do -- left the
+    # archive open with nothing to close it but the collector.
     with zf:
+        try:
+            scene = json.loads(zf.read(SCENE))
+        except (
+            zipfile.BadZipFile,
+            KeyError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError("this is not a Warlock Clay document") from exc
+
+        version = int(scene.get("version", 0))
+        if version > VERSION:
+            raise ValueError(
+                f"this clay document was written by a newer version of Warlock "
+                f"(format {version}, this build reads {VERSION})"
+            )
+
         textures = _read_textures(zf, scene)
         objects = []
         for entry in scene.get("objects", []):

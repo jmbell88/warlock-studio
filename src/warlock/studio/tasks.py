@@ -22,7 +22,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 # Private, and stable for years: the registry concurrent.futures' atexit hook
 # joins on. See TaskRunner.shutdown.
 from concurrent.futures.thread import _threads_queues
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..service.errors import Failed, ServiceError
@@ -59,9 +59,13 @@ class Done:
 
 @dataclass
 class _Pending:
+    # No ``started`` timestamp: one was declared here and never written or
+    # read. Elapsed time per task has exactly one consumer -- the progress
+    # readout -- and that is served by ``_progress``, which carries a percent
+    # and a label the task itself reports rather than a figure inferred from a
+    # clock this class would have to keep current.
     future: Future
     tag: Any = None
-    started: float = field(default=0.0)
 
 
 class TaskRunner:

@@ -88,6 +88,17 @@ the sweep becomes un-rerunnable in the same way. It is deliberately left
 undeclared here rather than fixed in passing, because adding a dependency is not
 this task's remit and torch-family pins want their own change.
 
+> **Correction, 2026-08-09 — the paragraph above is out of date.** `torchvision`
+> *is* declared, in the `text2image` extra, and `pyproject.toml`'s comment on it
+> answers this document directly: "transformers builds its fast image processors
+> on torchvision, which is the import `bench/metrics._dino_model` needs and
+> `queue._rank_candidate` silently swallows … It was present in the venv and
+> absent from this file, so any `uv sync` removed it." So `uv sync --extra
+> text2image` now brings it, the sweep is re-runnable, and the live gap described
+> in the next paragraph is closed on any install with that extra. The
+> observation that produced the fix is left standing above rather than rewritten,
+> because it is what the fix was made from.
+
 The consequence worth writing down is not the bench, though. **Part A Task 4's
 `reference_cosine` -- the anchor half of the candidate rank score -- goes down
 the same `AutoImageProcessor` path.** On any install without torchvision it

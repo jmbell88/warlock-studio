@@ -20,6 +20,7 @@ from ...service import validation
 from .. import dialogs, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
+from . import stamps
 
 log = logging.getLogger(__name__)
 
@@ -453,26 +454,42 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
         imgui.tree_pop()
 
 
-def _pixel_result(ctx: Any, job_id: str, sheet_id: str) -> None:
-    """The finished restyle, if the sidecar has landed.
+def pixel_record(ctx: Any, job_id: str, sheet_id: str) -> dict[str, Any] | None:
+    """This sheet's pixel sidecar, parsed once per version of the file.
 
     Keyed on the sidecar, never on the PNG: the worker writes the image first,
     so the PNG alone can be a file still being written.
+
+    One stat per frame and a parse only when the file changes -- the same idiom
+    ``inspector._manifest`` uses, and for the same reason: this is drawn sixty
+    times a second while the worker rewrites the file underneath it. Which is
+    also why the remembering goes through :mod:`.stamps`: "Pixelate" pressed
+    twice rewrites *this* sidecar, and a rewrite landing inside the stamped
+    mtime's own 15.6 ms tick matches that stamp forever -- so the panel would
+    advertise the previous restyle's cell size and palette against the new PNG,
+    with no way back short of restarting the app.
+
+    Split from the drawing half so the cache is assertable without a GL context,
+    which is the split ``blender_worker._rig_bones`` is: the rule worth pinning
+    is the one an imgui frame cannot reach.
     """
     path = rigging.sheet_pixel_path(ctx.job_dir(job_id), sheet_id)
-    try:
-        stamp = path.stat().st_mtime_ns
-    except OSError:
-        return
-    # One stat per frame and a parse only when the file changes -- the same
-    # idiom inspector._manifest uses, and for the same reason: this is drawn
-    # sixty times a second while the worker rewrites the file underneath it.
+    stamp = stamps.stamp_ns(path)
+    if stamp is None:
+        return None
     cache = ctx.state.preview.setdefault("pixel_sidecars", {})
     cached = cache.get(sheet_id)
-    if cached is None or cached[0] != stamp:
-        cached = (stamp, rigging.read_sheet_pixel(ctx.job_dir(job_id), sheet_id))
-        cache[sheet_id] = cached
-    record = cached[1]
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    record = rigging.read_sheet_pixel(ctx.job_dir(job_id), sheet_id)
+    if stamps.storable(stamp):
+        cache[sheet_id] = (stamp, record)
+    return record
+
+
+def _pixel_result(ctx: Any, job_id: str, sheet_id: str) -> None:
+    """The finished restyle, if the sidecar has landed."""
+    record = pixel_record(ctx, job_id, sheet_id)
     if record is None:
         return
     widgets.muted(

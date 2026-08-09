@@ -91,8 +91,11 @@ def push(imgui: Any, font: Any, size: float) -> Iterator[None]:
         imgui.pop_font()
 
 
-def body(imgui: Any) -> Any:
-    return push(imgui, REGULAR, tokens.TEXT_BODY)
+# There is deliberately no ``body()`` helper. Regular is loaded first, so it
+# *is* imgui's default font, and it is loaded at ``tokens.TEXT_BODY`` -- a
+# ``push(REGULAR, TEXT_BODY)`` therefore pushes what is already in force. The
+# one that existed had no callers, and the reason it never gained any is that
+# there is nothing for it to do.
 
 
 def small(imgui: Any) -> Any:

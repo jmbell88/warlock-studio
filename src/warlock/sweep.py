@@ -13,9 +13,10 @@ restarting the server -- which is exactly what this does, once per value.
 And the run needs the real GPU, the vendored exe and the GGUF weights, so it
 cannot be part of the test suite.
 
-Deliberately bypasses Worker, JobStore and the HTTP app: nothing here should be
-able to disturb queued jobs or leave rows behind. It must own the trellis port
-outright -- see require_free_port -- so run it with the app stopped.
+Deliberately bypasses Worker and JobStore, and runs outside the app entirely:
+nothing here should be able to disturb queued jobs or leave rows behind. It must
+own the trellis port outright -- see require_free_port -- so run it with the app
+stopped.
 
     warlock sweep --image assets/<job-id>/input.png --bands auto,2,4,8,16
 
@@ -180,7 +181,7 @@ def print_table(rows: list[dict[str, Any]], audit_resolution: int) -> None:
     # somebody would read it.
     print(f"band sweep (hole_fraction @ {audit_resolution})")
     print("lower is better for one subject at one seed; it is not a quality score --")
-    print("a featureless slab measures 0.0000. See TODO.md section 2.")
+    print("a featureless slab measures 0.0000. See LEFTOVERS.md section 2.")
     print(f"{'band':>6}  {'worst':>8}  {'mean':>8}  {'faces':>9}  {'gen s':>7}")
     for row in rows:
         if "error" in row:

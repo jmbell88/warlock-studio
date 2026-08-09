@@ -51,6 +51,8 @@ from . import gid as gidlib
 from .tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
 from .tileset import Tileset, TilesetRef
 from .tsx import (
+    TILED_VERSION,
+    TSX_VERSION,
     Prop,
     TiledUnsupported,
     check_tileset_features,
@@ -71,8 +73,14 @@ __all__ = [
     "tmx_export",
 ]
 
-MAP_VERSION = "1.10"
-TILED_VERSION = "1.10.2"
+# Imported from :mod:`.tsx` rather than restated, which is the same argument
+# this package makes everywhere else: neither number is a fact about maps or
+# about tilesets, both are facts about the Tiled release this build targets, and
+# two copies would let a bump move one of them and write an export whose ``.tmx``
+# and ``.tsx`` claim different versions of one editor. ``MAP_VERSION`` keeps its
+# own name because that is what the attribute is called on a ``<map>``; it is
+# ``TSX_VERSION`` by construction, the format version rather than the file type's.
+MAP_VERSION = TSX_VERSION
 
 TilesetLoader = Callable[[str], Tileset]
 ImageLoader = Callable[[str], Any]

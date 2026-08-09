@@ -135,11 +135,21 @@ class Document:
     _below: np.ndarray | None = field(init=False, default=None, repr=False)
     _dirty: tuple[int, int, int, int] | None = field(init=False, default=None, repr=False)
     _stroke: StrokeState | None = field(init=False, default=None, repr=False)
-    #: An open filter session: the rect being filtered and the pixels as they
-    #: were before it opened. A live preview recomputes from *those* rather
-    #: than from the last preview, which is the same rule a stroke's coverage
-    #: follows -- filtering the filtered result compounds every slider move.
-    _filter: tuple[tuple[int, int, int, int], np.ndarray] | None = field(
+    #: An open filter session: the rect being filtered, the pixels as they were
+    #: before it opened, and the **uid** of the layer they came off. A live
+    #: preview recomputes from those pixels rather than from the last preview,
+    #: which is the same rule a stroke's coverage follows -- filtering the
+    #: filtered result compounds every slider move.
+    #:
+    #: The uid is the third element for the reason ``undo.py`` states as a rule:
+    #: address the subject, never a position. A filter popup lives across frames
+    #: while the user drags a slider, and this session used to name no layer at
+    #: all -- commit and cancel acted on whatever ``stack.active`` happened to be
+    #: by then, so moving the active layer or the playhead mid-popup wrote a
+    #: filter into a layer that was never filtered, and on an animated document
+    #: could land on the shared read-only placeholder plane and raise out of the
+    #: middle of a draw. See :meth:`_filter_layer`.
+    _filter: tuple[tuple[int, int, int, int], np.ndarray, int] | None = field(
         init=False, default=None, repr=False
     )
     _full: bool = field(init=False, default=True, repr=False)
@@ -960,12 +970,21 @@ class Document:
             return
         track, frame = anim.tracks[index], anim.frame
         width, height = self.size
+        # Every one of the five track properties, not four: ``alpha_lock`` was
+        # the one left out, and the write that autovivified the cel is normally
+        # one line away from reading it back off the layer -- ``begin_stroke``
+        # samples ``layer.alpha_lock`` immediately after ``_ensure_active_cel``
+        # -- so a missing lock did not merely mislabel the cel, it painted
+        # through "preserve transparency" on the first stroke of every fresh
+        # frame. ``placeholder`` and ``layers_for`` both copy all five; this is
+        # the third copy of that list and it has to agree with them.
         real = Layer(
             pixels=cp.empty(width, height),
             name=track.name,
             opacity=track.opacity,
             visible=track.visible,
             blend=track.blend,
+            alpha_lock=track.alpha_lock,
             uid=placeholder.uid,
         )
         anim.cels[(track.uid, frame.uid)] = real
@@ -1101,8 +1120,45 @@ class Document:
             return None
         self._ensure_active_cel()
         x0, y0, x1, y1 = box
-        self._filter = (box, self.stack.active.pixels[y0:y1, x0:x1].copy())
+        layer = self.stack.active
+        self._filter = (box, layer.pixels[y0:y1, x0:x1].copy(), layer.uid)
         return box
+
+    def _filter_layer(self) -> Layer | None:
+        """The layer an open filter session belongs to, or None if it is gone.
+
+        ``layer_by_uid`` and not ``stack.by_uid``, for exactly the reason
+        ``PatchEdit._put`` gives: on an animated document the cel being filtered
+        may be on a frame the playhead has since moved off, and it is still the
+        cel these pixels came from and the one they must go back to. The frame
+        therefore needs no recording of its own -- a cel's uid names it on every
+        frame at once, and that is the whole point of addressing by uid.
+
+        Two answers are None rather than a layer, and both mean "cancel this
+        cleanly instead of writing somewhere". A uid nothing carries any more is
+        a layer (or a whole track) deleted while the popup was up. A uid that
+        now resolves to a *placeholder* is an autovivified cel undone while the
+        popup was up: placeholder uids are stable per slot, so the empty slot
+        takes the same number back -- and its plane is the shared read-only one,
+        which raises on the first write.
+        """
+        if self._filter is None:
+            return None
+        try:
+            layer = self.layer_by_uid(self._filter[2])
+        except KeyError:
+            return None
+        if self.anim is not None and self.anim.is_placeholder(layer):
+            return None
+        return layer
+
+    def _abandon_filter(self) -> bool:
+        """Drop a session whose layer went, restoring nothing and pushing
+        nothing. There is no target left to put the pixels back into, and the
+        cel this session brought into existence has to go with it."""
+        self._filter = None
+        self._discard_pending_cel()
+        return False
 
     def preview_filter(self, name: str, **params: Any) -> bool:
         """Show the filter without recording it. Cheap to call every frame.
@@ -1114,10 +1170,12 @@ class Document:
         """
         if self._filter is None:
             return False
-        box, before = self._filter
+        layer = self._filter_layer()
+        if layer is None:
+            return self._abandon_filter()
+        box, before, _uid = self._filter
         x0, y0, x1, y1 = box
         filtered = filters.apply_named(name, before, **params)
-        layer = self.stack.active
         if self.mask is None:
             layer.pixels[y0:y1, x0:x1] = filtered
         else:
@@ -1135,24 +1193,30 @@ class Document:
         """Turn whatever is previewed into exactly one undo step."""
         if self._filter is None:
             return False
-        box, before = self._filter
+        layer = self._filter_layer()
+        if layer is None:
+            return self._abandon_filter()
+        box, before, _uid = self._filter
         self._filter = None
         # ``_commit_patch`` compares before against after and pushes nothing
         # when they match, which is what makes opening a filter, moving nothing
         # and pressing Apply a no-op rather than a step that dirties the file.
-        self._commit_patch(self.stack.active, box, before)
+        self._commit_patch(layer, box, before)
         return True
 
     def cancel_filter(self) -> bool:
         """Put the pixels back. Nothing was ever pushed, so nothing is undone."""
         if self._filter is None:
             return False
-        box, before = self._filter
+        layer = self._filter_layer()
+        if layer is None:
+            return self._abandon_filter()
+        box, before, _uid = self._filter
         self._filter = None
         x0, y0, x1, y1 = box
-        self.stack.active.pixels[y0:y1, x0:x1] = before
+        layer.pixels[y0:y1, x0:x1] = before
         self._discard_pending_cel()
-        self.invalidate(box, layer_uid=self.stack.active.uid)
+        self.invalidate(box, layer_uid=layer.uid)
         return True
 
     def end_filter(self) -> None:
@@ -1382,10 +1446,25 @@ class Document:
         ``grid`` is the animated form of the same argument one level up. The
         copies are made once and shared back into the slots by index, so two
         frames that held one object hold one object again.
+
+        A snapshot that carries a grid onto a document that is no longer
+        animated is **refused**, not silently flattened. The two are unreachable
+        past each other through the ordinary stack -- de-animating is itself an
+        ``AnimateEdit`` and sits above any replay it followed, so LIFO undo
+        re-animates first -- which is exactly why the case deserves a raise
+        rather than a fallback: reaching it means an assumption elsewhere has
+        already broken, and the old branch answered by dropping every frame but
+        one and every link between them, with nothing said and nothing to undo.
         """
+        if (grid is None) != (self.anim is None):
+            raise ValueError(
+                "this undo step describes a "
+                f"{'still' if grid is None else 'animated'} document and this "
+                f"one is {'still' if self.anim is None else 'animated'}"
+            )
         copies = [layer.copy(uid=layer.uid) for layer in layers]
         width, height = size
-        if grid is None or self.anim is None:
+        if grid is None:
             self.stack = LayerStack(copies, active)
         else:
             anim = self.anim

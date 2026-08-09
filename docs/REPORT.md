@@ -2,7 +2,7 @@
 
 ## Executive summary
 
-ComfyUI is best understood as a **visual orchestration and automation layer**, not as a single asset generator. Its node graph can combine diffusion checkpoints, LoRAs, ControlNet preprocessors, reference-image adapters, masking, inpainting, upscaling, depth estimation, 3D reconstruction, file conversion, and external scripts into repeatable workflows. ComfyUI can also run headlessly through REST and WebSocket APIs, making it suitable as a backend worker for Warlock Studio rather than merely an artist-facing GUI. citeturn13view0turn13view2
+ComfyUI is best understood as a **visual orchestration and automation layer**, not as a single asset generator. Its node graph can combine diffusion checkpoints, LoRAs, ControlNet preprocessors, reference-image adapters, masking, inpainting, upscaling, depth estimation, 3D reconstruction, file conversion, and external scripts into repeatable workflows. ComfyUI can also run headlessly through REST and WebSocket APIs, making it suitable as a backend worker for Warlock Studio rather than merely an artist-facing GUI.
 
 The strongest current use cases for low-touch production are:
 
@@ -20,7 +20,7 @@ The strongest current use cases for low-touch production are:
 | Rigging-ready humanoids or creatures | Low–medium | High | Edge flow, symmetry, joint deformation, separate parts |
 | Production skeletal characters with facial rigs | Low | High | Topology, blendshapes, animation compatibility |
 
-The central finding is that **minimal post-editing comes from constraining generation before and during inference**, then applying deterministic validation and conversion afterward. Prompt-only generation is rarely enough. Successful workflows use approved silhouettes or sketches, fixed camera conventions, style references, LoRAs, ControlNet, IP-Adapter, standardized masks, deterministic seeds, inpainting passes, and automated output checks. Community sprite workflows likewise tend to combine pose or outline controls with LoRAs or image references because prompt-only consistency remains unreliable, especially across animation frames. citeturn13view3turn13view4turn1search3turn1search17turn1search24
+The central finding is that **minimal post-editing comes from constraining generation before and during inference**, then applying deterministic validation and conversion afterward. Prompt-only generation is rarely enough. Successful workflows use approved silhouettes or sketches, fixed camera conventions, style references, LoRAs, ControlNet, IP-Adapter, standardized masks, deterministic seeds, inpainting passes, and automated output checks. Community sprite workflows likewise tend to combine pose or outline controls with LoRAs or image references because prompt-only consistency remains unreliable, especially across animation frames.
 
 For 2D production, Warlock Studio should initially prioritize **static sprites, icons, UI ornamentation, props, tileable materials, and controlled variations**. These can often be generated close to final form when templates enforce canvas size, framing, transparency, palette, outline thickness, lighting direction, and engine import metadata. Animated sprites should be treated as a separate, higher-risk feature with temporal or pose conditioning and explicit frame QA.
 
@@ -39,7 +39,7 @@ flowchart LR
     I --> J[Unity or Unreal package]
 ```
 
-This is more controllable than direct text-to-3D because the approved concept image serves as an explicit visual contract. Feed-forward image-to-3D systems such as Stable Fast 3D, Hunyuan3D, InstantMesh-derived tools, and TRELLIS-style models are generally better candidates for production automation than older DreamFusion-style per-asset optimization. Stable Fast 3D directly produces UV-unwrapped GLB assets, predicts material parameters, and can run with approximately 6 GB of VRAM at default settings. Hunyuan3D 2.1 separates shape and PBR texture generation but lists approximately 10 GB for shape generation, 21 GB for texture generation, and 29 GB for both together. TRELLIS.2 can export PBR-ready GLB assets, but its published speed figures are measured on an NVIDIA H100 and should not be interpreted as consumer-GPU performance. citeturn14view5turn14view6turn14view1turn14view2turn14view3turn14view4
+This is more controllable than direct text-to-3D because the approved concept image serves as an explicit visual contract. Feed-forward image-to-3D systems such as Stable Fast 3D, Hunyuan3D, InstantMesh-derived tools, and TRELLIS-style models are generally better candidates for production automation than older DreamFusion-style per-asset optimization. Stable Fast 3D directly produces UV-unwrapped GLB assets, predicts material parameters, and can run with approximately 6 GB of VRAM at default settings. Hunyuan3D 2.1 separates shape and PBR texture generation but lists approximately 10 GB for shape generation, 21 GB for texture generation, and 29 GB for both together. TRELLIS.2 can export PBR-ready GLB assets, but its published speed figures are measured on an NVIDIA H100 and should not be interpreted as consumer-GPU performance.
 
 The recommended Warlock Studio architecture is to keep ComfyUI isolated behind a **job-oriented asset-generation service**. Warlock Studio should own project profiles, prompts, workflow versioning, model hashes, licenses, validation rules, engine packaging, and provenance. ComfyUI should own model execution and graph processing. This separation reduces dependency breakage and makes it possible to replace individual models without changing the editor-facing feature.
 
@@ -62,15 +62,15 @@ The principal assumptions are:
 
 “Game-ready” should not mean merely “opens in the engine.” For Warlock Studio, an asset should only be classified as game-ready after it passes an explicit asset contract.
 
-For 2D assets, that contract should include dimensions, color space, alpha mode, pivot, trim bounds, atlas padding, palette or style profile, absence of unintended text, and optional secondary textures such as normal or mask maps. Unity, for example, supports sprite secondary textures for normal and mask data, while sprite atlases provide a formal packing mechanism; import and texture-compression settings still differ by target platform. citeturn5search5turn13view12turn13view13
+For 2D assets, that contract should include dimensions, color space, alpha mode, pivot, trim bounds, atlas padding, palette or style profile, absence of unintended text, and optional secondary textures such as normal or mask maps. Unity, for example, supports sprite secondary textures for normal and mask data, while sprite atlases provide a formal packing mechanism; import and texture-compression settings still differ by target platform.
 
-For 3D assets, the contract should include scale and units, coordinate orientation, pivot, mesh bounds, manifold policy, material slots, UV requirements, texel density, triangle budgets, LODs, collision, tangent basis, normal-map convention, texture resolution, and engine-specific import settings. Unreal’s FBX pipeline can carry static meshes, skeletal meshes, animations, morph targets, materials, textures, and multiple LODs, but Epic specifies FBX 2020.2 for its documented pipeline. citeturn13view11turn4search1turn4search4turn4search7
+For 3D assets, the contract should include scale and units, coordinate orientation, pivot, mesh bounds, manifold policy, material slots, UV requirements, texel density, triangle budgets, LODs, collision, tangent basis, normal-map convention, texture resolution, and engine-specific import settings. Unreal’s FBX pipeline can carry static meshes, skeletal meshes, animations, morph targets, materials, textures, and multiple LODs, but Epic specifies FBX 2020.2 for its documented pipeline.
 
 The report uses “minimal post-editing” to mean that routine corrections are automated or incorporated into the graph, while a human mainly selects, approves, or rejects results. It does **not** imply that arbitrary generated characters can safely bypass retopology, deformation testing, collision setup, or visual review.
 
 ## Current workflow and tool landscape
 
-ComfyUI’s main production advantage is graph composability. Nodes pass models, conditioning, latent tensors, masks, images, geometry, or metadata through a directed workflow. Custom nodes expand the graph beyond image diffusion, and ComfyUI can expose workflows through an HTTP server for programmatic submission, file upload, output retrieval, and progress reporting. citeturn13view0turn13view2
+ComfyUI’s main production advantage is graph composability. Nodes pass models, conditioning, latent tensors, masks, images, geometry, or metadata through a directed workflow. Custom nodes expand the graph beyond image diffusion, and ComfyUI can expose workflows through an HTTP server for programmatic submission, file upload, output retrieval, and progress reporting.
 
 A generalized production workflow looks like this:
 
@@ -110,9 +110,9 @@ flowchart TD
 | UV and mesh processors | Unwrap, remesh, simplify, validate, or export | All runtime meshes | Deterministic and testable | May require external compiled dependencies |
 | PBR estimator | Derives aligned material channels | Surfaces and generated meshes | Reduces manual map authoring | Lighting baked into inputs can contaminate results |
 
-LoRA originated as a parameter-efficient adaptation method that injects trainable low-rank updates rather than retraining all model weights. In asset production, that makes it useful for distributing a Warlock Studio art-style adapter or object-family adapter independently from a large base checkpoint. IP-Adapter fills a different role: its ComfyUI implementation describes it as image-to-image conditioning capable of transferring subject or style, informally comparable to a “one-image LoRA.” citeturn6search3turn6search31turn13view4
+LoRA originated as a parameter-efficient adaptation method that injects trainable low-rank updates rather than retraining all model weights. In asset production, that makes it useful for distributing a Warlock Studio art-style adapter or object-family adapter independently from a large base checkpoint. IP-Adapter fills a different role: its ComfyUI implementation describes it as image-to-image conditioning capable of transferring subject or style, informally comparable to a “one-image LoRA.”
 
-ControlNet preprocessors convert source images into hint images such as Canny edges, line art, scribbles, pose, or depth. The widely used `comfyui_controlnet_aux` package provides dedicated preprocessors and an all-in-one preprocessor node, although dedicated nodes expose more threshold controls. citeturn13view3turn6search10
+ControlNet preprocessors convert source images into hint images such as Canny edges, line art, scribbles, pose, or depth. The widely used `comfyui_controlnet_aux` package provides dedicated preprocessors and an all-in-one preprocessor node, although dedicated nodes expose more threshold controls.
 
 ### Common ComfyUI extensions
 
@@ -129,13 +129,13 @@ ControlNet preprocessors convert source images into hint images such as Canny ed
 | Hunyuan3D wrappers | Shape and texture generation | Strong higher-end PBR candidate; heavy VRAM requirements |
 | Specialized PBR suites | Material-map generation and processing | Useful, but alignment and licensing must be evaluated per implementation |
 
-ComfyUI-Manager is officially documented as a way to manage custom nodes, but custom nodes execute code on the machine. ComfyUI’s documentation warns users to treat them as software installations rather than harmless workflow files. Warlock Studio should therefore use an approved-node registry, locked hashes, isolated environments, and no arbitrary node installation from user-supplied workflows. citeturn13view1turn7search12
+ComfyUI-Manager is officially documented as a way to manage custom nodes, but custom nodes execute code on the machine. ComfyUI’s documentation warns users to treat them as software installations rather than harmless workflow files. Warlock Studio should therefore use an approved-node registry, locked hashes, isolated environments, and no arbitrary node installation from user-supplied workflows.
 
 ### PBR material generation
 
 The most important distinction is between **independently generated maps** and **jointly aligned material estimation**. Independently prompting an albedo, normal map, roughness map, and metalness map can create visually plausible channels that disagree spatially. A crack may appear in the albedo but not in the normal map; a metallic region may not align with the object’s painted metal.
 
-Ubisoft La Forge’s Generative Base Material prototype demonstrates the more production-oriented pattern: first generate a seamless tileable texture from text and optional line art, sketch, or height conditioning; then use the CHORD architecture to derive aligned base-color, normal, height, roughness, and metalness channels; finally upscale the material maps by 2× or 4×. citeturn14view8turn14view9
+Ubisoft La Forge’s Generative Base Material prototype demonstrates the more production-oriented pattern: first generate a seamless tileable texture from text and optional line art, sketch, or height conditioning; then use the CHORD architecture to derive aligned base-color, normal, height, roughness, and metalness channels; finally upscale the material maps by 2× or 4×.
 
 This suggests the following ranking for Warlock Studio material creation:
 
@@ -148,9 +148,9 @@ This suggests the following ranking for Warlock Studio material creation:
 | Procedural derivation from height/base color | Medium | Medium | Stylized materials with predictable rules |
 | High-to-low baking | High | Medium | Final normal, AO, curvature, and ID maps for runtime assets |
 
-Depth and normal estimation can supplement the pipeline. Depth Anything V2 is intended for detailed and robust monocular depth estimation, while StableNormal targets sharp and stable surface-normal estimation. These outputs are useful as conditioning, relief sources, quality checks, or approximate secondary maps, but they are not substitutes for a true high-to-low bake when exact geometric correspondence is required. citeturn8search1turn8search5turn8search2turn8search6
+Depth and normal estimation can supplement the pipeline. Depth Anything V2 is intended for detailed and robust monocular depth estimation, while StableNormal targets sharp and stable surface-normal estimation. These outputs are useful as conditioning, relief sources, quality checks, or approximate secondary maps, but they are not substitutes for a true high-to-low bake when exact geometric correspondence is required.
 
-UV generation should normally remain deterministic. Libraries such as xatlas generate unique UV charts suitable for texture baking and painting. Diffusion can help create texture content, but there is little production advantage in asking a generative model to invent UV coordinates when established packing algorithms are measurable and repeatable. citeturn8search3
+UV generation should normally remain deterministic. Libraries such as xatlas generate unique UV charts suitable for texture baking and painting. Diffusion can help create texture content, but there is little production advantage in asking a generative model to invent UV coordinates when established packing algorithms are measurable and repeatable.
 
 ### Three-dimensional generation approaches
 
@@ -164,13 +164,13 @@ UV generation should normally remain deterministic. Libraries such as xatlas gen
 | NeRF or 3D Gaussian reconstruction | Instant-NGP, 3DGS workflows | Neural field or point-based scene | Strong novel-view rendering and captures | Collision, rigging, UVs, and conventional mesh export are awkward | Backgrounds, scans, reference captures |
 | High-poly generative sculpt | Various image-to-3D systems at high resolution | Dense mesh | Good visual prototype and bake source | Requires retopology and cleanup | Treat as source geometry, not runtime geometry |
 
-DreamFusion introduced score-distillation sampling to optimize a NeRF from a text-to-image diffusion prior. Magic3D used a coarse-to-fine process and optimized a higher-resolution textured mesh, while ProlificDreamer proposed variational score distillation to address issues such as oversaturation, oversmoothing, and limited diversity. These methods remain academically important, but feed-forward image-to-3D systems are generally easier to batch, cache, rerun, and fit into editor workflows. citeturn3search0turn3search1turn3search6
+DreamFusion introduced score-distillation sampling to optimize a NeRF from a text-to-image diffusion prior. Magic3D used a coarse-to-fine process and optimized a higher-resolution textured mesh, while ProlificDreamer proposed variational score distillation to address issues such as oversaturation, oversmoothing, and limited diversity. These methods remain academically important, but feed-forward image-to-3D systems are generally easier to batch, cache, rerun, and fit into editor workflows.
 
-ComfyUI-3D-Pack integrates mesh and UV processing alongside NeRF, 3D Gaussian, InstantMesh, CRM, TripoSR, and related workflows. Its repository also notes native-build dependencies for some NeRF and mesh-conversion operations, making containerization or a dedicated worker image preferable to installing the stack directly inside the Warlock Studio process. citeturn14view7
+ComfyUI-3D-Pack integrates mesh and UV processing alongside NeRF, 3D Gaussian, InstantMesh, CRM, TripoSR, and related workflows. Its repository also notes native-build dependencies for some NeRF and mesh-conversion operations, making containerization or a dedicated worker image preferable to installing the stack directly inside the Warlock Studio process.
 
 ## Recommended reproducible pipeline for two-dimensional assets
 
-The recommended initial 2D implementation is an **SDXL-class controlled-generation pipeline** with project-specific LoRAs, ControlNet, IP-Adapter, fixed seeds, standardized output transforms, masked correction, and engine-aware packaging. SDXL supports a base-plus-refiner design and can also be used in image-to-image workflows, although using a refiner should be optional because it adds latency and can weaken strict stylization. citeturn6search0turn6search8
+The recommended initial 2D implementation is an **SDXL-class controlled-generation pipeline** with project-specific LoRAs, ControlNet, IP-Adapter, fixed seeds, standardized output transforms, masked correction, and engine-aware packaging. SDXL supports a base-plus-refiner design and can also be used in image-to-image workflows, although using a refiner should be optional because it adds latency and can weaken strict stylization.
 
 ### Target asset profiles
 
@@ -235,7 +235,7 @@ These values are **starting points for calibration**, not universal optimums:
 | Seed | Fixed per approved variant | Enables reruns and controlled parameter comparisons |
 | Upscale | 2× model upscale followed by target-size reduction | Can improve detail while delivering exact runtime dimensions |
 
-The IP-Adapter repository documents distinct style and composition behavior and notes that reference conditioning can transfer both subject and style. Consequently, Warlock Studio should expose separate “style reference” and “composition reference” inputs rather than one ambiguous reference slot. citeturn13view4
+The IP-Adapter repository documents distinct style and composition behavior and notes that reference conditioning can transfer both subject and style. Consequently, Warlock Studio should expose separate “style reference” and “composition reference” inputs rather than one ambiguous reference slot.
 
 ### Step-by-step production path
 
@@ -245,7 +245,7 @@ The IP-Adapter repository documents distinct style and composition behavior and 
 
 3. **Build positive and negative conditioning.** Keep camera and production requirements separate from descriptive content. This allows Warlock Studio to reuse the same fixed “asset grammar” while changing only the object description.
 
-4. **Prepare structural controls.** Resize approved sketches, masks, poses, depth images, or outlines to the generation canvas. Use the matching ControlNet preprocessor and preserve the preprocessor output in the job record for debugging. The ControlNet auxiliary package supports line, Canny, scribble, and related hint extraction. citeturn13view3
+4. **Prepare structural controls.** Resize approved sketches, masks, poses, depth images, or outlines to the generation canvas. Use the matching ControlNet preprocessor and preserve the preprocessor output in the job record for debugging. The ControlNet auxiliary package supports line, Canny, scribble, and related hint extraction.
 
 5. **Apply style conditioning.** Use a project LoRA for learned project-wide traits and IP-Adapter for one-off visual references. Avoid using multiple strong style mechanisms at once until calibrated; otherwise they can compete.
 
@@ -255,7 +255,7 @@ The IP-Adapter repository documents distinct style and composition behavior and 
 
 8. **Run defect detection.** Check cropping, disconnected alpha islands, forbidden text-like regions, silhouette deviation, incorrect aspect ratio, edge contamination, and obvious duplication. Use local inpainting for repair rather than regenerating the entire asset.
 
-9. **Upscale and resize.** For non-pixel art, use a model upscaler or tiled diffusion pass when extra detail is needed. For pixel art, generate a clean large-form design, reduce using nearest-neighbor sampling, quantize to the target palette, and then validate pixel clusters. Community guidance consistently warns that diffusion outputs advertised as pixel art often require refinement and do not automatically produce cohesive animation-ready pixel work. citeturn1search24
+9. **Upscale and resize.** For non-pixel art, use a model upscaler or tiled diffusion pass when extra detail is needed. For pixel art, generate a clean large-form design, reduce using nearest-neighbor sampling, quantize to the target palette, and then validate pixel clusters. Community guidance consistently warns that diffusion outputs advertised as pixel art often require refinement and do not automatically produce cohesive animation-ready pixel work.
 
 10. **Package the asset.** Save the source-resolution render, runtime image, mask, optional normal or material maps, thumbnail, and JSON manifest. Atlas assembly should be a separate deterministic operation so regenerated assets do not unexpectedly rearrange unrelated atlas content.
 
@@ -299,7 +299,7 @@ no perspective, no border, texture continues through every edge,
 physically plausible stone, no objects, no text
 ```
 
-For a seamless material, the graph should offset the generated image by half its width and height, expose the former borders at the center, mask a narrow cross around the new seam, and inpaint only that region. The result should then be offset again and tested for opposing-edge differences. Specialized systems such as Ubisoft’s prototype generate seamless textures directly and derive spatially aligned PBR channels, but an explicit seam test is still appropriate. citeturn14view8turn14view9
+For a seamless material, the graph should offset the generated image by half its width and height, expose the former borders at the center, mask a narrow cross around the new seam, and inpaint only that region. The result should then be offset again and tested for opposing-edge differences. Specialized systems such as Ubisoft’s prototype generate seamless textures directly and derive spatially aligned PBR channels, but an explicit seam test is still appropriate.
 
 ### Starter quality gates for 2D
 
@@ -335,11 +335,11 @@ The most reliable 3D workflow starts with an approved image rather than a raw te
 | Premium research | TRELLIS.2 | High-end server GPU | High-resolution PBR assets and experimental workflows | PBR-ready GLB and high-resolution structured output |
 | Capture-oriented | NeRF or 3DGS pipeline | Variable | Scanned scenes, backgrounds, turntable captures | Neural or point representation, sometimes mesh conversion |
 
-Stable Fast 3D is particularly useful for the first Warlock Studio prototype because its repository provides a ComfyUI extension, GLB output, texture-resolution controls, triangular or quad remeshing options, UV unwrapping, delighting, and material prediction. citeturn14view5turn14view6
+Stable Fast 3D is particularly useful for the first Warlock Studio prototype because its repository provides a ComfyUI extension, GLB output, texture-resolution controls, triangular or quad remeshing options, UV unwrapping, delighting, and material prediction.
 
-Hunyuan3D 2.1 is better suited to a dedicated GPU worker. Its official repository describes a fully open-source framework with shape generation and PBR texture synthesis, but its memory footprint makes it unsuitable as a universal local fallback. The repository reports testing with Python 3.10 and PyTorch 2.5.1 with CUDA 12.4-era builds, which is another reason to isolate it in a dedicated environment. citeturn14view1turn14view2
+Hunyuan3D 2.1 is better suited to a dedicated GPU worker. Its official repository describes a fully open-source framework with shape generation and PBR texture synthesis, but its memory footprint makes it unsuitable as a universal local fallback. The repository reports testing with Python 3.10 and PyTorch 2.5.1 with CUDA 12.4-era builds, which is another reason to isolate it in a dedicated environment.
 
-TRELLIS.2 is attractive for future high-end workflows because it exports a PBR-ready GLB and supports a separate PBR texturing path. Its repository shows options for remeshing, decimation targets, and texture size. However, its reported generation times—about 3 seconds at 512³, 17 seconds at 1024³, and 60 seconds at 1536³—were measured on an NVIDIA H100, so Warlock Studio should benchmark actual target hardware before exposing interactive expectations. citeturn14view3turn14view4
+TRELLIS.2 is attractive for future high-end workflows because it exports a PBR-ready GLB and supports a separate PBR texturing path. Its repository shows options for remeshing, decimation targets, and texture size. However, its reported generation times—about 3 seconds at 512³, 17 seconds at 1024³, and 60 seconds at 1536³—were measured on an NVIDIA H100, so Warlock Studio should benchmark actual target hardware before exposing interactive expectations.
 
 ### Conceptual ComfyUI node graph
 
@@ -379,7 +379,7 @@ flowchart TD
 
 2. **Normalize the concept input.** Remove the background; fit the object to approximately 75–90% of the image height; preserve margin around protrusions; save the foreground mask; and reject severe truncation.
 
-3. **Generate candidate geometry.** For Stable Fast 3D, use the input image, set an appropriate output texture resolution, and start with triangular remeshing for static runtime props. For Hunyuan3D, run shape generation before paint generation so rejected geometry does not consume the heavier texture pass. Hunyuan’s official sample configuration exposes multi-view and resolution controls; the repository’s published default memory requirements should govern job routing. citeturn14view1turn14view5
+3. **Generate candidate geometry.** For Stable Fast 3D, use the input image, set an appropriate output texture resolution, and start with triangular remeshing for static runtime props. For Hunyuan3D, run shape generation before paint generation so rejected geometry does not consume the heavier texture pass. Hunyuan’s official sample configuration exposes multi-view and resolution controls; the repository’s published default memory requirements should govern job routing.
 
 4. **Render diagnostic turntables.** Produce fixed-angle renders of silhouette, wireframe, normals, and checker texture. Compare the front render to the approved concept and inspect inferred rear and bottom surfaces.
 
@@ -387,13 +387,13 @@ flowchart TD
 
 6. **Choose the mesh path.** A static background prop may retain triangulated topology after cleanup. A deforming asset requires real retopology with loops designed around joints. A high-poly sculpt should be preserved as the bake source while a lower-resolution runtime mesh is generated separately.
 
-7. **Unwrap UVs.** Use xatlas or a DCC tool with explicit chart padding and unique UVs for baked assets. Preserve a second UV channel when the target engine requires separate lightmap or runtime data. xatlas is designed to create unique UV charts suitable for baking and painting. citeturn8search3
+7. **Unwrap UVs.** Use xatlas or a DCC tool with explicit chart padding and unique UVs for baked assets. Preserve a second UV channel when the target engine requires separate lightmap or runtime data. xatlas is designed to create unique UV charts suitable for baking and painting.
 
 8. **Generate or bake textures.** For static props, prefer PBR models that produce aligned base color, normal, roughness, and metalness. For high-to-low workflows, bake tangent-space normal, ambient occlusion, curvature, thickness, and material IDs from the approved high mesh to the runtime low mesh.
 
 9. **Validate PBR channels.** Confirm channel dimensions, UV alignment, normal-vector validity, tangent-space orientation, absence of lighting baked into base color, sensible roughness variation, and engine-appropriate metalness behavior.
 
-10. **Generate LODs.** Use target-platform and camera profiles rather than a universal polygon count. A reasonable calibration set for initial experiments is 100%, 50%, 20%, and 8% of the approved base mesh, but silhouette error and screen-space appearance should determine the final ratios. Unity’s LOD system explicitly uses progressively simpler meshes as distance increases, while Unreal can import multiple LODs through FBX. citeturn5search0turn4search4turn13view11
+10. **Generate LODs.** Use target-platform and camera profiles rather than a universal polygon count. A reasonable calibration set for initial experiments is 100%, 50%, 20%, and 8% of the approved base mesh, but silhouette error and screen-space appearance should determine the final ratios. Unity’s LOD system explicitly uses progressively simpler meshes as distance increases, while Unreal can import multiple LODs through FBX.
 
 11. **Create collision.** Use primitive or convex collision for most props. Do not automatically use the generated render mesh as collision unless the profile explicitly permits complex collision.
 
@@ -512,15 +512,15 @@ The generation manifest should record:
 
 ### Unity delivery
 
-For 2D assets, Warlock Studio should generate Unity import settings for sprite mode, pixels per unit, pivot, mesh type, filtering, mipmaps, alpha handling, and platform-specific compression. Sprite Atlas V2 can pack related sprites, while secondary sprite textures can associate normals and masks with a sprite; Unity’s documentation notes that secondary textures should align in UV space and that normal or mask data generally should not be treated as sRGB color data. citeturn13view12turn5search5
+For 2D assets, Warlock Studio should generate Unity import settings for sprite mode, pixels per unit, pivot, mesh type, filtering, mipmaps, alpha handling, and platform-specific compression. Sprite Atlas V2 can pack related sprites, while secondary sprite textures can associate normals and masks with a sprite; Unity’s documentation notes that secondary textures should align in UV space and that normal or mask data generally should not be treated as sRGB color data.
 
-For UI panels, Warlock Studio should optionally produce border metadata for nine-slicing. This allows a generated frame or panel to resize without stretching corners and decorative borders. citeturn5search13
+For UI panels, Warlock Studio should optionally produce border metadata for nine-slicing. This allows a generated frame or panel to resize without stretching corners and decorative borders.
 
-For 3D assets, an importer should set scale, material assignments, normal and tangent handling, read/write flags, animation settings, and `LODGroup` configuration. Platform overrides should select texture formats according to target GPU support rather than baking one format into every build. Unity’s documentation maintains platform-specific format guidance because supported compression families differ across desktop, mobile, and web targets. citeturn13view13turn5search6turn5search10
+For 3D assets, an importer should set scale, material assignments, normal and tangent handling, read/write flags, animation settings, and `LODGroup` configuration. Platform overrides should select texture formats according to target GPU support rather than baking one format into every build. Unity’s documentation maintains platform-specific format guidance because supported compression families differ across desktop, mobile, and web targets.
 
 ### Unreal delivery
 
-For Unreal, Warlock Studio should export FBX using the version compatible with the documented import pipeline, preserve multiple LODs, and explicitly choose whether normals and tangents are imported or recomputed. Unreal’s documented FBX pipeline supports static meshes, skeletal meshes, animations, morph targets, materials, textures, and multiple LODs; Epic identifies FBX 2020.2 for this pipeline. citeturn13view11turn4search4turn4search7
+For Unreal, Warlock Studio should export FBX using the version compatible with the documented import pipeline, preserve multiple LODs, and explicitly choose whether normals and tangents are imported or recomputed. Unreal’s documented FBX pipeline supports static meshes, skeletal meshes, animations, morph targets, materials, textures, and multiple LODs; Epic identifies FBX 2020.2 for this pipeline.
 
 A common Unreal material package should use:
 
@@ -532,13 +532,13 @@ A common Unreal material package should use:
 | Emissive | Separate map only when required |
 | Opacity or mask | Separate or packed according to material type |
 
-Channel packing can reduce texture-sample and memory overhead, although it should be profile-controlled because compression and precision needs differ across channels. citeturn4search3turn4search20
+Channel packing can reduce texture-sample and memory overhead, although it should be profile-controlled because compression and precision needs differ across channels.
 
-Nanite can make dense static geometry more viable in supported Unreal projects, but it does not remove the need for valid materials, collision strategy, sensible asset scale, or texture-memory management. It should be a platform and project option, not a reason to bypass mesh QA. citeturn4search28
+Nanite can make dense static geometry more viable in supported Unreal projects, but it does not remove the need for valid materials, collision strategy, sensible asset scale, or texture-memory management. It should be a platform and project option, not a reason to bypass mesh QA.
 
 ### Automation through ComfyUI
 
-ComfyUI can run as an HTTP server and supports programmatic workflow submission, uploads, output retrieval, and progress monitoring. The official documentation describes REST and WebSocket access, making it practical for Warlock Studio to maintain a queue of headless generation jobs. citeturn13view2turn7search0turn7search1
+ComfyUI can run as an HTTP server and supports programmatic workflow submission, uploads, output retrieval, and progress monitoring. The official documentation describes REST and WebSocket access, making it practical for Warlock Studio to maintain a queue of headless generation jobs.
 
 A recommended service boundary is:
 
@@ -560,7 +560,7 @@ flowchart LR
     REVIEW --> ORCH
 ```
 
-The job orchestrator should export ComfyUI workflows in API JSON format, substitute only approved input fields, submit the workflow to the `/prompt` route, monitor progress over WebSocket, then retrieve outputs and history. Reusable ComfyUI subgraphs can encapsulate stable modules such as prompt conditioning, inpainting, upscale, or output packaging. citeturn7search6turn7search0turn7search1turn7search8
+The job orchestrator should export ComfyUI workflows in API JSON format, substitute only approved input fields, submit the workflow to the `/prompt` route, monitor progress over WebSocket, then retrieve outputs and history. Reusable ComfyUI subgraphs can encapsulate stable modules such as prompt conditioning, inpainting, upscale, or output packaging.
 
 ### Batch workflow design
 
@@ -576,7 +576,7 @@ A batch should vary one controlled dimension at a time:
 | Material variants | Geometry and UV | Colorway, roughness range, wear |
 | Tile-set generation | Grid, scale, palette, perspective | Tile topology and decoration |
 
-ComfyUI should not be trusted as the sole record of batch state. Warlock Studio should generate an immutable job manifest before submission and associate every output with a deterministic job ID. If a plugin update changes results—even with the same seed—the changed node commit should produce a new workflow identity. The IP-Adapter repository, for example, documents a bug fix that changed outputs, illustrating why seed alone is insufficient for reproducibility. citeturn13view4
+ComfyUI should not be trusted as the sole record of batch state. Warlock Studio should generate an immutable job manifest before submission and associate every output with a deterministic job ID. If a plugin update changes results—even with the same seed—the changed node commit should produce a new workflow identity. The IP-Adapter repository, for example, documents a bug fix that changed outputs, illustrating why seed alone is insufficient for reproducibility.
 
 ### Quality metrics
 
@@ -617,7 +617,7 @@ Hard failures should never be averaged away by visual attractiveness. A beautifu
 
 Every dependency needs its own license record. A ComfyUI workflow can combine a base checkpoint, VAE, LoRA, ControlNet model, CLIP vision encoder, upscaler, segmentation model, 3D model, custom node code, and training-derived project adapter. The fact that one component uses MIT, Apache, or OpenRAIL terms does not automatically authorize every other component.
 
-SDXL model releases use CreativeML Open RAIL++ terms rather than a simple permissive software license. ControlNet releases and individual derived checkpoints may use their own model cards and restrictions. TRELLIS.2’s repository is MIT-licensed, but its documentation explicitly points users to model cards and separately installed dependencies, which still need review. Hunyuan3D and Stable Fast 3D similarly require checking the exact repository license, model-weight terms, and transitive components used by the selected release. citeturn6search4turn6search18turn13view6turn13view5turn13view7
+SDXL model releases use CreativeML Open RAIL++ terms rather than a simple permissive software license. ControlNet releases and individual derived checkpoints may use their own model cards and restrictions. TRELLIS.2’s repository is MIT-licensed, but its documentation explicitly points users to model cards and separately installed dependencies, which still need review. Hunyuan3D and Stable Fast 3D similarly require checking the exact repository license, model-weight terms, and transitive components used by the selected release.
 
 Warlock Studio should reject a production job unless every model has:
 
@@ -638,7 +638,7 @@ Project LoRAs should be trained only from material Warlock Studio is authorized 
 
 ### Copyrightability and human contribution
 
-The U.S. Copyright Office’s 2025 guidance states that generative-AI outputs may receive copyright protection where a human author determines sufficient expressive elements, such as through perceptible human-authored material, creative arrangement, or modification. Merely supplying prompts is not, by itself, sufficient human authorship under that guidance. AI-assisted creation also does not prevent protection of the human-authored portions of a larger work. citeturn13view10
+The U.S. Copyright Office’s 2025 guidance states that generative-AI outputs may receive copyright protection where a human author determines sufficient expressive elements, such as through perceptible human-authored material, creative arrangement, or modification. Merely supplying prompts is not, by itself, sufficient human authorship under that guidance. AI-assisted creation also does not prevent protection of the human-authored portions of a larger work.
 
 For Warlock Studio, this supports recording meaningful human decisions: approved sketches, masks, layouts, curated iterations, manual adjustments, assembly choices, material changes, animation timing, and integration into the larger game. This record is useful for provenance and internal review even though copyright treatment varies by jurisdiction and individual case.
 
@@ -650,7 +650,7 @@ Community LoRAs and checkpoints are especially risky when their training sources
 
 ### Custom-node security
 
-Custom ComfyUI nodes are executable Python packages and may install additional dependencies or compile native code. ComfyUI’s official documentation cautions that custom nodes can be malicious, while 3D node suites may require runtime C++ or CUDA compilation. citeturn7search12turn14view7
+Custom ComfyUI nodes are executable Python packages and may install additional dependencies or compile native code. ComfyUI’s official documentation cautions that custom nodes can be malicious, while 3D node suites may require runtime C++ or CUDA compilation.
 
 Production controls should include:
 
@@ -737,25 +737,25 @@ The highest-return near-term Warlock Studio feature is therefore a **profile-dri
 
 | Priority | Source | Why it matters |
 |---:|---|---|
-| Essential | [ComfyUI official documentation](https://docs.comfy.org/) | Core workflows, nodes, server APIs, custom-node development, and templates citeturn13view0turn13view2 |
-| Essential | [ComfyUI GitHub repository](https://github.com/Comfy-Org/ComfyUI) | Core engine, release state, Manager integration, and implementation details citeturn13view1 |
-| Essential | [ComfyUI ControlNet Auxiliary Preprocessors](https://github.com/Fannovel16/comfyui_controlnet_aux) | Edge, line-art, scribble, depth, pose, and other structural preprocessing citeturn13view3 |
-| Essential | [ComfyUI IPAdapter Plus](https://github.com/comfyorg/comfyui-ipadapter) | Reference-image style, subject, and composition conditioning citeturn13view4 |
-| Essential for 3D | [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) | Low-VRAM image-to-GLB pipeline with UV and material prediction citeturn14view5turn14view6 |
-| Essential for 3D | [Hunyuan3D 2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1) | Open shape and PBR texture pipeline with published hardware requirements citeturn14view1turn14view2 |
-| Advanced 3D | [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) | High-resolution structured 3D generation and PBR-ready GLB export citeturn14view3turn14view4 |
-| Broad 3D experimentation | [ComfyUI-3D-Pack](https://github.com/MrForExample/ComfyUI-3D-Pack) | ComfyUI nodes for meshes, UVs, NeRF, 3D Gaussian methods, and multiple reconstruction models citeturn14view7 |
-| PBR materials | [Ubisoft La Forge Generative Base Material and CHORD overview](https://www.ubisoft.com/en-us/studio/laforge/news/1i3YOvQX2iArLlScBPqBZs/generative-base-material-an-opensource-prototype-for-pbr-material-estimation-debuting-at-siggraph-asia-2025) | Seamless texture generation, aligned PBR decomposition, and map upscaling citeturn14view8turn14view9 |
-| Research background | [DreamFusion](https://dreamfusion3d.github.io/) | Foundational score-distillation text-to-3D approach citeturn3search0 |
-| Research background | [Magic3D](https://research.nvidia.com/labs/dir/magic3d/) | Coarse-to-fine high-resolution text-to-mesh optimization citeturn3search1 |
-| Research background | [ProlificDreamer](https://ml.cs.tsinghua.edu.cn/prolificdreamer/) | Variational score distillation and analysis of SDS weaknesses citeturn3search6 |
-| Research background | [InstantMesh](https://github.com/TencentARC/InstantMesh) | Sparse-view diffusion and feed-forward reconstruction citeturn3search3turn3search10 |
-| Geometry utility | [xatlas](https://github.com/jpcy/xatlas) | Deterministic UV chart generation and packing citeturn8search3 |
-| Depth conditioning | [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) | Monocular depth estimation for conditioning and validation citeturn8search1turn8search5 |
-| Normal estimation | [StableNormal](https://github.com/Stable-X/StableNormal) | Diffusion-based surface-normal estimation citeturn8search2turn8search6 |
-| Engine delivery | [Unreal FBX content pipeline](https://dev.epicgames.com/documentation/unreal-engine/fbx-content-pipeline) | FBX version, LOD, material, skeletal, and morph-target behavior citeturn13view11 |
-| Engine delivery | [Unity sprite atlas documentation](https://docs.unity3d.com/6000.0/Documentation/Manual/sprite/atlas/v2/sprite-atlas-v2.html) | Sprite packing and atlas workflow citeturn13view12 |
-| Engine delivery | [Unity texture-format guidance](https://docs.unity3d.com/6000.0/Documentation/Manual/texture-choose-format-by-platform.html) | Platform-specific runtime compression planning citeturn13view13 |
-| Legal foundation | [U.S. Copyright Office AI copyrightability guidance](https://www.copyright.gov/newsnet/2025/1060.html) | Human-authorship standard for AI-assisted outputs in the United States citeturn13view10 |
-| Community practice | Reddit discussions on sprite consistency, LoRA, pose control, and IP-Adapter | Reveals practical consistency problems not always covered in model papers citeturn1search3turn1search6turn1search17 |
-| Community practice | YouTube ComfyUI-to-Unity, Unreal, Blender, and game-asset workflow tutorials | Useful for graph discovery and artist UX, but production settings should be verified against primary documentation citeturn1search2turn1search5turn1search9turn1search23 |
+| Essential | [ComfyUI official documentation](https://docs.comfy.org/) | Core workflows, nodes, server APIs, custom-node development, and templates |
+| Essential | [ComfyUI GitHub repository](https://github.com/Comfy-Org/ComfyUI) | Core engine, release state, Manager integration, and implementation details |
+| Essential | [ComfyUI ControlNet Auxiliary Preprocessors](https://github.com/Fannovel16/comfyui_controlnet_aux) | Edge, line-art, scribble, depth, pose, and other structural preprocessing |
+| Essential | [ComfyUI IPAdapter Plus](https://github.com/comfyorg/comfyui-ipadapter) | Reference-image style, subject, and composition conditioning |
+| Essential for 3D | [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) | Low-VRAM image-to-GLB pipeline with UV and material prediction |
+| Essential for 3D | [Hunyuan3D 2.1](https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1) | Open shape and PBR texture pipeline with published hardware requirements |
+| Advanced 3D | [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) | High-resolution structured 3D generation and PBR-ready GLB export |
+| Broad 3D experimentation | [ComfyUI-3D-Pack](https://github.com/MrForExample/ComfyUI-3D-Pack) | ComfyUI nodes for meshes, UVs, NeRF, 3D Gaussian methods, and multiple reconstruction models |
+| PBR materials | [Ubisoft La Forge Generative Base Material and CHORD overview](https://www.ubisoft.com/en-us/studio/laforge/news/1i3YOvQX2iArLlScBPqBZs/generative-base-material-an-opensource-prototype-for-pbr-material-estimation-debuting-at-siggraph-asia-2025) | Seamless texture generation, aligned PBR decomposition, and map upscaling |
+| Research background | [DreamFusion](https://dreamfusion3d.github.io/) | Foundational score-distillation text-to-3D approach |
+| Research background | [Magic3D](https://research.nvidia.com/labs/dir/magic3d/) | Coarse-to-fine high-resolution text-to-mesh optimization |
+| Research background | [ProlificDreamer](https://ml.cs.tsinghua.edu.cn/prolificdreamer/) | Variational score distillation and analysis of SDS weaknesses |
+| Research background | [InstantMesh](https://github.com/TencentARC/InstantMesh) | Sparse-view diffusion and feed-forward reconstruction |
+| Geometry utility | [xatlas](https://github.com/jpcy/xatlas) | Deterministic UV chart generation and packing |
+| Depth conditioning | [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) | Monocular depth estimation for conditioning and validation |
+| Normal estimation | [StableNormal](https://github.com/Stable-X/StableNormal) | Diffusion-based surface-normal estimation |
+| Engine delivery | [Unreal FBX content pipeline](https://dev.epicgames.com/documentation/unreal-engine/fbx-content-pipeline) | FBX version, LOD, material, skeletal, and morph-target behavior |
+| Engine delivery | [Unity sprite atlas documentation](https://docs.unity3d.com/6000.0/Documentation/Manual/sprite/atlas/v2/sprite-atlas-v2.html) | Sprite packing and atlas workflow |
+| Engine delivery | [Unity texture-format guidance](https://docs.unity3d.com/6000.0/Documentation/Manual/texture-choose-format-by-platform.html) | Platform-specific runtime compression planning |
+| Legal foundation | [U.S. Copyright Office AI copyrightability guidance](https://www.copyright.gov/newsnet/2025/1060.html) | Human-authorship standard for AI-assisted outputs in the United States |
+| Community practice | Reddit discussions on sprite consistency, LoRA, pose control, and IP-Adapter | Reveals practical consistency problems not always covered in model papers |
+| Community practice | YouTube ComfyUI-to-Unity, Unreal, Blender, and game-asset workflow tutorials | Useful for graph discovery and artist UX, but production settings should be verified against primary documentation |

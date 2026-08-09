@@ -24,8 +24,16 @@ from .pipelines import matting
 MIN_FREE_DISK_GB = 5.0
 
 # Importing bpy costs seconds and its answer cannot change while this process
-# lives, so the probe runs once. /api/health is polled by the UI.
+# lives, so the probe runs once. The header's health poll re-runs these.
 _blender: Check | None = None
+
+# The row the four volatile checks are spliced in after: the last of the
+# install rows, named rather than counted. The order used to be a positional
+# slice of ``static_checks``' result, which meant adding an install row silently
+# pushed it below the volatile block -- a misordering no test could see. Falling
+# back to "volatile rows last" if the marker ever goes missing keeps a renamed
+# check from dropping rows entirely.
+VOLATILE_AFTER = "CUDA"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +54,7 @@ def run_checks(
     """``trellis_running`` says the port is *ours*.
 
     Without it the port check reports a permanent false warning for the whole
-    life of a warm process: /api/health runs these while trellis-server is
+    life of a warm process: the health poll runs these while trellis-server is
     resident and holding the port it is supposed to hold.
 
     ``static`` reuses a previous :func:`static_checks` result so a poller only
@@ -58,9 +66,12 @@ def run_checks(
     """
     s = static_checks(config, probe_slow=probe_slow) if static is None else list(static)
     v = volatile_checks(config, trellis_running)
-    # The historical display order: the six install rows, then the four
-    # volatile rows, then the per-model rows, then Blender (last in s).
-    return [*s[:6], *v, *s[6:]]
+    # The historical display order: the install rows, then the four volatile
+    # rows, then the per-model rows, then Blender (last in s). The seam is found
+    # by name (VOLATILE_AFTER) rather than by a slice index, which was coupled
+    # to how many install rows static_checks happened to return.
+    cut = next((i + 1 for i, c in enumerate(s) if c.name == VOLATILE_AFTER), len(s))
+    return [*s[:cut], *v, *s[cut:]]
 
 
 def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
@@ -358,7 +369,7 @@ def _t2i_checks(config: Config) -> list[Check]:
             )
         else:
             detail = f"not found at {path} -- unavailable; download with:\n  {spec.download}"
-        checks.append(Check(f"image model: {spec.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("base", spec.label), ok, detail, fatal=False))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename
         ok = fetch.present(config, "lora", lora)
@@ -367,7 +378,7 @@ def _t2i_checks(config: Config) -> list[Check]:
             if ok
             else f"not found at {path} -- style unavailable; download with:\n  {lora.download}"
         )
-        checks.append(Check(f"style LoRA: {lora.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("lora", lora.label), ok, detail, fatal=False))
     for adapter in models.IP_ADAPTERS.values():
         root = config.t2i_model_root / adapter.dir_name
         weights = root / adapter.subfolder / adapter.weight_name
@@ -383,7 +394,7 @@ def _t2i_checks(config: Config) -> list[Check]:
                 f"{missing} not found under {root} -- conditioning unavailable; "
                 f"download with:\n  {adapter.download}"
             )
-        checks.append(Check(f"IP-Adapter: {adapter.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("adapter", adapter.label), ok, detail, fatal=False))
     for cn in models.CONTROLNETS.values():
         path = config.t2i_model_root / cn.dir_name
         ok = fetch.present(config, "control", cn)
@@ -392,7 +403,7 @@ def _t2i_checks(config: Config) -> list[Check]:
             if ok
             else f"not found at {path} -- control unavailable; download with:\n  {cn.download}"
         )
-        checks.append(Check(f"ControlNet: {cn.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("control", cn.label), ok, detail, fatal=False))
     checks.extend(_metric_checks(config))
     return checks
 
@@ -428,7 +439,7 @@ def _metric_checks(config: Config) -> list[Check]:
             else f"not found at {path} -- benchmark metric unavailable; download with:\n"
             f"  {spec.download}"
         )
-        checks.append(Check(f"metric model: {spec.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("metric", spec.label), ok, detail, fatal=False))
     return checks
 
 
@@ -465,7 +476,7 @@ def _pose_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
                 f"not found at {path} -- joint placement falls back to the "
                 f"bbox-proportional fit; download with:\n  {spec.download}"
             )
-        checks.append(Check(f"pose model: {spec.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("pose", spec.label), ok, detail, fatal=False))
     return checks
 
 
@@ -639,5 +650,5 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         # different BiRefNets -- one GGUF inside trellis-server, this one on
         # the host for 2D exports -- and a user with rough edges has to be able
         # to tell which download the row is asking for.
-        checks.append(Check(f"host matting: {spec.label}", ok, detail, fatal=False))
+        checks.append(Check(fetch.check_name("matting", spec.label), ok, detail, fatal=False))
     return checks

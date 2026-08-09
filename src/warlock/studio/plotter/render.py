@@ -70,18 +70,21 @@ def render_layer(doc: MapDoc, layer: TileLayer, out: np.ndarray) -> None:
     # A per-tileset cache of resolved tiles is pointless -- ``tile_pixels`` is
     # already a view -- but resolving the *tileset* is a linear scan of the
     # list, so the answer for each distinct id is worked out once.
-    resolved: dict[int, tuple] = {}
+    # A *failed* lookup is memoised too, as None -- which is why the membership
+    # test is ``not in`` rather than a falsy ``get``. A gid no loaded tileset
+    # carries is the one answer that costs a full scan of the list every time,
+    # and a map that has lost a tileset is made entirely of them.
+    resolved: dict[int, tuple | None] = {}
     for row in range(min(layer.height, doc.height)):
         for column in range(min(layer.width, doc.width)):
             tile_id = int(ids[row, column])
             if not tile_id:
                 continue
-            entry = resolved.get(tile_id)
+            if tile_id not in resolved:
+                resolved[tile_id] = doc.resolve(tile_id)
+            entry = resolved[tile_id]
             if entry is None:
-                found = doc.resolve(tile_id)
-                if found is None:
-                    continue
-                resolved[tile_id] = entry = found
+                continue
             tileset, local = entry
             mask = int(flags[row, column])
             pixels = orient(

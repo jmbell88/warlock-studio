@@ -469,7 +469,8 @@ class Worker:
         # Both evictions go through a thread. The queue being idle does not
         # make them cheap: stop() blocks for up to ~20 s if the server ignores
         # SIGTERM, and unload() pays a gc.collect() plus empty_cache(). On the
-        # event loop either one freezes /api/progress and every other route.
+        # event loop either one freezes the progress snapshot the frame loop
+        # reads, and every other job with it.
         if (
             self.trellis.running
             and time.monotonic() - self.trellis.last_used > self.config.trellis_idle_timeout
@@ -1096,7 +1097,7 @@ class Worker:
             if job.get("stage") in ("reference", "tile"):
                 # The whole point of the split: the user judges the image before
                 # anything pays for a trellis run. The job is finished here --
-                # promotion creates a separate child job (app.promote_to_model).
+                # promotion creates a separate child job (service.jobs.promote_to_model).
                 # A tile never has a mesh stage at all, and is not promotable.
                 _log_mem("after image-only job")
                 return
@@ -1157,7 +1158,7 @@ class Worker:
         )
         # The reconstruction is kept verbatim as source.glb and never
         # overwritten: model.glb is derived from it, so re-targeting a triangle
-        # budget later (POST /api/jobs/{id}/optimize) never has to pay for
+        # budget later (service.jobs.optimize_job) never has to pay for
         # another trellis run.
         source_glb = job_dir / "source.glb"
         glb_path = job_dir / "model.glb"
@@ -1506,6 +1507,11 @@ class Worker:
         # outcome and the question it raises is immediately "why", which the
         # inspector cannot answer without opening a file per card.
         params["weighting_reason"] = result.get("weighting_reason")
+        # How many joints the fitted skeleton ended up with (an int -- the
+        # worker returns len(bones)), for the same reason as the two above: it
+        # is in rig.json, and a card that wants to say "17 bones" should not
+        # have to open a file to do it. None only from a worker whose result
+        # predates the key.
         params["bone_count"] = result.get("bones")
         await asyncio.to_thread(self.store.set_params, job_id, params)
         log.info(
@@ -1583,7 +1589,7 @@ class Worker:
             self._blender = proc
 
         png = rigging.rig_qa_png_path(source_dir)
-        with tempfile.TemporaryDirectory(prefix="a3d-rigqa-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="warlock-rigqa-") as tmp:
             frames_dir = Path(tmp)
             spec = rigging.sheet_spec(
                 rig_glb,
@@ -1724,7 +1730,7 @@ class Worker:
             self._blender = proc
 
         png = rigging.sheet_png_path(source_dir, sheet_id)
-        with tempfile.TemporaryDirectory(prefix="a3d-sheet-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="warlock-sheet-") as tmp:
             frames_dir = Path(tmp)
             spec = rigging.sheet_spec(
                 source_glb,
@@ -1856,7 +1862,7 @@ class Worker:
                     inner_next=(band.index + 1) / len(plan),
                     nominal=30.0, detail=f"band {band.index + 1}/{len(plan)}",
                 )
-                with tempfile.TemporaryDirectory(prefix="a3d-pixel-") as tmp:
+                with tempfile.TemporaryDirectory(prefix="warlock-pixel-") as tmp:
                     scratch = Path(tmp)
                     init_path = scratch / "init.png"
                     out_path = scratch / "out.png"
@@ -2422,7 +2428,7 @@ class Worker:
 
         The unload goes through a thread for the same reason every other
         unload() call site does: gc.collect() plus empty_cache() on the event
-        loop stalls /api/progress for every other client.
+        loop stalls every other job on the queue.
         """
         if self._text2image is not None and self._t2i_key != base_key:
             log.info("switching image model %s -> %s", self._t2i_key, base_key)

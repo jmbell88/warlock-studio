@@ -131,9 +131,17 @@ def send_to_3d(ctx: Any, tab: Any) -> None:
     context and therefore the frame thread, which is the App's business. A
     headless ctx that never attached the handler gets a clear refusal rather
     than a half-drawn frame.
+
+    The refusal stays -- ``Ctx.clay_send_to_3d`` defaults to None and only the
+    App assigns it, so a ctx built without one is a real construction and not a
+    hypothetical -- but its wording did not. It said the feature was "not wired
+    up yet", which was true of the branch's own first draft and has not been
+    true of the app since: a user who saw it went looking for a setting to turn
+    on. What the branch actually knows is that *this* window has nothing to
+    render from, so that is what it now says.
     """
     handler = getattr(ctx, "clay_send_to_3d", None)
     if handler is None:
-        ctx.toast("Sending a clay model to 3D is not wired up yet.", "error")
+        ctx.toast("Could not send to 3D: this window has no viewport to render from.", "error")
         return
     handler(tab)

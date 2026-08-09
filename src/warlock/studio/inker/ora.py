@@ -69,7 +69,40 @@ THUMBNAIL_MAX = 256
 ANIMATION_VERSION = 1
 ANIMATION_MEMBER = "animation.json"
 
+# 1980-01-01, the earliest a zip can express, and the same constant the three
+# younger formats in this repo (``.wblk``, ``.wmap``, ``.wpack``) fix their
+# members at. Without it every member is stamped with the wall clock, so two
+# saves of a document nobody touched produced two different files -- which makes
+# a save look like a change to anything that hashes or diffs one.
+#
+# It is safe against a foreign reader, and the file itself is the evidence: the
+# ``mimetype`` member has carried this exact stamp since this writer was written
+# (it is what a bare ``ZipInfo`` defaults to) and it is the first thing every ORA
+# reader touches. The OpenRaster spec says nothing whatever about modification
+# times -- it specifies member *names*, the ordering of ``mimetype`` and its
+# being stored uncompressed -- and Krita's and GIMP's readers are ordinary zip
+# readers that never look. This is also the floor rather than an arbitrary
+# choice: MS-DOS date fields cannot express anything earlier, and ``zipfile``
+# raises on a date below it.
+_EPOCH = (1980, 1, 1, 0, 0, 0)
+
 log = logging.getLogger(__name__)
+
+
+def _member(name: str) -> zipfile.ZipInfo:
+    """A deflated archive member at the fixed epoch.
+
+    ``writestr`` builds one of these itself when it is handed a plain name --
+    with the wall clock, which is the whole problem -- and takes the compression
+    and the mode off the ``ZipInfo`` when it is handed one instead. So both have
+    to be restated here: a bare ``ZipInfo`` says ``ZIP_STORED``, and a writer
+    that forgot this line would silently stop compressing and treble the size of
+    every file it wrote.
+    """
+    info = zipfile.ZipInfo(name, _EPOCH)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o600 << 16
+    return info
 
 
 def _png(pixels: np.ndarray) -> bytes:
@@ -234,22 +267,22 @@ def write_ora(doc, path: Path) -> None:
         # Stored, and first: the spec makes this a magic number at a fixed
         # offset, and a deflated one is not readable as such.
         zf.writestr(
-            zipfile.ZipInfo("mimetype"), b"image/openraster", zipfile.ZIP_STORED
+            zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
         )
         if anim is None:
-            zf.writestr("stack.xml", _stack_xml(doc))
+            zf.writestr(_member("stack.xml"), _stack_xml(doc))
             for index, layer in enumerate(reversed(list(doc.stack))):
-                zf.writestr(f"data/layer{index}.png", _png(layer.pixels))
+                zf.writestr(_member(f"data/layer{index}.png"), _png(layer.pixels))
         else:
-            zf.writestr("stack.xml", _stack_xml_animated(doc, names))
+            zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
             # One PNG per name, with no de-duplication needed: ``_cel_names``
             # is built from the same ``unique_cel_layers`` walk and gives each
             # distinct cel its own name, so the two can only ever agree.
             for layer in anim.unique_cel_layers():
-                zf.writestr(names[id(layer)], _png(layer.pixels))
-            zf.writestr(ANIMATION_MEMBER, _animation_json(doc, names))
-        zf.writestr("mergedimage.png", _png(merged))
-        zf.writestr("Thumbnails/thumbnail.png", thumb_buf.getvalue())
+                zf.writestr(_member(names[id(layer)]), _png(layer.pixels))
+            zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
+        zf.writestr(_member("mergedimage.png"), _png(merged))
+        zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
     tmp.replace(path)
 
 

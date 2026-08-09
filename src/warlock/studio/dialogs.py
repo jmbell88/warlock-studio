@@ -22,14 +22,17 @@ from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
 from ..service.errors import Failed
-from . import widgets
+from . import filetypes, widgets
 from .tokens import sp
 
 log = logging.getLogger(__name__)
 
-# Filters, as portable-file-dialogs wants them: name, then patterns.
+# Filters, as portable-file-dialogs wants them: name, then patterns. The image
+# suffixes come from ``filetypes`` -- the same tuple the drop router refuses
+# against -- because a picker that offers what a drop refuses (or the reverse)
+# is one list maintained in two places.
 GLB_FILTER = ["glTF binary (*.glb)", "*.glb"]
-IMAGE_FILTER = ["Images", "*.png *.jpg *.jpeg *.webp *.bmp"]
+IMAGE_FILTER = ["Images", filetypes.pattern()]
 ZIP_FILTER = ["Zip archive (*.zip)", "*.zip"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 JSON_FILTER = ["JSON (*.json)", "*.json"]

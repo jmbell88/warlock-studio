@@ -37,7 +37,7 @@ from typing import Any
 
 import numpy as np
 
-from . import dialogs, plotter_state
+from . import dialogs, filetypes, plotter_state
 from .plotter_state import PlotterDoc, PlotterState
 
 log = logging.getLogger(__name__)
@@ -51,14 +51,14 @@ MAP_FILTER = [
 WMAP_FILTER = ["Warlock map (*.wmap)", "*.wmap"]
 TMX_FILTER = ["Tiled map (*.tmx)", "*.tmx"]
 TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
+# A ``.tsx`` carries its own slicing; anything else is an image sliced at the
+# map's tile size. Both halves of the entry are derived, because the label used
+# to read "(*.tsx *.png)" over a pattern list that also accepted .jpg, .jpeg,
+# .webp and .bmp -- a dialog disclaiming four formats it would have opened.
+_TILESET_SUFFIXES = (".tsx", *filetypes.IMAGE_SUFFIXES)
 TILESET_FILTER = [
-    "Tilesets and images (*.tsx *.png)",
-    "*.tsx",
-    "*.png",
-    "*.jpg",
-    "*.jpeg",
-    "*.webp",
-    "*.bmp",
+    filetypes.describe("Tilesets and images", _TILESET_SUFFIXES),
+    *filetypes.globs(_TILESET_SUFFIXES),
 ]
 
 DEFAULT_MAP = (32, 32, 32, 32)  # width, height, tile width, tile height

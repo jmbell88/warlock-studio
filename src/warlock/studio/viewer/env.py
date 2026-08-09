@@ -54,9 +54,12 @@ KEY_INTENSITY = 1.5
 # value straight back to sRGB -- so what reaches the framebuffer is the literal
 # hex. Running it through ACES here would make the panel and the viewport two
 # different greys.
-# Matches tokens.BG so the viewport and the panels around it read as one
-# surface; kept literal here (not imported) because the viewer package stays
-# free of studio-UI imports.
+# Matches the dark palette's tokens.BG so the viewport and the panels around it
+# read as one surface; kept literal here (not imported) because the viewer
+# package stays free of studio-UI imports. It is unconditional, so under the
+# light palette the viewport stays dark and that agreement is lost -- an open
+# design call rather than an oversight (LEFTOVERS.md section 15), because the
+# background doubles as the render-skip key.
 BACKGROUND_HEX = 0x0F1014
 
 

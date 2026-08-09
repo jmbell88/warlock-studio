@@ -258,6 +258,7 @@ class Viewer:
         self.pose_mode = True
         self.pose_job_id = job_id
         self._render_dirty = True
+        self._notify_pose_dirty()
         return True
 
     def exit_pose_mode(self) -> None:
@@ -267,6 +268,10 @@ class Viewer:
         self.rotate_gizmo.end_drag()
         self.translate_gizmo.end_drag()
         self.editor.clear()
+        # Both ends of the editor's life report, or an indicator raised on the
+        # way in survives every mesh loaded after it -- ``adopt_model`` and
+        # ``clear`` both come through here.
+        self._notify_pose_dirty()
 
     def get_pose(self) -> dict[str, list[float]]:
         return self.editor.pose()
@@ -295,8 +300,23 @@ class Viewer:
         self._render_dirty = True
         if self.gpu is not None:
             self.gpu.refresh_palettes()
+        self._notify_pose_dirty()
+
+    def _notify_pose_dirty(self) -> None:
+        """Tell the listener whether unsaved pose edits exist *right now*.
+
+        Answered as ``pose_mode and ...`` rather than by asking the editor
+        alone, so leaving the editor -- or loading another mesh, which exits it
+        -- reports False. A listener told "dirty" on the way out and never told
+        otherwise would keep an indicator up for edits nothing can reach any
+        more, which is worse than no indicator at all.
+
+        The listener is a mirror, never the authority: ``pose_panel.guard``
+        goes on asking ``editor.has_unsaved_edits()`` itself, so a missed
+        notification costs a stale marker rather than discarded work.
+        """
         if self.on_pose_dirty is not None:
-            self.on_pose_dirty(self.editor.has_unsaved_edits())
+            self.on_pose_dirty(self.pose_mode and self.editor.has_unsaved_edits())
 
     @property
     def selected_bone(self) -> str | None:
@@ -420,21 +440,13 @@ class Viewer:
     def thumbnail_png(self) -> bytes:
         return capture.png_bytes(self.viewport)
 
-    def render_sheet_strip(self, yaws: list[float], elevation: float, flat: bool) -> Any:
-        """Every direction in one call. Blocking: a draw and a synchronous
-        GPU-to-CPU readback per cell, so sixteen of them is a visible freeze.
-        The pane drives ``begin_sheet_strip``/``step_sheet_strip`` instead."""
-        if self.gpu is None or self.model is None:
-            return None
-        return sheetlib.strip(
-            self.renderer,
-            self.gpu,
-            self.model,
-            yaws,
-            elevation=elevation,
-            flat=flat,
-            model_matrix=self.placement,
-        )
+    # There is deliberately no whole-strip ``render_sheet_strip`` here any
+    # more. It rendered every direction in one call -- a draw plus a
+    # synchronous GPU-to-CPU readback per cell -- which for sixteen cells is a
+    # visible freeze on the frame thread, the exact thing ``StripRender``'s
+    # one-cell-per-``step()`` rule exists to prevent. It had no callers left,
+    # and a live method whose whole documented property is that it must never
+    # be called is worse than an absent one: nothing stops the next caller.
 
     def begin_sheet_strip(self, yaws: list[float], elevation: float, flat: bool) -> bool:
         """Start an incremental direction strip. -> whether there was a mesh.
@@ -559,8 +571,7 @@ class Viewer:
             gizmo = self._active_gizmo()
             if gizmo is not None:
                 gizmo.end_drag()
-            if self.on_pose_dirty is not None:
-                self.on_pose_dirty(self.editor.has_unsaved_edits())
+            self._notify_pose_dirty()
         del button
         return True
 

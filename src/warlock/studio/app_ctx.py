@@ -95,11 +95,16 @@ class Ctx:
     textures: Any = None
     confirms: dialogs.ConfirmQueue = field(default_factory=dialogs.ConfirmQueue)
     prompts: dialogs.PromptQueue = field(default_factory=dialogs.PromptQueue)
-    # Answers from doctor + the rig-template probe, read at startup. Rigging is
-    # genuinely fixed for the life of the process -- the bpy probe is a
-    # subprocess whose answer cannot change without a restart.
+    # Answers from doctor + the rig-template probe. Written at startup and
+    # again when a later health poll first reports Blender working: the bpy
+    # probe is deferred (C30), so the *startup* answer is routinely "not yet
+    # known" rather than "no" -- ``App._on_task_done`` re-asks for the
+    # templates on the poll that changes its mind. What is fixed for the life
+    # of the process is whether bpy is installed, not whether this ctx has
+    # heard about it yet.
     #
-    # The *model* answers below are not, and used to say they were. A download
+    # The *model* answers below are not fixed either, and used to say they
+    # were. A download
     # started from the app-Settings pane makes weights appear while the app
     # runs, so ``base_models``/``style_loras``/``model_rows`` are recomputed
     # from a fresh ``doctor.run_checks`` when a fetch finishes -- the same

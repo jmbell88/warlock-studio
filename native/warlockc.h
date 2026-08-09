@@ -9,9 +9,19 @@
  *
  * Bit-parity with the numpy reference is the contract, not a goal. Every
  * kernel here has a Python implementation it must agree with exactly, and the
- * tests assert equality rather than closeness. That is why the build uses
- * /fp:precise (MSVC) or -ffp-contract=off (clang): a fused multiply-add
- * changes rounding, and a changed rounding moves a triangle edge by one pixel.
+ * tests assert equality rather than closeness. What that costs at build time is
+ * that contraction must be off in every compiler this is built with: a fused
+ * multiply-add rounds once where numpy rounds twice, and a changed rounding
+ * moves a triangle edge by one pixel. native/build.ps1 owns the flags, and it
+ * is the one place that knows which flag each driver needs -- notably that a
+ * driver taking MSVC-style options is not thereby MSVC, so /fp:precise alone
+ * cannot be assumed to have disabled contraction. The contract is stated here;
+ * the spelling of it lives with the build.
+ *
+ * One kernel is deliberately not held to output identity -- the contour tracer
+ * in contours.c, whose reference leaves loop order and winding unspecified. Its
+ * bar is the set of unit edges, and the licence for that is written down beside
+ * the tests that assert it.
  */
 
 #ifndef WARLOCKC_H

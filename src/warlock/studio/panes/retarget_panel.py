@@ -27,16 +27,34 @@ from ...service import jobs as svc_jobs
 from .. import theme, widgets
 from ..manual import render as manual_render
 
-# Named tiers coarsest-first, then the free-form one. "raw" is the identity --
-# the full reconstruction density -- and is the only entry that needs no
-# binary, which is why it is always offered.
-TIERS = (
-    ("raw", "Raw (full density)"),
-    ("draft", "Draft (20k)"),
-    ("standard", "Standard (50k)"),
-    ("detailed", "Detailed (100k)"),
-    ("custom", "Custom..."),
-)
+
+def tier_label(key: str, budget: int | None) -> str:
+    """What a named tier is called on screen: "Draft (20k)", "Raw (full
+    density)".
+
+    Derived rather than written out, which is the same argument the custom
+    range already made two functions down: ``optimize.PROFILES`` is the
+    authority on the numbers, and a label restating one is a second copy that
+    goes wrong silently -- a button offering 50k while gltfpack is asked for
+    something else. A budget that is not a round thousand is printed in full
+    rather than rounded into a number it is not.
+    """
+    if budget is None:
+        return f"{key.capitalize()} (full density)"
+    if budget % 1000 == 0:
+        return f"{key.capitalize()} ({budget // 1000}k)"
+    return f"{key.capitalize()} ({budget:,})"
+
+
+# "raw" first, then the rest of ``optimize.PROFILES``, then the free-form one.
+# The *membership* is derived so a tier added to the pipeline appears here
+# without an edit; only the position of "raw" is stated, because it is the
+# identity -- the full reconstruction density -- and the only entry that needs
+# no binary, which is what makes ``TIERS[0]`` the fallback list below.
+TIERS: tuple[tuple[str, str], ...] = tuple(
+    (key, tier_label(key, optimize.PROFILES[key]))
+    for key in ("raw", *(k for k in optimize.PROFILES if k != "raw"))
+) + (("custom", "Custom..."),)
 
 
 def draw(ctx: Any, job: Any) -> None:
@@ -89,11 +107,30 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
     return form
 
 
+# Whether the vendored binary is on disk, answered once per path. This ran on
+# every frame the section was open, for an answer that is fixed for the life of
+# the process: the path comes from Config and a vendored binary does not arrive
+# while the app runs. Keyed by the path rather than kept as a single flag so a
+# second service (a test's, a compare view's) cannot inherit the first one's
+# answer. The accepted cost is that installing gltfpack needs a restart before
+# the tiers appear -- which is already true of the doctor row that reports it.
+_gltfpack_seen: dict[str, bool] = {}
+
+
 def _gltfpack_available(ctx: Any) -> bool:
     try:
-        return bool(ctx.svc.config.gltfpack_exe.exists())
+        path = ctx.svc.config.gltfpack_exe
     except Exception:
         return False
+    key = str(path)
+    found = _gltfpack_seen.get(key)
+    if found is None:
+        try:
+            found = bool(path.exists())
+        except Exception:
+            found = False
+        _gltfpack_seen[key] = found
+    return found
 
 
 def _warn_stale(ctx: Any, job: Any) -> None:

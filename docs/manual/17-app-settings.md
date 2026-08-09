@@ -11,10 +11,14 @@ apply. It takes effect as you drag it, and the font atlas is re-baked when you l
 frames rather than during one, since a rebuild invalidates every font handle a half-drawn frame is
 holding. Nothing needs a restart.
 
-*Theme* switches the whole palette, including the viewport background, and takes effect at once. The
+*Theme* switches the whole palette and takes effect at once. The
 light palette keeps the same *roles* as the dark one rather than inverting its numbers: a panel is
 still the surface a form sits on, and the elevation steps still read as raised — which on a light
-ground means slightly darker rather than lighter. *Show frame rate* is the same toggle as `F10`.
+ground means slightly darker rather than lighter. The one thing it does **not** repaint is the 3D
+viewport's background, which stays the dark `#0F1014` under either theme: that colour is a property
+of the renderer rather than of the palette, and making it follow the theme means threading a colour
+into the render-skip key so a theme switch triggers a redraw. It is a known gap, deliberately left
+open. *Show frame rate* is the same toggle as `F10`.
 
 **Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
 rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make

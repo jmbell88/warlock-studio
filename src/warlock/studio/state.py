@@ -229,7 +229,11 @@ class Filters:
 
     text: str = ""
     status: str = "all"  # all | done | running | error
-    kind: str = "all"  # all | reference | model | rig | sheet
+    # all | reference | tile | model | rig | sheet -- the same six the library's
+    # combo offers, in its order. ``tile`` is a reference the seamless path
+    # produced, and it is a kind of its own because its next step is an export
+    # rather than a mesh (see ``card_kind``/``card_action``).
+    kind: str = "all"
     favorites_only: bool = False
     # One of SORTS. Persisted with the rest of the filter bar, because a
     # workshop is browsed the same way every session.
@@ -243,7 +247,9 @@ class Filters:
     descending: bool = True
     # Whether the list is showing the trash instead of the workshop (J91). A
     # *view*, not a filter on top of the others: everything else narrows what
-    # you are looking at, and this changes which set you are looking at.
+    # you are looking at, and this changes which set you are looking at. Which
+    # is also why it is the one field here that is never persisted -- see
+    # ``VOLATILE_FILTERS``.
     trash: bool = False
 
     def matches(self, job: dict[str, Any]) -> bool:
@@ -395,6 +401,66 @@ class Filters:
 
             return key
         return None
+
+
+# The filter-bar fields that must never survive a restart, in the shape
+# ``settings.VOLATILE`` already established for the forms.
+#
+# ``trash`` is here because it is a *view* rather than a filter: everything
+# else on the bar narrows what you are looking at, and remembering that is the
+# whole reason the bar is persisted at all. This one changes *which set* you
+# are looking at, so a session that ended while emptying the trash reopened in
+# the trash -- an empty-looking library with no obvious way back, and the one
+# reading of "restore my filters" nobody wants.
+VOLATILE_FILTERS: tuple[str, ...] = ("trash",)
+
+
+def filters_to_store(filters: Filters) -> dict[str, Any]:
+    """The filter bar as it should be written to the settings file."""
+    return {k: v for k, v in vars(filters).items() if k not in VOLATILE_FILTERS}
+
+
+def filters_from_stored(stored: Any) -> Filters:
+    """The inverse. Unknown and volatile keys are dropped rather than carried.
+
+    Volatile keys are dropped on the way *in* as well as on the way out, so a
+    settings file written by an older build -- which really does carry
+    ``trash: true`` -- opens on the library like every other launch.
+    """
+    values = stored if isinstance(stored, dict) else {}
+    return Filters(
+        **{
+            k: v
+            for k, v in values.items()
+            if k in Filters.__annotations__ and k not in VOLATILE_FILTERS
+        }
+    )
+
+
+def set_mode(state: AppState, key: str) -> bool:
+    """Switch modes, recording where Esc should go back to. -> whether it moved.
+
+    **The one implementation.** ``App._set_mode`` and the command palette's
+    ``go:`` commands both call this, because they were two spellings of it and
+    had already drifted: the palette's copy did not early-return on the mode it
+    was already in, so re-selecting the current mode from the palette left
+    ``previous_mode == mode`` -- and ``_escape_mode`` treats that as no history
+    at all and falls back to Home. Escaping a pass-through mode is documented
+    as going back to *the mode it came from*, so the drift was a wrong answer
+    rather than a cosmetic difference.
+
+    Takes the state rather than being an ``AppState`` method so it stays
+    callable against any object carrying the four fields, which is what the
+    palette's tests hand it.
+    """
+    if key == state.mode:
+        return False
+    state.previous_mode = state.mode
+    state.mode_observed = key
+    state.mode = key
+    if key == "home":
+        state.landing_view = "choose"
+    return True
 
 
 def card_kind(job: dict[str, Any]) -> str:
@@ -627,10 +693,6 @@ class AppState:
     # payload is an integer, so the job id travels here instead; one drag is in
     # flight at a time by construction. See ``library.DRAG_JOB``.
     dragging_job: str | None = None
-    # The command palette (I80). Three plain fields rather than a state object:
-    # it holds a query, a cursor and whether it is up, and nothing about it
-    # survives being closed -- reopening on the last query would make Ctrl+K
-    # act on a search the user has forgotten typing.
     # Which slot last received a drop, and when (H70). A dropped file used to
     # be acknowledged only by a toast in the far corner of the window, while
     # the control that actually changed -- in 2D, inside a section that is
@@ -644,19 +706,30 @@ class AppState:
     # because the list it belongs to is short today, would be a panel that
     # silently hides half its contents on launch.
     list_filters: dict[str, str] = field(default_factory=dict)
-    # Set when the UI scale changes, consumed by the frame loop *between*
-    # frames (K99): the atlas rebuild invalidates every ImFont handle, and a
-    # rebuild inside a frame would leave the rest of it drawing through freed
-    # pointers.
     # Whether the crash-recovery offer has been made this session. One-shot:
     # the autosave directory is *also* where this session's own copies land, so
     # asking again later would offer the user their own open documents back.
     recovery_offered: bool = False
+    # Set when the UI scale changes, consumed by the frame loop *between*
+    # frames (K99): the atlas rebuild invalidates every ImFont handle, and a
+    # rebuild inside a frame would leave the rest of it drawing through freed
+    # pointers.
     fonts_dirty: bool = False
+    # Whether the pose editor is holding rotations nobody has saved. Written
+    # only from ``Viewer.on_pose_dirty`` -- so it costs a frame nothing, and it
+    # is a mirror rather than the authority: ``pose_panel.guard`` still asks
+    # the editor itself, because a guard that trusted a cached bool would let
+    # unsaved work through if one write were ever missed. What this is for is
+    # the *indicator*, which has to be visible from outside the pose pane.
+    pose_dirty: bool = False
     # Which Home tile the keyboard is on (M107). Not persisted: the app opens
     # on Home every launch, and a remembered cursor would put Enter on
     # whichever tile was last hovered a week ago.
     home_index: int = 0
+    # The command palette (I80). Three plain fields rather than a state object:
+    # it holds a query, a cursor and whether it is up, and nothing about it
+    # survives being closed -- reopening on the last query would make Ctrl+K
+    # act on a search the user has forgotten typing.
     palette_open: bool = False
     palette_query: str = ""
     palette_index: int = 0

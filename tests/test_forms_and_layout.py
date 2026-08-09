@@ -200,9 +200,25 @@ def test_the_sidebar_option_is_three_names_and_the_width_is_module_state():
 
 def test_the_tiles_are_data_so_the_keys_and_the_clicks_agree():
     """A hand-written keyboard index over a hand-written column of calls is two
-    orderings, and they drift the first time a tile is inserted."""
+    orderings, and they drift the first time a tile is inserted.
+
+    The *order* is editorial and stays here; that the set covers every work mode
+    is the half that drifted (F76 -- it stopped at six while the app grew to ten
+    modes) and is asserted against ``modes.WORK_MODES`` in
+    ``tests/test_panes_home_tiles.py``.
+    """
     keys = [key for key, _icon, _name in landing.TILES]
-    assert keys == ["2d", "3d", "inker", "clay", "open", "profiles"]
+    assert keys == [
+        "2d",
+        "3d",
+        "inker",
+        "clay",
+        "plotter",
+        "packwright",
+        "review",
+        "open",
+        "profiles",
+    ]
     assert len(set(keys)) == len(keys)
 
 
@@ -220,8 +236,8 @@ def test_every_tile_has_an_icon_the_atlas_carries_and_a_caption():
 
 
 def test_the_tile_cursor_wraps():
-    """Six fixed choices in a ring is a menu, where a two-hundred-row list is
-    not -- which is why the library's arrows clamp and these do not."""
+    """A fixed ring of choices is a menu, where a two-hundred-row list is not --
+    which is why the library's arrows clamp and these do not."""
     from types import SimpleNamespace
 
     ctx = SimpleNamespace(state=SimpleNamespace(home_index=0))

@@ -35,9 +35,13 @@ UNMEASURED = 0.5
 WARNING_COST = 0.10
 COMPONENT_COST = 0.15
 TOUCH_COST = 0.10
-# How much of the score the occupancy distance can take. Scaled by how far the
-# subject is from DEFAULT_OCCUPANCY as a fraction of the whole range, so a
-# candidate at 0.70 against a target of 0.78 loses very little.
+# The most the occupancy distance can take off, and it is charged in proportion
+# to that distance: |occupancy - DEFAULT_OCCUPANCY| straight, not normalised by
+# anything, so a candidate at 0.70 against a target of 0.78 loses 0.4 * 0.08 --
+# very little -- and one at 0.10 loses a quarter of its score. The min(1.0, ..)
+# beside it cannot fire on a measured report (occupancy is subject pixels over
+# frame pixels, so the distance is at most DEFAULT_OCCUPANCY) and is kept as a
+# guard on a report read back off disk, which is JSON some other build wrote.
 OCCUPANCY_COST = 0.40
 
 

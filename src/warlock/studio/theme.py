@@ -26,11 +26,12 @@ def __getattr__(name: str) -> int:
     colours. PEP 562 makes the same expression a live lookup, which is why the
     switch needed no edit at any of those call sites.
 
-    ``RAISED`` is kept as an alias: "one step above PANEL" predates the
-    elevation ramp. Anything else raises, as an attribute should.
+    Only the palette's own names resolve; anything else raises, as an
+    attribute should. There used to be a ``RAISED`` alias for ``ELEV_2`` here
+    -- "one step above PANEL", which predates the elevation ramp -- and it had
+    no reader left anywhere in the tree. A colour name with no call site is a
+    second vocabulary for the ramp, and the ramp is the vocabulary.
     """
-    if name == "RAISED":
-        return tokens.colour("ELEV_2")
     if name in tokens.COLOUR_NAMES:
         return tokens.colour(name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

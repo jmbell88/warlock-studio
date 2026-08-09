@@ -42,8 +42,10 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A switch at the top of the window chooses between eight modes, and that switch is the single thing
+A switch at the top of the window chooses between ten modes, and that switch is the single thing
 that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
+`Alt+1` to `Alt+9` and `Alt+0` jump straight to the nth segment — see
+[Keyboard shortcuts](14-shortcuts.md).
 
 - **Home.** The chooser the app opens on: start a 2D reference, start a 3D asset, open something
   already made, or manage profiles. Returning here is never destructive.
@@ -65,6 +67,11 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
   [In-app settings](16-configuration.md#in-app-settings).
+- **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
+  engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
+  speaks Tiled's formats in both directions. Covered in [Plotter](09-plotter.md).
+- **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
+  where everything landed. Covered in [Packwright](10-packwright.md).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
@@ -84,8 +91,8 @@ is the first entry in the mode switch described above, and returns there at any 
 Once you are in the workspace, the window is three columns:
 
 - **The left sidebar** is the settings form for the current mode, and nothing else — there is
-  nothing left to split against, so it is one scrolling column with no divider. The sidebar itself
-  is a fixed width.
+  nothing left to split against, so it is one scrolling column with no divider. Its width is not
+  draggable; it is one of three named sizes chosen in Settings.
 - **The middle column** is the viewport: the interactive 3D preview, or the reference image in 2D
   mode, or the canvas in Inker mode. A small toolbar sits over it with the framing, wireframe and
   turntable toggles, and — on a finished reference in 2D mode — the **Open in Inker** button.
@@ -93,7 +100,7 @@ Once you are in the workspace, the window is three columns:
   inspector: everything about the selected asset. In 3D mode it is three tabs, **Details**, **Rig &
   Pose** and **Export**; in 2D mode, **Details** and **Export**. The lower panel is the asset
   library — every job you have ever run, with its filters. The divider between them can be dragged;
-  the sidebar itself is a fixed width.
+  the sidebar's own width is not draggable, only chosen from the three named sizes in Settings.
 
 At the far right of the top bar are two small controls. The **?** button opens the keyboard
 shortcut list, which is also reproduced in [Keyboard shortcuts](14-shortcuts.md). Beside it is the

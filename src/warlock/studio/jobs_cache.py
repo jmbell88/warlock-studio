@@ -159,9 +159,26 @@ class JobsCache:
         return True
 
     def refresh_storage(self) -> None:
-        """Measure the data directory now. **Blocking** -- callers off the
-        frame thread only; the app submits :meth:`measure` as a task instead
-        (the startup call this used to serve is deferred too, C32)."""
+        """Measure the data directory now, and publish the reading.
+
+        **Blocking** -- callers off the frame thread only.
+
+        **The app deliberately does not call this, and that is the design
+        rather than an oversight.** ``main.App._request_storage`` submits
+        :meth:`measure`, which returns the reading instead of assigning it, so
+        the frame thread adopts it when the task result comes back; two tests
+        pin exactly that split (``test_measuring_storage_is_reachable_without
+        _touching_the_cache`` and ``test_requesting_storage_submits_the_non
+        _publishing_measurement``), and a third pins that ``_refresh`` never
+        reaches this method on the frame thread. Wiring this into the task
+        would publish ``storage`` from the measuring thread and contradict all
+        three.
+
+        What it survives as is the measure-and-adopt form for a caller that has
+        no frame loop to route a result through -- a script, a test, or a
+        headless harness. It is not dead code looking for a consumer; it is the
+        synchronous half of a split whose asynchronous half the app uses.
+        """
         self.storage = self.measure()
 
     def measure(self) -> Any:

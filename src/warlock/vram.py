@@ -143,11 +143,16 @@ def estimate(
         # memory, which is what the reference stage below accounts for too.
         return pass_gib if exclusive else pass_gib + TRELLIS_GIB
     if kind == "pixel_sheet":
-        # An img2img restyle: the same resident SDXL pipe as a text job, plus a
+        # An img2img restyle: the same resident pipe as a text job, plus a
         # ControlNet, and never trellis -- the mesh was reconstructed long
         # before. Under coexist a warm trellis is still holding its memory,
         # exactly as the reference stage below accounts for.
-        pixel = SDXL_GIB + CONTROLNET_GIB
+        #
+        # Priced from the registry like every other checkpoint-loading kind:
+        # `queue._pixel_sheet` reads params["base_model"], so charging a flat
+        # SDXL_GIB was correct only for as long as the one caller kept writing
+        # "sdxl_cfg" into it.
+        pixel = _image_model_cost(params) + CONTROLNET_GIB
         return pixel if exclusive else pixel + TRELLIS_GIB
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.

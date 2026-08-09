@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 # Bias generations toward images TRELLIS handles well: one object, clean
-# silhouette. Moved here from text2image.py so prompt.build() (used by the
-# /api/prompt-preview endpoint) and text2image.generate() share one copy;
+# silhouette. Moved here from text2image.py so prompt.build() (which the
+# generate panes' prompt preview calls) and text2image.generate() share one copy;
 # text2image.py re-exports this name so existing readers are unchanged.
 #
 # Two edits on 2026-08-07, both from the rogue sweep's 17 refusals. Every one

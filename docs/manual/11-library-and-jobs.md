@@ -195,8 +195,15 @@ one than a confirm answered in half a second while looking at something else.
 
 The trash icon on the third row of the filter bar switches the list to it. A trashed asset offers
 exactly two actions, **Restore** and **Delete permanently...**, and the bulk bar offers the same two
-for a ticked set. **Empty trash...** at the foot deletes all of it, including anything older than
-the loaded window.
+for a ticked set. Beside them the bar reports what is in there — `12 assets - 4.1 GB` — which is
+the number **Empty trash...** is about, since that button deletes all of it including anything
+older than the loaded window. The figure is measured in the background and the last answer is drawn
+until a new one arrives, so it can lag a delete by a moment rather than walking the disk while you
+are scrolling.
+
+Switching to the trash is a *view*, not a filter, and it is deliberately not remembered: the app
+always opens on the library. Quitting while looking at the trash and reopening into it would be a
+setting nobody chose, hiding every asset behind a state with no obvious way out.
 
 Deleting refuses on a running job — cancel it first — and a *queued* job is cancelled as it goes, so
 the worker never spends two minutes on something you have thrown away.

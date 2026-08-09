@@ -2,10 +2,10 @@
 
 The workspace assumes you already know which of two pipelines you are in and
 what you are looking at; the first thing after a launch is neither. So the
-frame starts here instead -- start a 2D reference, start a 3D asset, open
-something already made, or manage the style profiles the 2D pane draws from --
-and the Home entry in the mode switch comes back to it, so it is a chooser
-rather than a splash screen.
+frame starts here instead -- one tile per place there is work to do, plus
+opening something already made and managing the style profiles the 2D pane
+draws from -- and the Home entry in the mode switch comes back to it, so it is
+a chooser rather than a splash screen.
 
 Nothing here is persisted: ``AppState.mode`` defaults to ``"home"``, which is
 what makes this appear on every launch rather than only the first ever.
@@ -17,7 +17,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import fonts, icons, profiles, theme, widgets
+from .. import fonts, icons, modes, profiles, theme, widgets
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d
 from ..tokens import sp
@@ -34,22 +34,44 @@ def draw(ctx: Any) -> None:
         _choose(ctx)
 
 
-# --- the four choices -------------------------------------------------------
+# --- the choices ------------------------------------------------------------
 
 
-# The six choices, in the order they are drawn (M107). Data, so the arrow keys
-# and the click path agree about what the third tile *is* -- a hand-written
-# keyboard index over a hand-written column of calls is two orderings, and they
-# drift the first time a tile is inserted. The caption is a function because
-# one of them names the active profile; the action is looked up by key in
-# ``activate`` rather than stored here, so this stays importable data.
-TILES: tuple[tuple[str, str, str], ...] = (
-    ("2d", "IMAGE", "New 2D Image"),
-    ("3d", "BOX", "New 3D Model"),
-    ("inker", "BRUSH", "Inker"),
-    ("clay", "RULER", "Clay"),
-    ("open", "FOLDER_OPEN", "Open Existing"),
-    ("profiles", "SLIDERS", "Profiles"),
+# What each tile is *called*, in the order they are drawn (M107). Data, so the
+# arrow keys and the click path agree about what the third tile *is* -- a
+# hand-written keyboard index over a hand-written column of calls is two
+# orderings, and they drift the first time a tile is inserted.
+#
+# The names are editorial and deliberately not ``modes.MODES``' labels: a
+# chooser says "New 2D Image" where a switch says "2D". The *set* is not
+# editorial, and that is the half that went wrong (F76): it stopped at six while
+# the app grew to ten modes, so Review, Plotter and Packwright had no way in
+# from the screen the app opens on. Every ``modes.WORK_MODES`` entry has a tile,
+# and ``tests/test_panes_home_tiles.py`` fails if one does not -- the argument
+# ``studio/palette.py`` already makes, that a second index of everything the app
+# can do drifts unless something checks it.
+_NAMES: tuple[tuple[str, str], ...] = (
+    ("2d", "New 2D Image"),
+    ("3d", "New 3D Model"),
+    ("inker", "Inker"),
+    ("clay", "Clay"),
+    ("plotter", "Plotter"),
+    ("packwright", "Packwright"),
+    ("review", "Review"),
+    ("open", "Open Existing"),
+    ("profiles", "Profiles"),
+)
+
+# The two tiles that are not modes: sub-views of Home itself, so they have no
+# entry in ``modes.MODES`` to take an icon from.
+_SUBVIEW_ICONS = {"open": icons.FOLDER_OPEN, "profiles": icons.SLIDERS}
+
+# ``(key, icon, name)``. The icon comes from ``modes.MODES`` where there is one:
+# it is already stated there, and a second copy is how Home comes to draw a mode
+# under a glyph the switch does not use.
+TILES: tuple[tuple[str, str, str], ...] = tuple(
+    (key, {k: i for k, _label, i in modes.MODES}.get(key) or _SUBVIEW_ICONS[key], name)
+    for key, name in _NAMES
 )
 
 _CAPTIONS = {
@@ -57,14 +79,22 @@ _CAPTIONS = {
     "3d": "Start from a finished reference, or drop an image.",
     "inker": "A canvas, or an image you already have.",
     "clay": "Block a shape out from primitives, by hand.",
+    "plotter": "Lay a tilemap out over a tileset.",
+    "packwright": "Pack sprites into an atlas and its sidecar.",
+    "review": "Judge a sweep's meshes, or label references.",
     "open": "Everything already generated.",
 }
 
 
 def tiles(ctx: Any) -> list[tuple[str, str, str, str]]:
-    """``(key, icon, name, caption)`` for each tile, in drawing order."""
+    """``(key, icon, name, caption)`` for each tile, in drawing order.
+
+    A function rather than a fourth column on ``TILES`` because one caption
+    names the active profile; the action is looked up by key in ``activate``
+    rather than stored here, so the table stays importable data.
+    """
     out = []
-    for key, icon_name, name in TILES:
+    for key, icon, name in TILES:
         if key == "profiles":
             active = profiles.get_active(ctx.settings)
             caption = (
@@ -74,7 +104,7 @@ def tiles(ctx: Any) -> list[tuple[str, str, str, str]]:
             )
         else:
             caption = _CAPTIONS[key]
-        out.append((key, getattr(icons, icon_name), name, caption))
+        out.append((key, icon, name, caption))
     return out
 
 
@@ -89,14 +119,21 @@ def activate(ctx: Any, index: int) -> None:
         start_inker(ctx)
     elif key == "clay":
         start_clay(ctx)
-    else:
-        # "open" and "profiles" are sub-views of Home rather than modes.
+    elif key in ("open", "profiles"):
+        # Sub-views of Home rather than modes.
         ctx.state.landing_view = key
+    else:
+        # Plotter, Packwright and Review: a plain switch, because each already
+        # draws its own empty state with a way in ("New map", "Add a sprite",
+        # a run to pick). Clay is the exception above rather than the rule --
+        # it had no such state, which is why its tile mints a document.
+        ctx.state.mode = key
+        _leave(ctx)
 
 
 def move(ctx: Any, delta: int) -> None:
-    """Up/Down between the tiles. Wraps, unlike the library's arrow keys: six
-    fixed choices in a ring is a menu, where a two-hundred-row list is not."""
+    """Up/Down between the tiles. Wraps, unlike the library's arrow keys: a
+    fixed ring of choices is a menu, where a two-hundred-row list is not."""
     ctx.state.home_index = (ctx.state.home_index + delta) % len(TILES)
 
 
@@ -158,8 +195,10 @@ def _centre(width: float) -> None:
 
 def _choose(ctx: Any) -> None:
     avail = imgui.get_content_region_avail()
-    # Six tiles plus the title block; centre the stack in the upper half.
-    stack = sp(64 + 8) * 6 + sp(110)
+    # The tiles plus the title block; centre the stack in the upper half. Off
+    # ``len(TILES)`` rather than a literal, or adding a tile silently pushes the
+    # bottom of the stack off screen.
+    stack = sp(64 + 8) * len(TILES) + sp(110)
     imgui.dummy((0, max((avail.y - stack) * 0.4, sp(24))))
 
     def centred(text: str, colour: int | None = None) -> None:
@@ -200,10 +239,10 @@ def _setup_entry(ctx: Any) -> None:
 
     A first run reaches Home with nothing downloaded, presses New 2D Image, and
     is refused at the door -- correctly, and now with the download command in
-    the message (F55) -- but Home itself offered four ways to start work and no
+    the message (F55) -- but Home itself offered every way to start work and no
     way to find out whether this install can do any of it. The row is small and
-    sits under the tiles rather than beside them: it is not a fifth thing to do,
-    it is the thing to do when one of the four did not work.
+    sits under the tiles rather than beside them: it is not another thing to do,
+    it is the thing to do when one of the tiles did not work.
 
     It counts what is failing rather than saying "Diagnostics", because the
     number is the whole reason to press it, and it is drawn in the same colours

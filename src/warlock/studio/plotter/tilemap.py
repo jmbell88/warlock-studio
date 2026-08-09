@@ -487,7 +487,15 @@ class MapDoc:
         for uid, positions in objects.items():
             layer = self.layer(uid)
             if isinstance(layer, ObjectLayer):
-                for obj, (x, y) in zip(layer.objects, positions, strict=False):
+                # ``strict``, like every other zip in this package. The two
+                # lists are recorded from one walk of the same layer and
+                # replayed in LIFO order, so a length mismatch means an object
+                # arrived or left between the record and the replay -- at which
+                # point the positions no longer describe these objects and
+                # truncating quietly leaves the tail sitting on the old grid,
+                # detached from the geometry it was drawn around. That is the
+                # thing the resize moves objects to prevent.
+                for obj, (x, y) in zip(layer.objects, positions, strict=True):
                     obj.x, obj.y = float(x), float(y)
 
     # -- objects -------------------------------------------------------------

@@ -207,6 +207,15 @@ _MIB_TCP_STATE_LISTEN = 2
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_INSUFFICIENT_BUFFER = 122
 
+# How many times the TCP table is re-sized before giving up. The table is
+# live: connections open between the sizing call and the reading one, and the
+# second call then answers ERROR_INSUFFICIENT_BUFFER with the new size rather
+# than filling the buffer. Retrying is the documented contract; not retrying
+# meant a busy machine silently degraded "who holds this port" to "nobody
+# knows", which is the answer the whole section exists to stop giving. Bounded
+# because a machine whose table grows on every attempt is not going to settle.
+_TCP_TABLE_ATTEMPTS = 5
+
 
 if sys.platform == "win32":
 
@@ -232,12 +241,20 @@ def listener_pid(port: int) -> int | None:
         iphlpapi.GetExtendedTcpTable(
             None, ctypes.byref(size), False, _AF_INET, _TCP_TABLE_OWNER_PID_ALL, 0
         )
-        buf = ctypes.create_string_buffer(size.value)
-        rc = iphlpapi.GetExtendedTcpTable(
-            buf, ctypes.byref(size), False, _AF_INET, _TCP_TABLE_OWNER_PID_ALL, 0
-        )
-        if rc != 0:
-            log.debug("GetExtendedTcpTable failed (%d)", rc)
+        for _ in range(_TCP_TABLE_ATTEMPTS):
+            buf = ctypes.create_string_buffer(size.value)
+            rc = iphlpapi.GetExtendedTcpTable(
+                buf, ctypes.byref(size), False, _AF_INET, _TCP_TABLE_OWNER_PID_ALL, 0
+            )
+            if rc == 0:
+                break
+            if rc != _ERROR_INSUFFICIENT_BUFFER:
+                log.debug("GetExtendedTcpTable failed (%d)", rc)
+                return None
+            # The table grew between the two calls, and `size` now holds what it
+            # takes today. Round again rather than reporting no owner.
+        else:
+            log.debug("GetExtendedTcpTable kept growing; giving up")
             return None
         count = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD)).contents.value
         rows = ctypes.cast(

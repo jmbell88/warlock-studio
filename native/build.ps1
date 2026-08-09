@@ -12,7 +12,8 @@
     tuning choice. Every kernel here must agree bit for bit with a numpy
     reference, and a fused multiply-add rounds once where numpy rounds twice.
     /fp:precise (MSVC) and -ffp-contract=off (clang) are what forbid that; do
-    not "optimise" them to /fp:fast or -ffast-math.
+    not "optimise" them to /fp:fast or -ffast-math. clang-cl needs both spelled
+    out -- its /fp:precise still allows contraction.
 
 .PARAMETER Clean
     Delete intermediate objects after a successful build.
@@ -75,7 +76,16 @@ if (-not $built) {
         if (-not $exe) { continue }
         Write-Host "fallback compiler: $($exe.Source)"
         if ($alt -eq 'clang-cl') {
-            & clang-cl /O2 /fp:precise /LD /I"$here" /Fe:"$outDll" @sources
+            # /clang:-ffp-contract=off is not belt-and-braces beside /fp:precise:
+            # on clang 14+ /fp:precise means -ffp-contract=on, which *permits*
+            # the FMAs the bit-parity contract forbids -- so this branch alone
+            # could produce a DLL that fails the np.array_equal parity tests
+            # while the ABI handshake says it is current. /std:c11 and /W4 /WX
+            # match the MSVC line for the same reason: one compiler quietly
+            # building to a different standard, with warnings, is how a kernel
+            # stops being the same kernel.
+            & clang-cl /O2 /fp:precise /clang:-ffp-contract=off /std:c11 /W4 /WX `
+                /LD /I"$here" /Fe:"$outDll" @sources
         } elseif ($alt -eq 'clang') {
             & clang -O2 -ffp-contract=off -std=c11 -shared -I"$here" -o "$outDll" @sources
         } else {

@@ -247,20 +247,33 @@ def read_wmap(data: bytes) -> MapDoc:
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
-        manifest = json.loads(zf.read(MANIFEST))
-    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock map document") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("this map's manifest is malformed")
 
-    version = int(manifest.get("version", 0))
-    if version > VERSION:
-        raise ValueError(
-            f"this map was written by a newer version of Warlock "
-            f"(format {version}, this build reads {VERSION})"
-        )
-
+    # Every refusal is inside the ``with``, the two above included: raised in
+    # the gap between the open and the block, they left the archive open with
+    # nothing to close it but the collector. Same fix, same reason, as
+    # ``clay/serialize.read_wblk``.
     with zf:
+        try:
+            manifest = json.loads(zf.read(MANIFEST))
+        except (
+            zipfile.BadZipFile,
+            KeyError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError("this is not a Warlock map document") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("this map's manifest is malformed")
+
+        version = int(manifest.get("version", 0))
+        if version > VERSION:
+            raise ValueError(
+                f"this map was written by a newer version of Warlock "
+                f"(format {version}, this build reads {VERSION})"
+            )
+
         doc = MapDoc(
             width=int(manifest.get("width", 1)),
             height=int(manifest.get("height", 1)),

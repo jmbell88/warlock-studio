@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import meshreport, rigging
+from . import sheet
 
 
 def progress(frac: float, label: str) -> None:
@@ -732,9 +733,11 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     # The widest the subject can look from any yaw is its horizontal diagonal;
     # sizing to that rather than to a single axis is what stops the corner
     # views clipping.
-    extent = max((span[0] ** 2 + span[1] ** 2) ** 0.5, span[2], 1e-6) * float(
-        spec.get("margin", 1.12)
-    )
+    # sheet.FRAME_MARGIN, not a literal and not spec.get("margin", ...): nothing
+    # has ever written `margin` into a sheet spec, so that fallback was the only
+    # value it ever took -- and it was a second copy of the figure the in-app
+    # preview frames with, which has to match this one.
+    extent = max((span[0] ** 2 + span[1] ** 2) ** 0.5, span[2], 1e-6) * sheet.FRAME_MARGIN
     distance = extent * 2.0
 
     progress(0.10, "Setting up")

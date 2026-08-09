@@ -117,7 +117,7 @@ def draw(ctx: Any) -> None:
     imgui.end_child()
     below = imgui.get_cursor_pos_y()
     _bulk(ctx, jobs)
-    _storage(ctx)
+    _storage(ctx, jobs)
     _measure_footer(below)
 
 
@@ -272,20 +272,22 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     """The three selects, the star and the tick, on two rows rather than one.
 
     Measured, not guessed: three 110 px combos plus two square buttons come to
-    417 px, and the sidebar this pane lives in is a fixed 300 (``layout.
-    SIDEBAR_W``), which leaves 290 inside the padding. A child window *clips*
-    rather than wraps, so the star spent its whole life drawn past the right
-    edge -- neither visible nor clickable -- and the tick would have joined it.
-    Widths come off the live content region for the same reason a constant was
-    the bug: ``sp`` scales the sidebar with the monitor and 110 did not scale
-    with anything.
+    417 px, and the sidebar this pane lives in is one of three fixed widths
+    (``layout.SIDEBAR_WIDTHS``, 260/300/360 design px -- M106 replaced the
+    single 300 the rest of this comment was written against), the narrowest of
+    which leaves 250 inside the padding. A child window *clips* rather than
+    wraps, so the star spent its whole life drawn past the right edge -- neither
+    visible nor clickable -- and the tick would have joined it. Widths come off
+    the live content region for the same reason a constant was the bug: ``sp``
+    scales the sidebar with the monitor, the user picks its width, and 110 did
+    not scale with either.
     """
     filters = ctx.state.filters
     imgui.set_next_item_width(-1)
     # The hint carries the syntax (J87). Nowhere else can: the box is
-    # full-width in a 300 px sidebar, so a (?) beside it would push it off the
-    # edge, and a line of help under it would cost a row on every frame to
-    # explain something most queries never use.
+    # full-width in a sidebar of 260 to 360 design px, so a (?) beside it would
+    # push it off the edge at any of them, and a line of help under it would
+    # cost a row on every frame to explain something most queries never use.
     filters.text = widgets.input_text(
         "##filter", filters.text, max_length=120, hint="Filter... (tag: status: kind:)"
     )
@@ -332,8 +334,8 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     # Four square buttons on this row now: the direction toggle joined the
     # star, the tick and the (?). The reservation is computed rather than
     # written out for the reason the comment above gives -- a child window
-    # clips, so anything that overruns the fixed 300 px sidebar is neither
-    # visible nor clickable.
+    # clips, so anything that overruns the sidebar's chosen width is neither
+    # visible nor clickable, and that width is now the user's to change.
     buttons = 4 * (imgui.get_frame_height() + spacing)
     filters.sort = widgets.combo(
         "##sort",
@@ -385,7 +387,8 @@ def _view_row(ctx: Any) -> None:
     """Density and the trash: which *set* is on screen and how tightly (J89/J91).
 
     Its own row rather than two more squares on the sort row, which is already
-    a computed reservation against a fixed 300 px sidebar that clips. These two
+    a computed reservation against a sidebar that clips -- and one whose width
+    is the user's to pick (``layout.SIDEBAR_WIDTHS``). These two
     are also a different kind of control from the ones above -- everything on
     the rows above narrows what you are looking at, and these change how it is
     drawn and which pile it comes from.
@@ -427,7 +430,8 @@ def _failures(ctx: Any) -> None:
     click -- and after a sweep or an overnight batch that is the one thing the
     user does not know. Its own full-width row rather than a fourth control on
     the filter rows: three combos and two square buttons already overrun the
-    fixed 300 px sidebar, and a child window clips rather than wraps.
+    sidebar at every width it is offered in, and a child window clips rather
+    than wraps.
     """
     filters = ctx.state.filters
     if filters.status == "error":
@@ -1051,7 +1055,14 @@ def _export_zip(ctx: Any, ids: list[str]) -> None:
     ctx.submit("export-zip", run)
 
 
-def _storage(ctx: Any) -> None:
+def _storage(ctx: Any, jobs: list[Any]) -> None:
+    if ctx.state.filters.trash:
+        # The bar describes the set on screen, so in the trash it is the
+        # trash's own figure rather than the workshop's -- two totals on one
+        # row, one of which counts everything the other one does not, is worse
+        # than either alone.
+        _trash_bar(ctx, jobs)
+        return
     storage = ctx.cache.storage
     if ctx.cache.storage_error:
         # Before the figure rather than after it (E45): a stale total beside a
@@ -1070,21 +1081,105 @@ def _storage(ctx: Any) -> None:
         # which is full width, putting Prune 82 px past the panel's right edge.
         # Unclickable exactly while a new install has nothing else on screen.
         imgui.same_line()
-    if ctx.state.filters.trash:
-        if widgets.destructive_button("Empty trash...", (0, 0)):
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Empty the trash?",
-                    message="Every trashed asset and everything derived from it is "
-                    "removed from disk. This cannot be undone.",
-                    confirm_label="Empty",
-                    cancel_label="Cancel",
-                    on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
-                )
-            )
-        return
     if imgui.small_button("Prune..."):
         _ask_prune(ctx)
+
+
+# The task key the trash measurement runs under, and the ``AppState.preview``
+# slot its answer lands in. Named once because three lines read them, and
+# because a task key is a namespace: ``main._on_task_done`` claims several by
+# prefix and this one must collide with none of them.
+TRASH_SIZE_KEY = "trash-size"
+TRASH_SIZE_SLOT = "trash_size"
+
+
+def measure_trash(ctx: Any, jobs: list[Any]) -> dict[str, Any] | None:
+    """The trash's count and bytes, measured off the frame thread. -> the last
+    answer, or None before the first one lands.
+
+    Named for the asking rather than for the answer, so it cannot be mistaken
+    at a call site for ``service.jobs.trash_size``, which is what it runs.
+
+    ``service.jobs.trash_size`` walks a directory per trashed job, so it is a
+    task and the bar draws the answer it gave -- the storage walk's own
+    arrangement (``main._request_storage``) and for exactly the same reason: a
+    disk walk on the frame thread is the stall ``attach_files`` exists to avoid.
+    That figure was written for this bar and then never wired to it, so the one
+    question a trash view has to answer -- "is emptying this worth anything" --
+    had no answer on screen at all.
+
+    Re-measured when the *loaded* trash page changes identity, which is
+    ``jobs_cache.sweep_summary``'s stated limitation applied to a number rather
+    than to a toast: the figure itself is complete (``trash_size`` reads
+    ``store.trashed()``, not a page), and only the decision to re-measure is
+    window-scoped -- so a trash deeper than one page is reported correctly and
+    merely re-measured a little less eagerly. The submit is re-attempted every
+    frame the key is stale rather than armed once, because ``TaskRunner.submit``
+    refuses a key already in flight and nothing else would re-arm it (the
+    ``findings_dirty`` lesson).
+
+    Its own function, and returning the answer rather than drawing it, so the
+    arithmetic that decides *when* to walk the disk is assertable without a GL
+    context.
+    """
+    key = tuple(job["id"] for job in jobs)
+    cached = ctx.state.preview.get(TRASH_SIZE_SLOT)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    def run(stamp: Any = key) -> Any:
+        answer = svc_jobs.trash_size(ctx.svc)
+        # Written on the task thread and read on the frame thread, as
+        # ``JobsCache.storage_error`` beside it already is: one dict assignment,
+        # and nothing branches on it twice. Stamped with the key this run was
+        # asked for, so an answer arriving after the trash moved on is replaced
+        # rather than believed.
+        ctx.state.preview[TRASH_SIZE_SLOT] = (stamp, answer)
+        return answer
+
+    ctx.submit(TRASH_SIZE_KEY, run)
+    # The last measurement meanwhile, stale or not, exactly as the workshop
+    # figure above is drawn: a number that vanishes while it is being re-taken
+    # is a row that changes height every time something is restored.
+    return cached[1] if cached else None
+
+
+def trash_summary(answer: Any) -> str | None:
+    """"12 assets - 4.1 GB", or None when nothing has been measured yet.
+
+    Pure, for the reason ``_delete_message`` is: the wording is the feature.
+    Assets rather than jobs, because the trash is a view of the library and the
+    library calls its rows assets everywhere else.
+    """
+    if not isinstance(answer, dict):
+        return None
+    from ..state import format_bytes
+
+    count = int(answer.get("count") or 0)
+    what = "1 asset" if count == 1 else f"{count} assets"
+    return f"{what} - {format_bytes(int(answer.get('bytes') or 0))}"
+
+
+def _trash_bar(ctx: Any, jobs: list[Any]) -> None:
+    """What the trash is holding, and the one way to let go of it."""
+    summary = trash_summary(measure_trash(ctx, jobs))
+    if summary is not None:
+        widgets.muted(summary)
+        # Inside the branch for the reason the storage figure's ``same_line``
+        # is: before the first measurement lands there is no item on this line,
+        # and a ``same_line`` there attaches to the full-width list child above.
+        imgui.same_line()
+    if widgets.destructive_button("Empty trash...", (0, 0)):
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Empty the trash?",
+                message="Every trashed asset and everything derived from it is "
+                "removed from disk. This cannot be undone.",
+                confirm_label="Empty",
+                cancel_label="Cancel",
+                on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
+            )
+        )
 
 
 # How many jobs a prune keeps, while its question is on screen (O116). Module

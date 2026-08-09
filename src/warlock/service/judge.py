@@ -155,6 +155,14 @@ def probe(svc: WarlockService, stage: str) -> Any:
 def score_job(svc: WarlockService, job_id: str, stage: str) -> float | None:
     """This job's image, scored by the probe for ``stage``. None for no opinion.
 
+    The single-job form, and it is deliberately not what the app calls: every
+    screen that scores anything is scoring a grid, so ``score_jobs`` -- which
+    loads the probe once for the whole set -- is the path the panes take, and
+    this one is for a caller that has exactly one job in hand (and for the tests
+    that pin one score at a time). Kept rather than folded into ``score_jobs``
+    because the two differ in the thing that costs: a probe load per call is
+    fine for one row and is a file read per row for a hundred.
+
     Every way of having nothing to say collapses to None: no probe, no image, no
     weights, an unreadable file. A judge failure must never fail its caller --
     ``Worker._record_observation``'s rule, and here the caller is a frame.

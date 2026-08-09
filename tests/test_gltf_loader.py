@@ -2,8 +2,11 @@
 
 The hand-built one is the pin: it is the only way to assert what a skin
 *should* decode to without a 30 MB fixture in the repo. The real-asset tests
-run only in the main checkout, where assets/ exists -- they are what catch a
-loader that is self-consistently wrong.
+need one particular finished, rigged job still on disk -- they are what catch a
+loader that is self-consistently wrong. `assets/` is gitignored and a job is
+routinely pruned, so the skip names *this asset*, not the directory: a prune
+then degrades to a skip rather than to a test that silently never runs again
+while claiming it only wants the main checkout.
 """
 
 from __future__ import annotations
@@ -19,10 +22,12 @@ from warlock.glbio import rebuild_glb
 from warlock.studio.viewer import gltf
 from warlock.studio.viewer import math3d as m3
 
-REAL_MESH = Path("assets/2b058522940a/model.glb")
-REAL_RIG = Path("assets/2b058522940a/rig.glb")
+REAL_JOB = "44593039ccee"
+REAL_MESH = Path(f"assets/{REAL_JOB}/model.glb")
+REAL_RIG = Path(f"assets/{REAL_JOB}/rig.glb")
 needs_real = pytest.mark.skipif(
-    not REAL_RIG.exists(), reason="needs the main checkout's assets/ dir"
+    not (REAL_MESH.exists() and REAL_RIG.exists()),
+    reason=f"needs the rigged asset assets/{REAL_JOB}/ (pruned, or not this checkout)",
 )
 
 
@@ -285,21 +290,48 @@ def test_not_a_glb_is_refused_by_the_container_reader(tmp_path):
 
 
 @needs_real
-def test_the_real_rig_has_twenty_joints_including_the_synthetic_one():
+def test_the_real_rigs_palette_holds_every_joint_the_skin_declares():
+    """Every figure here is read off the asset, never written down.
+
+    This asserted the literal 20 and the presence of ``neutral_bone``, both of
+    which were facts about one particular pruned job rather than about the
+    loader: the replacement asset has 19 joints and no synthetic one, because
+    Blender only invents ``neutral_bone`` when some vertex has no group. So the
+    number and the name both failed while every property actually under test
+    still held.
+
+    What a loader can get wrong is *dropping* a joint -- which silently shifts
+    every index above it -- so that is what is asserted: the palette, the
+    inverse-bind array and the skin's own joint list are the same length, and
+    each of those nodes is one the model resolved. The synthetic joint is the
+    case that motivated it and is still checked, when the asset has one.
+    """
     model = gltf.load(REAL_RIG)
     node = model.mesh_instances()[0][0]
-    assert len(model.joint_palette(node)) == 20
-    assert model.skins[0].inverse_bind.shape == (20, 4, 4)
-    # Blender's exporter invents neutral_bone for vertices with no group; it
-    # is a real joint in the palette and dropping it shifts every index.
-    assert "neutral_bone" in model.by_name
+    skin = model.skins[0]
+    joints = model.joint_palette(node)
+
+    assert len(joints) > 1
+    assert len(skin.joints) == len(joints)
+    assert skin.inverse_bind.shape == (len(joints), 4, 4)
+    # Nothing was filtered out on the way in: every declared joint is a node
+    # the model kept, including any the template skeleton does not name.
+    named = set(model.by_name.values())
+    assert all(index in named for index in skin.joints)
+    if "neutral_bone" in model.by_name:
+        assert model.by_name["neutral_bone"] in skin.joints
 
 
 @needs_real
 def test_the_real_rig_is_skinned_with_normalized_weights():
-    prim = gltf.load(REAL_RIG).meshes[0][0]
+    model = gltf.load(REAL_RIG)
+    prim = model.meshes[0][0]
+    node = model.mesh_instances()[0][0]
     assert prim.joints.dtype == np.int32
-    assert prim.joints.max() < 20
+    # Every index addresses a joint this skin actually has -- the failure a
+    # dropped synthetic joint produces, and the reason the bound is the
+    # palette's own length rather than a number typed in beside it.
+    assert prim.joints.max() < len(model.joint_palette(node))
     assert prim.weights.sum(axis=1) == pytest.approx(np.ones(len(prim.weights)), abs=1e-5)
 
 

@@ -29,10 +29,17 @@ NO_HELP_BUTTON = {
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
     "overlay",  # the viewport toolbar and placeholders
+    # Not a pane at all: the mtime-cache rule several panes share, kept beside
+    # them because inspector already imports sheet_panel and so neither of the
+    # two could host it. Nothing on screen, so nothing to document.
+    "stamps",
     # A search box over whatever is on screen: it has no titled section to hang
     # a (?) beside, and a help button inside a list the arrow keys walk is a
-    # row the arrow keys would have to skip. Documented in chapter 12, which is
-    # where a reader looks for a keyboard binding.
+    # row the arrow keys would have to skip. Documented in
+    # `docs/manual/14-shortcuts.md` ("The command palette"), which is where a
+    # reader looks for a keyboard binding. Named by file rather than by chapter
+    # number: the numbers move, and this comment already outlived one
+    # renumbering saying "chapter 12".
     "palette",
 }
 

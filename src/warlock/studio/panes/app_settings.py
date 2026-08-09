@@ -24,6 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import fetch
 from .. import app_ctx, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -233,18 +234,19 @@ def _layout(ctx: Any) -> None:
 # --- models -----------------------------------------------------------------
 
 
-# The order rows are grouped in, and the heading each group gets. Written out
-# rather than taken from whatever order the rows arrive in, so a registry
-# gaining a table cannot silently append an unlabelled block.
-_GROUPS = (
-    ("base", "Image models"),
-    ("lora", "Style LoRAs"),
-    ("adapter", "Conditioning"),
-    ("control", "Conditioning"),
-    ("metric", "Measurement"),
-    ("pose", "Measurement"),
-    ("matting", "Measurement"),
-)
+# The order rows are grouped in, and the heading each group gets -- taken from
+# the vocabulary that owns it (``warlock.fetch.KINDS``) rather than hand-copied
+# here. The copy claimed a registry gaining a table could not silently append an
+# unlabelled block, and did the opposite: this loop only draws the kinds it
+# lists, so an unlisted one vanished from the pane entirely with nothing to say
+# it existed. Derived, plus the fallback heading below, is what makes that true.
+_GROUPS = fetch.GROUPS
+
+# Where a kind this build has never heard of lands. It should be unreachable --
+# the rows come from the same table these groups do -- but "unreachable" is what
+# the hand-copy assumed too, and a labelled block a user can read beats a
+# download that is simply not offered.
+_UNGROUPED = "Other"
 
 
 def _models(ctx: Any) -> None:
@@ -262,8 +264,9 @@ def _models(ctx: Any) -> None:
     for row in rows:
         by_kind.setdefault(str(row.get("kind")), []).append(row)
 
+    ordered = [*_GROUPS, *((k, _UNGROUPED) for k in by_kind if k not in dict(_GROUPS))]
     heading = ""
-    for kind, label in _GROUPS:
+    for kind, label in ordered:
         group = by_kind.get(kind) or []
         if not group:
             continue

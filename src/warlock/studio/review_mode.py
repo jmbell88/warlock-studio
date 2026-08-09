@@ -99,10 +99,12 @@ REASON_KEYS = {str(i + 1): reason for i, reason in enumerate(verdicts_mod.REASON
 RECENT_ID = "recent"
 RECENT_LABEL = "Recent, unreviewed"
 
-# The reference image a unit was generated from, in the order to look. A text
-# job writes reference.png (what trellis actually saw); an upload has only the
-# input it was given.
-REFERENCE_NAMES = ("reference.png", "input.png")
+# Where a unit's reference image is, in the order to look, is
+# ``verdicts.IMAGE_NAMES`` and is deliberately *not* restated here. This module
+# used to carry an identical copy and then read both of them -- ``_label_rows``
+# through the service's, ``reference_path`` through the local one -- which is
+# the ``judge.STAGES``/``verdicts.STAGES`` hazard exactly: two spellings of one
+# fact, agreeing right up until a name is added to one of them.
 
 
 @dataclass
@@ -733,7 +735,7 @@ def record_label(ctx: Any, verdict: str) -> bool:
     status = state.labels.status
     status[key] = int(status.get(key, 0)) + 1
     status["labels"] = int(status.get("labels", 0)) + 1
-    _advance_labels(state.labels)
+    advance_labels(state.labels)
     # A flag, never a submit. ``TaskRunner.submit`` refuses a key already in
     # flight and nothing re-arms it, so a burst of labels trained once on the set
     # as it stood at the first press and silently dropped the rest -- the
@@ -742,7 +744,7 @@ def record_label(ctx: Any, verdict: str) -> bool:
     return True
 
 
-def _advance_labels(labels: LabelPass) -> None:
+def advance_labels(labels: LabelPass) -> None:
     """Forward to the next row with no answer, wrapping, then staying put."""
     order = list(range(labels.index + 1, len(labels.rows))) + list(range(labels.index))
     ahead = next((i for i in order if labels.rows[i]["verdict"] is None), None)
@@ -966,7 +968,7 @@ def model_path(unit: dict[str, Any]) -> Path:
 
 def reference_path(unit: dict[str, Any]) -> Path | None:
     """What the unit was generated from, or None if neither exists."""
-    for name in REFERENCE_NAMES:
+    for name in verdicts_mod.IMAGE_NAMES:
         path = Path(unit["dir"]) / name
         if path.exists():
             return path
@@ -1134,7 +1136,7 @@ def _label_key(ctx: Any, state: ReviewState, event: Any, name: str) -> bool:
     if name == "r":
         return record_label(ctx, "reject")
     if name == "s":
-        _advance_labels(labels)
+        advance_labels(labels)
         return True
     # Everything else is swallowed, not passed down: the verdict loop's keys act
     # on a mesh nobody is looking at while this grid is on screen.

@@ -15,15 +15,22 @@ from __future__ import annotations
 
 import numpy as np
 
+#: The axes :func:`flip` accepts, and the list a menu is built from. One owner:
+#: the function validates against this tuple rather than against a chain of its
+#: own ``if``s, so a third axis cannot be offered by a pane and refused by the
+#: function, or accepted by the function and missing from every menu.
 FLIPS = ("horizontal", "vertical")
+
+#: Which numpy axis each of them reverses. Keyed off ``FLIPS`` above rather
+#: than restating the names, so the two cannot drift apart either.
+_FLIP_AXIS = dict(zip(FLIPS, (1, 0), strict=True))
 
 
 def flip(pixels: np.ndarray, axis: str) -> np.ndarray:
-    if axis == "horizontal":
-        return np.ascontiguousarray(pixels[:, ::-1])
-    if axis == "vertical":
-        return np.ascontiguousarray(pixels[::-1, :])
-    raise ValueError(f"unknown flip axis {axis!r}")
+    which = _FLIP_AXIS.get(axis)
+    if which is None:
+        raise ValueError(f"unknown flip axis {axis!r}")
+    return np.ascontiguousarray(np.flip(pixels, axis=which))
 
 
 def rotate90(pixels: np.ndarray, quarters: int = 1) -> np.ndarray:

@@ -13,11 +13,15 @@ way on layers before a mesh ever needed them.
 **Every edit addresses its object by uid, never by index.** An index stops
 naming the thing it named the moment anything moves, and the outliner can move
 an object at any time -- including between the edit being recorded and the undo
-being asked for. So a ``MeshEdit`` carries ``obj_uid`` and looks the object up,
-and the two edits that genuinely *are* about a position in a list
-(:class:`ObjectAddEdit`, :class:`ObjectRemoveEdit`, :class:`MaterialEdit`) hold
-an index only for where to put something *back*, never for finding it: the add
-and remove pair still delete by uid.
+being asked for. So a ``MeshEdit`` carries ``obj_uid`` and looks the object up.
+Three edits genuinely *are* about a position in a list, and they split two ways.
+:class:`ObjectAddEdit` and :class:`ObjectRemoveEdit` hold an index only for
+where to put an object *back*, never for finding it -- both still delete by uid.
+:class:`MaterialEdit` and :class:`MaterialListEdit` are the exception that
+proves the rule rather than a lapse from it: a palette slot **is** an index,
+named as one by the per-face ``material`` array on every mesh in the document,
+so there is no uid for one to be addressed by and ``_put`` finds its slot by
+the only name it has.
 
 **An edit owns its data.** ``cost`` is what eviction is driven by, and a numpy
 view reports its own small ``nbytes`` while pinning the whole base array alive.
@@ -256,20 +260,81 @@ class MaterialListEdit(Edit):
 
 
 def _shift_materials(doc: Any, index: int, delta: int) -> None:
-    """Renumber every face index at or above *index*.
+    """Renumber every reference to a palette slot at or above *index*.
 
-    Skipped entirely when the slot is the last one, which is the append case
-    and the common one: there is nothing above it to move, and rebuilding every
-    mesh in the document to change nothing would throw away the whole GPU cache
-    on every palette add.
+    An object that names no slot that high is skipped, which is what makes the
+    append case -- the common one -- cost nothing: there is nothing above the
+    last slot to move, and rebuilding every mesh in the document to change
+    nothing would throw away the whole GPU cache on every palette add.
+
+    Three things about *what* gets renumbered, each of which was once missed.
+
+    **Both references, not just the array.** A mesh's per-face ``material``
+    array is the obvious one; ``Obj.material`` -- the slot a *new* face is given
+    -- is the other, it is written to the file by ``serialize`` like any other
+    field, and leaving it behind pointed an object's default past the end of a
+    shortened palette.
+
+    **In place, never through ``dataclasses.replace`` on the object.** The mesh
+    is immutable and is replaced, as every mesh op replaces one; the ``Obj``
+    around it is not. Swapping in a new ``Obj`` left the old one held by any
+    :class:`ObjectAddEdit` or :class:`ObjectRemoveEdit` on the stack, so a redo
+    re-inserted an object the document had since moved on from -- the identity
+    that ``ObjectAddEdit``'s docstring says is the whole reason it holds the
+    object rather than a copy.
+
+    **Everything the history is holding, as well as everything in the
+    document.** An undone add and a done remove both keep an object alive in no
+    document at all, and a renumbering that walked ``doc.objects`` alone left
+    those naming the palette as it stood before it. Deduplicated by identity,
+    because an object that is both in the document and named by a step on the
+    stack is one object and must shift once.
     """
     from dataclasses import replace as _replace
 
     import numpy as np
 
-    for i, obj in enumerate(doc.objects):
-        material = obj.mesh.material
+    def shift(mesh: Any) -> Any:
+        material = mesh.material
         if not len(material) or int(material.max()) < index:
-            continue
-        moved = np.where(material >= index, material + delta, material)
-        doc.objects[i] = _replace(obj, mesh=_replace(obj.mesh, material=moved))
+            return mesh
+        return _replace(mesh, material=np.where(material >= index, material + delta, material))
+
+    for obj in _material_holders(doc):
+        obj.mesh = shift(obj.mesh)
+        if int(obj.material) >= index:
+            # The same threshold the face arrays use, and exactly reversible
+            # for every default *above* the slot. A default that names the
+            # removed slot itself is the one lossy case, and it is lossy
+            # because the position it named stopped existing -- no arithmetic
+            # can put that back. It is reachable from one place, the properties
+            # panel's own Remove, which re-points that object's default in the
+            # very next call and records it as an ``ObjectPropsEdit``; so the
+            # undo restores it exactly, from the step that owns it rather than
+            # from here. The clamp is the floor under the arithmetic for a slot
+            # 0 removal, not a choice about which material to substitute.
+            obj.material = max(0, int(obj.material) + delta)
+
+
+def _material_holders(doc: Any) -> Any:
+    """Every ``Obj`` this document's state space contains, each exactly once.
+
+    The objects in the document, and the ones a step on the undo stack could put
+    back into it -- an undone add, a done remove. Deduplicated by identity,
+    which is not a tidiness measure in either caller: one object is routinely
+    named by the document *and* by an add step still on the stack, and counting
+    it twice overstates a slot's users while shifting it twice moves its faces
+    two slots instead of one.
+    """
+    seen: set[int] = set()
+    for obj in doc.objects:
+        seen.add(id(obj))
+        yield obj
+    for edit in doc.history.edits():
+        obj = getattr(edit, "obj", None)
+        # ``hasattr(obj, "mesh")`` rather than an isinstance check, because the
+        # shared history engine carries edits from three other packages and this
+        # asks only whether the thing it holds has materials to renumber.
+        if obj is not None and hasattr(obj, "mesh") and id(obj) not in seen:
+            seen.add(id(obj))
+            yield obj

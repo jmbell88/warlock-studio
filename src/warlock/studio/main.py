@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog
+from . import filetypes
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ WINDOW_TITLE = "Warlock Studio"
 # How often the frame loop samples host memory. Long enough to be free, short
 # enough that a 30-minute idle session yields 60 points to fit a slope through.
 MEMORY_TICK_SECONDS = 30.0
+# How often the diagnostics popup re-stats the log file. Long enough that the
+# popup costs no syscall per frame, short enough that the button ungreys within
+# a second of the first line being written.
+LOG_STAT_SECONDS = 1.0
 # The task key the selection's GLB is parsed under. One key, so a selection
 # moving faster than the disk cannot pile up loads: a refused submit is simply
 # retried on the next tick, and a landed result is checked against
@@ -39,18 +44,22 @@ MEMORY_TICK_SECONDS = 30.0
 VIEWER_KEY = "viewer-load"
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
-# Pane widths and the sidebar split now live in layout.Layout, persisted and
-# draggable; the defaults there are the 340 / 0.55 this file used to hard-code.
+# Pane widths live in layout.py and are *fixed*, not draggable: three named
+# sidebar widths (260 / 300 / 360 design px, ``layout.SIDEBAR_WIDTHS``) with
+# ``default`` in force unless the settings file says otherwise. The one
+# proportion the user still drags is the sidebar's internal split,
+# ``Layout.settings_share``, which defaults to 0.55.
 TARGET_FPS = 60
 # The redraw rate while nothing on screen can change (B11): no pending input,
 # no job, no toast, no task, cameras settled, nothing playing. Fast enough
 # that the first frame after a wake-up condition is never far away, slow
 # enough that an idle session stops burning a core and the GPU.
 IDLE_FPS = 12
-# The modes that fill the host window with one pane. Inker and Clay are not
-# here: each fills it with a three-column *workspace* instead, which is
-# ``modes.WORKSPACE_MODES``. Those three categories partition ``modes.KEYS``
-# exactly, and the partition is the guard on ``_build_ui``'s dispatch.
+# The modes that fill the host window with one pane. Inker, Clay, Review,
+# Plotter and Packwright are not here: each fills it with a three-column
+# *workspace* instead, which is ``modes.WORKSPACE_MODES``. Those three
+# categories partition ``modes.KEYS`` exactly (ten modes today), and the
+# partition is the guard on ``_build_ui``'s dispatch.
 _SINGLE_PANE_MODES = ("home", "manual", "settings")
 
 # The mode-switch digits (I75), built lazily because pygame is imported inside
@@ -60,9 +69,11 @@ _SINGLE_PANE_MODES = ("home", "manual", "settings")
 _DIGIT_KEYS: dict[int, int] = {}
 
 
-# What a drop onto the window is allowed to be. One tuple, because the refusal
-# message and the accept path have to agree about it (H71).
-DROPPABLE_IMAGES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+# What a drop onto the window is allowed to be. The refusal message and every
+# accept path have to agree about it (H71) -- and so do the file pickers, which
+# is why the list itself lives in ``filetypes`` and this is a name for it
+# rather than a copy of it.
+DROPPABLE_IMAGES = filetypes.IMAGE_SUFFIXES
 
 
 def _ago(seconds: float) -> str:
@@ -327,7 +338,13 @@ class App:
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
         from .settings import restore_form
-        from .state import DEFAULT_FORM_3D, AppState, Eta, Filters, default_form_2d
+        from .state import (
+            DEFAULT_FORM_3D,
+            AppState,
+            Eta,
+            default_form_2d,
+            filters_from_stored,
+        )
 
         settings = self.settings
         monitor_scale = self._monitor_scale
@@ -340,10 +357,10 @@ class App:
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
         state.history = list(settings.get("history") or [])
-        stored_filters = settings.get("filters") or {}
-        state.filters = Filters(
-            **{k: v for k, v in stored_filters.items() if k in Filters.__annotations__}
-        )
+        # The filter bar, minus the fields that are views rather than filters:
+        # the app always opens on the library, never in the trash. See
+        # ``state.VOLATILE_FILTERS``.
+        state.filters = filters_from_stored(settings.get("filters"))
 
         self.app_ctx = Ctx(
             svc=self.svc,
@@ -365,7 +382,7 @@ class App:
         # job directory, and nothing on the first frame needs the number --
         # the library's storage line simply appears when the task lands.
         self._request_storage()
-        self.viewer.on_pose_dirty = lambda _dirty: None
+        self.viewer.on_pose_dirty = self._on_pose_dirty
 
     def _load_static_answers(self) -> None:
         """Read the things that cannot change without a restart, once."""
@@ -412,7 +429,7 @@ class App:
         downloaded from the Settings pane has to stop saying "weights missing"
         without a restart.
         """
-        from .. import models
+        from .. import fetch, models
         from ..service import downloads as svc_downloads
 
         ctx = self.app_ctx
@@ -420,10 +437,15 @@ class App:
         # every registered model regardless meant picking one whose weights
         # were never downloaded and learning at job-failure time, despite
         # doctor knowing at startup.
+        # The prefix comes from fetch.CHECK_PREFIXES rather than a literal:
+        # doctor composes the row name through the same table, so a prefix
+        # spelled twice would go on matching nothing and mark every downloaded
+        # base model present forever.
+        prefix = fetch.CHECK_PREFIXES["base"]
         missing = {
-            check.name.removeprefix("image model: ")
+            check.name.removeprefix(prefix)
             for check in (self.runtime.checks or [])
-            if check.name.startswith("image model: ") and not check.ok
+            if check.name.startswith(prefix) and not check.ok
         }
         ctx.base_models = [
             (k, f"{spec.label} - weights missing" if spec.label in missing else spec.label)
@@ -1044,6 +1066,47 @@ class App:
             return
         ctx.submit("storage", ctx.cache.measure)
 
+    def _on_pose_dirty(self, dirty: bool) -> None:
+        """The one reader of ``Viewer.on_pose_dirty``.
+
+        The viewer reports on every pose edit, every gizmo release and both
+        ends of the editor's life; this mirrors it onto ``AppState`` and marks
+        the window. Cheap by construction: the callback fires on a *change*
+        rather than per frame, and the caption is only touched when the answer
+        actually moves -- ``set_caption`` is an OS call and the pose editor's
+        rotate gizmo would otherwise make one per mouse-motion event.
+
+        A mirror, not the authority. ``pose_panel.guard`` -- which is what
+        stands between unsaved rotations and losing them, on the Done button,
+        on a mode switch and in the quit chain -- goes on asking the editor
+        itself, so the worst a missed notification can do is leave a marker on
+        a title bar. The indicator exists because that guard is the only sign
+        the app gives, and it appears *after* the user has asked to leave: the
+        banner saying so is inside the very pane you have to be looking at.
+        """
+        ctx = self.app_ctx
+        if ctx is None or bool(dirty) == ctx.state.pose_dirty:
+            return
+        ctx.state.pose_dirty = bool(dirty)
+        self._sync_title()
+
+    def _sync_title(self) -> None:
+        """The window caption, marked while something is unsaved.
+
+        Swallows its own failure: a caption is not worth taking a frame down
+        for, and this is reachable from a viewer callback that knows nothing
+        about whether a display still exists (teardown releases the viewer
+        after pygame has quit).
+        """
+        state = self.app_ctx.state if self.app_ctx is not None else None
+        marked = bool(state is not None and state.pose_dirty)
+        try:
+            import pygame
+
+            pygame.display.set_caption(f"{WINDOW_TITLE} *" if marked else WINDOW_TITLE)
+        except Exception:  # a lost display, a headless run
+            log.debug("could not set the window caption", exc_info=True)
+
     def _reload_viewer(self) -> None:
         """Re-read whatever the viewport is showing, in place.
 
@@ -1275,15 +1338,15 @@ class App:
 
     def _set_mode(self, key: str) -> None:
         """The one way a *shortcut* changes mode, so Home's reset is not a
-        second spelling of the switch's."""
-        state = self.app_ctx.state
-        if key == state.mode:
-            return
-        state.previous_mode = state.mode
-        state.mode_observed = key
-        state.mode = key
-        if key == "home":
-            state.landing_view = "choose"
+        second spelling of the switch's.
+
+        The switch itself is :func:`state.set_mode`, which the command palette
+        also calls -- the palette used to carry its own copy of these four
+        lines, and the copy had already lost the early return.
+        """
+        from .state import set_mode
+
+        set_mode(self.app_ctx.state, key)
 
     def _escape_mode(self) -> None:
         """Esc out of a mode you only pass through, back to the work you left.
@@ -1309,10 +1372,11 @@ class App:
 
         ctx = self.app_ctx
         self._note_mode(ctx.state)
-        # Alt+1..8, before everything: it is the only binding that must work in
-        # *every* mode, and Inker, Clay and Review each consume whatever
-        # reaches them. See ``modes.mode_for_digit`` for why the modifier is
-        # Alt and not Ctrl.
+        # The mode digits (Alt+1..9 and Alt+0 for the tenth), before
+        # everything: it is the only binding that must work in *every* mode,
+        # and the workspace modes each consume whatever reaches them. See
+        # ``modes.mode_for_digit`` for why the modifier is Alt and not Ctrl,
+        # and ``modes.digit_key_label`` for why the tenth slot is 0.
         if event.type == pygame.KEYDOWN and pygame.key.get_mods() & pygame.KMOD_ALT:
             digit = _digit_keys().get(event.key)
             target = modes.mode_for_digit(digit) if digit is not None else None
@@ -2225,7 +2289,7 @@ class App:
             review_mode.record_label(ctx, "reject")
         imgui.same_line()
         if widgets.disabled_button("Skip (S)", row is not None):
-            review_mode._advance_labels(labels)
+            review_mode.advance_labels(labels)
         if widgets.disabled_button("Done", True):
             review_mode.close_labels(ctx)
 
@@ -2840,8 +2904,9 @@ class App:
         from . import modes
 
         imgui.dummy((sp(420), 0))
-        # The digit range comes from the mode list, not from the number 8: a
-        # ninth mode would otherwise gain a working binding this list denies.
+        # The digit range comes from the mode list, not from a written-out
+        # count: an eleventh mode would otherwise gain a working binding this
+        # list denies.
         table(
             "Everywhere",
             [
@@ -3020,8 +3085,7 @@ class App:
 
             ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
         imgui.same_line()
-        log_path = Path(ctx.runtime.config.data_dir) / "warlock.log"
-        if widgets.disabled_button("Open the log", log_path.exists()):
+        if widgets.disabled_button("Open the log", _log_exists(ctx.runtime.config.data_dir)):
             ctx.open_log()
         imgui.same_line()
         # Chapter 12 (F57). The popup names the failing rows and their remedies;
@@ -3199,9 +3263,16 @@ class App:
             log.info("frame loop: %s", self.fps.summary())
         ctx = self.app_ctx
         if ctx is not None:
+            # Each mode's persist is its own step, so one raising cannot cost
+            # the others -- but the *write* is one flush at the end, because
+            # Settings holds the whole document and flushing per step wrote the
+            # same file five times on the way out.
             _step("persist settings", lambda: self._persist(ctx))
             _step("persist inker", lambda: self._persist_inker(ctx))
-            _step("persist build", lambda: self._persist_clay(ctx))
+            _step("persist clay", lambda: self._persist_clay(ctx))
+            _step("persist plotter", lambda: self._persist_plotter(ctx))
+            _step("persist packwright", lambda: self._persist_packwright(ctx))
+            _step("write settings", ctx.settings.flush)
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
             from .panes import sheet_panel
@@ -3229,29 +3300,71 @@ class App:
         log.info("teardown complete")
 
     def _persist(self, ctx: Any) -> None:
-        from .settings import sanitise_form
+        """The app's own settings. The write itself is teardown's last step.
 
-        # No mode: the app opens on Home every launch, so storing the one it
-        # happened to quit in would have no reader -- and quitting from the
-        # Manual or Settings would store a mode nothing would want restored.
+        No mode: the app opens on Home every launch, so storing the one it
+        happened to quit in would have no reader -- and quitting from the
+        Manual or Settings would store a mode nothing would want restored.
+        """
+        from .settings import sanitise_form
+        from .state import filters_to_store
+
         ctx.settings.set("show_fps", ctx.state.show_fps)
         ctx.settings.set("form_2d", sanitise_form(ctx.state.form_2d))
         ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
         ctx.settings.set("history", ctx.state.history)
-        ctx.settings.set("filters", vars(ctx.state.filters))
-        ctx.settings.flush()
+        # Not ``vars``: the trash is a *view* rather than a filter, so quitting
+        # from it must not reopen in it. See ``state.VOLATILE_FILTERS``.
+        ctx.settings.set("filters", filters_to_store(ctx.state.filters))
 
     def _persist_inker(self, ctx: Any) -> None:
         from . import inker_mode
 
         inker_mode.persist(ctx)
-        ctx.settings.flush()
 
     def _persist_clay(self, ctx: Any) -> None:
         from . import clay_mode
 
         clay_mode.persist(ctx)
-        ctx.settings.flush()
+
+    def _persist_plotter(self, ctx: Any) -> None:
+        from . import plotter_mode
+
+        plotter_mode.persist(ctx)
+
+    def _persist_packwright(self, ctx: Any) -> None:
+        from . import packwright_mode
+
+        packwright_mode.persist(ctx)
+
+
+# The diagnostics popup's log-file probe: (data dir, deadline, answer). One
+# slot rather than a map -- a process has exactly one data directory, and a
+# dict keyed by path would be a cache with no eviction for no benefit.
+_LOG_PROBE: tuple[str, float, bool] = ("", 0.0, False)
+
+
+def _log_exists(data_dir: Any) -> bool:
+    """Whether there is a log file to open, re-stated at most once a second.
+
+    The popup draws every frame while it is open, and this was a ``stat`` per
+    frame for an answer that changes once per session -- when the first line is
+    written. Cached rather than answered once, because on a clean data
+    directory that first line lands *after* the window does, and a button
+    permanently greyed because the popup happened to be open early is a worse
+    failure than a second of staleness.
+
+    A module function rather than a method: it needs no App, and the popup is
+    drawn against stand-ins in the smoke suite.
+    """
+    global _LOG_PROBE
+    key = str(data_dir)
+    cached_key, deadline, exists = _LOG_PROBE
+    now = time.monotonic()
+    if key != cached_key or now >= deadline:
+        exists = (Path(data_dir) / "warlock.log").exists()
+        _LOG_PROBE = (key, now + LOG_STAT_SECONDS, exists)
+    return exists
 
 
 def _step(label: str, fn: Any) -> None:

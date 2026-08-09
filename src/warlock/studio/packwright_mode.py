@@ -30,20 +30,17 @@ from typing import Any
 
 import numpy as np
 
-from . import dialogs, packwright_state
+from . import dialogs, filetypes, packwright_state
 from .packwright_state import PackTab, PackwrightState
 
 log = logging.getLogger(__name__)
 
 WPACK_FILTER = ["Warlock atlas (*.wpack)", "*.wpack"]
-IMAGE_FILTER = [
-    "Images (*.png *.jpg *.webp)",
-    "*.png",
-    "*.jpg",
-    "*.jpeg",
-    "*.webp",
-    "*.bmp",
-]
+# Label *and* patterns from ``filetypes``, which is the whole point: the label
+# was hand-written and named three of the five suffixes the pattern list
+# accepted, so the dialog told the user two of the formats it would have opened
+# were unsupported.
+IMAGE_FILTER = [filetypes.describe("Images"), *filetypes.globs()]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 
 

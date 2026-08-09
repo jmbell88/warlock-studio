@@ -43,8 +43,9 @@ GRID_SCALES: tuple[int, ...] = (4, 5, 6, 8, 10, 12, 16)
 # Normalized within-cell variance below which the lattice is considered real.
 # Provisional: Phase C's bench run over bench/suites/pixel-v1 calibrates it from
 # the observed separation between an on-grid generation and an off-grid one, and
-# a measurement document under docs/measurements/ comes before it moves -- the
-# pattern trellis_band and mesh_hole_max both set.
+# docs/measurements/2026-08-06-pixel-art-xl.md is that document (procedure
+# pre-registered, run not yet taken) and comes before it moves -- the pattern
+# trellis_band and mesh_hole_max both set.
 GRID_RESIDUAL_MAX = 0.05
 
 # Alpha is binary in pixel art: a cell is drawn or it is not. The threshold is

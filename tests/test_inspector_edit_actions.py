@@ -1,11 +1,15 @@
 """Exactly one "Open in Inker" is on screen at a time, and which one it is.
 
-`TODO.md` §6's third item. Both affordances shipped in 9e and both act on
+The decision this pins shipped, so it is stated here rather than cited to a
+roadmap section: the duplicate is resolved by *ownership*, not by removing
+either affordance. Both shipped in 9e and both act on
 ``ctx.job()`` -- the *same* asset -- so in 2D mode there were two buttons for
 one action on one object, one directly above the image and one in the sidebar.
 
-The decision taken: **in a mode with a viewport toolbar over the reference, the
-toolbar owns it; everywhere else the inspector does.** The toolbar's button sits
+So: **in a mode with a viewport toolbar over the reference, the
+toolbar owns it; everywhere else the inspector does** -- ``overlay.offers_inker``
+is the toolbar's gate and ``inspector.offers_inker`` is written as its
+*complement*, so exactly one is on screen in every mode. The toolbar's button sits
 against the pixels it edits, which is where the intent forms; the inspector's
 covers the cases with no such toolbar -- a reference selected while in 3D, where
 ``overlay.toolbar`` deliberately hides the button because the thing on screen is

@@ -7,9 +7,10 @@ falling back is the one outcome those rows exist to prevent, and the only thing
 that settles it is an attempted load.
 
 **It runs out of process, and the reason is measured rather than assumed.**
-Loading BiRefNet on the CPU costs **1475 MB** of RSS on this machine, and the
-memory does not come back: dropping every reference and calling ``gc.collect()``
-leaves 1053 MB resident, because what is holding it is the allocator's arenas
+Loading BiRefNet on the CPU costs **1475 MB** of RSS on this machine
+(``docs/measurements/2026-08-08-load-probe-memory.md``), and the memory does not
+come back: dropping every reference and calling ``gc.collect()`` leaves
+1053 MB resident, because what is holding it is the allocator's arenas
 rather than a live object. So an in-process check is a gigabyte spent on every
 launch, for the life of the process, to make one row say "loads" -- on a user
 who may never do a 2D export. Warlock's worst crash to date is host-commit

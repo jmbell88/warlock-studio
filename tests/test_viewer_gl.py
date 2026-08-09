@@ -228,11 +228,19 @@ def test_resizing_a_viewport_is_a_no_op_when_the_size_is_unchanged(gl):
 
 # --- skinning ---------------------------------------------------------------
 
-REAL_RIG = "assets/2b058522940a/rig.glb"
-REAL_MESH = "assets/2b058522940a/model.glb"
+# One particular finished, rigged job. `assets/` is gitignored and a job is
+# routinely pruned, so the skip names *this asset* rather than the directory:
+# a prune degrades to an honest skip instead of a test that never runs again
+# while claiming it only wants the main checkout.
+REAL_JOB = "44593039ccee"
+REAL_RIG = f"assets/{REAL_JOB}/rig.glb"
+REAL_MESH = f"assets/{REAL_JOB}/model.glb"
 needs_real = pytest.mark.skipif(
-    not __import__("pathlib").Path(REAL_RIG).exists(),
-    reason="needs the main checkout's assets/ dir",
+    not (
+        __import__("pathlib").Path(REAL_RIG).exists()
+        and __import__("pathlib").Path(REAL_MESH).exists()
+    ),
+    reason=f"needs the rigged asset assets/{REAL_JOB}/ (pruned, or not this checkout)",
 )
 
 

@@ -19,17 +19,20 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, inker_state
+from . import dialogs, filetypes, inker_state
 from .inker import animation
 from .inker_state import InkerDoc, InkerState
 
 log = logging.getLogger(__name__)
 
 ORA_FILTER = ["OpenRaster (*.ora)", "*.ora"]
-OPEN_FILTER = ["Images and layered files", "*.ora *.png *.jpg *.jpeg *.webp *.bmp"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 
-OPENABLE = (".ora", ".png", ".jpg", ".jpeg", ".webp", ".bmp")
+# The layered format plus every image the app accepts anywhere -- the tuple
+# from ``filetypes``, not a copy of it, so the picker and the suffix check can
+# never disagree with each other or with what a drop accepts.
+OPENABLE = (".ora", *filetypes.IMAGE_SUFFIXES)
+OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 
 NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 

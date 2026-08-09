@@ -10,7 +10,7 @@ it — a stored mode would be a value with no reader, and the app would drift in
 itself about where it opens. The mode switch along the top always has a Home entry, so the chooser
 is one click away from anywhere.
 
-## The six tiles
+## The tiles
 
 Each tile is a whole clickable card, not a button with a label beside it.
 
@@ -20,13 +20,21 @@ Each tile is a whole clickable card, not a button with a label beside it.
 | New 3D Model | A clean [mesh form](04-generating-meshes.md), with no source asset selected. |
 | Inker | The [layered raster editor](07-inker.md), with whatever documents were already open. |
 | Clay | The [primitive modeller](08-clay.md). If nothing is open it starts a new empty document, because a mode with nothing in it and no obvious way to begin is a dead end. |
+| Plotter | The [tilemap editor](09-plotter.md). |
+| Packwright | The [sprite-atlas packer](10-packwright.md). |
+| Review | The [sweep review and labelling](13-review.md) pass. |
 | Open Existing | The [library](11-library-and-jobs.md) in full, with a Continue button that opens the selected asset in the pane that made it. |
 | Profiles | The [style profiles](12-profiles.md) editor. The caption names the active profile when there is one. |
 
-Inker and Clay keep whatever was open, and the two generate tiles do not. The difference is not an
-inconsistency: in Inker and Clay the *documents are the work*, and there is no form to reset, while
-a generate pane is a form and starting from someone else's half-filled one is worse than starting
-empty.
+There is one tile for every mode that owns a viewport or a form, and a test asserts exactly that —
+a chooser missing a mode is a mode reachable only by a keyboard shortcut somebody has to already
+know about, which is the same drift the command palette is derived rather than hand-written to
+avoid. The names, captions and order stay editorial; only the coverage is checked.
+
+Inker, Clay, Plotter and Packwright keep whatever was open, and the two generate tiles do not. The
+difference is not an inconsistency: in the editors the *documents are the work*, and there is no
+form to reset, while a generate pane is a form and starting from someone else's half-filled one is
+worse than starting empty.
 
 ## The diagnostics row
 

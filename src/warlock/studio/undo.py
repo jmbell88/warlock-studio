@@ -29,6 +29,7 @@ data copies it when it is a view.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -119,6 +120,32 @@ class UndoStack:
     def redo_top(self) -> Edit | None:
         """The step a ``redo`` would replay. The counterpart of :attr:`top`."""
         return self._undone[-1] if self._undone else None
+
+    def edits(self) -> Iterator[Edit]:
+        """Every step the stack is holding, done and undone, compounds opened.
+
+        The stack has no opinion about what an edit edits, and this does not
+        give it one -- it hands back opaque ``Edit``s and the caller decides
+        which of them it recognises. What it is *for* is the one thing an owner
+        of the document cannot otherwise see: a step holds objects that are in
+        no document (an undone add, a done remove), and a document-wide
+        renumbering that walked only the live objects would leave those holding
+        numbers from before it. Clay's palette shift is that caller.
+
+        A ``CompoundEdit`` yields its children rather than itself, recursively,
+        because whether an edit was bundled with another is a fact about how it
+        was pushed and never about what it holds.
+        """
+
+        def walk(edit: Edit) -> Iterator[Edit]:
+            if isinstance(edit, CompoundEdit):
+                for child in edit.edits:
+                    yield from walk(child)
+            else:
+                yield edit
+
+        for edit in (*self._done, *self._undone):
+            yield from walk(edit)
 
     @property
     def head(self) -> int:

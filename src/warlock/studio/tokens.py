@@ -53,18 +53,19 @@ def sp(n: float) -> float:
 
 # -- spacing scale -----------------------------------------------------------
 
+# Only the steps something actually spaces with. A scale carried out to every
+# multiple "for completeness" is a menu of near-identical choices, which is how
+# two panes come to sit 24 and 20 apart for no stated reason -- SP_6, SP_10 and
+# RADIUS_L were exactly that and had no readers at all.
 SP_1 = 4
 SP_2 = 8
 SP_3 = 12
 SP_4 = 16
-SP_6 = 24
-SP_10 = 40
 
 # -- radii / strokes ---------------------------------------------------------
 
 RADIUS_S = 4.0
 RADIUS_M = 6.0
-RADIUS_L = 10.0
 BORDER = 1.0
 
 # -- type scale --------------------------------------------------------------

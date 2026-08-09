@@ -1,6 +1,12 @@
 """The rig section's two readings of a rig that lives in another job's row.
 
-`TODO.md` §6, and the whole difficulty is one sentence: 0d wrote the weighting
+The decision this pins shipped, so it is stated here rather than cited to a
+roadmap section: the rig-weighting verdict reads ``rig.json`` beside the
+*selected mesh*, cached per job on the directory's mtime under the racily-clean
+rule, and the row still wins where it has an answer, so a *rig* job selected in
+the library answers for itself.
+
+The whole difficulty is one sentence: 0d wrote the weighting
 outcome onto the **rig** job, but the Rig & Pose tab opens on the **model** job,
 because that is the asset a user selects and the mesh the rig belongs to. So the
 natural selection showed nothing at all -- a degraded rig looked exactly like a
@@ -117,11 +123,13 @@ def _settled(monkeypatch, job_dir):
     answered correctly and deliberately not remembered, so a test that skipped
     this would be asserting against the racy window the rule exists to refuse.
     """
-    import warlock.studio.panes.inspector as inspector_mod
+    import warlock.studio.panes.stamps as stamps_mod
     from warlock.service.files import MTIME_RACE_NS
 
     settled = job_dir.stat().st_mtime_ns + MTIME_RACE_NS * 2
-    monkeypatch.setattr(inspector_mod.time, "time_ns", lambda: settled)
+    # ``stamps`` is where the rule and its clock read now live -- one owner for
+    # the four stamped caches in the panes, rather than four spellings of it.
+    monkeypatch.setattr(stamps_mod.time, "time_ns", lambda: settled)
 
 
 def test_the_rig_file_is_read_once_and_then_cached(svc, monkeypatch):
@@ -178,10 +186,10 @@ def test_a_re_rig_inside_the_mtime_tick_is_still_seen(svc, monkeypatch):
     job = _job(svc, job_id)
     job_dir = svc.job_dir(job_id)
 
-    import warlock.studio.panes.inspector as inspector_mod
+    import warlock.studio.panes.stamps as stamps_mod
 
     monkeypatch.setattr(
-        inspector_mod.time, "time_ns", lambda: job_dir.stat().st_mtime_ns
+        stamps_mod.time, "time_ns", lambda: job_dir.stat().st_mtime_ns
     )
     assert inspector.rig_meta(ctx, job)["weighting"] == "automatic"
 

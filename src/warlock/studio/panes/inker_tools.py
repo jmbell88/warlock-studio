@@ -43,7 +43,6 @@ TOOL_ICONS = {
 }
 
 SYMMETRY_LABELS = (("none", "off"), ("x", "left / right"), ("y", "top / bottom"), ("xy", "both"))
-BLEND_LABELS = tuple((mode, mode) for mode in inker.BLEND_MODES)
 
 
 def draw(ctx: Any) -> None:

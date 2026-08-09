@@ -35,7 +35,12 @@ keep the name.
 
 Idempotent. Run over the vendored faces after any font bump:
 
-    uv run --with fonttools python scripts/strip_font_pua.py
+    uv run python scripts/strip_font_pua.py
+
+No ``--with fonttools`` is needed any more: ``fonttools`` is in the ``dev``
+dependency *group*, which is one of uv's defaults, so a plain ``uv sync``
+already installed it -- the same copy ``tests/test_fonts.py`` reads the cmaps
+with. Nothing under ``src/`` imports it.
 """
 
 from __future__ import annotations

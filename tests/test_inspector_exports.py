@@ -238,7 +238,23 @@ def test_a_manifest_that_is_not_an_object_is_not_an_error(tmp_path):
     assert inspector._manifest(_Ctx(tmp_path), "abc123abc123") is None
 
 
-def test_an_unreadable_manifest_is_not_re_read_every_frame(tmp_path):
+def _settled(monkeypatch, path):
+    """Move the clock a tick past ``path``'s mtime.
+
+    Every test that wants a *cache hit* has to do this, and that is the
+    racily-clean rule working rather than a wrinkle in it: a file written a
+    moment ago is answered correctly and deliberately not remembered, because a
+    rewrite landing inside its mtime's own 15.6 ms tick would otherwise match
+    that stamp forever. Same helper, same reason, as ``test_inspector_rig``'s.
+    """
+    import warlock.studio.panes.stamps as stamps_mod
+    from warlock.service.files import MTIME_RACE_NS
+
+    settled = path.stat().st_mtime_ns + MTIME_RACE_NS * 2
+    monkeypatch.setattr(stamps_mod.time, "time_ns", lambda: settled)
+
+
+def test_an_unreadable_manifest_is_not_re_read_every_frame(tmp_path, monkeypatch):
     # The one state that would otherwise defeat the cache entirely: "cannot be
     # parsed" is an answer about this version of the file just as a dict is,
     # and without the sentinel a mangled manifest is a read plus a failed parse
@@ -246,14 +262,27 @@ def test_an_unreadable_manifest_is_not_re_read_every_frame(tmp_path):
     path = tmp_path / "manifest.json"
     path.write_text("{not json", encoding="utf-8")
     ctx = _Ctx(tmp_path)
+    _settled(monkeypatch, path)
     assert inspector._manifest(ctx, "abc123abc123") is None
     assert ctx.state.manifest == (("abc123abc123", path.stat().st_mtime_ns), None)
 
 
-def test_the_manifest_is_parsed_once_per_version_not_once_per_frame(tmp_path):
+def test_a_manifest_written_a_moment_ago_is_not_cached_at_all(tmp_path):
+    """The other half of the same rule, and the one that makes it safe: inside
+    the racy window the answer is re-read every frame rather than remembered."""
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps({"artifacts": {"icon.png": {}}}), encoding="utf-8")
     ctx = _Ctx(tmp_path)
+
+    assert inspector._manifest(ctx, "abc123abc123") is not None
+    assert ctx.state.manifest is None
+
+
+def test_the_manifest_is_parsed_once_per_version_not_once_per_frame(tmp_path, monkeypatch):
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"artifacts": {"icon.png": {}}}), encoding="utf-8")
+    ctx = _Ctx(tmp_path)
+    _settled(monkeypatch, path)
 
     # Identity, not equality: a second parse would produce an equal dict, and
     # parsing a file sixty times a second is exactly what the cache exists to

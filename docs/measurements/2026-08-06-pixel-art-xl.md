@@ -44,8 +44,14 @@ uv run python -m warlock.bench run --suite pixel-v1 --recipe pixel-lcm-xl --stag
 uv run python -m warlock.bench run --suite pixel-v1 --recipe pixel-hyper-xl --stage reference
 uv run python -m warlock.bench run --suite pixel-v1 --recipe baseline-turbo-raw --stage reference
 uv run python -m warlock.bench score <each run dir>
-uv run python -m warlock.bench compare <run A> <run B>
+uv run python -m warlock.bench score <run B> --against <run A>
 ```
+
+The A/B is `score --against`, not a `compare` subcommand: there is no such
+subcommand and there never was. `python -m warlock.bench --help` lists the whole
+surface — `suites`, `recipes`, `suite`, `run`, `score`, `calibrate`, `prune`,
+`purge`. Two `--against` calls give the two comparisons this run needs, each
+pixel arm against the `baseline-turbo-raw` control.
 
 Reference stage, not model: the question is entirely about the picture, and a
 TRELLIS reconstruction of a 32-colour sprite would add two minutes per unit and
@@ -101,6 +107,6 @@ threshold work above is suspended until it is explained.
 ## Results
 
 Not yet taken. The run needs the weights from
-[Installation](../manual/10-installation.md#optional-image-models-and-style-loras):
+[Installation](../manual/15-installation.md#optional-image-models-and-style-loras):
 `nerijs/pixel-art-xl`, `latent-consistency/lcm-lora-sdxl` (renamed), and the
 SDXL 1.0 base, which is likely already present.

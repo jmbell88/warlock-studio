@@ -57,7 +57,7 @@ def get_file(
         raise NotFound("unknown file")
     if pixel_colors is not None and pixel_colors not in files.PIXEL_COLOR_CHOICES:
         choices = ", ".join(str(n) for n in files.PIXEL_COLOR_CHOICES)
-        raise Invalid(f"pixel_colors must be one of {choices}")
+        raise Invalid(f"pixel_colors must be one of {choices}", field="pixel_colors")
     # The row is fetched, not just the id checked: readiness is a fact about
     # the job (a mesh is only servable once it is *done*), and an orphaned
     # directory used to serve files for a job that no longer exists.

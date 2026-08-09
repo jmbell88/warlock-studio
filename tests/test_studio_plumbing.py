@@ -363,7 +363,10 @@ def test_leaving_pose_mode_forgets_which_job_it_was_bound_to():
     viewer.pose_job_id = "a" * 12
     viewer.rotate_gizmo = SimpleNamespace(end_drag=lambda: None)
     viewer.translate_gizmo = SimpleNamespace(end_drag=lambda: None)
-    viewer.editor = SimpleNamespace(clear=lambda: None)
+    viewer.editor = SimpleNamespace(clear=lambda: None, has_unsaved_edits=lambda: False)
+    # exit_pose_mode reports the pose-dirty state on the way out; __new__
+    # bypasses __init__, so the listener slot has to be stubbed like the rest.
+    viewer.on_pose_dirty = None
 
     Viewer.exit_pose_mode(viewer)
 

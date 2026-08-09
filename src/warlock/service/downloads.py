@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -168,9 +170,39 @@ def _run_worker(
 
         writer = threading.Thread(target=_send, daemon=True)
         writer.start()
+
+        # stdout is drained on a helper thread so the *whole* fetch has a
+        # deadline, not just the wait() after EOF -- ``rigging.run_worker``'s
+        # pattern, and here for a sharper reason: the child's _Sampler emits a
+        # progress line every half second whether or not bytes are arriving, so
+        # a child parked on a stalled socket never closes stdout at all. Reading
+        # it inline meant `timeout` was never consulted and the task-pool worker
+        # was held forever.
+        lines: queue.Queue[str | None] = queue.Queue()
+
+        def _pump(stream: Any) -> None:
+            try:
+                for raw in stream:
+                    lines.put(raw)
+            finally:
+                lines.put(None)
+
+        reader = threading.Thread(target=_pump, args=(proc.stdout,), daemon=True)
+        reader.start()
+
+        deadline = time.monotonic() + timeout
         try:
-            for line in proc.stdout:
-                line = line.strip()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(proc.args, timeout)
+                try:
+                    raw = lines.get(timeout=min(remaining, 1.0))
+                except queue.Empty:
+                    continue
+                if raw is None:
+                    break
+                line = raw.strip()
                 if not line:
                     continue
                 try:
@@ -178,7 +210,7 @@ def _run_worker(
                 except ValueError:
                     continue
                 on_progress(float(payload.get("percent") or 0.0), str(payload.get("label") or ""))
-            code = proc.wait(timeout=timeout)
+            code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()

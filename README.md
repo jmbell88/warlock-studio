@@ -197,9 +197,26 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 uv run warlock sweep --image assets/<job-id>/input.png --bands auto,4,8 --seed 42
 ```
 
+### The modes
+
+A switch at the top of the window chooses between **ten** top-level modes, in this order, and it is the single thing that decides what the panes show. `Alt+1`–`Alt+9` and `Alt+0` jump straight to the nth segment.
+
+1. **Home** — the chooser the app opens on, every launch. No mode is remembered between runs.
+2. **Manual** — the full manual (`docs/manual/`) embedded in the window. `F1`, and every pane's (?) button, come here.
+3. **2D** — the reference stage. Owns the prompt and every control that composes it.
+4. **3D** — the mesh stage. Owns no prompt controls at all: mesh, rig, pose and sprite-sheet decisions only.
+5. **Inker** — the layered raster editor, described below.
+6. **Clay** — modelling from primitives: transforms, mesh editing, a material palette, and two ways out — export a `.glb`, or import the document as an asset. A built asset is an ordinary asset, so rigging, posing, sprite sheets, the triangle retarget and every mesh export work on it unchanged.
+7. **Review** — judging finished meshes, one at a time or as a parameter sweep, plus the "what works" findings the accept/reject verdicts add up to. It is also where the quality judge is taught.
+8. **Settings** — the app's own preferences: theme, UI scale, sidebar width, and the list of models it loaded, from which a missing one can be downloaded.
+9. **Plotter** — a tile-map editor: a grid, a layer stack, tilesets and object layers, speaking Tiled's `.tmx`/`.tsx` formats in both directions.
+10. **Packwright** — a sprite-atlas packer: many images in, one atlas out, with a sidecar saying where everything landed. The layout is deterministic, so a re-export of an unchanged document is byte-identical.
+
+`src/warlock/studio/modes.py` is the authoritative list.
+
 ### Inker
 
-The third top-level mode is a layered raster editor -- soft brushes, layers with
+The fifth top-level mode is a layered raster editor -- soft brushes, layers with
 blend modes, a full selection suite (rectangle, ellipse, lasso, magic wand, with
 Shift to add and Alt to subtract), free transform, gradients, blur and smudge,
 symmetry and a grid. It opens any image, keeps several documents in tabs, and
@@ -223,7 +240,7 @@ space-drag or middle-drag pans, `Ctrl+T` transforms, `Ctrl+0` fits and `Ctrl+1` 
 The trellis server subprocess starts on the first 3D job and by default stays resident in VRAM alongside SDXL-Turbo (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle (configurable). Set `WARLOCK_VRAM_EXCLUSIVE=1` to restore sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident Flux.
 
 The main knobs are env-overridable (the full table lives in
-[docs/manual/14-configuration.md](docs/manual/14-configuration.md)): `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLIS_EXE`, `WARLOCK_TRELLIS_MODELS`, `WARLOCK_TRELLIS_PORT`, `WARLOCK_TRELLIS_IDLE`, `WARLOCK_T2I_ROOT` (where image models and `loras/` live), `WARLOCK_T2I_MODEL` (default base model key), `WARLOCK_T2I_DIR` (redirects the `turbo` entry only), `WARLOCK_VRAM_EXCLUSIVE`, `WARLOCK_RIG_TEMPLATE`, `WARLOCK_RIG_TIMEOUT`, `WARLOCK_POSE_TIMEOUT`, `WARLOCK_SHEET_TIMEOUT`, `WARLOCK_TRELLIS_WEBP` (WebP rather than PNG for trellis textures), `WARLOCK_TRELLIS_TEX_RES` (texture resolution), `WARLOCK_TRELLIS_BAND` (mesh extraction band; unset by default, and measurement says leave it that way).
+[docs/manual/16-configuration.md](docs/manual/16-configuration.md)): `WARLOCK_DATA_DIR`, `WARLOCK_DB`, `WARLOCK_TRELLIS_EXE`, `WARLOCK_TRELLIS_MODELS`, `WARLOCK_TRELLIS_PORT`, `WARLOCK_TRELLIS_IDLE`, `WARLOCK_T2I_ROOT` (where image models and `loras/` live), `WARLOCK_T2I_MODEL` (default base model key), `WARLOCK_T2I_DIR` (redirects the `turbo` entry only), `WARLOCK_VRAM_EXCLUSIVE`, `WARLOCK_RIG_TEMPLATE`, `WARLOCK_RIG_TIMEOUT`, `WARLOCK_POSE_TIMEOUT`, `WARLOCK_SHEET_TIMEOUT`, `WARLOCK_TRELLIS_WEBP` (WebP rather than PNG for trellis textures), `WARLOCK_TRELLIS_TEX_RES` (texture resolution), `WARLOCK_TRELLIS_BAND` (mesh extraction band; unset by default, and measurement says leave it that way).
 
 ## Development
 

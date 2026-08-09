@@ -36,17 +36,36 @@ was lost:
   It is unused because it is waiting on a human, not on code (§7).
 
 Three citations in the deleted documents were stale and are corrected here rather
-than carried: the command palette is `studio/panes/palette.py`; the configuration
-chapter is `docs/manual/14-configuration.md`; `docs/manual/` was renumbered 01→19.
+than carried: the command palette is `src/warlock/studio/panes/palette.py` (with
+its pure half in `src/warlock/studio/palette.py`); the configuration chapter is
+`docs/manual/16-configuration.md`; `docs/manual/` is numbered `00-index` through
+`21-extending`, twenty-two chapters. **Two of those three corrections were
+themselves wrong as first written** — the chapter was given as
+`14-configuration.md`, which is the *shortcuts* chapter, and the renumbering was
+given as "01→19" — and both were repaired on 2026-08-09 against the tree. A
+correction is not exempt from the rule it enforces.
+
+**A bare path in this file means `src/warlock/<path>` unless it starts with
+`docs/`, `scripts/`, `tests/`, `native/` or `vendor/`.** That matters because a
+real top-level `bench/` output directory exists beside the `src/warlock/bench/`
+package, so "`bench/findings.py`" is ambiguous on its face; where it could be
+read either way below, it is written out in full.
 
 ## The section numbers are load-bearing — do not renumber
 
-About twenty-five source, test and script files cite `TODO.md §2`, `§3`, `§4`,
-`§5`, `§7`, `§8` and `§10` **by number** — `judge.py`, `service/judge.py`,
-`tiercheck.py`, `sweep.py`, `studio/widgets.py`, `studio/review_mode.py`,
-`db.py`, `scripts/sweep_confirm.py`, `scripts/sweep_rebaseline.py`,
-`scripts/qualify_tiers.py`, `scripts/calibrate_seam.py` and several test
-docstrings. **A citation reading `TODO.md §N` means this file's §N.** Every
+Eighteen source, test and script files cite `TODO.md §2`, `§3`, `§5`, `§7`, `§8`
+and `§10` **by number** — `src/warlock/judge.py`, `src/warlock/service/judge.py`,
+`src/warlock/service/findings.py`, `src/warlock/tiercheck.py`,
+`src/warlock/studio/widgets.py`, `src/warlock/studio/review_mode.py`,
+`scripts/sweep_confirm.py`, `scripts/sweep_rebaseline.py`,
+`scripts/sweep_rogue.py`, `scripts/qualify_tiers.py` and eight test docstrings.
+A further handful (`src/warlock/db.py`, `src/warlock/sweep.py`,
+`scripts/calibrate_seam.py`) name `TODO.md` without a section number, which is
+the provenance case below. `§4` and `§6` are cited by nothing: §4 is carried
+anyway, and §6 was deleted when its three UI decisions shipped — the two test
+docstrings that still pointed at §6 now state the decision instead of citing it,
+which is what a section with no live section number is owed. **A citation reading
+`TODO.md §N` means this file's §N.** Every
 carried section keeps the number it had, which is why the numbering has gaps
 (§6's three UI decisions shipped, and §13–§16 are new). Renumbering would strand
 all twenty-five at once, silently; a new section takes the next free number.
@@ -294,7 +313,7 @@ a measurement document.
 which is the only reason any of it matters. The detector tracks the inner edge of
 bulky armour rather than the limb's centre line, visible in the overlay, and may
 or may not cost anything once Blender's automatic weights run. The deformation
-battery (`templates/deform_qa/humanoid.json` — squat, arms overhead, elbow and
+battery (`src/warlock/templates/deform_qa/humanoid.json` — squat, arms overhead, elbow and
 knee 90°, torso twist, rendered through the existing sheet pipeline as
 `rig_qa.png`, with a thumbnail in the inspector's rig section) is the artifact for
 judging this by eye. Scoring waits for the judge (§7).
@@ -382,7 +401,8 @@ disagrees with it is, on this evidence, more likely to be right.
 **Filing an `ai:` verdict is deliberately not part of it, and it is the one
 remaining seam.** `review_mode.SOURCE_AI = "ai:dino-probe"` is a constant nothing
 writes — `tests/test_review_mode.py` asserts no row carries it, and the live
-database holds 114 verdict rows, every one `source='human'`. The
+database holds 117 verdict rows (107 `model`, 10 `reference`, as of
+2026-08-09), every one `source='human'` — which is the load-bearing half. The
 `(job_id, source, stage)` seam is built and tested, so the day §10's document
 exists this is one call. What it is waiting on is the threshold: a
 probability-to-accept cut is a constant the stored corpus is then keyed on, and
@@ -394,7 +414,7 @@ work here is: run a labelling session, then write the measurement document.
 
 ## 8. Phase 2 — the mesh judge
 
-Reuses `bench/views.py`'s 8-view render, adds the pooling adapter and the third
+Reuses `src/warlock/bench/views.py`'s 8-view render, adds the pooling adapter and the third
 probe.
 
 **Not blocked on labelling — blocked on a corpus that contains acceptable
@@ -409,7 +429,7 @@ wasted — they are a clean negative set, and the matched pairs (identical
 precisely because everything except the matte is held constant.
 
 **The mesh probe must be max- or mean-over-8-views, never single-view.**
-`bench/views.py` records a calibration over 37 finished jobs spanning every
+`src/warlock/bench/views.py` records a calibration over 37 finished jobs spanning every
 category: the per-job argmax scattered by 330° (`silhouette_iou`) and 300°
 (`dino_cosine`) against a `STABLE_YAW_SPREAD` of 30, the two metrics disagreed
 with each other, and it scattered *within* categories as well as across them. The

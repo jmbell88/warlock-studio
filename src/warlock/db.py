@@ -231,19 +231,20 @@ MIGRATIONS: list[list[str]] = [
     # sometimes the input to the next machine -- where "good" means opposite
     # things (rich and dramatic against single-subject on plain background). A
     # reference-stage image therefore takes two independent labels, which is
-    # also why intent may not live in ``source``: ``latest_verdicts`` keys on
-    # (job_id, source) and one answer would silently overwrite the other.
+    # also why intent may not live in ``source``: ``latest_verdicts`` groups on
+    # (job_id, source, stage) *because* of this column -- without stage in that
+    # key one answer would silently supersede the other.
     #
     # The DEFAULT backfills every existing row to 'model', which is what every
     # verdict recorded to date is about.
     #
-    # This is the entry `TODO.md` and BUILD_PLAN both called "migration 6".
-    # Migration 6 is the candidate columns above: it landed first, and
-    # migrations are append-only and never renumbered.
+    # It was planned as "migration 6". Migration 6 is the candidate columns
+    # above: they landed first, and migrations are append-only and never
+    # renumbered.
     [
         "ALTER TABLE verdicts ADD COLUMN stage TEXT NOT NULL DEFAULT 'model'",
     ],
-    # 8 -- read-path indexes (NEXT_ROADMAP A4-A7). All additive, and all live
+    # 8 -- read-path indexes for the queries named below. All additive, and live
     # here rather than in _SCHEMA for the reason idx_jobs_sweep does: several
     # name columns (verdicts.stage, jobs.sweep_id) that a pre-existing table
     # may not have when _SCHEMA's CREATE TABLE IF NOT EXISTS no-ops.

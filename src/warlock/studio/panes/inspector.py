@@ -10,7 +10,6 @@ as a broken asset rather than as a 2D one.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from imgui_bundle import imgui
@@ -30,6 +29,7 @@ from . import (
     pose_panel,
     retarget_panel,
     sheet_panel,
+    stamps,
     texture_panel,
 )
 
@@ -164,6 +164,7 @@ def _details_tab(ctx: Any, job: Any) -> None:
 
 def _rig_tab(ctx: Any, job: Any) -> None:
     _weighting(ctx, job)
+    _bones(ctx, job)
     _deform_qa(ctx, job)
     retarget_panel.draw(ctx, job)
     texture_panel.draw(ctx, job)
@@ -183,28 +184,20 @@ def rig_meta(ctx: Any, job: Any) -> dict[str, Any] | None:
     row, which is refused: that row has one owner and ``set_params`` is
     last-write-wins.
 
-    Why the racily-clean rule, in full: the stamp is the directory's mtime, and
-    on Windows that is written from the system clock, whose tick is 15.6 ms --
-    adding a file left it unchanged 155 times in 200 (see
-    ``docs/measurements/2026-08-07-directory-mtime-granularity.md``). A re-rig
-    landing after this read but inside the stamped mtime's own tick would then be
-    invisible **forever**, because every later comparison keeps matching. So a
-    stamp is only remembered once its mtime is comfortably in the past, and the
-    clock is read *after* the file: the hazard needs a write later than our read
-    yet still inside the tick, which cannot exist if the read already finished a
-    tick after the mtime. It is ``files.attach_files``'s rule and its constant,
-    imported rather than restated -- one judgement about one class of hazard.
+    Why the racily-clean rule: a re-rig landing after this read but inside the
+    stamped mtime's own tick would be invisible **forever**, because every later
+    comparison keeps matching. :mod:`.stamps` is where that rule and its
+    constant live -- one judgement about one class of hazard, shared with the
+    three other stamped caches in the panes -- and the ordering it depends on is
+    visible here: the clock is read (by ``storable``) *after* the file.
     """
     job_id = job.get("id")
     if not job_id:
         return None
     job_dir = ctx.svc.job_dir(job_id)
-    try:
-        stamp: Any = job_dir.stat().st_mtime_ns
-    except OSError:
-        # No directory: a perfectly good stamp of its own, and the answer is
-        # "no rig". It changes the moment a directory appears.
-        stamp = None
+    # A missing directory stamps as None, which is an answer of its own: it is
+    # "no rig", and it changes the moment a directory appears.
+    stamp = stamps.stamp_ns(job_dir)
     cache = ctx.state.rig_meta_cache
     hit = cache.get(job_id)
     if hit is not None and hit[0] == stamp:
@@ -212,7 +205,7 @@ def rig_meta(ctx: Any, job: Any) -> dict[str, Any] | None:
     from ... import rigging
 
     meta = rigging.read_rig(job_dir)
-    if stamp is None or time.time_ns() - stamp > svc_files.MTIME_RACE_NS:
+    if stamps.storable(stamp):
         cache[job_id] = (stamp, meta)
     return meta
 
@@ -252,6 +245,57 @@ def weighting_verdict(params: Any) -> tuple[int, str] | None:
     return (theme.MUTED, f"weighting: {weighting}")
 
 
+def rig_bones(ctx: Any, job: Any) -> int | None:
+    """How many bones the rig on screen has, from wherever it is recorded.
+
+    ``rig_weighting``'s two sources and its order, for the same reason: the
+    **rig** job's row carries ``bone_count`` (``queue._rig`` records it beside
+    ``weighting``) and the **model** job the user selects carries ``rig.json``,
+    so the two are disjoint in practice and preferring the row means the answer
+    is always about the row on screen. ``queue.py`` wrote that param and nothing
+    read it, which is how a rig could report *how* it was bound and never *what*
+    it was bound to.
+    """
+    count = bone_count_of(job.get("params") or {})
+    if count is not None:
+        return count
+    return bone_count_of(rig_meta(ctx, job) or {})
+
+
+def bone_count_of(source: Any) -> int | None:
+    """The bone count a rig record carries, in either of its two spellings.
+
+    A pure function for the reason ``weighting_verdict`` is one. The two
+    spellings are not a mistake to be normalised away: the row records the
+    *number* because a card must not open a file per asset to draw a badge,
+    while ``rig.json`` carries the joints themselves because a pose editor needs
+    their names and positions. Read defensively throughout -- rows written
+    before ``bone_count`` existed simply do not carry it, and a bool is an int
+    as far as ``isinstance`` is concerned.
+    """
+    if not isinstance(source, dict):
+        return None
+    raw = source.get("bone_count")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    bones = source.get("bones")
+    if isinstance(bones, list) and bones:
+        return len(bones)
+    return None
+
+
+def _bones(ctx: Any, job: Any) -> None:
+    count = rig_bones(ctx, job)
+    if count is None:
+        return
+    widgets.muted(f"{count} bone" if count == 1 else f"{count} bones")
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "How many joints the skeleton template fitted onto this mesh. It is "
+            "the template's count, not a measurement of the mesh."
+        )
+
+
 def _weighting(ctx: Any, job: Any) -> None:
     source: Any = job.get("params") or {}
     verdict = weighting_verdict(source)
@@ -270,7 +314,7 @@ def _weighting(ctx: Any, job: Any) -> None:
         widgets.hint_text("Blender's bone-heat solve did not take; hover for why.")
 
 
-def deform_qa_path(svc: Any, job: Any) -> Any:
+def deform_qa_path(svc: Any, job: Any, *, cache: dict | None = None) -> Any:
     """The deformation review sheet for this asset, or None.
 
     Gated on the **sidecar** rather than on its own existence, which is
@@ -279,11 +323,37 @@ def deform_qa_path(svc: Any, job: Any) -> Any:
     render in progress. Deliberately not in the inspector's download grid --
     that grid is a hardcoded list of mesh artifacts, which is exactly why
     ``rig_qa.png`` reached ``job["files"]`` and appeared nowhere.
+
+    ``cache`` is an optional ``{job_id: (stamp, path)}`` the caller owns, and it
+    is ``attach_files``' argument at two stats rather than ten: both files are
+    answered by *existence*, and a file appearing or going moves the job
+    directory's own mtime, so one stat on the directory stands in for both --
+    which matters because this ran twice per frame for as long as the Rig & Pose
+    tab was open. Optional rather than mandatory because the gate is also a
+    plain question a test or a one-off caller asks once, and a cache is only
+    worth its subtleties on the frame thread. Those subtleties are
+    :mod:`.stamps`': the answer is remembered only once the directory's mtime is
+    safely in the past, or a QA sheet landing inside that mtime's own tick would
+    be invisible for the life of the process.
     """
     job_id = job.get("id")
     if not job_id:
         return None
     job_dir = svc.job_dir(job_id)
+    if cache is None:
+        return _deform_qa_probe(job_dir)
+    stamp = stamps.stamp_ns(job_dir)
+    hit = cache.get(job_id)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    # No directory is no sheet, and there is nothing to stat inside one.
+    found = None if stamp is None else _deform_qa_probe(job_dir)
+    if stamps.storable(stamp):
+        cache[job_id] = (stamp, found)
+    return found
+
+
+def _deform_qa_probe(job_dir: Any) -> Any:
     sheet = job_dir / "rig_qa.png"
     if not (job_dir / "rig_qa.json").exists() or not sheet.exists():
         return None
@@ -299,7 +369,7 @@ def _deform_qa(ctx: Any, job: Any) -> None:
     can see where the skin tears. A metric here would be a claim about
     deformation quality that nothing in the repo has earned yet.
     """
-    path = deform_qa_path(ctx.svc, job)
+    path = deform_qa_path(ctx.svc, job, cache=ctx.state.preview.setdefault("deform_qa", {}))
     if path is None:
         return
     widgets.field_label("Deformation review")
@@ -668,20 +738,28 @@ def _palette_names(ctx: Any) -> list[str]:
     mtime, so a file added while the app runs still appears on the next frame.
     A missing directory is an empty list, never an error -- palettes are opt-in
     and there is nothing to report about not having any.
+
+    "Moves its own mtime" is true only to a 15.6 ms tick, which is why the
+    remembering goes through :mod:`.stamps`: dropping a palette in is precisely
+    a write that can land inside the stamp's own tick, and an unguarded stamp
+    would then hide that palette for the life of the process -- from the one
+    control whose whole purpose is to offer it.
     """
     from ...service import palettes as svc_palettes
 
     directory = ctx.svc.config.palette_dir
-    try:
-        key = directory.stat().st_mtime_ns
-    except OSError:
+    key = stamps.stamp_ns(directory)
+    if key is None:
         ctx.state.palettes = None
         return []
     cached = ctx.state.palettes
     if cached is not None and cached[0] == key:
         return cached[1]
     names = svc_palettes.available(ctx.svc.config)
-    ctx.state.palettes = (key, names)
+    # After the listing, never beside the stat: that ordering is what makes the
+    # stored stamp's tick provably older than the read it describes.
+    if stamps.storable(key):
+        ctx.state.palettes = (key, names)
     return names
 
 
@@ -1115,14 +1193,20 @@ def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
     read and parsed *every* frame, for as long as it stayed mangled -- which is
     the per-frame read this cache exists to remove. A missing file needs no
     sentinel: the stat fails, so nothing is read either way.
+
+    The remembering goes through :mod:`.stamps` for the reason ``rig_meta``'s
+    does. "A derivation rewrites the manifest underneath it" is exactly a write
+    that can land inside the stamped mtime's own 15.6 ms tick, and an unguarded
+    stamp keeps matching it forever -- so the export tab would go on describing
+    the artifacts of the derivation before last.
     """
     import json
 
     path = ctx.job_dir(job_id) / "manifest.json"
-    try:
-        key = (job_id, path.stat().st_mtime_ns)
-    except OSError:
+    mtime = stamps.stamp_ns(path)
+    if mtime is None:
         return None
+    key = (job_id, mtime)
     cached = ctx.state.manifest
     if cached is not None and cached[0] == key:
         return cached[1]
@@ -1132,7 +1216,8 @@ def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
         manifest = None
     if not isinstance(manifest, dict):
         manifest = None
-    ctx.state.manifest = (key, manifest)
+    if stamps.storable(mtime):
+        ctx.state.manifest = (key, manifest)
     return manifest
 
 

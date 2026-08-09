@@ -19,13 +19,16 @@ from typing import Any
 
 import numpy as np
 
+from ...pipelines import sheet as sheetlib
 from . import math3d as m3
 from .glctx import Viewport
 
 CELL = 64
-# The widest the subject can look from any yaw, with the same 12% margin
-# blender_worker.op_sheet frames with.
-MARGIN = 1.12
+# The widest the subject can look from any yaw, with the same margin
+# blender_worker.op_sheet frames with -- imported from the module both sides
+# already go through, rather than typed out a second time here. A preview that
+# frames differently from the renderer depicts a sheet nobody will get.
+MARGIN = sheetlib.FRAME_MARGIN
 
 
 def extent_of(size: np.ndarray) -> float:

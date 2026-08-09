@@ -3,9 +3,13 @@
 Four outward imports, and every one of them is the same argument: reach for the
 module that *owns* a definition rather than restating it. ``pipelines.sheet``
 owns the atlas ceiling and what "trim" means; ``plotter.tsx`` owns the ``.tsx``
-format; ``studio.undo`` owns history; ``studio.inker`` owns the document a clip
-is enumerated from. Restating any of those is how two answers to one question
-appear and then drift.
+format and ``plotter.tileset`` the type it is written from; ``studio.undo`` owns
+history. Restating any of those is how two answers to one question appear and
+then drift.
+
+``studio.inker`` is pointedly *not* one of them, and the test below says so from
+the other side: ``sources`` takes a document and asks it for frames rather than
+importing the editor that owns the type.
 
 This is the ``tests/inker/test_sheetout.py`` pin, third instance.
 """

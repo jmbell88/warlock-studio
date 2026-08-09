@@ -96,7 +96,14 @@ def friendly(exc: Exception) -> str:
 
 
 def write_error_log(job_dir: Path, exc: Exception) -> None:
+    # utf-8 and errors="replace", never the platform default: a traceback
+    # routinely carries a non-ASCII path or a library's smart quotes, and on
+    # Windows cp1252 those raise UnicodeEncodeError -- which is not an OSError,
+    # so it escaped the caller's suppress(OSError) and took down the very
+    # handler that was recording why the job failed.
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "error.log").write_text(
-        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        encoding="utf-8",
+        errors="replace",
     )

@@ -84,7 +84,13 @@ def create_sheet(
     # importer no way to tell which rows loop.
     if clip_from or clip_to:
         if not (clip_from and clip_to):
-            raise Invalid("a clip needs both clip_from and clip_to")
+            # The empty one, not the pair: a refusal names the control it came
+            # from, and highlighting the end the user *did* fill in would send
+            # them to change the wrong select.
+            raise Invalid(
+                "a clip needs both clip_from and clip_to",
+                field="clip_to" if clip_from else "clip_from",
+            )
         for pose_id in (clip_from, clip_to):
             check_pose_id(pose_id)
         ends = [rigging.read_pose(job_dir, pid) for pid in (clip_from, clip_to)]

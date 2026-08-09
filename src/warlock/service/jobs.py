@@ -58,20 +58,26 @@ def _resolve_profile(
     params: dict[str, Any],
     profile: str | None,
     custom_triangles: int | None,
-):
-    """Validate a triangle budget and record it. Validated at submit time for
-    the same reason a rig template is: an unusable budget should cost the
-    request, not the two minutes of GPU that precede the optimize step.
+) -> int | None:
+    """Validate a triangle budget, record it, and return it. Validated at submit
+    time for the same reason a rig template is: an unusable budget should cost
+    the request, not the two minutes of GPU that precede the optimize step.
 
     A tier that needs gltfpack is refused outright while the binary is absent,
     not just downgraded: the worker's fallback ships the raw copy silently, so
     the job would finish ``done`` wearing a profile param the mesh never saw --
     and ``profile`` is in ``findings.VECTOR_PARAMS``, so every verdict on it
     would credit a tier that never ran. The UI never offers these tiers
-    without the binary; this closes the API and sweep doors too.
+    without the binary; this closes the API, sweep and retarget doors too.
+
+    The budget is returned so ``optimize_job`` -- which runs the optimizer right
+    there rather than queueing it -- can use this one implementation instead of
+    a second, divergent copy of the same two checks. ``None`` back means "no
+    reduction": the ``raw`` tier, and also a caller that named no profile at all,
+    which are the same instruction to ``optimize.run``.
     """
     if profile is None:
-        return
+        return None
     from ..pipelines import optimize
 
     try:
@@ -88,6 +94,7 @@ def _resolve_profile(
     params["profile"] = profile
     if custom_triangles is not None:
         params["custom_triangles"] = custom_triangles
+    return target
 
 
 def create_job(
@@ -1164,13 +1171,16 @@ def optimize_job(
     source = job_dir / "source.glb"
     if not source.exists():
         raise Invalid("this job has no source reconstruction to re-optimize")
-    # The configured default, not a hardcoded tier: every named tier needs a
-    # gltfpack that isn't vendored yet, so a bare call used to explode.
+    # The configured default, not a hardcoded tier: a named tier needs the
+    # vendored gltfpack, and `raw` is what Config.mesh_profile still defaults to.
     profile = profile or svc.config.mesh_profile
-    try:
-        budget = optimize.resolve(profile, custom_triangles)
-    except ValueError as exc:
-        raise Invalid(str(exc), field="profile") from exc
+    # Through the one implementation, not a second copy of it: this used to
+    # resolve the budget itself, which raised a fieldless Invalid the UI could
+    # not point at anything and -- the half that mattered -- skipped the
+    # gltfpack-presence refusal. With a broken WARLOCK_GLTFPACK a retarget then
+    # shipped the raw copy while params["profile"] named a tier that never ran,
+    # and `profile` is in VECTOR_PARAMS, so the corpus learned it.
+    budget = _resolve_profile(svc, {}, profile, custom_triangles)
 
     with svc.convert_lock(job_id, "optimize"):
         try:

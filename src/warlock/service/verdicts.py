@@ -67,8 +67,9 @@ IMAGE_STAGES = ("reference", "blank")
 
 # Where an image label's subject is, in the order to look. A text job writes
 # reference.png (what trellis actually saw); an upload has only its input.
-# Mirrors ``review_mode.REFERENCE_NAMES``, which is the same question asked by
-# the pane rather than by the service.
+# The one spelling. ``studio.review_mode`` used to carry an identical copy and
+# read both -- the judge.STAGES hazard, minus the test that makes it survivable
+# -- and now imports this.
 IMAGE_NAMES = ("reference.png", "input.png")
 
 

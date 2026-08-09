@@ -30,8 +30,17 @@ different capability:
 | Extra | What it adds | Skipping it costs |
 | --- | --- | --- |
 | `studio` | moderngl, pygame-ce, imgui-bundle | The window itself. Without it only `warlock doctor` and `warlock sweep` run. |
-| `text2image` | torch cu128, diffusers, transformers, accelerate, peft | Text-to-3D. Image-to-3D from an upload still works. |
+| `text2image` | torch cu128, torchvision, diffusers, transformers, accelerate, peft, sentencepiece, protobuf, and BiRefNet's own einops/kornia/timm | Text-to-3D. Image-to-3D from an upload still works. |
 | `rig` | bpy | Rigging, posing and sprite sheets. |
+
+`text2image`'s tail is longer than it looks because two of the things it pulls in are not declared
+by anything else. BiRefNet — the learned matting model — is loaded with `trust_remote_code`, so the
+modelling code that builds it is the checkpoint's own and no resolver can see its imports: `einops`,
+`kornia` and `timm` are what that code reaches for, and without them the matting silently fell back
+to a corner fill on a machine where `warlock doctor` could see every weight on disk. `torchvision` is
+the other: `transformers` builds its fast image processors on it, and the DINOv2 embedding behind
+candidate ranking needs it, so leaving it undeclared meant any `uv sync` removed it and candidate
+ranking quietly degraded to composition alone.
 
 `studio` is an extra rather than a core dependency because `warlock doctor` and `warlock sweep` have
 to run on a machine with no display — the command line only imports the window on the path that

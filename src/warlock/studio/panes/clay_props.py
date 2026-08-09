@@ -328,7 +328,10 @@ def _palette_row(doc: Any, obj: Any) -> None:
         doc.remove_material(index)
         doc.set_props(obj.uid, material=min(index, len(doc.materials) - 1))
     if not removable and len(doc.materials) > 1:
-        widgets.muted(f"{users} face(s) use this slot")
+        # The count spans objects the undo stack still holds, not only the ones
+        # in the document -- a slot removed while an undone deletion was the
+        # last thing using it came back magenta on redo.
+        widgets.muted(f"{users} face(s) use this slot (including undone deletions)")
 
     name = widgets.input_text("slot name##matname", doc.materials[index].name or "", max_length=60)
     if name != (doc.materials[index].name or ""):
