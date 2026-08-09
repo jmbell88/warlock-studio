@@ -932,6 +932,57 @@ def sheet_spec(
     }
 
 
+def views_spec(
+    source_glb: Path,
+    views_dir: Path,
+    views: list[tuple[float, float]],
+    *,
+    size: int,
+) -> dict[str, Any]:
+    """The worker spec for rendering one flat view per direction.
+
+    Half of a re-texture. The other half (``project_spec``) runs *after* the
+    host has restyled these renders, which is why it is two ops rather than
+    one: the restyle is an SDXL pass and Blender is a separate interpreter with
+    no way to call back into this one.
+    """
+    return {
+        "op": "views",
+        "source_glb": str(source_glb),
+        "views_dir": str(views_dir),
+        "result_path": str(views_dir / ".views_result.json"),
+        "size": size,
+        "views": [list(v) for v in views],
+    }
+
+
+def project_spec(
+    source_glb: Path,
+    views_dir: Path,
+    out_dir: Path,
+    views: list[tuple[float, float]],
+    *,
+    size: int,
+    texture_size: int,
+) -> dict[str, Any]:
+    """The worker spec for baking each restyled view into the mesh's atlas.
+
+    ``size`` is the render size again rather than a second knob: it is what
+    frames the camera, and a camera framed differently from the one that drew
+    the views would land every projection somewhere the colours are not.
+    """
+    return {
+        "op": "project",
+        "source_glb": str(source_glb),
+        "views_dir": str(views_dir),
+        "out_dir": str(out_dir),
+        "result_path": str(out_dir / ".project_result.json"),
+        "size": size,
+        "texture_size": texture_size,
+        "views": [list(v) for v in views],
+    }
+
+
 def fbx_spec(source_glb: Path, out_fbx: Path, result_dir: Path) -> dict[str, Any]:
     """The worker spec for converting a GLB to FBX.
 

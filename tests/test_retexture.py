@@ -228,3 +228,65 @@ def test_the_module_stays_on_the_host_side_of_the_bpy_split():
     source = pathlib.Path(retexture.__file__).read_text(encoding="utf-8")
     for banned in ("import bpy", "from ..service", "from ..queue", "from ..studio"):
         assert banned not in source
+
+
+# -- the two copies of the view basis ----------------------------------------
+
+
+def test_the_workers_view_direction_matches_this_modules():
+    """`blender_worker` keeps its own copy and must not drift from this one.
+
+    The worker runs in a bpy interpreter and imports nothing from the host half
+    by design, which is the same split `rigging.fit_template` sits on -- and it
+    gets the same treatment: the duplicate is pinned by a test rather than by a
+    comment asking the two to stay identical. A drift here would rotate every
+    weight map relative to the colours it weights, which looks like a bad
+    restyle rather than like a bug.
+    """
+    import ast
+    import pathlib
+
+    from warlock.pipelines import blender_worker
+
+    source = pathlib.Path(blender_worker.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fn = next(
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "_view_direction"
+    )
+    namespace: dict = {}
+    exec(compile(ast.Module([fn], []), "<worker>", "exec"), namespace)  # noqa: S102
+
+    for yaw, pitch in retexture.VIEWS:
+        assert namespace["_view_direction"](yaw, pitch) == pytest.approx(
+            retexture.view_matrix(yaw, pitch)
+        )
+
+
+def test_the_specs_carry_the_views_they_are_given():
+    from warlock import rigging
+    from warlock.pipelines import blender_worker
+
+    views = list(retexture.VIEWS)
+    v = rigging.views_spec(
+        __import__("pathlib").Path("m.glb"),
+        __import__("pathlib").Path("d"),
+        views,
+        size=512,
+    )
+    p = rigging.project_spec(
+        __import__("pathlib").Path("m.glb"),
+        __import__("pathlib").Path("d"),
+        __import__("pathlib").Path("o"),
+        views,
+        size=512,
+        texture_size=1024,
+    )
+    assert v["op"] in blender_worker.OPS and p["op"] in blender_worker.OPS
+    # Lists, not tuples: the spec is JSON and a tuple would come back a list on
+    # the far side anyway, so it is written as one here.
+    assert v["views"] == [list(x) for x in views]
+    assert p["views"] == v["views"]
+    # Both ops frame from the same render size, or the projection lands
+    # somewhere the colours are not.
+    assert p["size"] == v["size"]

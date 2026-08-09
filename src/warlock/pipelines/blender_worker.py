@@ -812,7 +812,252 @@ def op_fbx(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "objects": len(bpy.context.scene.objects)}
 
 
-OPS = {"rig": op_rig, "pose": op_pose, "sheet": op_sheet, "fbx": op_fbx}
+# The scratch UV layer a projection lands in. The mesh's own atlas stays the
+# active layer and is what every bake writes *into*; this only ever carries one
+# view at a time and is rebuilt per view.
+PROJECT_UV = "wl_proj"
+
+
+def _view_direction(yaw: float, pitch: float) -> tuple[float, float, float]:
+    """The unit direction the camera sits in, in Blender axes.
+
+    ``pipelines.retexture.view_matrix`` is the same arithmetic and is the one a
+    test can reach without bpy; this is the worker's copy, which imports
+    nothing from the host half by design -- this module runs inside a bpy
+    interpreter and `rigging.py`'s split is what keeps that one-way.
+    ``tests/test_retexture.py`` pins the two against each other, which is the
+    same treatment ``rigging.fit_template`` gets for the same reason.
+    """
+    import math
+
+    y, p = math.radians(yaw), math.radians(pitch)
+    return (math.sin(y) * math.cos(p), -math.cos(y) * math.cos(p), math.sin(p))
+
+
+def _retexture_frame(bpy: Any, source: Path, size: int):
+    """Import, measure, and frame the one camera both re-texture ops use.
+
+    Shared rather than written twice because the two ops have to agree about
+    that camera *exactly*: ``op_views`` renders through it and ``op_project``
+    projects through it, and a framing that differed by a pixel between them
+    would shift the whole atlas by that pixel with nothing on screen to say
+    why. -> (mesh, centre, extent, distance)
+    """
+    _reset_scene(bpy)
+    mesh = _import_glb(bpy, source)
+    lo, hi = _world_bounds(mesh)
+    centre = [(a + b) / 2.0 for a, b in zip(lo, hi, strict=True)]
+    span = [b - a for a, b in zip(lo, hi, strict=True)]
+    # The horizontal diagonal, as op_sheet sizes to: one axis clips the corner
+    # views, and here a clipped view is a strip of atlas nothing covers.
+    extent = max((span[0] ** 2 + span[1] ** 2) ** 0.5, span[2], 1e-6) * 1.05
+    distance = extent * 2.0
+    _setup_render(bpy, size)
+    return mesh, centre, extent, distance
+
+
+def op_views(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Render the mesh once per view direction, flat.
+
+    **Flat, not lit, and that is the load-bearing choice.** These renders are
+    restyled and then baked back into the *albedo*, so any shading in them
+    becomes shading painted permanently into the texture -- a highlight that
+    stays put as the object turns, which is the one artefact a base-colour map
+    must not have. ``_make_flat`` keeps the existing texture and drops the
+    lighting, which is exactly the signal an img2img pass should be restyling.
+
+    The alpha matters as much as the colour: ``film_transparent`` leaves the
+    background clear, and ``op_project`` uses that alpha as the mask saying
+    which texels this view is entitled to speak about at all.
+    """
+    source = Path(spec["source_glb"])
+    if not source.exists():
+        raise RuntimeError(f"nothing to render at {source}")
+    views_dir = Path(spec["views_dir"])
+    views_dir.mkdir(parents=True, exist_ok=True)
+    views = spec["views"]
+
+    progress(0.05, "Loading model")
+    _mesh, centre, extent, distance = _retexture_frame(bpy, source, int(spec["size"]))
+    _make_flat(bpy)
+    _world(bpy, 0.0)
+    cam = _setup_camera(bpy, extent, distance)
+
+    for i, (yaw, pitch) in enumerate(views):
+        _aim_camera(cam, centre, float(yaw), float(pitch), distance)
+        bpy.context.scene.render.filepath = str(views_dir / f"view_{i:02d}.png")
+        bpy.ops.render.render(write_still=True)
+        progress(0.05 + 0.9 * (i + 1) / max(len(views), 1), f"View {i + 1}/{len(views)}")
+
+    progress(1.0, "Views rendered")
+    return {"ok": True, "views": len(views), "extent": extent}
+
+
+def _project_material(bpy: Any, colour_png: Path, mask_png: Path, direction):
+    """One material carrying both bakes. -> (material, colour_emit, weight_emit)
+
+    Both emissions share one projection and one pair of textures, so switching
+    which node feeds the output is the whole difference between the colour bake
+    and the weight bake -- they cannot come to disagree about where the view
+    landed.
+
+    The mask is the **original** render's alpha rather than the restyled one's,
+    because img2img returns RGB and drops it. Two textures over one UV layer,
+    which also makes "outside the camera frustum" free: ``CLIP`` extension
+    returns alpha 0 out there, so a texel the camera never saw gets weight 0
+    without a frustum test of its own.
+    """
+    material = bpy.data.materials.new("wl_project")
+    if material.node_tree is None:
+        material.use_nodes = True
+    tree = material.node_tree
+    tree.nodes.clear()
+    out = tree.nodes.new("ShaderNodeOutputMaterial")
+
+    uv = tree.nodes.new("ShaderNodeUVMap")
+    uv.uv_map = PROJECT_UV
+
+    colour_tex = tree.nodes.new("ShaderNodeTexImage")
+    colour_tex.image = bpy.data.images.load(str(colour_png))
+    colour_tex.extension = "CLIP"
+    tree.links.new(uv.outputs["UV"], colour_tex.inputs["Vector"])
+
+    mask_tex = tree.nodes.new("ShaderNodeTexImage")
+    mask_tex.image = bpy.data.images.load(str(mask_png))
+    mask_tex.extension = "CLIP"
+    tree.links.new(uv.outputs["UV"], mask_tex.inputs["Vector"])
+
+    colour_emit = tree.nodes.new("ShaderNodeEmission")
+    tree.links.new(colour_tex.outputs["Color"], colour_emit.inputs["Color"])
+
+    # facing = max(0, dot(N, the direction the camera is in)), masked by the
+    # render's own alpha. Clamped at zero rather than made absolute: a face
+    # pointing away from this camera is not "seen from behind", it is not seen.
+    geo = tree.nodes.new("ShaderNodeNewGeometry")
+    dot = tree.nodes.new("ShaderNodeVectorMath")
+    dot.operation = "DOT_PRODUCT"
+    dot.inputs[1].default_value = direction
+    tree.links.new(geo.outputs["Normal"], dot.inputs[0])
+    clamp = tree.nodes.new("ShaderNodeMath")
+    clamp.operation = "MAXIMUM"
+    clamp.inputs[1].default_value = 0.0
+    tree.links.new(dot.outputs["Value"], clamp.inputs[0])
+    masked = tree.nodes.new("ShaderNodeMath")
+    masked.operation = "MULTIPLY"
+    tree.links.new(clamp.outputs["Value"], masked.inputs[0])
+    tree.links.new(mask_tex.outputs["Alpha"], masked.inputs[1])
+    weight_emit = tree.nodes.new("ShaderNodeEmission")
+    tree.links.new(masked.outputs["Value"], weight_emit.inputs["Color"])
+
+    tree.links.new(colour_emit.outputs["Emission"], out.inputs["Surface"])
+    return material, colour_emit, weight_emit
+
+
+def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Bake each restyled view into the atlas, with a weight image beside it.
+
+    One pair of images per view, combined on the host by
+    ``pipelines.retexture.assemble`` -- deliberately not accumulated here,
+    because a weighted mean is arithmetic and belongs where ``sheet.py``'s grid
+    does.
+
+    The projection is Blender's own UVProject modifier onto a scratch UV layer,
+    applied per view and rebuilt for the next. The mesh's real atlas stays the
+    *active* layer throughout, because that is the one every bake writes into
+    -- leaving the scratch layer active would bake the projection into itself.
+    """
+    source = Path(spec["source_glb"])
+    if not source.exists():
+        raise RuntimeError(f"nothing to project onto at {source}")
+    views_dir = Path(spec["views_dir"])
+    out_dir = Path(spec["out_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    views = spec["views"]
+    texture_size = int(spec["texture_size"])
+
+    progress(0.05, "Loading model")
+    mesh, centre, extent, distance = _retexture_frame(bpy, source, int(spec["size"]))
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    # An emission bake carries no noise, so one sample is the whole budget.
+    scene.cycles.samples = 1
+    scene.render.bake.use_pass_direct = False
+    scene.render.bake.use_pass_indirect = False
+    # No margin: the host dilates, and it has to, because a margin Blender
+    # grew per view would be grown from that view's colours before the views
+    # were ever combined.
+    scene.render.bake.margin = 0
+
+    if not mesh.data.uv_layers:
+        raise RuntimeError("this mesh has no UVs to bake into")
+    atlas_uv = mesh.data.uv_layers.active.name
+    cam = _setup_camera(bpy, extent, distance)
+
+    original = list(mesh.data.materials)
+    done = []
+    for i, (yaw, pitch) in enumerate(views):
+        colour_png = views_dir / f"restyled_{i:02d}.png"
+        mask_png = views_dir / f"view_{i:02d}.png"
+        if not colour_png.exists() or not mask_png.exists():
+            # A view whose restyle never arrived contributes nothing rather
+            # than failing the bake: five good projections beat none.
+            continue
+        _aim_camera(cam, centre, float(yaw), float(pitch), distance)
+
+        if PROJECT_UV in mesh.data.uv_layers:
+            mesh.data.uv_layers.remove(mesh.data.uv_layers[PROJECT_UV])
+        mesh.data.uv_layers.new(name=PROJECT_UV)
+        modifier = mesh.modifiers.new("wl_project", "UV_PROJECT")
+        modifier.uv_layer = PROJECT_UV
+        modifier.projector_count = 1
+        modifier.projectors[0].object = cam
+        modifier.aspect_x = modifier.aspect_y = 1.0
+        bpy.context.view_layer.objects.active = mesh
+        bpy.ops.object.modifier_apply(modifier="wl_project")
+        mesh.data.uv_layers.active = mesh.data.uv_layers[atlas_uv]
+
+        material, colour_emit, weight_emit = _project_material(
+            bpy, colour_png, mask_png, _view_direction(float(yaw), float(pitch))
+        )
+        mesh.data.materials.clear()
+        mesh.data.materials.append(material)
+        tree = material.node_tree
+        out_node = next(n for n in tree.nodes if n.type == "OUTPUT_MATERIAL")
+
+        for suffix, emit in (("bake", colour_emit), ("weight", weight_emit)):
+            for link in list(out_node.inputs["Surface"].links):
+                tree.links.remove(link)
+            tree.links.new(emit.outputs["Emission"], out_node.inputs["Surface"])
+            image = bpy.data.images.new(
+                f"wl_{suffix}_{i}", texture_size, texture_size, alpha=False
+            )
+            node = tree.nodes.new("ShaderNodeTexImage")
+            node.image = image
+            tree.nodes.active = node
+            bpy.ops.object.bake(type="EMIT")
+            image.filepath_raw = str(out_dir / f"{suffix}_{i:02d}.png")
+            image.file_format = "PNG"
+            image.save()
+            tree.nodes.remove(node)
+
+        mesh.data.materials.clear()
+        done.append(i)
+        progress(0.05 + 0.9 * (i + 1) / max(len(views), 1), f"Baking {i + 1}/{len(views)}")
+
+    for material in original:
+        mesh.data.materials.append(material)
+    progress(1.0, "Projections baked")
+    return {"ok": True, "baked": done, "uv_layer": atlas_uv}
+
+
+OPS = {
+    "rig": op_rig,
+    "pose": op_pose,
+    "sheet": op_sheet,
+    "fbx": op_fbx,
+    "views": op_views,
+    "project": op_project,
+}
 
 
 def main() -> int:
