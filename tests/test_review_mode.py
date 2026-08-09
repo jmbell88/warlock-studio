@@ -123,11 +123,17 @@ def _scanned(ctx) -> Any:
     return ctx.state.review
 
 
-def _press(ctx, key_name: str) -> bool:
+def _press(ctx, key_name: str, mod: int = 0) -> bool:
+    """One keydown. ``mod`` is always supplied, because ``handle_key`` reads it
+    off the event -- ``pygame.key.name`` returns "1" whether or not Ctrl is
+    held, so the modifier is the only thing that says which of three things a
+    digit means."""
     import pygame
 
     key = getattr(pygame, f"K_{key_name}")
-    return review_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key))
+    return review_mode.handle_key(
+        ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=mod)
+    )
 
 
 # --- the mode sets -----------------------------------------------------------
@@ -183,7 +189,7 @@ def test_the_first_bucket_is_the_finished_assets_nobody_has_judged(ctx, svc):
     """Ordinary daily use feeds the same findings pool a sweep does."""
     plain = _mesh(svc, "a chest")
     judged = _mesh(svc, "a sword")
-    svc_verdicts.record_verdict(svc, judged, verdict="accept")
+    svc_verdicts.record_verdict(svc, judged, grade=3)
     _sweep(svc)
 
     state = _scanned(ctx)
@@ -202,7 +208,7 @@ def test_a_scan_with_nothing_recorded_leaves_an_empty_but_usable_state(ctx):
     assert review_mode.current(state) is None
     # Every key path has to survive the empty case rather than raise.
     assert _press(ctx, "a") is False
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
 
 
 def test_the_scan_runs_off_the_frame_thread_under_one_claimable_key(ctx):
@@ -247,7 +253,7 @@ def test_a_rescan_keeps_the_sweep_that_is_open(ctx, svc):
 
 def test_a_scan_carries_the_verdicts_already_recorded(ctx, svc):
     sweep_id, ids = _sweep(svc)
-    svc_verdicts.record_verdict(svc, ids[0], verdict="accept")
+    svc_verdicts.record_verdict(svc, ids[0], grade=3)
 
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
@@ -260,7 +266,7 @@ def test_opening_a_sweep_starts_on_the_first_unit_with_no_verdict(ctx, svc):
     """A review session is resumed far more often than it is started, and
     landing back on unit one every time is what makes resuming useless."""
     sweep_id, ids = _sweep(svc, n=3)
-    svc_verdicts.record_verdict(svc, ids[0], verdict="accept")
+    svc_verdicts.record_verdict(svc, ids[0], grade=3)
 
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
@@ -269,16 +275,26 @@ def test_opening_a_sweep_starts_on_the_first_unit_with_no_verdict(ctx, svc):
 
 # --- the verdict loop --------------------------------------------------------
 
+# Filled in at import time from pygame rather than written as literals: the
+# modifier bits are pygame's, and a hand-copied constant is a second spelling
+# of a number this test suite exists to check the first one against.
+import pygame as _pygame  # noqa: E402
 
-def test_accept_writes_one_verdict_and_advances(ctx, svc):
+_CTRL = _pygame.KMOD_LCTRL
+_SHIFT = _pygame.KMOD_LSHIFT
+
+
+def test_a_grade_key_writes_one_verdict_and_advances(ctx, svc):
     sweep_id, ids = _sweep(svc)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
-    assert _press(ctx, "a") is True
+    assert _press(ctx, "4") is True
 
     recorded = svc.store.latest_verdicts()
-    assert [(r["job_id"], r["verdict"]) for r in recorded] == [(ids[0], "accept")]
+    assert [(r["job_id"], r["grade"], r["verdict"]) for r in recorded] == [
+        (ids[0], 4, "accept")
+    ]
     assert state.index == 1
     # And the findings recompute is asked for rather than done here: it reads
     # every verdict and writes a file, neither of which belongs on the frame
@@ -301,7 +317,7 @@ def test_a_burst_of_verdicts_is_not_swallowed_by_the_one_in_flight(ctx, svc):
     review_mode.open_sweep(ctx, sweep_id)
 
     ctx.accept = False  # stand in for "a recompute is already running"
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
     review_mode.pump_findings(ctx)
     assert ctx.state.findings_dirty is True
 
@@ -315,52 +331,193 @@ def test_a_verdict_carries_the_jobs_config_vector(ctx, svc):
     sweep_id, _ = _sweep(svc, lora_weight=0.6)
     _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
 
     assert svc.store.latest_verdicts()[0]["vector"] == {
         "lora_weight": 0.6, "stage": "model"
     }
 
 
-def test_reject_waits_for_a_reason_key(ctx, svc):
+def test_r_arms_the_sign_and_the_next_digit_is_negative(ctx, svc):
     sweep_id, _ = _sweep(svc)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
     assert _press(ctx, "r") is True
-    assert state.pending_reject is True
+    assert state.pending_negative is True
     assert svc.store.latest_verdicts() == []
 
-    assert _press(ctx, "1") is True
+    assert _press(ctx, "2") is True
     recorded = svc.store.latest_verdicts()
+    assert recorded[0]["grade"] == -2
     assert recorded[0]["verdict"] == "reject"
-    assert recorded[0]["reasons"] == [review_mode.REASON_KEYS["1"]]
-    assert state.pending_reject is False
+    # The arm belongs to the unit that was on screen when it was pressed.
+    assert state.pending_negative is False
 
 
-def test_a_reason_key_with_nothing_armed_writes_nothing(ctx, svc):
+def test_a_bare_digit_is_positive(ctx, svc):
     sweep_id, _ = _sweep(svc)
     _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
-    assert _press(ctx, "1") is False
-    assert svc.store.latest_verdicts() == []
+    assert _press(ctx, "5") is True
+    assert svc.store.latest_verdicts()[0]["grade"] == 5
 
 
-def test_escape_disarms_a_pending_reject(ctx, svc):
+def test_zero_is_its_own_key_and_a_real_answer(ctx, svc):
+    """No sign to arm, and "no opinion either way" is an answer rather than a
+    refusal to give one -- so it records, and the row it records is *answered*,
+    which is what stops ``advance`` from offering it again."""
+    sweep_id, _ = _sweep(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    assert _press(ctx, "0") is True
+    row = svc.store.latest_verdicts()[0]
+    assert row["grade"] == 0
+    assert row["verdict"] == "reject"  # below the usable cut, as +0 must be
+    assert state.units[0]["verdict"] is not None
+
+
+def test_the_whole_scale_is_reachable_from_the_keyboard(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=10)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    filed = []
+    for magnitude in range(1, 6):
+        for negative in (False, True):
+            if negative:
+                _press(ctx, "r")
+            _press(ctx, str(magnitude))
+            filed.append(-magnitude if negative else magnitude)
+
+    recorded = sorted(r["grade"] for r in svc.store.latest_verdicts())
+    assert recorded == sorted(filed)
+    assert set(recorded) == set(range(-5, 6)) - {0}
+
+
+def test_escape_disarms_the_sign_and_drops_the_staged_tags(ctx, svc):
     sweep_id, _ = _sweep(svc)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
     _press(ctx, "r")
+    _press(ctx, "1", mod=_CTRL)
 
     assert _press(ctx, "ESCAPE") is True
-    assert state.pending_reject is False
+    assert state.pending_negative is False
+    assert state.pending_tags == []
     assert svc.store.latest_verdicts() == []
 
 
-def test_every_reason_key_names_a_real_reason():
-    assert set(review_mode.REASON_KEYS.values()) == set(svc_verdicts.REASONS)
-    assert list(review_mode.REASON_KEYS) == ["1", "2", "3", "4", "5"]
+def test_every_tag_key_names_a_real_tag():
+    assert set(review_mode.GOOD_TAG_KEYS.values()) == set(svc_verdicts.GOOD_TAGS)
+    assert set(review_mode.BAD_TAG_KEYS.values()) == set(svc_verdicts.BAD_TAGS)
+    assert list(review_mode.GOOD_TAG_KEYS) == ["1", "2", "3", "4", "5"]
+    assert list(review_mode.BAD_TAG_KEYS) == ["1", "2", "3", "4", "5"]
+    assert list(review_mode.GRADE_KEYS.values()) == [1, 2, 3, 4, 5]
+
+
+def test_tags_are_toggled_by_modifier_and_ride_the_next_grade(ctx, svc):
+    sweep_id, _ = _sweep(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    # Ctrl is good, Shift is bad, and the digit is positional in both.
+    assert _press(ctx, "1", mod=_CTRL) is True
+    assert _press(ctx, "1", mod=_SHIFT) is True
+    assert state.pending_tags == [svc_verdicts.GOOD_TAGS[0], svc_verdicts.BAD_TAGS[0]]
+    assert svc.store.latest_verdicts() == []
+
+    assert _press(ctx, "4") is True
+    row = svc.store.latest_verdicts()[0]
+    assert row["grade"] == 4
+    assert row["reasons"] == [svc_verdicts.GOOD_TAGS[0], svc_verdicts.BAD_TAGS[0]]
+    assert state.units[0]["tags"] == row["reasons"]
+    # Staged state belongs to the unit that is now behind us.
+    assert state.pending_tags == []
+
+
+def test_a_tag_key_pressed_twice_removes_it(ctx, svc):
+    sweep_id, _ = _sweep(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    _press(ctx, "3", mod=_SHIFT)
+    assert state.pending_tags == [svc_verdicts.BAD_TAGS[2]]
+    _press(ctx, "3", mod=_SHIFT)
+    assert state.pending_tags == []
+
+
+def test_a_good_tag_is_legal_on_a_negative_grade(ctx, svc):
+    """Tags stopped being reasons a reviewer rejected. A mesh can have a clean
+    shape and still be unusable, and that pair is the finding."""
+    sweep_id, _ = _sweep(svc)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    _press(ctx, "1", mod=_CTRL)
+    _press(ctx, "r")
+    _press(ctx, "4")
+
+    row = svc.store.latest_verdicts()[0]
+    assert row["grade"] == -4
+    assert row["reasons"] == [svc_verdicts.GOOD_TAGS[0]]
+
+
+def test_a_modified_digit_never_files_a_grade(ctx, svc):
+    """Tags are checked before grades, or Ctrl+1 would file a +1 and stage
+    nothing at all."""
+    sweep_id, _ = _sweep(svc)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    _press(ctx, "1", mod=_CTRL)
+    _press(ctx, "2", mod=_SHIFT)
+    _press(ctx, "0", mod=_CTRL)
+    assert svc.store.latest_verdicts() == []
+
+
+def test_a_records_nothing_at_all(ctx, svc):
+    """The old Accept key. Deliberately not remapped onto +3: silently filing
+    the mildest usable grade for somebody reaching for the old key is a wrong
+    number rather than a missing one."""
+    sweep_id, _ = _sweep(svc)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    assert _press(ctx, "a") is False
+    assert svc.store.latest_verdicts() == []
+
+
+def test_moving_clears_the_staged_tags_as_well_as_the_sign(ctx, svc):
+    """Both belong to the unit that was on screen. A tag surviving a step is
+    filed against a mesh nobody was looking at when they chose it."""
+    sweep_id, _ = _sweep(svc, n=3)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    for move in (
+        lambda: review_mode.step(state, 1),
+        lambda: review_mode.advance(state),
+        lambda: review_mode.open_sweep(ctx, sweep_id),
+    ):
+        _press(ctx, "r")
+        _press(ctx, "2", mod=_SHIFT)
+        assert state.pending_negative is True
+        assert state.pending_tags
+        move()
+        assert state.pending_negative is False
+        assert state.pending_tags == []
+
+
+def test_grade_text_is_signed_except_at_zero():
+    assert review_mode.grade_text(4) == "+4"
+    assert review_mode.grade_text(-2) == "-2"
+    assert review_mode.grade_text(0) == "0"
+    assert review_mode.grade_text(None) == ""
+    # bool is an int, and True would otherwise render as +1.
+    assert review_mode.grade_text(True) == ""
 
 
 def test_skip_writes_nothing_and_advances(ctx, svc):
@@ -375,12 +532,12 @@ def test_skip_writes_nothing_and_advances(ctx, svc):
 
 def test_recording_advances_past_units_that_already_have_a_verdict(ctx, svc):
     sweep_id, ids = _sweep(svc, n=3)
-    svc_verdicts.record_verdict(svc, ids[1], verdict="accept")
+    svc_verdicts.record_verdict(svc, ids[1], grade=3)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
     assert state.index == 0
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
     assert state.index == 2
 
 
@@ -390,7 +547,7 @@ def test_recording_wraps_to_work_left_behind_the_cursor(ctx, svc):
     review_mode.open_sweep(ctx, sweep_id)
     review_mode.step(state, 2)
 
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
     assert state.index == 0
 
 
@@ -399,7 +556,7 @@ def test_the_last_unit_stays_put_when_there_is_nothing_left_to_do(ctx, svc):
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
     assert state.index == 0
 
 
@@ -408,8 +565,8 @@ def test_a_re_review_supersedes_rather_than_duplicating(ctx, svc):
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
-    review_mode.record(ctx, "accept")
-    review_mode.record(ctx, "reject", ("holes",))
+    review_mode.record(ctx, 3)
+    review_mode.record(ctx, -3, ("holes",))
 
     latest = svc.store.latest_verdicts()
     assert len(latest) == 1
@@ -429,14 +586,14 @@ def test_the_arrows_navigate_and_clamp_at_both_ends(ctx, svc):
     assert state.index == 1
 
 
-def test_navigating_disarms_a_pending_reject(ctx, svc):
+def test_navigating_disarms_the_pending_sign(ctx, svc):
     sweep_id, _ = _sweep(svc, n=2)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
     _press(ctx, "r")
 
     _press(ctx, "RIGHT")
-    assert state.pending_reject is False
+    assert state.pending_negative is False
 
 
 def test_no_key_does_anything_while_a_scan_is_in_flight(ctx, svc):
@@ -445,7 +602,7 @@ def test_no_key_does_anything_while_a_scan_is_in_flight(ctx, svc):
     review_mode.open_sweep(ctx, sweep_id)
     state.scanning = True
 
-    for key in ("a", "r", "s", "1", "LEFT"):
+    for key in ("r", "s", "0", "1", "LEFT"):
         assert _press(ctx, key) is False
     assert svc.store.latest_verdicts() == []
 
@@ -599,7 +756,7 @@ def test_blinding_does_not_hide_the_verdicts_already_recorded(ctx, svc):
     """What is hidden is the arm, not the reviewer's own answers -- the unit
     list's marks are how a session is resumed."""
     sweep_id, ids = _sweep(svc, n=4)
-    svc_verdicts.record_verdict(svc, ids[0], verdict="accept")
+    svc_verdicts.record_verdict(svc, ids[0], grade=3)
     state = _scanned(ctx)
     review_mode.set_blind(ctx, True)
     review_mode.open_sweep(ctx, sweep_id)
@@ -753,14 +910,16 @@ def test_the_review_list_sorts_by_the_judges_score_and_never_filters_by_it(ctx, 
 
 
 def test_labelling_keys_do_nothing_when_no_pass_is_open(ctx, svc):
-    """The verdict loop owns A and R the rest of the time."""
+    """The verdict loop owns the keyboard the rest of the time, and it reads a
+    digit as a grade rather than as a label."""
     _mesh(svc, "a chest")
     _scanned(ctx)
 
-    _press(ctx, "a")
+    _press(ctx, "3")
 
     row = svc.store.latest_verdicts()[0]
     assert row["stage"] == "model"
+    assert row["grade"] == 3
 
 
 def test_closing_a_labelling_pass_returns_to_the_verdict_loop(ctx, svc):
@@ -772,7 +931,7 @@ def test_closing_a_labelling_pass_returns_to_the_verdict_loop(ctx, svc):
     review_mode.close_labels(ctx)
 
     assert ctx.state.review.labels is None
-    assert _press(ctx, "a") is True
+    assert _press(ctx, "3") is True
     assert svc.store.latest_verdicts()[0]["stage"] == "model"
 
 
@@ -875,7 +1034,7 @@ def test_the_recent_bucket_cannot_be_deleted(ctx, svc):
 def test_a_finished_delete_says_what_it_kept(ctx, svc):
     sweep_id, ids = _sweep(svc, n=1)
     _scanned(ctx)
-    svc_verdicts.record_verdict(svc, ids[0], verdict="accept")
+    svc_verdicts.record_verdict(svc, ids[0], grade=3)
     review_mode.delete(ctx, sweep_id)
     review_mode.on_task_done(ctx, _Done(review_mode.DELETE_KEY, {"deleted": 1}))
 
@@ -898,7 +1057,7 @@ def test_review_persists_nothing_at_all(ctx, svc):
     names, and a deleted one would open on nothing with no way to say so."""
     _mesh(svc, "a chest")
     _scanned(ctx)
-    review_mode.record(ctx, "accept")
+    review_mode.record(ctx, 3)
 
     assert ctx.settings.store == {}
     source = Path(review_mode.__file__).read_text("utf-8")

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from warlock.studio import inker, inker_state
+from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker_state import InkerDoc, InkerState, PaintView
 
 
@@ -324,29 +324,52 @@ def test_the_tool_groups_do_not_overlap():
 
 
 # --- recent files -----------------------------------------------------------
+#
+# The list itself moved to ``studio/recents.py`` and ``tests/test_recents.py``
+# owns its rules; what these check is that Inker still reaches it, through a
+# settings object with the two methods that module uses and nothing else.
+
+
+class _RecentCtx:
+    def __init__(self) -> None:
+        self.data: dict = {}
+
+    @property
+    def settings(self):
+        return self
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value) -> None:
+        self.data[key] = value
+
 
 
 def test_recent_files_are_most_recent_first_deduplicated_and_bounded():
-    state = InkerState()
-    for i in range(inker_state.MAX_RECENT + 5):
-        state.remember(Path(f"/tmp/f{i}.ora"))
-    assert len(state.recent) == inker_state.MAX_RECENT
-    state.remember(Path("/tmp/f0.ora"))
-    assert state.recent[0] == str(Path("/tmp/f0.ora"))
-    assert state.recent.count(str(Path("/tmp/f0.ora"))) == 1
+    from warlock.studio import recents
+
+    ctx = _RecentCtx()
+    for i in range(recents.MAX_RECENT + 5):
+        inker_mode.remember_path(ctx, Path(f"/tmp/f{i}.ora"))
+    assert len(inker_mode.recent_paths(ctx)) == recents.MAX_RECENT
+    inker_mode.remember_path(ctx, Path("/tmp/f0.ora"))
+    found = inker_mode.recent_paths(ctx)
+    assert found[0] == str(Path("/tmp/f0.ora"))
+    assert found.count(str(Path("/tmp/f0.ora"))) == 1
 
 
 def test_an_unsaved_document_contributes_nothing_to_the_recent_list():
-    state = InkerState()
-    state.remember(None)
-    assert state.recent == []
+    ctx = _RecentCtx()
+    inker_mode.remember_path(ctx, None)
+    assert inker_mode.recent_paths(ctx) == []
 
 
 def test_a_path_that_did_not_open_can_be_forgotten():
-    state = InkerState()
-    state.remember(Path("/tmp/gone.ora"))
-    state.forget(str(Path("/tmp/gone.ora")))
-    assert state.recent == []
+    ctx = _RecentCtx()
+    inker_mode.remember_path(ctx, Path("/tmp/gone.ora"))
+    inker_mode.forget_path(ctx, str(Path("/tmp/gone.ora")))
+    assert inker_mode.recent_paths(ctx) == []
 
 
 # --- keys -------------------------------------------------------------------

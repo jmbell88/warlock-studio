@@ -462,7 +462,7 @@ def test_a_file_that_will_not_open_is_reported_and_forgotten(svc, tmp_path) -> N
     bad.write_bytes(b"not a wblk")
     ctx = FakeCtx(svc)
     clay_mode.ensure(ctx)
-    ctx.state.clay.remember(bad)
+    clay_mode.remember_path(ctx, bad)
 
     with pytest.raises(ValueError):
         clay_mode._load(bad)
@@ -484,8 +484,9 @@ def test_recent_files_persist_through_the_settings_store(svc, tmp_path) -> None:
     tab = _tab(ctx)
     _save(ctx, tab, tmp_path / "scene.wblk")
 
-    stored = ctx.settings.get("clay") or {}
-    assert str(tmp_path / "scene.wblk") in (stored.get("recent") or [])
+    # Through ``recents``, the one merged list, rather than a per-mode key:
+    # four independent lists could not be merged into Home's Resume list at all.
+    assert str(tmp_path / "scene.wblk") in clay_mode.recent_paths(ctx)
 
 
 def test_tool_settings_belong_to_the_app_and_the_view_to_the_document(svc) -> None:

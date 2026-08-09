@@ -3,10 +3,14 @@
 Same division of labour as ``tests/test_ux_phases.py`` states for Phases 2 and
 3. The screenshot pass (``scripts/screenshot_modes.py``, now with ``--floating``
 so the palette's translucency is in a still at all) is the instrument for the
-half of these phases that is pixels. It cannot see that the orientation card
-never comes back, that a nine-patch refuses a rectangle smaller than its own
-corners, or that a spring settles rather than running out of ramp -- and those
-are what this file pins.
+half of these phases that is pixels. It cannot see that a resume row opens in
+the pane that made it, that a nine-patch refuses a rectangle smaller than its
+own corners, or that a spring settles rather than running out of ramp -- and
+those are what this file pins.
+
+The phase's first-run orientation card is gone: Home stopped being a chooser
+with nothing on it but choices, and a card explaining the screen sat above a
+screen that now explains itself.
 
 The GL half of Phase 5 -- that a sprite really builds and a backdrop really
 captures -- lives in ``tests/test_studio_smoke.py``, where the context, the
@@ -47,31 +51,7 @@ def _ctx(**kwargs):
     return SimpleNamespace(**base)
 
 
-# --- Phase 4: first-run orientation -----------------------------------------
-
-
-def test_the_orientation_card_never_comes_back():
-    """An orientation that reappears is not orientation. One key, no counter:
-    "how many times has this been seen" would be a number with nothing reading
-    it, and a card dismissed three times is worse than one shown once."""
-    ctx = _ctx()
-    assert landing.orientation_visible(ctx)
-    landing.dismiss_orientation(ctx)
-    assert not landing.orientation_visible(ctx)
-    # Through the settings file, so it survives the session it was dismissed in.
-    assert ctx.settings.get(landing.ORIENTATION_SETTING) is True
-    assert not landing.orientation_visible(_ctx(settings=_Settings(**ctx.settings.data)))
-
-
-def test_the_stack_reserves_the_orientation_cards_own_height():
-    """It is on screen for exactly one session, and that is the session where
-    the bottom card going missing costs the most."""
-    source = inspect.getsource(landing._choose)
-    assert "orientation_visible(ctx)" in source
-    assert "ORIENTATION_HEIGHT" in source
-
-
-# --- Phase 4: continue ------------------------------------------------------
+# --- Phase 4: resume --------------------------------------------------------
 
 
 def _job(job_id, status="done", stage="model", **extra):
@@ -83,52 +63,36 @@ def _cache(jobs):
     return SimpleNamespace(jobs=list(jobs), get=lambda key: by_id.get(key))
 
 
-def test_continue_prefers_the_selection_over_the_newest():
-    """A selection is a statement; a timestamp is an inference."""
-    jobs = [_job("newest"), _job("older")]
-    ctx = _ctx(cache=_cache(jobs), state=SimpleNamespace(selected="older", home_index=0))
-    assert landing.recent(ctx)["id"] == "older"
+def test_resuming_selects_what_it_opens_and_lands_in_the_right_pane():
+    """The same reference/model split Continue used, plus the selection -- a
+    resume that switched mode and left nothing selected would open the pane the
+    asset belongs to and not the asset.
 
-
-def test_continue_offers_nothing_unfinished_and_nothing_at_all_on_a_fresh_profile():
-    """Opening a queued job lands on a pane with nothing in it, and a first run
-    has nothing to continue -- which is also what keeps the two new cards from
-    routinely being on screen together."""
-    ctx = _ctx(cache=_cache([_job("q", status="queued")]))
-    assert landing.recent(ctx) is None
-    assert landing.recent(_ctx(cache=_cache([]))) is None
-    # No cache at all (a headless caller, the tests): still no answer, never a
-    # crash on the screen the app opens on.
-    assert landing.recent(_ctx()) is None
-
-
-def test_the_continue_card_is_in_front_of_the_table_and_the_ring_knows_it():
-    """Three things index the same list -- the click, the arrows and Enter --
-    so there is one function answering "what is the nth card"."""
-    ctx = _ctx(cache=_cache([_job("newest")]))
-    drawn = landing.rows(ctx)
-    assert drawn[0][0] == "continue"
-    assert [row[0] for row in drawn[1:]] == [key for key, _i, _n in landing.TILES]
-    landing.move(ctx, -1)
-    assert ctx.state.home_index == len(drawn) - 1
-
-
-def test_continuing_selects_what_it_opens_and_lands_in_the_right_pane():
-    """The same reference/model split ``_continue`` already used, plus the
-    selection -- a Continue that switched mode and left nothing selected would
-    open the pane the asset belongs to and not the asset."""
+    The Continue *card* is gone: it was one row in front of a tile grid,
+    answering "the newest finished thing" with one card, and the Resume list
+    answers it with the whole list. What survives is the rule about how a row
+    is opened.
+    """
     picked = []
     state = SimpleNamespace(
         selected=None,
         home_index=0,
         mode="home",
-        landing_view="choose",
         select=picked.append,
     )
     ctx = _ctx(cache=_cache([_job("ref", stage="reference")]), state=state)
     landing.activate(ctx, 0)
     assert picked == ["ref"]
     assert state.mode == "2d"
+
+
+def test_a_queued_job_is_not_offered_and_a_bare_ctx_is_not_a_crash():
+    """Opening a queued job lands on a pane with nothing in it; and Home is the
+    screen the app opens on, so a headless or half-built ctx must draw an empty
+    list rather than raise."""
+    assert landing.rows(_ctx(cache=_cache([_job("q", status="queued")]))) == []
+    assert landing.rows(_ctx(cache=_cache([]))) == []
+    assert landing.rows(_ctx()) == []
 
 
 # --- Phase 4: in-flow discovery ---------------------------------------------

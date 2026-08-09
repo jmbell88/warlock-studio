@@ -20,10 +20,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# How many files the "recent" list keeps. Ten is one screenful of a menu, the
-# same number the raster editor settled on.
-MAX_RECENT = 10
-
 # Name, label, and the key that selects it. The primitive tools mirror the
 # generator registry; the transform tools mirror the three gizmos.
 TOOLS = (
@@ -116,7 +112,6 @@ class ClayState:
 
     docs: list[ClayTab] = field(default_factory=list)
     active_uid: str = ""
-    recent: list[str] = field(default_factory=list)
 
     # Tool and snap settings: shared across documents on purpose.
     tool: str = "select"
@@ -238,18 +233,3 @@ class ClayState:
         self.drag_axis = ""
         self.ref = {}
 
-    # -- recent files -------------------------------------------------------
-
-    def remember(self, path: Path | None) -> None:
-        """Most recent first, deduplicated, bounded -- as the raster editor's
-        list does, and for the same reason."""
-        if path is None:
-            return
-        text = str(path)
-        self.recent = [text] + [p for p in self.recent if p != text]
-        del self.recent[MAX_RECENT:]
-
-    def forget(self, path: str) -> None:
-        """Drop a path that turned out not to open -- a recent list that keeps
-        offering a moved file is worse than a short one."""
-        self.recent = [p for p in self.recent if p != path]

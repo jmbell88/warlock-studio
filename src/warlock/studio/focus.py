@@ -9,7 +9,7 @@ its own controls, one of them is the cursor, Tab and Shift-Tab move it, and
 The order is **the order the controls are drawn in**, recorded as the frame
 builds them rather than written out beside the pane: a hand-kept list over a
 hand-written column of widgets is two orderings, and they drift the first time
-a control is inserted -- which is exactly the argument ``landing.TILES`` and
+a control is inserted -- which is exactly the argument ``landing.rows`` and
 ``palette.py`` already make about the two other indices of the same thing.
 
 Two rules keep this from fighting imgui rather than riding on it.

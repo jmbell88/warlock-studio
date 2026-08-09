@@ -24,9 +24,6 @@ MIN_ZOOM = 0.05
 MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
 
-# How many files the "recent" list keeps. Ten is one screenful of a menu.
-MAX_RECENT = 10
-
 # The swatch row's own capacity. Not a palette editor -- the eyedropper is how
 # a user gets the colours actually in their image; this only has to hold the
 # handful they keep coming back to.
@@ -305,7 +302,6 @@ def _tool_option(name: str) -> property:
 class InkerState:
     docs: list[InkerDoc] = field(default_factory=list)
     active_uid: str = ""
-    recent: list[str] = field(default_factory=list)
 
     # Tool settings: shared across documents on purpose.
     tool: str = "brush"
@@ -510,21 +506,6 @@ class InkerState:
         self.swatches.append(colour)
         del self.swatches[:-MAX_SWATCHES]
 
-    # -- recent files -------------------------------------------------------
-
-    def remember(self, path: Path | None) -> None:
-        """Most recent first, deduplicated, bounded -- as the prompt history
-        does, and for the same reason."""
-        if path is None:
-            return
-        text = str(path)
-        self.recent = [text] + [p for p in self.recent if p != text]
-        del self.recent[MAX_RECENT:]
-
-    def forget(self, path: str) -> None:
-        """Drop a path that turned out not to open -- a recent list that keeps
-        offering a moved file is worse than a short one."""
-        self.recent = [p for p in self.recent if p != path]
 
 
 # --- brush size stepping ----------------------------------------------------

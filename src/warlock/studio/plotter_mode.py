@@ -37,7 +37,7 @@ from typing import Any
 
 import numpy as np
 
-from . import dialogs, filetypes, plotter_state
+from . import dialogs, filetypes, plotter_state, recents
 from .plotter_state import PlotterDoc, PlotterState
 
 log = logging.getLogger(__name__)
@@ -73,16 +73,40 @@ def ensure(ctx: Any) -> PlotterState:
     state = ctx.state.plotter
     if state is None:
         state = PlotterState()
-        stored = ctx.settings.get("plotter") or {}
-        state.recent = [p for p in (stored.get("recent") or []) if isinstance(p, str)]
         ctx.state.plotter = state
     return state
 
 
+def remember_path(ctx: Any, path: Any) -> None:
+    """Put ``path`` at the front of the merged recent list.
+
+    Through :mod:`.recents` rather than onto a field of this mode's own state:
+    the four document modes kept four independent ``recent`` lists, and Home's
+    single Resume list cannot be built from them at all -- four bare path lists
+    carry no ordering *between* them. There is one list now, and this is how
+    plotter writes to it.
+    """
+    recents.remember(ctx.settings, "plotter", path)
+
+
+def forget_path(ctx: Any, path: Any) -> None:
+    """Drop a path that turned out not to open -- :mod:`.recents`' own rule,
+    named here so a caller does not have to know this mode's kind string."""
+    recents.forget(ctx.settings, "plotter", path)
+
+
+def recent_paths(ctx: Any) -> list[str]:
+    """This mode's recent files, newest first. What its own panel draws."""
+    return recents.paths(ctx.settings, "plotter")
+
+
 def persist(ctx: Any) -> None:
-    state = ctx.state.plotter
-    if state is not None:
-        ctx.settings.set("plotter", {"recent": state.recent})
+    """Nothing to write any more: the recent list moved to :mod:`.recents`,
+    which persists itself on every write. Kept as a no-op because it is called
+    from a dozen places after every open and save, and turning each of those
+    into "call this only if the mode still has settings" is how one of them
+    comes to skip a write that mattered later."""
+
 
 
 def active(ctx: Any) -> PlotterDoc | None:
@@ -143,7 +167,7 @@ def adopt(
         saved_head=doc.history.head,
     )
     state.add(tab)
-    state.remember(path)
+    remember_path(ctx, path)
     persist(ctx)
     return tab
 
@@ -537,7 +561,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         tab.path = Path(result["path"])
         tab.title = plotter_state.title_for(tab.path)
         tab.file_format = result.get("format") or tab.file_format
-        state.remember(tab.path)
+        remember_path(ctx, tab.path)
         persist(ctx)
     ctx.toast("Saved.")
 

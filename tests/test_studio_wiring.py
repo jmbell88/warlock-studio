@@ -115,16 +115,17 @@ def test_the_plotter_and_packwright_recents_survive_a_teardown(fake_pygame):
     state = AppState()
     ctx = _ctx(settings, state)
 
-    plotter = plotter_mode.ensure(ctx)
-    plotter.recent = ["D:/maps/one.wmap"]
-    packwright = packwright_mode.ensure(ctx)
-    packwright.recent = ["D:/atlases/one.wpack"]
-    # Not through ``adopt``: the point is that quitting persists whatever the
-    # state holds, rather than relying on every mutation having remembered to.
+    plotter_mode.ensure(ctx)
+    plotter_mode.remember_path(ctx, "D:/maps/one.wmap")
+    packwright_mode.ensure(ctx)
+    packwright_mode.remember_path(ctx, "D:/atlases/one.wpack")
+    # The list is written by ``recents`` on the spot rather than flushed at
+    # teardown -- which is the point: a mutation that forgot to persist used to
+    # survive only because quitting wrote whatever the state happened to hold.
     _teardown_app(ctx).teardown()
 
-    assert settings.get("plotter") == {"recent": ["D:/maps/one.wmap"]}
-    assert settings.get("packwright") == {"recent": ["D:/atlases/one.wpack"]}
+    assert plotter_mode.recent_paths(ctx) == ["D:/maps/one.wmap"]
+    assert packwright_mode.recent_paths(ctx) == ["D:/atlases/one.wpack"]
 
 
 # --- H71: one write, and a label that names what it does ---------------------
@@ -162,7 +163,6 @@ def _palette_ctx(mode: str) -> Any:
             mode=mode,
             previous_mode=mode,
             mode_observed=mode,
-            landing_view="choose",
         )
     )
 

@@ -711,15 +711,28 @@ def test_the_right_sidebar_splits_inspector_and_library_by_settings_share(app_ct
     assert bottoms[0] == pytest.approx(expected_bottom, abs=1.0)
 
 
-def test_the_landing_screen_builds_in_each_of_its_views(app_ctx, imgui_ctx):
+def test_the_landing_screen_builds_empty_and_with_something_to_resume(
+    app_ctx, imgui_ctx
+):
+    """Both states, because Home's empty state is the frame that shows none of
+    its Resume rows -- which is the half a seeded smoke run never reaches."""
     from warlock.studio.panes import landing
 
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
-    app_ctx.state.landing_view = "open"
     _seeded(app_ctx)
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
-    app_ctx.state.landing_view = "profiles"
-    _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+
+
+def test_library_and_profiles_build_as_their_own_modes(app_ctx, imgui_ctx):
+    """They were sub-views of Home behind an enum; they are single-pane modes
+    now, drawn by the same call Home used to make."""
+    from warlock.studio.panes import library, profiles_panel
+
+    _seeded(app_ctx)
+    app_ctx.state.mode = "library"
+    _frame(imgui_ctx, lambda: library.draw(app_ctx))
+    app_ctx.state.mode = "profiles"
+    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
 
 
 def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
@@ -1700,7 +1713,9 @@ def test_the_2d_pane_builds_with_a_saved_vector_preset(app_ctx, imgui_ctx):
     assert "vector_preset" not in app_ctx.state.preview
 
 
-def test_the_inspector_builds_its_verdict_section_armed_and_not(app_ctx, imgui_ctx):
+def test_the_inspector_builds_its_verdict_section_with_and_without_staged_tags(
+    app_ctx, imgui_ctx
+):
     from warlock.studio.panes import inspector
 
     app_ctx.state.mode = "3d"
@@ -1711,7 +1726,10 @@ def test_the_inspector_builds_its_verdict_section_armed_and_not(app_ctx, imgui_c
     job = app_ctx.svc.store.get(job_id)
 
     _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))
-    inspector.arm_verdict(app_ctx.state, job_id)
+    # A staged tag draws its button in the selected style, which is a different
+    # code path through ``tag_toggles`` -- the push/pop pair has to balance.
+    inspector.toggle_tag(app_ctx.state, job_id, "holes")
+    inspector.toggle_tag(app_ctx.state, job_id, "clean-shape")
     _frame(imgui_ctx, lambda: inspector._verdict(app_ctx, job))
 
 
@@ -2343,12 +2361,17 @@ def test_the_whole_frame_builds_under_the_light_palette(app_ctx, imgui_ctx):
         theme.apply(imgui)
 
 
-def test_the_home_tiles_build_with_the_keyboard_cursor_on_each(app_ctx, imgui_ctx):
+def test_the_home_resume_rows_build_with_the_keyboard_cursor_on_each(
+    app_ctx, imgui_ctx
+):
+    from warlock.studio import recents
     from warlock.studio.panes import landing
 
     app_ctx.state.mode = "home"
-    app_ctx.state.landing_view = "choose"
-    for index in range(len(landing.TILES)):
+    _seeded(app_ctx)
+    for index in range(4):
+        recents.remember(app_ctx.settings, "clay", f"f{index}.wblk", when=float(index))
+    for index in range(len(landing.rows(app_ctx))):
         app_ctx.state.home_index = index
         _frame(imgui_ctx, lambda: landing.draw(app_ctx))
 
@@ -2559,6 +2582,11 @@ def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, s
             [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
             "home",
             breaks=modes.GROUP_BREAKS,
+            # The compact form, exactly as ``_mode_switch`` passes it: twelve
+            # labelled segments do not fit the resize floor at 1.5, so what has
+            # to fit is the switch the app would actually draw there.
+            compact=[(key, icon) for key, _label, icon in modes.MODES],
+            max_width=available,
         )
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
         measured.append((hi.x - lo.x, available))
@@ -2652,3 +2680,55 @@ def test_the_backdrop_captures_the_frame_and_skips_the_frames_it_was_used_on(img
     finally:
         vibrancy.release_all()
         gl.screen.use()
+
+
+def test_a_staged_tag_is_the_only_thing_that_repaints_a_toggle(app_ctx, imgui_ctx):
+    """The selected-toggle branch, which is the whole signal the control gives.
+
+    Everything else in the smoke suite asserts that a pane *builds*, and this
+    branch builds identically whether or not it paints -- so a push that went to
+    the wrong colour slot, or never happened, would be invisible here and
+    invisible in the GL pass. The staged fill was in fact verified by eye
+    through ``scripts/screenshot_modes.py --review``; this is what keeps it.
+
+    Asserted on the *calls* rather than on pixels: pushed only when something is
+    staged, and every push popped. A framebuffer colour comparison would be more
+    direct and far more brittle -- it would fail on any palette change, which is
+    not what is being protected.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import widgets
+
+    pushed: list = []
+    real_push = imgui.push_style_color
+    real_pop = imgui.pop_style_color
+
+    def spy_push(index, colour):
+        pushed.append(index)
+        return real_push(index, colour)
+
+    popped = [0]
+
+    def spy_pop(count=1):
+        popped[0] += count
+        return real_pop(count)
+
+    imgui.push_style_color = spy_push
+    imgui.pop_style_color = spy_pop
+    try:
+        _frame(imgui_ctx, lambda: widgets.tag_toggles("t", [], True))
+        assert pushed == [], "nothing staged must push nothing"
+
+        pushed.clear()
+        popped[0] = 0
+        _frame(imgui_ctx, lambda: widgets.tag_toggles("t", ["holes"], True))
+    finally:
+        imgui.push_style_color = real_push
+        imgui.pop_style_color = real_pop
+
+    assert pushed, "a staged tag must push a colour"
+    assert imgui.Col_.button.value in pushed
+    # The hover slot too, or a staged tag drops back to the default fill under
+    # the pointer -- the one moment the user is deciding whether to unstage it.
+    assert imgui.Col_.button_hovered.value in pushed
+    assert popped[0] == len(pushed), "every push is popped"

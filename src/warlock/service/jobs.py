@@ -674,6 +674,13 @@ def retained_job_ids(svc: WarlockService) -> set[str]:
     escape hatch when somebody really does want an accepted job gone. What is
     guarded is the three bulk paths, where the asset is not on screen and the
     count is the only thing the user sees.
+
+    The code below is unchanged by migration 10 and reads the same column it
+    always did -- but ``"accept"`` is the *derived usable cut* now (grade >= +3),
+    written from the grade by one owner, ``vectors.verdict_for_grade``. This is
+    one of the four readers that split survives for. There is deliberately no
+    per-grade retention tier: which grades are worth keeping is a policy nobody
+    has asked for, and the cut is the only threshold the scale has.
     """
     keep: set[str] = set()
     for verdict in svc.store.latest_verdicts():

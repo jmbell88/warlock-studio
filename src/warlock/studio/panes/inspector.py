@@ -965,24 +965,52 @@ def _quality(ctx: Any, job: Any) -> None:
 
 # --- verdicts ---------------------------------------------------------------
 #
-# The same Accept/Reject a sweep unit gets in Review, on any finished asset --
+# The same graded verdict a sweep unit gets in Review, on any finished asset --
 # which is the point: daily use and a deliberate sweep feed one findings pool,
 # and the vast majority of assets anyone ever looks at were never part of a
-# sweep. The two halves that are easy to get wrong (when the reject is armed,
-# and what a recorded verdict does) are plain functions so they can be asserted
-# without a GL context.
+# sweep. The two halves that are easy to get wrong (which asset the staged tags
+# belong to, and what a recorded verdict does) are plain functions so they can be
+# asserted without a GL context.
 
 
-def verdict_armed(state: Any, job_id: str) -> bool:
-    return state.inspector_reject_armed == job_id
+def staged_tags(state: Any, job_id: str) -> list[str]:
+    """The tags staged for this asset, and ``[]`` for any other.
+
+    Answering per job id is what makes the drop automatic: nothing has to notice
+    a selection change, because a different id simply has nothing staged. The
+    two fields are read as a pair for exactly that reason -- a bare list would
+    ride onto whatever was selected next.
+    """
+    if state.inspector_tags_job != job_id:
+        return []
+    return state.inspector_tags
 
 
-def arm_verdict(state: Any, job_id: str | None) -> None:
-    state.inspector_reject_armed = job_id
+def toggle_tag(state: Any, job_id: str, tag: str) -> None:
+    """Stage or unstage one tag against this asset.
+
+    The toggle rule itself is ``review_mode.toggled`` -- including its refusal
+    to stage a tag the vocabulary does not carry, which would otherwise make
+    ``record_verdict`` refuse the whole verdict and lose a grade to a typo. Only
+    the "which asset is this staged against" half lives here, because that is
+    the part the inspector genuinely does differently.
+    """
+    from .. import review_mode
+
+    if state.inspector_tags_job != job_id:
+        state.inspector_tags_job = job_id
+        state.inspector_tags = []
+    state.inspector_tags = review_mode.toggled(state.inspector_tags, tag)
 
 
-def record_verdict(ctx: Any, job_id: str, verdict: str, reasons: tuple[str, ...] = ()) -> bool:
-    """File a verdict and queue the findings recompute. -> whether it landed.
+def clear_tags(state: Any) -> None:
+    state.inspector_tags_job = None
+    state.inspector_tags = []
+
+
+def record_verdict(ctx: Any, job_id: str, grade: int, tags: tuple[str, ...] = ()) -> bool:
+    """File a graded verdict and queue the findings recompute. -> whether it
+    landed.
 
     Inline on the frame thread for the reason Review's is: one INSERT under the
     store's lock. The recompute that follows reads every verdict and writes a
@@ -993,39 +1021,35 @@ def record_verdict(ctx: Any, job_id: str, verdict: str, reasons: tuple[str, ...]
     from .. import review_mode
 
     try:
-        svc_verdicts.record_verdict(ctx.svc, job_id, verdict=verdict, reasons=reasons)
+        svc_verdicts.record_verdict(ctx.svc, job_id, grade=grade, reasons=tags)
     except (ServiceError, OSError):
         ctx.toast("Could not record that verdict.", "error")
         return False
-    arm_verdict(ctx.state, None)
+    clear_tags(ctx.state)
     # Through Review's own request, not a second submit under a copy of its
     # key: two spellings of one task key are two things to keep in step.
     review_mode.refresh_findings(ctx)
-    ctx.toast(f"Recorded: {verdict}.")
+    ctx.toast(f"Recorded: {review_mode.grade_text(grade)}.")
     return True
 
 
 def _verdict(ctx: Any, job: Any) -> None:
-    from ...service import verdicts as svc_verdicts
-
     if job.get("status") != "done" or job.get("stage") != "model":
         return
     if not widgets.header("Was this any good?", default_open=False):
         return
     job_id = job["id"]
     widgets.muted("Feeds the same findings a sweep does.")
-    if widgets.primary_button("Accept"):
-        record_verdict(ctx, job_id, "accept")
-    imgui.same_line()
-    if imgui.button("Reject"):
-        arm_verdict(ctx.state, job_id)
-    if verdict_armed(ctx.state, job_id):
-        widgets.muted("Why?")
-        for reason in svc_verdicts.REASONS:
-            if imgui.button(f"{reason}##verdict-{reason}"):
-                record_verdict(ctx, job_id, "reject", (reason,))
-        if imgui.button("Cancel##verdict-cancel"):
-            arm_verdict(ctx.state, None)
+    pending = staged_tags(ctx.state, job_id)
+
+    grade = widgets.grade_buttons(f"inspector-{job_id}", True)
+    if grade is not None:
+        record_verdict(ctx, job_id, grade, tuple(pending))
+    widgets.muted_wrapped("+5 ships as-is, +3 usable, -5 unusable. Tags are optional.")
+
+    tag = widgets.tag_toggles(f"inspector-{job_id}", pending, True)
+    if tag is not None:
+        toggle_tag(ctx.state, job_id, tag)
 
 
 def _downloads(ctx: Any, job: Any) -> None:

@@ -38,7 +38,6 @@ def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None =
             mode_observed=mode,
             selected=selected,
             source_job=None,
-            landing_view="choose",
             wireframe=False,
             turntable=False,
             show_fps=False,
@@ -106,14 +105,12 @@ def test_every_mode_has_a_go_to_command_and_they_are_derived():
     assert {f"go:{key}" for key in modes.KEYS} <= keys
 
 
-def test_a_go_to_command_carries_its_own_digit():
-    """The *key label*, not the slot number: the tenth mode is Alt+0, and
-    "Alt+10" is a key no keyboard has."""
+def test_a_go_to_command_advertises_no_key():
+    """There is no per-mode binding to advertise since the positional Alt+digit
+    scheme went away, and a hint naming Ctrl+K would be the palette telling you
+    how to open the palette you are reading it in."""
     found = {c.key: c.hint for c in palette.commands(_ctx())}
-    for key in modes.KEYS:
-        label = modes.digit_key_label(modes.digit_for_mode(key))
-        assert found[f"go:{key}"] == f"Alt+{label}"
-    assert found[f"go:{modes.KEYS[9]}"] == "Alt+0"
+    assert {found[f"go:{key}"] for key in modes.KEYS} == {""}
 
 
 def test_going_somewhere_records_where_it_came_from():
@@ -126,11 +123,13 @@ def test_going_somewhere_records_where_it_came_from():
     assert ctx.state.previous_mode == "3d"
 
 
-def test_going_home_resets_the_landing_view():
-    ctx = _ctx("3d")
-    ctx.state.landing_view = "assets"
-    next(c for c in palette.commands(ctx) if c.key == "go:home").run(ctx)
-    assert ctx.state.landing_view == "choose"
+def test_library_and_profiles_are_reachable_as_modes():
+    """They were tiles on Home behind a sub-view enum, which is what a
+    destination looks like when there is nowhere to put it. The palette derives
+    its list from ``modes.MODES``, so this passes for free -- which is the
+    property being asserted."""
+    keys = {c.key for c in palette.commands(_ctx())}
+    assert {"go:library", "go:profiles"} <= keys
 
 
 @pytest.mark.parametrize("key", ["wireframe", "turntable", "frame"])

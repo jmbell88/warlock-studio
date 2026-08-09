@@ -51,15 +51,21 @@ CREATE TABLE IF NOT EXISTS verdicts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id      TEXT NOT NULL,
     source      TEXT NOT NULL,                  -- 'human' | 'ai:<model>'
-    verdict     TEXT NOT NULL,                  -- accept | reject
-    reasons     TEXT NOT NULL DEFAULT '[]',     -- JSON list
+    verdict     TEXT NOT NULL,                  -- accept | reject; DERIVED from grade on model rows
+    reasons     TEXT NOT NULL DEFAULT '[]',     -- JSON list: tags (vectors.TAGS)
     vector      TEXT NOT NULL DEFAULT '{}',     -- JSON: the config vector, denormalized
     created_at  REAL NOT NULL,
     sweep_id    TEXT,                           -- denormalized: pairs outlive delete_sweep
     sweep_unit  TEXT NOT NULL DEFAULT '',       -- display label only; pairing never parses it
     seed        INTEGER,                        -- params["seed"] at record time
     prompt_hash TEXT NOT NULL DEFAULT '',       -- sha1[:12]; counts distinct prompts, nothing else
-    stage       TEXT NOT NULL DEFAULT 'model'   -- 'reference' | 'blank' | 'model': which question
+    stage       TEXT NOT NULL DEFAULT 'model',  -- 'reference' | 'blank' | 'model': which question
+    -- -5..+5, model stage only; NULL on an image label and on every row written
+    -- before migration 10. Declared *last* rather than beside ``verdict``, where
+    -- it reads better: ALTER TABLE appends, so a migrated database puts it here,
+    -- and ``tests/test_migrate.py`` compares the two schemas column-position and
+    -- all. Fresh and migrated converging is the property, not the prose.
+    grade       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_job ON verdicts(job_id);
 
@@ -295,6 +301,49 @@ MIGRATIONS: list[list[str]] = [
     # different, worse thing wearing the name.
     [
         "ALTER TABLE jobs ADD COLUMN deleted_at REAL",
+    ],
+    # 10 -- graded mesh verdicts. One nullable integer, -5..+5, model stage only.
+    #
+    # The binary corpus failed at its own purpose: 3 accepts against 81 rejects
+    # on 2026-08-07, in which a slab with no geometry, a smeared texture and a
+    # mesh a modeller would fix in five minutes are the same row. A bit can say a
+    # mesh failed and can never say how close it came, and that difference is
+    # exactly what a ranking, a tie-break or a future regression target wants.
+    #
+    # ``verdict`` TEXT is **not** dropped. It survives as a *derived* column
+    # written from the grade by one writer (``vectors.verdict_for_grade``), which
+    # is what leaves four readers untouched: prune retention, the judge's label
+    # reads, the ``latest_verdicts``/``unverdicted_models`` SQL, and every
+    # findings-v3 reader. One writer is what stops that from becoming the
+    # two-spellings hazard.
+    #
+    # The backfill is +-3 rather than +-5, and the value is argued in
+    # ``docs/measurements/2026-08-09-grade-scale.md``: a reviewer who pressed
+    # Accept asserted "usable" and had no key for anything stronger, so +-5 would
+    # invent evidence 84 times over and leave every real grade recorded later
+    # sitting inside synthetic tails. It is the same number as ``USABLE_GRADE``
+    # by design -- a cut above +3 would silently demote every row these UPDATEs
+    # just wrote.
+    #
+    # The literals are literals rather than an f-string over ``vectors``: a
+    # shipped migration must mean the same thing forever, and interpolating a
+    # constant somebody may later retune would rewrite history retroactively.
+    # ``tests/test_verdicts_db.py`` asserts they still equal ``BINARY_GRADES``,
+    # so a divergence is caught rather than merely forbidden.
+    #
+    # The ``grade IS NULL`` guards make a partial replay idempotent -- DDL runs
+    # in autocommit here, so an entry that fails part-way is re-run whole. On a
+    # fresh DB the ADD COLUMN guard skips the ALTER and both UPDATEs touch zero
+    # rows, which is how fresh and migrated databases converge.
+    #
+    # Image-stage rows keep grade NULL permanently: those labels feed binary
+    # logistic probes, so a grade would be thresholded straight back to a bit.
+    [
+        "ALTER TABLE verdicts ADD COLUMN grade INTEGER",
+        "UPDATE verdicts SET grade = 3"
+        " WHERE grade IS NULL AND stage = 'model' AND verdict = 'accept'",
+        "UPDATE verdicts SET grade = -3"
+        " WHERE grade IS NULL AND stage = 'model' AND verdict = 'reject'",
     ],
 ]
 
@@ -895,6 +944,7 @@ class JobStore:
         seed: int | None = None,
         prompt_hash: str = "",
         stage: str = "model",
+        grade: int | None = None,
     ) -> int:
         """Append one verdict. Append-only: a changed mind is a new row, and
         ``latest_verdicts`` takes the highest id per (job, source, stage), so the
@@ -907,12 +957,19 @@ class JobStore:
 
         ``stage`` defaults to ``'model'`` because every existing caller records a
         mesh verdict and every row written before migration 7 is one.
+
+        ``grade`` is the mesh scale (-5..+5) and is ``None`` on an image label,
+        which is what every row written before migration 10 carries too. This
+        method does not derive ``verdict`` from it and must not: the derivation
+        has one owner, ``service.verdicts.record_verdict``, and a second one here
+        would be the two-spellings hazard with a storage layer as one of the
+        spellings.
         """
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO verdicts (job_id, source, verdict, reasons, vector,"
-                " created_at, sweep_id, sweep_unit, seed, prompt_hash, stage)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " created_at, sweep_id, sweep_unit, seed, prompt_hash, stage, grade)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     source,
@@ -925,6 +982,7 @@ class JobStore:
                     seed,
                     prompt_hash,
                     stage,
+                    grade,
                 ),
             )
             self._conn.commit()

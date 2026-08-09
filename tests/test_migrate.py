@@ -220,6 +220,10 @@ def test_a_v4_db_gains_verdict_context_and_the_observations_table(tmp_path):
     try:
         record = store.latest_verdicts()[0]
         assert record["vector"] == {"platform": "pc"}
+        # Migration 10 rode along: a binary accept is now the mildest grade that
+        # still means "usable", and the derived verdict word is untouched.
+        assert record["grade"] == 3
+        assert record["verdict"] == "accept"
         assert record["sweep_id"] is None
         assert record["sweep_unit"] == ""
         assert record["seed"] is None
@@ -332,3 +336,58 @@ def test_a_v3_db_gains_the_sweep_columns_and_the_new_tables(tmp_path):
     assert migrated_version == fresh_version == len(MIGRATIONS)
     assert "idx_jobs_sweep" in migrated_indexes
     assert "idx_jobs_sweep" in fresh_indexes
+
+
+def _grades(store):
+    return dict(store._conn.execute("SELECT id, grade FROM verdicts"))
+
+
+def test_migration_10_backfills_only_the_mesh_rows_and_replays_idempotently(tmp_path):
+    """The grade column, and the three properties its guards buy.
+
+    A pre-migration database is v9 with three verdict rows: a mesh accept, a
+    mesh reject and an image label. After migration the two mesh rows carry the
+    backfill and the image row carries NULL -- permanently, because an image
+    label feeds a binary probe and a grade would be thresholded straight back to
+    a bit.
+
+    The ``grade IS NULL`` guards are what make a *partial* replay safe: DDL runs
+    in autocommit here, so an entry that failed part-way is re-run whole, and an
+    unguarded UPDATE would overwrite a real grade recorded since. Replaying the
+    statements by hand is the only way to exercise that -- the store will not
+    re-run a migration it has already versioned past.
+    """
+    path = tmp_path / "v9.sqlite"
+    store = JobStore(path)
+    mesh_ok = store.add_verdict("aaaaaaaaaaaa", source="human", verdict="accept",
+                                reasons=[], vector={}, stage="model")
+    mesh_bad = store.add_verdict("bbbbbbbbbbbb", source="human", verdict="reject",
+                                 reasons=["holes"], vector={}, stage="model")
+    image = store.add_verdict("cccccccccccc", source="human", verdict="accept",
+                              reasons=[], vector={}, stage="reference")
+    # Rewind to the state migration 10 was written to find, then reopen.
+    store._conn.execute("UPDATE verdicts SET grade = NULL")
+    store._conn.execute("PRAGMA user_version = 9")
+    store._conn.commit()
+    store.close()
+
+    store = JobStore(path)
+    try:
+        grades = _grades(store)
+        assert grades[mesh_ok] == 3
+        assert grades[mesh_bad] == -3
+        assert grades[image] is None
+
+        # A human regrades the accepted mesh to a +5 it never had...
+        store._conn.execute("UPDATE verdicts SET grade = 5 WHERE id = ?", (mesh_ok,))
+        store._conn.commit()
+        # ...and a partial replay of the entry must not walk it back to +3.
+        for stmt in MIGRATIONS[9][1:]:
+            store._conn.execute(stmt)
+        store._conn.commit()
+        regraded = _grades(store)
+        assert regraded[mesh_ok] == 5
+        assert regraded[mesh_bad] == -3
+        assert regraded[image] is None
+    finally:
+        store.close()

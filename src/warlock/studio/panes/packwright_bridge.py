@@ -82,11 +82,12 @@ def _recent(ctx: Any, state: Any) -> None:
 
     from imgui_bundle import imgui
 
-    if not state.recent:
+    found = packwright_mode.recent_paths(ctx)
+    if not found:
         return
     imgui.dummy((0, 8))
     widgets.section("recent")
-    for path in list(state.recent)[:6]:
+    for path in found[:6]:
         if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
             packwright_mode.open_path(ctx, Path(path))
         if imgui.is_item_hovered():

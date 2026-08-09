@@ -58,15 +58,9 @@ IDLE_FPS = 12
 # The modes that fill the host window with one pane. Inker, Clay, Review,
 # Plotter and Packwright are not here: each fills it with a three-column
 # *workspace* instead, which is ``modes.WORKSPACE_MODES``. Those three
-# categories partition ``modes.KEYS`` exactly (ten modes today), and the
+# categories partition ``modes.KEYS`` exactly (twelve modes today), and the
 # partition is the guard on ``_build_ui``'s dispatch.
-_SINGLE_PANE_MODES = ("home", "manual", "settings")
-
-# The mode-switch digits (I75), built lazily because pygame is imported inside
-# the functions that need it -- importing it at module scope would drag SDL in
-# for every test that touches this file. Both rows are bound: a laptop's number
-# row and the numpad are the same digit to the user.
-_DIGIT_KEYS: dict[int, int] = {}
+_SINGLE_PANE_MODES = ("home", "manual", "settings", "library", "profiles")
 
 
 # What a drop onto the window is allowed to be. The refusal message and every
@@ -90,22 +84,6 @@ def _ago(seconds: float) -> str:
         return f"{int(seconds // 60)}m"
     return f"{int(seconds // 3600)}h"
 
-
-def _digit_keys() -> dict[int, int]:
-    global _DIGIT_KEYS
-    if not _DIGIT_KEYS:
-        import pygame
-
-        # 1..9 positionally, then 0 for the *tenth* slot -- the spelling
-        # ``modes.digit_key_label`` renders, and the one every application
-        # with ten of anything uses. Both rows: a laptop's number row and
-        # the numpad are the same digit to the user.
-        _DIGIT_KEYS = (
-            {getattr(pygame, f"K_{n}"): n for n in range(1, 10)}
-            | {getattr(pygame, f"K_KP{n}"): n for n in range(1, 10)}
-            | {pygame.K_0: 10, pygame.K_KP0: 10}
-        )
-    return _DIGIT_KEYS
 
 # The two image-labelling passes, named as the questions they are. Wording is the
 # feature here: the same PNG is a *product* in 2D mode and a *blank* on the way to
@@ -1011,6 +989,13 @@ class App:
             if done.result is not None:
                 ctx.toast(f"Exported to {done.result}")
             return
+        if key == "home-unreviewed":
+            # Home's status block. A count only, and the last one stands until
+            # a newer one lands -- a failed read leaves the previous figure up
+            # rather than blanking a row somebody is reading.
+            if isinstance(done.result, int):
+                ctx.state.home_unreviewed = done.result
+            return
         if key == "storage" or key.startswith("storage:"):
             # Both the full walk and the per-job incremental re-measure (C33)
             # land here; each returns the whole storage dict.
@@ -1473,20 +1458,12 @@ class App:
 
         ctx = self.app_ctx
         self._note_mode(ctx.state)
-        # The mode digits (Alt+1..9 and Alt+0 for the tenth), before
-        # everything: it is the only binding that must work in *every* mode,
-        # and the workspace modes each consume whatever reaches them. See
-        # ``modes.mode_for_digit`` for why the modifier is Alt and not Ctrl,
-        # and ``modes.digit_key_label`` for why the tenth slot is 0.
-        if event.type == pygame.KEYDOWN and pygame.key.get_mods() & pygame.KMOD_ALT:
-            digit = _digit_keys().get(event.key)
-            target = modes.mode_for_digit(digit) if digit is not None else None
-            if target is not None:
-                self._set_mode(target)
-                return
-        # Ctrl+K, beside the mode digits and for the same reason: the palette
-        # is reachable from every mode or it is not a palette. K is bound by
-        # neither Inker nor Clay, so no workspace binding is displaced.
+        # Ctrl+K, before everything, because it is the only binding that must
+        # work in *every* mode and the workspace modes each consume whatever
+        # reaches them. It is also, since the positional Alt+digit bindings went
+        # away with the tenth-and-eleventh mode, the only keyboard route to a
+        # mode at all. K is bound by neither Inker nor Clay, so no workspace
+        # binding is displaced.
         if (
             event.type == pygame.KEYDOWN
             and event.key == pygame.K_k
@@ -1517,11 +1494,10 @@ class App:
             if event.key == pygame.K_ESCAPE:
                 self._escape_mode()
                 return
-            # Home's tiles take the arrows and Enter (M107). Only on the
-            # chooser: its other two views are lists with their own controls,
-            # and a tile cursor moving invisibly behind them would fire on the
-            # next Enter.
-            if ctx.state.mode == "home" and ctx.state.landing_view == "choose":
+            # Home's Resume list takes the arrows and Enter (M107). Library and
+            # Profiles are their own modes now, so there is no sub-view behind
+            # which a cursor could move invisibly and then fire on Enter.
+            if ctx.state.mode == "home":
                 from .panes import landing
 
                 if event.key in (pygame.K_UP, pygame.K_DOWN):
@@ -1813,6 +1789,19 @@ class App:
                 manual_render.draw_body(ctx)
             elif mode == "settings":
                 app_settings.draw(ctx)
+            elif mode == "library":
+                # The library verbatim rather than a second card list: the
+                # filters, the cards and the primary-action ladder are the same
+                # question here as in the sidebar, and two implementations of
+                # it would drift. This is the call Home's "Open Existing" tile
+                # used to make behind a sub-view enum.
+                from .panes import library as library_pane
+
+                library_pane.draw(ctx)
+            elif mode == "profiles":
+                from .panes import profiles_panel
+
+                profiles_panel.draw(ctx)
             elif mode == "clay":
                 self._clay_workspace()
             elif mode == "review":
@@ -2052,11 +2041,11 @@ class App:
         imgui.dummy((0, 8))
         if imgui.button("Open a file...", (240, 0)):
             clay_mode.ask_open(ctx)
-        state = clay_mode.ensure(ctx)
-        if state.recent:
+        found = clay_mode.recent_paths(ctx)
+        if found:
             imgui.dummy((0, 16))
             widgets.section("recent")
-            for path in list(state.recent)[:6]:
+            for path in found[:6]:
                 # The path is in the id, not just the label: two documents can
                 # share a basename and one imgui id between them is one row.
                 if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
@@ -2588,7 +2577,13 @@ class App:
             widgets.muted("Nothing to review here.")
             return
         for i, unit in enumerate(state.units):
-            mark = {"accept": icons.CHECK, "reject": icons.X}.get(unit["verdict"] or "", " ")
+            # The grade, which says more than the tick it replaces -- but a
+            # unit judged before migration 10, or by an older build, has a
+            # verdict and no grade, so the icons stay as the fallback rather
+            # than that row going blank.
+            mark = review_mode.grade_text(unit.get("grade")) or {
+                "accept": icons.CHECK, "reject": icons.X
+            }.get(unit["verdict"] or "", " ")
             if imgui.selectable(
                 f"{mark} {review_mode.label(state, unit)}##unit-{unit['job_id']}",
                 i == state.index,
@@ -2706,24 +2701,27 @@ class App:
 
         imgui.separator()
         enabled = not state.scanning
-        if widgets.primary_button("Accept (A)", enabled=enabled):
-            review_mode.record(ctx, "accept")
-        imgui.same_line()
-        if widgets.disabled_button("Reject (R)", enabled):
-            state.pending_reject = True
-        imgui.same_line()
+
+        grade = widgets.grade_buttons("review", enabled)
+        if grade is not None:
+            review_mode.record(ctx, grade, state.pending_tags)
+        widgets.muted_wrapped("+5 ships as-is, +3 usable, -5 unusable. Tags are optional.")
+
+        tag = widgets.tag_toggles("review", state.pending_tags, enabled)
+        if tag is not None:
+            review_mode.toggle_tag(state, tag)
+
         if widgets.disabled_button("Skip (S)", enabled):
             review_mode.advance(state)
 
-        if state.pending_reject:
-            widgets.muted("Why? (1-5, Esc to cancel)")
-            for number, reason in review_mode.REASON_KEYS.items():
-                if widgets.disabled_button(f"{number}  {reason}", enabled):
-                    review_mode.record(ctx, "reject", (reason,))
-        elif unit["verdict"]:
-            recorded = unit["verdict"]
-            if unit["reasons"]:
-                recorded += " - " + ", ".join(unit["reasons"])
+        if unit["verdict"]:
+            # ``grade_text`` rather than the verdict word: the word is the
+            # derived cut and the grade is what was actually said, so showing
+            # the word here would answer a coarser question than the one the
+            # buttons above ask.
+            recorded = review_mode.grade_text(unit.get("grade")) or unit["verdict"]
+            if unit.get("tags"):
+                recorded += " - " + ", ".join(unit["tags"])
             widgets.muted(f"Recorded: {recorded}")
 
         self._review_findings(ctx)
@@ -2779,6 +2777,9 @@ class App:
             measured = findings_lib.metrics_line(entry.get("metrics"))
             if measured:
                 widgets.muted(measured)
+            tagged = findings_lib.tag_line(entry)
+            if tagged:
+                widgets.muted(tagged)
             vector = entry["vector"]
             if widgets.disabled_button(f"Apply to forms##apply-{entry['key']}", True):
                 vector_presets.apply(ctx.state, vector)
@@ -2920,11 +2921,18 @@ class App:
         # No mode switch is destructive: Inker's documents are still open when
         # you come back, because it is a mode rather than a takeover. Only
         # quitting and closing a tab can lose pixels, and both ask.
+        # Twelve segments do not fit the resize floor at 1.5 UI scale, and a
+        # clipped segment is an unreachable mode. So the switch has a compact
+        # form -- the glyph alone, with the label in a tooltip -- taken when the
+        # full one will not fit the width actually available. Both labellings
+        # come from ``modes.MODES``, so the two can never name different things.
         selected = widgets.segmented_control(
             "mode-seg",
             [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
             state.mode,
             breaks=modes.GROUP_BREAKS,
+            compact=[(key, icon) for key, _label, icon in modes.MODES],
+            max_width=imgui.get_content_region_avail().x,
         )
         if selected != state.mode:
             self._set_mode(selected)
@@ -3093,22 +3101,14 @@ class App:
         def table(title: str, rows: list[tuple[str, str]]) -> None:
             sections.append((title, rows))
 
-        from . import modes
-
         imgui.dummy((sp(420), 0))
-        # The digit range comes from the mode list, not from a written-out
-        # count: an eleventh mode would otherwise gain a working binding this
-        # list denies.
         table(
             "Everywhere",
             [
-                (
-                    # Rendered through ``digit_key_label`` so the tenth slot
-                    # reads Alt+0 rather than the Alt+10 a plain count gives.
-                    f"Alt+1 - Alt+{modes.digit_key_label(len(modes.MODES))}",
-                    "Switch mode, in the order the switch draws them",
-                ),
-                ("Ctrl+K", "Command palette -- type a command, or an asset"),
+                # No per-mode digit: twelve modes against ten digits is either
+                # two modes with no key or a table saying which two, and the
+                # palette is the keyboard route to all of them.
+                ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
                 ("F1", "Switch to the Manual"),
                 ("Esc", "Leave Home, the Manual or Settings"),
                 ("F10", "Toggle the frame-rate readout"),
@@ -3131,11 +3131,14 @@ class App:
         table(
             "Review",
             [
-                ("A", "Accept the unit on screen"),
-                ("R", "Reject (then 1-5 picks the reason)"),
+                ("1 - 5", "Grade the mesh +1 to +5 (+3 is usable)"),
+                ("R then 1 - 5", "Grade it -1 to -5"),
+                ("0", "Grade it 0 - no opinion either way"),
+                ("Ctrl + 1-5", "Toggle a good tag for the next grade"),
+                ("Shift + 1-5", "Toggle a bad tag for the next grade"),
                 ("S", "Skip to the next unverdicted unit"),
                 ("Left / Right", "Previous / next unit"),
-                ("Esc", "Cancel a pending reject"),
+                ("Esc", "Clear the pending sign and tags"),
             ],
         )
         from .clay_mode import TOOL_KEYS as CLAY_KEYS

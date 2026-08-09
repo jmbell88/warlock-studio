@@ -36,7 +36,7 @@ SQUIRCLES = True
 # What each flag is called in the settings file and in the Settings pane, in
 # the order the pane draws them. A table rather than four calls, because the
 # pane, the loader and the test that keeps them in agreement are three readers
-# of one list -- the argument ``landing.TILES`` and ``palette.py`` both make.
+# of one list -- the argument ``landing.rows`` and ``palette.py`` both make.
 KEYS: tuple[tuple[str, str, str], ...] = (
     (
         "soft_shadows",

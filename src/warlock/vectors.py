@@ -12,6 +12,11 @@ that learned the old import path never notice the move; ``prompt_hash`` and
 and it must stay that way: it is imported before torch exists and inside the
 frame loop's reach.
 
+The mesh-verdict **grade scale** and its **tag vocabulary** are here for exactly
+the same reason and not a related one: ``service/verdicts.py`` imports
+``service/findings.py`` at module top, so a constant both need cannot live in
+the importer. ``service.verdicts`` re-exports all of it.
+
 ``observation_metrics`` is the defensive half: it extracts the numbers an
 observation row carries from ``params`` written by ``_audit_mesh`` and
 ``meshreport.build``. Both measurements are advisory -- either can be absent,
@@ -85,6 +90,86 @@ VECTOR_PARAMS = (
     "trellis_band",
     "trellis_tex_res",
 )
+
+
+# --- The mesh-verdict grade scale, and the tag vocabulary beside it. ---------
+#
+# Here rather than in ``service/verdicts.py`` for the reason ``VECTOR_PARAMS`` is
+# here: ``verdicts.py`` imports ``service.findings`` at module top, so a constant
+# both of them need cannot live in the importer. ``service.verdicts`` re-exports
+# every name below, so callers that learned the old spelling never notice.
+#
+# An integer scale rather than a bit, because the binary corpus failed at its own
+# purpose: 3 accepts against 81 rejects on 2026-08-07, in which a slab with no
+# geometry, a smeared texture and a mesh a modeller would fix in five minutes are
+# all the same row. See ``docs/measurements/2026-08-09-grade-scale.md``, which is
+# where every number here is argued -- the repo rule is that a constant the stored
+# corpus is keyed on gets its document before it changes.
+#
+# Model (mesh) stage only. Image labels stay binary and keep ``grade`` NULL: they
+# feed binary logistic probes, so a grade would be thresholded straight back to a
+# bit, and the two-key loop is what makes a hundred-image pass viable at all.
+GRADE_MIN, GRADE_MAX = -5, 5
+
+# The one binary cut, and the only threshold in the whole scale. ``verdict`` TEXT
+# survives as a *derived* column written from this by one writer, which is what
+# keeps prune retention, the judge's label reads, the ``latest_verdicts`` SQL and
+# every findings-v3 reader unchanged.
+USABLE_GRADE = 3
+
+# What migration 10 backfills a binary row to, and the fallback for a row that
+# has no grade. Deliberately the mildest grade that preserves the row's meaning:
+# a reviewer who pressed Accept asserted "usable" and had no key for anything
+# stronger, so +-5 would invent evidence 84 times over and leave every real grade
+# recorded later sitting inside synthetic tails. +-3 keeps +-4/+-5 free for
+# judgements a binary reviewer never made.
+#
+# ``BINARY_GRADES["accept"] == USABLE_GRADE`` is not a coincidence and is
+# asserted rather than commented: the backfill value and the cut are one decision
+# with two names. A cut above +3 would silently demote every row the migration
+# just wrote; a cut below it would claim a grade nobody recorded was already
+# usable.
+BINARY_GRADES = {"accept": USABLE_GRADE, "reject": -USABLE_GRADE}
+
+# Tags, optional at every grade, in one namespace.
+#
+# The five bad spellings are **frozen**: they are the old ``REASONS`` tuple and
+# the stored corpus already carries those exact strings in the ``reasons`` JSON
+# column. There is no alias table here as there is for taxonomy keys, so a rename
+# would not migrate evidence, it would split it. Only the name of the concept
+# changed -- from "reasons a reviewer rejected" to "tags describing what is true
+# of this mesh" -- which is why they are legal at any grade now.
+BAD_TAGS = ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")
+
+# Mirrors of the bad set where a mirror exists, plus the two that have none:
+# ``sharp-detail`` (detail survived reconstruction -- what trellis most often
+# loses, and what a bare "not broken" cannot say) and ``good-topology`` (the
+# constructive counterpart of ``broken``: it imports and derives cleanly).
+#
+# Deliberately no ``game-ready``: that is what grade +5 already asserts, and a tag
+# saying the same thing as a grade is two spellings of one fact.
+#
+# Five per polarity is load-bearing rather than tidy -- it is what makes
+# Ctrl+1..5 and Shift+1..5 map *positionally* onto the two vocabularies, so the
+# keyboard needs no second table naming which digit is which tag.
+GOOD_TAGS = ("clean-shape", "good-texture", "on-style", "sharp-detail", "good-topology")
+
+# One namespace, stored in the existing ``reasons`` column. Sound only because the
+# two vocabularies are disjoint strings: polarity is recoverable from the tag
+# itself, so nothing is written down twice and the findings writer splits by
+# membership -- which is what keeps ``bench/findings.py`` pure-stdlib with no
+# ``warlock`` imports.
+TAGS = GOOD_TAGS + BAD_TAGS
+
+
+def verdict_for_grade(grade: int) -> str:
+    """The derived binary answer for a grade -- the *only* place the cut lives.
+
+    One writer owns this, which is what stops ``verdict`` and ``grade`` from
+    becoming the two-spellings hazard: the column can never disagree with the
+    grade it was derived from, because nothing else writes it.
+    """
+    return "accept" if grade >= USABLE_GRADE else "reject"
 
 
 def config_vector(job: dict[str, Any]) -> dict[str, Any]:

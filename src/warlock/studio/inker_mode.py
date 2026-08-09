@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, filetypes, inker_state
+from . import dialogs, filetypes, inker_state, recents
 from .inker import animation
 from .inker_state import InkerDoc, InkerState
 
@@ -47,7 +47,6 @@ def ensure(ctx: Any) -> InkerState:
     if state is None:
         state = InkerState()
         stored = ctx.settings.get("inker") or {}
-        state.recent = [p for p in (stored.get("recent") or []) if isinstance(p, str)]
         swatches = stored.get("swatches")
         if isinstance(swatches, list) and swatches:
             state.swatches = [
@@ -59,13 +58,42 @@ def ensure(ctx: Any) -> InkerState:
     return state
 
 
+def remember_path(ctx: Any, path: Any) -> None:
+    """Put ``path`` at the front of the merged recent list.
+
+    Through :mod:`.recents` rather than onto a field of this mode's own state:
+    the four document modes kept four independent ``recent`` lists, and Home's
+    single Resume list cannot be built from them at all -- four bare path lists
+    carry no ordering *between* them. There is one list now, and this is how
+    inker writes to it.
+    """
+    recents.remember(ctx.settings, "inker", path)
+
+
+def forget_path(ctx: Any, path: Any) -> None:
+    """Drop a path that turned out not to open -- :mod:`.recents`' own rule,
+    named here so a caller does not have to know this mode's kind string."""
+    recents.forget(ctx.settings, "inker", path)
+
+
+def recent_paths(ctx: Any) -> list[str]:
+    """This mode's recent files, newest first. What its own panel draws."""
+    return recents.paths(ctx.settings, "inker")
+
+
 def persist(ctx: Any) -> None:
+    """The swatches, and only those: the recent list moved to :mod:`.recents`,
+    which persists itself on every write."""
     state = ctx.state.inker
-    if state is not None:
-        ctx.settings.set(
-            "inker",
-            {"recent": state.recent, "swatches": [list(s) for s in state.swatches]},
-        )
+    if state is None:
+        return
+    # Merged into whatever is stored rather than replacing it, so the legacy
+    # ``recent`` key survives untouched: ``recents`` folds the four per-mode
+    # lists in on *its* first read, which may well be after this has run.
+    stored = ctx.settings.get("inker")
+    block = dict(stored) if isinstance(stored, dict) else {}
+    block["swatches"] = [list(s) for s in state.swatches]
+    ctx.settings.set("inker", block)
 
 
 def active(ctx: Any) -> InkerDoc | None:
@@ -113,7 +141,7 @@ def _adopt(
         has_original=has_original,
     )
     state.add(tab)
-    state.remember(path)
+    remember_path(ctx, path)
     persist(ctx)
     return tab
 
@@ -685,7 +713,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         tab.path = Path(result["path"])
         tab.title = inker_state.title_for(tab.path)
         tab.file_format = result.get("format", "ora")
-        state.remember(tab.path)
+        remember_path(ctx, tab.path)
         persist(ctx)
     linked_just_now = bool(result.get("link"))
     if linked_just_now:

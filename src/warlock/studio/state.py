@@ -458,8 +458,6 @@ def set_mode(state: AppState, key: str) -> bool:
     state.previous_mode = state.mode
     state.mode_observed = key
     state.mode = key
-    if key == "home":
-        state.landing_view = "choose"
     return True
 
 
@@ -744,10 +742,21 @@ class AppState:
     # unsaved work through if one write were ever missed. What this is for is
     # the *indicator*, which has to be visible from outside the pose pane.
     pose_dirty: bool = False
-    # Which Home tile the keyboard is on (M107). Not persisted: the app opens
-    # on Home every launch, and a remembered cursor would put Enter on
-    # whichever tile was last hovered a week ago.
+    # Which Resume row the keyboard is on. Not persisted: the app opens on Home
+    # every launch, and a remembered cursor would put Enter on whichever row
+    # was last hovered a week ago -- which, now that the list is derived from
+    # what has actually been touched, is not even the same row.
     home_index: int = 0
+    # How many finished meshes nobody has judged, for Home's status block, and
+    # when it was last asked. A count, not a list: the question is "is there a
+    # review pass waiting", and Review itself owns the list. ``None`` means
+    # nothing has come back yet, which draws as nothing rather than as zero --
+    # "0 unreviewed" and "not asked yet" are different sentences.
+    #
+    # A cached answer refreshed on a cadence rather than read on the frame
+    # thread, because it is a table scan behind the one serialized connection.
+    home_unreviewed: int | None = None
+    home_unreviewed_at: float = 0.0
     # The command palette (I80). Three plain fields rather than a state object:
     # it holds a query, a cursor and whether it is up, and nothing about it
     # survives being closed -- reopening on the last query would make Ctrl+K
@@ -756,11 +765,16 @@ class AppState:
     palette_query: str = ""
     palette_index: int = 0
     comparing: str | None = None
-    # Which asset the inspector's Reject button is armed for, waiting on a
-    # reason. Keyed by job id rather than being a bare flag, so selecting a
-    # different asset disarms it -- an armed state belongs to the thing that was
-    # on screen when it was armed, exactly as Review's ``pending_reject`` does.
-    inspector_reject_armed: str | None = None
+    # Which asset the inspector's tag toggles are staged against, and what is
+    # staged. Keyed by job id rather than being a bare list, so selecting a
+    # different asset drops them -- staged state belongs to the thing that was
+    # on screen when it was chosen, exactly as Review's ``pending_tags`` does,
+    # and a tag surviving a selection change is filed against a mesh nobody was
+    # looking at when they picked it. The two fields move together and are
+    # cleared together; there is no arming any more, because a grade is one
+    # keypress and a tag is optional at every grade.
+    inspector_tags_job: str | None = None
+    inspector_tags: list[str] = field(default_factory=list)
     form_2d: dict[str, Any] = field(default_factory=default_form_2d)
     form_3d: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_FORM_3D))
     filters: Filters = field(default_factory=Filters)
@@ -818,9 +832,6 @@ class AppState:
     # was a coloured dot. The diagnostics popup shows these, which is what makes
     # Dismiss "put it away" rather than "forget it".
     dismissed_errors: list[str] = field(default_factory=list)
-    # The Home screen's sub-view. Not persisted: Home always opens on the
-    # chooser rather than on whichever list was last being browsed.
-    landing_view: str = "choose"  # choose | open | profiles
     profile_draft: dict[str, Any] | None = None
     profile_draft_name: str = ""
     # The name the draft was opened under, so renaming one in the editor moves

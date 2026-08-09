@@ -1086,6 +1086,93 @@ def grid_width(columns: int) -> float:
     return (imgui.get_content_region_avail().x - gap * (columns - 1)) / columns
 
 
+# Grade buttons per row. Six, so the eleven-value scale lays out 6/5 rather
+# than leaving one button alone on a third line.
+GRADES_PER_ROW = 6
+
+
+def grade_buttons(id_prefix: str, enabled: bool) -> int | None:
+    """The -5..+5 mesh grade row. -> the grade clicked, or ``None``.
+
+    Eleven buttons, worst on the left, so the control is the scale: a reviewer
+    reads the position rather than the label. Eleven do not fit one row in a
+    260 px sidebar at any UI scale, so they wrap at a **counted** six per row
+    rather than on measured space.
+
+    That count is the fix rather than the shortcut. Wrapping on
+    ``same_line_or_wrap`` is what the rest of this module does and it is right
+    where the item widths are not known in advance -- but here they are exactly
+    ``grid_width(6)``, and six of those plus five gaps comes to the content
+    width to within a rounding error, so the measured test failed on the sixth
+    button and laid the scale out 5/5/1. Counting gives 6/5 and, more to the
+    point, gives *the same* 6/5 at every UI scale and sidebar width, which a
+    control the user reads positionally has to.
+
+    Widths still come from ``grid_width`` for the reason it exists: the gap is
+    a style value, not the literal 8 that is only right at scale 1.0.
+
+    Zero is drawn as ``0`` and everything else signed, which is
+    ``review_mode.grade_text`` and is *imported* rather than re-spelled here --
+    the unit list, the inspector's toast and this row must agree about how a
+    grade is written.
+    """
+    from .review_mode import grade_text
+
+    clicked: int | None = None
+    width = grid_width(GRADES_PER_ROW)
+    for index, grade in enumerate(range(-5, 6)):
+        if index % GRADES_PER_ROW:
+            imgui.same_line()
+        if disabled_button(f"{grade_text(grade)}##{id_prefix}-grade{grade}", enabled,
+                           (width, 0)):
+            clicked = grade
+    return clicked
+
+
+def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None:
+    """The two tag vocabularies as toggle rows. -> the tag clicked, or ``None``.
+
+    Two rows rather than one list, because the polarity is the thing a reader
+    needs before the word: "good-texture" and "bad-texture" differ by three
+    characters and mean opposite things. The order inside each row is the
+    vocabulary's own, which is also the order ``Ctrl``/``Shift`` + 1-5 press
+    them in -- a hand-ordered row here would silently disagree with the
+    keyboard.
+
+    Returns the tag rather than mutating ``pending``: the toggle rule lives in
+    ``review_mode.toggle_tag`` (which also drops an unknown tag rather than
+    staging a verdict that would be refused), and a second copy of it in a
+    drawing function is how the two come to disagree.
+    """
+    from ..service import verdicts as verdicts_mod
+
+    clicked: str | None = None
+    for label, vocabulary in (("Good", verdicts_mod.GOOD_TAGS),
+                              ("Bad", verdicts_mod.BAD_TAGS)):
+        field_label(f"{label}:")
+        width = grid_width(3)
+        for index, tag in enumerate(vocabulary):
+            if index:
+                same_line_or_wrap(width)
+            selected = tag in pending
+            if selected:
+                # ``button_hovered`` as well as ``button``, or a staged tag
+                # reverts to the default fill under the pointer -- which is
+                # exactly when the user is deciding whether to unstage it, and
+                # the one moment the state has to stay legible. ``.value``
+                # because every other ``push_style_color`` in this module spells
+                # it that way; the enum is an ``int`` subclass, so both work and
+                # one spelling is worth more than the choice between them.
+                fill = imgui.ImVec4(*theme.rgba(theme.ACCENT))
+                imgui.push_style_color(imgui.Col_.button.value, fill)
+                imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
+            if disabled_button(f"{tag}##{id_prefix}-tag-{tag}", enabled, (width, 0)):
+                clicked = tag
+            if selected:
+                imgui.pop_style_color(2)
+    return clicked
+
+
 def help_marker(text: str) -> None:
     """The hover-for-more mark beside a control.
 
@@ -1121,6 +1208,8 @@ def segmented_control(
     current: str,
     *,
     breaks: Any = (),
+    compact: list[tuple[str, str]] | None = None,
+    max_width: float | None = None,
 ) -> str:
     """One rounded track with a sliding highlight; the macOS mode switch.
 
@@ -1135,13 +1224,32 @@ def segmented_control(
     needed, since three of them are places and seven are workspaces and a flat
     row said they were all the same kind of thing. The pill still slides across
     a break, because it is one selection over all of them.
+
+    ``compact`` is a second labelling of the same segments -- in practice the
+    glyph alone -- used when the full one does not fit inside ``max_width``. It
+    is **all or nothing**: a switch that abbreviated only the segments that did
+    not fit would be saying two different kinds of thing in one control, and
+    which two would change as the window is dragged. A compacted segment keeps
+    its full label in a tooltip, or the abbreviation is a picture with no name.
+    A clipped segment is an unreachable mode, which is why this is a fit
+    problem rather than a tidiness one.
     """
     draw = imgui.get_window_draw_list()
     pad_x, pad_y = sp(14), sp(6)
     gap = sp(tokens.SP_2)
     breaks = frozenset(breaks)
+    titles: dict[str, str] = {}
     with fonts.label(imgui):
-        widths = [imgui.calc_text_size(label).x + pad_x * 2 for _, label in options]
+
+        def measure(entries: list[tuple[str, str]]) -> list[float]:
+            return [imgui.calc_text_size(label).x + pad_x * 2 for _, label in entries]
+
+        widths = measure(options)
+        if compact is not None and max_width is not None:
+            spread = sum(widths) + gap * len(breaks)
+            if spread > max_width:
+                titles = dict(options)
+                options, widths = compact, measure(compact)
         height = imgui.get_text_line_height() + pad_y * 2
         origin = imgui.get_cursor_screen_pos()
         # One offset per segment, with a gap opened at each break.
@@ -1189,6 +1297,8 @@ def segmented_control(
             if imgui.invisible_button(f"{seg_id}/{key}", (width, height)):
                 selected = key
             hovered = imgui.is_item_hovered()
+            if hovered and key in titles:
+                imgui.set_tooltip(titles[key])
             active = key == current
             alpha = motion.value(
                 f"{seg_id}/{key}/text",

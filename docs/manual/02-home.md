@@ -2,82 +2,75 @@
 
 Warlock Studio opens on Home every time you launch it, not just the first time. That is deliberate:
 the workspace assumes you already know which of the two pipelines you are in and what you are
-looking at, and neither of those is true a second after a launch. Home is a chooser, so the frame
-starts with a decision rather than with a form.
+looking at, and neither of those is true a second after a launch.
+
+Home used to be a grid of tiles, and most of those tiles were the mode switch again — the same names
+under the same glyphs, one click either way, on a switch that is drawn along the top of every mode
+anyway. So Home answers the three questions nothing else in the app answered instead: **what
+changed**, **what is the machine doing**, and **what was I working on**.
 
 Nothing about Home is remembered. There is no "last mode" setting, and no way to make the app skip
 it — a stored mode would be a value with no reader, and the app would drift into disagreeing with
-itself about where it opens. The mode switch along the top always has a Home entry, so the chooser
-is one click away from anywhere.
+itself about where it opens.
 
-## The first-run card
+## What's new
 
-The first time you open the app there is a card above the tiles saying to start with **New 2D
-Image**, because the order of the two pipelines is the one fact that makes the rest of the screen
-make sense: a prompt becomes a reference image, and that reference becomes a mesh. Press **Got it**
-and it never comes back — the dismissal is stored, so it is gone for good rather than for the
-session.
+The left column opens with the changelog for this build, with older releases collapsed under it. It
+is read from a `CHANGELOG.md` shipped inside the app, hand-written rather than generated: every
+commit in this repository is titled `Warlock vN.N.N` and carries no detail, so a generated list
+would be a column of version numbers. If the file is missing or unreadable the block says so and
+nothing else on the screen is affected.
 
-## Continue
+The version this build is running is printed beside the title, which is the only place in the UI it
+appears.
 
-When there is a finished asset to come back to, a **Continue** card appears in front of the tiles
-and opens it in the pane that made it — 2D for a reference or a tile, 3D for anything else. It is
-the selected asset when something is selected and the newest finished one otherwise, and it is
-worked out from the library rather than remembered, so an asset you delete simply stops being the
-answer. Home still remembers no *mode*; resuming the work is a different promise from resuming a
-place.
+## Status
 
-## The tiles
+Under the changelog is a short block about this machine rather than about the work. Each line that
+has somewhere to go is clickable.
 
-Each tile is a whole clickable card, not a button with a label beside it.
+| Line | What it says | Where it goes |
+|---|---|---|
+| Diagnostics | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. | [App settings](17-app-settings.md), where the model list and its Download buttons are. |
+| Queue | What is running or queued, with a percentage when the worker is reporting one, or "Queue idle". | — |
+| Library | How many assets there are, how many failed, and how much disk they occupy. | The [Library](11-library-and-jobs.md). |
+| Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](13-review.md). |
 
-| Tile | What it does |
-|---|---|
-| New 2D Image | A clean [reference form](03-generating-references.md), wearing the active style profile. The seed is rolled fresh, so this is a genuine new start rather than the last form with the prompt cleared. |
-| New 3D Model | A clean [mesh form](04-generating-meshes.md), with no source asset selected. |
-| Inker | The [layered raster editor](07-inker.md), with whatever documents were already open. |
-| Clay | The [primitive modeller](08-clay.md). If nothing is open it starts a new empty document, because a mode with nothing in it and no obvious way to begin is a dead end. |
-| Plotter | The [tilemap editor](09-plotter.md). |
-| Packwright | The [sprite-atlas packer](10-packwright.md). |
-| Review | The [sweep review and labelling](13-review.md) pass. |
-| Open Existing | The [library](11-library-and-jobs.md) in full, with a Continue button that opens the selected asset in the pane that made it. |
-| Profiles | The [style profiles](12-profiles.md) editor. The caption names the active profile when there is one. |
+The diagnostics line is a different destination from the health dot in the top-right corner, which
+opens the read-only diagnostics popup: the dot answers "what is wrong right now", and this line
+answers "how do I fix it". It exists because a fresh install reaches Home with no weights
+downloaded, presses New 2D, and is refused at the door with a download command in the message. That
+refusal is correct, but Home offered every way to start work and no way to find out first whether
+this install could do any of them.
 
-There is one tile for every mode that owns a viewport or a form, and a test asserts exactly that —
-a chooser missing a mode is a mode reachable only by a keyboard shortcut somebody has to already
-know about, which is the same drift the command palette is derived rather than hand-written to
-avoid. The names, captions and order stay editorial; only the coverage is checked.
+The unreviewed count is asked for in the background on a timer, never on the frame the screen is
+drawn — it is a table scan — so it can lag by up to half a minute. It is not shown at all until an
+answer has come back, and not shown when the answer is zero.
 
-Inker, Clay, Plotter and Packwright keep whatever was open, and the two generate tiles do not. The
-difference is not an inconsistency: in the editors the *documents are the work*, and there is no
-form to reset, while a generate pane is a form and starting from someone else's half-filled one is
-worse than starting empty.
+## Resume
 
-## The diagnostics row
+The right column starts with a **New …** row — one button per thing the app can start from nothing —
+and under it a single list of everything you have touched recently, newest first, badged with the
+mode that opens it.
 
-Under the tiles is a single line that counts what is wrong with this installation:
+That list is genuinely one list. Inker, Clay, Plotter and Packwright each used to keep their own
+recent-files history, which meant "the six things you were working on" could not be answered at all:
+four separate lists carry an order within themselves and none between them. They are now one
+history with a timestamp per entry, and your generated assets are folded in beside them from the
+library — an asset row opens in the pane that made it, 2D for a reference or a tile and 3D for
+anything else.
 
-- **"Diagnostics — everything checks out"** when every check passed.
-- **"Diagnostics — still checking"** for the first second or two after launch, while the slow
-  probes are still running in the background.
-- **"Diagnostics / Set up models — N things need attention"** otherwise, in amber for a warning and
-  red when something fatal is missing.
+Arrow keys move between the rows and Enter opens the highlighted one; hovering moves the highlight
+too, so the mouse and the keyboard never disagree about what Enter would do.
 
-Clicking it opens [app settings](17-app-settings.md), which is where the model list and its
-Download buttons live. That is a different destination from the health dot in the top-right corner,
-which opens the read-only diagnostics popup: the dot answers "what is wrong right now", and this
-row answers "how do I fix it".
-
-The row exists because a fresh install reaches Home with no weights downloaded, presses New 2D
-Image, and is refused at the door with a download command in the message. That refusal is correct,
-but Home offered four ways to start work and no way to find out first whether this install could do
-any of them.
+If a row names a file that is no longer there, clicking it drops the row and says so rather than
+failing silently. A recent list that keeps offering a moved file is worse than a short one.
 
 ## Failures
 
-If a startup check failed fatally, or the GPU worker died, the message appears in red below the
-tiles as well as in the banner across the top of every mode. Dismissing the banner does not destroy
+If a startup check failed fatally, or the GPU worker died, the message appears in red under the
+title as well as in the banner across the top of every mode. Dismissing the banner does not destroy
 the text: it moves into the diagnostics popup under a **Dismissed** heading, which is the only copy
-there is — each of the three things that write a banner message writes it exactly once.
+there is.
 
 See [Troubleshooting](18-troubleshooting.md) for what the individual checks mean.

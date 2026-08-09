@@ -428,4 +428,4 @@ def test_recent_files_persist():
     doc = packwright_mode.new_document(ctx).doc
     path = Path("/tmp/atlas.wpack")
     packwright_mode.adopt(ctx, doc, path=path)
-    assert ctx.settings.get("packwright")["recent"] == [str(path)]
+    assert packwright_mode.recent_paths(ctx) == [str(path)]

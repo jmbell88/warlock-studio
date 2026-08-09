@@ -26,6 +26,16 @@ it was fitted to and refuses to be anything else. The mesh probe is `TODO.md` §
 and is not built here: it is blocked on a corpus with positives in it, and its
 pooling over eight views is a decision §8 says to make with data.
 
+Its **target** changed on 2026-08-09 without a line of this module moving. Mesh
+verdicts are graded -5..+5 now rather than accept/reject
+(``docs/measurements/2026-08-09-grade-scale.md``), so the mesh probe becomes a
+grade *regression* rather than a binary classifier -- a strictly better fit for a
+corpus whose problem was the resolution of its labels rather than their number.
+The two image stages are untouched and stay binary, which is why nothing here
+needs to change: everything ``fit`` and ``score`` are used for today is an image
+question, and ``MIN_PER_CLASS`` is a rule about two classes because those are the
+only stages that have any.
+
 **Why the probe is trained on pixels and never on the audit scalars.** The first
 calibration result is that the obvious feature runs backwards:
 AUC(``hole_worst`` -> reject) = 0.115 over the existing corpus, because a slab

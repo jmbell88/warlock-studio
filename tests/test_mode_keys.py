@@ -57,83 +57,33 @@ def no_mods(monkeypatch):
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
 
 
-def test_the_digits_are_the_switch_order_and_nothing_else():
-    """The binding is the picture on screen: the nth segment is the nth digit.
-
-    Derived from ``MODES`` rather than written out, so a mode inserted into the
-    switch cannot leave the shortcuts pointing one place to the left.
-    """
-    assert [modes.mode_for_digit(n) for n in range(1, len(modes.MODES) + 1)] == list(
-        modes.KEYS
-    )
-    assert modes.mode_for_digit(len(modes.MODES) + 1) is None
-    assert modes.mode_for_digit(0) is None
-    for index, key in enumerate(modes.KEYS, start=1):
-        assert modes.digit_for_mode(key) == index
-    assert modes.digit_for_mode("quit") is None
+def test_no_digit_is_a_mode_switch(alt, no_mods):
+    """The positional Alt+digit bindings are gone, and the negative is the whole
+    point of the test: twelve modes against ten digits meant either two modes
+    with no key or a second table saying which two -- and that table is exactly
+    what the positional scheme existed to avoid. Clay binds 1-4 to the element
+    modes and Review binds 1-5 to reject reasons; those keys are theirs again,
+    with or without Alt."""
+    for key in (pygame.K_1, pygame.K_4, pygame.K_9, pygame.K_0, pygame.K_KP3, pygame.K_KP0):
+        app = _app("3d")
+        _press(app, key)
+        assert app.app_ctx.state.mode == "3d"
 
 
-@pytest.mark.parametrize("mode", sorted(modes.KEYS))
-def test_alt_digit_switches_from_every_mode_including_the_workspaces(mode, alt):
-    """Inker, Clay and Review consume every key they are handed -- deliberately,
-    so F/W/S cannot act on a viewport they have replaced. The mode switch is
-    therefore checked *above* them, or it would be the one binding that stops
-    working exactly where the user is most likely to be stuck."""
-    app = _app(mode)
-    _press(app, pygame.K_4)  # the 4th segment
-    assert app.app_ctx.state.mode == modes.KEYS[3]
+def test_the_digit_helpers_are_gone_rather_than_left_unused():
+    """A helper with no caller is not free (the ``setup()`` lesson): it reads as
+    a supported entry point, and the next thing to want a digit map would find
+    one that nothing keeps honest."""
+    for name in ("mode_for_digit", "digit_key_label", "digit_for_mode"):
+        assert not hasattr(modes, name)
+    assert "_digit_keys" not in inspect.getsource(main)
 
 
-def test_the_numpad_digits_switch_too(alt):
-    app = _app("home")
-    _press(app, pygame.K_KP3)
-    assert app.app_ctx.state.mode == modes.KEYS[2]
-
-
-def test_the_last_two_slots_are_alt_9_and_alt_0(alt):
-    """Ten segments and nine digits above zero, so the tenth takes ``0`` -- the
-    way every application with ten of anything does. That the *key* is 0 while
-    the *slot* is 10 is a keyboard fact, which is why it lives in
-    ``_digit_keys`` and in ``modes.digit_key_label`` and nowhere else."""
-    app = _app("home")
-    _press(app, pygame.K_9)
-    assert app.app_ctx.state.mode == modes.KEYS[8]
-    _press(app, pygame.K_0)
-    assert app.app_ctx.state.mode == modes.KEYS[9]
-    app = _app("home")
-    _press(app, pygame.K_KP0)
-    assert app.app_ctx.state.mode == modes.KEYS[9]
-
-
-def test_a_digit_past_the_last_mode_still_maps_to_nothing():
-    """Every digit key is now spoken for, so the out-of-range property is only
-    assertable on the pure function -- which is where it was always the real
-    guarantee. ``0`` is *not* the zeroth slot: there is no zeroth segment."""
-    assert modes.mode_for_digit(len(modes.MODES) + 1) is None
-    assert modes.mode_for_digit(0) is None
-
-
-def test_a_bare_digit_is_not_a_mode_switch(no_mods):
-    """Clay binds 1-4 to the element modes and Review binds 1-5 to reject
-    reasons. Alt is what keeps those keys theirs."""
-    app = _app("home")
-    _press(app, pygame.K_4)
-    assert app.app_ctx.state.mode == "home"
-
-
-def test_the_mode_switch_is_checked_before_the_workspace_handlers():
+def test_the_palette_is_checked_before_the_workspace_handlers():
+    """Ctrl+K is now the *only* keyboard route to a mode, so it has to be
+    checked above Inker/Clay/Review, which consume every key they are handed."""
     source = inspect.getsource(main.App._shortcut)
-    assert source.index("_digit_keys()") < source.index("WORK_MODES")
-
-
-def test_switching_to_home_resets_the_landing_view(alt):
-    """The switch's own segment does this; a shortcut that did not would drop
-    the user on whichever sub-view Home was last showing."""
-    app = _app("3d")
-    app.app_ctx.state.landing_view = "assets"
-    _press(app, pygame.K_1)
-    assert app.app_ctx.state.mode == "home"
-    assert app.app_ctx.state.landing_view == "choose"
+    assert source.index("K_k") < source.index("WORK_MODES")
 
 
 # --- I76: Esc out of the pass-through modes ----------------------------------

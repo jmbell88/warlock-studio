@@ -37,7 +37,15 @@ def _labelled(svc, verdict, *, stage="blank", image=True, prompt="a rogue"):
     job_dir.mkdir(parents=True, exist_ok=True)
     if image:
         (job_dir / "reference.png").write_bytes(b"png-not-really")
-    svc_verdicts.record_verdict(svc, job_id, verdict=verdict, stage=stage)
+    if stage == "model":
+        # A mesh verdict is graded; only the image stages take a word. The
+        # backfill table is what "accept" meant, so a mesh row planted here is
+        # the same evidence it always was.
+        from warlock.vectors import BINARY_GRADES
+
+        svc_verdicts.record_verdict(svc, job_id, grade=BINARY_GRADES[verdict])
+    else:
+        svc_verdicts.record_verdict(svc, job_id, verdict=verdict, stage=stage)
     return job_id
 
 

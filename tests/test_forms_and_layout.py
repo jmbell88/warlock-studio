@@ -198,68 +198,43 @@ def test_the_sidebar_option_is_three_names_and_the_width_is_module_state():
 # --- M107: the Home tiles ----------------------------------------------------
 
 
-def test_the_tiles_are_data_so_the_keys_and_the_clicks_agree():
-    """A hand-written keyboard index over a hand-written column of calls is two
-    orderings, and they drift the first time a tile is inserted.
-
-    The *order* is editorial and stays here; that the set covers every work mode
-    is the half that drifted (F76 -- it stopped at six while the app grew to ten
-    modes) and is asserted against ``modes.WORK_MODES`` in
-    ``tests/test_panes_home_tiles.py``.
-    """
-    keys = [key for key, _icon, _name in landing.TILES]
-    assert keys == [
-        "2d",
-        "3d",
-        "inker",
-        "clay",
-        "plotter",
-        "packwright",
-        "review",
-        "open",
-        "profiles",
-    ]
-    assert len(set(keys)) == len(keys)
-
-
-def test_every_tile_has_an_icon_the_atlas_carries_and_a_caption():
+def test_the_resume_cursor_wraps():
+    """A short ring of recent work is a menu, where a two-hundred-row list is
+    not -- which is why the library's arrows clamp and these do not."""
     from types import SimpleNamespace
 
-    from warlock.studio import icons
+    from warlock.studio import recents
 
-    known = {v for k, v in vars(icons).items() if k.isupper()}
-    ctx = SimpleNamespace(settings=SimpleNamespace(get=lambda *_a: None))
-    for key, icon, name, caption in landing.tiles(ctx):
-        assert icon in known, key
-        assert name and caption
-        assert all(ord(c) < 0x100 for c in name + caption), key
-
-
-def test_the_tile_cursor_wraps():
-    """A fixed ring of choices is a menu, where a two-hundred-row list is not --
-    which is why the library's arrows clamp and these do not."""
-    from types import SimpleNamespace
-
-    ctx = SimpleNamespace(
-        state=SimpleNamespace(home_index=0),
-        settings=SimpleNamespace(get=lambda *_a: None),
-    )
-    # Over the drawn cards rather than the table: since UX.md Phase 4 the
-    # chooser has an optional Continue card in front of ``TILES``, and with no
-    # job cache on this ctx there is none, so the two counts agree here.
+    settings = _RecentSettings()
+    for index in range(3):
+        recents.remember(settings, "clay", f"f{index}.wblk", when=float(index))
+    ctx = SimpleNamespace(state=SimpleNamespace(home_index=0), settings=settings)
     landing.move(ctx, -1)
-    assert ctx.state.home_index == len(landing.rows(ctx)) - 1 == len(landing.TILES) - 1
+    assert ctx.state.home_index == len(landing.rows(ctx)) - 1 == 2
     landing.move(ctx, 1)
     assert ctx.state.home_index == 0
 
 
-def test_home_takes_the_arrows_and_enter_only_on_the_chooser():
-    """Its other two views are lists with their own controls, and a tile cursor
-    moving invisibly behind them would fire on the next Enter."""
+class _RecentSettings:
+    def __init__(self):
+        self.data = {}
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+
+
+def test_home_takes_the_arrows_and_enter():
+    """Library and Profiles are modes now, so there is no sub-view behind which
+    a cursor could move invisibly and then fire on the next Enter -- which is
+    what the ``landing_view == "choose"`` guard here used to be for."""
     from warlock.studio import main
 
     source = inspect.getsource(main.App._shortcut)
-    assert 'landing_view == "choose"' in source
+    assert "landing_view" not in source
+    assert 'ctx.state.mode == "home"' in source
     assert "landing.activate" in source
 
 

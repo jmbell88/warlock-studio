@@ -18,17 +18,17 @@ sees the key, which is the one exception to the rule above.
 
 | Keys | Action |
 | --- | --- |
-| Alt+1 … Alt+9, Alt+0 | Switch mode, in the order the switch draws them |
-| Ctrl+K | Open the command palette |
+| Ctrl+K | Open the command palette — switch mode, or open an asset |
 | F1 | Switch to the Manual |
 | Esc | Leave Home, the Manual or app Settings, back to the mode you came from |
 | F10 | Toggle the frame-rate readout |
 
-**Alt+0 is the tenth mode**, not the zeroth. There are ten segments in the switch and only nine
-digits above zero, so the last one takes `0` the way every application with ten of anything does.
-
-**Why Alt and not Ctrl.** Inker already uses Ctrl+0 and Ctrl+1 for its zoom, and a binding checked
-above the modes takes whatever it names away from them for good.
+**There is no per-mode digit.** There was, while there were ten modes and ten digits: `Alt+N` for
+the nth segment, so the binding was the picture on screen rather than a second table to keep in
+agreement with it. That argument stopped holding as soon as there were twelve segments — either two
+modes have no key, or something has to say which two, and that something is exactly the second table
+the positional scheme existed to avoid. Switching modes is a mouse action and a palette action, and
+the digits go back to the workspace modes that were already reaching for them.
 
 **Esc.** In a mode with something to drop — a comparison, a pose edit, a floating selection — Esc
 drops that and stays put. It only leaves a mode that has nothing of its own to cancel. Home is
@@ -62,11 +62,14 @@ the pane that made it.
 
 | Keys | Action |
 | --- | --- |
-| A | Accept the unit on screen |
-| R | Reject — then `1`–`5` picks the reason |
+| 1 – 5 | Grade the mesh +1 to +5 (+3 is usable) |
+| R then 1 – 5 | Grade it −1 to −5 |
+| 0 | Grade it 0 — no opinion either way |
+| Ctrl + 1 – 5 | Toggle a good tag for the next grade |
+| Shift + 1 – 5 | Toggle a bad tag for the next grade |
 | S | Skip to the next unverdicted unit |
 | Left / Right | Previous / next unit |
-| Esc | Cancel a pending reject |
+| Esc | Clear the pending sign and tags |
 
 ## Review — labelling images
 

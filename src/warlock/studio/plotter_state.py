@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from .inker_state import MAX_RECENT, PaintView
+from .inker_state import PaintView
 
 # What Plotter can open and what each suffix means. ``wmap`` is the project
 # file; the other two are Tiled's, and opening one is an *import* -- the
@@ -115,7 +115,6 @@ class PlotterDoc:
 class PlotterState:
     docs: list[PlotterDoc] = field(default_factory=list)
     active_uid: str = ""
-    recent: list[str] = field(default_factory=list)
 
     # Tool settings: app-level, shared across documents on purpose.
     tool: str = "stamp"
@@ -227,17 +226,6 @@ class PlotterState:
         self.drag_object = None
         self.palette_anchor = None
 
-    # -- recent files -------------------------------------------------------
-
-    def remember(self, path: Path | None) -> None:
-        if path is None:
-            return
-        text = str(path)
-        self.recent = [text] + [p for p in self.recent if p != text]
-        del self.recent[MAX_RECENT:]
-
-    def forget(self, path: str) -> None:
-        self.recent = [p for p in self.recent if p != path]
 
 
 def title_for(path: Path | None) -> str:

@@ -1,10 +1,13 @@
-"""The verdict and sweep tables: latest-wins, sources coexisting, and the one
-property the denormalized vector exists for -- surviving the job it names."""
+"""The verdict and sweep tables: latest-wins, sources coexisting, the one
+property the denormalized vector exists for -- surviving the job it names -- and
+the grade scale that replaced the binary mesh verdict."""
 
 from __future__ import annotations
 
 import pytest
 
+from warlock import db as db_mod
+from warlock import vectors
 from warlock.service import findings as svc_findings
 from warlock.service import jobs as svc_jobs
 from warlock.service import verdicts as svc_verdicts
@@ -118,24 +121,128 @@ def test_record_verdict_snapshots_the_jobs_vector(svc):
         "image", "a chest", {"lora_weight": 0.9, "seed": 12, "composed_prompt": "x"},
         stage="model", status="done",
     )
-    svc_verdicts.record_verdict(svc, job_id, verdict="reject", reasons=["holes"])
+    svc_verdicts.record_verdict(svc, job_id, grade=-3, reasons=["holes"])
 
     row = svc.store.latest_verdicts()[0]
     assert row["verdict"] == "reject"
+    assert row["grade"] == -3
     assert row["reasons"] == ["holes"]
     # The allowlist, not "everything in params": no seed, no derived value.
     assert row["vector"] == {"lora_weight": 0.9, "stage": "model"}
 
 
-def test_record_verdict_refuses_unknown_verdicts_reasons_and_jobs(svc):
+def test_record_verdict_refuses_unknown_tags_and_jobs(svc):
     job_id = svc.store.create("image", "a chest", {}, stage="model", status="done")
     with pytest.raises(Invalid):
-        svc_verdicts.record_verdict(svc, job_id, verdict="maybe")
-    with pytest.raises(Invalid):
-        svc_verdicts.record_verdict(svc, job_id, verdict="reject", reasons=["ugly"])
+        svc_verdicts.record_verdict(svc, job_id, grade=-3, reasons=["ugly"])
     with pytest.raises(NotFound):
-        svc_verdicts.record_verdict(svc, "ffffffffffff", verdict="accept")
+        svc_verdicts.record_verdict(svc, "ffffffffffff", grade=3)
     assert svc.store.latest_verdicts() == []
+
+
+# --- the grade scale --------------------------------------------------------
+
+
+def test_the_two_tag_vocabularies_are_disjoint_and_the_bad_spellings_are_frozen():
+    """One namespace is only sound while polarity is recoverable from the tag.
+
+    And the bad five are the pre-migration ``REASONS`` tuple verbatim: the stored
+    corpus carries those exact strings and there is no alias table, so a rename
+    would split the evidence rather than migrate it.
+    """
+    assert set(vectors.GOOD_TAGS).isdisjoint(vectors.BAD_TAGS)
+    assert vectors.BAD_TAGS == ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")
+    assert vectors.TAGS == vectors.GOOD_TAGS + vectors.BAD_TAGS
+    # Five per polarity is what makes Ctrl+1..5 / Shift+1..5 map positionally.
+    assert len(vectors.GOOD_TAGS) == len(vectors.BAD_TAGS) == 5
+    assert len(set(vectors.TAGS)) == len(vectors.TAGS)
+
+
+def test_the_backfill_value_and_the_usable_cut_are_one_decision():
+    """A cut above the backfill would silently demote every row migration 10
+    wrote; a cut below it would claim a grade nobody recorded was usable."""
+    assert vectors.BINARY_GRADES == {"accept": 3, "reject": -3}
+    assert vectors.BINARY_GRADES["accept"] == vectors.USABLE_GRADE
+    assert vectors.BINARY_GRADES["reject"] == -vectors.USABLE_GRADE
+    for word, grade in vectors.BINARY_GRADES.items():
+        assert vectors.verdict_for_grade(grade) == word
+    assert (vectors.GRADE_MIN, vectors.GRADE_MAX) == (-5, 5)
+
+
+def test_the_usable_cut_lives_in_exactly_one_place():
+    assert vectors.verdict_for_grade(vectors.USABLE_GRADE) == "accept"
+    assert vectors.verdict_for_grade(vectors.USABLE_GRADE - 1) == "reject"
+    assert vectors.verdict_for_grade(vectors.GRADE_MAX) == "accept"
+    assert vectors.verdict_for_grade(vectors.GRADE_MIN) == "reject"
+    assert vectors.verdict_for_grade(0) == "reject"
+
+
+def test_migration_10s_literals_still_equal_the_backfill_constants():
+    """The migration hard-codes +-3 on purpose -- a shipped migration must mean
+    the same thing forever, so interpolating a constant somebody may retune would
+    rewrite history. This is what catches the divergence that permits."""
+    statements = db_mod.MIGRATIONS[9]
+    assert "ALTER TABLE verdicts ADD COLUMN grade INTEGER" in statements[0]
+    for word, grade in vectors.BINARY_GRADES.items():
+        assert any(
+            f"SET grade = {grade}" in stmt and f"verdict = '{word}'" in stmt
+            for stmt in statements
+        ), word
+
+
+def test_record_verdict_refuses_a_grade_outside_the_scale_or_a_bool(svc):
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="done")
+    for bad in (6, -6, 100, None, "3", 3.0, True, False):
+        with pytest.raises(Invalid) as excinfo:
+            svc_verdicts.record_verdict(svc, job_id, grade=bad)
+        assert excinfo.value.field == "grade"
+    assert svc.store.latest_verdicts() == []
+
+
+def test_a_mesh_verdict_refuses_a_caller_supplied_verdict(svc):
+    """One door in: the derived column can never disagree with its grade."""
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="done")
+    with pytest.raises(Invalid) as excinfo:
+        svc_verdicts.record_verdict(svc, job_id, verdict="accept", grade=-5)
+    assert excinfo.value.field == "verdict"
+    with pytest.raises(Invalid):
+        svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+    assert svc.store.latest_verdicts() == []
+
+
+def test_the_whole_scale_records_and_derives_its_verdict(svc):
+    for grade in range(vectors.GRADE_MIN, vectors.GRADE_MAX + 1):
+        job_id = svc.store.create("image", "a chest", {}, stage="model", status="done")
+        result = svc_verdicts.record_verdict(svc, job_id, grade=grade)
+        assert result["grade"] == grade
+        assert result["verdict"] == vectors.verdict_for_grade(grade)
+        row = {r["job_id"]: r for r in svc.store.latest_verdicts()}[job_id]
+        assert (row["grade"], row["verdict"]) == (grade, result["verdict"])
+
+
+def test_a_good_tag_on_a_negative_grade_is_legal(svc):
+    """Tags stopped being *reasons a reviewer rejected*. A mesh can have a clean
+    shape and be unusable, and that is the pair of facts worth recording."""
+    job_id = svc.store.create("image", "a chest", {}, stage="model", status="done")
+    svc_verdicts.record_verdict(svc, job_id, grade=-4, reasons=["clean-shape", "holes"])
+
+    row = svc.store.latest_verdicts()[0]
+    assert row["reasons"] == ["clean-shape", "holes"]
+    assert row["grade"] == -4
+
+
+def test_an_image_label_stays_binary_and_keeps_its_grade_null(svc, tmp_path):
+    job_id = svc.store.create("text", "a chest", {}, stage="reference", status="done")
+    (svc.job_dir(job_id)).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(job_id) / "reference.png").write_bytes(b"x")
+
+    result = svc_verdicts.record_verdict(svc, job_id, verdict="accept", stage="reference")
+    assert result["grade"] is None
+    assert svc.store.latest_verdicts()[0]["grade"] is None
+
+    with pytest.raises(Invalid) as excinfo:
+        svc_verdicts.record_verdict(svc, job_id, grade=4, stage="blank")
+    assert excinfo.value.field == "grade"
 
 
 def test_record_verdict_snapshots_the_sweep_context(svc):
@@ -152,8 +259,8 @@ def test_record_verdict_snapshots_the_sweep_context(svc):
     plain = svc.store.create(
         "image", "another chest", {"seed": 7}, stage="model", status="done"
     )
-    svc_verdicts.record_verdict(svc, unit, verdict="accept")
-    svc_verdicts.record_verdict(svc, plain, verdict="accept")
+    svc_verdicts.record_verdict(svc, unit, grade=3)
+    svc_verdicts.record_verdict(svc, plain, grade=3)
     svc.store.delete(unit)
 
     rows = {r["job_id"]: r for r in svc.store.latest_verdicts()}
@@ -170,7 +277,7 @@ def test_record_verdict_snapshots_the_sweep_context(svc):
 
 def test_record_verdict_tolerates_a_job_with_no_seed(svc):
     job_id = svc.store.create("image", None, {}, stage="model", status="done")
-    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+    svc_verdicts.record_verdict(svc, job_id, grade=3)
 
     row = svc.store.latest_verdicts()[0]
     assert row["seed"] is None
@@ -181,7 +288,7 @@ def test_a_verdict_on_a_pruned_job_still_feeds_the_findings(svc):
     job_id = svc.store.create(
         "image", "a chest", {"lora_weight": 0.9}, stage="model", status="done"
     )
-    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+    svc_verdicts.record_verdict(svc, job_id, grade=3)
     svc_jobs.prune_jobs(svc, keep=0)
 
     doc = svc_findings.aggregate(svc.store)

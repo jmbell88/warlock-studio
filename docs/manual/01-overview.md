@@ -42,13 +42,21 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A switch at the top of the window chooses between ten modes, and that switch is the single thing
+A switch at the top of the window chooses between twelve modes, and that switch is the single thing
 that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
-`Alt+1` to `Alt+9` and `Alt+0` jump straight to the nth segment — see
+There is no per-mode keyboard shortcut: twelve modes against ten digits is either two modes with no
+key or a table saying which two, so the command palette (`Ctrl+K`) is the keyboard route — see
 [Keyboard shortcuts](14-shortcuts.md).
 
-- **Home.** The chooser the app opens on: start a 2D reference, start a 3D asset, open something
-  already made, or manage profiles. Returning here is never destructive.
+The switch is drawn as three groups, and the grouping is derived from what a mode *is* rather than
+written down: the two ways in, then the seven workspaces that own a viewport or a form, then the
+three places that are about the program and its shelves rather than about a piece of work. If the
+window is too narrow for twelve labels the switch shows the glyphs alone, all of them, with each
+label in a tooltip — abbreviating only the segments that did not fit would be one control saying two
+different kinds of thing, and which two would change as you dragged the window.
+
+- **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
+  single list of everything you were recently working on. Returning here is never destructive.
 - **Manual.** This documentation, embedded in the window rather than floating over it. `F1` and
   every pane's (?) button come here.
 
@@ -64,14 +72,18 @@ that decides what the panes show. It is drawn in every mode, so there is no scre
   export a `.glb` or import the document as an asset. Covered in [Clay](08-clay.md).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
   works" findings the verdicts add up to. Covered in [Review](13-review.md).
-- **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
-  list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](16-configuration.md#in-app-settings).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
   speaks Tiled's formats in both directions. Covered in [Plotter](09-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](10-packwright.md).
+
+- **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
+  list of models it loaded, from which a missing one can be downloaded. See
+  [In-app settings](16-configuration.md#in-app-settings).
+- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
+  trash and the prune. Covered in [Library and jobs](11-library-and-jobs.md).
+- **Profiles.** Saved style settings for the 2D form. Covered in [Profiles](12-profiles.md).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes

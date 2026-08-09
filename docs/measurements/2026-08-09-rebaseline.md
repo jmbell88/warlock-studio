@@ -236,6 +236,123 @@ dominant failure mode, and auto is unusable.
 the 50-unit run is both the better-powered instrument and the real decision
 point. The gate below is unchanged and is not amended.
 
-## Results — the re-baseline
+## Results — the re-baseline, 2026-08-09
 
-Not yet taken.
+Sweep `5f26623d12aa`, 50 units submitted. 09:00 to 10:51 local, **1.84 h**, mean
+2.54 min per finished unit.
+
+```
+done        41     all 41 reviewed
+error        4     2 composition-gate refusals, 2 "interrupted by shutdown"
+cancelled    5
+```
+
+### The gate: PASSED
+
+**19 accepts, 22 rejects.** The pre-registered bar was **>= 12 of 50**. Against
+the 41 units that produced a mesh that is **46%**; against all 50 submitted,
+38%. Either denominator clears the 25% the bar was written as.
+
+The stock of accepted meshes with files on disk went from **1 to 20**. That was
+the campaign's actual objective, and it is met.
+
+### Every axis is null, and the bar was unsatisfiable
+
+Matched pairs against the baseline at the same seed:
+
+| Arm | win | lose | tie | n/a | Accept rate |
+| --- | --- | --- | --- | --- | --- |
+| `base_model=playground` | 2 | 1 | 1 | 1 | 4/5 · 80% |
+| `base_model=sdxl_cfg` | 1 | 0 | 1 | 3 | 3/3 · 100% |
+| `style_lora=render3d` | 1 | 0 | 2 | 2 | 3/4 · 75% |
+| `style_lora=redmond3d` | 2 | 1 | 1 | 1 | 3/5 · 60% |
+| **baseline** (sdxl, no LoRA) | — | — | — | — | 2/4 · 50% |
+| `style_lora=ps1` | 1 | 1 | 2 | 1 | 2/5 · 40% |
+| `base_model=turbo` | 0 | 1 | 3 | 1 | 1/5 · 20% |
+| `framing=front_ortho` | 1 | 2 | 1 | 1 | 1/5 · 20% |
+| `style_lora=pixelxl` | 0 | 2 | 2 | 1 | 0/5 · 0%, all `broken` |
+| `base_model=pixel` | — | — | — | 5 | no data |
+
+Nothing reached 5-0. **Nothing could have**: `baseline s23` was refused at the
+composition gate, so only **four** matched pairs ever existed, and the bar was
+written as five. Every axis in this run was null before a single unit ran.
+
+That is the second mis-specification of the same rule in one campaign — the
+confirm's was that ties are structural when both arms fail often, this one is
+that the bar assumed a baseline unit which is not guaranteed to exist. **Both
+have one root cause: a sign test sized as though ties and losses were rare.**
+Recorded here rather than repaired, because repairing a rule after seeing the
+data it judged is the thing pre-registration forbids. A future OFAT run should
+state its bar as a fraction of *usable* pairs, decided before the run and
+evaluated after the losses are known.
+
+The marginal accept rates in the right-hand column are **confounded and
+underpowered** and no winner is claimed from them. They are reported because
+they are the only evidence available for choosing settings for a corpus run, and
+the choice is a practical one rather than a claim.
+
+Two arms are informative despite the null. `style_lora=pixelxl` took 0 of 5 with
+**every** rejection tagged `broken`, which is the prior that flat pixel art is
+poor trellis input, confirmed at the only strength this design can offer. And
+`base_model=turbo` at 1/5 is the weakest checkpoint that produced data.
+
+### Refusals, reported separately
+
+**2 of 50**, both `multi_object`, against 17 of 100 in the 2026-08-07 sweep. Both
+fell on SDXL-family arms at full CFG (`baseline`, `base_model=sdxl_cfg`). n=2, so
+this is a count and not a rate about any checkpoint.
+
+### `hole_worst` is no longer inverted, and the matte is why
+
+```
+AUC(hole_worst predicts reject) = 0.756       (2026-08-07 corpus: 0.115)
+median hole_worst — accepts 0.0141, rejects 0.0293   (was 0.0304 / 0.0000)
+meshes at exactly 0.000: 1 of 41                     (was 48 of 81)
+```
+
+The pre-registered rule was that **only AUC >= 0.65 restores it as evidence**. It
+clears, and the mechanism is legible rather than merely statistical: **the
+inversion was an artefact of the `auto` matte, not a property of the metric.**
+`auto` produced solid slabs, a slab has no visible openings, and `meshaudit`
+therefore scored the dominant failure mode as perfect. Under birefnet the slab is
+gone — one mesh at exactly zero against forty-eight — and with it gone the metric
+ranks the right way round. This is the same mechanism the confirm sweep measured
+through the `broken` tag, arrived at independently.
+
+**What this does not license.** `widgets.quality_badge`'s missing green branch is
+a separate decision, deferred by this document's own rule to its own measurement,
+and it is **not** taken here. n=41 on one subject and one prompt is not grounds
+for a UI that tells users a low hole count means a good mesh — the finding is
+that the metric is informative *on a corpus whose matte is birefnet*, which is a
+narrower claim than the badge would make.
+
+### `mesh_hole_max`: retired as a retry trigger
+
+The distribution is 0.000–0.052, **unimodal**, largest internal gap 0.007, and
+**0 of 41 exceed 0.07**. The rule said the number moves only if a bimodal
+distribution with an empty gap reproduces, and that **a unimodal distribution
+retires it rather than re-tunes it**. It is retired. `Config.mesh_retries` is 0,
+so nothing changes operationally and the constant is left in place with this
+document as the reason it is not used.
+
+### Watertight, re-measured
+
+**2 of 41.** The first figure taken since `meshreport` began welding by position;
+every watertight number before 2026-08-08 is void and none is carried forward.
+Triangles 273,888 – 299,408 (median 288,440), unmoved by any axis, consistent
+with the 177k–299k of the old run.
+
+### Amendment 2, 2026-08-09: what the prop corpus is generated at
+
+`scripts/sweep_props.py` needs a configuration and this run declined to name one.
+The corpus does not need the *optimal* configuration — it needs one that produces
+keepable meshes on three new subjects — so `WINNER` is set to the strongest
+marginals, **`base_model=playground` + `style_lora=render3d`**, and the script
+records that this is a marginal rather than a winner. No claim about either is
+entered into any finding.
+
+Seven units produced no terminal measurement (the whole `base_model=pixel` arm,
+`base_model=sdxl_cfg s101`, `style_lora=render3d s11` — five cancelled, two lost
+to an app shutdown). They are re-queued into this same sweep by
+`scripts/sweep_refill.py`, so the pairs they belong to can still form. The two
+genuine composition-gate refusals are **not** re-run: a refusal is a measurement.

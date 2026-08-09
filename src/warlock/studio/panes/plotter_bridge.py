@@ -86,11 +86,12 @@ def _recent(ctx: Any, state: Any) -> None:
 
     from imgui_bundle import imgui
 
-    if not state.recent:
+    found = plotter_mode.recent_paths(ctx)
+    if not found:
         return
     imgui.dummy((0, 8))
     widgets.section("recent")
-    for path in list(state.recent)[:6]:
+    for path in found[:6]:
         # The path is in the id, not just the label: two maps can share a
         # basename and one imgui id between them is one row.
         if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:

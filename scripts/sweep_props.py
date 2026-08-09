@@ -66,16 +66,29 @@ from sweep_rogue import SEEDS  # noqa: E402
 
 from warlock.service import sweeps as sweeps_mod  # noqa: E402
 
-# Filled in from the re-baseline's verdicts. Left at the re-baseline's own
-# baseline arm so the script is runnable and testable today -- but that is a
-# placeholder, not a recommendation, and the two entries below carry the same
-# rule the other campaigns state: ``bg_removal`` and ``framing`` are written out
-# rather than inherited, because a default that is host-gated (birefnet.gguf's
-# presence) or that is an *axis* in the run next door is not something a later
-# reader can recover from the spec.
+# Filled in from the re-baseline (sweep ``5f26623d12aa``, 2026-08-09) -- and
+# **these are the strongest marginals, not a winner**. That run named no winner
+# on any axis and could not have: ``baseline s23`` was refused at the
+# composition gate, leaving four usable matched pairs against a bar written as
+# 5-0, so every axis was null before a unit ran
+# (``docs/measurements/2026-08-09-rebaseline.md``, Amendment 2).
+#
+# Choosing anyway is legitimate *here* and would not be in a finding, and the
+# difference is what this comment exists to record. A tier qualification needs a
+# configuration that produces meshes worth keeping on three new subjects; it does
+# not need the best one, and nothing downstream reads these values as a claim.
+# ``playground`` took 4 of 5 and ``render3d`` 3 of 4, the highest of each axis.
+#
+# ``bg_removal`` and ``framing`` are written out rather than inherited, for the
+# reason the other campaigns state: a default that is host-gated (on
+# birefnet.gguf's presence) or that is an *axis* in the run next door is not
+# something a later reader can recover from the spec. ``framing`` stays
+# ``three_quarter`` because ``front_ortho`` lost 1-2 and accepted 1/5 against the
+# baseline's 2/4 -- see ``docs/measurements/2026-08-09-framing-axis.md``.
 WINNER = {
-    "base_model": "sdxl",
-    "style_lora": None,
+    "base_model": "playground",
+    "style_lora": "render3d",
+    "lora_weight": 0.9,
     "bg_removal": "birefnet",
     "framing": "three_quarter",
     "platform": "3d",

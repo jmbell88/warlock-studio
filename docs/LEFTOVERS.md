@@ -122,138 +122,67 @@ this is untidiness rather than a bug — but they should not be quoted as facts.
 
 ---
 
-## 2. Two GPU sessions, and the measurement items still wait on them
+## 2. The re-baseline campaign — run, and what it left open
 
-*Code work is sweep-spec preparation and it is done. §3, §4, §5, §7 and §8 are
-all waiting on the output. Neither run has happened.*
+*Both GPU sessions happened on 2026-08-09 and their results are written up in
+the documents that pre-registered them:
+[`2026-08-09-rebaseline.md`](measurements/2026-08-09-rebaseline.md) (the
+blind-confirm and the 50-unit re-baseline, with two amendments) and
+[`2026-08-09-framing-axis.md`](measurements/2026-08-09-framing-axis.md). The
+narrative that used to stand here — the 2026-08-07 review, the `bg_removal`
+mechanism argument, the two run plans — is deleted per this file's own rule; it
+is in those documents and in `git log`. What follows is only what is still open.*
 
-*Pre-registered 2026-08-09, before any unit was queued:
-[`2026-08-09-rebaseline.md`](measurements/2026-08-09-rebaseline.md) (which
-supersedes the hole-rate baseline and carries the go/no-go — **≥12 accepts of
-50**) and
-[`2026-08-09-framing-axis.md`](measurements/2026-08-09-framing-axis.md).
-The decision rules in both are binding; do not re-open them after seeing the
-labels.*
+**What the campaign settled.** `bg_removal=birefnet` is the baseline: `auto` is
+**0 accepts in 90 units** across two runs, and no birefnet reject carries the
+`broken` tag (0 of 5 against 4 of 5, Fisher p=0.024). The re-baseline's go/no-go
+**passed** — 19 accepts of 41 finished units, against a pre-registered bar of ≥12
+of 50 — so a workable baseline exists and the floor effect that made Sweep B
+measure nothing is gone. `hole_worst` is **no longer inverted** (AUC 0.756
+against the pre-registered ≥0.65), and the inversion is now understood as an
+artefact of the `auto` matte rather than a property of the metric. `framing`
+did not win and nothing changes; `mesh_hole_max` is retired as a retry trigger.
 
-### What the review found
+**What it did not settle, and is the remaining work:**
 
-**3 accepts in 83.** All three are `bg_removal=birefnet`; `auto` went 0 for 80.
-It is the only signal in the corpus — `bg_removal` is the **sole** comparison
-with a non-zero win count (`a_wins=0, b_wins=3, ties=1`). Every other axis, in
-both sweeps, is all ties: base_model, style_lora, silhouette, palette, condition,
-mood.
+1. **The depiction axes have still never been measured on a working baseline.**
+   The re-baseline carried checkpoint, style LoRA and framing only. `palette`,
+   `silhouette`, `condition` and `mood` were last run inside Sweep B's floor
+   effect, which means they are untouched — this is §5's dependency and the
+   whole reason §5 is still open.
+2. **No checkpoint is chosen.** Every axis in the re-baseline was null, and the
+   bar was *unsatisfiable* rather than merely unmet: `baseline s23` was refused
+   at the composition gate, so only four matched pairs ever existed against a bar
+   written as five. The marginals (`playground` 4/5, `sdxl_cfg` 3/3,
+   `style_lora=render3d` 3/4) are confounded and underpowered, and
+   `sweep_props.WINNER` records them as marginals rather than winners. Two arms
+   are informative anyway: `style_lora=pixelxl` took 0 of 5 with every rejection
+   tagged `broken`, and `base_model=turbo` at 1/5 is the weakest checkpoint that
+   produced data.
+3. **A future OFAT run must state its bar as a fraction of *usable* pairs.**
+   Both mis-specifications in this campaign have one root cause — a sign test
+   sized as though ties and losses were rare. Recorded here because the rule was
+   deliberately not repaired after seeing the data it judged.
+4. **Seven units produced no terminal measurement** and are re-queued into the
+   same sweep by `../scripts/sweep_refill.py`, so their pairs can still form. The
+   two genuine composition-gate refusals are not re-run: a refusal is a
+   measurement.
 
-At n=4 that would normally be a curiosity. Three things make it more:
-
-- **The matched pairs are byte-identical upstream.** `input.png` hashes the same
-  for `baseline s23` and `bg_removal=birefnet s23`, and for s42, s77 and s101.
-  Same reference image, same seed, one knob — `bg_removal` is passed to
-  trellis-server at reconstruction time, so nothing about the picture differs.
-  This is a controlled A/B, not a confounded marginal.
-- **The failure mode changes, not just the rate.** 58 of 80 `auto` rejects are
-  tagged `broken`; 0 of 4 birefnet are (its one reject is `bad-shape`). A rate
-  shift at n=4 is weak evidence; a rate shift plus the disappearance of the
-  dominant failure tag is a mechanism signature.
-- **It is not review drift.** The accepts land at review positions **46, 48 and
-  83** of 84, with 34 consecutive rejects between the second and the third.
-
-**The mechanism.** Without `birefnet.gguf`, matting falls back to a threshold
-cutout, and `auto` lets the server decide. A threshold cutout on a deliberately
-dark brief ("black and silver and blue") leaves background attached, and TRELLIS
-reconstructs it into a solid slab. `../models/trellis2-gguf/birefnet.gguf` is
-present, so the learned matte was available the whole time and simply was not
-being asked for.
-
-### The two runs
-
-1. **Blind-confirm, before any of this is leaned on.** The clean 2×2 on its own
-   is Fisher p=0.14; the p≈4×10⁻⁵ figure (≈8×10⁻⁴ after Bonferroni over ~20
-   blocks) comes from using all 80 `auto` units as controls, which is legitimate
-   but leans on their comparability. The review was also unblinded and
-   single-reviewer, and the app shows the params. 8–12 units, birefnet against
-   auto, labels hidden, is cheap next to a 3.7 h sweep. **Run this first** —
-   everything else in this file leans on its answer.
-   `../scripts/sweep_confirm.py`; Review's **Blind** toggle renames every unit *and
-   reorders them*, because `expand` enqueues the baseline first and position
-   names the arm as plainly as a label does.
-2. **Re-run the render sweep with birefnet as the baseline**, check the accept
-   rate is workable, and only then re-run the depiction axes on top of it. The
-   re-run also carries the **framing axis** for character subjects.
-   `../scripts/sweep_rebaseline.py`. Both specs are validated headlessly by
-   `../tests/test_campaign_specs.py`.
-
-Note the re-run measures more than one change: `PROMPT_TEMPLATE` moved
-(`PROMPT_VERSION` 3 → 4), so a unit from the new run is not comparable with one
-from the old on the prompt axis either. All the changes are deliberate and all
-landed before the re-run, which is the right order — a sweep around a broken base
-measures the brokenness — but the re-run is the first corpus in which any of them
-is measured.
-
-**The framing measurement document is pre-registered and its Results section is
-empty** — [`2026-08-09-framing-axis.md`](measurements/2026-08-09-framing-axis.md).
-`guidance.py` carries `framing` with `three_quarter` (the default) and
-`front_ortho`, threaded through `vectors.VECTOR_PARAMS`, and its own comment calls
-`front_ortho` "a measurement axis rather than a new default". So the code is done
-and nothing has been measured. Two corrections the pre-registration makes to the
-sentence that used to stand here, both worth reading before the verdicts land.
-**There is no per-category framing machinery to flip**: `DEFAULT_FRAMING` is a
-single global, and `default_size_m` on `CATEGORIES` is the precedent for building
-one — so a win is two decisions, and the document fixes in advance that it adds
-`default_framing` to the `character` entry and leaves the global alone. And **a
-win at 5 pairs ships provisional**: p=0.031 does not survive Bonferroni over this
-run's nine contrasts, so the flip either waits on a 10-unit confirm or says
-"provisional" in its first line. It is still the `PROMPT_VERSION` 4 → 5 moment
-and the findings-corpus split is still the documented cost.
-
-### `hole_worst` is not weakly informative. It is backwards.
-
-```
-AUC(hole_worst predicts reject) = 0.115      (0.5 = coin flip)
-rejects with hole_worst EXACTLY 0.0:  48/81 = 59%
-accepts with hole_worst exactly 0.0:   0/3
-median hole_worst — rejects 0.0000, accepts 0.0304
-```
-
-The accepted meshes have *more* measured holes than the median discarded one,
-because a slab has no holes: `meshaudit` scores the dominant failure mode as
-perfect. Anywhere that reads a low hole fraction as evidence of quality is wrong.
-This supersedes `measurements/2026-08-04-hole-rate-baseline.md`, which the
-re-run's measurement doc should say explicitly. The UI has already been audited
-for the inversion (`widgets.AUDIT_UNINFORMATIVE`, no green branch).
-
-Note this is `meshaudit` (the silhouette question), **not** `meshreport` (the
-importer question) — see §3 for what happened to the other one.
-
-### Sweep B measured nothing, and the design is the lesson
-
-45 units, four axes, zero accepts, every comparison a tie. `bg_removal` was
-pinned at `auto` throughout, so the variable that dominates the verdict was held
-fixed at its bad value while the axes under study varied. That is a floor effect:
-OFAT around a baseline that fails ~96% of the time has no headroom to detect an
-improvement in anything. Roughly half the GPU time bought one finding about a
-knob that was an afterthought in the design.
-
-**The rule that follows: establish a baseline that produces acceptable output at
-a workable rate before fanning out.**
-
-### What the review says about the checkpoints: nothing yet
-
-Refusal rate and mesh quality still rank them oppositely — `playground` and
-`redmond3d` refused 0/5 each; `sdxl_cfg` refused 3/5 but its survivors were
-flawless, while `render3d` and `pixelxl` passed more often and produced the two
-worst meshes (0.48 and 0.61 worst-view hole fraction). But every checkpoint ran
-under `auto`, so all of them were being judged through the same defect. Neither
-number picks a checkpoint, and the re-run is what settles it.
-
-**The re-run will now say this itself**, which it could not before: a refusal is
-an observation, so `findings.json` carries `refused_multi_object` as a
-per-checkpoint rate and the hint under the base-model select reads it.
+**The `quality_badge` green branch is still absent, deliberately.** The
+re-baseline's own rule defers it to its own measurement and does not take it:
+n=41 on one subject and one prompt is not grounds for a UI that tells users a low
+hole count means a good mesh. `widgets.AUDIT_UNINFORMATIVE` and the inspector's
+"a solid, featureless mesh scores this too" stand unchanged. `../CLAUDE.md`'s
+invariant has been rewritten to match: the claim is no longer "inverted" but
+**corpus-dependent**, which is the stronger form and the one that survives the
+next time the corpus moves.
 
 ---
 
 ## 3. Qualify the gltfpack tiers
 
-*Binary present; corpus from §2.*
+*Binary present; harness present; `WINNER` filled. What is missing is a run of
+`sweep_props.py` and the meshes it would leave on disk.*
 
 `../vendor/gltfpack/gltfpack.exe` arrived on 2026-08-07, so `pipelines/optimize.py`,
 the config field, the doctor check and the retarget panel's full tier list are
@@ -283,18 +212,29 @@ once. And it does not touch `PROFILES`: on a pass, exposing the tiers is a
 decision, and `Config.mesh_profile` stays `raw` regardless — the default flip is
 a separate one again.
 
-Run today it prints *no accepted meshes to qualify against* and exits 1, which is
-the correct answer: the accepts it wants are §2's output.
+**The qualification corpus still does not exist on disk, and that is now the
+whole of this section.** §2's re-baseline produced 19 accepts and took the stock
+of accepted meshes with files from 1 to 20 — but **`config.data_dir` holds zero
+job directories today**, against 66 `done` rows in `jobs.sqlite` and 26
+model-stage accepts among 231 verdicts. The verdicts outlived the pixels exactly
+as they are designed to; the meshes did not. `../bench/tiers/corpus` holds one
+`source.glb` (`44593039ccee`) and nothing else. So `qualify_tiers.py` run today
+still prints *no accepted meshes to qualify against* and exits 1.
 
-**The qualification corpus is not the old sweep.** 80 of the 83 meshes were
-rejected, and a tier test needs meshes worth keeping: whether a tier *preserves*
-something cannot be judged on output that is already broken. The three accepted
-birefnet meshes were a start and were not enough — and they are **gone**: of the
-six model-stage accepts on record, exactly one still has a `source.glb` on disk
-(`44593039ccee`, copied to `../bench/tiers/corpus`). `delete_sweep` took the rest.
+Whether that loss was a prune, a `delete_sweep` or a manual clear is worth
+establishing before the next corpus is generated — `service.jobs.retained_job_ids`
+was added to stop precisely this, and it did not.
 
-**`../scripts/sweep_props.py` is what generates the corpus**, after §2's re-baseline
-fills in its `WINNER` dict — four no-axis plans at five seeds, twenty units:
+**The qualification corpus is not the old sweep either.** A tier test needs
+meshes worth keeping: whether a tier *preserves* something cannot be judged on
+output that is already broken.
+
+**`../scripts/sweep_props.py` is what generates the corpus**, and its `WINNER` dict
+is **filled in** as of the re-baseline's Amendment 2
+(`base_model=playground` + `style_lora=render3d` + `bg_removal=birefnet`,
+recorded there as the strongest marginals rather than as winners). So this is
+now a run to take rather than a blocked one — four no-axis plans at five seeds,
+twenty units:
 chest, sword and rock (whose prompts contain those words, because
 `qualify_tiers._warn_about_the_corpus` substring-matches `WANTED_SHAPES` against
 the prompt), plus one deliberately asymmetric knight that exists only for §4.
@@ -303,14 +243,11 @@ subjects, but `recipe.Recipe` has no `bg_removal` field, so a bench run would
 inherit the matte from whichever weights the host holds — in the one run whose
 whole premise is "at the winning settings".
 
-**The old triangle/watertight figures were measuring the wrong thing.** The
-triangle counts (177k–299k) stand. The watertight figure does not: `meshreport`
-was counting **xatlas UV-seam splits** as holes, so it was answering a question
-about the atlas rather than about the mesh, and it now welds by position
-(`WELD_TOLERANCE`, quantised onto a lattice) before judging. **Every watertight
-number recorded before 2026-08-08 is void**, including the "0 of 83" that was
-once offered as a baseline. Re-measure on the re-run; do not carry the old figure
-forward.
+**The watertight figure has been re-measured and is `2 of 41`** — the first taken
+since `meshreport` began welding by position, and the replacement for the void
+"0 of 83". Triangles are 273,888–299,408 (median 288,440), unmoved by any axis
+and consistent with the old run's 177k–299k. Nothing here is outstanding; it is
+kept only so the void figure is not carried forward by someone who remembers it.
 
 ---
 
@@ -331,8 +268,10 @@ detection and `test_a_subjects_left_arm_lands_on_the_templates_positive_x_side`
 pins the convention — but whether **trellis reconstructs with the same
 handedness** is a fact about the exe, and the check used a symmetric box as its
 stand-in because no reconstruction survives in `jobs.sqlite`. A mirrored skeleton
-looks perfectly plausible in a still. So: on the first mesh out of §2's re-run,
-rig an *asymmetric* subject and look at which side the `.L` bones came out on.
+looks perfectly plausible in a still. §2's re-run produced meshes and they are no
+longer on disk (§3), so this still wants a fresh one: rig an *asymmetric* subject
+— `sweep_props.py`'s knight plan exists for exactly this — and look at which side
+the `.L` bones came out on.
 Nothing else depends on the answer, a flip is a one-line sign change, and it owes
 a measurement document.
 
@@ -367,10 +306,12 @@ do is settle whether the era fragment should be describing colour at all.
 
 Sweep B's `palette` axis (`steel` baseline against `mono`, `muted`, `vibrant`)
 was meant to measure the tension directly and returned 0 accepts and all ties —
-the floor effect in §2, not a null result about colour. The question is untouched
-and rides on the re-run. If `mono` or `muted` wins clearly, the era fragments are
-over-specifying colour and should describe *shape and shading* language only,
-leaving colour to `palette` and the user's own words.
+the floor effect in §2, not a null result about colour. **The 2026-08-09
+re-baseline did not carry a `palette` axis**, so this is still untouched and now
+rides on §2.1, the depiction-axes run that has not been designed yet. If `mono`
+or `muted` wins clearly, the era fragments are over-specifying colour and should
+describe *shape and shading* language only, leaving colour to `palette` and the
+user's own words.
 
 Note a colour finding is one of the few things `meshaudit` could never answer
 even had the meshes been sound: it is a texture judgement, so it needs human
@@ -389,20 +330,25 @@ the difference between a probe that means something and one that is merely
 believed. The end-to-end path was verified against real DINOv2 weights (768-d CLS
 embeddings, fit, save, load, score) rather than only against stubs.
 
-**What it is blocked on is a human.** No probe exists on this machine because
-nobody has labelled anything: the corpus is 3 accepts against 81 rejects, all of
-them mesh verdicts, and `judge.fit` returns `None` below `MIN_PER_CLASS` (8) of
-each class on purpose.
+**One probe now exists.** A labelling pass was taken on 2026-08-09: the corpus is
+**231 human verdicts** — 61 `blank` (45 accept / 16 reject), 11 `reference`
+(7 / 4) and 159 `model` — and `../bench/probe-blank.npz` is a fitted 768-d blank
+probe. The `reference` probe is still unbuilt, four rejects short of
+`MIN_PER_CLASS` (8) per class. No `ai:` verdict has been filed by anything.
 
-## 7. Phase 1 — the 2D judge — built, and waiting for labels
+## 7. Phase 1 — the 2D judge — one probe fitted, one still short
 
-**Everything in this section is implemented.** What it is blocked on is **a
-labelling pass** — and, for the mesh half, §8's corpus.
+**Everything in this section is implemented, and the first labelling pass has
+been taken.** What remains is: **~4 more `reference`-stage rejects** to reach
+`MIN_PER_CLASS` and fit the second probe, and then §10's measurement document.
 
 How to run one: open Review, and under the sweep list pick one of the two passes
 under *Teach the judge*. The centre column becomes a grid; `A` is good, `R` is
-bad, there is no reason step, and the pass owns the keyboard while it is open so a
-keypress about a picture can never be filed as a verdict about a mesh. Retraining
+bad, there is no second step, and the pass owns the keyboard while it is open so a
+keypress about a picture can never be filed as a verdict about a mesh. Those two
+keys are **unchanged by the 2026-08-09 grade scale**, which reaches the mesh
+stage only — an image label is still one bit, and the verdict loop behind this
+grid is the one that now takes `1`–`5`, `R`+digit and `0`. Retraining
 happens as you go, off the frame thread. Do **both** passes over the same images
 if you want both probes: they are different questions and neither answer implies
 the other.
@@ -419,17 +365,19 @@ best reproduce `reference.py` exactly, blind spots included — and `baseline s2
 learned judge exists to catch. What makes the 2D half attractive is not free data
 but *cheap* data: ~2 s to judge an image against ~15 s for a mesh.
 
-**And a probe must be trained on pixels, never on the audit scalars.**
-`AUC(hole_worst → reject) = 0.115` (§2), so a scalar-fitted probe would need a
-sign flip to beat a coin and would then be fitting the slab artefact. The same
-inversion disqualifies `hole_worst` as a sanity check *on* a probe: a probe that
-disagrees with it is, on this evidence, more likely to be right.
+**And a probe must be trained on pixels, never on the audit scalars.** The
+original argument was the inversion, which §2 has since overturned
+(AUC 0.115 → 0.756 once the matte changed). The rule survives its own evidence
+and is *strengthened* by it: a scalar whose AUC moved 0.64 because an unrelated
+knob moved is measuring the corpus's dominant artefact rather than quality, and a
+probe fitted to it would have learned the slab in 2026-08-07 and something else
+now. It is still not a sanity check *on* a probe.
 
 **Filing an `ai:` verdict is deliberately not part of it, and it is the one
 remaining seam.** `review_mode.SOURCE_AI = "ai:dino-probe"` is a constant nothing
 writes — `../tests/test_review_mode.py` asserts no row carries it, and the live
-database holds 117 verdict rows (107 `model`, 10 `reference`, as of
-2026-08-09), every one `source='human'` — which is the load-bearing half. The
+database holds 231 verdict rows (159 `model`, 61 `blank`, 11 `reference`, after
+the 2026-08-09 pass), every one `source='human'` — which is the load-bearing half. The
 `(job_id, source, stage)` seam is built and tested, so the day §10's document
 exists this is one call. What it is waiting on is the threshold: a
 probability-to-accept cut is a constant the stored corpus is then keyed on, and
@@ -437,16 +385,14 @@ that owes a measurement first —
 [`2026-08-09-judge-threshold.md`](measurements/2026-08-09-judge-threshold.md),
 pre-registered with an empty Results section and blocked on a labelling session.
 
-**And it is blocked on pixels as much as on a human, which §7 used to
-understate.** Of the 117 verdict rows, **100 name job directories that no longer
-exist** — `delete_sweep` removed them under a confirmation that truthfully
-promised the verdicts would be kept, and they were; a probe trains on pixels.
-The `reference` stage stands at 6 accept / 4 reject against a `MIN_PER_CLASS` of
-8 per class, with 11 reference jobs left on disk to label from. So the labelling
-pass sits *behind* §2's runs rather than beside them.
-`service.jobs.retained_job_ids` is what stops the next corpus going the same
-way: the three bulk delete paths now skip a job carrying an accept at any stage
-or any label at an image stage, and count it apart from `remaining`.
+**It is blocked on pixels as much as on a human, and that got worse rather than
+better.** `config.data_dir` now holds **zero job directories** against 231
+verdict rows, so *every* labelled image is a row without pixels behind it. The
+fitted blank probe survives — it stores 768-d weights, not images — but nothing
+can be re-labelled, re-split or held out from what is on disk today, which is
+what §10 needs. `service.jobs.retained_job_ids` was added to prevent exactly
+this and evidently did not; §3 carries the same finding and the same question
+about what removed them.
 
 **The held-out accuracy figure is not built, and cannot be.** It is a measurement
 over labels that do not exist yet, and it is what §10 specifies — so the remaining
@@ -458,15 +404,29 @@ Reuses `../src/warlock/bench/views.py`'s 8-view render, adds the pooling adapter
 probe.
 
 **Not blocked on labelling — blocked on a corpus that contains acceptable
-meshes.** The review produced **3 positives against 81 negatives**. That is not a
-thin corpus, it is an unusable one: a linear probe fitted to it learns "reject"
-and scores 96% accuracy doing so.
+meshes.** The mesh corpus is now **27 accepts against 132 rejects** (159 rows,
+up from 3-against-81), so the positive count has cleared "unusable". What has
+*not* changed is the spread: **every one of those 159 grades is exactly ±3**, the
+two backfill values, because no reviewer has yet used the −5..+5 scale. A
+regression target with no variance is not a regression target.
 
-So this phase sits behind §2's re-run, and the gate on starting it is a positive
-count in the tens, not a total label count. The 84 existing labels are not
-wasted — they are a clean negative set, and the matched pairs (identical
-`input.png`, opposite verdict) are the most useful training rows in the corpus
-precisely because everything except the matte is held constant.
+**The corpus is graded as of 2026-08-09, and that changes what this probe is
+aimed at.** Mesh verdicts are integers −5..+5 rather than accept/reject
+(`measurements/2026-08-09-grade-scale.md`), so the target here becomes **grade
+regression** rather than binary classification — which is a strictly better fit
+for a corpus whose problem was never the number of labels but their resolution.
+It does not unblock the phase, and the gate is now stated in the scale's own
+terms: **grades spanning more than the two backfilled values**. The positive
+count is no longer what blocks this — resolution is. What the change does is
+make the next pass worth taking, because the same afternoon of judging yields a
+graded target and a tag distribution instead of one more column of rejects.
+
+The existing labels are not wasted — they are a clean negative set, and the
+matched pairs (identical `input.png`, opposite verdict) are the most useful rows
+in the corpus precisely because everything except the matte is held constant.
+But see §7: none of them has pixels on disk any more, so a graded pass has to be
+taken over meshes that do not yet exist, which puts this behind §3's prop corpus
+run rather than beside it.
 
 **The mesh probe must be max- or mean-over-8-views, never single-view.**
 `../src/warlock/bench/views.py` records a calibration over 37 finished jobs spanning every
@@ -481,15 +441,15 @@ mesh classifier would be learning camera pose, not quality. See
 
 Only after §10's numbers exist. Candidates, in increasing order of risk:
 
-1. Sorting Review by score — **done**, and the least risky thing here for the
-   reason it always was: sorting shows the same set in a better order and costs
-   nothing when the judge is wrong.
-2. A bounded reference-seed re-roll on a predicted-bad blank. The mechanism is
+1. A bounded reference-seed re-roll on a predicted-bad blank. The mechanism is
    already there and already on — `Config.reference_retries` is 2 and the loop
    holds `mesh_seed` fixed — so this is only a matter of letting the probe, not
    `reference.py`'s three thresholds, decide what counts as bad.
-3. Refusal at the gate, which should not be attempted without a measurement
+2. Refusal at the gate, which should not be attempted without a measurement
    document.
+
+*(Sorting Review by score shipped and is deleted from this list per the rule at
+the top of the file.)*
 
 ### Risks to carry through all three phases
 
@@ -534,19 +494,36 @@ Report, on a held-out split:
   compute per rule rather than in aggregate, since a refusal is an observation
   carrying `refused_<code>`.
 - **Per-subject breakdown by `prompt_hash`**, or the scope risk is unmeasured.
-- **Beat `hole_worst`, which is a floor of 0.115 AUC and therefore no floor at
-  all.** Its inversion (§2) means the honest baseline to beat is a coin flip, and
-  any probe that merely correlates with the audit scalars has learned the slab
-  artefact. Report the probe against the human labels directly.
+- **Beat `hole_worst`, whose AUC is now 0.756 and was 0.115 six weeks of corpus
+  earlier.** The floor is no longer a coin flip, and it is no longer stable
+  either — it moved 0.64 because the matte changed (§2). Quote the floor with the
+  corpus it was measured on, and report the probe against the human labels
+  directly rather than against the scalar.
 
 ### Open questions
 
 - Does the mesh probe pool views by max or by mean? Max finds the worst angle,
   matching how `meshaudit` already reports `worst`; mean is more stable at small
   sample sizes. Decide with data, not taste.
-- Binary accept/reject first, or straight to the five `REASONS` as multi-class? A
-  first corpus almost certainly cannot support five classes, but the vocabulary
-  exists and predicting *why* is far more actionable.
+- ~~Binary accept/reject first, or straight to the five `REASONS` as
+  multi-class?~~ **Answered, 2026-08-09, and by neither option.** The mesh
+  verdict became an ordinal **grade, −5..+5**, with the five reasons re-cast as
+  optional *tags* legal at any grade and a good vocabulary added beside them
+  (`measurements/2026-08-09-grade-scale.md`). The question assumed the choice was
+  between one bit and five classes, and both are the wrong shape: a bit cannot
+  say how close a mesh came, and five mutually exclusive classes are not what a
+  reviewer is looking at — a mesh routinely has holes *and* a bad texture, which
+  is why the tags are a set rather than a label. Multi-class over the reasons is
+  therefore not deferred, it is retired. What the grade buys the probes is a
+  **regression target with spread**, which §8 is blocked on; the tag tallies are
+  a second, cheaper signal that needs no probe at all.
+
+  The image stages deliberately did **not** follow. `reference` and `blank` stay
+  binary and keep `grade` NULL permanently: they feed binary logistic probes, so
+  a grade would be thresholded straight back to a bit, and the two-key loop is
+  what makes a hundred-image pass viable at all. That half of the
+  pre-registration in `measurements/2026-08-09-judge-threshold.md` stands
+  unchanged.
 - Should the 2D probes be per-`prompt_hash` from the outset, or global with scope
   added later once the scope risk is measured rather than assumed?
 - Does an `ai:` verdict feed `findings.json` at all, or only sort Review? Feeding
@@ -714,47 +691,13 @@ Small, and written down so they are not rediscovered as defects:
 
 | Item | Status |
 |---|---|
-| `measurements/2026-08-06-pixel-art-xl.md` — "run not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). Independent of everything — good use of idle GPU time alongside §2. |
+| `measurements/2026-08-06-pixel-art-xl.md` — Results still "not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). The re-baseline touches it only obliquely — `style_lora=pixelxl` took 0/5 with every rejection `broken`, and the `base_model=pixel` arm produced no data at all — and neither says anything about the 2D grid question this document asks. Independent of everything; good use of idle GPU time. |
 | `seam.SEAM_MAX` | **Closed at 3.5** on 72 units — `measurements/2026-08-08-seam-threshold.md`, corpus from `../scripts/calibrate_seam.py` and `calibrate_seam_hard.py`. One checkpoint only (turbo at 4 steps); a CFG base draws harder edges and should re-run the scripts. The re-run is pre-registered — `measurements/2026-08-09-seam-threshold-cfg.md` — and its `--out` **must** be `docs/measurements/data/seam-cfg`: both scripts write identical filenames across checkpoints, so `.../seam` overwrites all 125 turbo files and makes the closed measurement unreproducible. |
 | Fused brush dab kernel (`warlockc_dab_u8`) | Deferred on purpose; the gate is "the brush shows up in a profile first". |
 | Merge-down and flatten on an animated Inker document | Refused rather than approximated (`Document.can_restructure`). Both are defined over one layer stack and an animated document has one per frame, so the honest versions are "merge these two tracks across every frame" — which has to decide what merging a linked cel with an unlinked one means — and "flatten this frame", which discards every other frame's cels. Real features; neither is v1. |
 | Cel thumbnails in the Inker timeline | Dots and chain glyphs instead. A per-cel texture on a grid that can be fifty columns wide is `viewer/sheet.StripRender`'s problem at a larger scale — worth doing on a per-frame upload budget, not worth doing by accident. The `layer_thumb` stamp pattern extends to it when it is. |
 | `studio/clay/ops_topo.py` hole-fill UV | Documented, deliberate approximation. |
 | View-matched reference ranking | Not built on purpose; the Scattered verdict *is* the deliverable (`measurements/2026-08-04-view-calibration.md`). |
-
-## 17. The Apple-feel UX/UI programme
-
-*Design document: [`UX.md`](UX.md) — the review, the principles and
-the full phase specifications live there; this section is only the checklist.
-Sensibility, not macOS chrome: the shell stays, the substrate is rebuilt.*
-
-*Phases 0 and 1 shipped on 2026-08-09 and are gone from this list per the rule
-below; `UX.md` carries what they actually did, including the three places they
-departed from their own specification.*
-
-- [ ] **Phase 2 — Visual refinement.** Whitespace up (`PANE_PADDING`,
-      `window_padding`), sections breathe instead of ruling, display type
-      lands, Lucide replaces the ASCII glyphs and `"(?)"`, one shadow helper
-      at three elevations, Quit out of the mode switch + places/workspaces
-      grouping gap.
-- [ ] **Phase 3 — Simplicity and disclosure.** `Invalid.field` wired to
-      inline rings at last, the 2D form gets a common path behind one honest
-      reveal, the platform-detail/Detail naming collision resolved, a scoped
-      focus model on the generate panes, "Undo" joins the toast action
-      vocabulary.
-- [ ] **Phase 4 — Small moments.** One-time Home orientation + Continue
-      tile, filter-prefix chips, searchable shortcuts popup, the splash
-      spends its three seconds, progress-card and empty-state polish.
-- [ ] **Phase 5 — The GPU tier.** In payoff order: blurred 9-slice shadow
-      atlas, vibrancy (offscreen copy + separable blur) for what floats,
-      critically-damped springs, squircle SDF corners — each independently
-      shippable behind its own gate.
-
-*(The usual rule applies per phase: a finished phase is deleted from this
-list, not ticked, and the section goes with the last one. `UX.md`
-outlives the section as the record of the design.)*
-
----
 
 ## Appendix — what a diff could not carry
 

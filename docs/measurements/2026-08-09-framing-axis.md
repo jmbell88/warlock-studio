@@ -90,6 +90,67 @@ cause of all 17 refusals in the 2026-08-07 sweep. If it lowers
 refusal-rate finding and explicitly **not** as a quality finding. The two ranked
 the checkpoints oppositely once already.
 
-## Results
+## Results, 2026-08-09
 
-Not yet taken.
+Sweep `5f26623d12aa`, the re-baseline's `framing` axis. **`front_ortho` did not
+win. Nothing changes.**
+
+| Seed | `front_ortho` | baseline (`three_quarter`) | Pair |
+| --- | --- | --- | --- |
+| 11 | reject `broken` | accept | baseline |
+| 23 | reject `bad-shape` | *refused at the gate* | no pair |
+| 42 | reject `broken` | reject `bad-texture` | tie |
+| 77 | reject `broken` | accept | baseline |
+| 101 | accept | reject `broken` | **front_ortho** |
+
+**front_ortho 1, baseline 2, 1 tie, 1 unusable.** Accept rates 1/5 (20%) against
+the baseline's 2/4 (50%).
+
+### Verdict: null, and directionally against
+
+The rule required 5-0 for a win, and this is 1-2. Two things are worth separating
+in that.
+
+**It is a genuine null, not a floor effect.** The pre-registration named that
+distinction in advance precisely so it could not be blurred afterwards: both arms
+at zero accepts would have meant the axis was measured around a baseline with no
+headroom and therefore not measured at all. The baseline took 2 of 4. There was
+headroom, and `front_ortho` did not use it.
+
+**But the 5-0 bar was unsatisfiable here.** `baseline s23` was refused at the
+composition gate, leaving only four usable pairs, so a win was arithmetically
+impossible before the run began — see Amendment 1 in
+[`2026-08-09-rebaseline.md`](2026-08-09-rebaseline.md), which records the same
+defect across every axis in the run. **That does not rescue `front_ortho`**: it
+lost the pairs it had and accepted less than half as often. A bar that could not
+be met is a reason to distrust a *win*, not a reason to discount a loss.
+
+### Consequences, all of them negative
+
+- **`guidance.DEFAULT_FRAMING` stays `three_quarter`.** Unchanged.
+- **No `default_framing` is added to the `character` entry of `CATEGORIES`.** The
+  per-category machinery this document specified is not built, because there is
+  nothing to put in it.
+- **`pipelines.prompt.PROMPT_VERSION` stays at 4.** The corpus is not re-keyed,
+  and every vector recorded under version 4 goes on accumulating. This is the
+  outcome that costs nothing, which is exactly why the rule that produced it had
+  to be written before the numbers.
+- The provisional-flip machinery — the 10-unit confirm, the "provisional" first
+  line — is not needed and is not invoked.
+
+### The refusal clause did not fire
+
+`front_ortho`'s prompt fragment exists partly to suppress turnaround and
+prop-sheet layouts. The run's only two composition-gate refusals were `baseline
+s23` and `base_model=sdxl_cfg s11`; **no `front_ortho` unit was refused.** With
+5 units against 2 refusals corpus-wide there is no rate to compare, so this is
+recorded as "not measured" rather than as a refusal-rate finding in either
+direction.
+
+### What stays owed
+
+`front_ortho` remains in `guidance.FRAMINGS` as a selectable option. It is not
+removed on 4 usable pairs of one prompt — the finding is that it is not a better
+*default for characters on this subject*, which is narrower than "it is never
+useful". Re-asking it would want a baseline with a higher accept rate and a bar
+stated as a fraction of usable pairs.

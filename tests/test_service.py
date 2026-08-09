@@ -479,7 +479,7 @@ def test_prune_keeps_what_a_verdict_cannot_stand_in_for(svc):
     from warlock.service import verdicts as svc_verdicts
 
     keeper = _reviewable(svc)
-    svc_verdicts.record_verdict(svc, keeper, verdict="accept")
+    svc_verdicts.record_verdict(svc, keeper, grade=3)
     doomed = [_reviewable(svc) for _ in range(3)]
 
     outcome = svc_jobs.prune_jobs(svc, keep=0)
@@ -512,7 +512,7 @@ def test_prune_still_reclaims_a_rejected_mesh(svc):
     from warlock.service import verdicts as svc_verdicts
 
     job_id = _reviewable(svc)
-    svc_verdicts.record_verdict(svc, job_id, verdict="reject")
+    svc_verdicts.record_verdict(svc, job_id, grade=-3)
 
     outcome = svc_jobs.prune_jobs(svc, keep=0)
 
@@ -546,7 +546,7 @@ def test_the_per_asset_delete_is_still_the_escape_hatch(svc):
     from warlock.service import verdicts as svc_verdicts
 
     job_id = _reviewable(svc)
-    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+    svc_verdicts.record_verdict(svc, job_id, grade=3)
 
     svc_jobs.delete_job(svc, job_id)
 

@@ -15,6 +15,15 @@ from __future__ import annotations
 from . import icons
 
 # (key, label, icon). The key is what lands in ``AppState.mode``.
+# **The order is the grouping**, and it is contiguous on purpose: the two ways
+# in (Home, the Manual), then every workspace, then the three places that are
+# about the program and its shelves rather than about a piece of work. It was
+# not contiguous before -- Settings sat eighth, between Review and Plotter,
+# because it was appended when it was added and the positional Alt+digits were
+# already in people's hands, and Plotter and Packwright were then appended after
+# *it* for the same reason. Nothing is typed positionally any more, so the list
+# is free to say what it means, and ``GROUP_BREAKS`` (derived) collapses from
+# four breaks to the two real ones.
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
     ("manual", "Manual", icons.BOOK_OPEN),
@@ -23,9 +32,18 @@ MODES: list[tuple[str, str, str]] = [
     ("inker", "Inker", icons.PEN_TOOL),
     ("clay", "Clay", icons.RULER),
     ("review", "Review", icons.CIRCLE_CHECK),
-    ("settings", "Settings", icons.SETTINGS),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
+    ("settings", "Settings", icons.SETTINGS),
+    # Real modes rather than sub-views of Home. They were tiles on the chooser
+    # and a ``state.landing_view`` enum behind it, which is what a destination
+    # looks like when there is nowhere to put it; Home stopped being a tile
+    # grid, so they went where everything else already was. The two glyphs are
+    # the ones ``landing._SUBVIEW_ICONS`` already assigned them -- moved, not
+    # re-picked, because a screen the user has seen should not change its
+    # pictures for a refactor.
+    ("library", "Library", icons.FOLDER_OPEN),
+    ("profiles", "Profiles", icons.SLIDERS),
 ]
 
 # The modes that own a viewport or a form, and so have work in them. Home, the
@@ -45,7 +63,8 @@ VIEWPORT_MODES = frozenset({"2d", "3d"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
 # its own three-column workspace. Inker, Clay, Review, Plotter and Packwright
-# are the five, and the three categories partition KEYS exactly -- which
+# are the five; Library and Profiles are single panes, not workspaces, and join
+# Home/Manual/Settings there. The three categories partition KEYS exactly -- which
 # matters because ``_build_ui``'s dispatch ends in a bare ``else``, so an
 # unlisted mode would draw one of these rather than fail.
 WORKSPACE_MODES = frozenset({"inker", "clay", "review", "plotter", "packwright"})
@@ -53,70 +72,34 @@ WORKSPACE_MODES = frozenset({"inker", "clay", "review", "plotter", "packwright"}
 KEYS = tuple(key for key, _label, _icon in MODES)
 
 # After which segment indices the switch leaves a wider gap (UX.md Phase 2).
-# Ten flat segments said that Manual and Settings were peers of the five
+# A flat row of segments said that Manual and Settings were peers of the
 # creative workspaces; a gap says they are not, and says it in the *spacing*,
-# so ``MODES``' order is untouched and every Alt+N position is exactly what it
-# was.
+# so ``MODES``' order is untouched.
 #
-# **Derived from where the category changes, never written out.** The bullet
-# this comes from describes one gap, between the places (Home, Manual,
-# Settings) and the workspaces -- which is one gap only if the places are
-# contiguous, and in this list they are not: Settings sits eighth, between
-# Review and Plotter, because it was appended when it was added and the digits
-# were already in people's hands. So the honest rendering of "places are not
-# workspaces" against *this* order is a break at each transition, and the day
-# the order does group them the set collapses to a single break with nothing to
-# edit. A hand-written index would instead have put one gap in the middle of
-# the workspaces and called it a grouping.
+# **Derived from where the category changes, never written out** -- which is
+# what let the reorder above be a reorder and nothing else. While the places
+# were scattered through the list this rendered as four breaks, because that is
+# the honest picture of "places are not workspaces" against an order that did
+# not group them; now that ``MODES`` is contiguous it renders as the two real
+# ones, with nothing here to edit. A hand-written index would have had to be
+# rewritten, and until somebody did it would have put a gap in the middle of the
+# workspaces and called it a grouping.
 GROUP_BREAKS: frozenset[int] = frozenset(
     index
     for index, ((key, _l, _i), (nxt, _l2, _i2)) in enumerate(zip(MODES, MODES[1:], strict=False))
     if (key in WORK_MODES) != (nxt in WORK_MODES)
 )
 
-# Alt+1..9 and Alt+0, positionally: the nth segment of the switch is the nth
-# digit, so the binding is the picture on screen rather than a second table to
-# keep in agreement with it. The tenth slot is Alt+0 for the reason every
-# application with ten of anything uses 0 for the tenth -- see
-# :func:`digit_key_label`, which is where that spelling lives so the palette
-# hint and the shortcuts popup cannot disagree about it.
-#
-# **Alt, not Ctrl.** Mode switching is the one binding that has to fire in
-# every mode -- including Inker and Clay, whose ``handle_key`` consumes
-# everything unconditionally -- so it is checked before them, which means it
-# takes whatever it names away from them for good. Inker already binds Ctrl+0
-# and Ctrl+1 to fit and 100% zoom, and Clay's axis views want Ctrl+1/3/7, so
-# Ctrl+digit was a key the workspace modes were already using. Alt+digit is
-# used by nothing here.
-def mode_for_digit(digit: int) -> str | None:
-    """``1`` -> ``"home"``, ``10`` -> the tenth mode; ``None`` past the end.
+# **There is no positional Alt+digit binding, and there deliberately is not.**
+# It existed while there were ten modes and ten digits, on the argument that the
+# binding was the picture on screen rather than a second table. That argument
+# stopped holding the moment Library and Profiles became modes: twelve segments
+# against ten digits means either two modes with no key, or a second table
+# saying which two -- and the second table is exactly what the positional
+# scheme existed to avoid. So mode switching is a mouse action and a palette
+# (Ctrl+K) action, and the digits go back to the workspace modes that were
+# already reaching for them.
 
-    Positional and 1-based throughout. That 10 is typed as ``0`` is a *keyboard*
-    fact and lives at the keyboard layer, not here -- ``mode_for_digit(0)`` is
-    still None, because there is no zeroth segment.
-    """
-    if 1 <= digit <= len(MODES):
-        return MODES[digit - 1][0]
-    return None
-
-
-def digit_key_label(digit: int) -> str:
-    """What the user actually presses for slot ``digit``: ``"0"`` for the tenth.
-
-    One spelling, in one place. The palette's hint and the shortcuts popup both
-    render this, and a second copy is how one of them comes to advertise
-    "Alt+10" -- a key no keyboard has.
-    """
-    return "0" if digit == 10 else str(digit)
-
-
-def digit_for_mode(key: str) -> int | None:
-    """The inverse, for the shortcut list. ``None`` for a mode that is not in
-    the switch (there is none today; ``QUIT`` is not a mode)."""
-    for index, (mode_key, _label, _icon) in enumerate(MODES, start=1):
-        if mode_key == key:
-            return index
-    return None
 
 # Deliberately *not* in MODES. Quitting is an action, not a place: it never
 # lands in ``AppState.mode``, it has no pane, and the three categories above

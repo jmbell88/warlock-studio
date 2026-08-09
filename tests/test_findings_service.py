@@ -10,6 +10,7 @@ from warlock.bench import findings as bench_findings
 from warlock.service import findings as svc_findings
 from warlock.service import verdicts as svc_verdicts
 from warlock.service.validation import DERIVED_PARAMS
+from warlock.vectors import BINARY_GRADES
 
 
 def test_the_vector_is_the_allowlist_and_nothing_else():
@@ -60,10 +61,21 @@ def test_the_key_does_not_depend_on_dict_order():
 # --- aggregation -------------------------------------------------------------
 
 
-def _judged(svc, verdict, reasons=(), source="human", **params):
+def _judged(svc, verdict, reasons=(), source="human", grade=None, **params):
+    """A mesh verdict, named by the word its grade derives to.
+
+    The helper takes the *word* deliberately: over the +-3 the corpus is
+    backfilled to, "accept" and "grade 3" are the same row, so every assertion
+    below about accept rates is the one it always was. Pass ``grade=`` where the
+    point is the scale rather than the cut.
+    """
     job_id = svc.store.create("image", "a chest", params, stage="model", status="done")
     svc_verdicts.record_verdict(
-        svc, job_id, verdict=verdict, reasons=reasons, source=source
+        svc,
+        job_id,
+        grade=BINARY_GRADES[verdict] if grade is None else grade,
+        reasons=reasons,
+        source=source,
     )
     return job_id
 
@@ -81,6 +93,10 @@ def test_a_verdict_credits_every_param_in_its_vector(svc):
         "accepts": 1,
         "accept_rate": 0.5,
         "wilson_low": svc_findings.wilson_low(1, 2),
+        "graded_n": 2,
+        "mean_grade": 0.0,
+        "grades": {"-3": 1, "3": 1},
+        "tags": {"good": [], "bad": [["holes", 1]]},
         "sources": {"human": {"accept": 1, "reject": 1}},
         "top_reasons": [["holes", 1]],
     }
@@ -110,7 +126,7 @@ def test_an_image_label_never_reaches_the_mesh_findings(svc):
     job_dir = svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "reference.png").write_bytes(b"png-not-really")
-    svc_verdicts.record_verdict(svc, job_id, verdict="reject", reasons=("holes",))
+    svc_verdicts.record_verdict(svc, job_id, grade=-3, reasons=("holes",))
     # The same job's *blank* judged the opposite way: a fine image to
     # reconstruct, which happened to reconstruct badly. Both are true.
     svc_verdicts.record_verdict(svc, job_id, verdict="accept", stage="blank")
@@ -121,6 +137,10 @@ def test_an_image_label_never_reaches_the_mesh_findings(svc):
         "accepts": 0,
         "accept_rate": 0.0,
         "wilson_low": svc_findings.wilson_low(0, 1),
+        "graded_n": 1,
+        "mean_grade": -3.0,
+        "grades": {"-3": 1},
+        "tags": {"good": [], "bad": [["holes", 1]]},
         "sources": {"human": {"accept": 0, "reject": 1}},
         "top_reasons": [["holes", 1]],
     }
@@ -164,7 +184,7 @@ def test_a_mesh_verdict_still_needs_a_finished_job(svc):
     job_id = svc.store.create("image", "a chest", {}, stage="model", status="error")
 
     with pytest.raises(Invalid):
-        svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+        svc_verdicts.record_verdict(svc, job_id, grade=3)
 
 
 def test_a_verdict_names_a_stage_the_vocabulary_knows(svc):
@@ -173,12 +193,14 @@ def test_a_verdict_names_a_stage_the_vocabulary_knows(svc):
     job_id = _judged(svc, "accept")
 
     with pytest.raises(Invalid):
-        svc_verdicts.record_verdict(svc, job_id, verdict="accept", stage="mesh")
+        svc_verdicts.record_verdict(svc, job_id, grade=3, stage="mesh")
 
 
 def _judged_about(svc, prompt, verdict, source="human", **params):
     job_id = svc.store.create("image", prompt, params, stage="model", status="done")
-    svc_verdicts.record_verdict(svc, job_id, verdict=verdict, reasons=(), source=source)
+    svc_verdicts.record_verdict(
+        svc, job_id, grade=BINARY_GRADES[verdict], reasons=(), source=source
+    )
     return job_id
 
 
@@ -212,7 +234,9 @@ def test_the_marginals_are_also_broken_out_per_subject(svc):
     # Everything ``bench.findings.hint`` reads, and nothing else: a scoped
     # bucket exists per distinct prompt, so the two fields only the Review
     # pane's whole-vector view uses would be paid for once per subject.
-    assert set(rogue) == {"n", "accepts", "accept_rate", "wilson_low"}
+    assert set(rogue) == {
+        "n", "accepts", "accept_rate", "wilson_low", "graded_n", "mean_grade"
+    }
 
 
 def test_a_verdict_with_no_prompt_joins_no_subject_scope(svc):
@@ -264,8 +288,8 @@ def test_vectors_are_ranked_and_carry_their_jobs(svc):
 def test_an_ai_source_sits_beside_the_human_one(svc):
     job_id = svc.store.create("image", "a chest", {"platform": "pc"},
                               stage="model", status="done")
-    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
-    svc_verdicts.record_verdict(svc, job_id, verdict="reject", source="ai:demo")
+    svc_verdicts.record_verdict(svc, job_id, grade=3)
+    svc_verdicts.record_verdict(svc, job_id, grade=-3, source="ai:demo")
 
     entry = svc_findings.aggregate(svc.store)["params"]["platform"]["pc"]
     assert entry["n"] == 2
@@ -290,11 +314,13 @@ def test_the_written_file_is_what_the_existing_readers_expect(svc):
     assert path == svc.config.bench_dir / "findings.json"
 
     doc = bench_findings.load(path)
-    assert bench_findings.hint(doc, "lora_weight", 0.9) == "accept 6/7 (49%+)"
+    # v4: the count is the derived usable cut, so the noun says so, and the mean
+    # of six +3s and one -3 rides along.
+    assert bench_findings.hint(doc, "lora_weight", 0.9) == "usable 6/7 (49%+) · avg +2.1"
     # A float32 slider value still finds the bucket.
     assert (
         bench_findings.hint(doc, "lora_weight", float(np.float32(0.9)))
-        == "accept 6/7 (49%+)"
+        == "usable 6/7 (49%+) · avg +2.1"
     )
     # A thin bucket is noise, not a finding.
     assert bench_findings.hint(doc, "lora_weight", 0.6) is None

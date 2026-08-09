@@ -9,9 +9,11 @@ Two things here are deliberate and easy to undo.
 
 **The mode commands are derived from** :data:`.modes.MODES`, not written out.
 A palette is a second index of everything the app can do, and a hand-written
-one is a second index that drifts -- an eleventh mode would gain a switch
-segment and an Alt+digit binding from :func:`.modes.mode_for_digit`, and be
-missing from the one surface whose entire job is telling the user what exists.
+one is a second index that drifts -- a thirteenth mode would gain a switch
+segment and be missing from the one surface whose entire job is telling the
+user what exists. It is also, since the positional Alt+digit bindings went
+away, the *only* keyboard route to a mode, which is what turns the derivation
+from tidiness into a requirement.
 For the same reason what a mode command *does* is :func:`.state.set_mode` and
 not four lines of its own: that copy existed, and it had already drifted.
 
@@ -156,25 +158,16 @@ def _selected(ctx: Any) -> Any:
 
 
 def _mode_commands() -> list[Command]:
-    """One per switch segment, in the switch's order, carrying its own digit.
+    """One per switch segment, in the switch's order.
 
-    Derived rather than listed -- see the module docstring.
+    Derived rather than listed -- see the module docstring. No hint: there is
+    no per-mode key to advertise any more, and a hint naming Ctrl+K would be
+    the palette telling you how to open the palette you are looking at.
     """
-    out = []
-    for key, label, _icon in modes.MODES:
-        digit = modes.digit_for_mode(key)
-        out.append(
-            Command(
-                key=f"go:{key}",
-                label=f"Go to {label}",
-                group="Go to",
-                run=_go(key),
-                # ``digit_key_label``, not the digit: the tenth slot is
-                # typed as 0, and "Alt+10" is a key no keyboard has.
-                hint=f"Alt+{modes.digit_key_label(digit)}" if digit else "",
-            )
-        )
-    return out
+    return [
+        Command(key=f"go:{key}", label=f"Go to {label}", group="Go to", run=_go(key))
+        for key, label, _icon in modes.MODES
+    ]
 
 
 def commands(ctx: Any) -> list[Command]:

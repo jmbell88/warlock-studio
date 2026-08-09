@@ -1,4 +1,27 @@
-"""Accept/Reject verdicts on a job, and the one function that records them.
+"""Verdicts on a job -- a graded mesh judgement or a binary image label -- and
+the one function that records either.
+
+**A mesh verdict is a grade, not a bit.** An integer -5..+5, where +5 is
+game-useable as-is and -5 is nothing recoverable. The binary corpus it replaces
+failed at its own purpose: 3 accepts against 81 rejects on 2026-08-07, in which a
+slab with no geometry, a smeared texture and a mesh a modeller would fix in five
+minutes are all the same row. A bit can say a mesh failed and can never say how
+close it came. The scale, its +-3 backfill and its ``grade >= +3`` usable cut are
+argued in ``docs/measurements/2026-08-09-grade-scale.md``.
+
+**``verdict`` survives as a derived column with exactly one writer.** This
+function is that writer, via ``vectors.verdict_for_grade``, which is what leaves
+prune retention, the judge's label reads, the ``latest_verdicts`` SQL and every
+findings-v3 reader unchanged while there is still only one place the cut lives. A
+caller may not pass a ``verdict`` for a mesh at all -- two ways to say one thing
+is how they come to disagree.
+
+**Tags are optional at every grade.** The five bad spellings are the old
+``REASONS`` tuple, frozen: the stored corpus carries those exact strings in the
+``reasons`` column and there is no alias table, so a rename would not migrate
+evidence but split it. What changed is the concept -- from "reasons a reviewer
+rejected" to "what is true of this mesh" -- which is why a good tag on a negative
+grade, or a bad one on a positive, is legal rather than a contradiction to refuse.
 
 Verdicts used to be an append-only JSONL file beside a sweep run directory,
 keyed by a unit key that only meant anything inside that run. They are rows
@@ -43,18 +66,42 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from ..vectors import prompt_hash
+from ..vectors import (
+    BAD_TAGS,
+    BINARY_GRADES,
+    GOOD_TAGS,
+    GRADE_MAX,
+    GRADE_MIN,
+    TAGS,
+    USABLE_GRADE,
+    prompt_hash,
+    verdict_for_grade,
+)
 from . import findings
 from .core import WarlockService
 from .errors import Invalid
 
-VERDICTS = ("accept", "reject")
+__all__ = [
+    "BAD_TAGS",
+    "BINARY_GRADES",
+    "GOOD_TAGS",
+    "GRADE_MAX",
+    "GRADE_MIN",
+    "IMAGE_NAMES",
+    "IMAGE_STAGES",
+    "SOURCE_HUMAN",
+    "STAGES",
+    "TAGS",
+    "USABLE_GRADE",
+    "VERDICTS",
+    "record_verdict",
+    "verdict_for_grade",
+]
 
-# Rejection reasons a reviewer picks from -- short and mesh/render-specific,
-# not free text, so the findings table can tally them. Meaningful on reject
-# only, but not refused on accept: a reviewer who mis-clicks a reason before
-# switching to Accept should not be blocked by it.
-REASONS = ("holes", "bad-shape", "bad-texture", "wrong-style", "broken")
+# The two values the derived ``verdict`` column ever takes, and the two an image
+# label is recorded with directly. A mesh verdict no longer names one at the
+# door: it names a grade, and ``verdict_for_grade`` derives this.
+VERDICTS = ("accept", "reject")
 
 SOURCE_HUMAN = "human"
 
@@ -77,21 +124,63 @@ def record_verdict(
     svc: WarlockService,
     job_id: str,
     *,
-    verdict: str,
+    verdict: str | None = None,
+    grade: int | None = None,
     reasons: Iterable[str] = (),
     source: str = SOURCE_HUMAN,
     stage: str = "model",
 ) -> dict[str, Any]:
-    """File one verdict against a job, with a snapshot of its config vector."""
-    if verdict not in VERDICTS:
-        raise Invalid(f"verdict must be one of {list(VERDICTS)}", field="verdict")
+    """File one verdict against a job, with a snapshot of its config vector.
+
+    **The two stages take different arguments, and each refuses the other's.**
+    A mesh verdict names a ``grade`` and the ``verdict`` column is derived from
+    it; an image label names a ``verdict`` and keeps ``grade`` NULL. Passing the
+    wrong one is an ``Invalid`` rather than a silent preference, because there is
+    exactly one door in and that is what stops the derived column from ever
+    disagreeing with the grade it was derived from.
+    """
     if stage not in STAGES:
         raise Invalid(f"stage must be one of {list(STAGES)}", field="stage")
+
+    if stage in IMAGE_STAGES:
+        # Binary, permanently: these feed binary logistic probes, so a grade
+        # would be thresholded straight back to a bit, and the two-key loop is
+        # what makes a hundred-image pass viable at all.
+        if grade is not None:
+            raise Invalid(
+                f"a {stage} label is binary; it takes a verdict, not a grade", field="grade"
+            )
+        if verdict not in VERDICTS:
+            raise Invalid(f"verdict must be one of {list(VERDICTS)}", field="verdict")
+    else:
+        # A mesh verdict is graded. Refusing a passed ``verdict`` outright rather
+        # than checking it against the derivation: two ways to say one thing is
+        # how they come to disagree, and the caller has no business asserting the
+        # cut.
+        if verdict is not None:
+            raise Invalid(
+                "a mesh verdict is graded; pass grade, not verdict", field="verdict"
+            )
+        if not isinstance(grade, int) or isinstance(grade, bool):
+            # ``bool`` is an ``int`` in Python and ``True`` would file a +1.
+            raise Invalid(
+                f"grade must be an integer in {GRADE_MIN}..{GRADE_MAX}", field="grade"
+            )
+        if not GRADE_MIN <= grade <= GRADE_MAX:
+            raise Invalid(
+                f"grade must be in {GRADE_MIN}..{GRADE_MAX}, not {grade}", field="grade"
+            )
+        verdict = verdict_for_grade(grade)
+
+    # Tags are legal at *every* grade, which is the change of meaning migration
+    # 10 came with: these used to be reasons a reviewer rejected, and are now
+    # descriptions of what is true of the mesh. One namespace, because the two
+    # vocabularies are disjoint strings.
     reason_list = [str(r) for r in reasons]
-    unknown = [r for r in reason_list if r not in REASONS]
+    unknown = [r for r in reason_list if r not in TAGS]
     if unknown:
         raise Invalid(
-            f"unknown reason(s) {unknown}; expected one of {list(REASONS)}", field="reasons"
+            f"unknown tag(s) {unknown}; expected one of {list(TAGS)}", field="reasons"
         )
     if not source:
         raise Invalid("source must be non-empty", field="source")
@@ -128,11 +217,13 @@ def record_verdict(
         seed=seed if isinstance(seed, int) and not isinstance(seed, bool) else None,
         prompt_hash=prompt_hash(job.get("prompt")),
         stage=stage,
+        grade=grade,
     )
     return {
         "id": row_id,
         "job": job_id,
         "verdict": verdict,
+        "grade": grade,
         "reasons": reason_list,
         "stage": stage,
     }

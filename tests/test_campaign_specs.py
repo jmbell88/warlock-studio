@@ -218,6 +218,21 @@ def test_the_prop_corpus_carries_one_asymmetric_humanoid(svc):
     assert "right" in figure.prompt and "left" in figure.prompt
 
 
+def test_the_prop_corpus_runs_at_the_re_baselines_strongest_marginals(svc):
+    """`TODO.md` §2's re-baseline named no winner on any axis and could not have
+    -- ``baseline s23`` was refused at the gate, leaving four usable matched
+    pairs against a bar written as 5-0. Choosing anyway is legitimate here and
+    would not be in a finding: a tier qualification needs a configuration that
+    produces meshes worth keeping, not the best one. This pins that the choice
+    is the *measured* strongest marginal rather than drifting back to a guess."""
+    module = _campaign("sweep_props")
+
+    assert module.WINNER["base_model"] == "playground"  # 4/5
+    assert module.WINNER["style_lora"] == "render3d"  # 3/4
+    # front_ortho lost 1-2 and accepted 1/5 against the baseline's 2/4.
+    assert module.WINNER["framing"] == "three_quarter"
+
+
 def test_the_prop_corpus_states_its_framing_rather_than_inheriting_it(svc):
     """``framing`` is an *axis* in the run next door, so its value here is not
     something a later reader can recover from ``DEFAULT_FRAMING`` -- that
@@ -226,3 +241,55 @@ def test_the_prop_corpus_states_its_framing_rather_than_inheriting_it(svc):
 
     for plan in module.PLANS:
         assert plan.base.get("framing"), plan.label
+
+
+# --- refilling a sweep that lost units ---------------------------------------
+
+
+def test_a_refill_re_queues_a_cancelled_unit_but_never_a_refusal(svc):
+    """A long sweep loses units to a cancel or an app shutdown, and neither is a
+    measurement. A composition-gate refusal *is* one -- it writes an observation
+    carrying ``refused_<code>``, and the whole reason the worker records a
+    terminal ``error`` is that the 2026-08-07 sweep's 17 refusals wrote nothing
+    and so flattered every checkpoint that fails most often. Re-rolling one
+    would replace a real negative with whatever the next seed drew."""
+    import sweep_refill
+
+    plan = _campaign("sweep_confirm").PLANS[0]
+    result = sweeps_mod.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    svc.store.set_status(units[0]["id"], "cancelled")
+    svc.store.set_status(units[1]["id"], "error", "interrupted by shutdown")
+    svc.store.set_status(
+        units[2]["id"], "error", "There is more than one object in the reference."
+    )
+
+    lost, refused = sweep_refill.lost_units(svc, result["id"])
+
+    assert units[0]["sweep_unit"] in lost
+    assert units[1]["sweep_unit"] in lost
+    assert units[2]["sweep_unit"] in refused
+    assert units[2]["sweep_unit"] not in lost
+
+
+def test_a_refill_plans_from_the_sweeps_own_stored_spec(svc):
+    """Never a restatement of the settings. ``rerun_job`` cannot serve here --
+    it copies params only, deliberately, so ``sweep_id`` can never leak onto a
+    reroll -- which means a refill has to plan the unit itself, and the only
+    honest source for that is the spec the sweep was created with."""
+    import sweep_refill
+
+    plan = _campaign("sweep_rebaseline").PLANS[0]
+    result = sweeps_mod.create_sweep(svc, plan)
+
+    recovered = sweep_refill.plan_from_spec(svc.store.get_sweep(result["id"]))
+
+    assert recovered.base == plan.base
+    assert recovered.seeds == plan.seeds
+    assert {a.param for a in recovered.axes} == {a.param for a in plan.axes}
+    assert recovered.stage == plan.stage
+    # And it therefore expands to exactly the same units, which is what lets a
+    # refilled label be looked up rather than parsed.
+    assert [sweeps_mod.unit_label(u) for u in sweeps_mod.expand(recovered)] == [
+        sweeps_mod.unit_label(u) for u in sweeps_mod.expand(plan)
+    ]

@@ -114,6 +114,65 @@ def _seed_tile(app, png: Path) -> None:
     ctx.state.select(job_id)
 
 
+def _seed_review(app) -> None:
+    """A finished mesh in the recent-unreviewed bucket, open in Review.
+
+    Review's empty state shows none of the verdict panel: no grade row, no tag
+    toggles, no recorded line. That is the same gap ``--seed`` closes for Inker
+    and Clay, and it matters more here because the grade row is eleven buttons
+    wrapping inside a 300 px sidebar -- ``same_line`` past the content region
+    clips rather than wrapping, which is the bug that once hid seven controls,
+    and it is invisible to the smoke suite because that asserts only that a pane
+    builds.
+
+    Writes into whatever data directory the process was pointed at, so run it
+    against a throwaway ``WARLOCK_DATA_DIR`` rather than a real library.
+    """
+    from warlock.studio import review_mode
+
+    ctx = app.app_ctx
+    job_id = ctx.svc.store.create(
+        "image", "a wooden chest", {"lora_weight": 0.9, "seed": 42},
+        stage="model", status="done",
+    )
+    ctx.svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    ctx.cache.invalidate()
+    ctx.cache.tick()
+    # Through the scan the Rescan button runs, rather than by building units by
+    # hand: a second way to populate this list is a second thing to keep true.
+    # It is a *task*, so frames have to be pumped until it lands -- and the
+    # staged tag has to be set after that, because the scan's completion opens
+    # the bucket and opening disarms. That is the product behaviour (a rescan
+    # moves you off the unit, so what you had staged for it goes with it), so
+    # the harness waits rather than the rule bending.
+    review_mode.scan(ctx)
+
+
+def _stage_review_tag(app) -> None:
+    """Wait for Review's scan, open the bucket and stage one tag.
+
+    Called after the mode switch and immediately before the capture, because
+    both halves of that timing are load-bearing: the scan is a task and the
+    units do not exist until it lands, and the scan's completion re-opens the
+    bucket, which drops anything staged beforehand.
+
+    What it buys is the one frame where the *selected* toggle is on screen --
+    the branch that draws the accent fill, and so the branch that looks
+    identical to every other button if it is ever pushed wrongly.
+    """
+    from warlock.studio import review_mode
+
+    ctx = app.app_ctx
+    state = review_mode.ensure(ctx)
+    for _ in range(SETTLE_FRAMES):
+        app.frame(1.0 / 60.0)
+        if not state.scanning and state.units:
+            break
+    if not state.units:
+        return
+    review_mode.toggle_tag(state, "sharp-detail")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
@@ -132,6 +191,12 @@ def main() -> int:
         "--tile-preview",
         action="store_true",
         help="turn the 2D viewport's tiled preview on",
+    )
+    ap.add_argument(
+        "--review",
+        action="store_true",
+        help="seed a finished mesh and open Review on it, so the verdict panel "
+             "draws its grade row and tag toggles rather than its empty state",
     )
     ap.add_argument(
         "--floating",
@@ -182,6 +247,8 @@ def main() -> int:
         _seed(app)
     if args.tile:
         _seed_tile(app, args.tile)
+    if args.review:
+        _seed_review(app)
     app.app_ctx.state.tile_preview = bool(args.tile_preview)
     try:
         for name in args.themes.split(","):
@@ -190,6 +257,13 @@ def main() -> int:
             print(f"{name}:", flush=True)
             for mode in MODES:
                 app.app_ctx.state.mode = mode
+                if args.review and mode == "review":
+                    # *After* the switch, because entering a mode starts a
+                    # rescan and a scan landing re-opens the bucket -- which
+                    # correctly drops anything staged against the unit that was
+                    # on screen. Seeding transient per-unit state before a loop
+                    # over every mode therefore cannot survive to its capture.
+                    _stage_review_tag(app)
                 _capture(app, args.out / f"{name}-{mode}.png")
             if args.floating:
                 # Over 3D rather than over Home: the backdrop is what is being

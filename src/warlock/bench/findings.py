@@ -13,8 +13,14 @@ marginals keyed by ``str(value)``, wilson-ranked ``vectors``, matched-pair
 Strings here render through imgui's Inter atlas, which is baked with the
 default Basic-Latin + Latin-1 glyph range: the middle dot (U+00B7) is safe,
 but anything past U+00FF (a real ``>=`` sign, a Greek delta) would come out
-as the missing-glyph box -- hence "41%+" and "worst-hole" rather than the
+as the missing-glyph box -- hence "41%+", "worst-hole" and "x4" rather than the
 typographically nicer spellings.
+
+Grades (findings v4) are rendered wherever the document carries them and
+omitted, to the character, where it does not: a v3 file keeps saying
+"accept 6/8 (41%+)" and a v4 one says "usable 6/8 (41%+) · avg +2.6". The
+absence of an average is never a zero -- zero is a real grade on this scale
+("no opinion either way"), so it cannot also stand for "nobody has said".
 """
 
 from __future__ import annotations
@@ -136,10 +142,18 @@ def hint(
         if entry is None:
             return None
         if entry.get("n", 0) >= min_n:
-            base = f"accept {entry.get('accepts', 0)}/{entry['n']}"
+            # "usable" once the file carries grades, "accept" when it does not:
+            # the count is the same derived cut either way, but on a v4 file
+            # there is a scale behind it and the word should say which question
+            # was answered. A v3 file renders the v3 string to the character.
+            average = _mean_grade(entry)
+            noun = "accept" if average is None else "usable"
+            base = f"{noun} {entry.get('accepts', 0)}/{entry['n']}"
             bound = entry.get("wilson_low")
             if isinstance(bound, (int, float)) and not isinstance(bound, bool):
                 base += f" ({round(bound * 100)}%+)"
+            if average is not None:
+                base += f" · avg {average}"
             return base
         return _metrics_hint(entry.get("metrics"), min_n)
 
@@ -154,6 +168,71 @@ def hint(
             return f"{line} · this subject"
     line = rendered(pooled)
     return None if line is None else f"{line} · all subjects"
+
+
+def _mean_grade(entry: Any) -> str | None:
+    """A bucket's mean grade, rendered signed -- ``"+2.6"``, ``"-1.4"`` -- or
+    ``None`` when the bucket carries none.
+
+    ``None`` covers three different situations on purpose and they are the same
+    situation to a reader: a v3 file written before grades existed, a v4 bucket
+    holding only image labels, and a bucket nobody has graded. In all three
+    there is no average to state, and the line simply does not carry one rather
+    than carrying a zero -- zero is a real grade on this scale ("no opinion
+    either way"), so it cannot also stand for "nobody has said".
+
+    Always signed, including ``"+0.0"``: an unsigned ``0.0`` beside grades that
+    are otherwise written ``+3`` reads as a different kind of number.
+    """
+    if not isinstance(entry, dict):
+        return None
+    mean = entry.get("mean_grade")
+    if not isinstance(mean, (int, float)) or isinstance(mean, bool):
+        return None
+    return f"{float(mean):+.1f}"
+
+
+def tag_line(entry: Any) -> str | None:
+    """A bucket's tag tallies on one muted line -- ``"good: good-texture x4,
+    on-style x2 · bad: holes x3"`` -- or ``None`` when nothing is tagged.
+
+    Top three per polarity, which is what keeps the line one line. The polarity
+    split is read off the document rather than derived here: the writer splits by
+    membership in its own vocabulary, which is what lets this module stay pure
+    stdlib with no ``warlock`` import.
+
+    ``x`` rather than a multiplication sign for the reason every other string
+    here is ASCII: the atlas is Basic-Latin + Latin-1, and U+00D7 is inside it
+    but reads as a dimension separator. The middle dot is the one non-ASCII
+    character used, as everywhere else in this module.
+    """
+    if not isinstance(entry, dict):
+        return None
+    tags = entry.get("tags")
+    if not isinstance(tags, dict):
+        return None
+    parts: list[str] = []
+    for polarity in ("good", "bad"):
+        rendered = _tag_group(tags.get(polarity))
+        if rendered:
+            parts.append(f"{polarity}: {rendered}")
+    return " · ".join(parts) if parts else None
+
+
+def _tag_group(pairs: Any) -> str:
+    if not isinstance(pairs, list):
+        return ""
+    shown: list[str] = []
+    for pair in pairs:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        tag, count = pair
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            continue
+        shown.append(f"{tag} x{count}")
+        if len(shown) == 3:
+            break
+    return ", ".join(shown)
 
 
 def _reading(metrics: dict[str, Any], key: str, min_n: int) -> tuple[float, int] | None:
@@ -265,7 +344,8 @@ def metrics_line(metrics: Any) -> str | None:
 
 
 def vector_line(entry: Any) -> str:
-    """A ranked recipe's headline -- ``"80% of 20 (61%+)"``.
+    """A ranked recipe's headline -- ``"usable 80% of 20 (61%+) · avg +2.6"``,
+    or ``"80% of 20 (61%+)"`` on a file written before grades existed.
 
     The bound is *omitted* rather than defaulted to zero when the file does not
     carry one. A v1 findings.json never computed it and ranked by the raw rate,
@@ -282,10 +362,17 @@ def vector_line(entry: Any) -> str:
     rate = entry.get("accept_rate")
     ok = isinstance(rate, (int, float)) and not isinstance(rate, bool)
     percent = round(float(rate) * 100) if ok else 0
-    line = f"{percent}% of {n}"
+    # The rate is the derived usable cut on a graded file, and saying so is the
+    # point: "80%" alone under a grade scale invites the reader to think it is
+    # the scale. On a legacy file there is no scale and the bare figure is what
+    # every existing Review pane already shows.
+    average = _mean_grade(entry)
+    line = f"{percent}% of {n}" if average is None else f"usable {percent}% of {n}"
     bound = entry.get("wilson_low")
     if isinstance(bound, (int, float)) and not isinstance(bound, bool):
         line += f" ({round(bound * 100)}%+)"
+    if average is not None:
+        line += f" · avg {average}"
     return line
 
 
@@ -368,6 +455,28 @@ def _entry_lines(param: str, entry: dict[str, Any], min_pairs: int) -> list[str]
             lines.append(f"    {label} {shown} over {delta_pairs} paired runs")
         return lines
 
+    def grade_gap(flip: bool) -> str:
+        """How much better the winner graded, winner-minus-loser.
+
+        The stored mean is a-minus-b like every other delta here, so it takes
+        the same re-orientation ``delta_lines`` does -- a header leading with the
+        winner and a signed number oriented the other way is the failure that
+        machinery exists to prevent, and it would be less visible here because a
+        grade gap is plausible in either direction.
+
+        Omitted entirely on a file with no graded pairs, rather than shown as
+        zero: a zero mean is a real reading (the two sides graded the same on
+        average) and cannot also mean nobody graded them.
+        """
+        stat = entry.get("grade_delta")
+        if not isinstance(stat, dict):
+            return ""
+        mean = stat.get("mean")
+        if not isinstance(mean, (int, float)) or isinstance(mean, bool):
+            return ""
+        shown = -float(mean) if flip else float(mean)
+        return f", avg {shown:+.1f} grade"
+
     def plural(count: int, noun: str) -> str:
         return f"{count} {noun}{'' if count == 1 else 's'}"
 
@@ -380,11 +489,12 @@ def _entry_lines(param: str, entry: dict[str, Any], min_pairs: int) -> list[str]
             header = f"{param}: {a} vs {b} - tied over {pairs} matched pairs {breadth}"
             return [header, *delta_lines(False)]
         winner, loser = (a, b) if a_wins > b_wins else (b, a)
+        flip = b_wins > a_wins
         header = (
             f"{param}: {winner} beat {loser} in {max(a_wins, b_wins)} of {pairs}"
-            f" matched pairs {breadth}"
+            f" matched pairs{grade_gap(flip)} {breadth}"
         )
-        return [header, *delta_lines(b_wins > a_wins)]
+        return [header, *delta_lines(flip)]
     if raw_deltas:
         # The "a vs b" header names a first, so the stored orientation stands.
         return [f"{param}: {a} vs {b} - machine evidence only", *delta_lines(False)]

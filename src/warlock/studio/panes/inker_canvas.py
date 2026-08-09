@@ -159,9 +159,10 @@ def _recent_popup(ctx: Any, state: Any) -> None:
 
     if not imgui.begin_popup("inker-recent"):
         return
-    if not state.recent:
+    found = inker_mode.recent_paths(ctx)
+    if not found:
         widgets.muted("Nothing opened yet.")
-    for path in list(state.recent):
+    for path in found:
         # The full path in the id, not just the label: two files with the same
         # basename in different directories are an ordinary thing to have open,
         # and one imgui id between them is one row.
@@ -186,10 +187,11 @@ def _empty(ctx: Any, state: Any) -> None:
     imgui.dummy((0, sp(8)))
     if imgui.button("Open a file...", (sp(240), 0)):
         inker_mode.ask_open(ctx)
-    if state.recent:
+    found = inker_mode.recent_paths(ctx)
+    if found:
         imgui.dummy((0, sp(16)))
         widgets.section("recent")
-        for path in list(state.recent)[:6]:
+        for path in found[:6]:
             if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
                 inker_mode.open_path(ctx, Path(path))
 

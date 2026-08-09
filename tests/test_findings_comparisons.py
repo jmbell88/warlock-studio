@@ -8,12 +8,20 @@ from warlock.service import verdicts as svc_verdicts
 
 
 def _v(store, job_id, vector, verdict="accept", *, sweep=None, seed=42,
-       source="human", prompt="p1"):
+       source="human", prompt="p1", grade=None):
+    """A verdict row straight into the store.
+
+    ``grade`` defaults to ``None`` on purpose rather than to the backfill: these
+    rows then look exactly like the pre-migration-10 corpus, so every assertion
+    below is also a test of ``_grade_of``'s ``BINARY_GRADES`` fallback. Pass one
+    where the graded semantics are the point.
+    """
     store.add_verdict(
         job_id, source=source, verdict=verdict,
         reasons=["holes"] if verdict == "reject" else [],
         vector={**vector, "stage": "model"},
         sweep_id=sweep, sweep_unit="", seed=seed, prompt_hash=prompt,
+        grade=grade,
     )
 
 
@@ -44,7 +52,7 @@ def test_vectors_rank_by_the_lower_bound_not_the_raw_rate(store):
     _v(store, "b19", {"lora_weight": 0.9}, "reject")
 
     doc = svc_findings.aggregate(store)
-    assert doc["version"] == 3
+    assert doc["version"] == 4
     top = doc["vectors"][0]
     assert top["vector"]["lora_weight"] == 0.9
     assert (top["accept_rate"], top["wilson_low"]) == (0.95, 0.764)
@@ -141,8 +149,8 @@ def test_pairs_survive_the_sweep_and_job_deletion(svc):
         stage="model", status="done",
         sweep_id="sw1", sweep_unit="lora_weight=0.6 s42",
     )
-    svc_verdicts.record_verdict(svc, base, verdict="reject", reasons=["holes"])
-    svc_verdicts.record_verdict(svc, unit, verdict="accept")
+    svc_verdicts.record_verdict(svc, base, grade=-3, reasons=["holes"])
+    svc_verdicts.record_verdict(svc, unit, grade=3)
     svc.store.delete(base)
     svc.store.delete(unit)
     svc.store.delete_sweep("sw1")
@@ -248,3 +256,71 @@ def test_aggregate_skips_rows_with_malformed_json_payloads(store):
     assert doc["params"] == {}
     assert doc["vectors"] == []
     assert doc["comparisons"] == {}
+
+
+# --- grades in comparisons ---------------------------------------------------
+
+
+def test_a_win_is_the_higher_grade_and_the_delta_rides_along(store):
+    """The graded rule says strictly more than the binary one it replaces: a +4
+    against a +1 is a real contrast that accept-beats-reject filed as a tie."""
+    _v(store, "base", {}, "accept", sweep="sw1", grade=1)
+    _v(store, "unit", {"lora_weight": 0.6}, "accept", sweep="sw1", grade=4)
+
+    entry = svc_findings.aggregate(store)["comparisons"]["lora_weight"][0]
+    # a is the lexicographically lower value string -- "0.6" sorts before
+    # "unset", so the *unit* is the a side and the baseline is b. The delta is
+    # a-minus-b throughout: 4 - 1.
+    assert (entry["a"], entry["b"]) == ("0.6", "unset")
+    assert (entry["pairs"], entry["a_wins"], entry["b_wins"], entry["ties"]) == (1, 1, 0, 0)
+    assert entry["grade_delta"] == {"mean": 3.0, "pairs": 1}
+
+
+def test_equal_grades_still_tie(store):
+    _v(store, "base", {}, "accept", sweep="sw1", grade=2)
+    _v(store, "unit", {"lora_weight": 0.6}, "accept", sweep="sw1", grade=2)
+
+    entry = svc_findings.aggregate(store)["comparisons"]["lora_weight"][0]
+    assert (entry["a_wins"], entry["b_wins"], entry["ties"]) == (0, 0, 1)
+    assert entry["grade_delta"] == {"mean": 0.0, "pairs": 1}
+
+
+def test_an_ungraded_pair_falls_back_to_what_its_binary_word_meant(store):
+    """The whole pre-migration-10 corpus is ungraded, and it must still pair.
+    The fallback is the same table the migration backfilled with, so a legacy
+    row and a migrated one are the same evidence."""
+    _v(store, "base", {}, "reject", sweep="sw1")
+    _v(store, "unit", {"lora_weight": 0.6}, "accept", sweep="sw1")
+
+    entry = svc_findings.aggregate(store)["comparisons"]["lora_weight"][0]
+    assert (entry["a_wins"], entry["b_wins"], entry["ties"]) == (1, 0, 0)
+    # a is the unit (+3 by fallback), b the baseline (-3): the backfill's own
+    # spread, recovered from the binary words alone.
+    assert entry["grade_delta"] == {"mean": 6.0, "pairs": 1}
+
+
+def test_an_observation_only_entry_carries_no_grade_delta(store):
+    """None rather than a zero mean: nobody graded these, and a 0.0 would read
+    as "the two sides are equal" -- a claim about a comparison never made."""
+    _o(store, "base", {}, {"hole_worst": 0.10})
+    _o(store, "unit", {"lora_weight": 0.6}, {"hole_worst": 0.06})
+
+    entry = svc_findings.aggregate(store)["comparisons"]["lora_weight"][0]
+    assert entry["pairs"] == 0
+    assert entry["grade_delta"] is None
+
+
+def test_a_bucket_with_no_grades_sorts_last_among_its_ties(store):
+    """Unanswerable at the end in both directions -- ``Filters.order``'s rule.
+    Two configurations with identical Wilson bounds, one graded and one not."""
+    _v(store, "graded", {"lora_weight": 0.6}, "accept", grade=5)
+    _v(store, "legacy", {"lora_weight": 0.9}, "accept")
+    store._conn.execute("UPDATE verdicts SET grade = NULL WHERE job_id = 'legacy'")
+    store._conn.commit()
+
+    ranked = svc_findings.aggregate(store)["vectors"]
+    assert [v["wilson_low"] for v in ranked] == [ranked[0]["wilson_low"]] * 2
+    assert ranked[0]["vector"]["lora_weight"] == 0.6
+    assert ranked[0]["mean_grade"] == 5.0
+    assert ranked[1]["mean_grade"] is None
+    assert ranked[1]["graded_n"] == 0

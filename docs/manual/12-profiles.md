@@ -37,7 +37,7 @@ In the **2D pane**, a profile picker sits beside the preset picker. Choosing one
 and makes it active, and the picker shows "Custom" once you edit past it. **Save as...** asks for a
 name and captures the current form's profile fields.
 
-From **[Home](02-home.md)**, the Profiles tile opens the full manager. **New profile** starts from
+The **Profiles** mode in the switch is the full manager. **New profile** starts from
 whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and how many
 style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form** and
 **Delete** — the active profile hides **Set active**.

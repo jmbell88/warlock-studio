@@ -142,7 +142,7 @@ def test_state_is_built_lazily_and_remembers_recent_files():
     tab = _tab(ctx)
     path = Path("/tmp/level.wmap")
     plotter_mode.adopt(ctx, tab.doc, path=path)
-    assert ctx.settings.get("plotter")["recent"] == [str(path)]
+    assert plotter_mode.recent_paths(ctx) == [str(path)]
 
 
 def test_opening_an_already_open_path_focuses_rather_than_forking():

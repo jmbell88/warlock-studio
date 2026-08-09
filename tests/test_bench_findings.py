@@ -497,3 +497,126 @@ def test_comparison_lines_never_raise_on_malformed_entries(tmp_path):
         # The one salvageable half: entry 2's counts collapse to 0-vs-1.
         "lora_weight: 0.9 beat 0.6 in 1 of 8 matched pairs (1 sweep, 1 prompt)",
     ]
+
+
+# --- grades (findings v4) ------------------------------------------------------
+#
+# Every test above this line uses a document with no grades in it, which is what
+# makes them the v3-legacy pins: they assert, to the character, that a file
+# written before the scale existed still renders exactly the strings it always
+# did. The tests below are the other half.
+
+
+def test_a_graded_bucket_names_the_cut_and_states_its_average():
+    doc = _doc({"lora_weight": {"0.6": {
+        "n": 8, "accepts": 6, "wilson_low": 0.409,
+        "graded_n": 8, "mean_grade": 2.63,
+    }}})
+
+    assert findings_mod.hint(doc, "lora_weight", 0.6) == "usable 6/8 (41%+) · avg +2.6"
+
+
+def test_a_negative_average_and_a_zero_one_are_both_signed():
+    """+0.0 rather than 0.0: an unsigned zero beside grades otherwise written
+    +3 reads as a different kind of number."""
+    def line(mean):
+        return findings_mod.hint(
+            _doc({"p": {"v": {"n": 8, "accepts": 0, "mean_grade": mean}}}), "p", "v"
+        )
+
+    assert line(-1.44) == "usable 0/8 · avg -1.4"
+    assert line(0) == "usable 0/8 · avg +0.0"
+
+
+def test_an_ungraded_bucket_on_a_v4_file_still_says_accept():
+    """``mean_grade: None`` is what a bucket holding no graded rows carries, and
+    it must render as the legacy line rather than as an average of zero -- zero
+    is a real grade here and cannot also mean "nobody has said"."""
+    doc = _doc({"p": {"v": {"n": 8, "accepts": 6, "graded_n": 0, "mean_grade": None}}})
+
+    assert findings_mod.hint(doc, "p", "v") == "accept 6/8"
+
+
+def test_a_malformed_mean_grade_never_raises_on_the_frame_thread():
+    for mean in ("2.6", True, [], {}):
+        doc = _doc({"p": {"v": {"n": 8, "accepts": 6, "mean_grade": mean}}})
+        assert findings_mod.hint(doc, "p", "v") == "accept 6/8"
+
+
+def test_a_graded_recipe_line_leads_with_the_word_usable():
+    assert findings_mod.vector_line(
+        {"n": 20, "accept_rate": 0.8, "wilson_low": 0.607, "mean_grade": 2.6}
+    ) == "usable 80% of 20 (61%+) · avg +2.6"
+
+
+def test_tag_line_tallies_both_polarities_top_three_first():
+    line = findings_mod.tag_line({"tags": {
+        "good": [["good-texture", 4], ["on-style", 2]],
+        "bad": [["holes", 3]],
+    }})
+    assert line == "good: good-texture x4, on-style x2 · bad: holes x3"
+
+    # Top three per polarity is what keeps it to one line.
+    many = findings_mod.tag_line({"tags": {"bad": [
+        ["holes", 9], ["broken", 8], ["bad-shape", 7], ["bad-texture", 6],
+    ]}})
+    assert many == "bad: holes x9, broken x8, bad-shape x7"
+
+
+def test_tag_line_is_none_when_there_is_nothing_to_say():
+    assert findings_mod.tag_line({"tags": {"good": [], "bad": []}}) is None
+    assert findings_mod.tag_line({}) is None
+    assert findings_mod.tag_line(None) is None
+    # A document that crossed a disk can be any shape.
+    assert findings_mod.tag_line({"tags": "broken"}) is None
+    assert findings_mod.tag_line({"tags": {"bad": ["holes", ["x"], ["y", "3"]]}}) is None
+
+
+def test_the_grade_gap_is_re_oriented_to_winner_minus_loser():
+    """The stored mean is a-minus-b like every other delta, and the header leads
+    with the winner -- so an unflipped sign would read backwards depending only
+    on which value happens to sort first."""
+    def header(a_wins, b_wins, mean):
+        doc = {"version": 4, "generated": "x", "comparisons": {"lora_weight": [
+            {"a": "0.6", "b": "0.9", "pairs": 8, "a_wins": a_wins, "b_wins": b_wins,
+             "ties": 0, "sweeps": 1, "prompts": 1, "deltas": {},
+             "grade_delta": {"mean": mean, "pairs": 8}},
+        ]}}
+        return findings_mod.comparison_lines(doc)[0]
+
+    # a won by 1.4, and a is named first.
+    assert header(7, 1, 1.4) == (
+        "lora_weight: 0.6 beat 0.9 in 7 of 8 matched pairs, avg +1.4 grade"
+        " (1 sweep, 1 prompt)"
+    )
+    # b won: the same stored -1.4 must read as b being +1.4 better.
+    assert header(1, 7, -1.4) == (
+        "lora_weight: 0.9 beat 0.6 in 7 of 8 matched pairs, avg +1.4 grade"
+        " (1 sweep, 1 prompt)"
+    )
+
+
+def test_a_comparison_with_no_graded_pairs_carries_no_gap():
+    doc = {"version": 4, "generated": "x", "comparisons": {"lora_weight": [
+        {"a": "0.6", "b": "0.9", "pairs": 8, "a_wins": 7, "b_wins": 1,
+         "ties": 0, "sweeps": 1, "prompts": 1, "deltas": {}, "grade_delta": None},
+    ]}}
+    assert findings_mod.comparison_lines(doc) == [
+        "lora_weight: 0.6 beat 0.9 in 7 of 8 matched pairs (1 sweep, 1 prompt)"
+    ]
+
+
+def test_every_rendered_string_stays_inside_the_baked_glyph_range():
+    """imgui's Inter atlas is Basic-Latin + Latin-1; anything past U+00FF comes
+    out as the missing-glyph box. The middle dot (U+00B7) is the one non-ASCII
+    character used anywhere in this module."""
+    rendered = [
+        findings_mod.hint(
+            _doc({"p": {"v": {"n": 8, "accepts": 6, "wilson_low": 0.4,
+                              "mean_grade": -2.6}}}), "p", "v"),
+        findings_mod.vector_line({"n": 20, "accept_rate": 0.8, "mean_grade": 2.6}),
+        findings_mod.tag_line({"tags": {"good": [["on-style", 2]], "bad": [["holes", 3]]}}),
+    ]
+    for text in rendered:
+        assert text
+        assert all(ord(ch) <= 0xFF for ch in text), text

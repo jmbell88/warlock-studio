@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from .inker_state import MAX_RECENT, PaintView
+from .inker_state import PaintView
 
 WPACK_SUFFIX = ".wpack"
 
@@ -95,7 +95,6 @@ class PackTab:
 class PackwrightState:
     docs: list[PackTab] = field(default_factory=list)
     active_uid: str = ""
-    recent: list[str] = field(default_factory=list)
 
     # Which source row is selected, by uid. View state, shared between the
     # sources list, the items list and the preview's highlight -- one answer to
@@ -155,15 +154,6 @@ class PackwrightState:
                 return doc
         return None
 
-    def remember(self, path: Path | None) -> None:
-        if path is None:
-            return
-        text = str(path)
-        self.recent = [text] + [p for p in self.recent if p != text]
-        del self.recent[MAX_RECENT:]
-
-    def forget(self, path: str) -> None:
-        self.recent = [p for p in self.recent if p != path]
 
 
 def title_for(path: Path | None) -> str:

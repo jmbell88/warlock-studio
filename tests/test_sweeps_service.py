@@ -228,7 +228,7 @@ def test_deleting_a_sweep_removes_its_jobs_and_keeps_its_verdicts(svc):
     result = svc_sweeps.create_sweep(svc, plan)
     unit = svc.store.sweep_jobs(result["id"])[0]
     svc.store.set_status(unit["id"], "done")
-    svc_verdicts.record_verdict(svc, unit["id"], verdict="reject")
+    svc_verdicts.record_verdict(svc, unit["id"], grade=-3)
 
     svc_sweeps.delete_sweep(svc, result["id"])
 
@@ -258,7 +258,7 @@ def test_a_sweep_delete_keeps_the_units_it_cannot_regenerate(svc):
     units = svc.store.sweep_jobs(result["id"])
     for unit in units:
         svc.store.set_status(unit["id"], "done")
-    svc_verdicts.record_verdict(svc, units[0]["id"], verdict="accept")
+    svc_verdicts.record_verdict(svc, units[0]["id"], grade=3)
 
     outcome = svc_sweeps.delete_sweep(svc, result["id"])
 

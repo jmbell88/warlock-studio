@@ -55,7 +55,13 @@ from typing import Any
 # The vector vocabulary lives in ``warlock.vectors`` so the worker can import
 # it without importing ``service``; re-exported here because this module is
 # where every service-side caller (and test) learned the names.
-from ..vectors import VECTOR_PARAMS, config_vector, vector_key
+from ..vectors import (
+    BINARY_GRADES,
+    GOOD_TAGS,
+    VECTOR_PARAMS,
+    config_vector,
+    vector_key,
+)
 
 __all__ = [
     "VECTOR_PARAMS",
@@ -75,7 +81,14 @@ __all__ = [
 # value, so a reader that knows nothing about either is correct on a v3 file,
 # and ``hint`` asked for a subject it cannot find simply falls back to the
 # pooled answer.
-FINDINGS_VERSION = 3
+# 4: mesh verdicts carry a grade (-5..+5), so every bucket gains ``graded_n``,
+# ``mean_grade``, a sparse ``grades`` histogram and a ``tags`` tally; comparison
+# entries gain ``grade_delta``. Additive in the strictest sense -- every v3 key
+# keeps its value *and* its meaning, because ``accepts`` is now counted off the
+# derived usable cut, which is computed identically. A v3 reader is correct on a
+# v4 file, and ``bench.findings`` renders the v3 strings verbatim for a file
+# that carries no grades.
+FINDINGS_VERSION = 4
 JSON_FILENAME = "findings.json"
 
 # How many verdicts a whole vector needs before it is offered as a preset. The
@@ -156,6 +169,10 @@ def aggregate(store: Any) -> dict[str, Any]:
             "accepts": summary["accepts"],
             "accept_rate": summary["accept_rate"],
             "wilson_low": summary["wilson_low"],
+            "graded_n": summary["graded_n"],
+            "mean_grade": summary["mean_grade"],
+            "grades": summary["grades"],
+            "tags": summary["tags"],
             "top_reasons": summary["top_reasons"],
             "jobs": [r["job_id"] for r in bucket["records"]],
         }
@@ -163,8 +180,29 @@ def aggregate(store: Any) -> dict[str, Any]:
             entry["metrics"] = _metric_summary(vector_metrics[bucket["key"]])
         out_vectors.append(entry)
     # Best first by the lower bound, not the raw rate -- the ordering the
-    # bound exists for -- with sample size breaking exact ties.
-    out_vectors.sort(key=lambda v: (-v["wilson_low"], -v["n"], v["key"]))
+    # bound exists for -- with the mean grade breaking ties, then sample size.
+    #
+    # **The mean is a tie-break and deliberately not the primary key.** A
+    # mean-minus-standard-error bound degenerates at n=1 (sd is zero, so the
+    # bound is the mean), which re-creates the lucky-5/5 pathology Wilson was
+    # adopted to kill in a new coordinate system; and over the corpus as it
+    # stands right after migration 10 every grade is +-3, so the mean is an
+    # affine function of the usable rate and a mean-primary sort would be the
+    # Wilson sort with its confidence correction thrown away. Displayed always;
+    # revisited when real spread exists, per
+    # ``docs/measurements/2026-08-09-grade-scale.md``.
+    #
+    # A bucket with no grades sorts last among its ties rather than as 0.0 --
+    # zero is a real grade here, and "unknown" is not a value at one end of a
+    # scale. ``Filters.order``'s rule.
+    out_vectors.sort(
+        key=lambda v: (
+            -v["wilson_low"],
+            -(v["mean_grade"] if v["mean_grade"] is not None else -math.inf),
+            -v["n"],
+            v["key"],
+        )
+    )
 
     return {
         "version": FINDINGS_VERSION,
@@ -223,7 +261,19 @@ def _marginals(
             entry = _summarise(rows.get(value, []))
             if not full:
                 entry = {
-                    k: entry[k] for k in ("n", "accepts", "accept_rate", "wilson_low")
+                    k: entry[k]
+                    for k in (
+                        "n",
+                        "accepts",
+                        "accept_rate",
+                        "wilson_low",
+                        # v4: ``hint`` renders the mean per scoped bucket too, so
+                        # a subject's own evidence can say "avg +2.6" rather than
+                        # falling back to the pooled figure for the one number the
+                        # scoping exists to keep separate.
+                        "graded_n",
+                        "mean_grade",
+                    )
                 }
             if value in metric_rows:
                 entry["metrics"] = _metric_summary(metric_rows[value])
@@ -277,17 +327,64 @@ def _summarise(records: list[dict[str, Any]]) -> dict[str, Any]:
     for record in records:
         if record.get("verdict") == "reject":
             reasons.update(record.get("reasons") or ())
+
+    # v4. Every key below is *additional*: ``accepts`` above is still the count
+    # of the derived usable cut and means exactly what it meant in v3, which is
+    # what lets a v3 reader stay correct on this document.
+    grades = [g for g in (record.get("grade") for record in records) if _is_grade(g)]
+
+    # Tags are counted over *every* row now, not over the rejects alone the way
+    # ``top_reasons`` is. That is the change of meaning migration 10 came with:
+    # these stopped being reasons a reviewer rejected and became descriptions of
+    # what is true of a mesh, so a ``sharp-detail`` on a +4 is exactly the kind
+    # of evidence the tally exists to accumulate. ``top_reasons`` is left
+    # computing what it always computed rather than redefined underneath its
+    # name -- two readers already print it.
+    tags: Counter[str] = Counter()
+    for record in records:
+        tags.update(record.get("reasons") or ())
+    # Split by membership at write time, which is what keeps ``bench/findings.py``
+    # pure-stdlib with no ``warlock`` import: the reader gets the polarity rather
+    # than the vocabulary it would need to derive it.
+    good_set = set(GOOD_TAGS)
     return {
         "n": n,
         "accepts": accepts,
         "accept_rate": round(accepts / n, 3) if n else 0.0,
         "wilson_low": wilson_low(accepts, n),
+        "graded_n": len(grades),
+        # ``None`` rather than 0.0 for a bucket with no grades: zero is a real
+        # grade on this scale and means "no opinion either way", so it cannot
+        # also stand for "nobody has said". The unanswerable-bucket rule.
+        "mean_grade": round(sum(grades) / len(grades), 2) if grades else None,
+        # Sparse, string-keyed: JSON has no integer keys, and a dense -5..+5 map
+        # of mostly zeros is eleven claims where the data supports two.
+        "grades": {
+            str(grade): count for grade, count in sorted(Counter(grades).items())
+        },
+        "tags": {
+            "good": _tag_pairs(tags, lambda t: t in good_set),
+            "bad": _tag_pairs(tags, lambda t: t not in good_set),
+        },
         "sources": sources,
         "top_reasons": [
             [reason, count]
             for reason, count in sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))
         ],
     }
+
+
+def _is_grade(value: Any) -> bool:
+    """``bool`` is an ``int`` in Python, and ``True`` would average as a +1."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _tag_pairs(tags: Counter[str], keep: Any) -> list[list[Any]]:
+    return [
+        [tag, count]
+        for tag, count in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))
+        if keep(tag)
+    ]
 
 
 def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -361,6 +458,20 @@ def _one_key_diff(a: dict[str, Any], b: dict[str, Any]) -> str | None:
     return None
 
 
+def _grade_of(row: dict[str, Any]) -> int:
+    """A verdict row's grade, falling back to what its binary word meant.
+
+    The fallback is what keeps a corpus written before migration 10 pairable at
+    all -- and it is the same table the migration backfilled with, rather than a
+    second reading of the same fact. A row with neither is 0: no opinion, which
+    ties rather than inventing a side.
+    """
+    grade = row.get("grade")
+    if _is_grade(grade):
+        return int(grade)
+    return BINARY_GRADES.get(str(row.get("verdict")), 0)
+
+
 def _comparisons(
     records: list[dict[str, Any]], observations: list[dict[str, Any]]
 ) -> dict[str, list[dict[str, Any]]]:
@@ -387,7 +498,7 @@ def _comparisons(
                 "pairs": 0, "a_wins": 0, "b_wins": 0, "ties": 0,
                 "sweeps": set(), "prompts": set(),
                 "obs_sweeps": set(), "obs_prompts": set(),
-                "deltas": {},
+                "deltas": {}, "grade_deltas": [],
             },
         )
 
@@ -430,11 +541,20 @@ def _comparisons(
                     low_val, high_val, low, high = sides
                     entry = entry_for(param, low_val, high_val)
                     entry["pairs"] += 1
-                    low_accept = low.get("verdict") == "accept"
-                    high_accept = high.get("verdict") == "accept"
-                    if low_accept and not high_accept:
+                    # **A win is the higher grade.** Over the backfilled corpus
+                    # this reproduces the old accept-beats-reject semantics
+                    # exactly -- every row is +-3, so "higher grade" and "accepted
+                    # while the other was not" are the same predicate, and two
+                    # rows on the same side tie either way. On graded rows it says
+                    # strictly more: a +4 beating a +1 is a real contrast that the
+                    # binary rule filed as a tie.
+                    low_grade = _grade_of(low)
+                    high_grade = _grade_of(high)
+                    delta = low_grade - high_grade
+                    entry["grade_deltas"].append(delta)
+                    if delta > 0:
                         entry["a_wins"] += 1
-                    elif high_accept and not low_accept:
+                    elif delta < 0:
                         entry["b_wins"] += 1
                     else:
                         entry["ties"] += 1
@@ -487,6 +607,19 @@ def _comparisons(
                 "ties": e["ties"],
                 "sweeps": len(sweeps),
                 "prompts": len(prompts),
+                # a-side minus b-side, the same sign convention every other
+                # delta here follows -- a display leading with the winner
+                # re-orients it (``bench.findings._entry_lines``).
+                "grade_delta": (
+                    {
+                        "mean": round(
+                            sum(e["grade_deltas"]) / len(e["grade_deltas"]), 2
+                        ),
+                        "pairs": len(e["grade_deltas"]),
+                    }
+                    if e["grade_deltas"]
+                    else None
+                ),
                 "deltas": {
                     metric: {
                         "mean": round(sum(values) / len(values), 4),

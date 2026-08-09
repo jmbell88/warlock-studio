@@ -6,8 +6,8 @@ assertable without a GL context.
 
 What it is for. A sweep queues a family of settings vectors as ordinary jobs;
 this mode is where they are looked at, one at a time, with the reference image
-beside the mesh and two keys to say whether it worked. Those verdicts compile
-into ``findings.json``, which is what puts an "accept 6/8" under a control in
+beside the mesh and a keypress to say how well it worked. Those verdicts compile
+into ``findings.json``, which is what puts a "usable 6/8" under a control in
 the generate panes and what a saved vector preset is built from. The loop
 closes here.
 
@@ -23,11 +23,24 @@ from them -- see ``service/verdicts.py``.
 is the recent finished meshes nobody has judged, which is how ordinary daily
 use feeds the same findings pool a deliberate sweep does.
 
-**Reject waits for a reason.** ``R`` arms; the verdict is not written until one
-of the five reason keys is pressed. A bare rejection is a row the findings can
-count and nothing else, and the tally of *why* things fail is the one thing a
-sweep exists to produce. Accept has no such second step, because there is only
-one way for a mesh to be right.
+**A mesh verdict is a grade, and the sign is armed rather than typed.** ``1``-
+``5`` file +1..+5, ``R`` arms the negative so the next digit files -1..-5, and
+``0`` is its own key. Eleven values inside six keys, which is what keeps a pass
+at the pace the binary loop had.
+
+The old rule this replaces said that reject waits for a reason while "accept has
+no such second step, because there is only one way for a mesh to be right".
+The second half was the mistake, and the corpus showed it: 3 accepts against 81
+rejects, in which a slab, a smeared texture and a mesh a modeller would fix in
+five minutes were the same row. There are eleven ways to be almost right, the
+grade now carries what a bare reject could not, and **tags are optional at every
+grade** -- Ctrl+1-5 for the good vocabulary, Shift+1-5 for the bad, positional
+in both, staged until a grade is pressed and dropped by anything that moves.
+They stopped being *reasons a reviewer rejected*, so a ``clean-shape`` on a -4 is
+exactly the pair of facts worth having. ``A`` is gone from this loop and is
+deliberately *not* remapped onto +3: silently filing the mildest usable grade for
+somebody reaching for the old key is a wrong number rather than a missing one.
+The labelling pass keeps its own A/R, because an image label is still one bit.
 
 **The advance is to the next thing to do, not the next row.** A session is
 resumed far more often than it is started, so opening a sweep lands on its
@@ -90,9 +103,21 @@ SOURCE_AI = "ai:dino-probe"
 SCORE_STAGE = "blank"
 SCORE_QUESTION = "will this reconstruct"
 
-# 1-5, in the order verdicts.REASONS lists them, so the pane can number the
-# buttons off the same table and the two can never disagree.
-REASON_KEYS = {str(i + 1): reason for i, reason in enumerate(verdicts_mod.REASONS)}
+# The grade keyboard. 1-5 are the magnitudes; ``R`` arms the negative sign and
+# 1-5 then read as -1..-5; ``0`` is its own key, because zero has no sign to
+# arm and is a real answer rather than a refusal to give one.
+#
+# The sign-then-digit shape is what keeps eleven values inside six keys, and it
+# is deliberately the *same* ``R`` the binary loop used to arm a reject with:
+# the muscle memory is "R then say more", and what "more" means got richer.
+GRADE_KEYS = {str(i): i for i in range(1, 6)}
+
+# Digit -> tag, positional, which is the whole reason each vocabulary is five
+# long. Modifiers pick the polarity: Ctrl for good, Shift for bad. Derived from
+# the vocabularies rather than written out, so a reordered tuple cannot leave
+# the keyboard naming the old order -- the ``palette._mode_commands`` rule.
+GOOD_TAG_KEYS = {str(i + 1): tag for i, tag in enumerate(verdicts_mod.GOOD_TAGS)}
+BAD_TAG_KEYS = {str(i + 1): tag for i, tag in enumerate(verdicts_mod.BAD_TAGS)}
 
 # The synthetic first bucket: finished meshes from ordinary use that nobody has
 # judged. Not a sweep row, so it has no spec and cannot be deleted.
@@ -175,10 +200,15 @@ class ReviewState:
     # the list's remaining count.
     units: list[dict[str, Any]] = field(default_factory=list)
     index: int = 0
-    # Whether R has been pressed and a reason key is what the mode is waiting
-    # for. Cleared by anything that moves, because the armed state belongs to
-    # the unit that was on screen when it was armed.
-    pending_reject: bool = False
+    # Whether R has been pressed, so the next digit reads as a negative grade.
+    # Cleared by anything that moves, because the armed state belongs to the
+    # unit that was on screen when it was armed.
+    pending_negative: bool = False
+    # Tags toggled for the unit on screen, ready to ride along with whatever
+    # grade is pressed next. Cleared by exactly the same four things, and for
+    # exactly the same reason: a tag chosen while looking at one mesh must never
+    # be filed against the next one.
+    pending_tags: list[str] = field(default_factory=list)
     # There is deliberately no "which unit is loaded" field here. What the
     # shared viewer is showing is ``viewer.path``, and a second copy of that
     # answer is a way for the two to disagree -- see ``main._review_viewport``.
@@ -220,7 +250,12 @@ def _unit(job: dict[str, Any], recorded: dict[tuple[str, str], dict[str, Any]],
         "params": job.get("params") or {},
         "dir": job_dir,
         "verdict": seen.get("verdict"),
-        "reasons": list(seen.get("reasons") or ()),
+        # The grade the row carries, or None. ``verdict`` stays beside it and
+        # stays the field ``advance``/``_recount``/``open_sweep`` key on: their
+        # question is "has this been answered", which a grade of 0 answers yes
+        # and a falsy check would answer no.
+        "grade": seen.get("grade"),
+        "tags": list(seen.get("reasons") or ()),
     }
 
 
@@ -564,7 +599,7 @@ def open_sweep(ctx: Any, sweep_id: str) -> None:
     # blind review exists to hide, and a judge's opinion on screen anchors the
     # independent human judgement it exists to collect.
     state.units = blind_order(units) if state.blind else by_score(units)
-    state.pending_reject = False
+    _disarm(state)
     state.index = next(
         (i for i, unit in enumerate(state.units) if unit["verdict"] is None), 0
     )
@@ -578,12 +613,12 @@ def current(state: ReviewState) -> dict[str, Any] | None:
 
 
 def step(state: ReviewState, delta: int) -> None:
-    """Move by hand, clamped at both ends. Disarms, because the armed state
-    belongs to the unit that was on screen when R was pressed."""
+    """Move by hand, clamped at both ends. Disarms and drops any toggled tags,
+    because both belong to the unit that was on screen when they were set."""
     if not state.units:
         return
     state.index = min(max(state.index + delta, 0), len(state.units) - 1)
-    state.pending_reject = False
+    _disarm(state)
 
 
 def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
@@ -598,7 +633,7 @@ def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
     """
     if not state.units:
         return
-    state.pending_reject = False
+    _disarm(state)
     if unverdicted_only:
         order = list(range(state.index + 1, len(state.units))) + list(range(state.index))
         ahead = next((i for i in order if state.units[i]["verdict"] is None), None)
@@ -608,8 +643,58 @@ def advance(state: ReviewState, *, unverdicted_only: bool = False) -> None:
     state.index = min(state.index + 1, len(state.units) - 1)
 
 
-def record(ctx: Any, verdict: str, reasons: Any = ()) -> None:
-    """Write one verdict for the unit on screen, then move on.
+def _disarm(state: ReviewState) -> None:
+    """Drop the armed sign and the toggled tags together.
+
+    One function rather than two assignments at four call sites: they are one
+    piece of state about one unit, and the way this goes wrong is that a fifth
+    site clears the sign and forgets the tags, which then ride onto the next
+    mesh silently.
+    """
+    state.pending_negative = False
+    state.pending_tags = []
+
+
+def toggled(tags: Any, tag: str) -> list[str]:
+    """``tags`` with ``tag`` added or removed. Pure, and the one owner of the
+    rule -- the inspector stages tags against a job id rather than against a
+    review unit, so it holds a different list and calls this with it.
+
+    A toggle rather than a set, because the same key has to be able to undo an
+    accidental press. An unknown tag is ignored rather than staged: it would
+    make ``record_verdict`` refuse the whole verdict, which loses a grade to a
+    typo in a key map.
+    """
+    staged = list(tags)
+    if tag not in verdicts_mod.TAGS:
+        return staged
+    if tag in staged:
+        staged.remove(tag)
+    else:
+        staged.append(tag)
+    return staged
+
+
+def toggle_tag(state: ReviewState, tag: str) -> None:
+    """Add or remove a tag from what the next grade will carry."""
+    state.pending_tags = toggled(state.pending_tags, tag)
+
+
+def grade_text(grade: Any) -> str:
+    """A grade as it is written everywhere in the UI -- ``"+4"``, ``"-2"``,
+    ``"0"`` -- or ``""`` for a unit with no grade.
+
+    Signed for everything but zero: ``+0`` reads as a magnitude that lost its
+    meaning, while a bare ``4`` beside a ``-2`` reads as a different scale.
+    ``bool`` is excluded because it is an ``int`` and ``True`` would render +1.
+    """
+    if not isinstance(grade, int) or isinstance(grade, bool):
+        return ""
+    return "0" if grade == 0 else f"{grade:+d}"
+
+
+def record(ctx: Any, grade: int, tags: Any = ()) -> None:
+    """Write one graded verdict for the unit on screen, then move on.
 
     Inline on the frame thread on purpose: one INSERT under the store's RLock,
     the same IO class as ``settings.set``, and putting it on a task thread would
@@ -624,17 +709,21 @@ def record(ctx: Any, verdict: str, reasons: Any = ()) -> None:
     unit = current(state)
     if unit is None or state.scanning:
         return
-    reasons = list(reasons)
+    tags = list(tags)
     try:
-        verdicts_mod.record_verdict(
-            ctx.svc, unit["job_id"], verdict=verdict, reasons=reasons, source=SOURCE
+        result = verdicts_mod.record_verdict(
+            ctx.svc, unit["job_id"], grade=grade, reasons=tags, source=SOURCE
         )
     except (ServiceError, OSError):
         log.exception("could not record a verdict for %s", unit["job_id"])
         ctx.toast("Could not record that verdict.", "error")
         return
-    unit["verdict"] = verdict
-    unit["reasons"] = reasons
+    unit["grade"] = grade
+    # Read back off the service rather than re-derived here: the cut has one
+    # owner, and a second application of it in the UI is how the list comes to
+    # disagree with the row it is drawing.
+    unit["verdict"] = result["verdict"]
+    unit["tags"] = tags
     _recount(state)
     refresh_findings(ctx)
     advance(state, unverdicted_only=True)
@@ -1099,7 +1188,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # about a picture.
         return _label_key(ctx, state, event, name)
     if event.key == pygame.K_ESCAPE:
-        state.pending_reject = False
+        _disarm(state)
         return True
     if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
         step(state, -1 if event.key == pygame.K_LEFT else 1)
@@ -1107,18 +1196,44 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if current(state) is None:
         # Nothing on screen to judge: every key below acts on a unit.
         return False
-    if name == "a":
-        record(ctx, "accept")
+
+    # Modifiers are read off ``event.mod`` rather than off the key name, because
+    # ``pygame.key.name`` returns "1" whether or not Ctrl or Shift is held --
+    # the digit is the same key, and only the modifier says which of three
+    # things it means. There is no collision with a global binding: the
+    # positional Alt+digit switch was deleted with ``mode_for_digit``, and
+    # Ctrl+K is answered above the modes either way.
+    ctrl = bool(event.mod & pygame.KMOD_CTRL)
+    shift = bool(event.mod & pygame.KMOD_SHIFT)
+    # Tags before grades, or Ctrl+1 would file a +1 and stage nothing.
+    if ctrl and name in GOOD_TAG_KEYS:
+        toggle_tag(state, GOOD_TAG_KEYS[name])
         return True
-    if name == "r":
-        state.pending_reject = True
+    if shift and name in BAD_TAG_KEYS:
+        toggle_tag(state, BAD_TAG_KEYS[name])
         return True
-    if name == "s":
-        advance(state)
-        return True
-    if name in REASON_KEYS and state.pending_reject:
-        record(ctx, "reject", (REASON_KEYS[name],))
-        return True
+    if not ctrl and not shift:
+        if name == "0":
+            # Its own key rather than a magnitude: zero has no sign to arm, and
+            # "no opinion either way" is an answer rather than a refusal to give
+            # one. Deliberately reachable with the sign armed too -- -0 is 0.
+            record(ctx, 0, state.pending_tags)
+            return True
+        if name in GRADE_KEYS:
+            magnitude = GRADE_KEYS[name]
+            record(ctx, -magnitude if state.pending_negative else magnitude,
+                   state.pending_tags)
+            return True
+        if name == "r":
+            state.pending_negative = True
+            return True
+        if name == "s":
+            advance(state)
+            return True
+    # ``a`` deliberately falls through unconsumed. It was Accept, and a mesh
+    # verdict is a grade now: silently mapping it onto +3 would file the mildest
+    # usable grade every time somebody reached for the old key, which is a wrong
+    # number rather than a missing one. The label pass keeps its own A/R.
     return False
 
 
