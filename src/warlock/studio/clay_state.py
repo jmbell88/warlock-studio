@@ -52,8 +52,37 @@ class ClayView:
     target: tuple[float, float, float] = (0.0, 0.5, 0.0)
     # Whether the view has been framed yet. False asks the viewport to fit on
     # the next frame it draws, which is the only moment it knows how big the
-    # pane is -- the state layer never does.
+    # pane is -- the state layer never does. A document opened from a file that
+    # carried a camera arrives already True, which is the whole point of storing
+    # one: framing over it would throw away the answer just read off disk.
     fitted: bool = False
+
+    def read_from(self, camera: Any) -> None:
+        """Take the live camera's angles. ``theta``/``phi`` are its names for
+        yaw and pitch; the two spellings meet here and nowhere else.
+
+        The **goals** are read rather than the current values. The camera damps
+        toward them, so mid-ease the two differ -- and what a user means by
+        "where I left the camera" is where they pointed it, not the frame the
+        tab switch happened to interrupt.
+        """
+        self.yaw = float(getattr(camera, "_goal_theta", camera.theta))
+        self.pitch = float(getattr(camera, "_goal_phi", camera.phi))
+        self.distance = float(getattr(camera, "_goal_distance", camera.distance))
+        self.target = tuple(float(v) for v in getattr(camera, "_goal_target", camera.target))
+
+    def write_to(self, camera: Any) -> None:
+        """Put these angles back on the live camera, goals included.
+
+        Both halves, or the camera eases straight back to wherever it was: the
+        angles are what the frame draws and the goals are what it converges to,
+        and setting one without the other is a restore that undoes itself over
+        the next few frames.
+        """
+        camera.theta = camera._goal_theta = self.yaw
+        camera.phi = camera._goal_phi = self.pitch
+        camera.distance = camera._goal_distance = self.distance
+        camera.set_target(self.target)
 
 
 @dataclass
@@ -118,6 +147,21 @@ class ClayState:
     snap: bool = False
     snap_translate: float = DEFAULT_SNAP_TRANSLATE
     snap_rotate: float = DEFAULT_SNAP_ROTATE
+    # Snap a move onto the vertex under the cursor, in preference to the grid.
+    # A *separate* switch rather than a mode of ``snap``, because the two answer
+    # different questions -- "put it on round numbers" and "put it exactly
+    # there" -- and a user aligning two parts wants the second without giving up
+    # the first everywhere else. Off by default: it changes what a plain drag
+    # does, and a viewport that silently jumps is worse than one that does not.
+    snap_vertex: bool = False
+
+    # Proportional editing: an element drag carries the geometry around the
+    # selection with it, fading out over ``proportional_radius`` metres of world
+    # space. Off by default and radius-driven rather than count-driven, because
+    # a radius is the thing the user can see -- a "how many rings" control means
+    # nothing on an imported mesh whose density varies across it.
+    proportional: bool = False
+    proportional_radius: float = 0.5
     grid: bool = True
     wireframe: bool = False
 

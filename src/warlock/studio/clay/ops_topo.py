@@ -21,6 +21,8 @@ step.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from . import topo
@@ -29,9 +31,12 @@ from .elements import ElementSel, OpError, empty
 from .mesh import Mesh, _face_normals, face_count, reversed_corner_perm
 
 __all__ = [
+    "bridge_edges",
     "collapse",
     "delete_faces",
+    "extrude_edges",
     "extrude_faces",
+    "extrude_verts",
     "fill_hole",
     "flip_normals",
     "inset_faces",
@@ -623,3 +628,301 @@ def fill_hole(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
         uv=uv,
     )
     return out, ElementSel(faces=np.arange(n_faces, n_faces + len(counts)))
+
+
+# --- the boundary ops: extrude an edge, bridge two loops ---------------------
+#
+# Both of these are about a mesh's *border* rather than its interior, and both
+# rest on one fact that is easy to forget and expensive to rediscover: a
+# ``Mesh`` stores no wire edges. ``edges`` is derived from face corners, so an
+# edge exists exactly while some face uses it -- which is why a vertex extrude
+# is not implementable here at all (see :func:`extrude_edges`) and why both ops
+# below refuse an interior edge rather than guessing what to do with it.
+
+
+def _boundary_owner(mesh: Mesh, sel: ElementSel, what: str) -> tuple[Any, np.ndarray, np.ndarray]:
+    """``(adjacency, edge ids, owning corners)`` for a boundary-edge selection.
+
+    Shared by both ops because the refusals are the interesting part and two
+    copies of them is two chances to word one of them differently. A boundary
+    edge has exactly one corner leaving along it, so that corner is the edge's
+    whole context: the face that owns it, the direction that face traverses it,
+    and the two uvs to inherit.
+    """
+    if len(sel.edges) == 0:
+        raise OpError(f"Select one or more boundary edges to {what}.")
+    a = adjacency(mesh)
+    ids = a.edge_ids(sel.edges).astype("i8")
+    if (ids < 0).any():
+        raise OpError("That edge is not part of this mesh.")
+    uses = a.edge_uses[ids]
+    if (uses != 1).any():
+        bad = sel.edges[uses != 1][0]
+        raise OpError(
+            f"Edge {int(bad[0])}-{int(bad[1])} has faces on both sides, so there is "
+            f"no open side to {what}. Select edges on the border of the mesh."
+        )
+    # One corner per edge, and the assignment is unambiguous precisely because
+    # every selected edge is used exactly once.
+    owner = np.full(a.n_edges, -1, dtype="i8")
+    owner[a.corner_edge.astype("i8")] = np.arange(len(mesh.loops), dtype="i8")
+    return a, ids, owner[ids]
+
+
+def extrude_edges(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
+    """Grow one quad outward from each selected boundary edge.
+
+    **It takes no distance at all**, which is the one place it departs from
+    :func:`extrude_faces`. That op accepts an ``offset`` along the region's mean
+    normal, and here the same quantity is *degenerate on the commonest case*: a
+    closed rim's owning faces point radially outward all the way round, so their
+    mean is zero and any number handed in moves nothing. A parameter that
+    silently does nothing is worse than no parameter, so the new rim lands
+    exactly on the old one and the gizmo moves it -- which is what the returned
+    selection is for, and what "extrude, then drag" already meant.
+
+    Each new quad traverses its shared edge **opposite** to the face already on
+    it -- ``[v_b, v_a, new_a, new_b]`` against that face's ``v_a -> v_b`` --
+    which is what keeps the shell consistently oriented. That is the mirror of
+    the wall :func:`extrude_faces` builds, and it is the other way round for a
+    reason worth stating: there the cap *moves* onto the new vertices, so the
+    wall keeps the original direction, while here the face stays exactly where
+    it is.
+
+    **A vertex extrude is not offered, and cannot be.** A ``Mesh`` stores no
+    wire edges, so an extruded lone vertex would be a position no face uses --
+    which ``compact_vertices`` drops on the way out and every exporter would
+    drop again. Extrude in vertex mode therefore converts the selection to the
+    edges it implies and extrudes those, which is what a user selecting a run of
+    border vertices means; a selection implying no boundary edge is refused by
+    name rather than silently doing nothing.
+
+    UV **inherited**: each new quad copies its source corners' two uvs, twice
+    over, exactly as an extruded wall does.
+    """
+    a, _ids, corners = _boundary_owner(mesh, sel, "extrude")
+    nxt = a.next_corner[corners].astype("i8")
+    v_a, v_b = mesh.loops[corners].astype("i8"), mesh.loops[nxt].astype("i8")
+
+    used = np.unique(np.concatenate([v_a, v_b]))
+    n_verts = len(mesh.positions)
+    new_index = np.full(n_verts, -1, dtype="i8")
+    new_index[used] = n_verts + np.arange(len(used), dtype="i8")
+
+    owner_face = a.corner_face[corners].astype("i8")
+    positions = np.concatenate([mesh.positions.astype("f8"), mesh.positions[used].astype("f8")])
+
+    quads = np.stack([v_b, v_a, new_index[v_a], new_index[v_b]], axis=1).reshape(-1)
+    uv = mesh.uv
+    if uv is not None:
+        uv_a, uv_b = uv[corners], uv[nxt]
+        uv = np.concatenate([uv, np.stack([uv_b, uv_a, uv_a, uv_b], axis=1).reshape(-1, 2)])
+
+    out, old_to_new = topo.compact_vertices(
+        topo.rebuild(
+            positions,
+            np.concatenate([mesh.loops.astype("i8"), quads]),
+            np.concatenate(
+                [
+                    mesh.starts.astype("i8"),
+                    int(mesh.starts[-1]) + 4 * np.arange(1, len(corners) + 1, dtype="i8"),
+                ]
+            ),
+            np.concatenate([mesh.material, mesh.material[owner_face]]),
+            np.concatenate([mesh.smooth, mesh.smooth[owner_face]]),
+            uv=uv,
+        )
+    )
+    grown = np.stack([new_index[v_a], new_index[v_b]], axis=1)
+    return out, ElementSel(edges=old_to_new[grown])
+
+
+def extrude_verts(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
+    """Extrude the *border* edges a vertex selection implies.
+
+    See :func:`extrude_edges` for why there is no such thing as extruding a
+    vertex here. What a user selecting a run of border vertices means is the
+    border between them, so that is what this takes -- and the interior edges
+    the same selection also implies are dropped rather than refused, because
+    including them is the one reading nobody intends: a patch of selected
+    vertices in the middle of a surface implies a web of interior edges and no
+    border at all.
+    """
+    from .elements import convert
+
+    edges = convert(mesh, sel, "edge").edges
+    if len(edges):
+        a = adjacency(mesh)
+        ids = a.edge_ids(edges)
+        edges = edges[(ids >= 0) & (a.edge_uses[np.clip(ids, 0, None)] == 1)]
+    if not len(edges):
+        raise OpError(
+            "Those vertices have no border edge between them. A mesh stores no "
+            "wire edges, so a vertex on its own has nothing to extrude -- select "
+            "two or more connected vertices on the edge of the surface."
+        )
+    return extrude_edges(mesh, ElementSel(edges=edges))
+
+
+def _directed_runs(pairs: np.ndarray, what: str) -> list[list[int]]:
+    """Ordered vertex runs from directed edges, one per connected component.
+
+    A closed run comes back with its k vertices and no repeat of the first; an
+    open one with k + 1. The direction is the caller's -- here always the way
+    the owning face traverses the edge -- so the walk is a plain ``u -> v``
+    follow rather than an undirected trace needing a turn rule, and a component
+    that is not a single run is refused rather than cut into pieces.
+    """
+    out_of: dict[int, int] = {}
+    into: dict[int, int] = {}
+    for u, v in np.asarray(pairs, dtype="i8").tolist():
+        if u in out_of or v in into:
+            raise OpError(
+                f"The selected edges fork at vertex {u if u in out_of else v}, so "
+                f"there is no single loop to {what}."
+            )
+        out_of[int(u)], into[int(v)] = int(v), int(u)
+
+    runs: list[list[int]] = []
+    seen: set[int] = set()
+    for start in out_of:
+        if start in seen:
+            continue
+        # Walk back to a beginning first, so an open run is reported from its
+        # end rather than from wherever the iteration happened to start.
+        head = start
+        while head in into and into[head] not in seen and into[head] != start:
+            head = into[head]
+            if head == start:
+                break
+        run = [head]
+        seen.add(head)
+        while run[-1] in out_of:
+            nxt = out_of[run[-1]]
+            if nxt == run[0]:
+                break  # closed: the first vertex is not repeated
+            if nxt in seen:
+                raise OpError(
+                    f"The selected edges cross themselves, so there is nothing to {what}."
+                )
+            run.append(nxt)
+            seen.add(nxt)
+        runs.append(run)
+    return runs
+
+
+def _bridge_offset(a_pos: np.ndarray, b_pos: np.ndarray) -> int:
+    """Which rotation of loop B lines up with loop A.
+
+    A closed loop carries no starting vertex -- a ring of sixteen is the same
+    ring however it is numbered -- so the correspondence has to be *measured*,
+    and the measurement is the plain one: the rotation minimising the summed
+    squared distance between paired vertices. Getting it wrong produces no
+    refusal at all, just a bridge with a visible twist in it, which is why this
+    is arithmetic rather than a convention.
+    """
+    return int(
+        np.argmin(
+            [float(((a_pos - np.roll(b_pos, -s, axis=0)) ** 2).sum()) for s in range(len(a_pos))]
+        )
+    )
+
+
+def bridge_edges(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
+    """Join two selected boundary loops with a strip of quads.
+
+    The op that turns two tubes into one, closes the gap left by deleting a band
+    of faces, and skins a pair of profiles -- and it is worth having because
+    every alternative is wrong: filling both holes leaves the geometry inside,
+    and extruding one loop and welding it onto the other is four steps and a
+    distance the user has to get exactly right.
+
+    **Both loops must be boundaries**, which is the one refusal that will
+    surprise somebody. Bridging two *interior* rings means deleting the faces
+    between them first, and doing that silently would remove geometry nobody
+    asked to lose. Everything else refused here is genuinely ambiguous: a
+    selection that is not exactly two runs, two runs of different lengths, a
+    fork, a self-crossing run, or one closed loop against one open chain, which
+    have no correspondence at all.
+
+    **The winding needs no decision and no measurement.** Each loop is ordered
+    by the direction its own faces traverse it, and every quad then traverses
+    both of its shared edges the opposite way -- ``[a1, a0, b0, b1]`` -- which is
+    exactly what "consistently oriented" means, on both sides at once. A
+    geometric guess (does this normal point away from the axis?) would be a
+    second opinion that could disagree with the faces already there.
+
+    UV **inherited**: each quad takes its four coordinates from the two boundary
+    corners it grew between, which puts the strip in the same region of the
+    texture as the surfaces it joins.
+    """
+    a, _ids, corners = _boundary_owner(mesh, sel, "bridge")
+    nxt = a.next_corner[corners].astype("i8")
+    v_a, v_b = mesh.loops[corners].astype("i8"), mesh.loops[nxt].astype("i8")
+
+    # Corner lookup by the directed pair, so the walk can hand back plain vertex
+    # runs and the uvs and owning faces can still be found afterwards.
+    corner_of = {(int(u), int(v)): int(c) for u, v, c in zip(v_a, v_b, corners, strict=True)}
+    runs = _directed_runs(np.stack([v_a, v_b], axis=1), "bridge")
+    if len(runs) != 2:
+        raise OpError(
+            f"Bridge joins exactly two boundary loops; the selection makes {len(runs)}."
+        )
+    left, right = runs
+    closed_left = (int(left[-1]), int(left[0])) in corner_of
+    closed_right = (int(right[-1]), int(right[0])) in corner_of
+    if closed_left != closed_right:
+        raise OpError(
+            "One selected loop is closed and the other is not, so there is no way "
+            "to pair them up."
+        )
+    if len(left) != len(right):
+        raise OpError(
+            f"The two loops have {len(left)} and {len(right)} vertices; bridge needs "
+            "the same number on each side."
+        )
+
+    positions = mesh.positions.astype("f8")
+    # B reversed: the strip walks A forwards and B backwards, which is what makes
+    # quad i and quad i+1 share an edge rather than a single vertex.
+    flipped = list(right[::-1])
+    if closed_right:
+        shift = _bridge_offset(positions[left], positions[flipped])
+        flipped = [int(v) for v in np.roll(np.asarray(flipped, dtype="i8"), -shift)]
+    span = len(left) if closed_left else len(left) - 1
+
+    quads: list[int] = []
+    uv_rows: list[np.ndarray] = []
+    owner_face: list[int] = []
+    for i in range(span):
+        a0, a1 = int(left[i]), int(left[(i + 1) % len(left)])
+        b0, b1 = int(flipped[i]), int(flipped[(i + 1) % len(flipped)])
+        quads.extend([a1, a0, b0, b1])
+        ca = corner_of[(a0, a1)]
+        # ``flipped`` runs against its own faces, so its directed edge is the
+        # reversed pair -- which is the corner the uvs and the face come from.
+        cb = corner_of[(b1, b0)]
+        owner_face.append(int(a.corner_face[ca]))
+        if mesh.uv is not None:
+            na, nb = int(a.next_corner[ca]), int(a.next_corner[cb])
+            uv_rows.append(np.stack([mesh.uv[na], mesh.uv[ca], mesh.uv[nb], mesh.uv[cb]]))
+
+    faces = np.asarray(owner_face, dtype="i8")
+    uv = mesh.uv
+    if uv is not None:
+        uv = np.concatenate([uv, np.concatenate(uv_rows)])
+    out = topo.rebuild(
+        mesh.positions,
+        np.concatenate([mesh.loops.astype("i8"), np.asarray(quads, dtype="i8")]),
+        np.concatenate(
+            [
+                mesh.starts.astype("i8"),
+                int(mesh.starts[-1]) + 4 * np.arange(1, span + 1, dtype="i8"),
+            ]
+        ),
+        np.concatenate([mesh.material, mesh.material[faces]]),
+        np.concatenate([mesh.smooth, mesh.smooth[faces]]),
+        uv=uv,
+    )
+    n_faces = face_count(mesh)
+    return out, ElementSel(faces=np.arange(n_faces, n_faces + span))

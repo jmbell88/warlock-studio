@@ -37,7 +37,7 @@ from .topo_asserts import directed_edge_counts, edge_use_counts
 # parametrised tests keeps the exception assertable as an exception -- if a
 # later change accidentally closes it, or accidentally opens something else,
 # exactly one of the two tests below fails.
-OPEN = {"plane"}
+OPEN = {"plane", "grid"}
 CLOSED = sorted(set(bp.GENERATORS) - OPEN)
 
 # Every generic test runs at the defaults *and* at the clamped low end, because
@@ -49,6 +49,8 @@ COUNT_MINIMA = {
     "segments": bp.MIN_SEGMENTS,
     "sides": bp.MIN_SEGMENTS,
     "rings": bp.MIN_RINGS,
+    "divisions": bp.MIN_DIVISIONS,
+    "subdivisions": 0,
 }
 
 
@@ -454,7 +456,109 @@ def test_the_registry_names_every_generator_the_module_exports() -> None:
         "cone",
         "uv_sphere",
         "torus",
+        "grid",
+        "capsule",
+        "icosphere",
     }
+
+
+# --- the three later arrivals -------------------------------------------------
+
+
+def test_a_grid_at_one_division_is_the_plane() -> None:
+    """Which is why ``plane`` stays a separate entry rather than an alias: it is
+    the single quad a decal or a backdrop wants, and finding the number that
+    undoes sixteen faces is not something a user should have to do."""
+    a, b = bp.grid(divisions=1), bp.plane()
+    # Compared as the face is *traversed* rather than as the buffer is ordered:
+    # a grid numbers its vertices row by row and a plane numbers them round its
+    # one loop, which is a different array holding the same quad.
+    assert bm.face_count(a) == 1
+    assert np.allclose(a.positions[bm.face(a, 0)], b.positions[bm.face(b, 0)])
+    assert np.allclose(a.uv, b.uv)
+
+
+def test_a_grid_cuts_the_sheet_it_was_asked_for() -> None:
+    mesh = bp.grid(size=(2.0, 4.0), divisions=3)
+    lo, hi = bm.bounds(mesh)
+    assert np.allclose(lo, [-1.0, 0.0, -2.0])
+    assert np.allclose(hi, [+1.0, 0.0, +2.0])
+    assert (len(mesh.positions), bm.face_count(mesh)) == (16, 9)
+
+
+def test_a_grids_divisions_clamp_at_one_rather_than_at_three() -> None:
+    """``MIN_SEGMENTS`` is three because three is the smallest ring that is a
+    polygon; a grid has no ring, and one division is a shape it already ships."""
+    assert bm.face_count(bp.grid(divisions=0)) == 1
+
+
+def test_a_grid_faces_up_like_the_plane_it_generalises() -> None:
+    mesh = bp.grid(divisions=2)
+    for i in range(bm.face_count(mesh)):
+        normal = _face_normal(mesh, i)
+        assert np.allclose(normal / np.linalg.norm(normal), [0.0, 1.0, 0.0])
+
+
+def test_a_capsules_height_is_its_cylinder_rather_than_its_whole_span() -> None:
+    """Blender's reading, and the one that keeps the two numbers independent: a
+    ``height`` meaning the total would turn the capsule into a sphere, and then
+    into nothing, as the radius passed half of it -- with no control saying so."""
+    lo, hi = bm.bounds(bp.capsule(radius=0.5, height=2.0, segments=16, rings=4))
+    # The cylinder spans the full 2.0 asked for, from -1 to +1, and each
+    # hemisphere adds its own radius beyond that.
+    assert np.allclose(lo, [-0.5, -1.5, -0.5], atol=1e-6)
+    assert np.allclose(hi, [+0.5, +1.5, +0.5], atol=1e-6)
+
+
+def test_a_capsule_has_two_rows_at_the_cylinder_rather_than_one() -> None:
+    """The band across the middle is a plain quad strip between two full rings,
+    which is what lets every band in the profile be the same expression."""
+    mesh = bp.capsule(radius=0.5, height=2.0, segments=8, rings=2)
+    ys = sorted({round(float(y), 6) for y in mesh.positions[:, 1]})
+    assert ys.count(-1.0) == 1 and ys.count(1.0) == 1
+    # 2 poles + (2 * rings) rings of 8.
+    assert len(mesh.positions) == 2 + 4 * 8
+
+
+def test_a_capsules_hemispheres_are_round_rather_than_conical() -> None:
+    mesh = bp.capsule(radius=0.5, height=1.0, segments=16, rings=4)
+    upper = mesh.positions[mesh.positions[:, 1] > 0.5 + 1e-6]
+    centre = np.array([0.0, 0.5, 0.0])
+    assert np.allclose(np.linalg.norm(upper - centre, axis=1), 0.5, atol=1e-6)
+
+
+def test_an_icosphere_quadruples_its_faces_per_subdivision() -> None:
+    assert [bm.face_count(bp.icosphere(subdivisions=d)) for d in range(4)] == [
+        20,
+        80,
+        320,
+        1280,
+    ]
+
+
+def test_an_icosphere_is_a_sphere_to_the_radius_it_was_asked_for() -> None:
+    mesh = bp.icosphere(radius=2.0, subdivisions=2)
+    assert np.allclose(np.linalg.norm(mesh.positions, axis=1), 2.0, atol=1e-6)
+
+
+def test_an_icospheres_subdivision_shares_its_edge_midpoints() -> None:
+    """Without the cache each face mints its own copy of every midpoint: the
+    positions coincide, the shell looks whole and every edge is used once."""
+    mesh = bp.icosphere(subdivisions=1)
+    assert set(_edge_use_counts(mesh).values()) == {2}
+    assert len(mesh.positions) == 42  # not 80 * 3
+
+
+def test_an_icospheres_subdivisions_are_capped() -> None:
+    """Each step quadruples the face count and the undo stack holds two meshes
+    per step, so an unbounded integer field is one keystroke from a stall."""
+    capped = bp.icosphere(subdivisions=bp.MAX_SUBDIVISIONS)
+    assert bm.face_count(bp.icosphere(subdivisions=99)) == bm.face_count(capped)
+
+
+def test_an_icosphere_at_zero_subdivisions_is_the_bare_icosahedron() -> None:
+    mesh = bp.icosphere(subdivisions=0)
+    assert (len(mesh.positions), bm.face_count(mesh)) == (12, 20)
 
 
 def test_every_generated_mesh_starts_flat_shaded_on_material_zero() -> None:

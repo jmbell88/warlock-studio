@@ -31,6 +31,7 @@ PACKAGE = "warlock.studio.clay"
 #: and quaternions are XYZW in exactly one place in this project.
 OUTWARD_IMPORTS = {
     ("document.py", "warlock.studio.undo"),
+    ("drag.py", "warlock.studio.viewer"),
     ("document.py", "warlock.studio.viewer"),
     ("edits.py", "warlock.studio.undo"),
     ("glbimport.py", "warlock.studio.viewer"),
@@ -164,6 +165,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         adjacency,
         diagnose,
         document,
+        drag,
         earclip,
         edits,
         elements,

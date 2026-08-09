@@ -862,3 +862,85 @@ def test_auto_shading_at_a_wide_angle_smooths_everything() -> None:
     doc.select([obj.uid])
     clay_ops.run(None, doc, clay_ops.get("shade-auto"), angle=179.0)
     assert bool(doc.by_uid(obj.uid).mesh.smooth.all())
+
+
+# --- reorder and visibility (Clay24) -----------------------------------------
+
+
+def _three() -> tuple[bd.ClayDoc, list[int]]:
+    doc = bd.ClayDoc()
+    uids = [doc.add_object(_obj(name)).uid for name in ("a", "b", "c")]
+    return doc, uids
+
+
+def test_moving_an_object_reorders_the_list_and_undoes() -> None:
+    """Display order is what ``to_model`` and ``write_glb`` emit, so it is an
+    edit rather than a view setting."""
+    doc, uids = _three()
+    assert doc.move_object(uids[0], 2)
+    assert [o.uid for o in doc.objects] == [uids[1], uids[2], uids[0]]
+    doc.undo()
+    assert [o.uid for o in doc.objects] == uids
+
+
+def test_a_move_that_changes_nothing_pushes_nothing() -> None:
+    doc, uids = _three()
+    depth = len(doc.history)
+    assert doc.move_object(uids[1], 1) is False
+    assert len(doc.history) == depth
+
+
+def test_a_move_past_the_end_clamps_because_the_caller_is_a_drag() -> None:
+    """A row dropped past the end means the end, and there is nothing sensible
+    for a refusal to show mid-gesture."""
+    doc, uids = _three()
+    doc.move_object(uids[0], 99)
+    assert [o.uid for o in doc.objects][-1] == uids[0]
+
+
+def test_a_move_undone_after_a_later_move_still_finds_its_own_object() -> None:
+    """The uid rule, applied to the one edit that is genuinely about a position:
+    the indices say where it goes and ``index_of`` says what is moving."""
+    doc, uids = _three()
+    doc.move_object(uids[0], 2)
+    doc.move_object(uids[2], 0)
+    doc.undo()
+    doc.undo()
+    assert [o.uid for o in doc.objects] == uids
+
+
+def test_isolating_hides_everything_else_in_one_step() -> None:
+    """Hiding nine things one Ctrl+Z at a time is not an undo history."""
+    doc, uids = _three()
+    depth = len(doc.history)
+    assert doc.isolate([uids[1]])
+    assert [o.visible for o in doc.objects] == [False, True, False]
+    assert len(doc.history) == depth + 1
+    doc.undo()
+    assert all(o.visible for o in doc.objects)
+
+
+def test_isolating_what_is_already_isolated_pushes_nothing() -> None:
+    """Dirty is a comparison against the head, so a no-op step would make a
+    saved document ask to be saved again."""
+    doc, uids = _three()
+    doc.isolate([uids[1]])
+    depth = len(doc.history)
+    assert doc.isolate([uids[1]]) is False
+    assert len(doc.history) == depth
+
+
+def test_show_all_is_one_step_and_the_inverse_of_isolating() -> None:
+    doc, uids = _three()
+    doc.isolate([uids[0]])
+    depth = len(doc.history)
+    assert doc.show_all()
+    assert all(o.visible for o in doc.objects)
+    assert len(doc.history) == depth + 1
+
+
+def test_show_all_with_nothing_hidden_pushes_nothing() -> None:
+    doc, _uids = _three()
+    depth = len(doc.history)
+    assert doc.show_all() is False
+    assert len(doc.history) == depth

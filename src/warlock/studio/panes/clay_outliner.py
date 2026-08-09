@@ -20,6 +20,7 @@ same thing a plain click does.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from imgui_bundle import imgui
@@ -31,6 +32,11 @@ from ..tokens import sp
 # Design pixels: every use goes through sp(), or the row keeps its 1.0x height
 # while the glyph inside it grows with the UI scale.
 ROW_HEIGHT = 24.0
+
+# The drag-and-drop payload name. One constant, because the source and the
+# target have to agree and two spellings of it fail silently -- the row simply
+# refuses every drop, with nothing to say why.
+_DRAG_OBJECT = "clay-object"
 
 
 def draw(ctx: Any) -> None:
@@ -55,12 +61,33 @@ def draw(ctx: Any) -> None:
     # while a save was running would let the user narrow the list to one object
     # and then find every control on it refusing the click.
     needle = widgets.list_filter(ctx, "clay-outliner", len(doc.objects))
+    _visibility_row(doc)
     for index in range(len(doc.objects) - 1, -1, -1):
         obj = doc.objects[index]
         if needle and needle not in (obj.name or "").lower():
             continue
-        _row(state, doc, obj, index)
+        _row(ctx, state, doc, obj, index, filtered=bool(needle))
     imgui.end_disabled()
+
+
+def _visibility_row(doc: Any) -> None:
+    """Solo and Show all, above the list.
+
+    Isolating is one click where nine eye toggles were, and it is the pair of
+    them that makes it usable: a solo you cannot undo in one action is a solo
+    you have to remember the previous state of. Both are single undo steps, so
+    Ctrl+Z is the third way back.
+    """
+    hidden = sum(1 for obj in doc.objects if not obj.visible)
+    if widgets.disabled_button(f"{icons.EYE} Solo##claysolo", bool(doc.selection)):
+        doc.isolate(doc.selection)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Show only the selected objects")
+    imgui.same_line()
+    if widgets.disabled_button(f"{icons.EYE_OFF} Show all##clayshowall", hidden > 0):
+        doc.show_all()
+    if hidden:
+        widgets.muted(f"{hidden} hidden")
 
 
 def _click(state: Any, doc: Any, obj: Any) -> None:
@@ -88,7 +115,67 @@ def _range(doc: Any, anchor: int, uid: int) -> list[int]:
     return order[lo : hi + 1]
 
 
-def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
+def _reorder(ctx: Any, doc: Any, obj: Any, index: int, *, filtered: bool) -> None:
+    """Drag one row onto another to move it in the list.
+
+    Display order is the order ``to_model`` and ``write_glb`` emit nodes in, so
+    this is an edit rather than a view setting -- and it goes through
+    ``move_object``, which pushes one step.
+
+    **Disabled while the list is filtered**, which is the one rule here that is
+    not obvious. The rows on screen are then a subset, so dropping between two
+    of them names a position in the *filtered* list and there is no honest
+    answer for where that is in the real one -- a drop that silently landed
+    somewhere else would be a reorder the user cannot see.
+    """
+    if filtered:
+        return
+    # The payload carries the *uid* rather than a row index, for the reason
+    # every address in this package is one: the drop reads the list again, so a
+    # reorder in between cannot make it move a different object.
+    if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
+        imgui.set_drag_drop_payload_py_id(_DRAG_OBJECT, obj.uid)
+        imgui.text(obj.name or "object")
+        imgui.end_drag_drop_source()
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id(_DRAG_OBJECT)
+        if payload is not None:
+            # Suppressed rather than checked: the object can be deleted between
+            # the pick-up and the drop, and there is nothing for a half-finished
+            # drag to report.
+            with contextlib.suppress(KeyError):
+                doc.move_object(int(payload.data_id), index)
+        imgui.end_drag_drop_target()
+
+
+def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
+    """Rename, duplicate and delete on the row itself.
+
+    Duplicate is here rather than only on Ctrl+D because the keyboard version
+    acts on the *selection*, and the thing a user right-clicks is one row --
+    which is why it selects the row first: a menu item that operated on
+    something other than what was clicked would be the sharpest possible
+    misreading of a right-click.
+    """
+    if not imgui.begin_popup_context_item(f"clayrow{obj.uid}"):
+        return
+    if obj.uid not in doc.selection:
+        doc.select([obj.uid])
+    if imgui.menu_item(f"{icons.PENCIL} Rename", "", False)[0]:
+        state.renaming = obj.uid
+    if imgui.menu_item(f"{icons.COPY} Duplicate", "Ctrl+D", False)[0]:
+        from .. import clay_mode
+
+        clay_mode._duplicate_selection(ctx, state, doc)
+    if imgui.menu_item(f"{icons.EYE} Solo", "", False)[0]:
+        doc.isolate([obj.uid])
+    imgui.separator()
+    if imgui.menu_item(f"{icons.TRASH} Delete", "Del", False)[0]:
+        doc.remove_object(obj.uid)
+    imgui.end_popup()
+
+
+def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool) -> None:
     selected = obj.uid in doc.selection
     imgui.push_id(str(obj.uid))
 
@@ -126,6 +213,11 @@ def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
             _click(state, doc, obj)
         if hidden:
             imgui.pop_style_color()
+        # Both hang off the selectable, which is the item the user aims at --
+        # the eye and the trash button are their own targets and must keep
+        # doing only what they say.
+        _reorder(ctx, doc, obj, index, filtered=filtered)
+        _context_menu(ctx, state, doc, obj)
         if imgui.is_item_hovered() and imgui.is_mouse_double_clicked(0):
             state.renaming = obj.uid
 

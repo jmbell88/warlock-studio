@@ -150,14 +150,22 @@ def nearest_vertex(
     *,
     surface_depth: float | None = None,
     radius: float = VERT_RADIUS,
+    allowed: np.ndarray | None = None,
 ) -> int | None:
-    """The vertex under the cursor, or ``None``."""
+    """The vertex under the cursor, or ``None``.
+
+    ``allowed`` is a ``(V,)`` bool narrowing the candidates before the occlusion
+    rule runs, and it exists for snapping: a drag that could snap to the very
+    vertices it is moving would follow the cursor exactly and call it a snap.
+    Left ``None`` -- which is what picking wants -- every vertex is a candidate.
+    """
     if len(screen.xy) == 0:
         return None
     delta = screen.xy - np.asarray(point, dtype="f8")
-    return _pick_nearest(
-        np.linalg.norm(delta, axis=1), visible(screen, surface_depth), screen.depth, radius
-    )
+    ok = visible(screen, surface_depth)
+    if allowed is not None:
+        ok = ok & np.asarray(allowed, dtype=bool)
+    return _pick_nearest(np.linalg.norm(delta, axis=1), ok, screen.depth, radius)
 
 
 def _segment_distance(

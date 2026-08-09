@@ -100,6 +100,45 @@ def test_a_torus_closes_both_of_its_seams():
     assert float(mesh.uv[:, 1].max()) == pytest.approx(1.0)
 
 
+def test_an_icospheres_seam_faces_stay_contiguous_rather_than_wrapping():
+    """A per-vertex longitude hands a straddling triangle ``0.98, 0.02`` and
+    wraps the whole texture backwards across it. The island is unwrapped to one
+    branch and then *translated* into the square -- never scaled, so the mapping
+    stays exact and the only thing paid is continuity, at the seam."""
+    mesh = prim.icosphere(subdivisions=2)
+    for index, island in enumerate(_faces(mesh)):
+        assert float(island[:, 0].max() - island[:, 0].min()) < 0.5, index
+
+
+def test_an_icospheres_axial_corner_borrows_its_faces_own_longitude():
+    """A corner on the Y axis has no longitude at all; without the fallback it
+    reads as zero and drags its island across half the texture."""
+    mesh = prim.icosphere(subdivisions=1)
+    assert np.all(np.isfinite(mesh.uv))
+
+
+def test_a_capsules_v_follows_arc_length_rather_than_height():
+    """Height squashes each hemisphere into a band as tall as its own bulge,
+    which on a stubby capsule is most of the texture in a tenth of the square."""
+    mesh = prim.capsule(radius=0.5, height=0.1, segments=8, rings=4)
+    equator = float(mesh.uv[:, 1].max())
+    assert equator == pytest.approx(1.0)
+    # The cylinder is a tenth of the profile's length, so it must take about a
+    # tenth of v -- the two rows at y = +-0.05 sit either side of the middle.
+    rows = sorted({round(float(v), 4) for v in mesh.uv[:, 1]})
+    middle = [v for v in rows if 0.4 < v < 0.6]
+    assert len(middle) == 2
+    assert middle[1] - middle[0] == pytest.approx(0.1 / (0.1 + np.pi * 0.5), abs=1e-3)
+
+
+def test_a_grid_wraps_one_texture_over_the_whole_sheet():
+    """The coordinates describe the surface, not the faces it happens to be cut
+    into, so a texture fits it once however many divisions it has."""
+    mesh = prim.grid(divisions=4)
+    assert float(mesh.uv.min()) == pytest.approx(0.0)
+    assert float(mesh.uv.max()) == pytest.approx(1.0)
+
+
 def test_a_generators_uvs_survive_a_parameter_change():
     """The panel rebuilds the mesh from the generator, so a resized box has to
     come back with coordinates rather than without."""

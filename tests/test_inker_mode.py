@@ -678,3 +678,179 @@ def test_a_recovered_document_opens_untitled_and_dirty(tmp_path):
     assert tab.dirty
     assert "recovered" in tab.title
     assert tab.autosave_name == path.name
+
+
+# --- a custom new canvas (Ink7) ----------------------------------------------
+
+
+def test_a_typed_size_is_clamped_rather_than_refused():
+    """The snap rule: the fields are being *typed into*, and there is nothing
+    useful for a refusal to show halfway through a number."""
+    from warlock.studio import inker_mode
+
+    assert inker_mode.clamp_canvas(0, -4) == (1, 1)
+    assert inker_mode.clamp_canvas(1920, 1080) == (1920, 1080)
+    assert inker_mode.clamp_canvas(99999, 8) == (inker_mode.NEW_MAX, 8)
+
+
+def test_a_size_that_is_not_a_number_at_all_falls_back_to_one():
+    from warlock.studio import inker_mode
+
+    assert inker_mode.clamp_canvas(None, "x") == (1, 1)
+
+
+def test_a_new_document_honours_a_non_square_size():
+    """The whole of Ink7: a user who wanted 1920x1080 had to make a square and
+    then resize it, which is two undo steps and a guess about the anchor."""
+    from warlock.studio import inker_mode
+
+    ctx = _PaletteCtx()
+    doc = inker_mode.new_document(ctx, 1920, 1080)
+    assert doc.doc.size == (1920, 1080)
+
+
+def test_a_new_document_cannot_be_asked_for_a_gigabyte_by_one_stray_digit():
+    from warlock.studio import inker_mode
+
+    ctx = _PaletteCtx()
+    doc = inker_mode.new_document(ctx, 20480, 20480)
+    assert doc.doc.size == (inker_mode.NEW_MAX, inker_mode.NEW_MAX)
+
+
+# --- canvas rotation and the flipped view (Ink9) ------------------------------
+#
+# Quarter turns only, and the tests say so as much as the code does: the whole
+# licence for leaving every overlay in the pane axis-aligned is that an
+# axis-aligned image rectangle comes out an axis-aligned screen rectangle.
+
+
+ORIENTATIONS = [(r, f) for r in (0, 90, 180, 270) for f in (False, True)]
+
+
+def _view(rotation=0, flipped=False, zoom=2.0, pan=(7.0, 11.0)):
+    from warlock.studio import inker_state
+
+    return inker_state.PaintView(zoom=zoom, pan=pan, rotation=rotation, flipped=flipped)
+
+
+@pytest.mark.parametrize(("rotation", "flipped"), ORIENTATIONS)
+def test_a_round_trip_is_the_identity_in_every_orientation(rotation, flipped):
+    """The basis is orthonormal, so its transpose is its inverse -- exactly,
+    for all eight of them, rather than to within a rounding error."""
+    from warlock.studio import inker_state
+
+    view = _view(rotation, flipped)
+    screen = inker_state.to_screen(view, (10.0, 20.0), 4.0, 6.0)
+    assert inker_state.to_image(view, (10.0, 20.0), *screen) == pytest.approx((4.0, 6.0))
+
+
+@pytest.mark.parametrize(("rotation", "flipped"), ORIENTATIONS)
+def test_a_quarter_turn_keeps_an_axis_aligned_rectangle_axis_aligned(rotation, flipped):
+    """The whole licence for the pane's overlays staying as they were. If this
+    ever fails, the grid, the marquee preview and the transform box are all
+    quietly drawing the wrong shape."""
+    from warlock.studio import inker_state
+
+    view = _view(rotation, flipped)
+    corners = [
+        inker_state.to_screen(view, (0.0, 0.0), x, y)
+        for x, y in ((0, 0), (8, 0), (8, 5), (0, 5))
+    ]
+    xs = sorted({round(p[0], 6) for p in corners})
+    ys = sorted({round(p[1], 6) for p in corners})
+    assert len(xs) == 2 and len(ys) == 2
+
+
+@pytest.mark.parametrize(("rotation", "flipped"), ORIENTATIONS)
+def test_the_orientation_preserves_distance(rotation, flipped):
+    """Which is why the marching ants need no change to their arc-length
+    arithmetic: the basis turns, and turning does not stretch."""
+    import math
+
+    from warlock.studio import inker_state
+
+    view = _view(rotation, flipped, zoom=1.0, pan=(0.0, 0.0))
+    a = inker_state.to_screen(view, (0.0, 0.0), 1.0, 2.0)
+    b = inker_state.to_screen(view, (0.0, 0.0), 4.0, 6.0)
+    assert math.dist(a, b) == pytest.approx(5.0)
+
+
+def test_a_quarter_turn_swaps_the_extent_the_canvas_needs():
+    from warlock.studio import inker_state
+
+    upright = _view(0)
+    turned = _view(90)
+    (lo, hi) = inker_state.view_extent(upright, (100, 50))
+    assert (hi[0] - lo[0], hi[1] - lo[1]) == (100.0, 50.0)
+    (lo, hi) = inker_state.view_extent(turned, (100, 50))
+    assert (hi[0] - lo[0], hi[1] - lo[1]) == (50.0, 100.0)
+
+
+@pytest.mark.parametrize(("rotation", "flipped"), ORIENTATIONS)
+def test_fitting_puts_the_whole_canvas_inside_the_pane_however_it_is_turned(
+    rotation, flipped
+):
+    """The one thing rotation genuinely costs the layout: a turn puts part of
+    the canvas at negative view coordinates, so the framing cannot assume the
+    corner is at the origin."""
+    from warlock.studio import inker_state
+
+    view = _view(rotation, flipped)
+    inker_state.fit(view, (100, 50), (200.0, 200.0))
+    corners = [
+        inker_state.to_screen(view, (0.0, 0.0), x, y)
+        for x, y in ((0, 0), (100, 0), (100, 50), (0, 50))
+    ]
+    lo_x, hi_x = min(p[0] for p in corners), max(p[0] for p in corners)
+    lo_y, hi_y = min(p[1] for p in corners), max(p[1] for p in corners)
+    assert lo_x >= -1e-6 and hi_x <= 200.0 + 1e-6
+    assert lo_y >= -1e-6 and hi_y <= 200.0 + 1e-6
+    # Centred on both axes, and touching on the one that limited the zoom.
+    assert lo_x == pytest.approx(200.0 - hi_x)
+    assert lo_y == pytest.approx(200.0 - hi_y)
+    assert min(lo_x, lo_y) == pytest.approx(0.0)
+
+
+def test_a_flip_mirrors_left_to_right_and_is_its_own_inverse():
+    from warlock.studio import inker_state
+
+    view = _view(0, zoom=1.0, pan=(0.0, 0.0))
+    right = inker_state.to_screen(view, (0.0, 0.0), 10.0, 0.0)
+    inker_state.flip_view(view)
+    assert inker_state.to_screen(view, (0.0, 0.0), 10.0, 0.0)[0] == pytest.approx(-right[0])
+    inker_state.flip_view(view)
+    assert not view.flipped
+
+
+def test_rotating_cycles_through_the_four_and_keeps_the_zoom():
+    """Re-centred through ``pending_zoom`` rather than by clearing ``fitted``,
+    which would also re-scale and throw away a zoom the user chose."""
+    from warlock.studio import inker_state
+
+    view = _view(0, zoom=3.0)
+    for expected in (90, 180, 270, 0):
+        inker_state.rotate_view(view)
+        assert view.rotation == expected
+        assert view.pending_zoom == 3.0
+        assert view.zoom == 3.0
+
+
+def test_rotating_backwards_is_the_other_direction():
+    from warlock.studio import inker_state
+
+    view = _view(0)
+    inker_state.rotate_view(view, -1)
+    assert view.rotation == 270
+
+
+def test_neither_rotation_nor_flip_is_an_edit():
+    """No pixels move, so there is nothing to undo and nothing to save -- which
+    is the reason both live on the view rather than on the document."""
+    from warlock.studio import inker, inker_state
+
+    doc = inker.Document.blank(8, 8)
+    head, rev = doc.history.head, doc.rev
+    view = inker_state.PaintView()
+    inker_state.rotate_view(view)
+    inker_state.flip_view(view)
+    assert (doc.history.head, doc.rev) == (head, rev)

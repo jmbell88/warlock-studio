@@ -575,64 +575,6 @@ Hunyuan3D appear only in `REPORT.md`'s research prose.*
   `vram.plan` machinery: a new backend declares its GiB cost in the cost table.
 - **Explicitly out:** MeshAnything V2 as a retopo path (sub-1600-face target).
 
-## 13. Inker and Clay — the nine items that did not land
-
-*Both engines are pure by invariant, so every engine-level item lands with
-headless tests in `../tests/inker` / `../tests/clay`; UI items follow the
-`../tests/test_inker_mode.py` / `../tests/test_clay_mode.py` patterns. Item numbers are
-`docs/LIST.md`'s, kept so the original observation is still traceable through
-`git log`.*
-
-- **Ink7 — half done.** The 3×3 anchor exists (`panes/inker_bridge._anchor_grid`
-  → `Document.resize_canvas(anchor=)`); what is missing is on the *other* popup —
-  the new-canvas dialog (`panes/inker_canvas.py`) still offers only
-  `inker_mode.NEW_PRESETS` buttons, with no custom width/height fields.
-- **Ink9 — canvas rotation and flipped view. Not started, and it is the one
-  Inker item with a real reason.** It is a viewport-wide coordinate change:
-  `ants.py`'s fast path is written against "`to_screen` is a uniform scale plus
-  this offset" (its own comment), and the composite, the floating buffer, the
-  onion frames, the grid, the symmetry lines and the transform handles are all
-  drawn axis-aligned. A half-done version silently misplaces every overlay, which
-  is worse than not having it. Pixels stay untouched either way — it is a display
-  transform in `inker_canvas` only.
-- **Clay18 — axis constraints and numeric entry during transforms.** Not started.
-  A gizmo drag has no X/Y/Z lock and no typed value, and `clay_view._about`
-  always pivots on the selection centre. Add axis keys during a drag plus a small
-  HUD showing the live delta, and typed-value commit. The single-commit-on-release
-  model (`set_transform(was=…)`) already fits.
-- **Clay19 — snap-to-vertex during element drags, and *only* that.** The
-  "consistency bug" half of the original item is already satisfied:
-  `clay_view._element_world_transform` applies both `ops.snap_translation` and
-  `ops.snap_rotation` to an element drag. What is missing is snap-to-vertex,
-  using `pick.nearest_vertex`, which exists but is wired only to selection
-  picking.
-- **Clay20 — proportional editing (soft falloff).** Not started. `_ElementDrag`
-  moves its affected vertices at full weight and carries no radius. A radius plus
-  a smooth falloff weighting is a small change to the drag preview/commit maths
-  and is the highest feature-set-per-line item in the list — it turns Clay from
-  blockout-only into organic-adjustment-capable.
-- **Clay21 — bridge edge loops, and extrude for edges/vertices.** Not started.
-  `ops_topo.__all__` has no bridge and `extrude_faces` is face-gated. These are
-  the two ops whose absence blocks common kitbash workflows; `topo.py`'s CSR
-  surgery primitives (`splice_corners`, `region_boundary_corners`) are the right
-  substrate.
-- **Clay22 — icosphere, capsule, subdivided grid plane.** Not started;
-  `GENERATORS` still has box/plane/cylinder/cone/uv_sphere/torus, and `plane` is
-  a single quad. One builder plus a defaults dict each, exactly how the registry
-  was designed to grow — and each now owes **canonical UVs**, since every existing
-  generator produces them and `../tests/clay/test_uv.py` asserts it registry-wide.
-- **Clay23 — bbox dimensions readout, and the camera in `.wblk`.** Not started.
-  `clay_props` shows TRS only, in an app whose whole pipeline cares about
-  `size_m`; add a read-only world-space W×D×H row. And `serialize.scene_json`
-  carries no view, so every reopen loses the camera — persist
-  yaw/pitch/distance/target as an additive JSON key (`read_wblk` validates, so it
-  is version-safe).
-- **Clay24 — outliner ergonomics, three of four.** The eye toggle, rename,
-  delete, Ctrl/Shift multi-select and a name filter all exist. Missing:
-  drag-reorder (display order is meaningful in exports), isolate/solo visibility
-  (one click versus N eye toggles), and duplicate/delete from a row context menu.
-  All UI-layer; no engine change.
-
 ## 14. Texture coverage — what replaced the "dedicated texture model" tier
 
 **The measurement is the reason, not a change of mind.**
@@ -669,10 +611,33 @@ being painted and do nothing about the two thirds that are not. So, in order:
    corpus whose coverage is high enough for the difference to be attributable to
    the model. It gets its own spec first.
 
-## 15. Two accepted narrowings and one open design call
+## 15. Accepted narrowings and one open design call
 
 Small, and written down so they are not rediscovered as defects:
 
+- **`Ink9` is quarter turns and a mirror, not free-angle rotation.**
+  `inker_state.ROTATIONS` is `(0, 90, 180, 270)` and `flipped` is a separate
+  boolean. That is the decision the section it replaced argued for from the
+  other side: a free angle makes every overlay in the pane a rotated quantity —
+  the grid stops being two families of axis-aligned lines, the marquee preview
+  stops being a rect, the transform box's handles stop being squares — and a
+  half-done version silently misplaces all of them. A quarter turn maps an
+  axis-aligned image rectangle onto an axis-aligned *screen* rectangle, so each
+  of those stays exactly what it was and is checked by
+  `test_a_quarter_turn_keeps_an_axis_aligned_rectangle_axis_aligned`. What it
+  costs is drawing on a page turned to an arbitrary angle; what it buys is the
+  two things canvas rotation is actually reached for. The orientation is
+  orthonormal and handed to `ants.dash_segments` **separately from the zoom**,
+  which is why the dash arithmetic needed no change at all: every distance in it
+  is an arc length in canvas space, and turning does not stretch.
+- **`Clay21` has no vertex extrude, and cannot have one.** A `Mesh` stores no
+  wire edges — `edges` is derived from face corners — so an extruded lone vertex
+  is a position no face uses, which `compact_vertices` drops on the way out and
+  every exporter would drop again. `ops_topo.extrude_verts` therefore extrudes
+  the *border* edges the selection implies, and refuses by name when it implies
+  none. `extrude_edges` also takes no `offset`, where `extrude_faces` does: the
+  same quantity is degenerate on the commonest case, since a closed rim's owning
+  faces point radially outward all the way round and their mean is zero.
 - **`K93` is a floor, not an audit.** `../tests/test_forms_and_layout.py` asserts
   each of ten dense panes carries at least one `help_marker`/`set_tooltip`. The
   original ask was per-control tooltip coverage; the floor is what shipped.

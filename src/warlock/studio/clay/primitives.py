@@ -1,4 +1,4 @@
-"""The six shapes a user can place, and the registry the panel is built from.
+"""The nine shapes a user can place, and the registry the panel is built from.
 
 Each generator is a plain function of its parameters returning a :class:`Mesh`,
 and :data:`GENERATORS` maps a name to ``(defaults, builder)``. The registry is
@@ -84,6 +84,19 @@ from .mesh import Mesh
 # sphere with any surface between its poles.
 MIN_SEGMENTS = 3
 MIN_RINGS = 2
+
+# A grid's own floor, deliberately *not* ``MIN_SEGMENTS``. One division is a
+# legitimate grid -- it is ``plane`` -- so clamping it to three would refuse a
+# shape the registry already ships, which is why the parameter is called
+# ``divisions`` rather than ``segments``: the shared name would drag the shared
+# clamp along with it.
+MIN_DIVISIONS = 1
+
+# How far an icosphere may be subdivided from the properties panel. Each step
+# quadruples the face count (20 -> 80 -> 320 -> 1280 -> 5120 -> 20480), and the
+# undo stack holds two meshes per step, so an unbounded integer field is one
+# keystroke away from a multi-second stall on a control that is being *typed*.
+MAX_SUBDIVISIONS = 5
 
 
 def _mesh(
@@ -396,6 +409,281 @@ def torus(
     return _mesh(positions, faces, uv)
 
 
+def grid(size: Sequence[float] = (1.0, 1.0), divisions: int = 4) -> Mesh:
+    """A subdivided sheet in the XZ plane at y = 0, facing +Y.
+
+    ``plane`` is this at one division and stays a separate entry rather than
+    being folded in: it is a single quad, which is what a decal, a billboard or
+    a backdrop wants, and a user who asks for "plane" and gets sixteen faces has
+    to go and find the number that undoes that. What a grid is *for* is the
+    thing a single quad cannot do -- carry a displacement, a proportional edit
+    or a terrain sculpt, all of which need interior vertices to move.
+
+    Open, like ``plane``: it has a boundary and no volume, so there is no
+    outward direction to derive and +Y is the same decision for the same reason.
+
+    UV runs 0..1 across the whole sheet, so a texture fits it once however many
+    divisions it is cut into -- the coordinates describe the surface, not the
+    faces it happens to be made of.
+    """
+    hx, hz = (abs(float(s)) * 0.5 for s in size)
+    n = max(int(divisions), MIN_DIVISIONS)
+    xs = np.linspace(-hx, +hx, n + 1)
+    zs = np.linspace(+hz, -hz, n + 1)
+    positions = np.array(
+        [[x, 0.0, z] for z in zs for x in xs],
+        dtype="f4",
+    )
+
+    def at(i: int, j: int) -> int:
+        """Vertex index of column *i*, row *j*, rows running +Z to -Z."""
+        return j * (n + 1) + i
+
+    # The same corner order ``plane`` uses -- (-x,+z), (+x,+z), (+x,-z), (-x,-z)
+    # -- which is the traversal whose Newell normal points at +Y.
+    faces = [
+        [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]
+        for j in range(n)
+        for i in range(n)
+    ]
+    uv = [
+        [
+            (i / n, j / n),
+            ((i + 1) / n, j / n),
+            ((i + 1) / n, (j + 1) / n),
+            (i / n, (j + 1) / n),
+        ]
+        for j in range(n)
+        for i in range(n)
+    ]
+    return _mesh(positions, faces, uv)
+
+
+def capsule(
+    radius: float = 0.25,
+    height: float = 0.5,
+    segments: int = 16,
+    rings: int = 4,
+) -> Mesh:
+    """A cylinder with a hemisphere on each end, axis along Y.
+
+    ``height`` is the **cylindrical** section alone, so the whole shape spans
+    ``height + 2 * radius``. That is Blender's reading of the same pair and it is
+    the one that keeps the two numbers independent: a capsule whose ``height``
+    meant the total would silently stop being a capsule -- and start being a
+    sphere, or nothing -- as the radius passed half of it, which is a shape
+    change with no control the user can see it in. The defaults still add up to
+    a one-metre box, as every other primitive's do.
+
+    ``rings`` counts the latitude bands in **one** hemisphere, so the profile is
+    ``rings`` bands up, one cylinder band across the middle, and ``rings`` bands
+    down. There is no cap n-gon and no pole fan sharing a ring with the tube:
+    the two hemisphere rings that meet the cylinder are separate rows of
+    vertices at the same radius, which is what lets the cylinder band be a plain
+    quad strip and keeps every band's winding the same expression.
+
+    UV is a cylindrical unwrap whose ``v`` follows **arc length along the
+    profile** rather than height, so the texel density does not collapse at the
+    ends: a naive v = (y - min) / span squashes each hemisphere into a band as
+    tall as its own bulge, which on a stubby capsule is most of the texture in
+    a tenth of the square. ``u`` runs to exactly 1 on the last column, per
+    corner, for the reason the cylinder's does.
+    """
+    n = max(int(segments), MIN_SEGMENTS)
+    m = max(int(rings), MIN_RINGS)
+    r, h = abs(float(radius)), abs(float(height)) * 0.5
+
+    # The profile, north to south, as (ring radius, y). The two poles are the
+    # ends and are single vertices; everything between them is a full ring.
+    profile: list[tuple[float, float]] = [(0.0, +h + r)]
+    for k in range(1, m + 1):
+        phi = 0.5 * np.pi * k / m
+        profile.append((r * float(np.sin(phi)), +h + r * float(np.cos(phi))))
+    for k in range(m):
+        psi = 0.5 * np.pi * k / m
+        profile.append((r * float(np.cos(psi)), -h - r * float(np.sin(psi))))
+    profile.append((0.0, -h - r))
+
+    rows = profile[1:-1]
+    positions = np.concatenate(
+        [[[0.0, profile[0][1], 0.0]]]
+        + [_ring(rr, y, n) for rr, y in rows]
+        + [[[0.0, profile[-1][1], 0.0]]]
+    )
+    top, bottom = 0, 1 + len(rows) * n
+
+    def row(j: int) -> int:
+        """First vertex index of intermediate ring *j*, counting from the top."""
+        return 1 + j * n
+
+    # The pole fans are wound the way ``uv_sphere``'s are, and the bands between
+    # rings the way ``_side_quads`` orders them -- upper ring first, because the
+    # rings run downward and "lower" there means the ring further from +Y.
+    faces: list[list[int]] = [[row(0) + i, top, row(0) + (i + 1) % n] for i in range(n)]
+    for j in range(len(rows) - 1):
+        faces.extend(_side_quads(row(j + 1), row(j), n))
+    faces.extend(
+        [bottom, row(len(rows) - 1) + i, row(len(rows) - 1) + (i + 1) % n] for i in range(n)
+    )
+
+    # v by arc length along the profile, measured south-to-north so v = 0 is the
+    # bottom pole -- the same direction ``uv_sphere``'s bands run.
+    points = np.array(profile, dtype="f8")
+    steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    along = np.concatenate([[0.0], np.cumsum(steps)])
+    total = float(along[-1])
+    v = 1.0 - along / total if total > 0.0 else np.zeros(len(along))
+
+    uv: list[list[tuple[float, float]]] = [
+        [(i / n, float(v[1])), ((i + 0.5) / n, float(v[0])), ((i + 1) / n, float(v[1]))]
+        for i in range(n)
+    ]
+    for j in range(len(rows) - 1):
+        uv.extend(
+            [
+                (i / n, float(v[j + 2])),
+                (i / n, float(v[j + 1])),
+                ((i + 1) / n, float(v[j + 1])),
+                ((i + 1) / n, float(v[j + 2])),
+            ]
+            for i in range(n)
+        )
+    uv.extend(
+        [
+            ((i + 0.5) / n, float(v[-1])),
+            (i / n, float(v[-2])),
+            ((i + 1) / n, float(v[-2])),
+        ]
+        for i in range(n)
+    )
+    return _mesh(positions, faces, uv)
+
+
+# The regular icosahedron, before normalisation: three mutually perpendicular
+# golden rectangles. Written out rather than derived because the *face* list
+# below is written out and the two have to agree about which vertex is which --
+# deriving one and not the other is how a shell comes out with five faces
+# reversed and passes every test that only counts things.
+_ICO_T = (1.0 + 5.0**0.5) * 0.5
+
+_ICO_VERTS = (
+    (-1.0, _ICO_T, 0.0), (1.0, _ICO_T, 0.0), (-1.0, -_ICO_T, 0.0), (1.0, -_ICO_T, 0.0),
+    (0.0, -1.0, _ICO_T), (0.0, 1.0, _ICO_T), (0.0, -1.0, -_ICO_T), (0.0, 1.0, -_ICO_T),
+    (_ICO_T, 0.0, -1.0), (_ICO_T, 0.0, 1.0), (-_ICO_T, 0.0, -1.0), (-_ICO_T, 0.0, 1.0),
+)
+
+# Every triangle counter-clockwise seen from outside, which is what makes the
+# Newell normal point away from the centre -- the module's third rule, and the
+# one whose failure is invisible in the viewport.
+_ICO_FACES = (
+    (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+    (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+    (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+    (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1),
+)
+
+
+def _subdivide(
+    verts: list[np.ndarray], faces: list[tuple[int, int, int]]
+) -> tuple[list[np.ndarray], list[tuple[int, int, int]]]:
+    """One Loop-style split: each triangle into four, midpoints on the sphere.
+
+    The midpoint cache is keyed on the *sorted* vertex pair, which is what makes
+    two triangles sharing an edge share the vertex on it. Without it the shell
+    cracks: each face would mint its own copy, the positions would coincide, and
+    the mesh would be two-manifold in appearance and open in every measurement.
+
+    The four children are wound in the parent's own direction, so consistency is
+    a property of the base list and is never re-derived.
+    """
+    cache: dict[tuple[int, int], int] = {}
+
+    def middle(a: int, b: int) -> int:
+        key = (a, b) if a < b else (b, a)
+        found = cache.get(key)
+        if found is not None:
+            return found
+        point = verts[a] + verts[b]
+        verts.append(point / np.linalg.norm(point))
+        cache[key] = len(verts) - 1
+        return cache[key]
+
+    out: list[tuple[int, int, int]] = []
+    for a, b, c in faces:
+        ab, bc, ca = middle(a, b), middle(b, c), middle(c, a)
+        out.extend([(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)])
+    return verts, out
+
+
+def _sphere_uv(
+    positions: np.ndarray, faces: Sequence[Sequence[int]]
+) -> list[list[tuple[float, float]]]:
+    """A latitude/longitude unwrap of a sphere whose faces do not share rings.
+
+    ``uv_sphere`` and ``capsule`` can put ``u`` on a corner directly, because
+    their faces are laid out in columns and the last column simply closes at 1.
+    An icosphere has no columns: its triangles straddle the seam meridian, and a
+    per-*vertex* longitude therefore hands one of them the corner pair
+    ``0.98, 0.02`` and wraps the whole texture backwards across it.
+
+    So longitude is unwrapped **per face**: each corner is taken to the branch
+    nearest the face's first corner, which makes the island contiguous. That can
+    put it outside the square by up to its own width, and the island is then
+    *translated* back in -- never scaled, so the mapping stays exact and the only
+    thing paid is continuity, at the seam, where a sphere has none to keep.
+
+    A corner on the axis has no longitude at all; it takes the mean of its
+    face's other two, which is the same answer ``cone`` gives its apex and for
+    the same reason.
+    """
+    positions = np.asarray(positions, dtype="f8")
+    radius = float(np.max(np.linalg.norm(positions, axis=1))) or 1.0
+    lon = (np.arctan2(positions[:, 2], positions[:, 0]) / (2.0 * np.pi)) % 1.0
+    axial = np.hypot(positions[:, 0], positions[:, 2]) < 1e-9
+    lat = 0.5 + np.arcsin(np.clip(positions[:, 1] / radius, -1.0, 1.0)) / np.pi
+
+    out: list[list[tuple[float, float]]] = []
+    for face in faces:
+        known = [lon[i] for i in face if not axial[i]]
+        anchor = known[0] if known else 0.0
+        us = []
+        for i in face:
+            if axial[i]:
+                us.append(None)
+                continue
+            # The branch nearest the anchor: ``round`` of the difference is the
+            # number of whole turns to take off.
+            us.append(float(lon[i] - round(float(lon[i]) - anchor)))
+        fallback = float(np.mean([u for u in us if u is not None])) if known else 0.0
+        row = [fallback if u is None else u for u in us]
+        low, high = min(row), max(row)
+        shift = -low if low < 0.0 else (1.0 - high if high > 1.0 else 0.0)
+        out.append([(u + shift, float(lat[i])) for u, i in zip(row, face, strict=True)])
+    return out
+
+
+def icosphere(radius: float = 0.5, subdivisions: int = 2) -> Mesh:
+    """A geodesic sphere: an icosahedron, split and pushed back out.
+
+    The one sphere with **even triangles**. ``uv_sphere``'s poles are fans of
+    slivers and its equator quads are many times their area, which is what makes
+    it the wrong ball to sculpt, to bevel, or to bake to -- and the right one to
+    wrap an equirectangular texture round, which is why both ship rather than
+    one replacing the other.
+
+    ``subdivisions`` is capped at :data:`MAX_SUBDIVISIONS`; see the comment
+    there. Zero is the bare icosahedron, which is a legitimate shape to place.
+    """
+    r = abs(float(radius))
+    depth = min(max(int(subdivisions), 0), MAX_SUBDIVISIONS)
+    verts = [np.asarray(v, dtype="f8") / np.linalg.norm(v) for v in _ICO_VERTS]
+    faces = [tuple(f) for f in _ICO_FACES]
+    for _ in range(depth):
+        verts, faces = _subdivide(verts, faces)
+    unit = np.asarray(verts, dtype="f8")
+    return _mesh(unit * r, faces, _sphere_uv(unit, faces))
+
+
 # --- the registry ------------------------------------------------------------
 
 GENERATORS: dict[str, tuple[dict[str, Any], Callable[..., Mesh]]] = {
@@ -405,6 +693,9 @@ GENERATORS: dict[str, tuple[dict[str, Any], Callable[..., Mesh]]] = {
     "cone": ({"radius": 0.5, "height": 1.0, "segments": 16}, cone),
     "uv_sphere": ({"radius": 0.5, "segments": 16, "rings": 8}, uv_sphere),
     "torus": ({"radius": 0.35, "tube": 0.15, "segments": 24, "sides": 12}, torus),
+    "grid": ({"size": (1.0, 1.0), "divisions": 4}, grid),
+    "capsule": ({"radius": 0.25, "height": 0.5, "segments": 16, "rings": 4}, capsule),
+    "icosphere": ({"radius": 0.5, "subdivisions": 2}, icosphere),
 }
 """Name -> ``(defaults, builder)``. Every default dictionary is a complete call.
 

@@ -176,6 +176,35 @@ class ObjectRemoveEdit(Edit):
 
 
 @dataclass
+class ObjectMoveEdit(Edit):
+    """One object's position in the list, before and after.
+
+    The third of the three edits that genuinely are about a position -- and it
+    still finds its object by uid, exactly as add and remove do. The indices say
+    only where it goes; ``index_of`` says which object is being moved, so a
+    reorder recorded before some other reorder still moves the right thing when
+    it is undone.
+
+    It costs nothing: two integers, and the object never leaves the document.
+    """
+
+    obj_uid: int
+    before: int
+    after: int
+
+    def _put(self, doc: Any, index: int) -> None:
+        obj = doc.objects.pop(doc.index_of(self.obj_uid))
+        doc.objects.insert(index, obj)
+        doc.touch()
+
+    def undo(self, doc: Any) -> None:
+        self._put(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._put(doc, self.after)
+
+
+@dataclass
 class ObjectPropsEdit(Edit):
     """Name, visibility, default material, generator and its parameters --
     anything about an object that is neither its geometry nor its transform."""

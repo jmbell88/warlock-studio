@@ -296,3 +296,40 @@ def test_cull_is_conservative_about_touching_runs():
 def test_loop_box_is_the_canvas_space_aabb():
     verts, _cum = _one([SQUARE])
     assert ants.loop_box(verts) == (0.0, 0.0, 3.0, 3.0)
+
+
+# --- the view's orientation (Ink9) -------------------------------------------
+
+
+def test_a_basis_turns_the_dashes_without_touching_the_dash_pattern():
+    """The whole reason the orientation is handed in separately from the zoom:
+    every distance in ``dash_segments`` is an arc length in canvas space, so a
+    transform that only turns leaves all of it alone."""
+    import numpy as np
+
+    from warlock.studio import ants
+
+    verts = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 6.0], [0.0, 6.0], [0.0, 0.0]])
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(verts, axis=0), axis=1))])
+
+    plain = ants.dash_segments(verts, cum, 1.0, (0.0, 0.0), 0.0)
+    quarter = np.array([[0.0, -1.0], [1.0, 0.0]])
+    turned = ants.dash_segments(verts, cum, 1.0, (0.0, 0.0), 0.0, basis=quarter)
+
+    # Same number of runs and the same lit pattern -- only the coordinates move.
+    assert len(plain[0]) == len(turned[0])
+    assert plain[2].tolist() == turned[2].tolist()
+    assert np.allclose(turned[0], plain[0] @ quarter.T)
+    assert np.allclose(turned[1], plain[1] @ quarter.T)
+
+
+def test_no_basis_is_exactly_what_the_upright_view_always_produced():
+    import numpy as np
+
+    from warlock.studio import ants
+
+    verts = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]])
+    cum = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(verts, axis=0), axis=1))])
+    a = ants.dash_segments(verts, cum, 2.0, (3.0, 5.0), 1.0)
+    b = ants.dash_segments(verts, cum, 2.0, (3.0, 5.0), 1.0, basis=np.eye(2))
+    assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1])

@@ -244,6 +244,9 @@ class App:
         # state is: a session that never opens Clay should not pay for a
         # renderer, a framebuffer and three gizmos.
         self.clay_view = None
+        # Which Clay tab the one viewport camera currently belongs to. See
+        # ``_clay_viewport``: the camera is per document and the viewport is not.
+        self._clay_camera_tab = ""
         # Clay's own hover flag, set by the pane that draws its image, for the
         # reason _viewport_hovered exists: the host window is fullscreen, so
         # io.want_capture_mouse is always true and cannot be the gate.
@@ -2011,12 +2014,23 @@ class App:
         )
         state = clay_mode.ensure(ctx)
         view = self._ensure_build_view()
+        # One viewport, many tabs: the camera belongs to the *document*, so it
+        # is snapshotted off the live one on the way out of a tab and put back
+        # on the way in. Done here rather than in ``ClayState.activate`` because
+        # this is the only place that has the viewport -- and it is keyed on
+        # what is being drawn rather than on the switch, so a tab restored from
+        # a ``.wblk`` or closed out from under the pointer lands correctly too.
+        if self._clay_camera_tab != tab.uid:
+            clay_mode.remember_camera(ctx, state.get(self._clay_camera_tab))
+            clay_mode.apply_camera(ctx, tab)
+            self._clay_camera_tab = tab.uid
         view.wireframe = state.wireframe
         view.show_grid = state.grid
         texture = view.draw(tab.doc, rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
         self._build_hovered = imgui.is_item_hovered()
         self._clay_marquee(imgui, view, rect)
+        self._clay_drag_hud(imgui, widgets, view, rect)
         clay_menu.draw(ctx, view)
 
     def _clay_empty(self, ctx: Any, clay_mode: Any) -> None:
@@ -2069,6 +2083,34 @@ class App:
         x1, y1 = rect[0] + max(box[0], box[2]), rect[1] + max(box[1], box[3])
         draw.add_rect_filled((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.08)))
         draw.add_rect((x0, y0), (x1, y1), imgui.get_color_u32((1, 1, 1, 0.55)))
+
+    def _clay_drag_hud(self, imgui: Any, widgets: Any, view: Any, rect: Any) -> None:
+        """What the live drag currently amounts to, above the cursor.
+
+        In the draw list for ``_clay_marquee``'s reason, and *near the cursor*
+        rather than in a corner: the number answers a question the user is
+        asking with their hand, and a readout they have to look away to find is
+        one they stop looking at. It draws only while a drag is live, so an idle
+        viewport is unchanged.
+        """
+        text = getattr(view, "drag_hud", "")
+        if not text or not getattr(view, "dragging", False):
+            return
+        from . import theme
+        from .tokens import sp
+
+        mouse = imgui.get_mouse_pos()
+        x, y = mouse.x + sp(18), mouse.y - sp(28)
+        draw = imgui.get_window_draw_list()
+        size = imgui.calc_text_size(text)
+        pad = sp(6)
+        draw.add_rect_filled(
+            (x - pad, y - pad),
+            (x + size.x + pad, y + size.y + pad),
+            imgui.get_color_u32(theme.rgba(theme.ELEV_2, 0.92)),
+            sp(4),
+        )
+        draw.add_text((x, y), imgui.get_color_u32(theme.rgba(theme.TEXT)), text)
 
     def _inker_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton the other modes use.

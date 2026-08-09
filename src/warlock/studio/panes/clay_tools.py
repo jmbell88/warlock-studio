@@ -50,6 +50,9 @@ PRIMITIVE_ICONS = {
     "cone": icons.TRIANGLE_ALERT,
     "uv_sphere": icons.CIRCLE,
     "torus": icons.CIRCLE,
+    "grid": icons.GRID,
+    "capsule": icons.EGG,
+    "icosphere": icons.STAR,
 }
 
 AXES = (("x", "X"), ("y", "Y"), ("z", "Z"))
@@ -294,6 +297,41 @@ def _snapping(state: Any) -> None:
     )
     _, state.snap_rotate = imgui.input_float("angle (deg)##snapr", state.snap_rotate, 5.0, 0.0)
     imgui.end_disabled()
+    # Outside the disable, because it is a *separate* switch rather than a mode
+    # of the grid: the two answer different questions -- "put it on round
+    # numbers" and "put it exactly there" -- and a user aligning two parts wants
+    # the second without giving up the first everywhere else.
+    changed, value = widgets.toggle(f"{icons.MAGNET} Snap to vertex", state.snap_vertex)
+    if changed:
+        state.snap_vertex = value
+    widgets.help_marker(
+        "While moving, a drag lands on the vertex under the cursor rather than "
+        "on the grid. The vertices being moved are never candidates, so a drag "
+        "cannot snap onto itself. Typing a value or locking an axis (X/Y/Z "
+        "during a drag) overrides it."
+    )
+    _proportional(state)
+
+
+def _proportional(state: Any) -> None:
+    widgets.field_label("proportional")
+    changed, value = widgets.toggle(f"{icons.CIRCLE} Soft falloff", state.proportional)
+    if changed:
+        state.proportional = value
+    widgets.help_marker(
+        "An element drag carries the geometry around the selection with it, "
+        "fading out over the radius, so the surface bends instead of tearing. "
+        "The radius is metres of world space, measured from the nearest "
+        "selected vertex."
+    )
+    imgui.begin_disabled(not state.proportional)
+    _, state.proportional_radius = imgui.input_float(
+        "radius (m)##propr", state.proportional_radius, 0.05, 0.0, "%.3f"
+    )
+    imgui.end_disabled()
+    # Clamped rather than validated, the grid's rule: zero is the off switch the
+    # falloff already treats as a hard selection.
+    state.proportional_radius = max(0.0, float(state.proportional_radius))
     # Clamped rather than validated: zero is the off switch every snap function
     # already treats as the identity, and a negative grid is meaningless.
     state.snap_translate = max(0.0, float(state.snap_translate))

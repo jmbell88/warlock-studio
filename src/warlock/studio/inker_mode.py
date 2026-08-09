@@ -36,6 +36,27 @@ OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 
 NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 
+# The largest canvas the New dialog will make. Not a limit of the engine, which
+# is happy with anything numpy can allocate -- it is a limit on what a *typed*
+# number may do: the fields step and accept free text, so one stray digit turns
+# 2048 into 20480, which is a 1.7 GiB layer allocated on the frame thread. The
+# resize popup is deliberately not capped the same way, because there the
+# document already exists and shrinking it is the usual reason to open it.
+NEW_MAX = 8192
+
+
+def clamp_canvas(width: Any, height: Any) -> tuple[int, int]:
+    """A typed size, made safe. Clamped rather than refused, the snap rule:
+    the fields are being *typed into*, and there is nothing useful for a
+    refusal to show halfway through a number."""
+    def one(value: Any) -> int:
+        try:
+            return max(1, min(int(value), NEW_MAX))
+        except (TypeError, ValueError):
+            return 1
+
+    return one(width), one(height)
+
 
 def ensure(ctx: Any) -> InkerState:
     """The mode's state, built on first use.
@@ -108,7 +129,8 @@ def new_document(ctx: Any, width: int, height: int) -> InkerDoc:
     from . import inker
 
     state = ensure(ctx)
-    doc = inker.Document.blank(int(width), int(height))
+    width, height = clamp_canvas(width, height)
+    doc = inker.Document.blank(width, height)
     return _adopt(ctx, state, doc, path=None, title="Untitled", file_format="ora")
 
 
@@ -1136,6 +1158,14 @@ def _ctrl_key(
         # Applied by the canvas, which is the only thing that knows how big the
         # pane is; a keypress cannot centre on its own.
         tab.view.pending_zoom = 1.0
+    elif name == "4":
+        # Ctrl+4 / Ctrl+Shift+4 turn the page, Ctrl+5 mirrors it. Both are
+        # *view* state -- no pixels move, nothing is pushed, nothing is saved --
+        # which is why they sit here beside the zoom keys rather than among the
+        # mutating shortcuts.
+        inker_state.rotate_view(tab.view, -1 if shift else 1)
+    elif name == "5":
+        inker_state.flip_view(tab.view)
     return True
 
 

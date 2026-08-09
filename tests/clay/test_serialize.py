@@ -396,6 +396,89 @@ def test_a_missing_texture_member_is_refused_rather_than_blanked() -> None:
         ser.read_wblk(out.getvalue())
 
 
+# --- the camera (Clay23) ------------------------------------------------------
+
+
+class _Camera:
+    """What ``ClayView`` hands the writer: a duck with four attributes."""
+
+    def __init__(self, yaw=0.4, pitch=1.1, distance=7.5, target=(1.0, 2.0, 3.0)):
+        self.yaw, self.pitch, self.distance, self.target = yaw, pitch, distance, target
+
+
+def test_a_camera_round_trips_through_the_archive():
+    doc = bd.ClayDoc()
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    data = ser.wblk_bytes(doc, view=_Camera())
+    out = ser.read_view(data)
+    assert out == {
+        "yaw": 0.4,
+        "pitch": 1.1,
+        "distance": 7.5,
+        "target": (1.0, 2.0, 3.0),
+    }
+
+
+def test_a_document_written_without_a_camera_is_byte_for_byte_what_it_was():
+    """Additive rather than versioned: a build that has never heard of the key
+    writes and reads exactly the file it did before."""
+    doc = bd.ClayDoc()
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    assert ser.wblk_bytes(doc) == ser.wblk_bytes(doc, view=None)
+    assert "view" not in json.loads(ser.scene_json(doc))
+
+
+def test_a_file_with_no_camera_reads_as_none_rather_than_as_a_default():
+    """A default would be indistinguishable from a camera somebody chose, and
+    ``None`` is what tells the mode to frame the document instead."""
+    doc = bd.ClayDoc()
+    assert ser.read_view(ser.wblk_bytes(doc)) is None
+
+
+def test_the_camera_is_still_readable_by_a_reader_that_ignores_it():
+    doc = bd.ClayDoc()
+    doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    restored = ser.read_wblk(ser.wblk_bytes(doc, view=_Camera()))
+    assert len(restored.objects) == 1
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "not a dict",
+        {"yaw": 0.0},
+        {"yaw": 0.0, "pitch": 0.0, "distance": 1.0, "target": [1.0, 2.0]},
+        {"yaw": "x", "pitch": 0.0, "distance": 1.0, "target": [0, 0, 0]},
+        {"yaw": float("nan"), "pitch": 0.0, "distance": 1.0, "target": [0, 0, 0]},
+    ],
+    ids=["not-a-dict", "short", "wrong-length-target", "not-a-number", "nan"],
+)
+def test_a_camera_that_makes_no_sense_answers_none_rather_than_raising(entry):
+    """It is read beside a document that has already parsed, so a malformed
+    camera is worth one unfitted viewport and never a refused file."""
+    doc = bd.ClayDoc()
+    data = _with_view(ser.wblk_bytes(doc), entry)
+    assert ser.read_view(data) is None
+    assert ser.read_wblk(data) is not None
+
+
+def test_a_camera_out_of_something_that_is_not_an_archive_answers_none():
+    assert ser.read_view(b"not a zip") is None
+
+
+def _with_view(data: bytes, entry: object) -> bytes:
+    source = zipfile.ZipFile(BytesIO(data))
+    scene = json.loads(source.read(ser.SCENE))
+    scene["view"] = entry
+    out = BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr(ser.SCENE, json.dumps(scene))
+        for name in source.namelist():
+            if name != ser.SCENE:
+                zf.writestr(name, source.read(name))
+    return out.getvalue()
+
+
 def _rewrite_version(data: bytes, version: int) -> bytes:
     """The same archive with ``scene.json``\'s version replaced."""
     source = zipfile.ZipFile(BytesIO(data))

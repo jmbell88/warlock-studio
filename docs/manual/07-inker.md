@@ -11,6 +11,38 @@ the canvas. Only quitting the app and closing a tab can lose pixels, and both as
 The layout follows the rest of the app: tools and their options on the left, the canvas in the
 middle, layers and the pipeline panel on the right. Several documents stay open at once, as tabs.
 
+## Starting a canvas
+
+**New** offers three square presets and, under them, width and height fields for anything else —
+1920 × 1080, a tall banner, a tile. Sizes are clamped rather than refused, up to 8192 px a side: the
+fields are being typed into, and there is nothing useful to show halfway through a number. The
+figure you get is the one printed on the Create button.
+
+Changing the size of a document you already have is a different pair of operations, in the document
+panel on the right: **Scale image** resamples the picture, and **Resize canvas** changes how much
+room it has, with a 3 × 3 anchor saying where the old picture sits in the new space.
+
+## Turning the page
+
+Two buttons at the end of the file row change how the canvas is *shown*, and nothing else — no pixel
+moves, so there is nothing to undo and nothing to save.
+
+- **Rotate the view** (`Ctrl+4`, `Ctrl+Shift+4` the other way) turns the canvas a quarter at a time.
+- **Flip the view** (`Ctrl+5`) mirrors it left to right. This is the oldest check there is on a
+  drawing: errors you have stopped seeing are obvious in the mirror.
+
+Quarter turns rather than a free angle, deliberately: at a quarter turn every overlay — the grid, the
+marching ants, the symmetry lines, the transform box — stays exactly as accurate as it was, and a
+free angle would put all of them slightly wrong. While either is on, a small button beside them says
+so and sets the view back upright, because a mirrored canvas you have forgotten about quietly
+teaches the wrong hand.
+
+Do not confuse these with **Flip H**, **Flip V** and **Rotate** in the document panel's *canvas*
+section. Those move pixels: they are edits, they are one undo step each, and they change what a save
+writes. These two change nothing at all, which is also why they keep working while a save is in
+flight — an editor that would not let you *look* at your drawing while it writes a file would be a
+strange one.
+
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in

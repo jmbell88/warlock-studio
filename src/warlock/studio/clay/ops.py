@@ -73,6 +73,29 @@ def mirror(obj: Obj, axis: int) -> Obj:
     return replace(obj, mesh=bm.transformed(obj.mesh, matrix))
 
 
+def world_box(obj: Obj) -> tuple[np.ndarray, np.ndarray] | None:
+    """The object's axis-aligned box in *world* space, or ``None`` if it is empty.
+
+    Measured by transforming the eight corners of the mesh's own box rather than
+    every position, which makes it **conservative under rotation**: a box tilted
+    45 degrees reports the box around the tilted box, not around the geometry.
+    That is deliberate and is the same answer the viewport's framing already
+    uses -- the two would otherwise disagree about the size of the same object,
+    and a readout that contradicts what the camera does is worse than one that
+    is honestly an upper bound. It is also O(1) after the local bounds, which is
+    what lets a properties panel ask for it every frame.
+    """
+    if len(obj.mesh.positions) == 0:
+        return None
+    lo, hi = bm.bounds(obj.mesh)
+    corners = np.array(
+        [[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    )
+    matrix = m3.compose(obj.translation, obj.rotation, obj.scale)
+    world = (matrix @ np.hstack([corners, np.ones((8, 1))]).T).T[:, :3]
+    return world.min(axis=0), world.max(axis=0)
+
+
 def snap_value(value: float, step: float) -> float:
     """``value`` to the nearest multiple of ``step``; unchanged at step zero.
 

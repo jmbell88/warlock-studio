@@ -290,6 +290,25 @@ def _dissolve(ctx: Any, doc: Any, **_: Any) -> None:
         run_mesh_op(ctx, doc, which)
 
 
+def _extrude(ctx: Any, doc: Any, **params: Any) -> bool:
+    """Extrude, dispatched on the mode -- one row and one key, as Dissolve is.
+
+    "Extrude" means the same thing in all three modes (pull this out and wall in
+    the gap it leaves) and only the implementation differs, so three rows would
+    be exposing the implementation. The vertex branch is the one that is not a
+    simple rename: a mesh stores no wire edges, so it extrudes the *border*
+    edges the selection implies -- see ``ops_topo.extrude_verts``.
+    """
+    from .clay import ops_topo
+
+    which = {
+        "vertex": ops_topo.extrude_verts,
+        "edge": ops_topo.extrude_edges,
+        "face": ops_topo.extrude_faces,
+    }.get(doc.element_mode)
+    return which is not None and run_mesh_op(ctx, doc, which, **params)
+
+
 def _smooth(ctx: Any, doc: Any, levels: float = 1.0, **_: Any) -> None:
     """Catmull-Clark over every selected object, whatever the mode.
 
@@ -662,11 +681,20 @@ def _register_defaults() -> None:
         Op(
             name="extrude",
             label="Extrude",
-            modes=("face",),
-            run=_element("ops_topo.extrude_faces"),
-            enabled=in_mode("face"),
+            modes=ELEMENT_MODES,
+            run=_extrude,
+            enabled=has_elements,
             key="E",
             separator_before=True,
+        )
+    )
+    register(
+        Op(
+            name="bridge",
+            label="Bridge Loops",
+            modes=("edge",),
+            run=_element("ops_topo.bridge_edges"),
+            enabled=in_mode("edge"),
         )
     )
     register(

@@ -124,6 +124,7 @@ def _transform(doc: Any, obj: Any) -> None:
         "way to set one by eye."
     )
     changed |= edited
+    _dimensions(obj)
     if changed:
         # ``was`` is the values the fields started from. imgui writes the new
         # ones into the widget's own state as they are typed, so reading
@@ -137,6 +138,30 @@ def _transform(doc: Any, obj: Any) -> None:
             scale=scale,
             was=was,
         )
+
+
+def _dimensions(obj: Any) -> None:
+    """How big the thing actually is, in metres of world space.
+
+    Read-only, and it is the number the panel was missing: a scale of 2 on a
+    generator whose radius is 0.35 says nothing about how large the object is,
+    in an app whose whole pipeline is denominated in ``size_m``. W x D x H
+    rather than X/Y/Z because that is how a physical object is quoted, and
+    ``ops.world_box``'s answer rather than a second measurement here, so the
+    row and the camera's framing cannot disagree about one object.
+    """
+    from ..clay import ops as bops
+
+    box = bops.world_box(obj)
+    if box is None:
+        return
+    w, h, d = (float(v) for v in (box[1] - box[0]))
+    widgets.muted(f"size  {w:.3f} x {d:.3f} x {h:.3f} m  (W x D x H)")
+    widgets.help_marker(
+        "The object's world-space bounding box, after its transform. A rotated "
+        "object reports the box around its rotated box, which is the same "
+        "measurement the camera frames against."
+    )
 
 
 def _generator(doc: Any, obj: Any) -> None:

@@ -82,6 +82,7 @@ from .edits import (  # noqa: F401
     MaterialListEdit,
     MeshEdit,
     ObjectAddEdit,
+    ObjectMoveEdit,
     ObjectPropsEdit,
     ObjectRemoveEdit,
     TransformEdit,
@@ -277,6 +278,63 @@ class ClayDoc:
         self.history.push(ObjectRemoveEdit(index, obj))
         self.touch()
         return True
+
+    def move_object(self, uid: int, index: int) -> bool:
+        """Put an object at *index* in the list, and record the step.
+
+        Display order is not decoration: ``to_model`` and ``write_glb`` walk the
+        list, so it is the order the nodes come out in and the order an engine
+        importing the GLB will show. That is what makes this an *edit* rather
+        than a view setting, and why it goes on the undo stack beside the others.
+
+        The index is clamped rather than validated, because the caller is a drag:
+        a row dropped past the end of the list means the end of the list, and
+        there is nothing sensible for a refusal to show mid-gesture.
+        """
+        at = self.index_of(uid)
+        target = max(0, min(int(index), len(self.objects) - 1))
+        if target == at:
+            return False
+        obj = self.objects.pop(at)
+        self.objects.insert(target, obj)
+        self.history.push(ObjectMoveEdit(uid, at, target))
+        self.touch()
+        return True
+
+    def set_visibility(self, wanted: dict[int, bool]) -> bool:
+        """Several objects' visibility as **one** step.
+
+        One step because that is what the gesture is: isolating an object is a
+        single click and hiding nine things one Ctrl+Z at a time is not an undo
+        history, it is a punishment. Objects whose visibility already agrees are
+        left out entirely rather than recorded as no-ops, which is what keeps
+        "isolate the thing that is already isolated" from making a saved
+        document ask to be saved again.
+        """
+        edits = []
+        for uid, visible in wanted.items():
+            try:
+                obj = self.by_uid(uid)
+            except KeyError:
+                continue
+            if bool(obj.visible) == bool(visible):
+                continue
+            edits.append(ObjectPropsEdit(uid, {"visible": obj.visible}, {"visible": visible}))
+            obj.visible = bool(visible)
+        if not edits:
+            return False
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.touch()
+        return True
+
+    def isolate(self, uids: Iterable[int]) -> bool:
+        """Show only these objects. One step, and its own inverse is
+        :meth:`show_all` rather than a second isolate."""
+        keep = set(uids)
+        return self.set_visibility({obj.uid: obj.uid in keep for obj in self.objects})
+
+    def show_all(self) -> bool:
+        return self.set_visibility({obj.uid: True for obj in self.objects})
 
     def set_mesh(
         self,

@@ -96,7 +96,14 @@ def active(ctx: Any) -> ClayTab | None:
 # --- opening ----------------------------------------------------------------
 
 
-def adopt(ctx: Any, doc: Any, *, path: Path | None = None, title: str | None = None) -> ClayTab:
+def adopt(
+    ctx: Any,
+    doc: Any,
+    *,
+    path: Path | None = None,
+    title: str | None = None,
+    view: dict[str, Any] | None = None,
+) -> ClayTab:
     state = ensure(ctx)
     tab = ClayTab(
         doc=doc,
@@ -104,6 +111,14 @@ def adopt(ctx: Any, doc: Any, *, path: Path | None = None, title: str | None = N
         path=path,
         saved_head=doc.history.head,
     )
+    if view:
+        tab.view.yaw = view["yaw"]
+        tab.view.pitch = view["pitch"]
+        tab.view.distance = view["distance"]
+        tab.view.target = view["target"]
+        # Already framed, which is the whole point of having stored one: an
+        # auto-fit over the top would throw away the answer just read off disk.
+        tab.view.fitted = True
     state.add(tab)
     remember_path(ctx, path)
     persist(ctx)
@@ -120,8 +135,17 @@ def _load(path: Path) -> dict[str, Any]:
     """Blocking; task thread only. Raises rather than returning a broken tab."""
     from .clay import serialize
 
-    doc = serialize.read_wblk(Path(path).read_bytes())
-    return {"doc": doc, "path": str(path), "title": clay_state.title_for(Path(path))}
+    data = Path(path).read_bytes()
+    doc = serialize.read_wblk(data)
+    return {
+        "doc": doc,
+        "path": str(path),
+        "title": clay_state.title_for(Path(path)),
+        # A second read of the same bytes, deliberately: see ``read_view``'s own
+        # docstring for why the camera is not a second return value from
+        # ``read_wblk``. It parses one small JSON member of an in-memory zip.
+        "view": serialize.read_view(data),
+    }
 
 
 def ask_open(ctx: Any) -> None:
@@ -214,8 +238,11 @@ def _parse_glb(data: bytes, name: str) -> dict[str, Any]:
 def _adopt_import(ctx: Any, result: dict[str, Any]) -> None:
     """Adopt a parsed import, asking first when it is big enough to be slow."""
     doc, title = result["doc"], result.get("title") or "Imported"
+    # A ``.wblk`` sidecar carries a camera; a GLB does not, and ``None`` is
+    # simply "frame it", which is what an import has always done.
+    view = result.get("view")
     if int(result.get("triangles", 0)) <= SLOW_TRIANGLES:
-        adopt(ctx, doc, title=title)
+        adopt(ctx, doc, title=title, view=view)
         ctx.state.mode = "clay"
         return
     ctx.confirms.ask(
@@ -228,17 +255,55 @@ def _adopt_import(ctx: Any, result: dict[str, Any]) -> None:
             ),
             confirm_label="Edit anyway",
             cancel_label="Cancel",
-            on_confirm=lambda: _adopt_now(ctx, doc, title),
+            on_confirm=lambda: _adopt_now(ctx, doc, title, view),
         )
     )
 
 
-def _adopt_now(ctx: Any, doc: Any, title: str) -> None:
-    adopt(ctx, doc, title=title)
+def _adopt_now(ctx: Any, doc: Any, title: str, view: dict[str, Any] | None = None) -> None:
+    adopt(ctx, doc, title=title, view=view)
     ctx.state.mode = "clay"
 
 
 # --- saving -----------------------------------------------------------------
+
+
+def camera_of(ctx: Any, tab: ClayTab) -> Any:
+    """The tab's stored camera, refreshed from the live viewport first.
+
+    Called on every path that writes the document, because ``tab.view`` is only
+    brought up to date when the tab is switched away from -- so saving the tab
+    you are looking at would otherwise store wherever the camera was when you
+    last left it, which is the one case where the answer is visibly wrong.
+    """
+    view = getattr(ctx, "clay_view", None)
+    if view is not None and getattr(view, "camera", None) is not None:
+        tab.view.read_from(view.camera)
+    return tab.view
+
+
+def remember_camera(ctx: Any, tab: ClayTab | None) -> None:
+    """Snapshot the live camera onto a tab that is being switched away from."""
+    if tab is not None:
+        camera_of(ctx, tab)
+
+
+def apply_camera(ctx: Any, tab: ClayTab) -> None:
+    """Put a tab's camera back on the viewport, or frame it if it has none.
+
+    Framing here rather than in ``ClayView`` because this is the layer that
+    knows a *tab* exists: the viewport has one camera and no idea that the thing
+    it is drawing changed identity.
+    """
+    view = getattr(ctx, "clay_view", None)
+    if view is None or getattr(view, "camera", None) is None:
+        return
+    if tab.view.fitted:
+        tab.view.write_to(view.camera)
+        return
+    view.frame_selection(tab.doc)
+    tab.view.read_from(view.camera)
+    tab.view.fitted = True
 
 
 def _start(ctx: Any, tab: ClayTab, key: str, run: Any) -> None:
@@ -261,7 +326,7 @@ def save_to(ctx: Any, tab: ClayTab, path: Path) -> None:
     path = Path(path)
     doc = tab.doc
     rev = doc.history.head
-    data = serialize.wblk_bytes(doc)
+    data = serialize.wblk_bytes(doc, view=camera_of(ctx, tab))
 
     def run() -> dict[str, Any]:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -298,7 +363,7 @@ def save_as(ctx: Any, tab: ClayTab | None = None) -> None:
         return
     doc, title = tab.doc, tab.title
     rev = doc.history.head
-    data = serialize.wblk_bytes(doc)
+    data = serialize.wblk_bytes(doc, view=camera_of(ctx, tab))
 
     def run() -> dict[str, Any] | None:
         path = dialogs.save_file(
@@ -345,7 +410,7 @@ def export_asset(ctx: Any, tab: ClayTab | None = None) -> None:
         return
 
     glb = glbwrite.write_glb(bd.to_model(doc))
-    wblk = serialize.wblk_bytes(doc)
+    wblk = serialize.wblk_bytes(doc, view=camera_of(ctx, tab))
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
@@ -370,7 +435,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     if name == "clay-open":
         if isinstance(result, dict):
-            adopt(ctx, result["doc"], path=Path(result["path"]), title=result.get("title"))
+            adopt(
+                ctx,
+                result["doc"],
+                path=Path(result["path"]),
+                title=result.get("title"),
+                view=result.get("view"),
+            )
             ctx.state.mode = "clay"
         return
 
@@ -505,6 +576,22 @@ def handle_key(ctx: Any, event: Any) -> bool:
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key)
+
+    # A live gizmo drag owns the bare keys, and it has to be asked *first*: the
+    # number row is bound to the element modes, so a "1" typed into a drag would
+    # otherwise jump into vertex mode halfway through moving something. Esc
+    # cancels the drag rather than falling through to the staged clear, and
+    # Enter commits it -- neither means anything else while one is under way.
+    view = getattr(ctx, "clay_view", None)
+    if not ctrl and view is not None and getattr(view, "dragging", False):
+        if event.key == pygame.K_ESCAPE:
+            view.cancel_drag(doc)
+            return True
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            view._release_drag(doc)
+            return True
+        if view.drag_key(doc, name):
+            return True
 
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, shift=shift)

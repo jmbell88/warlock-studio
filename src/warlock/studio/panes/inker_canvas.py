@@ -20,6 +20,7 @@ import math
 import time
 from typing import Any
 
+import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
@@ -30,6 +31,67 @@ from . import inker_textures
 
 def _u32(colour: int, alpha: float = 1.0) -> int:
     return imgui.get_color_u32(imgui.ImVec4(*theme.rgba(colour, alpha)))
+
+
+# --- drawing through the view's orientation (Ink9) ---------------------------
+#
+# Every overlay below goes through one of these three, and that is the whole of
+# what makes canvas rotation and the flipped view safe. The failure the feature
+# invites is not a crash: it is one overlay left computing its own screen
+# position from ``origin + x * zoom``, which is right at rotation 0 and silently
+# a quarter turn out everywhere else -- a grid drawn across a canvas that is not
+# there, ants beside the mask they describe. Quarter turns are what keeps these
+# three enough (see ``inker_state.ROTATIONS``): an axis-aligned image rectangle
+# comes out an axis-aligned *screen* rectangle, so a rect is still a rect and a
+# grid is still two families of straight lines.
+
+
+def _corners(view: Any, origin, x0: float, y0: float, x1: float, y1: float):
+    """An image-space rectangle's four corners on screen, in image order:
+    top-left, top-right, bottom-right, bottom-left."""
+    to = inker_state.to_screen
+    return (
+        to(view, origin, x0, y0),
+        to(view, origin, x1, y0),
+        to(view, origin, x1, y1),
+        to(view, origin, x0, y1),
+    )
+
+
+def _box(view: Any, origin, x0: float, y0: float, x1: float, y1: float):
+    """An image-space rectangle as a screen AABB ``(top_left, bottom_right)``.
+
+    Sound only because the orientation is a quarter turn: it maps the corner
+    set onto itself, so the min and max of the four transformed corners *are*
+    two opposite corners of the same rectangle rather than a box around a
+    tilted one.
+    """
+    points = _corners(view, origin, x0, y0, x1, y1)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return (min(xs), min(ys)), (max(xs), max(ys))
+
+
+def _blit(draw_list: Any, texture: Any, view: Any, origin, x0, y0, x1, y1, **kwargs) -> None:
+    """One image drawn over an image-space rectangle, however the view is turned.
+
+    ``add_image_quad`` rather than ``add_image``, because the two-corner form
+    can only draw an upright rectangle: the quad's four *positions* carry the
+    turn and the four uvs stay in the texture's own order, which is exactly a
+    rotation of the picture and not a resampling of it.
+
+    ``uv`` overrides the corner coordinates for the one caller that tiles
+    (the checkerboard), in the same top-left/top-right/bottom-right/bottom-left
+    order the positions are in.
+    """
+    uv = kwargs.pop("uv", ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
+    colour = kwargs.pop("colour", None)
+    a, b, c, d = _corners(view, origin, x0, y0, x1, y1)
+    ref = widgets.texture_ref(texture)
+    if colour is None:
+        draw_list.add_image_quad(ref, a, b, c, d, *uv)
+    else:
+        draw_list.add_image_quad(ref, a, b, c, d, *uv, colour)
 
 
 def draw(ctx: Any) -> None:
@@ -89,6 +151,8 @@ def _file_row(ctx: Any, state: Any) -> None:
         inker_mode.export_png(ctx, tab)
     if tab is not None:
         imgui.same_line()
+        _view_row(tab)
+        imgui.same_line()
         if tab.saving:
             widgets.muted("saving...")
         elif tab.playing:
@@ -98,6 +162,34 @@ def _file_row(ctx: Any, state: Any) -> None:
     imgui.separator()
     if tab is not None and state.transforming:
         _transform_row(ctx, state, tab)
+
+
+def _view_row(tab: Any) -> None:
+    """Turn the page, and mirror it. Never disabled while a save is running.
+
+    Everything else on this row is gated on ``busy`` because it changes the
+    document; these two change nothing at all -- no pixels move, no step is
+    pushed, nothing is written -- so gating them would be an editor that refuses
+    to let you *look* at your drawing while it writes a file.
+    """
+    view = tab.view
+    if widgets.icon_button(icons.ROTATE_CW, "Rotate the view (Ctrl+4)"):
+        inker_state.rotate_view(view, 1)
+    imgui.same_line()
+    if widgets.icon_button(icons.FLIP_HORIZONTAL, "Flip the view (Ctrl+5)"):
+        inker_state.flip_view(view)
+    if view.rotation or view.flipped:
+        imgui.same_line()
+        # Said out loud, because the two are invisible once you have looked away
+        # for a moment and a mirrored canvas silently teaches the wrong hand.
+        parts = ([f"{view.rotation} deg"] if view.rotation else []) + (
+            ["flipped"] if view.flipped else []
+        )
+        if imgui.small_button(f"{' + '.join(parts)}##inkerviewreset"):
+            view.rotation, view.flipped = 0, False
+            view.pending_zoom = view.zoom
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("The view only -- click to set it upright")
 
 
 def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
@@ -144,6 +236,17 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
 
 
 def _new_popup(ctx: Any) -> None:
+    """The presets, and the custom size the presets could not express.
+
+    The other half of the 3x3 anchor grid's popup: a resize has taken typed
+    width and height since it was written, and creating one could only ever
+    offer three squares -- so a user who wanted 1920x1080 had to make a square
+    and then resize it, which is two undo steps and a guess about the anchor.
+
+    The fields are remembered per session in ``state.preview`` rather than per
+    document, because there is no document yet -- and because reopening the
+    dialog after a mistake should offer the number that was nearly right.
+    """
     if not imgui.begin_popup("new-canvas"):
         return
     imgui.text("New canvas")
@@ -151,6 +254,24 @@ def _new_popup(ctx: Any) -> None:
         if imgui.button(f"{width} x {height}", (sp(160), 0)):
             inker_mode.new_document(ctx, width, height)
             imgui.close_current_popup()
+
+    imgui.separator()
+    key = "inker_new_size"
+    width, height = ctx.state.preview.get(key) or inker_mode.NEW_PRESETS[1]
+    imgui.set_next_item_width(sp(72))
+    changed_w, width = imgui.input_int("W##newcanvas", int(width), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(72))
+    changed_h, height = imgui.input_int("H##newcanvas", int(height), 0)
+    if changed_w or changed_h:
+        # Clamped on the way *into* the field as well as on the way out, or the
+        # box goes on showing a number that is not what the button would make.
+        ctx.state.preview[key] = inker_mode.clamp_canvas(width, height)
+    width, height = inker_mode.clamp_canvas(width, height)
+    if imgui.button(f"Create {width} x {height}", (sp(160), 0)):
+        inker_mode.new_document(ctx, width, height)
+        imgui.close_current_popup()
+    widgets.muted(f"up to {inker_mode.NEW_MAX} px a side")
     imgui.end_popup()
 
 
@@ -184,6 +305,11 @@ def _empty(ctx: Any, state: Any) -> None:
     for width, height in inker_mode.NEW_PRESETS:
         if imgui.button(f"New {width} x {height}", (sp(240), 0)):
             inker_mode.new_document(ctx, width, height)
+    # The same popup the file row's New button opens, rather than a second set
+    # of fields: it is registered earlier in this window, so opening it by name
+    # from here is enough.
+    if imgui.button("New custom size...", (sp(240), 0)):
+        imgui.open_popup("new-canvas")
     imgui.dummy((0, sp(8)))
     if imgui.button("Open a file...", (sp(240), 0)):
         inker_mode.ask_open(ctx)
@@ -343,8 +469,14 @@ def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
         "se": (x + width, y + height),
     }
     out = {k: inker_state.to_screen(view, origin, *p) for k, p in corners.items()}
+    # The arm points away from the box's top edge *in the image*, carried on to
+    # screen -- not straight up, which is only the same thing while the page is
+    # upright and puts the handle inside the box at 180 degrees.
     top = inker_state.to_screen(view, origin, x + width / 2.0, y)
-    out["rotate"] = (top[0], top[1] - ROTATE_ARM)
+    above = inker_state.to_screen(view, origin, x + width / 2.0, y - 1.0)
+    dx, dy = above[0] - top[0], above[1] - top[1]
+    length = math.hypot(dx, dy) or 1.0
+    out["rotate"] = (top[0] + dx / length * ROTATE_ARM, top[1] + dy / length * ROTATE_ARM)
     return out
 
 
@@ -397,6 +529,12 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
     elif state.drag_kind == "rotate":
         bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))
         step = bearing0 - bearing  # screen y grows downward; the engine's does not
+        if tab.view.flipped:
+            # A rotation of the *view* cancels in a difference of bearings, but
+            # a mirror does not: dragging the handle clockwise on a flipped page
+            # is anticlockwise on the drawing, and without this the buffer turns
+            # the opposite way to the cursor.
+            step = -step
         if imgui.get_io().key_shift:
             step = round(step / 15.0) * 15.0
         doc.transform_floating(angle=angle0 + step)
@@ -412,7 +550,15 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
         return
     handles = _handles(tab, origin)
     colour = _u32(theme.ACCENT)
-    draw_list.add_rect(handles["nw"], handles["se"], colour)
+    # The screen box of the four corners rather than the ``nw``/``se`` pair:
+    # those names are image-space, and a turned page makes ``nw`` the bottom
+    # right of what is on screen, which ``add_rect`` draws as nothing at all.
+    a, b = _box(
+        tab.view, origin,
+        buf.offset[0], buf.offset[1],
+        buf.offset[0] + buf.size[0], buf.offset[1] + buf.size[1],
+    )
+    draw_list.add_rect(a, b, colour)
     top = inker_state.to_screen(
         tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1]
     )
@@ -609,7 +755,7 @@ ONION_BACK = 0xE05050
 ONION_FORWARD = 0x50C060
 
 
-def _onion(ctx: Any, state: Any, tab: Any, draw_list, top_left, bottom_right) -> None:
+def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> None:
     """Neighbouring frames, tinted and faded, beneath the live one.
 
     Furthest first so the nearest neighbour ends up on top, and each step
@@ -630,24 +776,20 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, top_left, bottom_right) ->
             if texture is None:
                 continue
             fade = state.onion_alpha / offset
-            draw_list.add_image(
-                widgets.texture_ref(texture),
-                top_left,
-                bottom_right,
-                (0.0, 0.0),
-                (1.0, 1.0),
-                _u32(colour, fade),
+            _blit(
+                draw_list, texture, view, origin, 0, 0, size[0], size[1],
+                colour=_u32(colour, fade),
             )
 
 
-def _playback_frame(ctx: Any, tab: Any, draw_list, top_left, bottom_right) -> None:
+def _playback_frame(ctx: Any, tab: Any, draw_list, view, origin, size) -> None:
     anim = tab.doc.anim
     if anim is None or not anim.frames:
         return
     index = max(0, min(tab.play_index, len(anim.frames) - 1))
     texture = inker_textures.frame_texture(ctx, tab, anim.frames[index].uid)
     if texture is not None:
-        draw_list.add_image(widgets.texture_ref(texture), top_left, bottom_right)
+        _blit(draw_list, texture, view, origin, 0, 0, size[0], size[1])
 
 
 def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
@@ -655,27 +797,28 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     view = tab.view
     draw_list = imgui.get_window_draw_list()
     width, height = doc.size
-    top_left = inker_state.to_screen(view, origin, 0, 0)
-    bottom_right = inker_state.to_screen(view, origin, width, height)
+    # The canvas's screen AABB, which under a quarter turn is still exactly the
+    # canvas rather than a box around it -- see ``_box``.
+    top_left, bottom_right = _box(view, origin, 0, 0, width, height)
 
-    _checkerboard(ctx, draw_list, view, top_left, bottom_right)
+    _checkerboard(ctx, draw_list, top_left, bottom_right)
     # Before the composite and before its ``None`` early-out, so the strip is
     # genuinely beneath the live drawing rather than sometimes instead of it.
     if state.onion and not tab.playing:
-        _onion(ctx, state, tab, draw_list, top_left, bottom_right)
+        _onion(ctx, state, tab, draw_list, view, origin, doc.size)
 
     if tab.playing:
         # The cached flatten of the frame being played, not the document's
         # composite: the playhead on the document deliberately does not move
         # during playback, so the composite is still frame one.
-        _playback_frame(ctx, tab, draw_list, top_left, bottom_right)
+        _playback_frame(ctx, tab, draw_list, view, origin, doc.size)
         draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
         return
 
     texture = inker_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
     if texture is None:
         return
-    draw_list.add_image(widgets.texture_ref(texture), top_left, bottom_right)
+    _blit(draw_list, texture, view, origin, 0, 0, width, height)
     _floating(ctx, tab, draw_list, origin)
     draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
 
@@ -691,12 +834,20 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         _cursor(state, draw_list, view)
 
 
-def _checkerboard(ctx: Any, draw_list: Any, view: Any, top_left, bottom_right) -> None:
+def _checkerboard(ctx: Any, draw_list: Any, top_left, bottom_right) -> None:
+    """The transparency backdrop, drawn in **screen** space and deliberately not
+    put through the view's turn.
+
+    It is the surface the page sits on rather than part of the page: rotating it
+    with the canvas would make the squares spin, which says nothing and looks
+    like a bug. Under a quarter turn the canvas's screen AABB *is* the canvas,
+    so an upright ``add_image`` over that box covers exactly what it should.
+    """
     texture = inker_textures.checker(ctx)
     if texture is None:
         return
     # UVs in tile units, so one draw call covers the canvas at any zoom and the
-    # squares stay a constant size on *screen* rather than in image space.
+    # squares stay a constant size on screen rather than in image space.
     span = (bottom_right[0] - top_left[0], bottom_right[1] - top_left[1])
     tile = texture.size[0]
     draw_list.add_image(
@@ -717,9 +868,8 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
         return
     x, y = buf.offset
     fw, fh = buf.size
-    a = inker_state.to_screen(tab.view, origin, x, y)
-    b = inker_state.to_screen(tab.view, origin, x + fw, y + fh)
-    draw_list.add_image(widgets.texture_ref(texture), a, b)
+    _blit(draw_list, texture, tab.view, origin, x, y, x + fw, y + fh)
+    a, b = _box(tab.view, origin, x, y, x + fw, y + fh)
     draw_list.add_rect(a, b, _u32(theme.ACCENT))
 
 
@@ -738,6 +888,13 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
     # Only the visible index range (B22): the canvas span intersected with
     # the window, turned back into grid indices. A 16 px grid over a zoomed
     # 4096 canvas used to walk all 257 columns to draw the dozen on screen.
+    #
+    # The range is derived by inverse-transforming the visible rectangle's
+    # corners rather than by dividing a screen offset by the zoom, which is the
+    # form that only worked while ``top_left`` was the image's origin: under a
+    # quarter turn it is a different corner of the canvas, so the old
+    # subtraction produced a range that was correct at rotation 0 and empty
+    # (or reversed) at every other.
     win = imgui.get_window_pos()
     wsz = imgui.get_window_size()
     left = max(top_left[0], win.x)
@@ -746,34 +903,43 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
     bottom = min(bottom_right[1], win.y + wsz.y)
     if left > right or top > bottom:
         return
-    zoom = view.zoom
-    x_lo = max(0, int((left - top_left[0]) / zoom / step) * step)
-    x_hi = min(width, int((right - top_left[0]) / zoom) + step)
-    for x in range(x_lo, x_hi + 1, step):
-        sx = inker_state.to_screen(view, origin, x, 0)[0]
-        if left <= sx <= right:
-            draw_list.add_line((sx, top_left[1]), (sx, bottom_right[1]), colour)
-    y_lo = max(0, int((top - top_left[1]) / zoom / step) * step)
-    y_hi = min(height, int((bottom - top_left[1]) / zoom) + step)
-    for y in range(y_lo, y_hi + 1, step):
-        sy = inker_state.to_screen(view, origin, 0, y)[1]
-        if top <= sy <= bottom:
-            draw_list.add_line((top_left[0], sy), (bottom_right[0], sy), colour)
+    seen = [
+        inker_state.to_image(view, origin, sx, sy)
+        for sx in (left, right)
+        for sy in (top, bottom)
+    ]
+    lo_x = max(0, int(min(p[0] for p in seen) / step) * step)
+    hi_x = min(width, int(max(p[0] for p in seen)) + step)
+    lo_y = max(0, int(min(p[1] for p in seen) / step) * step)
+    hi_y = min(height, int(max(p[1] for p in seen)) + step)
+    # An image-space line still lands as an axis-aligned screen line, because
+    # the orientation is a quarter turn -- but which screen axis it lands on
+    # swaps, so both endpoints are transformed rather than one coordinate being
+    # borrowed from the canvas box.
+    for x in range(lo_x, hi_x + 1, step):
+        a = inker_state.to_screen(view, origin, x, 0)
+        b = inker_state.to_screen(view, origin, x, height)
+        draw_list.add_line(a, b, colour)
+    for y in range(lo_y, hi_y + 1, step):
+        a = inker_state.to_screen(view, origin, 0, y)
+        b = inker_state.to_screen(view, origin, width, y)
+        draw_list.add_line(a, b, colour)
 
 
 def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
     width, height = size
     colour = _u32(theme.ACCENT, 0.6)
+    # Both endpoints through ``to_screen``, for ``_grid``'s reason: the axis a
+    # mirror line lands on swaps with the page, so borrowing one coordinate
+    # from a corner would draw it across the canvas the wrong way.
     if state.symmetry in ("x", "xy"):
-        x = inker_state.to_screen(view, origin, width / 2, 0)[0]
-        top = inker_state.to_screen(view, origin, 0, 0)[1]
-        bottom = inker_state.to_screen(view, origin, 0, height)[1]
-        draw_list.add_line((x, top), (x, bottom), colour)
+        a = inker_state.to_screen(view, origin, width / 2, 0)
+        b = inker_state.to_screen(view, origin, width / 2, height)
+        draw_list.add_line(a, b, colour)
     if state.symmetry in ("y", "xy"):
-        y = inker_state.to_screen(view, origin, 0, height / 2)[1]
-        left = inker_state.to_screen(view, origin, 0, 0)[0]
-        right = inker_state.to_screen(view, origin, width, 0)[0]
-        draw_list.add_line((left, y), (right, y), colour)
+        a = inker_state.to_screen(view, origin, 0, height / 2)
+        b = inker_state.to_screen(view, origin, width, height / 2)
+        draw_list.add_line(a, b, colour)
 
 
 def _contours(ctx: Any, tab: Any):
@@ -819,16 +985,27 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     win = imgui.get_window_pos()
     wsz = imgui.get_window_size()
     clip = (win.x, win.y, win.x + wsz.x, win.y + wsz.y)
-    zoom = float(view.zoom)
+    rows = inker_state.basis(view)
+    matrix = np.asarray(rows, dtype=np.float64)
     for verts, cum, box in loops:
-        if (
-            box[0] * zoom + offset[0] > clip[2]
-            or box[2] * zoom + offset[0] < clip[0]
-            or box[1] * zoom + offset[1] > clip[3]
-            or box[3] * zoom + offset[1] < clip[1]
-        ):
+        # The loop's canvas box, put on screen through the *same* orientation
+        # the dashes go through. Under a quarter turn the transformed corners
+        # are still two opposite corners of an axis-aligned box, so a min/max
+        # over the four is exact rather than conservative -- but the old form,
+        # which scaled the box's own coordinates, silently culled every loop the
+        # moment the page was turned.
+        corners = [
+            inker_state.to_screen(view, origin, x, y)
+            for x in (box[0], box[2])
+            for y in (box[1], box[3])
+        ]
+        xs = [p[0] for p in corners]
+        ys = [p[1] for p in corners]
+        if min(xs) > clip[2] or max(xs) < clip[0] or min(ys) > clip[3] or max(ys) < clip[1]:
             continue
-        starts, ends, on = ants.dash_segments(verts, cum, view.zoom, offset, phase)
+        starts, ends, on = ants.dash_segments(
+            verts, cum, view.zoom, offset, phase, basis=matrix
+        )
         starts, ends, on = ants.cull(starts, ends, on, clip)
         # One call per dash. imgui has no batched per-segment-colour API, so
         # this loop is irreducible -- but it is over dashes now rather than over

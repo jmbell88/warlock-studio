@@ -90,8 +90,11 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | --- | --- |
 | Q / W / E / R | Select / move / rotate / scale |
 | 1 / 2 / 3 / 4 | Vertex / edge / face / object mode |
-| E | Extrude, with faces selected |
+| E | Extrude, in any element mode |
 | F | Frame the selection |
+| X / Y / Z | Lock a drag already under way to that axis; the same key again clears it |
+| digits, `.`, `-` | Type the drag's value outright; `Backspace` takes a character back |
+| Enter | Commit the drag |
 | Delete | Delete the selection — faces in an element mode, objects in object mode |
 | Ctrl+D | Duplicate the selection (object mode only) |
 | Ctrl+J | Merge the selected objects into one (object mode only) |
@@ -102,7 +105,7 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | Ctrl+N / Ctrl+O | New / open a document |
 | Ctrl+E | Export to the library |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous document |
-| Esc | Step back: element selection, then element mode, then object selection |
+| Esc | Cancel a drag; otherwise step back: element selection, then element mode, then object selection |
 
 **The mouse.** Left-drag in empty space orbits, and `Alt`+left-drag always orbits whatever mode you
 are in. Middle-drag pans and the wheel dollies. Right-click opens the context menu — right-drag does
@@ -145,6 +148,8 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+T | Free transform (Enter applies, Esc cancels) |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
+| Ctrl+4 / Ctrl+Shift+4 | Turn the view a quarter clockwise / anticlockwise |
+| Ctrl+5 | Mirror the view left to right |
 | Space drag, middle drag | Pan (the wheel zooms) |
 | Delete | Clear the selected pixels |
 | Esc | Cancel a floating selection, then deselect |

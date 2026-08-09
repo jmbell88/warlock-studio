@@ -91,6 +91,11 @@ class _ElementDrag:
     # that the object's mesh never moved -- reading it back would find the
     # press-time geometry and commit nothing at all.
     preview: Any = None
+    # One weight per entry of ``verts``, or None for a hard selection. It is a
+    # weight rather than a second vertex list because the falloff has to be a
+    # *blend*: a vertex at 0.3 moves three tenths of the way, which no set
+    # membership can express.
+    weights: Any = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,14 @@ class Hit:
 # Which gizmo each tool drives. Held as data so the dispatch is one lookup
 # rather than a chain that a fifth tool would have to be threaded through.
 GIZMO_FOR_TOOL = {"move": "translate", "rotate": "rotate", "scale": "scale"}
+
+# How close the cursor has to come to a vertex for a move to snap onto it, in
+# pixels. Larger than ``pick.VERT_RADIUS`` on purpose: picking asks "did you
+# mean to click this", where a generous radius selects the wrong thing, and
+# snapping asks "are you near this", where a mean one makes the feature feel
+# broken -- the user is already dragging, so there is nothing else the gesture
+# could have meant.
+SNAP_VERTEX_RADIUS = 14.0
 
 
 def _about(centre: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -339,6 +352,19 @@ class ClayView:
         # One shared empty element-selection, so an unselected object stops
         # synthesising a fresh empty() per frame (B26).
         self._empty_sel: Any = None
+
+        # What the keyboard has said about the drag under way, and what the HUD
+        # should draw for it. Both are per drag: created at the press and
+        # dropped at the release, because a lock that outlived one would
+        # silently constrain the next.
+        from .clay import drag as bdrag
+
+        self.drag_input = bdrag.DragInput()
+        self.drag_hud: str = ""
+        # The world position a move has snapped onto, or None. Held rather than
+        # recomputed by the consumer because it is found from the *cursor*, and
+        # the transform is applied a layer down where the cursor is gone.
+        self._snap_point: np.ndarray | None = None
 
     # -- the GPU cache -----------------------------------------------------
 
@@ -749,17 +775,15 @@ class ClayView:
         return out
 
     def _object_world_box(self, obj: Any) -> tuple[Any, Any] | None:
-        from .clay import mesh as bm
+        """``ops.world_box``, and deliberately nothing else.
 
-        if len(obj.mesh.positions) == 0:
-            return None
-        lo, hi = bm.bounds(obj.mesh)
-        corners = np.array(
-            [[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
-        )
-        matrix = self._world(obj)
-        world = (matrix @ np.hstack([corners, np.ones((8, 1))]).T).T[:, :3]
-        return world.min(axis=0), world.max(axis=0)
+        It used to be a second copy of the same eight corners, which is how the
+        properties panel's dimensions row and the camera's framing would have
+        come to disagree about the size of one object.
+        """
+        from .clay import ops as bops
+
+        return bops.world_box(obj)
 
     def frame_selection(self, doc: Any) -> float:
         """Put the selection -- or the whole document -- on screen."""
@@ -1021,6 +1045,11 @@ class ClayView:
         origin = None if gizmo is None else getattr(gizmo, "origin", None)
         self._drag_origin = np.zeros(3) if origin is None else np.array(origin, dtype="f8")
         self._grab = "gizmo"
+        from .clay import drag as bdrag
+
+        self.drag_input = bdrag.DragInput()
+        self.drag_hud = ""
+        self._snap_point = None
         if doc.element_mode != "object":
             self._begin_element_drag(doc)
 
@@ -1091,9 +1120,114 @@ class ClayView:
                 self._commit_element_drag(doc)
             else:
                 self._commit_drag(doc)
+            self._clear_drag_input()
         elif was == "marquee":
             self._commit_marquee(doc)
         return True
+
+    # -- the keyboard's half of a drag (Clay18) ------------------------------
+
+    @property
+    def dragging(self) -> bool:
+        """Whether a gizmo drag is live. What the key handler checks *first*.
+
+        First because the number row is bound to the element modes: a ``1``
+        typed into a drag has to be a digit, not a jump into vertex mode
+        halfway through moving something.
+        """
+        return self._grab == "gizmo"
+
+    def _clear_drag_input(self) -> None:
+        from .clay import drag as bdrag
+
+        self.drag_input = bdrag.DragInput()
+        self.drag_hud = ""
+        self._snap_point = None
+
+    def drag_key(self, doc: Any, name: str) -> bool:
+        """Feed one key name to the live drag. -> whether it was consumed.
+
+        The transform is re-applied immediately rather than waiting for the next
+        mouse move, because a typed value with the mouse held still is the whole
+        point of typing one. Re-applying is safe because every gizmo's
+        ``update`` is a function of the ray it is handed and the press it began
+        from: ``RotateGizmo`` returns a zero increment for an unchanged ray,
+        and the other two are measured from the press outright.
+        """
+        if not self.dragging or not self.drag_input.key(name):
+            return False
+        self._drag_gizmo(doc, self._last_mouse)
+        return True
+
+    def cancel_drag(self, doc: Any) -> bool:
+        """Esc during a drag: put everything back and record nothing.
+
+        Distinct from a release, which commits. Without it Esc cleared the
+        pane's own drag bookkeeping and left the view still holding the grab,
+        so the objects stayed wherever the last motion put them with no history
+        step to take them back.
+        """
+        if not self.dragging:
+            return False
+        self._grab = None
+        gizmo = self.active_gizmo(doc)
+        if gizmo is not None:
+            gizmo.end_drag()
+        if doc.element_mode != "object":
+            drags, self._element_drags = self._element_drags, {}
+            for uid in drags:
+                entry = self._cache.pop(uid, None)
+                if entry is not None:
+                    entry.gpu.release()
+        else:
+            for uid, was in self._drag_start.items():
+                try:
+                    obj = doc.by_uid(uid)
+                except KeyError:
+                    continue
+                obj.translation, obj.rotation, obj.scale = (np.array(v, copy=True) for v in was)
+            self._drag_uids = []
+            self._drag_start = {}
+        self._clear_drag_input()
+        doc.touch()
+        return True
+
+    def _snap_vertex(self, doc: Any, local: tuple[float, float]) -> np.ndarray | None:
+        """The world position of the vertex under the cursor, or ``None``.
+
+        Screen-space rather than a world-space proximity search, which is the
+        difference between "snap to what I am pointing at" and "snap to whatever
+        happens to be near the thing I am moving" -- and only the first is a
+        gesture the user can aim.
+
+        The vertices being dragged are excluded per object. A drag that could
+        snap onto its own moving geometry would track the cursor exactly and
+        report a snap, which is the worst failure available: it looks like the
+        feature working.
+        """
+        from .clay import pick as bp
+
+        best: tuple[float, np.ndarray] | None = None
+        for obj in doc.objects:
+            if not obj.visible:
+                continue
+            drag = self._element_drags.get(obj.uid)
+            allowed = None
+            if drag is not None:
+                allowed = np.ones(len(obj.mesh.positions), dtype=bool)
+                allowed[np.asarray(drag.verts, dtype="i8")] = False
+            screen = self.screen_of(doc, obj.uid)
+            index = bp.nearest_vertex(
+                screen, local, radius=SNAP_VERTEX_RADIUS, allowed=allowed
+            )
+            if index is None:
+                continue
+            depth = float(screen.depth[index])
+            if best is not None and depth >= best[0]:
+                continue
+            local_pos = np.append(obj.mesh.positions[index].astype("f8"), 1.0)
+            best = (depth, (self._world(obj) @ local_pos)[:3])
+        return None if best is None else best[1]
 
     def _commit_marquee(self, doc: Any) -> None:
         """Apply the swept rectangle, or clear the selection if it has no area.
@@ -1176,7 +1310,13 @@ class ClayView:
 
     def _begin_element_drag(self, doc: Any) -> None:
         """Snapshot every selected object's affected vertices at the press."""
+        from .clay import drag as bdrag
         from .clay import elements as el
+
+        state = self.state
+        radius = 0.0
+        if bool(getattr(state, "proportional", False)):
+            radius = float(getattr(state, "proportional_radius", 0.0))
 
         self._element_drags = {}
         centre = self.element_centre(doc)
@@ -1189,6 +1329,18 @@ class ClayView:
             verts = el.affected_verts(obj.mesh, sel)
             if not len(verts):
                 continue
+            weights = None
+            if radius > 0.0:
+                # The radius is metres of *world* space -- that is what the
+                # field says and what the user judges by eye -- and the search
+                # is in the object's own frame, so an object at scale 2 would
+                # otherwise reach twice as far as the number on the panel. Max
+                # rather than a mean, the ``ops.join`` rule: it is the bound
+                # that holds per axis.
+                scale = float(np.max(np.abs(np.asarray(obj.scale, dtype="f8"))))
+                verts, weights = bdrag.proportional_set(
+                    obj.mesh.positions, verts, radius / scale if scale > 0.0 else radius
+                )
             matrix = self._world(obj)
             try:
                 inverse = np.linalg.inv(matrix)
@@ -1200,6 +1352,7 @@ class ClayView:
                 local=obj.mesh.positions[verts].astype("f8"),
                 matrix=matrix,
                 inverse=inverse,
+                weights=weights,
             )
 
     def _element_world_transform(self, delta: Any, state: Any) -> Any:
@@ -1212,7 +1365,14 @@ class ClayView:
         from .clay import ops
 
         centre = self._element_centre
-        snap = bool(getattr(state, "snap", False))
+        # The grid stands down for anything more specific. A vertex snap and a
+        # typed value are both statements about where the thing goes, and
+        # re-quantising either onto the grid afterwards would move it off the
+        # answer the user just gave -- which is the same ordering ``_narrow``
+        # states and is repeated here because this is where it takes effect.
+        snap = bool(getattr(state, "snap", False)) and not (
+            self._snap_point is not None or self.drag_input.active
+        )
         world = m3.identity()
         if isinstance(delta, np.ndarray) and delta.shape == (4,):
             if snap:
@@ -1242,6 +1402,13 @@ class ClayView:
         world = self._element_world_transform(delta, state)
         for uid, drag in self._element_drags.items():
             moved = _apply_affine(drag.inverse @ world @ drag.matrix, drag.local)
+            if drag.weights is not None:
+                # The blend is between where the vertex *was* and where the
+                # whole transform would have put it, which is exact for a
+                # translation and the standard reading for the other two: a
+                # partially rotated vertex is one that has travelled part of the
+                # way along the same path.
+                moved = drag.local + drag.weights[:, None] * (moved - drag.local)
             positions = np.array(drag.before.positions, dtype="f4")
             positions[drag.verts] = moved
             drag.preview = positions
@@ -1316,6 +1483,7 @@ class ClayView:
         if delta is None:
             return
         delta = self._accumulate(delta)
+        delta = self._narrow(doc, delta, state, local)
         if doc.element_mode != "object":
             self._preview_element_drag(doc, delta, state)
             return
@@ -1326,6 +1494,47 @@ class ClayView:
                 continue
             self._apply(obj, was, delta, state)
         doc.touch()
+
+    def _narrow(self, doc: Any, delta: Any, state: Any, local: tuple[float, float]) -> Any:
+        """Axis lock, typed value and vertex snap, applied to one drag delta.
+
+        One place for all three, above both the object path and the element
+        path, so neither has to learn what a lock is -- the same argument that
+        keeps the constraint out of the three gizmos. It also fixes the order,
+        which is a decision rather than an accident: **an explicit constraint
+        beats a snap.** A user who has typed ``X 2`` has said exactly where the
+        thing goes, and quietly moving it onto a nearby vertex instead would be
+        the app overruling a number it was given.
+
+        The anchor for a translation is the same point the consumer measures
+        against -- the element centroid in an element mode, the gizmo's own
+        origin otherwise -- so the constrained displacement is the one that is
+        actually applied rather than one measured from somewhere else.
+        """
+        from .clay import drag as bdrag
+
+        tool = getattr(state, "tool", "") if state is not None else ""
+        entry = self.drag_input
+        if isinstance(delta, np.ndarray) and delta.shape == (4,):
+            self.drag_hud = _rotation_hud(delta, entry)
+            return bdrag.constrain_rotation(delta, entry)
+        if self._is_scale(state):
+            out = bdrag.constrain_scale(delta, entry)
+            self.drag_hud = bdrag.readout("scale", out, entry)
+            return out
+
+        anchor = self._element_centre if doc.element_mode != "object" else self._drag_origin
+        target = np.asarray(delta, dtype="f8").reshape(3)
+        self._snap_point = None
+        if not entry.active and bool(getattr(state, "snap_vertex", False)):
+            self._snap_point = self._snap_vertex(doc, local)
+            if self._snap_point is not None:
+                target = self._snap_point
+        moved = bdrag.constrain_translation(target - anchor, entry)
+        self.drag_hud = bdrag.readout(tool or "move", moved, entry)
+        if self._snap_point is not None:
+            self.drag_hud += "  snapped"
+        return anchor + moved
 
     def _accumulate(self, delta: Any) -> Any:
         """Turn one ``update`` return into a quantity measured from the press.
@@ -1356,7 +1565,12 @@ class ClayView:
     def _apply(self, obj: Any, was: Any, delta: Any, state: Any) -> None:
         from .clay import ops
 
-        snap = bool(getattr(state, "snap", False))
+        # See ``_element_world_transform``: the grid stands down for a vertex
+        # snap or a typed value, both of which are more specific answers to the
+        # same question.
+        snap = bool(getattr(state, "snap", False)) and not (
+            self._snap_point is not None or self.drag_input.active
+        )
         if isinstance(delta, np.ndarray) and delta.shape == (3,) and self._is_scale(state):
             obj.scale = np.array(was[2], dtype="f8") * delta
         elif isinstance(delta, np.ndarray) and delta.shape == (4,):
@@ -1397,6 +1611,21 @@ class ClayView:
         self._forget(self.viewport.texture)
         self.viewport.release()
         self.renderer.release()
+
+
+def _rotation_hud(quat: Any, entry: Any) -> str:
+    """The angle a rotation drag currently amounts to, in degrees.
+
+    Read off the *constrained* quaternion rather than the raw one, so a locked
+    axis reads as the angle about that axis and a typed value reads back as
+    itself -- which is the whole reason the HUD is worth drawing.
+    """
+    from .clay import drag as bdrag
+
+    out = bdrag.constrain_rotation(quat, entry)
+    length = float(np.linalg.norm(np.asarray(out, dtype="f8")[:3]))
+    angle = np.degrees(2.0 * float(np.arctan2(length, float(out[3]))))
+    return bdrag.readout("rotate", np.array([angle]), entry)
 
 
 def _toward_eye(eye: Any) -> np.ndarray:

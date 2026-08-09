@@ -30,6 +30,7 @@ class _State:
         self.snap = False
         self.snap_translate = 0.125
         self.snap_rotate = 15.0
+        self.snap_vertex = False
 
 
 class _Ctx:
@@ -753,6 +754,210 @@ def test_a_zero_movement_element_drag_pushes_nothing(view) -> None:
     view._release_drag(doc)
     assert len(doc.history) == depth
     assert uid not in view._cache, "the previewed buffers are evicted, not left stale"
+
+
+# --- the keyboard's half of a drag, and snapping (Clay18, Clay19) ------------
+
+
+def _moving_face(view, doc) -> int:
+    """One face selected in face mode with the move tool, drawn once."""
+    from warlock.studio.clay import elements as el
+
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    view.app_ctx.state.clay.tool = "move"
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    return uid
+
+
+def test_an_axis_lock_narrows_a_live_element_drag(view) -> None:
+    doc = _doc(count=1)
+    _moving_face(view, doc)
+    view._begin_gizmo_drag(doc)
+    view._begin_element_drag(doc)
+    centre = view.element_centre(doc)
+
+    view.drag_input.key("y")
+    narrowed = view._narrow(doc, centre + np.array([1.0, 2.0, 3.0]), view.state, (0.0, 0.0))
+    assert np.allclose(narrowed - centre, [0.0, 2.0, 0.0])
+
+
+def test_a_typed_value_reaches_the_drag_and_the_hud_says_so(view) -> None:
+    doc = _doc(count=1)
+    _moving_face(view, doc)
+    view._begin_gizmo_drag(doc)
+    view._begin_element_drag(doc)
+    centre = view.element_centre(doc)
+    for ch in ("x", "2"):
+        view.drag_input.key(ch)
+    narrowed = view._narrow(doc, centre + np.array([9.0, 9.0, 9.0]), view.state, (0.0, 0.0))
+    assert np.allclose(narrowed - centre, [2.0, 0.0, 0.0])
+    assert "[X]" in view.drag_hud and "2.000" in view.drag_hud
+
+
+def test_the_drag_keyboard_is_ignored_when_no_drag_is_under_way(view) -> None:
+    """The key handler asks ``dragging`` first, so a stray X outside a drag must
+    not quietly arm a lock for the next one."""
+    doc = _doc(count=1)
+    assert not view.dragging
+    assert view.drag_key(doc, "x") is False
+    assert view.drag_input.axis == ""
+
+
+def test_a_lock_is_dropped_at_the_release_rather_than_carried_forward(view) -> None:
+    doc = _doc(count=1)
+    _moving_face(view, doc)
+    view._begin_gizmo_drag(doc)
+    view.drag_input.key("z")
+    view._release_drag(doc)
+    assert view.drag_input.axis == ""
+    assert view.drag_hud == ""
+
+
+def test_cancelling_a_drag_puts_the_objects_back_and_records_nothing(view) -> None:
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.app_ctx.state.clay.tool = "move"
+    view.draw(doc, RECT, 0.0)
+    before = np.array(doc.by_uid(uid).translation, copy=True)
+
+    view._begin_gizmo_drag(doc)
+    depth = len(doc.history)
+    doc.by_uid(uid).translation = before + np.array([5.0, 0.0, 0.0])
+    assert view.cancel_drag(doc)
+
+    assert np.allclose(doc.by_uid(uid).translation, before)
+    assert len(doc.history) == depth
+    assert not view.dragging
+
+
+def test_cancelling_an_element_drag_drops_the_previewed_buffers(view) -> None:
+    """The cached mesh identity has not changed, so nothing else would ever
+    rebuild them and the object would keep rendering the abandoned preview."""
+    doc = _doc(count=1)
+    uid = _moving_face(view, doc)
+    view._begin_gizmo_drag(doc)
+    view._preview_element_drag(
+        doc, view.element_centre(doc) + np.array([0.0, 1.0, 0.0]), view.state
+    )
+    depth = len(doc.history)
+    assert view.cancel_drag(doc)
+    assert uid not in view._cache
+    assert len(doc.history) == depth
+    assert np.allclose(doc.by_uid(uid).mesh.positions, bp.box().positions)
+
+
+def test_a_move_snaps_onto_the_vertex_under_the_cursor(view) -> None:
+    doc = _doc(count=2)
+    _moving_face(view, doc)
+    view.app_ctx.state.clay.snap_vertex = True
+    view._begin_gizmo_drag(doc)
+    view._begin_element_drag(doc)
+
+    other = doc.objects[1]
+    screen = view.screen_of(doc, other.uid)
+    index = int(np.argmin(screen.depth))
+    at = (float(screen.xy[index][0]), float(screen.xy[index][1]))
+    world = (view._world(other) @ np.append(other.mesh.positions[index].astype("f8"), 1.0))[:3]
+
+    narrowed = view._narrow(doc, np.zeros(3), view.state, at)
+    assert np.allclose(narrowed, world, atol=1e-6)
+    assert "snapped" in view.drag_hud
+
+
+def test_a_move_never_snaps_onto_the_geometry_it_is_moving(view) -> None:
+    """The worst failure available, because it looks like the feature working:
+    the drag would track the cursor exactly and report a snap."""
+    doc = _doc(count=1)
+    uid = _moving_face(view, doc)
+    view.app_ctx.state.clay.snap_vertex = True
+    view._begin_gizmo_drag(doc)
+    view._begin_element_drag(doc)
+
+    screen = view.screen_of(doc, uid)
+    moving = view._element_drags[uid].verts
+    index = int(moving[0])
+    at = (float(screen.xy[index][0]), float(screen.xy[index][1]))
+    # Something else may still be within the radius -- what must never happen is
+    # landing on one of the vertices the drag is carrying.
+    found = view._snap_vertex(doc, at)
+    matrix = view._world(doc.by_uid(uid))
+    carried = [
+        (matrix @ np.append(doc.by_uid(uid).mesh.positions[int(v)].astype("f8"), 1.0))[:3]
+        for v in moving
+    ]
+    assert found is None or not any(np.allclose(found, c) for c in carried)
+
+
+def test_an_explicit_constraint_beats_a_snap(view) -> None:
+    """A user who has typed a number has said exactly where the thing goes, and
+    moving it onto a nearby vertex instead would be the app overruling them."""
+    doc = _doc(count=2)
+    _moving_face(view, doc)
+    view.app_ctx.state.clay.snap_vertex = True
+    view._begin_gizmo_drag(doc)
+    view._begin_element_drag(doc)
+    centre = view.element_centre(doc)
+
+    other = doc.objects[1]
+    screen = view.screen_of(doc, other.uid)
+    index = int(np.argmin(screen.depth))
+    at = (float(screen.xy[index][0]), float(screen.xy[index][1]))
+
+    for ch in ("x", "1"):
+        view.drag_input.key(ch)
+    narrowed = view._narrow(doc, centre + np.array([4.0, 4.0, 4.0]), view.state, at)
+    assert np.allclose(narrowed - centre, [1.0, 0.0, 0.0])
+    assert view._snap_point is None
+
+
+def test_a_soft_falloff_carries_the_neighbours_part_of_the_way(view) -> None:
+    """The whole feature in one assertion: the selected corners move fully, the
+    ones behind them move less, and the box bends instead of tearing."""
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    uid = _moving_face(view, doc)
+    before = doc.by_uid(uid).mesh.positions.copy()
+    selected = el.affected_verts(doc.by_uid(uid).mesh, doc.element_sel_of(uid))
+
+    view.app_ctx.state.clay.proportional = True
+    view.app_ctx.state.clay.proportional_radius = 2.0
+    view._begin_gizmo_drag(doc)
+    view._preview_element_drag(
+        doc, view.element_centre(doc) + np.array([0.0, 1.0, 0.0]), view.state
+    )
+    view._release_drag(doc)
+
+    moved = doc.by_uid(uid).mesh.positions - before
+    assert np.allclose(moved[selected][:, 1], 1.0, atol=1e-5)
+    others = np.setdiff1d(np.arange(len(before)), selected)
+    assert (moved[others][:, 1] > 1e-3).all()
+    assert (moved[others][:, 1] < 1.0 - 1e-3).all()
+
+
+def test_a_hard_selection_is_what_a_zero_radius_still_means(view) -> None:
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    uid = _moving_face(view, doc)
+    before = doc.by_uid(uid).mesh.positions.copy()
+    selected = el.affected_verts(doc.by_uid(uid).mesh, doc.element_sel_of(uid))
+
+    view.app_ctx.state.clay.proportional = True
+    view.app_ctx.state.clay.proportional_radius = 0.0
+    view._begin_gizmo_drag(doc)
+    view._preview_element_drag(
+        doc, view.element_centre(doc) + np.array([0.0, 1.0, 0.0]), view.state
+    )
+    view._release_drag(doc)
+
+    moved = doc.by_uid(uid).mesh.positions - before
+    others = np.setdiff1d(np.arange(len(before)), selected)
+    assert np.allclose(moved[others], 0.0)
 
 
 def test_element_overlays_are_built_and_released_with_the_mode(view) -> None:

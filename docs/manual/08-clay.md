@@ -26,8 +26,18 @@ work, and entering the mode is not a reason to disturb them.
 
 ## Adding a primitive
 
-The **add** row has one button per primitive: box, plane, cylinder, cone, UV sphere and torus.
-Clicking one places it at the origin and selects it. Hovering a button names it.
+The **add** row has one button per primitive: box, plane, grid, cylinder, cone, UV sphere,
+icosphere, capsule and torus. Clicking one places it at the origin and selects it. Hovering a button
+names it.
+
+Three of those are near-duplicates of others and are worth telling apart. **Grid** is a plane cut
+into squares; **plane** is the single quad, which is what a decal or a backdrop wants, and a grid is
+what you need the moment you want to bend the sheet, because only interior vertices can move.
+**Icosphere** and **UV sphere** are both balls: the icosphere's triangles are all much the same size,
+which is what makes it the one to sculpt, bevel or bake to, and the UV sphere is laid out in
+latitude and longitude, which is what makes it the one to wrap an equirectangular texture round.
+**Capsule**'s `height` is its cylindrical middle alone, so the whole shape is that plus a radius at
+each end.
 
 A placed object remembers *how it was made*. Its generator and the parameters it was built with are
 kept, so the properties panel offers those parameters — a cylinder's radius, height and segment
@@ -80,12 +90,13 @@ moves or renames something keeps it, because those cannot invalidate it.
 
 | Mode | Operation | What it does |
 | --- | --- | --- |
-| Faces | Extrude (`E`) | Pulls the selected faces off the surface and walls in the gap. It moves nothing — drag the returned faces with `W`. |
+| Any | Extrude (`E`) | Pulls the selection off the surface and walls in the gap. It moves nothing — drag what it hands back with `W`. |
 | Faces | Inset | Shrinks each face in place and rings it with the rim it vacated. |
 | Faces | Subdivide | Splits each face into quads without changing the shape. |
 | Faces | Flip Normals | Reverses the winding of the selected faces. |
 | Edges | Bevel | Replaces each edge with a flat quad, mitring the corners where several meet. |
 | Edges | Loop Cut | Rings a strip of quads with a new edge loop. |
+| Edges | Bridge Loops | Joins two selected boundary loops with a strip of quads. |
 | Edges | Fill Hole | Caps the boundary ring the selected edge belongs to. |
 | Edges, Faces | Collapse | Pulls the selection down to a single point. |
 | Verts | Weld | Merges vertices closer together than a distance you give. |
@@ -96,6 +107,19 @@ An operation that cannot do what you asked says so in a toast naming the element
 instead, and changes nothing. Bevel refuses a boundary edge; dissolve refuses a selection that rings
 a face it does not include; fill hole refuses a pinched boundary. Those are refusals, not failures:
 the alternative is geometry that looks right and is not.
+
+**Extrude** is one operation in all three modes, because it means the same thing in all three. In
+edge mode it grows a quad from each selected *boundary* edge — an edge with a face on each side has
+no open side to grow into, and it says so. In vertex mode it extrudes the border edges between the
+vertices you selected, which is the only reading available: a mesh here stores faces, not loose
+wires, so a vertex on its own has nothing to extrude and says that too.
+
+**Bridge Loops** is the one to reach for when two things need joining: select the boundary edges of
+both openings and it skins a strip of quads between them, which is what makes two tubes one tube and
+what closes the gap left by deleting a band of faces. Both openings must be *boundaries* — bridging
+two interior rings means deleting the faces between them first, and doing that for you would remove
+geometry you did not ask to lose. It also needs exactly two loops, of the same length, both open or
+both closed; anything else it refuses by name, because there is no pairing to guess at.
 
 The first operation that changes an object's topology **freezes** it. A box that has been extruded is
 no longer describable as "box, size 1", so the properties panel switches from the generator's
@@ -123,12 +147,57 @@ for the marquee.
 
 The **Move**, **Rotate** and **Scale** values are also typed directly in the properties panel, which
 is the better way to place something exactly. Rotation is shown as a quaternion in `XYZW` order,
-which is what every file this app writes uses.
+which is what every file this app writes uses. Under them is a read-only **size** row: the object's
+world-space width, depth and height in metres, after its transform — the number a scale of 2 on a
+generator whose radius is 0.35 does not tell you.
+
+### Locking an axis, and typing a number
+
+The keyboard joins a drag already under way. While a gizmo is held:
+
+| Key | What it does |
+| --- | --- |
+| `X` / `Y` / `Z` | Lock the drag to that axis. The same key again clears the lock. |
+| digits, `.`, `-` | Type the value outright — metres for a move, degrees for a rotation, a factor for a scale. |
+| `Backspace` | Take back the last character. |
+| `Enter` | Commit and end the drag. |
+| `Esc` | Cancel it: everything goes back where it was and nothing is recorded. |
+
+A readout beside the cursor says what the drag currently amounts to, so `X` then `2` is "two metres
+along X" with no dragging left in it. The two compose, and they are different in kind: a lock says
+which *direction*, leaving the mouse in charge of the amount, while a number is the amount. That is
+why a number on its own still means something — it sets the distance along whichever way you were
+already dragging, and the size of a uniform scale.
+
+### Proportional editing
+
+**Soft falloff**, in the snap section, makes an element drag carry the geometry *around* the
+selection with it, fading out over the radius, so the surface bends instead of tearing. The radius
+is metres of world space and is measured from the nearest selected vertex, not from the middle of
+the selection — dragging one end of a long strip fades out away from that end rather than along the
+strip. Setting the radius to zero is the same as switching it off.
 
 Two operations act on the whole selection. **Duplicate** (`Ctrl+D`) makes a copy under a new name,
 counting up — `Box`, `Box.001`, `Box.002`. **Bake** folds an object's position, rotation and scale
 into its geometry and resets the transform to identity, which is what you want before measuring
 something or exporting it into a frame that has to match.
+
+## The outliner
+
+Every object in the document, newest at the top. Click to select, `Ctrl`-click to toggle one and
+`Shift`-click to take a range. The filter box above narrows the list by name.
+
+The eye on each row hides an object, and a hidden object does not render, does not export and cannot
+be clicked in the viewport. **Solo** above the list hides everything *except* what is selected and
+**Show all** brings them back — each is a single undo step, so `Ctrl+Z` is a third way out.
+
+Rows are dragged to reorder them, which matters because display order is the order the objects come
+out in an exported GLB. Reordering is switched off while the filter box has something in it: the
+rows on screen are then a subset, so there is no honest answer for where a drop between two of them
+lands in the real list.
+
+Right-clicking a row selects it and offers **Rename**, **Duplicate**, **Solo** and **Delete**.
+Double-clicking a name renames it in place.
 
 ## Merging objects
 
@@ -197,6 +266,12 @@ the origin.
 
 Snapping applies to gizmo drags only. A number typed into the properties panel is used exactly as
 typed, because you already said what you meant.
+
+**Snap to vertex** is a separate switch beside it, and the two answer different questions: the grid
+puts things on round numbers, this puts them exactly *there*. While moving, the drag lands on the
+vertex under the cursor. The vertices being moved are never candidates, so a drag cannot snap onto
+itself; and locking an axis or typing a value during the drag overrides it, because at that point
+you have said where the thing goes.
 
 ## Texture coordinates
 
@@ -274,7 +349,9 @@ JSON half is sorted and indented so it is readable and diffable, and two saves o
 document produce byte-identical files.
 
 A saved document keeps every object's identity, so an undo recorded before the save still lands on
-the object it was made against after you reopen it.
+the object it was made against after you reopen it. It also keeps the **camera**, so reopening a
+document puts you back where you were looking rather than framing it afresh. A file written before
+that key existed still opens, and simply gets framed.
 
 ## The two ways out
 

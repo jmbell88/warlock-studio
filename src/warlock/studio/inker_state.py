@@ -102,6 +102,19 @@ _uids = itertools.count(1)
 # --- the view ---------------------------------------------------------------
 
 
+#: The quarter turns the view offers, in degrees. **Quarter turns only, and
+#: that is a decision rather than a first instalment.** A free-angle canvas
+#: rotation makes every overlay in the pane a rotated quantity: the grid stops
+#: being two families of axis-aligned lines, the marquee preview stops being a
+#: rect, the transform box's handles stop being squares, and each of those has
+#: to be re-derived and re-tested. A quarter turn maps an axis-aligned image
+#: rectangle onto an axis-aligned *screen* rectangle, so every one of those
+#: stays exactly what it was -- and it delivers what canvas rotation is
+#: actually reached for: turning the page to draw a curve, and checking a
+#: drawing mirrored. The engine never sees any of it; pixels are untouched.
+ROTATIONS = (0, 90, 180, 270)
+
+
 @dataclass
 class PaintView:
     """Where the canvas sits in its pane. Per document, so a tab switch does
@@ -116,35 +129,111 @@ class PaintView:
     # A zoom to snap to on the next frame, for the same reason: "100%, centred"
     # needs the pane's size, and a keypress does not have it.
     pending_zoom: float | None = None
+    # Display only, both of them: see ROTATIONS. ``rotation`` is clockwise on
+    # screen in degrees; ``flipped`` mirrors left-to-right *after* it, which is
+    # the order a physical sheet of paper does the two in.
+    rotation: int = 0
+    flipped: bool = False
 
 
 def clamp_zoom(zoom: float) -> float:
     return max(MIN_ZOOM, min(MAX_ZOOM, float(zoom)))
 
 
-def fit(view: PaintView, size: tuple[int, int], region: tuple[float, float]) -> None:
-    """Scale to show the whole document, centred."""
-    width, height = size
-    zoom = clamp_zoom(min(region[0] / max(width, 1), region[1] / max(height, 1)))
-    view.zoom = zoom
+def basis(view: PaintView) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The view's 2x2 orientation, as rows. Orthonormal, determinant +-1.
+
+    Kept separate from the zoom because it is exactly the part that preserves
+    *length*: the marching ants measure arc length in canvas space and dash
+    along it, so a transform that scaled would have to be threaded through that
+    arithmetic, and one that only turns does not.
+    """
+    quarter = ROTATIONS.index(int(view.rotation) % 360 if view.rotation % 90 == 0 else 0)
+    # (x, y) -> (-y, x) is one clockwise quarter turn on a screen whose y grows
+    # downward, which is the direction the button's icon points.
+    rows = (
+        ((1.0, 0.0), (0.0, 1.0)),
+        ((0.0, -1.0), (1.0, 0.0)),
+        ((-1.0, 0.0), (0.0, -1.0)),
+        ((0.0, 1.0), (-1.0, 0.0)),
+    )[quarter]
+    if view.flipped:
+        # After the turn, and on screen x: mirroring in image space instead
+        # would put the flip under the rotation and make "flip" mean two
+        # different things depending on which way the page was turned.
+        rows = ((-rows[0][0], -rows[0][1]), rows[1])
+    return rows
+
+
+def _oriented(view: PaintView, x: float, y: float) -> tuple[float, float]:
+    (a, b), (c, d) = basis(view)
+    return (a * x + b * y, c * x + d * y)
+
+
+def view_extent(
+    view: PaintView, size: tuple[int, int]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The canvas's oriented box at zoom 1, as ``(low, high)``.
+
+    A quarter turn puts part of the canvas at negative coordinates, so the
+    framing functions cannot assume the corner is at the origin any more --
+    which is the whole of what rotation costs the layout, and it is contained
+    here.
+    """
+    width, height = float(size[0]), float(size[1])
+    corners = [
+        _oriented(view, x, y) for x in (0.0, width) for y in (0.0, height)
+    ]
+    xs = [p[0] for p in corners]
+    ys = [p[1] for p in corners]
+    return (min(xs), min(ys)), (max(xs), max(ys))
+
+
+def _place(
+    view: PaintView, size: tuple[int, int], region: tuple[float, float], zoom: float
+) -> None:
+    """Set the zoom and centre the oriented canvas in the region."""
+    (lo_x, lo_y), (hi_x, hi_y) = view_extent(view, size)
+    view.zoom = clamp_zoom(zoom)
     view.pan = (
-        (region[0] - width * zoom) * 0.5,
-        (region[1] - height * zoom) * 0.5,
+        (region[0] - (hi_x - lo_x) * view.zoom) * 0.5 - lo_x * view.zoom,
+        (region[1] - (hi_y - lo_y) * view.zoom) * 0.5 - lo_y * view.zoom,
     )
     view.fitted = True
+
+
+def fit(view: PaintView, size: tuple[int, int], region: tuple[float, float]) -> None:
+    """Scale to show the whole document, centred."""
+    (lo_x, lo_y), (hi_x, hi_y) = view_extent(view, size)
+    zoom = min(region[0] / max(hi_x - lo_x, 1.0), region[1] / max(hi_y - lo_y, 1.0))
+    _place(view, size, region, zoom)
 
 
 def centre(
     view: PaintView, size: tuple[int, int], region: tuple[float, float], zoom: float
 ) -> None:
     """Set an explicit zoom and re-centre -- what Ctrl+1 (100%) does."""
-    width, height = size
-    view.zoom = clamp_zoom(zoom)
-    view.pan = (
-        (region[0] - width * view.zoom) * 0.5,
-        (region[1] - height * view.zoom) * 0.5,
-    )
-    view.fitted = True
+    _place(view, size, region, zoom)
+
+
+def rotate_view(view: PaintView, quarter_turns: int = 1) -> None:
+    """Turn the page. The zoom is kept and the canvas re-centred next frame.
+
+    Re-centred rather than left where it was, because a quarter turn about the
+    view's origin sends the canvas off the pane -- and through ``pending_zoom``
+    rather than by clearing ``fitted``, which would also re-scale and throw away
+    a zoom the user chose.
+    """
+    view.rotation = ROTATIONS[(ROTATIONS.index(int(view.rotation) % 360) + int(quarter_turns)) % 4]
+    view.pending_zoom = view.zoom
+
+
+def flip_view(view: PaintView) -> None:
+    """Mirror the view left-to-right. The classic check on a drawing, and the
+    reason this is a *view* flag rather than an edit: nothing about the document
+    changes, so there is nothing to undo and nothing to save."""
+    view.flipped = not view.flipped
+    view.pending_zoom = view.zoom
 
 
 def to_image(view: PaintView, origin: tuple[float, float], sx: float, sy: float):
@@ -152,17 +241,22 @@ def to_image(view: PaintView, origin: tuple[float, float], sx: float, sy: float)
 
     Floats, not ints: the brush walks sub-pixel positions, and rounding here
     would quantise every stroke to the zoom level it was drawn at.
+
+    The orientation is inverted by **transposing** its matrix, which is exact
+    rather than approximate: the basis is orthonormal, so its transpose is its
+    inverse whichever of the eight it happens to be.
     """
-    return (
-        (sx - origin[0] - view.pan[0]) / view.zoom,
-        (sy - origin[1] - view.pan[1]) / view.zoom,
-    )
+    u = (sx - origin[0] - view.pan[0]) / view.zoom
+    v = (sy - origin[1] - view.pan[1]) / view.zoom
+    (a, b), (c, d) = basis(view)
+    return (a * u + c * v, b * u + d * v)
 
 
 def to_screen(view: PaintView, origin: tuple[float, float], x: float, y: float):
+    u, v = _oriented(view, x, y)
     return (
-        origin[0] + view.pan[0] + x * view.zoom,
-        origin[1] + view.pan[1] + y * view.zoom,
+        origin[0] + view.pan[0] + u * view.zoom,
+        origin[1] + view.pan[1] + v * view.zoom,
     )
 
 

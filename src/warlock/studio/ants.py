@@ -86,6 +86,7 @@ def dash_segments(
     offset: tuple[float, float],
     phase: float,
     dash: float = DASH,
+    basis: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The lines to draw for one loop: ``(starts, ends, lit)`` in screen space.
 
@@ -97,6 +98,15 @@ def dash_segments(
     from ``inker_state.to_screen`` rather than restating the formula, because
     the ants sitting one pixel off the mask they describe is exactly what a
     duplicated affine looks like.
+
+    ``basis`` is the view's 2x2 orientation (``inker_state.basis``), or ``None``
+    for the upright view. It is deliberately **separate from the zoom** and
+    deliberately orthonormal: every distance in this function is an arc length
+    measured in canvas space, so a transform that turns leaves the whole dash
+    calculation exactly as it was, and one that scaled would have to be threaded
+    through all of it. The whole of the turn is one matmul in ``_points_at``,
+    and the straight-run merge survives it because a rotation maps a straight
+    run onto a straight run.
 
     Boundaries land at ``phase + k * dash`` and the even ``k`` are lit, which is
     the old walk's ``int((walked + travelled) // DASH) % 2 == 0`` with ``walked``
@@ -125,7 +135,7 @@ def dash_segments(
     if not keep.any():
         return empty, empty.copy(), np.zeros(0, dtype=bool)
 
-    points = _points_at(verts, cum, bounds, zoom, offset)
+    points = _points_at(verts, cum, bounds, zoom, offset, basis)
     starts, ends = starts[keep], ends[keep]
     head, tail = points[:-1][keep], points[1:][keep]
     # Which dash a piece belongs to, asked at its midpoint: at its start the
@@ -206,6 +216,7 @@ def _points_at(
     distance: np.ndarray,
     zoom: float,
     offset: tuple[float, float],
+    basis: np.ndarray | None = None,
 ) -> np.ndarray:
     """Interpolate canvas-space arc positions and put them on screen.
 
@@ -221,4 +232,6 @@ def _points_at(
     ratio = np.where(span > 0.0, (distance - cum[index]) / safe, 0.0)[:, None]
     here = verts[index]
     points = here + (verts[index + 1] - here) * ratio
+    if basis is not None:
+        points = points @ np.asarray(basis, dtype=np.float64).T
     return points * float(zoom) + np.asarray(offset, dtype=np.float64)

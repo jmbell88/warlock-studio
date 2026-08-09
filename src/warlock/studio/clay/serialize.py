@@ -191,7 +191,70 @@ def _png_bytes(image: tuple[int, int, bytes]) -> bytes:
     return out.getvalue()
 
 
-def scene_json(doc: ClayDoc, collected: tuple[list[Any], dict[int, int]] | None = None) -> str:
+#: The camera keys ``scene.json`` carries, and the only ones it will read back.
+#: Written out rather than taken from whatever dict a caller hands in, because
+#: this is a *file format*: an unrecognised key would round-trip once and then
+#: be silently dropped by the next build that read the table instead.
+VIEW_FIELDS = ("yaw", "pitch", "distance")
+
+
+def view_json(view: Any) -> dict[str, Any] | None:
+    """One camera as the JSON ``scene["view"]`` holds, or ``None`` for no camera.
+
+    Additive and therefore **not a version bump**: a build that has never heard
+    of it reads the file exactly as it did, and one that has reads a camera. The
+    same argument ``rig.json``'s ``fit`` key is added under.
+    """
+    if view is None:
+        return None
+    try:
+        out: dict[str, Any] = {name: float(getattr(view, name)) for name in VIEW_FIELDS}
+        out["target"] = [float(v) for v in view.target]
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return out
+
+
+def read_view(data: bytes) -> dict[str, Any] | None:
+    """The camera out of a ``.wblk``, or ``None`` if it has none it can trust.
+
+    **A second function rather than a second return value from**
+    :func:`read_wblk`, which is the same call ``files.unready_reason`` makes:
+    that reader's job is to hand back the engine's own document type, and a
+    camera is not part of one -- ``ClayDoc`` is geometry and a palette, and
+    where somebody last left the viewport is a property of the *tab*. Widening
+    the return would make every caller unpack a pair to ignore half of it, and
+    putting the camera on the document would put it in the undo stack.
+
+    Every way of being wrong answers ``None`` rather than raising. It is read on
+    the open path beside a document that has already parsed, so a malformed
+    camera is worth one unfitted viewport and never a refused file.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            scene = json.loads(zf.read(SCENE))
+    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    entry = scene.get("view")
+    if not isinstance(entry, dict):
+        return None
+    try:
+        out: dict[str, Any] = {name: float(entry[name]) for name in VIEW_FIELDS}
+        target = [float(v) for v in entry["target"]]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(target) != 3 or not all(np.isfinite([*out.values(), *target])):
+        return None
+    out["target"] = tuple(target)
+    return out
+
+
+def scene_json(
+    doc: ClayDoc,
+    collected: tuple[list[Any], dict[int, int]] | None = None,
+    *,
+    view: Any = None,
+) -> str:
     """``scene.json``'s text: sorted keys, indented, one object per entry.
 
     Sorted and indented rather than compact because this half of the file
@@ -217,16 +280,25 @@ def scene_json(doc: ClayDoc, collected: tuple[list[Any], dict[int, int]] | None 
             {"file": f"{TEXTURE_DIR}/{i}.png", "width": int(w), "height": int(h)}
             for i, (w, h, _data) in enumerate(images)
         ]
+    camera = view_json(view)
+    if camera is not None:
+        scene["view"] = camera
     return json.dumps(scene, sort_keys=True, indent=2)
 
 
-def wblk_bytes(doc: ClayDoc) -> bytes:
-    """The document as the bytes of a ``.wblk`` archive."""
+def wblk_bytes(doc: ClayDoc, *, view: Any = None) -> bytes:
+    """The document as the bytes of a ``.wblk`` archive.
+
+    ``view`` is where the viewport was left, and it is optional at every call
+    site: a document written without one is byte-for-byte the file this wrote
+    before the key existed, which is what keeps the format additive rather than
+    versioned.
+    """
     out = io.BytesIO()
     collected = _collect_textures(doc)
     images, _index = collected
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(zipfile.ZipInfo(SCENE, _EPOCH), scene_json(doc, collected))
+        zf.writestr(zipfile.ZipInfo(SCENE, _EPOCH), scene_json(doc, collected, view=view))
         for obj in doc.objects:
             arrays = {name: getattr(obj.mesh, name) for name in _MESH_FIELDS}
             if obj.mesh.uv is not None:

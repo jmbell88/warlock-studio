@@ -84,13 +84,20 @@ def test_the_menu_is_filtered_by_mode_and_keeps_registration_order() -> None:
 
     edges = [op.name for op in clay_ops.menu("edge")]
     assert "bevel" in edges and "loop-cut" in edges
-    assert "extrude" not in edges
+    # Extrude is now one row across all three modes, dispatched on the mode the
+    # way Dissolve is: it means the same thing everywhere and only the
+    # implementation differs, so three rows would be exposing that.
+    assert "extrude" in edges
+    assert "bridge" in edges
+    assert "bridge" not in face, "bridge joins two boundary loops, which is an edge selection"
 
 
 def test_a_key_resolves_to_the_op_the_menu_shows_for_it() -> None:
     op = clay_ops.by_key("face", "E")
     assert op is not None and op.name == "extrude"
-    assert clay_ops.by_key("edge", "E") is None
+    # The same op, and therefore the same key, in every element mode.
+    assert clay_ops.by_key("edge", "E") is op
+    assert clay_ops.by_key("vertex", "E") is op
     assert clay_ops.by_key("face", "nope") is None
 
 
