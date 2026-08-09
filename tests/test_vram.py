@@ -107,6 +107,31 @@ def test_a_pixel_sheet_restyle_costs_sdxl_plus_a_controlnet():
     assert coexist == pytest.approx(exclusive + vram.TRELLIS_GIB)
 
 
+def test_a_retexture_costs_one_img2img_pass_and_never_trellis():
+    """Six views are six *sequential* passes through one resident pipe, so the
+    view count is not a term in the peak -- and the two Blender halves are
+    out-of-process and CPU-side, so they are not either."""
+    exclusive = vram.estimate("retexture", "model", {}, exclusive=True)
+    assert exclusive == pytest.approx(vram.SDXL_GIB)
+    assert vram.estimate("retexture", "model", {}, exclusive=False) == pytest.approx(
+        exclusive + vram.TRELLIS_GIB
+    )
+    with_control = vram.estimate("retexture", "model", {"control": "canny"}, exclusive=True)
+    assert with_control == pytest.approx(exclusive + vram.CONTROLNET_GIB)
+
+
+def test_a_retexture_is_priced_from_the_registry_not_from_sdxl():
+    """It is exactly the job somebody points at an offloaded checkpoint, so the
+    spec's own figure has to be the one charged."""
+    from warlock import models
+
+    spec = models.BASE_MODELS["flux_klein"]
+    assert spec.vram_gib != vram.SDXL_GIB
+    assert vram.estimate(
+        "retexture", "model", {"base_model": "flux_klein"}, exclusive=True
+    ) == pytest.approx(spec.vram_gib)
+
+
 def test_an_image_model_is_charged_its_own_footprint():
     """Not every checkpoint is 7 GB any more. flux_klein is offloaded and
     records 10.0, and charging it SDXL's number would admit a job the card

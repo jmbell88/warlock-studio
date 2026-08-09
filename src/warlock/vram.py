@@ -124,6 +124,24 @@ def estimate(
     smaller card rather than only refusing it.
     """
     params = params or {}
+    if kind == "retexture":
+        # Six img2img passes over one mesh's renders, one at a time, through
+        # the same resident pipe -- so the peak is one pass, not six, and the
+        # view count is deliberately *not* a term. The checkpoint is priced
+        # from the registry rather than assumed to be 7 GB, because a re-texture
+        # is exactly the job somebody points at an offloaded FLUX.2 spec.
+        #
+        # The two Blender halves are out-of-process and CPU-side (`op_views`
+        # renders in EEVEE at 512px, `op_project` bakes emission at one sample),
+        # so they cost this budget nothing -- the same reason a rig job
+        # estimates zero below.
+        pass_gib = _image_model_cost(params)
+        if params.get("control"):
+            pass_gib += CONTROLNET_GIB
+        # Never trellis: the mesh was reconstructed long before, and nothing
+        # here goes near it. Under coexist a warm trellis is still holding its
+        # memory, which is what the reference stage below accounts for too.
+        return pass_gib if exclusive else pass_gib + TRELLIS_GIB
     if kind == "pixel_sheet":
         # An img2img restyle: the same resident SDXL pipe as a text job, plus a
         # ControlNet, and never trellis -- the mesh was reconstructed long
