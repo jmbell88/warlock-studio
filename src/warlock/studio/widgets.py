@@ -57,6 +57,18 @@ ARTIFACTS_2D = (
 ARTIFACTS_TILE = (
     ("input.png", "Tile PNG"),
     ("wrap_preview.png", "Wrapped view"),
+    # The zip leads the material group because it is what somebody taking this
+    # into an engine wants: all four images plus a glTF material fragment in
+    # one file. The individual maps follow, for whoever wants one of them.
+    #
+    # Every one of those three says "est." and that is not modesty. They are
+    # derived from the albedo's own contrast and describe nothing about a
+    # surface; a button labelled "Normal map" claims a measurement, and the
+    # docstring explaining otherwise is in a repository the user does not have.
+    ("material.zip", "Material set (zip)"),
+    ("material_normal.png", "Normal (est.)"),
+    ("material_roughness.png", "Roughness (est.)"),
+    ("material_height.png", "Height (est.)"),
     ("manifest.json", "Manifest"),
 )
 

@@ -354,7 +354,7 @@ def test_every_2d_artifact_has_a_derivation():
         "icon.png",
         "sprite.png",
         "wrap_preview.png",
-    } | set(svc_files.PIXEL_ARTIFACTS)
+    } | set(svc_files.PIXEL_ARTIFACTS) | set(svc_files.MATERIAL_2D)
 
 
 def _entry(svc, job_id, name):
@@ -665,3 +665,101 @@ def test_the_2d_artifacts_are_not_listed_as_files_on_the_job(svc):
     job = svc.store.get(job_id)
     svc_files.attach_files(job, svc.job_dir(job_id))
     assert "icon.png" not in job["files"]
+
+
+# -- the material set --------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["material_height.png", "material_normal.png",
+                                  "material_roughness.png"])
+def test_a_tile_derives_each_material_map_at_its_own_size(svc, name):
+    job_id = _reference(svc, stage="tile")
+    path = svc_derive.get_file(svc, job_id, name)
+    assert path.name == name
+    with Image.open(path) as im:
+        assert im.size == (128, 128)
+
+
+def test_a_reference_has_no_material_to_derive(svc):
+    # The wrapped view's rule, from the other side: these are whole-frame
+    # transforms, and a normal map of a barrel on a background is a normal map
+    # of the background too. Refused at the service rather than hidden in a
+    # pane, so the two cannot drift.
+    job_id = _reference(svc)
+    for name in svc_files.MATERIAL_2D:
+        with pytest.raises(NotReady):
+            svc_derive.get_file(svc, job_id, name)
+
+
+def test_the_material_zip_carries_every_map_the_albedo_and_the_gltf(svc):
+    import zipfile
+
+    from warlock.pipelines import material as material_lib
+
+    job_id = _reference(svc, stage="tile")
+    path = svc_derive.get_file(svc, job_id, "material.zip")
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+        doc = json.loads(zf.read("material.json"))
+        readme = zf.read("README.txt").decode("utf-8")
+    assert names == {"albedo.png", "material.json", "README.txt", *material_lib.MAP_NAMES}
+    assert doc["pbrMetallicRoughness"]["metallicFactor"] == 0.0
+    # The estimate has to travel with the file. A folder of textures called
+    # material_normal.png carries every implication of a measured one, and the
+    # docstring saying otherwise is in a repository the person unzipping this
+    # does not have.
+    assert "ESTIMATED" in readme
+
+
+def test_the_material_zip_needs_no_map_already_on_disk(svc):
+    # It re-derives into its own staging area rather than asking get_file for
+    # the three maps, which would nest four artifact locks where the module has
+    # an ordering rule about exactly two.
+    job_id = _reference(svc, stage="tile")
+    svc_derive.get_file(svc, job_id, "material.zip")
+    for name in ("material_height.png", "material_normal.png", "material_roughness.png"):
+        assert not (svc.job_dir(job_id) / name).exists()
+
+
+def test_a_material_map_is_re_derived_after_a_hand_edit(svc):
+    job_id = _reference(svc, stage="tile")
+    before = svc_derive.get_file(svc, job_id, "material_height.png").read_bytes()
+    _hand_edit(svc, job_id)
+    assert svc_derive.get_file(svc, job_id, "material_height.png").read_bytes() != before
+
+
+def test_a_failed_material_derivation_leaves_no_staging_file_behind(svc, monkeypatch):
+    from warlock.pipelines import material as material_lib
+
+    def boom(src, dest, name, **kwargs):
+        dest.write_bytes(b"half a png")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(material_lib, "write_map", boom)
+    job_id = _reference(svc, stage="tile")
+    with pytest.raises(OSError):
+        svc_derive.get_file(svc, job_id, "material_normal.png")
+    assert not list(svc.job_dir(job_id).glob(".*.tmp"))
+
+
+def test_a_failed_zip_leaves_neither_its_own_staging_file_nor_a_maps(svc, monkeypatch):
+    # The zip stages the maps *beside* its own tmp, so a failure part way
+    # through has two kinds of leftover to clean up rather than one.
+    from warlock.pipelines import material as material_lib
+
+    real = material_lib.write_map
+    calls = {"n": 0}
+
+    def flaky(src, dest, name, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            dest.write_bytes(b"half a png")
+            raise OSError("disk full")
+        return real(src, dest, name, **kwargs)
+
+    monkeypatch.setattr(material_lib, "write_map", flaky)
+    job_id = _reference(svc, stage="tile")
+    with pytest.raises(OSError):
+        svc_derive.get_file(svc, job_id, "material.zip")
+    assert not list(svc.job_dir(job_id).glob(".*.tmp*"))
+    assert not (svc.job_dir(job_id) / "material.zip").exists()

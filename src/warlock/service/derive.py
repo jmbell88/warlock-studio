@@ -240,6 +240,90 @@ def _pixel_current(
     return entry.get("palette") == (pixel_colors or None)
 
 
+def _staged(job_dir: Path, name: str, write) -> None:
+    """Write ``name`` through a dotfile and rename it into place.
+
+    The rule every derivation here follows: a concurrent reader of an artifact
+    this job derived a moment ago must never see a half-written file. The
+    ``finally`` matters as much as the replace -- an encode that raises part way
+    through would otherwise strand its staging file for the life of the job
+    directory, where nothing ever looks at a dotfile again.
+    """
+    tmp = job_dir / f".{name}.tmp"
+    try:
+        write(tmp)
+        os.replace(tmp, job_dir / name)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
+def _derive_material(job_dir: Path, name: str, source: Path) -> None:
+    """One map, or the zip of all of them, from a tile's input.png.
+
+    The zip re-derives the maps into its own staging area rather than asking
+    ``get_file`` for them, and that is a deliberate refusal to nest artifact
+    locks. This function already holds ``material.zip``'s lock; reaching for
+    three more would establish an ordering between four artifact locks that
+    nothing else in this module has, and the module's one stated lock rule is
+    that an artifact's lock is taken before the manifest's and never the other
+    way about. The cost is that a zip requested after the three maps are
+    already on disk computes them a second time -- a second or so on a 1024²
+    tile, against a deadlock that would need three callers to reproduce and
+    would hang the task runner.
+    """
+    from ..pipelines import material as material_lib
+
+    if name in material_lib.MAP_NAMES:
+        def write(tmp: Path) -> None:
+            if material_lib.write_map(source, tmp, name) is None:
+                raise NotReady(f"{source.name} could not be read as an image")
+
+        _staged(job_dir, name, write)
+        return
+
+    import json
+    import zipfile
+
+    def write_zip(tmp: Path) -> None:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(source, "albedo.png")
+            for map_name in material_lib.MAP_NAMES:
+                staged = tmp.with_name(f"{tmp.name}.{map_name}")
+                try:
+                    if material_lib.write_map(source, staged, map_name) is None:
+                        raise NotReady(f"{source.name} could not be read as an image")
+                    zf.write(staged, map_name)
+                finally:
+                    with contextlib.suppress(OSError):
+                        staged.unlink(missing_ok=True)
+            zf.writestr(
+                "material.json",
+                json.dumps(material_lib.material_json("albedo.png"), indent=2),
+            )
+            zf.writestr("README.txt", _MATERIAL_README)
+
+    _staged(job_dir, name, write_zip)
+
+
+# Said in the zip rather than only in a docstring nobody downloading it will
+# read. The whole point of pipelines/material is that these maps are estimates,
+# and a file called material_normal.png in a folder of textures carries every
+# implication of a measured one unless something says otherwise.
+_MATERIAL_README = (
+    "Warlock material set\n"
+    "\n"
+    "albedo.png is the generated tile. The other three maps are ESTIMATED from\n"
+    "it and describe its contrast, not a measured surface:\n"
+    "\n"
+    "  material_height.png     darker albedo is treated as deeper\n"
+    "  material_normal.png     slopes of that height, glTF/OpenGL green-up\n"
+    "  material_roughness.png  local fine detail is treated as roughness\n"
+    "\n"
+    "Metalness is not estimated at all and material.json declares 0.0.\n"
+    "All four images tile seamlessly, as the albedo does.\n"
+)
+
 def _derive_2d(
     svc: WarlockService,
     job: dict,
@@ -307,6 +391,15 @@ def _derive_2d(
                 # after a success, where the replace has already consumed it.
                 with contextlib.suppress(OSError):
                     tmp.unlink(missing_ok=True)
+            return
+        if name in files.MATERIAL_2D:
+            # No matte here either, and for the wrapped view's reason: every
+            # cutout is the operation of lifting a subject off a background,
+            # and a seamless texture *is* background. These are whole-frame
+            # transforms of it. Nothing goes in the manifest for the same
+            # reason -- an entry there records the matte that cut an artifact
+            # and the alpha it came out with, and these have neither.
+            _derive_material(job_dir, name, source)
             return
         with Image.open(source) as image:
             image.load()

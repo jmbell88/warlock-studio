@@ -62,6 +62,14 @@ MEDIA = {
     # texture rolled by half in both axes, so what was the wrap seam runs
     # through the middle of the frame where a discontinuity is visible.
     "wrap_preview.png": "image/png",
+    # The material set derived from a tile: height, tangent-space normal and
+    # roughness, plus a zip of all four images with a glTF material fragment.
+    # Each name is a literal for the reason the pixel sizes are -- MEDIA is the
+    # allowlist that keeps a caller-supplied string off the filesystem.
+    "material_height.png": "image/png",
+    "material_normal.png": "image/png",
+    "material_roughness.png": "image/png",
+    "material.zip": "application/zip",
     "manifest.json": "application/json",
     # The traceback errors.write_error_log already writes per job. The DB only
     # ever holds the one-line friendly sentence, so without this the actual
@@ -444,13 +452,32 @@ REFERENCE_2D = (
     "manifest.json",
 )
 
+# The PBR set. Estimates rather than measurements -- see pipelines/material --
+# and derived here for the reason every other 2D export is: they are a pure
+# function of a finished tile's input.png, so every tile already on disk gains
+# them without a second kind of job existing.
+#
+# Written out rather than imported from ``pipelines.material.MAP_NAMES``, which
+# is the same call ``config.SETTINGS`` makes: this file is the allowlist and an
+# allowlist assembled from somewhere else is one whose contents can change
+# without this file being edited. ``tests/test_material.py`` asserts the two
+# agree in both directions, which is what makes writing them out safe.
+MATERIAL_2D = (
+    "material_height.png",
+    "material_normal.png",
+    "material_roughness.png",
+    "material.zip",
+)
+
 # And what a *tile's* input.png can produce, which is deliberately almost none
-# of the above. Every cutout is the operation of lifting a subject off its
-# background, and a seamless texture is background: an icon of one is the whole
-# frame with a matte guessed over it, and a sprite of one is a trim box around
-# nothing. What a tile has instead is the wrapped view -- the only export that
-# says something true about it that the PNG itself does not.
-TILE_2D = ("wrap_preview.png", "manifest.json")
+# of the reference set. Every cutout is the operation of lifting a subject off
+# its background, and a seamless texture is background: an icon of one is the
+# whole frame with a matte guessed over it, and a sprite of one is a trim box
+# around nothing. What a tile has instead is the wrapped view -- the only
+# export that says something true about it that the PNG itself does not -- and
+# the material set, which is the same argument from the other side: these are
+# whole-frame transforms, and a texture is the one thing they mean anything for.
+TILE_2D = ("wrap_preview.png", *MATERIAL_2D, "manifest.json")
 
 # The union: what ``fresh_2d`` and ``derivable_2d`` answer about a *name*,
 # independently of the job asking. The per-stage split above is what decides

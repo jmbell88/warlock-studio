@@ -67,9 +67,30 @@ def test_a_tile_is_not_offered_the_cutout_exports():
     assert not [n for n in names if n.startswith("pixel_")]
 
 
-def test_a_tile_offers_the_texture_itself_and_its_wrapped_view():
+def test_a_tile_offers_the_texture_itself_its_wrapped_view_and_its_material():
     names = [n for n, _label in widgets.artifacts_for(_job(stage="tile"))]
-    assert names == ["input.png", "wrap_preview.png", "manifest.json"]
+    assert names == [
+        "input.png",
+        "wrap_preview.png",
+        "material.zip",
+        "material_normal.png",
+        "material_roughness.png",
+        "material_height.png",
+        "manifest.json",
+    ]
+
+
+def test_every_estimated_map_says_so_on_its_button():
+    """The one thing the labels must carry.
+
+    `pipelines/material` is written around the point that these maps describe
+    the albedo's contrast rather than a measured surface, and a button called
+    "Normal map" undoes that in the only place the user actually reads. The zip
+    carries the same sentence in its README, for the same reason.
+    """
+    labels = dict(widgets.artifacts_for(_job(stage="tile")))
+    for name in ("material_normal.png", "material_roughness.png", "material_height.png"):
+        assert "est." in labels[name], labels[name]
 
 
 def test_the_grid_offers_exactly_what_each_stage_can_derive():
