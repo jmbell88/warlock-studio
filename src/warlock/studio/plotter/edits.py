@@ -1,0 +1,268 @@
+"""The undoable steps a map document is changed by.
+
+On :mod:`warlock.studio.undo`, the engine the raster editor and Clay already
+share, and under its two travelling rules:
+
+**Every edit addresses its subject by uid, never by index.** An undo issued
+after the layer list has been reordered must still land on the layer the edit
+was made to, and an index stopped naming that layer the moment anything moved.
+Objects are addressed the same way, by their own uid within a named layer, so
+deleting the object above one does not retarget an edit to it.
+
+**An edit owns its arrays.** ``cost`` is what eviction is driven by, and a
+numpy slice reports only its own ``nbytes`` while keeping the whole base alive:
+a patch that costs four kilobytes by the budget's reckoning can pin a
+sixteen-megabyte layer, invisibly. So every array that arrives as a view is
+copied on the way in.
+
+The one type whose cost is easy to get wrong is :class:`TilesetAddEdit`. An
+undone add holds the *only* reference to a tileset's pixels -- several megabytes
+for a large atlas -- so reporting zero would hide it from the byte budget
+entirely, which is exactly the mistake ``LayerAddEdit`` was written to avoid in
+the raster editor.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+
+from ..undo import Edit
+
+
+def _own(array: np.ndarray) -> np.ndarray:
+    """A contiguous array this edit is the owner of.
+
+    ``base is not None`` is the test for a view, and it is the whole reason
+    this function exists rather than a bare ``np.asarray``.
+    """
+    out = np.ascontiguousarray(array)
+    if out.base is not None or out is array:
+        out = out.copy()
+    return out
+
+
+@dataclass
+class TilePatchEdit(Edit):
+    """A rectangle of one tile layer, before and after.
+
+    Dirty-rect rather than whole-layer for the reason the raster editor's patch
+    is: a single stamp on a 200x200 map is nine cells, and snapshotting 160 KB
+    per click would empty the byte budget in a few dozen strokes.
+    """
+
+    layer_uid: int
+    x0: int
+    y0: int
+    before: np.ndarray
+    after: np.ndarray
+
+    def __post_init__(self) -> None:
+        self.before = _own(self.before)
+        self.after = _own(self.after)
+        self.cost = int(self.before.nbytes + self.after.nbytes)
+
+    def undo(self, doc: Any) -> None:
+        doc._blit(self.layer_uid, self.x0, self.y0, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._blit(self.layer_uid, self.x0, self.y0, self.after)
+
+
+@dataclass
+class LayerAddEdit(Edit):
+    """Holds the layer object itself, not a copy of it.
+
+    Re-insertion has to bring back the *same* uid, or every patch recorded
+    against the layer before it was removed is stranded on a number nothing
+    answers to.
+    """
+
+    layer: Any
+    index: int
+
+    def __post_init__(self) -> None:
+        self.cost = int(getattr(getattr(self.layer, "data", None), "nbytes", 0))
+
+    def undo(self, doc: Any) -> None:
+        doc._detach_layer(self.layer)
+
+    def redo(self, doc: Any) -> None:
+        doc._attach_layer(self.layer, self.index)
+
+
+@dataclass
+class LayerRemoveEdit(Edit):
+    """The mirror of the add. Its cost is the same array, for the same reason:
+    while the removal stands, this edit is what keeps the layer alive."""
+
+    layer: Any
+    index: int
+
+    def __post_init__(self) -> None:
+        self.cost = int(getattr(getattr(self.layer, "data", None), "nbytes", 0))
+
+    def undo(self, doc: Any) -> None:
+        doc._attach_layer(self.layer, self.index)
+
+    def redo(self, doc: Any) -> None:
+        doc._detach_layer(self.layer)
+
+
+@dataclass
+class LayerMoveEdit(Edit):
+    """A reorder, recorded as the uid and the two positions.
+
+    By uid rather than by holding the layer, so that a move undone after an
+    unrelated add still finds its subject where the list actually has it.
+    """
+
+    layer_uid: int
+    before_index: int
+    after_index: int
+
+    def undo(self, doc: Any) -> None:
+        doc._relocate(self.layer_uid, self.before_index)
+
+    def redo(self, doc: Any) -> None:
+        doc._relocate(self.layer_uid, self.after_index)
+
+
+@dataclass
+class LayerPropsEdit(Edit):
+    """Name, visibility, opacity and custom properties -- everything about a
+    layer that is not its pixels or its position."""
+
+    layer_uid: int
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        # Copied: the caller routinely hands us the live dict it is about to
+        # write into, and a "before" that mutates with the document restores
+        # nothing.
+        self.before = dict(self.before)
+        self.after = dict(self.after)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_layer_props(self.layer_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_layer_props(self.layer_uid, self.after)
+
+
+@dataclass
+class TilesetAddEdit(Edit):
+    """Adding a tileset to the map's list.
+
+    Removal is not an operation the map offers, and the omission is deliberate:
+    ``firstgid`` allocation is contiguous, so dropping a set from the middle
+    would either renumber every set above it -- invalidating every gid already
+    painted -- or leave a hole that the next add would have to reason about.
+    Undo therefore only ever has to take back the set it appended, and it does
+    so by identity so that a stack which has somehow got out of order fails
+    loudly rather than removing somebody else's.
+    """
+
+    ref: Any
+
+    def __post_init__(self) -> None:
+        self.cost = int(getattr(getattr(self.ref, "tileset", None), "pixels", np.empty(0)).nbytes)
+
+    def undo(self, doc: Any) -> None:
+        doc._detach_tileset(self.ref)
+
+    def redo(self, doc: Any) -> None:
+        doc._attach_tileset(self.ref)
+
+
+@dataclass
+class ObjectAddEdit(Edit):
+    layer_uid: int
+    obj: Any
+    index: int
+
+    def undo(self, doc: Any) -> None:
+        doc._detach_object(self.layer_uid, self.obj)
+
+    def redo(self, doc: Any) -> None:
+        doc._attach_object(self.layer_uid, self.obj, self.index)
+
+
+@dataclass
+class ObjectRemoveEdit(Edit):
+    layer_uid: int
+    obj: Any
+    index: int
+
+    def undo(self, doc: Any) -> None:
+        doc._attach_object(self.layer_uid, self.obj, self.index)
+
+    def redo(self, doc: Any) -> None:
+        doc._detach_object(self.layer_uid, self.obj)
+
+
+@dataclass
+class ObjectPropsEdit(Edit):
+    """A moved, resized, renamed or re-keyed object.
+
+    ``properties`` is a dict inside the snapshot dicts, so both are deep-copied
+    one level: a shallow copy would hand undo and redo the same live mapping and
+    the two would overwrite each other.
+    """
+
+    layer_uid: int
+    obj_uid: int
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self.before = _snapshot(self.before)
+        self.after = _snapshot(self.after)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_object_props(self.layer_uid, self.obj_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_object_props(self.layer_uid, self.obj_uid, self.after)
+
+
+def _snapshot(values: dict[str, Any]) -> dict[str, Any]:
+    out = dict(values)
+    if isinstance(out.get("properties"), dict):
+        out["properties"] = dict(out["properties"])
+    return out
+
+
+@dataclass
+class ResizeEdit(Edit):
+    """The whole canvas, before and after.
+
+    A snapshot rather than a patch, and deliberately: a resize changes every
+    layer's *shape*, so there is no rectangle that describes it. The cost is
+    every array on both sides, which is the honest figure -- a resize is
+    expensive and the budget should see that it is.
+    """
+
+    before_size: tuple[int, int]
+    after_size: tuple[int, int]
+    before: dict[int, np.ndarray] = field(default_factory=dict)
+    after: dict[int, np.ndarray] = field(default_factory=dict)
+    before_objects: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
+    after_objects: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.before = {uid: _own(a) for uid, a in self.before.items()}
+        self.after = {uid: _own(a) for uid, a in self.after.items()}
+        self.cost = int(
+            sum(a.nbytes for a in self.before.values())
+            + sum(a.nbytes for a in self.after.values())
+        )
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_resize(self.before_size, self.before, self.before_objects)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_resize(self.after_size, self.after, self.after_objects)

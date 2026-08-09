@@ -1,0 +1,135 @@
+"""What ``studio/plotter/`` is allowed to reach for, pinned exactly.
+
+The package's whole claim is that every rule it has -- about where a tile lands,
+what a gid means, what a ``.tmx`` may contain -- is assertable headlessly. That
+claim is only worth anything while the imports stay honest, so a *new* outward
+import is a failing test and a deliberate decision rather than something that
+turns up in a review three months later.
+
+This is the ``tests/inker/test_sheetout.py`` pin applied to the second pure
+package, and it is written the same way on purpose.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from warlock.studio import plotter
+
+ENGINE = Path(plotter.__file__).parent
+PACKAGE = "warlock.studio.plotter"
+
+#: ``(module, imported name)`` for every import that leaves the package.
+#: :mod:`~warlock.studio.undo` is the history engine the raster editor and Clay
+#: already share -- as headless as this package is, and the reason a ``.wmap``
+#: undo step and an ``.ora`` one obey the same byte budget.
+OUTWARD_IMPORTS = {
+    ("edits.py", "warlock.studio.undo"),
+    ("tilemap.py", "warlock.studio.undo"),
+}
+
+BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}
+
+#: Imported inside the functions that need it, never at module scope. Pillow
+#: costs a tenth of a second to import and most of this package never decodes a
+#: pixel; the ``.wblk`` writer follows the same rule for the same reason.
+LAZY_ONLY = {"PIL"}
+
+
+def _outward(path: Path) -> set[str]:
+    """Absolute module names this file imports from outside its own package."""
+    found: set[str] = set()
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0:
+                found.add(node.module or "")
+            elif node.level >= 2:
+                # Level 1 is a sibling inside the package. Level 2+ climbs out
+                # of it, which is exactly what this is measuring.
+                base = PACKAGE.rsplit(".", node.level - 1)[0]
+                if node.module:
+                    found.add(f"{base}.{node.module}")
+                else:
+                    found.update(f"{base}.{alias.name}" for alias in node.names)
+    return found
+
+
+def _module_level(path: Path) -> set[str]:
+    """Only the imports at the top of the file, not the ones inside functions."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            found.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            found.add((node.module or "").split(".")[0])
+    return found
+
+
+def _modules() -> list[Path]:
+    return sorted(ENGINE.glob("*.py"))
+
+
+def test_there_are_modules_to_check():
+    """A glob that matched nothing would make every test below vacuously
+    pass."""
+    assert len(_modules()) >= 8
+
+
+def test_the_engine_never_imports_a_window():
+    """No imgui, no moderngl, no pygame -- which is what makes every rule this
+    package has about tiles assertable in a test like this one."""
+    for path in _modules():
+        roots = {name.split(".")[0] for name in _outward(path)}
+        assert not (roots & BANNED_ROOTS), f"{path.name} imports {roots & BANNED_ROOTS}"
+
+
+def test_the_engine_never_imports_the_service_layer():
+    for path in _modules():
+        for name in _outward(path):
+            assert "warlock.service" not in name, f"{path.name} imports {name}"
+
+
+def test_the_engine_never_imports_the_queue_or_the_pipelines():
+    """Plotter has no business in a worker process, and neither of those has
+    any business in a headless test of tile arithmetic."""
+    for path in _modules():
+        for name in _outward(path):
+            assert not name.startswith("warlock.queue"), f"{path.name} imports {name}"
+            assert not name.startswith("warlock.pipelines"), f"{path.name} imports {name}"
+
+
+def test_the_only_outward_imports_are_the_ones_written_down():
+    found = {
+        (path.name, name)
+        for path in _modules()
+        for name in _outward(path)
+        if name.split(".")[0] == "warlock"
+    }
+    assert found == OUTWARD_IMPORTS
+
+
+def test_pillow_is_never_imported_at_module_scope():
+    """Three modules decode or encode a PNG and the rest never touch one.
+    A top-level Pillow import would put that cost on importing ``gid``."""
+    for path in _modules():
+        assert not (_module_level(path) & LAZY_ONLY), f"{path.name} imports PIL eagerly"
+
+
+def test_the_package_imports_with_no_optional_dependency_present():
+    """Importing every module is the cheapest possible smoke test that the
+    lazy-import rule above is actually being followed."""
+    from warlock.studio.plotter import (  # noqa: F401
+        edits,
+        gid,
+        tilemap,
+        tileset,
+        tmx,
+        tools,
+        tsx,
+        wmap,
+    )
