@@ -172,6 +172,50 @@ because those describe the old geometry exactly.
 Press **Rebuild mesh** to apply. The served `model.glb` is never written in place: the new mesh is
 staged and swapped, so nothing reading the old one sees a truncated file.
 
+## Surface texture
+
+A re-texture gives a finished mesh a new skin without touching its geometry. The control is in the
+inspector, on the **Rig & Pose** tab, under the collapsed **Surface texture** header, directly below
+[Triangle budget](#triangle-budget) — both are operations on an asset that already exists.
+
+Describe the surface you want ("rusted iron", "mossy stone", "painted wood"), set how far the
+restyle is taken, pick an atlas size, and press **Re-texture mesh**. What happens then is four
+stages: the mesh is rendered flat from six directions, each render is restyled by the image model,
+each restyled view is projected back onto the mesh's own UV layout with a weight image saying how
+squarely it faced the camera, and the six are combined into one atlas by a weighted mean.
+
+Unlike a retarget, this is a queued job rather than a couple of seconds of processing — six image
+generations is a real amount of GPU — so it takes its turn behind whatever else is running, and it
+is refused outright on a job that is still queued or running.
+
+**Restyle strength** is how far each view is taken from the mesh's current look. Low keeps the
+shapes and recolours them; high reinterprets them, and past about two-thirds the views start
+disagreeing with each other about what the object is, which shows up as a muddled atlas rather than
+as a bolder one.
+
+**Atlas size** is the resolution the new texture is written at. The reconstruction engine bakes at
+512 px; the views being projected in are larger than that, so 1024 is the default and is not wasted.
+
+Three things the panel tells you rather than letting you find out.
+
+**Your rig is safe.** A rig, its saved poses and its rendered sheets reference geometry, and a
+re-texture changes no geometry — so unlike a retarget, none of them is invalidated. The exports that
+*do* carry the skin (OBJ, FBX, the texture zip) are deleted and rebuilt on next request. STL and the
+collision hull are geometry with no material in them and are left alone.
+
+**There is no occlusion test.** A view's contribution is weighted by how squarely each surface faces
+it, not by whether anything is in the way — so on a mesh with an overhang, the front view's colours
+can be smeared onto whatever hides behind it. On a convex prop this never arises. It is a stated
+limitation of the projection approach rather than a bug, and it is why the run reports what it does.
+
+**Coverage is reported.** After a run the panel says what fraction of the atlas any view could speak
+about at all. A texel no view could see keeps its old colour rather than being invented — the inside
+of a barrel stays the inside of a barrel — so a low coverage figure means most of the mesh kept its
+previous skin, which is worth knowing before you conclude the prompt did nothing.
+
+`source.glb` is never touched. A re-texture is a derivation, exactly as a retarget is, so the
+reconstruction stays the thing both of them rebuild from.
+
 ## Mesh audit and mesh report
 
 The app measures a finished mesh in two deliberately separate ways, and they answer different

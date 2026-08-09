@@ -321,6 +321,7 @@ DENSE_PANES = (
     "profiles_panel.py",
     "pose_panel.py",
     "retarget_panel.py",
+    "texture_panel.py",
     "inker_layers.py",
     "clay_props.py",
     "clay_outliner.py",

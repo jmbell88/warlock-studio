@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import pathlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -483,6 +484,40 @@ def test_copying_settings_survives_a_junk_value():
     form = form_from_params({"seed": "not a number", "prompt": "ok"})
     assert form["prompt"] == "ok"
     assert isinstance(form["seed"], int)
+
+
+# --- the re-texture control -----------------------------------------------------
+
+
+def test_the_texture_panel_refuses_an_empty_prompt_before_the_button():
+    """The one refusal a control can express -- the numeric ranges are enforced
+    by the slider and the combo, which cannot produce an out-of-range value."""
+    from warlock.studio.panes import texture_panel
+
+    assert texture_panel.validate({"prompt": "   "})
+    assert texture_panel.validate({"prompt": "rusted iron"}) == []
+
+
+def test_the_texture_panel_offers_only_atlas_sizes_the_service_accepts():
+    """Two spellings of one list is how a combo comes to offer a value the door
+    refuses, which reads as the button being broken."""
+    from warlock.pipelines import retexture
+    from warlock.studio.panes import texture_panel
+
+    source = pathlib.Path(texture_panel.__file__).read_text(encoding="utf-8")
+    assert "retexture.TEXTURE_SIZES" in source
+    assert retexture.TEXTURE_PX in retexture.TEXTURE_SIZES
+
+
+def test_the_texture_panel_sits_beside_the_retarget_one():
+    """Both are "an operation on a selected done job" -- the shape the closed
+    mode list is the reason for. A re-texture is a button, not a mode."""
+    from warlock.studio import modes
+    from warlock.studio.panes import inspector
+
+    source = pathlib.Path(inspector.__file__).read_text(encoding="utf-8")
+    assert source.index("retarget_panel.draw") < source.index("texture_panel.draw")
+    assert "retexture" not in modes.KEYS
 
 
 # --- the retarget control ------------------------------------------------------

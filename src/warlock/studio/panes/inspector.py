@@ -24,7 +24,14 @@ from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
 from ..tokens import sp
-from . import candidates_panel, overlay, pose_panel, retarget_panel, sheet_panel
+from . import (
+    candidates_panel,
+    overlay,
+    pose_panel,
+    retarget_panel,
+    sheet_panel,
+    texture_panel,
+)
 
 # Matches the library card's thumbnail, so the two read as the same kind of
 # object rather than as two different image widgets. Design px: every use of it
@@ -159,6 +166,7 @@ def _rig_tab(ctx: Any, job: Any) -> None:
     _weighting(ctx, job)
     _deform_qa(ctx, job)
     retarget_panel.draw(ctx, job)
+    texture_panel.draw(ctx, job)
     pose_panel.draw(ctx, job)
     sheet_panel.draw(ctx, job)
 

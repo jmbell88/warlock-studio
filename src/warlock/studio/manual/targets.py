@@ -12,6 +12,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "library": ("09-library-and-jobs", None),
     "inspector": ("04-generating-meshes", "exports"),
     "retarget": ("04-generating-meshes", "triangle-budget"),
+    "retexture": ("04-generating-meshes", "surface-texture"),
     "pose": ("05-rigging-and-posing", "posing"),
     "sheet": ("06-sprite-sheets", None),
     "inker-tools": ("07-inker", "tools"),
