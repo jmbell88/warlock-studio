@@ -117,6 +117,12 @@ class Runtime:
         self.worker = self._submit(self._make_worker()).result(10.0)
         self.svc = WarlockService(self.config, self.store, self.worker, self._loop)
         self.svc.vram_plan = self.vram_plan
+        # The one thing the worker needs from the service and cannot import:
+        # the per-artifact lock a re-texture takes to delete the exports that
+        # describe the skin it replaced. Injected rather than imported, because
+        # queue.py may not reach into service -- and defaulted to a null lock
+        # there, so a headless Worker is unchanged.
+        self.worker.artifact_lock = self.svc.convert_lock
         return self.svc
 
     def _resolve_vram(self) -> vram.Plan:

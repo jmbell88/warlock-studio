@@ -73,6 +73,28 @@ VIEWS: tuple[tuple[float, float], ...] = (
 # win by default wherever it was the only contributor.
 MIN_FACING = 0.15
 
+# The atlas a re-texture writes, in texels. Larger than trellis's own 512
+# (`Config.trellis_tex_res`, pinned there to dodge an upstream noise bug) and
+# deliberately so: the UV layout is unchanged, but the views being projected
+# into it are 1024px, so a 512 atlas would throw away detail the restyle
+# actually produced. The sizes a caller may ask for are stated rather than free,
+# because this number is baked into every derived export afterwards.
+TEXTURE_PX = 1024
+TEXTURE_SIZES: tuple[int, ...] = (512, 1024, 2048)
+
+# Which of ``service.files.DERIVED`` a re-texture invalidates: the exports that
+# carry the mesh's *skin*. STL is geometry only and a convex collision hull has
+# no material at all, so deleting those would cost the user a re-export to
+# produce a byte-identical file -- and a re-texture changes no geometry, which
+# is the same sentence that keeps the rig valid.
+#
+# It lives here rather than in ``service.files`` because ``queue.py`` is what
+# deletes them and may not import ``service``. ``files.DERIVED`` stays the
+# authority on the whole set; this is a stated subset of it, and
+# ``tests/test_retexture.py`` asserts the containment in both directions so a
+# new export cannot join one list and quietly miss the other.
+SURFACE_DERIVED: tuple[str, ...] = ("model_obj.zip", "textures.zip", "model.fbx")
+
 # How far the finished atlas is grown past the islands, in texels. Four covers
 # bilinear sampling plus two mip levels, which is where a rim first becomes
 # visible; growing further costs a pass each and never helps, because by the
@@ -237,3 +259,159 @@ def assemble(
         # record is what a user reading the job's params sees.
         "occlusion_tested": False,
     }
+
+
+# --- putting the atlas back into the GLB -------------------------------------
+#
+# Through ``glbio`` rather than through trimesh, and for the reason
+# ``normalize_glb`` gives about the same choice: re-exporting a scene would
+# re-encode every texture and rewrite the node graph -- and the node graph is
+# where the grounding transform lives. Only the JSON chunk and the tail of the
+# BIN chunk are touched; every existing byte is copied through verbatim.
+
+
+def _first_base_colour(gltf: dict) -> int | None:
+    """The index of the *texture* the first textured material samples as albedo."""
+    for material in gltf.get("materials") or []:
+        pbr = material.get("pbrMetallicRoughness") or {}
+        slot = pbr.get("baseColorTexture") or {}
+        index = slot.get("index")
+        if isinstance(index, int):
+            return index
+    return None
+
+
+def _image_bytes(gltf: dict, buffer: bytes, image_index: int) -> bytes | None:
+    image = (gltf.get("images") or [])[image_index]
+    view_index = image.get("bufferView")
+    if not isinstance(view_index, int):
+        # An external or data: URI. trellis writes neither, and chasing one
+        # would mean resolving paths relative to a GLB that may have moved.
+        return None
+    view = (gltf.get("bufferViews") or [])[view_index]
+    start = int(view.get("byteOffset", 0))
+    return buffer[start : start + int(view["byteLength"])]
+
+
+def extract_base_colour(glb_path: Path, dest: Path, *, size: int) -> bool:
+    """Write the mesh's current albedo out as a square PNG. -> whether it worked.
+
+    ``size`` is the bake resolution rather than the atlas's own, because this
+    image exists to be ``assemble``'s ``base``: a texel with no contributor
+    keeps its old colour, and "its old colour" has to be addressable at the
+    resolution the projections were baked at. Resampling here rather than in
+    ``assemble`` keeps that function a pure array operation.
+
+    False rather than an exception for every way of not having one -- an
+    untextured mesh is a legitimate input, and ``assemble`` already has an
+    honest stand-in for a missing base.
+    """
+    from PIL import Image
+
+    from .. import glbio
+
+    try:
+        gltf, buffer = glbio.read_glb(glb_path)
+        texture_index = _first_base_colour(gltf)
+        if texture_index is None:
+            return False
+        source = (gltf.get("textures") or [])[texture_index].get("source")
+        if not isinstance(source, int):
+            return False
+        raw = _image_bytes(gltf, buffer, source)
+        if raw is None:
+            return False
+        import io
+
+        with Image.open(io.BytesIO(raw)) as im:
+            im.load()
+            atlas = im.convert("RGB")
+        if atlas.size != (size, size):
+            atlas = atlas.resize((size, size), Image.LANCZOS)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        atlas.save(dest, "PNG")
+    except Exception:
+        return False
+    return True
+
+
+def swap_base_colour(glb_path: Path, atlas_png: Path, dest: Path) -> bool:
+    """Copy ``glb_path`` to ``dest`` with ``atlas_png`` as its albedo.
+
+    The new PNG is **appended** and pointed at through a new image, a new
+    texture and a rewritten ``baseColorTexture.index`` on every material that
+    had one -- rather than overwriting the old image in place. Overwriting is
+    the shorter code and it is wrong whenever anything else references the same
+    image or the same texture: a mesh whose metallic-roughness map happens to
+    be the same PNG would have its roughness replaced by an albedo, silently,
+    and only some meshes would show it. The orphaned original stays in the
+    buffer, which costs a megabyte and keeps every other offset exactly where
+    it was.
+
+    False rather than an exception, this module's rule: a mesh with no albedo
+    slot to replace is a fact about the mesh.
+    """
+    import struct
+
+    from .. import glbio
+
+    try:
+        data = glb_path.read_bytes()
+        header, gltf, rest = glbio.split_glb(data)
+        texture_index = _first_base_colour(gltf)
+        if texture_index is None:
+            return False
+
+        # The BIN chunk, and everything after it kept verbatim.
+        offset, bin_at = 0, None
+        while offset + 8 <= len(rest):
+            chunk_len, chunk_type = struct.unpack_from("<II", rest, offset)
+            if chunk_type == glbio.CHUNK_BIN:
+                bin_at = (offset, chunk_len)
+                break
+            offset += 8 + chunk_len
+        if bin_at is None:
+            return False
+        start, length = bin_at
+        body = rest[start + 8 : start + 8 + length]
+        tail = rest[start + 8 + length :]
+
+        png = atlas_png.read_bytes()
+        # 4-byte alignment is required of every bufferView offset, and the BIN
+        # chunk itself pads with zeros (the JSON chunk is the one that pads with
+        # spaces).
+        padded = body + b"\0" * (-len(body) % 4)
+        new_body = padded + png
+        new_body += b"\0" * (-len(new_body) % 4)
+
+        views = gltf.setdefault("bufferViews", [])
+        views.append({"buffer": 0, "byteOffset": len(padded), "byteLength": len(png)})
+        images = gltf.setdefault("images", [])
+        images.append({"bufferView": len(views) - 1, "mimeType": "image/png"})
+        textures = gltf.setdefault("textures", [])
+        sampler = textures[texture_index].get("sampler")
+        new_texture = {"source": len(images) - 1}
+        if sampler is not None:
+            new_texture["sampler"] = sampler
+        textures.append(new_texture)
+        # Every material sampling the old texture as albedo, not only the first:
+        # _first_base_colour found *a* slot, and a multi-material mesh sharing
+        # one atlas would otherwise come back half restyled.
+        for material in gltf.get("materials") or []:
+            slot = (material.get("pbrMetallicRoughness") or {}).get("baseColorTexture")
+            if slot is not None and slot.get("index") == texture_index:
+                slot["index"] = len(textures) - 1
+        buffers = gltf.setdefault("buffers", [{}])
+        buffers[0]["byteLength"] = len(new_body)
+
+        new_rest = (
+            rest[:start]
+            + struct.pack("<II", len(new_body), glbio.CHUNK_BIN)
+            + new_body
+            + tail
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(glbio.rebuild_glb(header, gltf, new_rest))
+    except Exception:
+        return False
+    return True

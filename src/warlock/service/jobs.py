@@ -1215,6 +1215,106 @@ def optimize_job(
     }
 
 
+def retexture_job(
+    svc: WarlockService,
+    job_id: str,
+    prompt: str,
+    *,
+    strength: float | None = None,
+    texture_size: int | None = None,
+    seed: int | None = None,
+    base_model: str | None = None,
+) -> dict[str, Any]:
+    """Queue a new surface for a finished mesh, from a prompt.
+
+    ``optimize_job``'s near-sibling in everything it *refuses* -- a terminal
+    status is required, ``source.glb`` is never touched, and the exports that
+    describe the old skin go -- and its opposite in where the work runs. A
+    retarget is a two-second gltfpack subprocess and belongs inline; a
+    re-texture is six SDXL passes around two Blender ops, so it takes the queue
+    for the reason every other GPU path does: it needs the resident pipe, and a
+    TaskRunner thread racing the worker for VRAM is the OOM that only
+    reproduces under load. Every refusal is still *here* rather than in the
+    worker, exactly as ``create_pixel_sheet`` states: a mesh with no atlas to
+    replace should cost the request, not a place in the queue and a minute of
+    GPU.
+
+    The ``Conflict`` is the same one and for the same reason: the worker's own
+    ``_optimize``/``_apply_scale`` write ``model.glb`` without taking a lock, so
+    a re-texture queued against a running job would be a second writer with no
+    ordering between them. Refusing beats racing.
+    """
+    from ..pipelines import retexture
+
+    check_job_id(job_id)
+    job = svc.require_job(job_id)
+    if job["status"] in ("queued", "running"):
+        raise Conflict(f"job is {job['status']}; re-texture it once it finishes")
+    job_dir = svc.job_dir(job_id)
+    if not (job_dir / "model.glb").exists():
+        raise Invalid("this job has no mesh to re-texture")
+    text = (prompt or "").strip()
+    if not text:
+        raise Invalid("describe the surface you want", field="prompt")
+    if len(text) > MAX_PROMPT:
+        raise TooLarge(f"prompt is longer than {MAX_PROMPT} characters", field="prompt")
+
+    value = models.DEFAULT_IMG2IMG_STRENGTH if strength is None else float(strength)
+    if not models.IMG2IMG_STRENGTH_MIN <= value <= models.IMG2IMG_STRENGTH_MAX:
+        raise Invalid(
+            f"strength must be between {models.IMG2IMG_STRENGTH_MIN} "
+            f"and {models.IMG2IMG_STRENGTH_MAX}",
+            field="strength",
+        )
+    size = retexture.TEXTURE_PX if texture_size is None else int(texture_size)
+    if size not in retexture.TEXTURE_SIZES:
+        raise Invalid(
+            f"texture_size must be one of {list(retexture.TEXTURE_SIZES)}",
+            field="texture_size",
+        )
+    if seed is not None:
+        check_seed("seed", seed)
+    base_key = str(base_model or svc.config.t2i_model)
+    if base_key not in models.BASE_MODELS:
+        raise Invalid(f"unknown base model {base_key!r}", field="base_model")
+
+    params = {
+        # Inputs, every one of them: what the re-texture recorded about the
+        # atlas it produced goes on the *mesh's* row under "retexture", which is
+        # in DERIVED_PARAMS. Nothing here is derived, so a rerun copies it
+        # verbatim.
+        "source_job": job_id,
+        "strength": value,
+        "texture_size": size,
+        "seed": random_seed() if seed is None else int(seed),
+        "base_model": base_key,
+    }
+    # At the door and before the row exists, as everywhere: six img2img passes
+    # through one resident pipe is a real budget question beside a warm trellis.
+    check_vram(svc, "retexture", "model", params)
+    check_weights(svc, "text", params)
+    new_id = svc.store.create("retexture", text, params, uuid.uuid4().hex[:12])
+    svc.wake_worker()
+    return {"id": new_id, "source_job": job_id, "stale": stale_surface_artifacts(job_dir)}
+
+
+def stale_surface_artifacts(job_dir: Path) -> list[str]:
+    """What a re-texture will invalidate, so the panel can say so beforehand.
+
+    Deliberately *not* ``stale_rig_artifacts``, and the difference is the whole
+    point: a rig, its poses and its sheets reference geometry, and a re-texture
+    changes no geometry -- so none of them appears here, and
+    ``tests/test_retexture.py`` asserts that rather than leaving it to be
+    "fixed" later. What does appear is the exports that carry the skin.
+
+    Reported rather than merely deleted after the fact, the rule the retarget
+    panel already follows: a warning before the button beats a list afterwards.
+    """
+    from ..pipelines import retexture
+
+    return [n for n in retexture.SURFACE_DERIVED if (job_dir / n).exists()]
+
+
 def stale_rig_artifacts(job_dir: Path) -> list[str]:
     """What still describes the old mesh after a retarget.
 

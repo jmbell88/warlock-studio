@@ -571,6 +571,15 @@ def run_worker(
 RIG_GLB_TMP = ".rig.tmp.glb"
 RIG_JSON_TMP = ".rig.tmp.json"
 
+# Where a re-texture assembles its replacement mesh before it becomes the one
+# being served. Named here beside the rig temps because it is the same rule for
+# the same reason -- a job writing into a *different* job's directory publishes
+# by rename, so a cancel deletes a temp and never a finished artifact -- and
+# because both the worker that writes it and ``_discard_artifacts`` need the
+# one spelling. Nothing goes near Blender's exporter here, so the suffix is
+# free; it keeps the rig temps' shape anyway.
+RETEXTURE_GLB_TMP = ".retexture.tmp.glb"
+
 
 def rig_spec(
     job_dir: Path,

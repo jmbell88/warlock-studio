@@ -317,6 +317,20 @@ class Worker:
         # loop in request_cancel -- a plain attribute assignment either way,
         # and only ever non-None for the one job the queue is running.
         self._blender: Any = None
+        # How to take the lock guarding one derived artifact of one job, as
+        # (job_id, name) -> a context manager. The worker holds no service and
+        # may not import one, so ``studio.runtime`` injects
+        # ``WarlockService.convert_lock`` here; unset, it is a null lock, which
+        # is exactly the pre-existing behaviour of every write the worker makes
+        # to a model.glb (and is why ``optimize_job`` refuses a job that is
+        # queued or running rather than trying to interleave with it).
+        #
+        # Only ``_retexture`` uses it, and only to *delete* the exports that
+        # describe the skin it just replaced -- the one place the worker touches
+        # a finished job's derived artifacts, and so the one place an in-flight
+        # conversion could otherwise rename a stale copy back into existence
+        # after the unlink.
+        self.artifact_lock: Any = lambda _job_id, _name: contextlib.nullcontext()
         self.fatal: BaseException | None = None
         self.progress = ProgressBus()
         self._parser = TrellisProgressParser(self._emit_progress)
@@ -395,7 +409,7 @@ class Worker:
             # _process below turns into a cancelled status because the
             # cancel event is already set.
             await asyncio.to_thread(self.trellis.stop)
-        elif phase in ("rig", "sheet"):
+        elif phase in ("rig", "sheet", "views", "project"):
             # Same story as trellis: bpy is inside a C weighting solve (or an
             # EEVEE render) and checks nothing, so killing the subprocess is
             # the only abort.
@@ -727,7 +741,7 @@ class Worker:
         successful job because the user cancelled a rig.
         """
         params = job["params"]
-        if job["kind"] in ("rig", "sheet", "pixel_sheet"):
+        if job["kind"] in ("rig", "sheet", "pixel_sheet", "retexture"):
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
             # could have written, so there is nothing to undo.
@@ -746,6 +760,15 @@ class Worker:
                 # served names may belong to an earlier, successful rig job
                 # (a cancelled re-rig must not destroy the rig it corrects).
                 paths = [job_dir / rigging.RIG_GLB_TMP, job_dir / rigging.RIG_JSON_TMP]
+            elif job["kind"] == "retexture":
+                # Only the temp, for the rig's reason exactly: the served
+                # model.glb in that directory is a different, successful job's
+                # mesh -- either still its original skin, or one an *earlier*
+                # re-texture published. A cancel must not destroy either.
+                # This job's own renders and bakes go with it below.
+                paths = [job_dir / rigging.RETEXTURE_GLB_TMP]
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(self.config.job_dir(job["id"]) / "views")
             else:
                 sheet_id = str(params.get("sheet_id") or "")
                 if not rigging.is_valid_id(sheet_id):
@@ -859,6 +882,9 @@ class Worker:
             return
         if job["kind"] == "pixel_sheet":
             await self._pixel_sheet(job)
+            return
+        if job["kind"] == "retexture":
+            await self._retexture(job)
             return
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -1940,6 +1966,232 @@ class Worker:
             "restyled sheet %s for job %s: %d bands, %d colours at %dpx",
             sheet_id, source_id, len(plan), len(palette), logical,
         )
+
+    async def _retexture(self, job: dict[str, Any]) -> None:
+        """Give a finished mesh a new skin: render, restyle, project, swap.
+
+        Four stages and only the middle one is GPU-generation: ``op_views``
+        renders the mesh flat from ``retexture.VIEWS``, one SDXL img2img pass
+        restyles each render, ``op_project`` bakes each restyled view back into
+        the mesh's own UV atlas with a weight image beside it, and
+        ``retexture.assemble`` does the weighted mean on the host. Two Blender
+        ops rather than one because the restyle sits between them and Blender
+        is a separate interpreter with no way to call back into this one.
+
+        A queue job for ``_pixel_sheet``'s reason: it needs the resident SDXL
+        pipe, and a TaskRunner thread racing the worker for VRAM is the OOM
+        that only reproduces under load.
+
+        **The new mesh belongs to the old one**, so like a rig it is published
+        into the *source* job's directory rather than into this job's -- and by
+        the same mechanism, a temp name renamed into place, so a concurrent
+        reader of ``model.glb`` never sees a partial file. ``source.glb`` is
+        untouched: a re-texture is derivation, never authorship, and the
+        reconstruction has to stay the thing a retarget rebuilds from.
+        """
+        from .pipelines import retexture
+        from .pipelines.conditioning import Conditioning
+
+        job_id = job["id"]
+        params = job["params"]
+        source_id = str(params.get("source_job") or "")
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
+        source_dir = self.config.job_dir(source_id)
+        model_glb = source_dir / "model.glb"
+        if not model_glb.exists():
+            raise RuntimeError("source job has no mesh to re-texture")
+
+        views = list(retexture.VIEWS)
+        texture_size = int(params.get("texture_size", retexture.TEXTURE_PX))
+        strength = float(params.get("strength", models.DEFAULT_IMG2IMG_STRENGTH))
+        seed = int(params.get("seed", 42))
+        base_key = str(params.get("base_model") or self.config.t2i_model)
+        if base_key not in models.BASE_MODELS:
+            base_key = models.DEFAULT_BASE_MODEL
+        spec = models.BASE_MODELS[base_key]
+        view_px = spec.image_size
+
+        def on_start(proc: Any) -> None:
+            self._blender = proc
+
+        job_dir = self.config.job_dir(job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        # This job's own directory, not a TemporaryDirectory: six renders, six
+        # restyles and twelve bakes are what a user asks about when the result
+        # is wrong, and they are exactly what ``_discard_artifacts`` removes on
+        # a cancel. Nothing here is in MEDIA or LISTED, so none of it is served.
+        views_dir = job_dir / "views"
+        views_dir.mkdir(parents=True, exist_ok=True)
+
+        self.progress.update(
+            job_id, phase="views", label="Rendering views", inner=0.0,
+            inner_next=0.2, nominal=20.0, detail=f"{len(views)} directions",
+        )
+        await asyncio.to_thread(
+            functools.partial(
+                rigging.run_worker,
+                rigging.views_spec(model_glb, views_dir, views, size=view_px),
+                on_progress=lambda f, label: self.progress.update(
+                    job_id, phase="views", label=label, inner=f * 0.2,
+                    inner_next=min(f * 0.2 + 0.03, 0.2), nominal=20.0, detail="",
+                ),
+                on_start=on_start,
+                # A render of six frames, which is the sentence sheet_timeout
+                # already describes -- a second knob would be two ceilings on
+                # one kind of Blender run.
+                timeout=self.config.sheet_timeout,
+            )
+        )
+
+        prompt = guidance.compose_prompt(job["prompt"] or "", params)
+        if self.config.vram_exclusive or self.trellis.running:
+            await asyncio.to_thread(self.trellis.stop)
+            _log_mem("after trellis stop")
+        t2i = await self._get_text2image(base_key)
+        assert self._cancel is not None
+        try:
+            for index in range(len(views)):
+                init_path = views_dir / f"view_{index:02d}.png"
+                if not init_path.exists():
+                    continue
+                self.progress.update(
+                    job_id, phase="restyle", label="Restyling views",
+                    inner=0.2 + 0.55 * index / len(views),
+                    inner_next=0.2 + 0.55 * (index + 1) / len(views),
+                    nominal=25.0, detail=f"view {index + 1}/{len(views)}",
+                )
+                await asyncio.to_thread(
+                    functools.partial(
+                        t2i.generate,
+                        prompt,
+                        views_dir / f"restyled_{index:02d}.png",
+                        # One seed for every view. Six independent seeds is six
+                        # unrelated interpretations of one prompt, and the
+                        # weighted mean of those is mud exactly where two views
+                        # overlap -- which is most of the mesh.
+                        seed=seed,
+                        conditioning=Conditioning(
+                            init_image=init_path, strength=strength
+                        ),
+                        on_state=lambda s: self._t2i_state(job_id, s),
+                        on_step=lambda i, n: self._t2i_step(job_id, i, n),
+                        cancel_event=self._cancel.event if self._cancel else None,
+                    )
+                )
+        finally:
+            if self.config.vram_exclusive:
+                await asyncio.to_thread(t2i.unload)
+                self._text2image = None
+                self._t2i_key = None
+
+        if self._cancel is not None and self._cancel.event.is_set():
+            return
+
+        self.progress.update(
+            job_id, phase="project", label="Baking projections", inner=0.75,
+            inner_next=0.95, nominal=30.0, detail="",
+        )
+        await asyncio.to_thread(
+            functools.partial(
+                rigging.run_worker,
+                rigging.project_spec(
+                    model_glb, views_dir, views_dir, views,
+                    size=view_px, texture_size=texture_size,
+                ),
+                on_progress=lambda f, label: self.progress.update(
+                    job_id, phase="project", label=label, inner=0.75 + f * 0.2,
+                    inner_next=min(0.75 + f * 0.2 + 0.03, 0.95), nominal=30.0,
+                    detail="",
+                ),
+                on_start=on_start,
+                timeout=self.config.sheet_timeout,
+            )
+        )
+
+        self.progress.update(
+            job_id, phase="assemble", label="Combining projections", inner=0.95,
+            inner_next=1.0, nominal=5.0, detail="",
+        )
+        base_png = views_dir / "base.png"
+        # The mesh's existing albedo, at the bake's resolution: a texel no view
+        # could see keeps its old colour, and that is only expressible if the
+        # old colours are addressable at the size the projections were baked at.
+        has_base = await asyncio.to_thread(
+            functools.partial(
+                retexture.extract_base_colour, model_glb, base_png, size=texture_size
+            )
+        )
+        atlas = views_dir / "atlas.png"
+        report = await asyncio.to_thread(
+            functools.partial(
+                retexture.assemble,
+                views_dir,
+                base_png if has_base else None,
+                atlas,
+                count=len(views),
+            )
+        )
+        if report is None:
+            raise RuntimeError("no projection could be read back from Blender")
+
+        if self._cancel is not None and self._cancel.event.is_set():
+            # Nothing is published for a cancelled re-texture -- the run loop is
+            # about to call _discard_artifacts, and the mesh on disk is still a
+            # different, successful job's. The same rule _rig follows about
+            # finalize_rig.
+            return
+
+        temp = source_dir / rigging.RETEXTURE_GLB_TMP
+        if not await asyncio.to_thread(
+            functools.partial(retexture.swap_base_colour, model_glb, atlas, temp)
+        ):
+            raise RuntimeError("this mesh has no base-colour texture to replace")
+        # Rename rather than write: model.glb is served, and os.replace is
+        # atomic on both platforms as long as the two share a filesystem --
+        # which they do, being siblings.
+        await asyncio.to_thread(os.replace, temp, model_glb)
+        await asyncio.to_thread(self._drop_surface_artifacts, source_dir)
+
+        report["base_model"] = base_key
+        report["strength"] = strength
+        report["seed"] = seed
+        report["texture_size"] = texture_size
+        report["prompt"] = t2i.last_prompt or prompt
+        params["retexture"] = report
+        await asyncio.to_thread(self.store.set_params, job_id, params)
+        # On the mesh's own row as well, because that is where a reader looking
+        # at the asset asks what its surface is -- and it is derived, so
+        # DERIVED_PARAMS carries it and a reroll does not inherit it.
+        await asyncio.to_thread(
+            self.store.merge_params, source_id, {"retexture": report}
+        )
+        log.info(
+            "re-textured job %s from %s: %d views, %.0f%% coverage",
+            source_id, job_id, report["views"], report["coverage"] * 100.0,
+        )
+
+    def _drop_surface_artifacts(self, source_dir: Path) -> None:
+        """Delete the exports that carry the old skin, and only those.
+
+        ``model.stl`` and ``collision.glb`` are geometry with no texture in
+        them at all, and a re-texture changes no geometry -- deleting them would
+        cost the user a re-export to produce a byte-identical file. The rig, its
+        poses and its sheets are the same argument one level up and are the
+        subject of a written assertion elsewhere: a rig references geometry, not
+        pixels.
+
+        Under each artifact's own lock where one is available. The worker holds
+        no service, so ``artifact_lock`` is injected by ``studio.runtime`` and
+        falls back to no lock at all -- which is the pre-existing behaviour of
+        every other write the worker makes to a model.glb, and is why
+        ``optimize_job`` refuses a job that is queued or running.
+        """
+        from .pipelines import retexture
+
+        for name in retexture.SURFACE_DERIVED:
+            with self.artifact_lock(source_dir.name, name), contextlib.suppress(OSError):
+                (source_dir / name).unlink()
 
     async def _optimize(
         self, job_id: str, source: Path, dest: Path, params: dict[str, Any]

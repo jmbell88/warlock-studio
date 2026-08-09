@@ -570,6 +570,111 @@ def test_a_retarget_reports_the_rig_artifacts_it_made_stale(svc):
     assert (job_dir / "rig.glb").exists()
 
 
+# --- re-texture -------------------------------------------------------------
+
+
+def test_a_retexture_refuses_a_job_the_worker_may_still_be_writing(svc):
+    """optimize_job's Conflict, for optimize_job's reason: the worker's own
+    _optimize/_apply_scale write model.glb without taking a lock."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    for status in ("queued", "running"):
+        svc.store.set_status(job_id, status)
+        with pytest.raises(Conflict):
+            svc_jobs.retexture_job(svc, job_id, "rusted iron")
+
+
+def test_a_retexture_needs_a_mesh_and_a_prompt(svc):
+    job_id = _finished_job(svc)
+    with pytest.raises(Invalid):
+        svc_jobs.retexture_job(svc, job_id, "rusted iron")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "model.glb").write_bytes(b"x")
+    with pytest.raises(Invalid):
+        svc_jobs.retexture_job(svc, job_id, "   ")
+
+
+def _retexturable(svc):
+    job_id = _finished_job(svc)
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "model.glb").write_bytes(b"x")
+    return job_id, job_dir
+
+
+def test_a_retexture_queues_a_job_carrying_only_inputs(svc):
+    from warlock.pipelines import retexture
+    from warlock.service.validation import DERIVED_PARAMS
+
+    job_id, _ = _retexturable(svc)
+    new_id = svc_jobs.retexture_job(svc, job_id, "rusted iron", seed=7)["id"]
+    row = svc.store.get(new_id)
+    assert row["kind"] == "retexture" and row["status"] == "queued"
+    assert row["params"]["source_job"] == job_id
+    assert row["params"]["seed"] == 7
+    assert row["params"]["texture_size"] == retexture.TEXTURE_PX
+    # Nothing derived rides in: what the run measures lands on the mesh's row.
+    assert not [k for k in DERIVED_PARAMS if k in row["params"]]
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"strength": 2.0}, {"texture_size": 777}, {"base_model": "nope"}]
+)
+def test_a_retexture_refuses_its_out_of_range_inputs_at_the_door(svc, kwargs):
+    """Costing the request, not a place in the queue and a minute of GPU."""
+    job_id, _ = _retexturable(svc)
+    with pytest.raises(Invalid):
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", **kwargs)
+
+
+def test_a_retexture_reports_the_exports_that_carry_the_old_skin(svc):
+    from warlock.pipelines import retexture
+
+    _job_id, job_dir = _retexturable(svc)
+    for name in retexture.SURFACE_DERIVED:
+        (job_dir / name).write_bytes(b"x")
+    (job_dir / "model.stl").write_bytes(b"x")
+    stale = svc_jobs.stale_surface_artifacts(job_dir)
+    assert set(stale) == set(retexture.SURFACE_DERIVED)
+    # Nothing was removed by the *report*; the run deletes them.
+    assert all((job_dir / n).exists() for n in stale)
+
+
+def test_a_retexture_does_not_make_the_rig_stale(svc):
+    """A rig references geometry, not pixels, and a re-texture changes no
+    geometry -- the one place this differs from a retarget, and the reason it
+    is a written assertion rather than a comment somebody could "fix".
+    """
+    from warlock import rigging
+
+    job_id, job_dir = _retexturable(svc)
+    (job_dir / "rig.glb").write_bytes(b"x")
+    (job_dir / "rig.json").write_text("{}")
+    rigging.pose_dir(job_dir).mkdir(parents=True, exist_ok=True)
+    (rigging.pose_dir(job_dir) / "abcdef012345.glb").write_bytes(b"x")
+    rigging.sheet_dir(job_dir).mkdir(parents=True, exist_ok=True)
+    (rigging.sheet_dir(job_dir) / "abcdef012345.png").write_bytes(b"x")
+
+    assert svc_jobs.stale_surface_artifacts(job_dir) == []
+    assert svc_jobs.retexture_job(svc, job_id, "rusted iron")["stale"] == []
+    # And the retarget's own report still names every one of them, so the two
+    # answers stay genuinely different rather than accidentally equal.
+    assert svc_jobs.stale_rig_artifacts(job_dir)
+
+
+def test_a_retexture_writes_no_observation(svc):
+    """The corpus is about what *generation* settings produce. import_mesh and
+    the retarget re-audit write none for the same reason, and a re-texture
+    measures neither a reference nor a reconstruction."""
+    from warlock import queue as queue_mod
+
+    job_id, _ = _retexturable(svc)
+    new_id = svc_jobs.retexture_job(svc, job_id, "rusted iron")["id"]
+    svc.store.merge_params(new_id, {"mesh_audit": {"hole_worst": 0.5}})
+    svc.store.set_status(new_id, "done")
+    assert queue_mod._observe_finished(svc.store, new_id) is False
+
+
 def test_derived_artifacts_outlive_the_normalize_that_finishes_the_new_mesh(svc, monkeypatch):
     """Deleted *after* grounding is reapplied, not before.
 

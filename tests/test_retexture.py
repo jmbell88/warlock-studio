@@ -290,3 +290,183 @@ def test_the_specs_carry_the_views_they_are_given():
     # Both ops frame from the same render size, or the projection lands
     # somewhere the colours are not.
     assert p["size"] == v["size"]
+
+
+# -- putting the atlas back into the GLB -------------------------------------
+
+
+def _png(colour, size=8) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (size, size), colour).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _textured_glb(path, *, shared_image=False, materials=1) -> bytes:
+    """A minimal GLB whose one image is the base colour of every material.
+
+    Hand-built rather than exported: the swap is a container-format operation,
+    so the fixture has to be a container rather than whatever an exporter felt
+    like emitting.
+    """
+    import struct
+
+    from warlock import glbio
+
+    png = _png((10, 20, 30))
+    body = png + b"\0" * (-len(png) % 4)
+    textures = [{"source": 0}]
+    if shared_image:
+        # Two textures over one image, which is the case an in-place overwrite
+        # gets wrong.
+        textures.append({"source": 0})
+    gltf = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": len(body)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(png)}],
+        "images": [{"bufferView": 0, "mimeType": "image/png"}],
+        "textures": textures,
+        "materials": [
+            {"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}
+            for _ in range(materials)
+        ],
+    }
+    if shared_image:
+        gltf["materials"][0].setdefault("normalTexture", {"index": 1})
+    header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
+    rest = struct.pack("<II", len(body), glbio.CHUNK_BIN) + body
+    data = glbio.rebuild_glb(header, gltf, rest)
+    path.write_bytes(data)
+    return png
+
+
+def test_the_current_albedo_comes_back_out_at_the_bake_resolution(tmp_path):
+    """`assemble`'s base has to be addressable at the size the projections were
+    baked at, or "keep the old colour" cannot be expressed for a single texel."""
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb)
+    out = tmp_path / "base.png"
+    assert retexture.extract_base_colour(glb, out, size=32) is True
+    with Image.open(out) as im:
+        assert im.size == (32, 32)
+        assert im.convert("RGB").getpixel((0, 0)) == (10, 20, 30)
+
+
+def test_a_mesh_with_no_albedo_is_a_false_rather_than_a_raise(tmp_path):
+    """An untextured mesh is a legitimate input, and `assemble` already has an
+    honest stand-in for a missing base."""
+    import struct
+
+    from warlock import glbio
+
+    glb = tmp_path / "bare.glb"
+    header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
+    glb.write_bytes(glbio.rebuild_glb(header, {"asset": {"version": "2.0"}}, b""))
+    assert retexture.extract_base_colour(glb, tmp_path / "b.png", size=8) is False
+    assert retexture.swap_base_colour(glb, tmp_path / "b.png", tmp_path / "o.glb") is False
+    assert not (tmp_path / "o.glb").exists()
+
+
+def test_a_swapped_atlas_reads_back_as_the_new_albedo(tmp_path):
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb)
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((200, 100, 50), size=16))
+
+    dest = tmp_path / "new.glb"
+    assert retexture.swap_base_colour(glb, atlas, dest) is True
+    out = tmp_path / "read.png"
+    assert retexture.extract_base_colour(dest, out, size=16) is True
+    with Image.open(out) as im:
+        assert im.convert("RGB").getpixel((0, 0)) == (200, 100, 50)
+
+
+def test_the_swap_appends_rather_than_overwriting_a_shared_image(tmp_path):
+    """The short version -- rewrite the image's bytes in place -- is wrong the
+    moment anything else references the same image: a mesh whose normal map
+    happens to be the same PNG would have it replaced by an albedo, silently,
+    and only some meshes would show it."""
+    glb = tmp_path / "model.glb"
+    original = _textured_glb(glb, shared_image=True)
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((200, 100, 50), size=16))
+    dest = tmp_path / "new.glb"
+    assert retexture.swap_base_colour(glb, atlas, dest) is True
+
+    from warlock import glbio
+
+    gltf, buffer = glbio.read_glb(dest)
+    # The other slot still points at the original image, byte for byte.
+    normal = gltf["materials"][0]["normalTexture"]["index"]
+    assert normal == 1
+    kept = gltf["textures"][normal]["source"]
+    view = gltf["bufferViews"][gltf["images"][kept]["bufferView"]]
+    start = view.get("byteOffset", 0)
+    assert buffer[start : start + view["byteLength"]] == original
+
+
+def test_every_material_sharing_the_atlas_is_repointed(tmp_path):
+    """_first_base_colour finds *a* slot; a multi-material mesh over one atlas
+    would otherwise come back half restyled."""
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb, materials=3)
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((200, 100, 50), size=16))
+    dest = tmp_path / "new.glb"
+    assert retexture.swap_base_colour(glb, atlas, dest) is True
+
+    from warlock import glbio
+
+    gltf, _ = glbio.read_glb(dest)
+    indices = {
+        m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        for m in gltf["materials"]
+    }
+    assert indices == {len(gltf["textures"]) - 1}
+
+
+def test_the_swap_leaves_the_rest_of_the_document_alone(tmp_path):
+    """Only the JSON chunk and the tail of the BIN chunk move. Everything the
+    grounding transform put in the node graph has to survive, which is the same
+    argument normalize_glb makes about not re-exporting."""
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb)
+
+    from warlock import glbio
+
+    before, buffer_before = glbio.read_glb(glb)
+    before["nodes"] = [{"name": "grounding", "scale": [2.0, 2.0, 2.0]}]
+    header, doc, rest = glbio.split_glb(glb.read_bytes())
+    doc["nodes"] = before["nodes"]
+    glb.write_bytes(glbio.rebuild_glb(header, doc, rest))
+
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((1, 2, 3), size=4))
+    dest = tmp_path / "new.glb"
+    assert retexture.swap_base_colour(glb, atlas, dest) is True
+    after, buffer_after = glbio.read_glb(dest)
+    assert after["nodes"] == before["nodes"]
+    # Every original byte still at its original offset -- the new PNG is
+    # appended, so nothing that pointed into the buffer had to be adjusted.
+    assert buffer_after[: len(buffer_before)] == buffer_before
+    assert after["buffers"][0]["byteLength"] == len(buffer_after)
+
+
+# -- what a re-texture makes stale, and what it deliberately does not ---------
+
+
+def test_the_surface_exports_are_a_stated_subset_of_the_derived_ones():
+    """One authority for the whole set, one stated subset of it, and the
+    containment asserted -- so a new export cannot join one list and quietly
+    miss the other."""
+    from warlock.service import files
+
+    assert set(retexture.SURFACE_DERIVED) < set(files.DERIVED)
+    # The two left out, named rather than merely absent: an STL is geometry and
+    # a convex collision hull has no material at all, so a re-texture -- which
+    # changes no geometry -- leaves both byte-identical.
+    assert set(files.DERIVED) - set(retexture.SURFACE_DERIVED) == {
+        "model.stl",
+        "collision.glb",
+    }

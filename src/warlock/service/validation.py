@@ -111,6 +111,12 @@ DERIVED_PARAMS = (
     "mesh_attempts",
     "control_hint",
     "recipe",
+    # What a re-texture did to this mesh's surface -- coverage, view count, the
+    # recipe that restyled it. Recorded on the mesh's own row because that is
+    # where a reader asks what its skin is, and derived, so a reroll must not
+    # inherit a coverage figure about an atlas it is about to reconstruct from
+    # scratch.
+    "retexture",
 )
 
 # The conditioning selection itself, which is an *input* rather than a derived
