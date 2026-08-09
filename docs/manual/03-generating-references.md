@@ -18,7 +18,7 @@ Beside the box, a **Recent** button opens your last twenty prompts, most recent 
 deduplicated — it appears once you have generated at least one reference, so there is history to
 show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
+menu instead, which is described in [Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
 
 Under **Advanced** there is a second box, **Negative**, listing what the image must not contain. It
 is pre-filled with the things that most often ruin a reconstruction:
@@ -247,7 +247,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`palettes/` by default — see
-[Configuration](14-configuration.md)), in either of the two formats palette sites publish: Lospec's
+[Configuration](16-configuration.md)), in either of the two formats palette sites publish: Lospec's
 `.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
 RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being

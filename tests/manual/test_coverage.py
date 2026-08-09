@@ -23,6 +23,10 @@ NO_HELP_BUTTON = {
     "__init__",  # not a pane
     "inker_canvas",  # the canvas itself; its tools are inker-tools
     "inker_textures",  # a texture cache, drawn by nobody
+    "plotter_canvas",  # the map itself; its tools are plotter-tools
+    "plotter_textures",  # a texture cache, drawn by nobody
+    "packwright_preview",  # the atlas itself; its controls are packwright-settings
+    "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
     "overlay",  # the viewport toolbar and placeholders
     # A search box over whatever is on screen: it has no titled section to hang

@@ -1,0 +1,174 @@
+"""Plotter's left-bottom pane: the map's tilesets and the tile picker.
+
+**This pane is the sole owner of what a stamp puts down.** The tools pane says
+what a click means and the layers pane says where it lands; the brush -- which
+tile, or which rectangular block of tiles -- is decided here and nowhere else.
+
+The picker draws the tileset's atlas as one image and the selection as a
+draw-list rectangle over it, rather than a button per tile: a 16x16 tileset is
+256 buttons, and imgui would spend a per-item id, a hover test and a draw call
+on each of them every frame.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+
+from .. import icons, plotter_mode, widgets
+from ..manual import render as manual_render
+from ..plotter import gid as gidlib
+from ..tokens import sp
+from . import plotter_textures
+
+
+def draw(ctx: Any) -> None:
+    from imgui_bundle import imgui
+
+    state = plotter_mode.ensure(ctx)
+    tab = state.active
+    widgets.section("tilesets")
+    manual_render.help_button(ctx, "plotter-tileset")
+
+    if tab is None:
+        widgets.muted("Open or start a map first.")
+        return
+
+    doc = tab.doc
+    disabled = tab.busy
+    if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
+        plotter_mode.ask_add_tileset(ctx)
+    if not doc.tilesets:
+        imgui.dummy((0, 8))
+        widgets.muted_wrapped(
+            "A map needs a tileset before anything can be painted. Add a PNG and it "
+            f"is sliced at {doc.tile_w} x {doc.tile_h}, or add a Tiled .tsx."
+        )
+        return
+
+    imgui.dummy((0, 4))
+    options = [
+        (str(index), f"{ref.tileset.name} ({ref.tileset.tile_count})")
+        for index, ref in enumerate(doc.tilesets)
+    ]
+    picked = widgets.labeled_combo("Tileset", str(state.tileset_index), options)
+    if picked != str(state.tileset_index):
+        state.tileset_index = int(picked)
+        state.brush = None
+
+    index = max(0, min(state.tileset_index, len(doc.tilesets) - 1))
+    state.tileset_index = index
+    ref = doc.tilesets[index]
+    imgui.dummy((0, 4))
+    _picker(ctx, state, ref, index, tab.uid)
+
+
+def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str) -> None:
+    from imgui_bundle import imgui
+
+    tileset = ref.tileset
+    texture = plotter_textures.tileset_texture(ctx, uid, index, tileset)
+    avail = max(imgui.get_content_region_avail().x, sp(80))
+    # Whole-pixel zoom, at least 1: a tileset drawn at 0.7 of a pixel per pixel
+    # is unreadable, and the horizontal scrollbar that a >1 zoom needs is a
+    # better trade than a blurred palette.
+    zoom = max(1, int(avail // max(tileset.image_w, 1)))
+    width = tileset.image_w * zoom
+    height = tileset.image_h * zoom
+
+    origin = imgui.get_cursor_screen_pos()
+    if texture is None:
+        # No GL context: the headless smoke suite and every state-only test.
+        # A placeholder keeps the layout identical so a screenshot pass still
+        # exercises the geometry around it.
+        widgets.thumb_placeholder(min(width, avail), icons.GRID)
+    else:
+        imgui.image(widgets.texture_ref(texture), (width, height))
+
+    draw = imgui.get_window_draw_list()
+    step_w = (tileset.tile_w + tileset.spacing) * zoom
+    step_h = (tileset.tile_h + tileset.spacing) * zoom
+    margin = tileset.margin * zoom
+
+    def cell_at(mx: float, my: float) -> tuple[int, int] | None:
+        if step_w <= 0 or step_h <= 0:
+            return None
+        column = int((mx - origin.x - margin) // step_w)
+        row = int((my - origin.y - margin) // step_h)
+        if 0 <= column < tileset.columns and 0 <= row < tileset.rows:
+            return column, row
+        return None
+
+    if imgui.is_item_hovered() and texture is not None:
+        mouse = imgui.get_mouse_pos()
+        hit = cell_at(mouse.x, mouse.y)
+        if hit is not None:
+            if imgui.is_mouse_clicked(0):
+                state.palette_anchor = hit
+            if imgui.is_mouse_down(0) and state.palette_anchor is not None:
+                state.brush = _block(ref, state.palette_anchor, hit)
+            elif imgui.is_mouse_released(0):
+                state.palette_anchor = None
+
+    # The current selection, drawn from the brush rather than from the drag, so
+    # it survives the mouse leaving the pane and is still right after a tab
+    # switch cleared the anchor.
+    span = _brush_span(ref, state.brush)
+    if span is not None:
+        (c0, r0), (c1, r1) = span
+        lo = (origin.x + margin + c0 * step_w, origin.y + margin + r0 * step_h)
+        hi = (
+            origin.x + margin + c1 * step_w + tileset.tile_w * zoom,
+            origin.y + margin + r1 * step_h + tileset.tile_h * zoom,
+        )
+        draw.add_rect(lo, hi, imgui.get_color_u32((1.0, 1.0, 1.0, 0.9)), 0.0, sp(2))
+
+    imgui.dummy((0, 2))
+    if state.brush is None:
+        widgets.muted_wrapped("Pick a tile -- drag for a multi-tile brush.")
+    else:
+        rows, columns = state.brush.shape
+        widgets.muted(f"Brush: {columns} x {rows} tile(s)")
+
+
+def _block(ref: Any, a: tuple[int, int], b: tuple[int, int]) -> np.ndarray:
+    """The encoded gids for a rectangular palette drag.
+
+    Global ids, not local ones: the brush is written straight into a layer, and
+    a layer holds gids. Converting at paint time instead would mean the brush
+    only made sense next to the tileset it came from, which is exactly the bug
+    a tab switch would produce.
+    """
+    tileset = ref.tileset
+    c0, c1 = sorted((a[0], b[0]))
+    r0, r1 = sorted((a[1], b[1]))
+    out = np.zeros((r1 - r0 + 1, c1 - c0 + 1), gidlib.DTYPE)
+    for row in range(r0, r1 + 1):
+        for column in range(c0, c1 + 1):
+            out[row - r0, column - c0] = ref.firstgid + row * tileset.columns + column
+    return out
+
+
+def _brush_span(
+    ref: Any, brush: np.ndarray | None
+) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Where the current brush sits in *this* tileset, or None if it does not.
+
+    Derived from the brush rather than remembered, so a brush picked from
+    another tileset simply draws no outline here instead of outlining the wrong
+    tiles.
+    """
+    if brush is None or brush.size == 0:
+        return None
+    tileset = ref.tileset
+    first = int(brush[0, 0]) & gidlib.GID_MASK
+    last = int(brush[-1, -1]) & gidlib.GID_MASK
+    if not ref.holds(first) or not ref.holds(last):
+        return None
+    a = ref.local(first)
+    b = ref.local(last)
+    return (
+        (a % tileset.columns, a // tileset.columns),
+        (b % tileset.columns, b // tileset.columns),
+    )

@@ -2365,3 +2365,210 @@ def test_the_3d_form_builds_with_a_custom_budget(app_ctx, imgui_ctx, monkeypatch
     )
     app_ctx.state.form_3d["profile"] = "custom"
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
+
+
+# --- Plotter and Packwright ---------------------------------------------------
+
+
+def _tileset(size: int = 32, tile: int = 16):
+    from warlock.studio.plotter.tileset import Tileset
+
+    pixels = np.zeros((size, size, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    pixels[0, 0] = (9, 9, 9, 255)
+    return Tileset(name="terrain", pixels=pixels, tile_w=tile, tile_h=tile)
+
+
+def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
+    """Both branches of every pane. The empty state is the frame that shows
+    none of the mode's controls, which is exactly why it is drawn first."""
+    from imgui_bundle import imgui
+
+    from warlock.studio import plotter_mode, plotter_state
+    from warlock.studio.panes import (
+        plotter_bridge,
+        plotter_canvas,
+        plotter_layers,
+        plotter_textures,
+        plotter_tileset,
+        plotter_tools,
+    )
+    from warlock.studio.plotter import gid
+    from warlock.studio.plotter.tilemap import MapObject, new_uid
+    from warlock.studio.tokens import sp
+
+    app_ctx.state.mode = "plotter"
+    state = plotter_mode.ensure(app_ctx)
+
+    def build() -> None:
+        # Three columns, as the app lays them out: stacked in one column the
+        # canvas child ends up below the tools pane, and imgui culls a child
+        # pushed past the visible area -- so a row added to the tools pane
+        # would silently stop the canvas drawing and its textures with it.
+        if imgui.begin_child("##plot-left", (sp(300), 0)):
+            plotter_tools.draw(app_ctx)
+            plotter_tileset.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##plot-centre", (sp(560), 0)):
+            plotter_canvas.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##plot-right", (sp(300), 0)):
+            plotter_layers.draw(app_ctx)
+            plotter_bridge.draw(app_ctx)
+        imgui.end_child()
+
+    _frame(imgui_ctx, build)  # nothing open
+
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    _frame(imgui_ctx, build)  # a map, but no tileset: the "add one first" branch
+
+    ref = tab.doc.add_tileset(_tileset())
+    layer = tab.doc.tile_layers()[0]
+    cells = np.zeros((8, 8), gid.DTYPE)
+    cells[0, 0] = gid.compose(ref.firstgid)
+    cells[1, 1] = gid.compose(ref.firstgid + 1, flip_h=True, flip_d=True)
+    tab.doc.write_region(layer.uid, 0, 0, cells)
+    state.brush = np.array([[ref.firstgid]], gid.DTYPE)
+    _frame(imgui_ctx, build)
+
+    for tool, _label, _letter in plotter_state.TOOLS:
+        state.tool = tool
+        _frame(imgui_ctx, build)
+
+    # An object layer with something selected: the properties form and the
+    # typed-property editor are a whole branch nothing above reaches.
+    objects = tab.doc.add_object_layer("Things")
+    obj = tab.doc.add_object(
+        objects.uid, MapObject(uid=new_uid(), name="spawn", kind="rect", w=16, h=16)
+    )
+    state.selected_object = obj.uid
+    tab.doc.set_active_layer(objects.uid)
+    _frame(imgui_ctx, build)
+
+    prefix = f"{plotter_textures.PREFIX}{tab.uid}:"
+    assert [k for k in app_ctx.state.preview if k.startswith(prefix)], "a texture was made"
+    plotter_mode.release_all(app_ctx)
+    assert not [k for k in app_ctx.state.preview if k.startswith(plotter_textures.PREFIX)]
+
+
+def test_packwright_builds_empty_and_with_an_atlas(app_ctx, imgui_ctx):
+    from imgui_bundle import imgui
+
+    from warlock.studio import packwright_mode
+    from warlock.studio.packwright import compose as composelib
+    from warlock.studio.packwright import layout as laylib
+    from warlock.studio.packwright.sources import Sprite
+    from warlock.studio.panes import (
+        packwright_bridge,
+        packwright_items,
+        packwright_preview,
+        packwright_settings,
+        packwright_sources,
+        packwright_textures,
+    )
+    from warlock.studio.tokens import sp
+
+    app_ctx.state.mode = "packwright"
+    packwright_mode.ensure(app_ctx)
+
+    def build() -> None:
+        if imgui.begin_child("##pack-left", (sp(300), 0)):
+            packwright_sources.draw(app_ctx)
+            packwright_settings.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##pack-centre", (sp(560), 0)):
+            packwright_preview.draw(app_ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("##pack-right", (sp(300), 0)):
+            packwright_items.draw(app_ctx)
+            packwright_bridge.draw(app_ctx)
+        imgui.end_child()
+
+    _frame(imgui_ctx, build)  # nothing open
+
+    tab = packwright_mode.new_document(app_ctx)
+    tab.pack_dirty = False  # the pane pumps a repack; there is nothing to pack
+    _frame(imgui_ctx, build)  # a document with no sources
+
+    for index in range(4):
+        block = np.zeros((6 + index, 8, 4), dtype=np.uint8)
+        block[1:-1, 1:-1] = (200, 30, 30, 255)
+        tab.doc.add_source(Sprite(key=f"s{index}", name=f"s{index}", pixels=block))
+
+    def repack(mode: str) -> None:
+        """What the pack task does, inline. The task runner is real here and
+        its result arrives on a later frame, so the adoption is done by hand --
+        ``adopt_pack`` is the same call ``on_task_done`` makes."""
+        tab.doc.set_settings(mode=mode)
+        result = laylib.layout(tab.doc.sprites(), tab.doc.settings)
+        tab.adopt_pack(result, composelib.compose(tab.doc.sprites(), result))
+        tab.pack_dirty = False
+
+    for mode in ("grid", "maxrects"):
+        repack(mode)
+        _frame(imgui_ctx, build)
+
+    packwright_mode.ensure(app_ctx).selected = tab.doc.sources[0].uid
+    _frame(imgui_ctx, build)
+
+    # And the failure branch, which must say why rather than show an empty list
+    # -- an empty list reads as success, which is the worst outcome here.
+    tab.pack_error = "these do not fit"
+    _frame(imgui_ctx, build)
+
+    prefix = f"{packwright_textures.PREFIX}{tab.uid}:"
+    assert [k for k in app_ctx.state.preview if k.startswith(prefix)], "a texture was made"
+    packwright_mode.release_all(app_ctx)
+    assert not [k for k in app_ctx.state.preview if k.startswith(packwright_textures.PREFIX)]
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, scale):
+    """A clipped segment is an unreachable mode.
+
+    ``segmented_control`` lays its segments out from ``origin`` with no wrap
+    and no scroll, so a switch wider than the host window does not compress --
+    the last segments are simply drawn off the edge, and the only way back to
+    that mode is a keyboard shortcut the user would have to already know. Ten
+    modes plus Quit is where that stopped being hypothetical, which is why this
+    runs at more than one UI scale: the segment widths are text widths, and the
+    font is scaled with everything else.
+    """
+    imgui, renderer = imgui_ctx
+    from warlock.studio import main as main_mod
+    from warlock.studio import modes, tokens
+    from warlock.studio import widgets as widgets_mod
+
+    measured: list[tuple[float, float]] = []
+
+    old_scale = tokens.SCALE
+    tokens.set_scale(scale)
+    try:
+        imgui.new_frame()
+        # The resize floor: what the window cannot be shrunk below, and so the
+        # width every mode has to survive.
+        imgui.set_next_window_size(main_mod.MIN_SIZE)
+        imgui.begin("##min-window")
+        available = imgui.get_content_region_avail().x
+        widgets_mod.segmented_control(
+            "mode-seg-fit",
+            [(key, f"{icon} {label}") for key, label, icon in [*modes.MODES, modes.QUIT]],
+            "home",
+        )
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        measured.append((hi.x - lo.x, available))
+        imgui.end()
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+    finally:
+        tokens.set_scale(old_scale)
+
+    switch_w, available = measured[-1]
+    assert switch_w <= available, (
+        f"the switch is {switch_w:.0f}px wide in a {available:.0f}px window at UI "
+        f"scale {scale}; a clipped segment is an unreachable mode"
+    )

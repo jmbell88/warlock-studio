@@ -9,7 +9,7 @@ from __future__ import annotations
 HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "settings-2d": ("03-generating-references", None),
     "settings-3d": ("04-generating-meshes", None),
-    "library": ("09-library-and-jobs", None),
+    "library": ("11-library-and-jobs", None),
     "inspector": ("04-generating-meshes", "exports"),
     "retarget": ("04-generating-meshes", "triangle-budget"),
     "retexture": ("04-generating-meshes", "surface-texture"),
@@ -27,9 +27,17 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "clay-props": ("08-clay", "materials"),
     "clay-outliner": ("08-clay", "adding-a-primitive"),
     "clay-bridge": ("08-clay", "the-two-ways-out"),
-    "profiles": ("10-profiles", None),
-    "review": ("11-review", None),
-    "app-settings": ("15-app-settings", None),
+    "plotter-tools": ("09-plotter", "tools"),
+    "plotter-tileset": ("09-plotter", "tilesets"),
+    "plotter-layers": ("09-plotter", "layers"),
+    "plotter-bridge": ("09-plotter", "files"),
+    "packwright-sources": ("10-packwright", "sources"),
+    "packwright-settings": ("10-packwright", "settings"),
+    "packwright-items": ("10-packwright", "when-it-does-not-fit"),
+    "packwright-bridge": ("10-packwright", "exporting"),
+    "profiles": ("12-profiles", None),
+    "review": ("13-review", None),
+    "app-settings": ("17-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("02-home", None),
@@ -44,4 +52,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("16-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("18-troubleshooting", None)

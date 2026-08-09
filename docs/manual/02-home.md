@@ -20,8 +20,8 @@ Each tile is a whole clickable card, not a button with a label beside it.
 | New 3D Model | A clean [mesh form](04-generating-meshes.md), with no source asset selected. |
 | Inker | The [layered raster editor](07-inker.md), with whatever documents were already open. |
 | Clay | The [primitive modeller](08-clay.md). If nothing is open it starts a new empty document, because a mode with nothing in it and no obvious way to begin is a dead end. |
-| Open Existing | The [library](09-library-and-jobs.md) in full, with a Continue button that opens the selected asset in the pane that made it. |
-| Profiles | The [style profiles](10-profiles.md) editor. The caption names the active profile when there is one. |
+| Open Existing | The [library](11-library-and-jobs.md) in full, with a Continue button that opens the selected asset in the pane that made it. |
+| Profiles | The [style profiles](12-profiles.md) editor. The caption names the active profile when there is one. |
 
 Inker and Clay keep whatever was open, and the two generate tiles do not. The difference is not an
 inconsistency: in Inker and Clay the *documents are the work*, and there is no form to reset, while
@@ -38,7 +38,7 @@ Under the tiles is a single line that counts what is wrong with this installatio
 - **"Diagnostics / Set up models — N things need attention"** otherwise, in amber for a warning and
   red when something fatal is missing.
 
-Clicking it opens [app settings](15-app-settings.md), which is where the model list and its
+Clicking it opens [app settings](17-app-settings.md), which is where the model list and its
 Download buttons live. That is a different destination from the health dot in the top-right corner,
 which opens the read-only diagnostics popup: the dot answers "what is wrong right now", and this
 row answers "how do I fix it".
@@ -55,4 +55,4 @@ tiles as well as in the banner across the top of every mode. Dismissing the bann
 the text: it moves into the diagnostics popup under a **Dismissed** heading, which is the only copy
 there is — each of the three things that write a banner message writes it exactly once.
 
-See [Troubleshooting](16-troubleshooting.md) for what the individual checks mean.
+See [Troubleshooting](18-troubleshooting.md) for what the individual checks mean.

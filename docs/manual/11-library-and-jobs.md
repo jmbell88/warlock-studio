@@ -159,7 +159,7 @@ conditioning strengths, which prompt history alone never did.
 
 A **profile** is a saved house style — the *look* half of the 2D form, stored under a name, with an
 optional anchor image every generation under it is conditioned on. It has a chapter of its own:
-[Style profiles](10-profiles.md).
+[Style profiles](12-profiles.md).
 
 ## Storage and pruning
 

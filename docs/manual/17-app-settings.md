@@ -42,8 +42,8 @@ one repository and exits, into a staging folder beside the destination that is o
 if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
 directory that looks finished. Free disk is checked against the whole selection first, and the whole
 selection is refused if it will not fit. Everything is still equally installable by hand — see
-[Model weights](13-installation.md#model-weights) and
-[Adding an image model](19-extending.md#adding-an-image-model).
+[Model weights](15-installation.md#model-weights) and
+[Adding an image model](21-extending.md#adding-an-image-model).
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
 saved profiles and settings presets, the sidebar's internal split, and the pixel-art export

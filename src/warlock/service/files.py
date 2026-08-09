@@ -273,6 +273,110 @@ def save_clay_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     return {"ok": True}
 
 
+# The authored Plotter and Packwright documents behind an exported asset,
+# following the ``paint.ora`` / ``build.wblk`` precedent exactly: absent from
+# MEDIA and LISTED, never served, never downloadable, and gone with the job
+# directory for free. ``input.png`` stays the one name every consumer reads;
+# these exist only so reopening an exported map or atlas brings the document
+# back instead of a single flattened picture.
+#
+# **No staleness rule**, for ``clay_source_status``'s reason rather than
+# ``inker_working_status``'s. That rule exists because a revert, a regenerate
+# or a remesh rewrites ``input.png`` behind the layers, leaving them describing
+# an image that is gone. Nothing rewrites one of these behind its document: an
+# export writes the PNG and the source in one operation, and a later hand-edit
+# of the flattened picture makes the render a *derivative* of the document
+# rather than making the document wrong.
+PLOTTER_SOURCE = "map.wmap"
+PACKWRIGHT_SOURCE = "pack.wpack"
+
+# Both are zips: a ``.wmap`` embeds one PNG per tileset and a ``.wpack`` one per
+# source sprite, so an atlas assembled from a hundred frames is the case these
+# bound. Bounded on the same reasoning as every other ceiling here rather than
+# left open because today's files are small.
+MAX_MAP_SOURCE_BYTES = 5 * MAX_UPLOAD_BYTES
+MAX_PACK_SOURCE_BYTES = 20 * MAX_UPLOAD_BYTES
+
+
+def job_dir_file(svc: Any, job_id: str, name: str) -> Path:
+    """One named file inside a job's directory, with the id checked.
+
+    ``name`` is a *fixed* string chosen by the caller, never user input -- the
+    two callers ask for ``input.png`` -- so this validates the half that can
+    come from outside and leaves the half that cannot. Existence is the
+    caller's problem: every one of them is about to read the file and would
+    rather have the OSError than a second question.
+    """
+    check_job_id(job_id)
+    return svc.job_dir(job_id) / name
+
+
+def plotter_source_path(svc: Any, job_id: str) -> Path:
+    check_job_id(job_id)
+    return svc.job_dir(job_id) / PLOTTER_SOURCE
+
+
+def packwright_source_path(svc: Any, job_id: str) -> Path:
+    check_job_id(job_id)
+    return svc.job_dir(job_id) / PACKWRIGHT_SOURCE
+
+
+def plotter_source_status(svc: Any, job_id: str) -> dict[str, Any]:
+    check_job_id(job_id)
+    return {"exists": (svc.job_dir(job_id) / PLOTTER_SOURCE).exists()}
+
+
+def packwright_source_status(svc: Any, job_id: str) -> dict[str, Any]:
+    check_job_id(job_id)
+    return {"exists": (svc.job_dir(job_id) / PACKWRIGHT_SOURCE).exists()}
+
+
+def _save_source(
+    svc: Any, job_id: str, data: bytes, *, name: str, limit: int, what: str
+) -> dict[str, Any]:
+    """The write ``save_clay_source`` does, for the two documents that arrived
+    after it. Through a temp and ``os.replace`` for the same reason: the file is
+    read whole by its reader, and a torn one is a document that will not open."""
+    check_job_id(job_id)
+    if svc.store.get(job_id) is None:
+        raise NotFound("no such job")
+    if len(data) > limit:
+        raise TooLarge(f"{what} too large")
+    if not data.startswith(ORA_MAGIC):
+        # The same four bytes: every authored document here is a zip.
+        raise Invalid(f"the {what} must be a zip archive")
+    dest = svc.job_dir(job_id) / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
+    return {"ok": True}
+
+
+def save_plotter_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+    """Store the map beside the flat render it exported to."""
+    return _save_source(
+        svc,
+        job_id,
+        data,
+        name=PLOTTER_SOURCE,
+        limit=MAX_MAP_SOURCE_BYTES,
+        what="map document",
+    )
+
+
+def save_packwright_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
+    """Store the atlas document beside the atlas it exported to."""
+    return _save_source(
+        svc,
+        job_id,
+        data,
+        name=PACKWRIGHT_SOURCE,
+        limit=MAX_PACK_SOURCE_BYTES,
+        what="atlas document",
+    )
+
+
 # The two stages whose input.png *is* the asset, and so the two that can be
 # hand-edited. A model job's input.png is the picture it was reconstructed
 # from, and editing it would change nothing about the mesh on disk while

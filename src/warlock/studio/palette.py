@@ -163,7 +163,9 @@ def _mode_commands() -> list[Command]:
                 label=f"Go to {label}",
                 group="Go to",
                 run=_go(key),
-                hint=f"Alt+{digit}" if digit else "",
+                # ``digit_key_label``, not the digit: the tenth slot is
+                # typed as 0, and "Alt+10" is a key no keyboard has.
+                hint=f"Alt+{modes.digit_key_label(digit)}" if digit else "",
             )
         )
     return out

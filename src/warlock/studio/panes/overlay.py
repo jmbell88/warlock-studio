@@ -351,6 +351,12 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
     "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
     "review": (icons.CIRCLE_CHECK, "No unit on screen", "Pick a sweep run to review."),
+    "plotter": (icons.GRID, "No map open", "Ctrl+N starts one, Ctrl+O opens a file."),
+    "packwright": (
+        icons.LAYERS,
+        "Nothing to pack",
+        "Add images, or pull the frames out of a document open in Inker.",
+    ),
 }
 
 

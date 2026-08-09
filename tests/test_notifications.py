@@ -232,12 +232,22 @@ def test_the_wrong_file_refusal_says_what_this_mode_would_have_done():
 
 
 def test_the_accepted_suffixes_are_stated_once():
-    """The refusal message and the accept path have to agree about what a drop
-    may be."""
+    """The refusal message and every accept path have to agree about what a
+    drop may be.
+
+    Asserted as "no route spells the suffixes out" rather than as a mention
+    count: five modes now accept a drop and each says what one would have done
+    *there*, so the constant is legitimately read several times. What must not
+    happen is one of them growing its own list, which is how ``.webp`` comes to
+    be droppable in three modes and refused in the fourth.
+    """
     from warlock.studio import main
 
     assert ".webp" in main.DROPPABLE_IMAGES
-    assert inspect.getsource(main.App._on_drop).count("DROPPABLE_IMAGES") == 1
+    source = inspect.getsource(main.App._on_drop)
+    assert "DROPPABLE_IMAGES" in source
+    for suffix in main.DROPPABLE_IMAGES:
+        assert f'"{suffix}"' not in source, f"{suffix} is spelled out in _on_drop"
 
 
 # --- H72 / H73 / H74: the empty states ---------------------------------------

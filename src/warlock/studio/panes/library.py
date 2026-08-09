@@ -708,6 +708,7 @@ def _overflow(ctx: Any, job: Any) -> None:
 
     if inker_mode.can_edit_job(ctx, job) and imgui.menu_item("Open in Inker", "", False)[0]:
         inker_mode.open_job_reference(ctx, job)
+    _map_and_atlas_items(ctx, job, files)
     if "model.glb" in files:
         # Clay prefers the ``build.wblk`` sidecar when the asset was authored
         # here, and imports ``model.glb`` -- the optimized, grounded, served
@@ -735,6 +736,34 @@ def _overflow(ctx: Any, job: Any) -> None:
         # irreversible delete has kept the question, in the trash.
         delete_asset(ctx, job_id)
     imgui.end_popup()
+
+
+def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
+    """The Plotter and Packwright half of the same pair as *Edit in Clay*.
+
+    Two kinds of entry, and the difference matters. **Reopening** is offered
+    only when the asset carries an authored document beside it -- answered from
+    ``params["authored"]``, which the exporter set, rather than from a stat,
+    because this menu is built on the frame thread. Unlike *Edit in Clay* there
+    is no fallback: a reference with no ``map.wmap`` cannot be reopened as a
+    map at all, so the item must not be offered rather than offered and refused.
+    **Consuming** an image is offered for any reference: a tileset or an atlas
+    source can be any picture, including one the pipeline generated, which is
+    most of why these entries are worth having.
+    """
+    from .. import packwright_mode, plotter_mode
+
+    authored = (job.get("params") or {}).get("authored")
+    if authored == "plotter" and imgui.menu_item("Edit in Plotter", "", False)[0]:
+        plotter_mode.edit_asset_in_plotter(ctx, job)
+    if authored == "packwright" and imgui.menu_item("Edit in Packwright", "", False)[0]:
+        packwright_mode.edit_asset_in_packwright(ctx, job)
+    if "input.png" not in files:
+        return
+    if imgui.menu_item("Use as a tileset in Plotter", "", False)[0]:
+        plotter_mode.use_as_tileset(ctx, job)
+    if imgui.menu_item("Add to a Packwright atlas", "", False)[0]:
+        packwright_mode.add_job_source(ctx, job)
 
 
 def _trash_menu(ctx: Any, job_id: str) -> None:

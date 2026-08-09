@@ -339,6 +339,7 @@ def import_reference(
     *,
     prompt: str | None = None,
     name: str | None = None,
+    authored: str | None = None,
 ) -> dict[str, Any]:
     """Mint a finished reference row from pixels that were painted, not generated.
 
@@ -353,6 +354,16 @@ def import_reference(
     image, and here nothing did. The reference report *is* measured, because
     promote_to_model's quality gate reads it and a missing report would let a
     reference through that cannot reconstruct.
+
+    ``authored`` names the mode that has a document beside this row -- today
+    ``"plotter"`` or ``"packwright"``. It is what lets the library offer
+    *Edit in Plotter* from the **cached row alone**, with no stat on the frame
+    thread: a reopen has no fallback (unlike *Edit in Clay*, which imports
+    ``model.glb`` when there is no ``.wblk``), so the menu has to know whether
+    the source is there before it offers to open it. It is an *input*, like
+    ``built``, so it stays out of ``DERIVED_PARAMS`` -- a reroll of one of these
+    is already refused, and a promotion carries a true statement about where the
+    picture came from.
     """
     from ..pipelines import reference
 
@@ -374,6 +385,8 @@ def import_reference(
         "hand_edited": True,
         "imported": True,
     }
+    if authored:
+        params["authored"] = str(authored)
     job_id = uuid.uuid4().hex[:12]
     job_dir = svc.config.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)

@@ -24,13 +24,15 @@ MODES: list[tuple[str, str, str]] = [
     ("clay", "Clay", icons.RULER),
     ("review", "Review", icons.CIRCLE_CHECK),
     ("settings", "Settings", icons.SETTINGS),
+    ("plotter", "Plotter", icons.GRID),
+    ("packwright", "Packwright", icons.LAYERS),
 ]
 
 # The modes that own a viewport or a form, and so have work in them. Home, the
 # Manual and Settings are places you pass through: they have no form to
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
-WORK_MODES = frozenset({"2d", "3d", "inker", "clay", "review"})
+WORK_MODES = frozenset({"2d", "3d", "inker", "clay", "review", "plotter", "packwright"})
 
 # The subset that draws the *asset* viewport, and therefore the only modes
 # whose selection is worth loading a mesh for. Inker and Clay each own their
@@ -42,17 +44,20 @@ WORK_MODES = frozenset({"2d", "3d", "inker", "clay", "review"})
 VIEWPORT_MODES = frozenset({"2d", "3d"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
-# its own three-column workspace. Inker, Clay and Review are the three, and
-# the three categories partition KEYS exactly -- which matters because
-# ``_build_ui``'s dispatch ends in a bare ``else``, so an unlisted mode would
-# draw one of these rather than fail.
-WORKSPACE_MODES = frozenset({"inker", "clay", "review"})
+# its own three-column workspace. Inker, Clay, Review, Plotter and Packwright
+# are the five, and the three categories partition KEYS exactly -- which
+# matters because ``_build_ui``'s dispatch ends in a bare ``else``, so an
+# unlisted mode would draw one of these rather than fail.
+WORKSPACE_MODES = frozenset({"inker", "clay", "review", "plotter", "packwright"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
-# Alt+1..8, positionally: the nth segment of the switch is the nth digit, so
-# the binding is the picture on screen rather than a second table to keep in
-# agreement with it.
+# Alt+1..9 and Alt+0, positionally: the nth segment of the switch is the nth
+# digit, so the binding is the picture on screen rather than a second table to
+# keep in agreement with it. The tenth slot is Alt+0 for the reason every
+# application with ten of anything uses 0 for the tenth -- see
+# :func:`digit_key_label`, which is where that spelling lives so the palette
+# hint and the shortcuts popup cannot disagree about it.
 #
 # **Alt, not Ctrl.** Mode switching is the one binding that has to fire in
 # every mode -- including Inker and Clay, whose ``handle_key`` consumes
@@ -62,10 +67,25 @@ KEYS = tuple(key for key, _label, _icon in MODES)
 # Ctrl+digit was a key the workspace modes were already using. Alt+digit is
 # used by nothing here.
 def mode_for_digit(digit: int) -> str | None:
-    """``1`` -> ``"home"``, ``8`` -> ``"settings"``; ``None`` past the end."""
+    """``1`` -> ``"home"``, ``10`` -> the tenth mode; ``None`` past the end.
+
+    Positional and 1-based throughout. That 10 is typed as ``0`` is a *keyboard*
+    fact and lives at the keyboard layer, not here -- ``mode_for_digit(0)`` is
+    still None, because there is no zeroth segment.
+    """
     if 1 <= digit <= len(MODES):
         return MODES[digit - 1][0]
     return None
+
+
+def digit_key_label(digit: int) -> str:
+    """What the user actually presses for slot ``digit``: ``"0"`` for the tenth.
+
+    One spelling, in one place. The palette's hint and the shortcuts popup both
+    render this, and a second copy is how one of them comes to advertise
+    "Alt+10" -- a key no keyboard has.
+    """
+    return "0" if digit == 10 else str(digit)
 
 
 def digit_for_mode(key: str) -> int | None:

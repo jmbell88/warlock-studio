@@ -107,9 +107,13 @@ def test_every_mode_has_a_go_to_command_and_they_are_derived():
 
 
 def test_a_go_to_command_carries_its_own_digit():
+    """The *key label*, not the slot number: the tenth mode is Alt+0, and
+    "Alt+10" is a key no keyboard has."""
     found = {c.key: c.hint for c in palette.commands(_ctx())}
     for key in modes.KEYS:
-        assert found[f"go:{key}"] == f"Alt+{modes.digit_for_mode(key)}"
+        label = modes.digit_key_label(modes.digit_for_mode(key))
+        assert found[f"go:{key}"] == f"Alt+{label}"
+    assert found[f"go:{modes.KEYS[9]}"] == "Alt+0"
 
 
 def test_going_somewhere_records_where_it_came_from():

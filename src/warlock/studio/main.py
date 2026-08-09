@@ -85,9 +85,15 @@ def _digit_keys() -> dict[int, int]:
     if not _DIGIT_KEYS:
         import pygame
 
-        _DIGIT_KEYS = {
-            getattr(pygame, f"K_{n}"): n for n in range(1, 10)
-        } | {getattr(pygame, f"K_KP{n}"): n for n in range(1, 10)}
+        # 1..9 positionally, then 0 for the *tenth* slot -- the spelling
+        # ``modes.digit_key_label`` renders, and the one every application
+        # with ten of anything uses. Both rows: a laptop's number row and
+        # the numpad are the same digit to the user.
+        _DIGIT_KEYS = (
+            {getattr(pygame, f"K_{n}"): n for n in range(1, 10)}
+            | {getattr(pygame, f"K_KP{n}"): n for n in range(1, 10)}
+            | {pygame.K_0: 10, pygame.K_KP0: 10}
+        )
     return _DIGIT_KEYS
 
 # The two image-labelling passes, named as the questions they are. Wording is the
@@ -704,6 +710,17 @@ class App:
                     from . import clay_mode
 
                     clay_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("plotter-"):
+                    from . import plotter_mode
+
+                    plotter_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("packwright-"):
+                    from . import packwright_mode
+
+                    # Same rule, plus one of its own: a failed *pack* has
+                    # to clear ``packing`` and record why, or the items
+                    # pane shows an empty list that reads as success.
+                    packwright_mode.on_task_failed(ctx, done)
                 elif done.key.startswith("download:"):
                     # A failed fetch has to be *routed* somewhere, not merely
                     # toasted: the rows carry a presence flag, and a fetch that
@@ -818,6 +835,24 @@ class App:
             from . import inker_mode
 
             inker_mode.on_task_done(ctx, done)
+            return
+        if key.startswith("plotter-"):
+            from . import plotter_mode
+
+            plotter_mode.on_task_done(ctx, done)
+            if isinstance(done.result, dict) and done.result.get("exported_asset"):
+                # The card appears in the library like any other asset, so
+                # it needs the thumbnail every other asset gets -- and that
+                # is an offscreen GL draw, which belongs on the frame thread
+                # rather than in the task that minted the row.
+                self._capture_clay_thumbnail(done.result["job_id"])
+            return
+        if key.startswith("packwright-"):
+            from . import packwright_mode
+
+            packwright_mode.on_task_done(ctx, done)
+            if isinstance(done.result, dict) and done.result.get("exported_asset"):
+                self._capture_clay_thumbnail(done.result["job_id"])
             return
         if key.startswith("review-"):
             from . import review_mode
@@ -1358,6 +1393,19 @@ class App:
             # has replaced. Nothing below this line belongs to Inker.
             inker_mode.handle_key(ctx, event)
             return
+        if ctx.state.mode == "plotter":
+            from . import plotter_mode
+
+            # Unconditional for the reason the three above are: handle_key
+            # returns False with no map open, and letting that fall through
+            # would let F/W/S act on a viewport Plotter has replaced.
+            plotter_mode.handle_key(ctx, event)
+            return
+        if ctx.state.mode == "packwright":
+            from . import packwright_mode
+
+            packwright_mode.handle_key(ctx, event)
+            return
         # Both edges reach this function, because Inker's space-to-pan is a
         # hold and needs the release. Nothing below is a hold: every one of
         # these is a toggle or an action, so acting on the release too undoes
@@ -1416,6 +1464,37 @@ class App:
             else:
                 ctx.toast("Clay opens .wblk documents and .glb meshes.", "error")
             return
+        if ctx.state.mode == "plotter":
+            from . import plotter_mode, plotter_state
+
+            suffix = path.suffix.lower()
+            if suffix in plotter_state.MAP_SUFFIXES:
+                plotter_mode.open_path(ctx, path)
+            elif suffix == ".tsx" or suffix in DROPPABLE_IMAGES:
+                # An image dropped in Plotter is a *tileset*, not a map -- the
+                # 2D pane's reasoning applied here: the refusal and the accept
+                # have to say what a drop would have done in this mode.
+                plotter_mode.add_tileset_path(ctx, path)
+            else:
+                ctx.toast(
+                    "Plotter opens .wmap, .tmx and .tmj maps, and adds .tsx or "
+                    "image files as tilesets.",
+                    "error",
+                )
+            return
+        if ctx.state.mode == "packwright":
+            from . import packwright_mode, packwright_state
+
+            suffix = path.suffix.lower()
+            if suffix == packwright_state.WPACK_SUFFIX:
+                packwright_mode.open_path(ctx, path)
+            elif suffix in DROPPABLE_IMAGES:
+                packwright_mode.add_source_paths(ctx, [path])
+            else:
+                ctx.toast(
+                    "Packwright opens .wpack documents and packs image files.", "error"
+                )
+            return
         if path.suffix.lower() not in DROPPABLE_IMAGES:
             # The refusal says what a drop would have *done here* (H71). One
             # sentence for both modes was wrong in 2D, where a dropped image is
@@ -1466,11 +1545,17 @@ class App:
         clicking "Keep editing" on the first still left two more questions to
         dismiss, after the user has already said they are not quitting.
         """
-        from . import clay_mode, inker_mode
+        from . import clay_mode, inker_mode, packwright_mode, plotter_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
-        guards = (inker_mode.guard, clay_mode.guard, pose_panel.guard)
+        guards = (
+            inker_mode.guard,
+            clay_mode.guard,
+            plotter_mode.guard,
+            packwright_mode.guard,
+            pose_panel.guard,
+        )
 
         def step(index: int) -> None:
             if index == len(guards):
@@ -1555,6 +1640,10 @@ class App:
                 self._clay_workspace()
             elif mode == "review":
                 self._review_workspace()
+            elif mode == "plotter":
+                self._plotter_workspace()
+            elif mode == "packwright":
+                self._packwright_workspace()
             else:
                 self._inker_workspace()
             imgui.end()
@@ -1882,6 +1971,112 @@ class App:
         imgui.end_child()
         if layout_mod.pane_child("inker-bridge", (0, 0)):
             inker_bridge.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+    def _plotter_workspace(self) -> None:
+        """The same sidebar / centre / sidebar skeleton every other mode uses:
+
+            [ plotter-tools   ]           [ plotter-layers ]
+            [ plotter-tileset ]  the map  [ plotter-bridge ]
+
+        Mirrors ``_clay_workspace`` line for line, ``settings_share`` included,
+        so the editors do not drift into looking like different applications.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from .panes import (
+            plotter_bridge,
+            plotter_canvas,
+            plotter_layers,
+            plotter_tileset,
+            plotter_tools,
+        )
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        lay = self.layout
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
+
+        imgui.begin_group()
+        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        if layout_mod.pane_child("plotter-tools", (sidebar_w, tools_height)):
+            plotter_tools.draw(ctx)
+        imgui.end_child()
+        if layout_mod.pane_child("plotter-tileset", (sidebar_w, 0)):
+            plotter_tileset.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+        imgui.same_line()
+        width = layout_mod.centre_width()
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if layout_mod.pane_child("plotter-centre", (width, 0), flags):
+            plotter_canvas.draw(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        imgui.begin_group()
+        layers_height = imgui.get_content_region_avail().y * lay.settings_share
+        if layout_mod.pane_child("plotter-layers", (0, layers_height)):
+            plotter_layers.draw(ctx)
+        imgui.end_child()
+        if layout_mod.pane_child("plotter-bridge", (0, 0)):
+            plotter_bridge.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+    def _packwright_workspace(self) -> None:
+        """The same skeleton again:
+
+            [ packwright-sources  ]              [ packwright-items  ]
+            [ packwright-settings ]  the atlas   [ packwright-bridge ]
+
+        The centre pane is also the mode's heartbeat -- there is no per-mode
+        update hook, so the pane that draws is what pumps the repack request.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from .panes import (
+            packwright_bridge,
+            packwright_items,
+            packwright_preview,
+            packwright_settings,
+            packwright_sources,
+        )
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        lay = self.layout
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
+
+        imgui.begin_group()
+        sources_height = imgui.get_content_region_avail().y * lay.settings_share
+        if layout_mod.pane_child("packwright-sources", (sidebar_w, sources_height)):
+            packwright_sources.draw(ctx)
+        imgui.end_child()
+        if layout_mod.pane_child("packwright-settings", (sidebar_w, 0)):
+            packwright_settings.draw(ctx)
+        imgui.end_child()
+        imgui.end_group()
+
+        imgui.same_line()
+        width = layout_mod.centre_width()
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if layout_mod.pane_child("packwright-centre", (width, 0), flags):
+            packwright_preview.draw(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        imgui.begin_group()
+        items_height = imgui.get_content_region_avail().y * lay.settings_share
+        if layout_mod.pane_child("packwright-items", (0, items_height)):
+            packwright_items.draw(ctx)
+        imgui.end_child()
+        if layout_mod.pane_child("packwright-bridge", (0, 0)):
+            packwright_bridge.draw(ctx)
         imgui.end_child()
         imgui.end_group()
 
@@ -2651,7 +2846,9 @@ class App:
             "Everywhere",
             [
                 (
-                    f"Alt+1 - Alt+{len(modes.MODES)}",
+                    # Rendered through ``digit_key_label`` so the tenth slot
+                    # reads Alt+0 rather than the Alt+10 a plain count gives.
+                    f"Alt+1 - Alt+{modes.digit_key_label(len(modes.MODES))}",
                     "Switch mode, in the order the switch draws them",
                 ),
                 ("Ctrl+K", "Command palette -- type a command, or an asset"),
@@ -2728,6 +2925,40 @@ class App:
                 ("Ctrl+Tab", "Next tab"),
                 ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
                 ("Space / middle drag", "Pan (wheel zooms)"),
+            ],
+        )
+        from .plotter_state import TOOLS as PLOTTER_TOOLS
+
+        table(
+            "Plotter",
+            [
+                (
+                    " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
+                    " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),
+                ),
+                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+                ("Ctrl+E", "Export to the library"),
+                ("Ctrl+Shift+E", "Export a Tiled .tmx"),
+                ("Ctrl+N / O / W", "New / open / close"),
+                ("Ctrl+G", "Toggle the grid"),
+                ("Ctrl+Tab", "Next map"),
+                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+                ("Space / middle drag", "Pan (wheel zooms)"),
+            ],
+        )
+        table(
+            "Packwright",
+            [
+                ("R", "Repack now"),
+                ("Delete", "Remove the selected source"),
+                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+                ("Ctrl+E", "Export to the library"),
+                ("Ctrl+Shift+E", "Export the atlas and its JSON"),
+                ("Ctrl+N / O / W", "New / open / close"),
+                ("Ctrl+Tab", "Next atlas"),
+                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
             ],
         )
         imgui.end_popup()
@@ -2976,6 +3207,10 @@ class App:
             from .panes import sheet_panel
 
             _step("release sheet strip", lambda: sheet_panel.release_strip_texture(ctx))
+            from . import packwright_mode, plotter_mode
+
+            _step("release plotter textures", lambda: plotter_mode.release_all(ctx))
+            _step("release atlas textures", lambda: packwright_mode.release_all(ctx))
         if self.viewer is not None:
             _step("release viewer", self.viewer.release)
         # ``getattr``, not an attribute access: teardown runs after a *failed*

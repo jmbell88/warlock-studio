@@ -29,7 +29,7 @@ switch.
 The split is not automatic. A new guidance table is far more likely to be another per-asset field
 than another style one, so a field joins the profile set only by being named — which is why adding
 one to `guidance.py` does not silently start dragging it between assets. See
-[Extending](19-extending.md).
+[Extending](21-extending.md).
 
 ## Where they are managed
 
@@ -62,7 +62,7 @@ against the profile's name.
 
 - **Attach an anchor** opens a file picker. Any readable image works; it is copied into
   `assets/profiles/` under a generated name, so it outlives every job it came from and survives a
-  [prune](09-library-and-jobs.md#storage-and-pruning).
+  [prune](11-library-and-jobs.md#storage-and-pruning).
 - **Strength** is how hard the anchor is applied, from 0 to 1.5. The default is 0.6.
 - **Remove anchor** detaches and deletes it.
 
@@ -75,6 +75,6 @@ changing a select preserves it rather than dropping it. And attaching a conditio
 one generation in the 2D pane **replaces** the profile's anchor for that asset only; the 2D pane
 says so when the active profile has one.
 
-When ranking is on (`WARLOCK_RANK`, see [Configuration](14-configuration.md)), a finished reference
+When ranking is on (`WARLOCK_RANK`, see [Configuration](16-configuration.md)), a finished reference
 is also scored for how close it looks to the anchor. That score is advisory and appears on the
 library card.

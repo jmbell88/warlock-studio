@@ -90,10 +90,27 @@ def test_the_numpad_digits_switch_too(alt):
     assert app.app_ctx.state.mode == modes.KEYS[2]
 
 
-def test_a_digit_past_the_last_mode_does_nothing(alt):
+def test_the_last_two_slots_are_alt_9_and_alt_0(alt):
+    """Ten segments and nine digits above zero, so the tenth takes ``0`` -- the
+    way every application with ten of anything does. That the *key* is 0 while
+    the *slot* is 10 is a keyboard fact, which is why it lives in
+    ``_digit_keys`` and in ``modes.digit_key_label`` and nowhere else."""
     app = _app("home")
     _press(app, pygame.K_9)
-    assert app.app_ctx.state.mode == "home"
+    assert app.app_ctx.state.mode == modes.KEYS[8]
+    _press(app, pygame.K_0)
+    assert app.app_ctx.state.mode == modes.KEYS[9]
+    app = _app("home")
+    _press(app, pygame.K_KP0)
+    assert app.app_ctx.state.mode == modes.KEYS[9]
+
+
+def test_a_digit_past_the_last_mode_still_maps_to_nothing():
+    """Every digit key is now spoken for, so the out-of-range property is only
+    assertable on the pure function -- which is where it was always the real
+    guarantee. ``0`` is *not* the zeroth slot: there is no zeroth segment."""
+    assert modes.mode_for_digit(len(modes.MODES) + 1) is None
+    assert modes.mode_for_digit(0) is None
 
 
 def test_a_bare_digit_is_not_a_mode_switch(no_mods):
@@ -249,12 +266,12 @@ def test_request_quit_no_longer_nests_its_guards_by_hand():
 
 
 def test_the_quit_chain_stops_at_the_first_cancel():
-    from warlock.studio import clay_mode, inker_mode
+    from warlock.studio import clay_mode, inker_mode, packwright_mode, plotter_mode
     from warlock.studio.panes import pose_panel
 
     quit_calls: list[str] = []
     ctx = SimpleNamespace(
-        state=SimpleNamespace(inker=None, clay=None),
+        state=SimpleNamespace(inker=None, clay=None, plotter=None, packwright=None),
         confirms=dialogs.ConfirmQueue(),
         viewer=None,
     )
@@ -266,11 +283,22 @@ def test_the_quit_chain_stops_at_the_first_cancel():
     main.App._request_quit(app)
     assert quit_calls == ["quit"]
     assert ctx.confirms.pending is None
-    # And the guards are the three this file names, in this order.
+    # And the guards are the ones this file names, in this order: painted
+    # pixels, built geometry, a map, an atlas, then a pose.
     source = inspect.getsource(main.App._request_quit)
-    assert source.index("inker_mode.guard") < source.index("clay_mode.guard")
-    assert source.index("clay_mode.guard") < source.index("pose_panel.guard")
-    assert inker_mode.guard and clay_mode.guard and pose_panel.guard
+    order = [
+        "inker_mode.guard",
+        "clay_mode.guard",
+        "plotter_mode.guard",
+        "packwright_mode.guard",
+        "pose_panel.guard",
+    ]
+    positions = [source.index(name) for name in order]
+    assert positions == sorted(positions)
+    assert all(
+        (inker_mode.guard, clay_mode.guard, plotter_mode.guard, packwright_mode.guard,
+         pose_panel.guard)
+    )
 
 
 # --- I77: the keyboard reaches the modal, and only the modal -----------------

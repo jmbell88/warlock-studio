@@ -15,11 +15,14 @@ sees the key, which is the one exception to the rule above.
 
 | Keys | Action |
 | --- | --- |
-| Alt+1 … Alt+8 | Switch mode, in the order the switch draws them |
+| Alt+1 … Alt+9, Alt+0 | Switch mode, in the order the switch draws them |
 | Ctrl+K | Open the command palette |
 | F1 | Switch to the Manual |
 | Esc | Leave Home, the Manual or app Settings, back to the mode you came from |
 | F10 | Toggle the frame-rate readout |
+
+**Alt+0 is the tenth mode**, not the zeroth. There are ten segments in the switch and only nine
+digits above zero, so the last one takes `0` the way every application with ten of anything does.
 
 **Why Alt and not Ctrl.** Inker already uses Ctrl+0 and Ctrl+1 for its zoom, and a binding checked
 above the modes takes whatever it names away from them for good.
@@ -143,3 +146,49 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
 to the current one, and **Alt** subtracts. Both are described in
 [Selections and transform](07-inker.md#selections-and-transform).
+
+## Plotter
+
+| Keys | Action |
+| --- | --- |
+| `B` | Stamp |
+| `E` | Erase |
+| `G` | Fill |
+| `R` | Rect |
+| `I` | Pick the tile under the cursor |
+| `O` | Objects |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+E | Export to the library |
+| Ctrl+Shift+E | Export a Tiled `.tmx` |
+| Ctrl+N | New map |
+| Ctrl+O | Open a file |
+| Ctrl+W | Close the current tab |
+| Ctrl+G | Toggle the grid |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous map |
+| Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
+| Space drag, middle drag | Pan (the wheel zooms) |
+| Esc | Cancel a drag, then deselect the object |
+
+The tool letters match [Inker](07-inker.md)'s brush, eraser, fill and rectangle, because a user
+arriving from there already has that map in their hand.
+
+## Packwright
+
+| Keys | Action |
+| --- | --- |
+| `R` | Repack now |
+| Delete | Remove the selected source |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+E | Export to the library |
+| Ctrl+Shift+E | Export the atlas and its JSON |
+| Ctrl+N | New atlas |
+| Ctrl+O | Open a file |
+| Ctrl+W | Close the current tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous atlas |
+| Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
+| Middle drag | Pan (the wheel zooms) |
+| Esc | Deselect |
+
+Packing is automatic — `R` is only there for when you want it now rather than on the next change.

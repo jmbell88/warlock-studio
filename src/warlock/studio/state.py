@@ -599,7 +599,8 @@ class AppState:
     """The whole UI's mutable state."""
 
     # The one thing that decides what a pane shows, one of ``modes.KEYS``:
-    # home | manual | 2d | 3d | inker | clay | review | settings. It defaults
+    # home | manual | 2d | 3d | inker | clay | review | settings | plotter |
+    # packwright. It defaults
     # to the Home screen, which is what makes the chooser appear on every
     # launch rather than only the first ever; no mode is ever persisted
     # (``test_no_mode_is_persisted_anywhere`` pins that).
@@ -737,6 +738,12 @@ class AppState:
     # Nothing in it is persisted: a stored run directory would outlive the
     # sweep it names.
     review: Any = None
+    # Plotter's open maps and tool settings, and Packwright's open atlases,
+    # both built on first use by their modes' ``ensure``. Untyped and None for
+    # the reason ``inker`` and ``clay`` are: AppState is the shared frame state
+    # and deliberately knows nothing about what a mode keeps.
+    plotter: Any = None
+    packwright: Any = None
     # Whether ``findings.json`` is behind the evidence in the DB. A flag rather
     # than a submit, because ``TaskRunner.submit`` *refuses* a key already in
     # flight and nothing re-arms it: five verdicts in a second used to run one

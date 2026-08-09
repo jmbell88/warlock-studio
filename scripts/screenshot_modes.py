@@ -29,9 +29,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# Modes in switch order. Every one of them, because "which pane did nobody
-# look at" is exactly the question this answers.
-MODES = ("home", "2d", "3d", "inker", "clay", "review", "manual", "settings")
+# Modes in switch order. Every one of them, because "which pane did nobody look
+# at" is exactly the question this answers -- so it is *derived* rather than
+# written out. A hand-kept tuple claiming to be every mode is the drift this
+# script's own docstring warns about, and it had already happened once: two
+# modes were added and the list still said eight.
+from warlock.studio import modes as _modes  # noqa: E402
+
+MODES = _modes.KEYS
 
 # Frames drawn before the read. Three is not a guess: one to build, one for the
 # textures asked for on it to upload, one for anything those made visible.

@@ -124,6 +124,21 @@ def muted(text: str) -> None:
     text_colored(theme.MUTED, text)
 
 
+def muted_wrapped(text: str) -> None:
+    """A muted note that wraps to the pane rather than running off it.
+
+    ``muted`` deliberately does not wrap -- most of its callers are short
+    status lines where a wrap would be a second row of chrome. A *sentence*
+    explaining what a button does is the other case, and in a 300px sidebar an
+    unwrapped one is simply cut off at the pane edge with no scrollbar to reach
+    it, which is what ``same_line`` past the content region already taught us
+    about controls.
+    """
+    imgui.push_text_wrap_pos(0.0)
+    text_colored(theme.MUTED, text)
+    imgui.pop_text_wrap_pos()
+
+
 def cost_note(text: str) -> None:
     """What pressing the button next to this will cost (S138).
 

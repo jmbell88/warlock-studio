@@ -26,7 +26,7 @@ the promotion inherit whatever the reference happened to record.
 Derived values never carry across. Anything the worker recorded about the *source* run's artifacts
 — the composed prompt, the mesh report, the applied transform — is stripped, so a new job never
 wears a quality verdict about a mesh that does not exist yet. See
-[Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
 
 ## Checking the cutout
 
@@ -75,7 +75,7 @@ Nothing is ever deleted on your behalf, and declining leaves you with ordinary a
 hidden ones.
 
 Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
-See [Review](11-review.md).
+See [Review](13-review.md).
 
 The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
 
@@ -280,4 +280,4 @@ the pixel-art reductions and the manifest — see
 [2D exports](03-generating-references.md#2d-exports).
 
 For bulk export of several assets at once, and for the storage those files occupy, see
-[The library and jobs](09-library-and-jobs.md#storage-and-pruning).
+[The library and jobs](11-library-and-jobs.md#storage-and-pruning).

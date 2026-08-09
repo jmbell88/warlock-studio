@@ -25,9 +25,9 @@ from pathlib import Path
 # it always belonged: it is a mode with a keyboard loop, not a note about how
 # the app is built.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 12)),
-    ("Setup & operations", range(12, 17)),
-    ("Architecture", range(17, 20)),
+    ("Using Warlock Studio", range(1, 14)),
+    ("Setup & operations", range(14, 19)),
+    ("Architecture", range(19, 22)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

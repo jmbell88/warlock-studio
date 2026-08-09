@@ -14,7 +14,7 @@ middle, layers and the pipeline panel on the right. Several documents stay open 
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
-[Keyboard shortcuts](12-shortcuts.md).
+[Keyboard shortcuts](14-shortcuts.md).
 
 | Tool | Key | What it does |
 | --- | --- | --- |
@@ -342,4 +342,4 @@ A painted reference is a real job row that never ran on the worker: the image al
 queueing a run to reproduce what you just drew would be two minutes of GPU for nothing. It is
 created finished, at the reference stage, which is exactly what promotion consumes. It cannot be
 rerolled — there is no generator behind it for a new seed to change — but it can be remeshed. See
-[Rerun and promotion](09-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
