@@ -76,8 +76,7 @@ def _actions(ctx: Any, doc: Any) -> None:
         widgets.muted("Merge and flatten are unavailable while animated.")
 
     layer = doc.stack.active
-    imgui.set_next_item_width(-1)
-    changed, value = imgui.slider_float("Opacity", layer.opacity, 0.0, 1.0)
+    changed, value = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)
     widgets.help_marker(
         "The active layer's opacity. Dragging previews it live and records one "
         "undo step when you let go."

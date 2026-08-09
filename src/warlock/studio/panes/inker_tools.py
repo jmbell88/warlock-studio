@@ -62,7 +62,7 @@ def draw(ctx: Any) -> None:
 
 
 def _grid(state: Any) -> None:
-    width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
+    width = widgets.grid_width(COLUMNS)
     for index, (key, label, shortcut) in enumerate(inker_state.TOOLS):
         selected = state.tool == key
         if selected:
@@ -88,30 +88,26 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     if tool in PAINT_TOOLS or tool in SHAPE_TOOLS:
         widgets.section("brush")
         _per_tool_note()
-        imgui.set_next_item_width(-1)
-        changed, size = imgui.slider_int("Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH)
+        changed, size = widgets.labeled_slider_int(
+            "Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH
+        )
         if changed:
             state.brush_size = inker.clamp_brush(size)
     if tool in PAINT_TOOLS:
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_float("Hardness", state.hardness, 0.0, 1.0)
+        changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
         if changed:
             state.hardness = value
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_float("Opacity", state.opacity, 0.05, 1.0)
+        changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
         if changed:
             state.opacity = value
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_float("Spacing", state.spacing, 0.02, 1.0)
+        changed, value = widgets.labeled_slider_float("Spacing", state.spacing, 0.02, 1.0)
         if changed:
             state.spacing = value
         if tool in ("blur", "smudge"):
-            imgui.set_next_item_width(-1)
-            changed, value = imgui.slider_float("Strength", state.strength, 0.05, 1.0)
+            changed, value = widgets.labeled_slider_float("Strength", state.strength, 0.05, 1.0)
             if changed:
                 state.strength = value
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_float("Smoothing", state.stabilise, 0.0, 0.95)
+        changed, value = widgets.labeled_slider_float("Smoothing", state.stabilise, 0.0, 0.95)
         if changed:
             state.stabilise = value
         widgets.help_marker(
@@ -119,8 +115,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "which turns a shaky line into a smooth one. It catches up when "
             "you stop moving."
         )
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_float("Taper", state.speed_taper, 0.0, 1.0)
+        changed, value = widgets.labeled_slider_float("Taper", state.speed_taper, 0.0, 1.0)
         if changed:
             state.speed_taper = value
         widgets.help_marker("How much a fast stroke thins, for a pen-like flick.")
@@ -132,8 +127,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     if tool in ("fill", "wand"):
         widgets.section("tolerance")
         _per_tool_note()
-        imgui.set_next_item_width(-1)
-        changed, value = imgui.slider_int("Tolerance", state.wand_tolerance, 0, 255)
+        changed, value = widgets.labeled_slider_int("Tolerance", state.wand_tolerance, 0, 255)
         if changed:
             state.wand_tolerance = value
         changed, value = imgui.checkbox("Contiguous", state.wand_contiguous)

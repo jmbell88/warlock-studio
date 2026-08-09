@@ -81,6 +81,9 @@ rig = [
 # the test tooling with it.
 [dependency-groups]
 dev = [
+    # Reads the vendored TTFs' cmaps in tests/test_fonts.py, and backs
+    # scripts/strip_font_pua.py. Never imported by src/.
+    "fonttools>=4.50",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",

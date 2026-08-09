@@ -99,7 +99,7 @@ def draw(ctx: Any) -> None:
 
 
 def _tool_grid(state: Any) -> None:
-    width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
+    width = widgets.grid_width(COLUMNS)
     for index, (key, label, shortcut) in enumerate(clay_state.TOOLS):
         selected = state.tool == key
         if selected:
@@ -127,7 +127,7 @@ def _mode_row(doc: Any) -> None:
     state is not involved at all.
     """
     widgets.field_label("mode")
-    width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
+    width = widgets.grid_width(COLUMNS)
     for index, (mode, label, key) in enumerate(MODE_BUTTONS):
         selected = doc.element_mode == mode
         if selected:
@@ -154,7 +154,7 @@ def _add(ctx: Any, state: Any, doc: Any) -> None:
     reason that registry is data.
     """
     widgets.field_label("add")
-    width = (imgui.get_content_region_avail().x - 8 * (COLUMNS - 1)) / COLUMNS
+    width = widgets.grid_width(COLUMNS)
     for index, name in enumerate(sorted(bp.GENERATORS)):
         icon = PRIMITIVE_ICONS.get(name, icons.BOX)
         if imgui.button(f"{icon}##add{name}", (width, sp(28))):
@@ -256,7 +256,7 @@ def _axis_views(ctx: Any) -> None:
     view = getattr(ctx, "clay_view", None)
     if view is None:
         return
-    width = (imgui.get_content_region_avail().x - 8 * 3) / 4
+    width = widgets.grid_width(4)
     for label, name, key in (
         ("F", "front", "Front  (Ctrl+1, Shift for back)"),
         ("R", "right", "Right  (Ctrl+3, Shift for left)"),

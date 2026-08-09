@@ -99,7 +99,11 @@ def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
         imgui.set_tooltip("Hidden objects do not render, export or pick.")
     imgui.same_line()
 
-    width = imgui.get_content_region_avail().x - 32
+    # What is still to come on this line: the delete button and the gap before
+    # it. Measured rather than written out -- the literal 32 this replaces was
+    # already a pixel short of sp(28) + spacing at scale 1.0, and at 1.6 it
+    # reserved 32 for 58 and clipped the trash button off the pane.
+    width = imgui.get_content_region_avail().x - sp(28) - imgui.get_style().item_spacing.x
     if state.renaming == obj.uid:
         imgui.set_next_item_width(width)
         name = widgets.input_text("##rename", obj.name, max_length=120)
@@ -109,10 +113,19 @@ def _row(state: Any, doc: Any, obj: Any, index: int) -> None:
             state.renaming = 0
     else:
         label = obj.name or f"object {index}"
-        if not obj.visible:
-            widgets.text_colored(theme.MUTED, "")
+        # A hidden object's name is drawn muted. It used to be a
+        # ``text_colored(theme.MUTED, "")`` above the selectable, which coloured
+        # nothing -- and, being an item rather than a style push, put the name
+        # on the *next* line, so hiding an object silently doubled the height of
+        # its row. The colour has to be pushed around the selectable, which is
+        # what draws the text.
+        hidden = not obj.visible
+        if hidden:
+            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED)))
         if imgui.selectable(f"{label}##row", selected, imgui.SelectableFlags_.none, (width, 0))[0]:
             _click(state, doc, obj)
+        if hidden:
+            imgui.pop_style_color()
         if imgui.is_item_hovered() and imgui.is_mouse_double_clicked(0):
             state.renaming = obj.uid
 

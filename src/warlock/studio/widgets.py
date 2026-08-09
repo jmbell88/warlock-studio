@@ -602,6 +602,26 @@ def same_line_or_wrap(width: float) -> None:
         imgui.new_line()
 
 
+def grid_width(columns: int) -> float:
+    """The per-button width of an ``n``-across grid laid out with ``same_line``.
+
+    Asks the style for the gap rather than assuming one. Every call site used to
+    subtract a literal ``8``, which is ``tokens.SP_2`` *unscaled* -- correct at
+    UI scale 1.0 and wrong everywhere else, because ``theme.apply`` sets
+    ``item_spacing`` through ``sp()``. On a 1.6x display each gap is 4.8 px
+    wider than the arithmetic budgeted for, so a five-across row overruns its
+    pane by ~19 px and the last column is clipped in half: the Inker toolbox
+    lost the spray can, the marquee and the eyedropper, and Clay's tool row lost
+    its fourth button. It is invisible at 1.0, which is the scale the smoke
+    suite runs at.
+
+    The same reasoning as ``same_line_or_wrap``: ask the layout, do not
+    remember its numbers per call site.
+    """
+    gap = imgui.get_style().item_spacing.x
+    return (imgui.get_content_region_avail().x - gap * (columns - 1)) / columns
+
+
 def help_marker(text: str) -> None:
     same_line_or_wrap(imgui.calc_text_size("(?)").x)
     text_colored(theme.MUTED, "(?)")
@@ -805,6 +825,28 @@ def labeled_combo(label: str, value: str, options: list[tuple[str, str]], width:
     return combo(f"##{label}", value, options, width)
 
 
+def labeled_slider_int(label: str, value: int, low: int, high: int) -> tuple[bool, int]:
+    """A full-width slider that keeps saying what it is. -> (changed, value)
+
+    ``labeled_combo``'s rule, applied to the control it was missing. imgui
+    draws a slider's label *outside* the widget, to its right, so a slider set
+    to `-1` width has nowhere to put one -- and the nine sliders in the Inker
+    tool and layer panes were all drawn that way, which put the user in front
+    of a bare `0.850` with nothing to say it was Hardness. The value still
+    reads inside the track; only the name was gone.
+    """
+    field_label(label)
+    imgui.set_next_item_width(-1)
+    return imgui.slider_int(f"##{label}", value, low, high)
+
+
+def labeled_slider_float(label: str, value: float, low: float, high: float) -> tuple[bool, float]:
+    """``labeled_slider_int`` for a float. See it for why this exists."""
+    field_label(label)
+    imgui.set_next_item_width(-1)
+    return imgui.slider_float(f"##{label}", value, low, high)
+
+
 def primary_button(label: str, size: tuple[float, float] = (0, 0), *, enabled: bool = True) -> bool:
     """The accent-filled call to action; one per pane."""
     imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.ACCENT)))
@@ -870,7 +912,18 @@ def card(card_id: str, size: tuple[float, float]):
         imgui.Col_.child_bg.value,
         imgui.ImVec4(*theme.rgba(theme.ELEV_1 if lift < 0.5 else theme.ELEV_2)),
     )
-    visible = imgui.begin_child(card_id, size, imgui.ChildFlags_.borders.value)
+    # No scrollbar. A card is a fixed-size tile whose content is laid out to
+    # fit, so a scrollbar in one is a symptom rather than an affordance -- and
+    # it is a *self-worsening* one, because it takes its width out of the
+    # content region and pushes the content it appeared for further over. Every
+    # tile on the landing screen was drawing one over a few pixels of overflow:
+    # the app's first screen, every launch, six grey slivers.
+    visible = imgui.begin_child(
+        card_id,
+        size,
+        imgui.ChildFlags_.borders.value,
+        imgui.WindowFlags_.no_scrollbar.value,
+    )
     try:
         yield visible
     finally:
