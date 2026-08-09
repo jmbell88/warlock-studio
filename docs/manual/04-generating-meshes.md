@@ -101,7 +101,7 @@ on a plain background.
 
 The **Mesh** section holds the reconstruction settings.
 
-**Detail** is the geometry resolution handed to the engine, supplied by a platform preset:
+**Mesh resolution** is the geometry resolution handed to the engine, supplied by a platform preset:
 
 | Platform | Resolution |
 | --- | --- |

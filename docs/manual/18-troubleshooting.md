@@ -55,7 +55,7 @@ raises the other side.
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
 job and buys back roughly 7 GB of headroom. See [VRAM modes](16-configuration.md#vram-modes).
 
-If it still fails, drop the geometry resolution: **Detail** in the 3D pane, choosing "2D" rather
+If it still fails, drop the geometry resolution: **Mesh resolution** in the 3D pane, choosing "2D" rather
 than "3D" — see
 [the mapping](04-generating-meshes.md#mesh-parameters).
 

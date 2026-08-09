@@ -335,8 +335,11 @@ class _Ctx:
 
         self.cache = _Cache()
 
-    def toast(self, text, level="info"):
-        self.toasts.append((text, level))
+    def toast(self, text, level="info", action=None, action_arg=None):
+        # The full signature, because ``library.delete_asset`` raises the
+        # "Moved to trash - Undo" offer (UX.md Phase 3) and a fake that only
+        # took two arguments would fail on a call the real Ctx accepts.
+        self.toasts.append((text, level, action, action_arg))
 
     def submit(self, key, fn, *args, **kwargs):
         self.submitted.append((key, fn, args, kwargs))

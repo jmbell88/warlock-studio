@@ -310,9 +310,61 @@ capture whatever the monitor was.
 green; a screen recording of mode switches, palette open and hover is the
 review artifact (screenshots cannot see motion — record, then look).
 
-### Phase 2 — Visual refinement
+### Phase 2 — Visual refinement — **shipped 2026-08-09**
 
 *Consumes Phase 0's vocabulary. This is the pass a screenshot can see.*
+
+**What shipped, and the five places it departed from this list.** All six
+bullets: the whitespace pass, sections that breathe, display type, Lucide
+status glyphs, one shadow at three elevations, and Quit out of the switch.
+
+**The numbers settled a step off what this section guessed, and deliberately.**
+`PANE_PADDING` went 5 → `SP_3` (12) rather than to 10, and `window_padding` to
+`SP_4` (16), because "a pane's inset comes from the scale" is the rule worth
+having and 10 is not a step of it; `item_spacing`'s vertical 7 became `SP_2`.
+`tests/test_layout.py` used to assert `PANE_PADDING == 5.0`, which froze one
+afternoon's answer exactly as the spacing-scale test once did, and now asserts
+the rule instead. **`SP_8` still does not exist**: the rhythm this phase
+settled on is `SP_6` above a heading and `SP_4` inside a form, and the two
+32-ish numbers left in the tree are positions rather than gaps — which Phase
+0's own note already permits to stay literal. `RADIUS_L` arrived with its three
+readers, as planned.
+
+**The shadow bands are *stroked*, not filled, and that is what makes one recipe
+serve everything.** A card's shadow is drawn before the surface and can be
+filled; a popup's cannot, because `begin` has already painted the window's
+background by the time anything else can draw. Four concentric stroked bands
+that tile (`tokens.SHADOW_STEPS`: each band's outer bound is the next one's
+inner, so there is no gap to read as a ring) leave the interior alone, so
+`widgets.shadow` is one function under `card`, both modals, the palette, the
+two header popups and every toast. `widgets.window_shadow` escapes the window's
+clip rect with `push_clip_rect_full_screen`, which is the render-level scissor
+and touches no hit-testing.
+
+**The switch grew *three* group breaks rather than one, because the places are
+not contiguous.** This section's bullet assumed Home / Manual / Settings sit
+together; Settings is eighth in `modes.MODES`, between Review and Plotter,
+because it was appended when it was added and the Alt+N digits were already in
+people's hands. `modes.GROUP_BREAKS` is therefore *derived* from where the
+work-mode/place category changes — a hand-picked index would have put one gap
+in the middle of the workspaces and called it a grouping — and it collapses to
+a single break with nothing to edit the day the order does group them.
+
+**"Pane/inspector headers at `TEXT_HEADING`" turned out to be two readers, not
+a sweep.** No pane in this app draws a title: a three-column mode is named by
+the lit switch segment, and its columns are named by their first `section()`.
+The two surfaces that genuinely title themselves are the app-Settings pane
+(`widgets.pane_title`, new) and the inspector, whose header *is* the asset name
+— so that field is drawn at heading size rather than gaining a label above it.
+
+**And the re-check at 1.5 scale this section asked for found a real defect,
+class-identical to the one `grid_width` fixed.** Nine `widgets.combo` call
+sites passed a *visible* label (Blend, Symmetry, Model, Style LoRA, Budget,
+Frame, Lighting, From, To); imgui draws a combo's label to its right and the
+default width is `-1`, so all nine names were drawn past the content region and
+clipped away entirely. `labeled_combo` was already the answer and the rule was
+already written down — in `settings_3d`, where nobody reaching for `combo`
+would read it. It is in `combo`'s own docstring now.
 
 - **Whitespace.** `PANE_PADDING` 5 → 10 (`layout.py:54`), `window_padding`
   (12,12) → (16,16), `item_spacing` vertical 7 → 8 (`theme.py:92-94`) —
@@ -358,10 +410,58 @@ against pre-phase captures; the forms-and-layout floor tests
 (`tests/test_forms_and_layout.py`) green; the manual's screenshots (if any
 chapter embeds one) re-taken.
 
-### Phase 3 — Simplicity and disclosure
+### Phase 3 — Simplicity and disclosure — **shipped 2026-08-09**
 
 *The structural half of "feels effortless". Larger items; each is its own
 plan when executed.*
+
+**What shipped.** All five bullets: field-level errors, the 2D common path, the
+naming fix, a scoped focus ring and Undo-as-forgiveness. Four notes a later
+session needs.
+
+**A refusal's address is recorded in one place and read by the control.**
+`App._collect_tasks` is where every task failure passes through, so that is
+where `ServiceError.field` lands on `AppState.field_errors`; a pane's control
+then asks by *name* (`widgets.field_error(state, "style_lora")`) rather than
+the pane switching on a remembered one. The taxonomy grid is one call site
+covering twelve fields for exactly that reason. The toast still goes up: the
+ring says *which control*, not *that something happened*, and the pane may not
+be on screen at all. Cleared when the named field changes, and wholesale when a
+new submit is made — a ring that outlived the value it was about would be the
+app arguing with a control the user has already fixed. **The seed deliberately
+has no ring**: nothing in `service` raises a refusal naming it, and the call
+would have to sit after the Reroll and Lock controls that share its line, where
+the rect it rings is the help marker's.
+
+**The 2D fold hides nothing that can refuse a submit silently.** `_more` opens
+itself when a refusal names a field inside it (`widgets.request_open`, the
+machinery a dropped file already used), the aggregate block above Generate
+still lists every problem, and the closed fold's own line says how many of the
+folded fields are *set* — a form restored with a style, a genre and a
+conditioning image looks identical to an empty one otherwise, which is how
+somebody spends two minutes of GPU on settings they had forgotten. What is
+behind the fold is derived from `GUIDANCE_GROUPS` rather than written out.
+
+**The names are "detail brief" and "Mesh resolution".** Not this section's
+"Era styling", which was already taken: `FIELD_LABELS` renders `art_style` as
+"era style", and a second era control would have been the collision moved
+rather than ended. The 2D one says *brief* because that is what it is — an
+instruction in the prompt the sampler may or may not honour — and the keys stay
+`platform` on both sides, which is `FIELD_LABELS`' own argument about
+`art_style`: the corpus is keyed on the stored name.
+
+**The focus ring is `studio/focus.py`, and its order is recorded rather than
+declared.** A pane wraps each control in `focus.item(state, pane, key)` and the
+order is the order they are drawn in — a hand-kept list beside a hand-written
+column of widgets is two orderings, which is the argument `landing.TILES` and
+`palette.py` already make. Two rules are load-bearing. `set_keyboard_focus_here`
+is a *command*, so it is issued only on the frame the cursor moved; asking every
+frame resets a text cursor mid-word and makes a slider undraggable. And Tab is
+read from **imgui**, not from the pygame event loop, because `App._shortcut` is
+skipped entirely while a text field has the keyboard (`io.want_text_input`) —
+and tabbing out of the prompt box is the whole job. The ring covers the common
+path only: it exists so a first job can be composed without the mouse, and Tab
+through forty controls is not that.
 
 - **Field-level errors, end to end.** Panes catch `Invalid`, remember
   `(field, message)` for the frame, and the named control draws
@@ -401,7 +501,47 @@ the 2D pane's common path fits without scrolling at default window size and
 1.0/1.5 scale; keyboard-only job submission works in both generate panes;
 Undo restores within the toast's dwell.
 
-### Phase 4 — Small moments
+### Phase 4 — Small moments — **shipped 2026-08-09**
+
+**What shipped.** All five bullets. Four notes a later session needs.
+
+**Home's tile table stopped being the drawn list, and one function owns what
+is.** `landing.rows` is the chooser's cards this frame — the optional Continue
+card, then `TILES` — and the click, the arrow keys and Enter all index *it*.
+`TILES` stays exactly what `tests/test_panes_home_tiles.py` is about (the set,
+and the modes it must cover); what moved is the answer to "what is the nth
+card", which used to be `TILES` in three places and would have been off by one
+whenever Continue was on screen. Two tests that had frozen the old spelling
+(`len(TILES)` inside `_choose`, the cursor wrapping over the table) now assert
+the rule instead. **Continue is derived, never stored**: the selected asset if
+there is one and the newest finished row otherwise, so a trashed asset simply
+stops being the answer and Home still remembers no *mode*.
+
+**The stack can now exceed a default window, and the case is stated rather than
+designed around.** The two new cards are very nearly exclusive in practice — a
+first run has nothing finished to continue, and a session that has one has
+usually dismissed the orientation — and the host window scrolls, as it already
+did at 1.5 scale with neither. What the arrow keys gained is
+`set_scroll_here_y` on the frame the cursor *moves*, so the focus ring cannot
+walk off the bottom; **never on the first frame**, because "moved" is only true
+against the seed there and centring the first card on frame one scrolls the
+mode switch off the top of the window.
+
+**The splash's line comes from the load itself.** `Runtime.start` takes an
+optional `note` callback and calls it at the four stages that are observable
+pauses on a cold start; `splash.Startup.note` is what it is given, and the
+message is a plain rebound string read by the frame thread — atomic under the
+GIL, and a missed intermediate line is one nobody would have finished reading.
+A quit stops the narration rather than continuing to describe work the user has
+asked to be done with. The logo fades in over 600 ms through `motion.ease`,
+which needs `begin_fade()` before the loop: `ease` on a key it has never seen
+reads 1.0, which is the right default everywhere else and exactly wrong here.
+
+**The progress card needed state to fade *out*.** The job is gone by the time
+the card leaves, so `_LAST_PROGRESS` holds the last snapshot and the card is
+redrawn from it while `motion.value` runs down — with Cancel disabled, because
+a button that acts on a finished job is worse than no button, and with the ETA
+estimator not fed, because it is keyed on a job id that has stopped moving.
 
 - **First-run orientation.** Home already solves "models missing"
   (`landing.py:237-284`). Add the other half: a one-time, dismissible
@@ -432,7 +572,76 @@ Undo restores within the toast's dwell.
 again; screenshot pass; the manual's coverage test still passes (new panes or
 controls acquired along the way need their `(?)` or exemption).
 
-### Phase 5 — The GPU tier
+### Phase 5 — The GPU tier — **shipped 2026-08-09**
+
+**What shipped.** All four items, each behind its own switch in the app-Settings
+pane (`effects.py`, `KEYS`, defaulting on — the phase's "a config flag per item
+while it stabilizes"). Five notes a later session needs.
+
+**Two of the four are one mechanism, and it lives in `ninepatch.py`.** A
+blurred rounded rect under a surface and a superellipse fill behind one are the
+same shape problem: square, symmetric, and constant along their own middle row
+and column — which is what makes a nine-slice *correct* rather than merely
+convenient, because the strip that gets stretched is the one the true shape does
+not vary along. So the slicing, the texture upload and the release live in one
+module and `shadows.py` / `surfaces.py` supply pixels. Two rules in there are
+load-bearing. A shadow draws **eight** quads and a fill draws nine: leaving the
+centre out is what lets one recipe sit under a card (drawn before the surface)
+and over an imgui window's already-painted background, which is the property the
+Phase 2 stroked bands had and the reason they were stroked. And a rectangle
+smaller than its own corners is **refused**, never fudged — shrinking the corner
+blocks distorts the shape the sprite exists to be exact about, and overlapping
+them doubles the alpha in exactly the four places a reader is looking — so the
+call site falls back to the Phase 2 bands, which is why the numpy path is not
+deleted.
+
+**Nothing here is a promise.** `effects.SOFT_SHADOWS` being true says the
+feature is *wanted*; every consumer separately answers "and did it work", with
+`None` rather than an exception for no renderer, no context or a texture that
+would not build, and a failure latched **permanently** so a broken host is a
+degradation rather than a retry every frame. A missing renderer is deliberately
+*not* a failure: the smoke suite and every headless test reach that branch and
+want the fallback, not a flag that outlives them.
+
+**Vibrancy captures the last *clean* frame, and that is the design.** This
+section's own sketch was an offscreen copy "before the overlay layer", which
+needs the frame split at a point imgui does not name — draw data is a flat list
+of command lists with nothing saying which window each came from, so "before the
+overlays" is a guess about ordering that a tooltip invalidates. Capturing at the
+end of a frame *on which nothing sampled the backdrop* is exact where that is
+approximate, and it has the property the naive version does not: a surface can
+never blur itself, which is what makes the region under an open palette converge
+to mush. The cost is staleness — the backdrop is the app as it was when the
+surface appeared — which is invisible for a modal and for the palette and is why
+**toasts deliberately do not use it**: a toast appears while what it reports on
+is still moving. The capture is a quarter-resolution blit throttled to 15 Hz and
+the blur runs only on frames something asks for it, so an idle app with nothing
+floating pays one blit every 60-odd ms.
+
+**The spring is a third primitive, not a replacement.** `motion.spring` carries
+velocity, which neither `value` (exponential, no velocity) nor `ease` (a ramp
+with a fixed length) can; the pill is the case that justifies it, because Alt+2
+then Alt+5 re-aims a target *while it is still moving* and the exponential
+decelerated into the first one before starting again towards the second.
+Slightly under-damped (0.72), semi-implicit Euler with a 4 ms substep ceiling
+because the closed form is only closed for a fixed target and this module's
+whole subject is targets that change. `popover_enter` clamps the **alpha** and
+does not clamp the **rise**: a spring goes a little past 1, which for an opacity
+is a value that does not exist and for a position is exactly the overshoot being
+asked for. Switched off it falls back to `value` on the same key, so the switch
+restores the Phase 1 motion rather than removing motion.
+
+**Squircles are the one item whose scope was narrowed, and here is the gate.**
+`surfaces.enabled_for` refuses anything under 8 physical px — this section's own
+rule — and the only reader is `widgets.card`, which is the app's most numerous
+surface and the one drawn at `RADIUS_L`. The modals and the palette were left on
+imgui's rounding: their background is painted by `begin`, so a superellipse fill
+there means every popup in the app hand-drawing its own background, for a
+difference that at their size is a pixel at four corners — and the two items
+above already changed how those surfaces read. The card's own hairline had to
+come from the sprite too (the same shape one border-width larger), because
+imgui's border is a circular arc and would have disagreed with the fill at
+precisely the corners the item is about.
 
 *The custom-rendering ceiling. Each item is independently shippable, each gets
 a cost estimate and a "worth it?" gate against a screenshot/recording before

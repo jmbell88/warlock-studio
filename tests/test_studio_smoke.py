@@ -2556,8 +2556,9 @@ def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, s
         available = imgui.get_content_region_avail().x
         widgets_mod.segmented_control(
             "mode-seg-fit",
-            [(key, f"{icon} {label}") for key, label, icon in [*modes.MODES, modes.QUIT]],
+            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
             "home",
+            breaks=modes.GROUP_BREAKS,
         )
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
         measured.append((hi.x - lo.x, available))
@@ -2572,3 +2573,82 @@ def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, s
         f"the switch is {switch_w:.0f}px wide in a {available:.0f}px window at UI "
         f"scale {scale}; a clipped segment is an unreachable mode"
     )
+
+
+# --- UX.md Phase 5: the GPU tier --------------------------------------------
+#
+# The rest of the phase's rules are assertable headlessly and live in
+# ``tests/test_ux_phase45.py``. These three are the half that needs a context,
+# a renderer and a framebuffer -- that a sprite really uploads, that a card
+# really draws through it, and that the backdrop really captures the frame --
+# which is exactly what the fixtures in this file are.
+
+
+def test_a_shadow_sprite_uploads_and_a_card_draws_through_it(imgui_ctx):
+    """The textured path end to end. Everything below the upload is pure and
+    pinned elsewhere; what this adds is that the texture builds on a real
+    context and that ``widgets.shadow`` takes the sliced branch rather than
+    quietly falling back to the drawn bands for the life of the session."""
+    from warlock.studio import shadows, tokens, widgets
+
+    shadows.release_all()
+    sprite = shadows.sprite(tokens.RADIUS_L, shadows.SPREAD)
+    assert sprite is not None, "no sprite on a live renderer means the fallback forever"
+    assert sprite.texture.size == (sprite.size, sprite.size)
+    assert not shadows._BROKEN
+
+    drawn = []
+
+    def build():
+        imgui_mod, _renderer = imgui_ctx
+        with widgets.card("smoke/shadowed", (320.0, 120.0)):
+            imgui_mod.text("card")
+        drawn.append(widgets._sliced_shadow(
+            (10.0, 10.0), (330.0, 130.0), tokens.RADIUS_L, 1.0, 1.0,
+            imgui_mod.get_window_draw_list(),
+        ))
+
+    _frame(imgui_ctx, build)
+    assert drawn == [True]
+    shadows.release_all()
+
+
+def test_a_squircle_sprite_uploads_and_is_refused_below_its_own_threshold(imgui_ctx):
+    """UX.md's own rule about where the shape stops being visible, on the side
+    of it that needs a renderer to answer."""
+    from warlock.studio import surfaces, tokens
+
+    surfaces.release_all()
+    sprite = surfaces.sprite(tokens.RADIUS_L)
+    assert sprite is not None
+    assert sprite.size == 2 * sprite.corner + 1
+    assert surfaces.sprite(surfaces.MIN_RADIUS - 1.0) is None
+    surfaces.release_all()
+
+
+def test_the_backdrop_captures_the_frame_and_skips_the_frames_it_was_used_on(imgui_ctx, gl):
+    """The one rule the whole design rests on: a floating surface must never
+    sample a blur of itself, which is enforced by *not capturing* on a frame
+    something asked for the backdrop."""
+    from warlock.studio import vibrancy
+
+    vibrancy.release_all()
+    try:
+        vibrancy.capture(gl, (1600.0, 950.0))
+        assert vibrancy._PIPELINE is not None
+        assert vibrancy._PIPELINE.size == vibrancy._target_size((1600.0, 950.0))
+        # A blur runs on demand and hands back something imgui can draw.
+        assert vibrancy.backdrop() is not None
+        # Having been used, the next capture is skipped -- and the throttle is
+        # not what did it, so the clock is moved past the interval first.
+        vibrancy._LAST_CAPTURE = 0.0
+        before = vibrancy._LAST_CAPTURE
+        vibrancy.capture(gl, (1600.0, 950.0))
+        assert before == vibrancy._LAST_CAPTURE
+        # Unused now, so the frame after it captures again.
+        vibrancy.capture(gl, (1600.0, 950.0))
+        assert before < vibrancy._LAST_CAPTURE
+        assert not vibrancy._BROKEN
+    finally:
+        vibrancy.release_all()
+        gl.screen.use()

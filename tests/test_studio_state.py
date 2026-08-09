@@ -470,15 +470,17 @@ def test_every_mode_has_exactly_one_place_that_draws_it():
     assert modes.WORKSPACE_MODES < modes.WORK_MODES
 
 
-def test_quit_is_a_segment_in_the_switch_but_never_a_mode():
-    """Quitting is an action, not a place.
+def test_quit_is_never_a_mode_and_is_no_longer_a_segment():
+    """Quitting is an action, not a place -- and as of UX.md Phase 2 it is not
+    drawn in the navigation control either.
 
-    It is drawn in the mode switch because that is where the user looks for
-    "leave", but it must stay out of ``MODES``: it never lands in
-    ``AppState.mode``, it has no pane to draw, and the three categories above
-    have to partition ``KEYS`` exactly. The switch splices it on, and
-    ``_mode_switch`` branches on its key *before* assigning the mode, so
-    cancelling the confirm leaves the switch exactly where it was.
+    It must stay out of ``MODES`` for the reasons it always did: it never lands
+    in ``AppState.mode``, it has no pane to draw, and the three categories above
+    have to partition ``KEYS`` exactly. What changed is where it is drawn: a
+    destructive action inside the switch is one click from every mode, and the
+    unconditional confirm in front of it was a mitigation rather than a fix. It
+    lives in the header strip beside the health dot and the ``?`` now, so the
+    switch is ten segments of navigation and nothing else.
     """
     import inspect
 
@@ -491,10 +493,36 @@ def test_quit_is_a_segment_in_the_switch_but_never_a_mode():
     assert "quit" not in set(main._SINGLE_PANE_MODES)
 
     source = inspect.getsource(main.App._mode_switch)
+    # Still one spelling of the name and the glyph, read from ``modes``...
     assert "modes.QUIT" in source
+    # ...but no longer spliced into the list the switch is built from, which is
+    # the whole of what moved.
+    assert "modes.MODES, modes.QUIT" not in source
+    assert "*modes.MODES" not in source
     # The unsaved-work chain is _request_quit's, in the order the plumbing test
     # pins; re-inlining it here would be a second chain to keep in step.
     assert "self._request_quit" in source
+
+
+def test_the_switch_groups_the_places_apart_from_the_workspaces():
+    """UX.md Phase 2, and derived rather than written out: a hand-picked index
+    would have put the gap in the middle of the workspaces, because Settings
+    sits eighth in ``MODES`` rather than beside Home and the Manual."""
+    from warlock.studio import modes
+
+    assert modes.GROUP_BREAKS
+    for index in modes.GROUP_BREAKS:
+        before = modes.MODES[index][0] in modes.WORK_MODES
+        after = modes.MODES[index + 1][0] in modes.WORK_MODES
+        assert before != after
+    # And every transition is marked, not just some of them.
+    transitions = {
+        i
+        for i in range(len(modes.MODES) - 1)
+        if (modes.MODES[i][0] in modes.WORK_MODES)
+        != (modes.MODES[i + 1][0] in modes.WORK_MODES)
+    }
+    assert transitions == modes.GROUP_BREAKS
 
 
 def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():

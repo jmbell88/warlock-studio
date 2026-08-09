@@ -19,11 +19,14 @@ from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
-from .. import dialogs, matte_preview, theme, widgets
+from .. import dialogs, focus, matte_preview, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
 MATTE_TITLE = "Check the cutout"
+
+# This pane's key in the focus ring; see ``settings_2d.FOCUS_PANE``.
+FOCUS_PANE = "3d"
 
 # What each of ``pipelines/matting``'s three sources is called on screen. The
 # distinction matters to the user: the corner fill is a guess a plain
@@ -49,6 +52,12 @@ def draw(ctx: Any) -> None:
     state = ctx.state
     form = state.form_3d
 
+    # The keyboard ring (UX.md Phase 3), over this pane's own controls. Shorter
+    # than 2D's because the pane is: everything here is an override on what the
+    # source reference recorded, so the path to a mesh is pick a source, press
+    # the button -- and both ends of that are in the ring.
+    focus.pump(state, FOCUS_PANE)
+    focus.begin(state, FOCUS_PANE)
     widgets.section("Source")
     manual_render.help_button(ctx, "settings-3d")
     _source(ctx)
@@ -60,11 +69,24 @@ def draw(ctx: Any) -> None:
     # "Detail", "Budget" and "Background" were invisible. ``labeled_combo`` is
     # the widget that already answers this, and the 2D pane's guidance grid
     # uses the same small-caps line above each control.
-    form["platform"] = widgets.labeled_combo("Detail", form["platform"], _platform_options(ctx))
+    # "Mesh resolution", not "Detail" (UX.md Phase 3). It and the 2D pane's own
+    # ``platform`` control were called "Detail" and "platform detail", two
+    # near-identical names for a geometry resolution and a prompt fragment, and
+    # the whole of what kept them apart was a tooltip on each apologising for
+    # the other. A name that says what the control *is* ends that; the tooltip
+    # below keeps only the half that is still worth saying.
+    before = form["platform"]
+    with focus.item(ctx.state, FOCUS_PANE, "platform"):
+        form["platform"] = widgets.labeled_combo(
+            "Mesh resolution", form["platform"], _platform_options(ctx)
+        )
+    widgets.field_error(ctx.state, "platform")
+    if form["platform"] != before:
+        ctx.state.clear_field_error("platform")
     _hint(ctx, "platform", form["platform"])
     widgets.help_marker(
-        "The geometry resolution sent to trellis. The 2D pane's platform is a "
-        "separate thing -- a hint in the prompt."
+        "How much geometry trellis is asked for. Higher costs more GPU and "
+        "more triangles."
     )
     _budget(ctx, form)
 
@@ -74,11 +96,16 @@ def draw(ctx: Any) -> None:
     # a threshold of five would essentially never be met.
     widgets.help_marker("0 keeps whatever the reference recorded.")
 
-    form["bg_removal"] = widgets.labeled_combo("Background", form["bg_removal"], _bg_options(ctx))
+    with focus.item(ctx.state, FOCUS_PANE, "bg_removal"):
+        form["bg_removal"] = widgets.labeled_combo(
+            "Background", form["bg_removal"], _bg_options(ctx)
+        )
+    widgets.field_error(ctx.state, "bg_removal")
     _hint(ctx, "bg_removal", form["bg_removal"])
 
     imgui.set_next_item_width(sp(120))
-    changed, seed = imgui.input_int("Mesh seed", int(form["mesh_seed"]), 0, 0)
+    with focus.item(ctx.state, FOCUS_PANE, "mesh_seed"):
+        changed, seed = imgui.input_int("Mesh seed", int(form["mesh_seed"]), 0, 0)
     if changed:
         form["mesh_seed"] = max(0, seed)
     imgui.same_line()
@@ -179,6 +206,7 @@ def _budget(ctx: Any, form: dict[str, Any]) -> None:
     imgui.begin_disabled(single)
     form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
     imgui.end_disabled()
+    widgets.field_error(ctx.state, "profile")
     if single:
         widgets.hint_text(
             "Only 'raw' here until a decimation tier has been checked against "
@@ -306,7 +334,16 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         else f"Roughly {count * 2} minutes of GPU - {count} attempts, one queue."
     )
     busy = ctx.busy("submit")
-    if widgets.primary_button("Make 3D", (-1, 34), enabled=not problems and not busy):
+    enabled = not problems and not busy
+    with focus.item(ctx.state, FOCUS_PANE, "make3d") as focused:
+        pressed = widgets.primary_button("Make 3D", (-1, 34), enabled=enabled)
+        # Enter on the ring's last stop; see ``settings_2d._submit``.
+        if focused and enabled and (
+            imgui.is_key_pressed(imgui.Key.enter)
+            or imgui.is_key_pressed(imgui.Key.keypad_enter)
+        ):
+            pressed = True
+    if pressed:
         promote(ctx, source, form)
     if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip("Ctrl+Enter")
@@ -429,6 +466,9 @@ def submit_promotion(ctx: Any, job_id: str, kwargs: dict[str, Any], force: bool)
     ``promote_to_model`` with no group minted, so there is one call path here
     rather than a branch that could send the two halves different overrides.
     """
+    # The rings from the last refusal describe a request that no longer exists;
+    # see ``settings_2d.generate``, which clears them for the same reason.
+    ctx.state.clear_field_errors()
     if ctx.state.filters.kind not in ("all", "model"):
         # Otherwise a filter left on "reference" (the natural way to find the
         # source image before promoting it) permanently hides the model job

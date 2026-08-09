@@ -214,6 +214,17 @@ class ImguiRenderer:
 
     def shutdown(self) -> None:
         global _current
+
+        # The three Phase 5 caches hold textures made from *this* context and
+        # registered against *this* renderer, so they die with it -- here
+        # rather than in App.teardown, because the smoke suite builds and drops
+        # renderers without ever building an App, and a sprite left behind
+        # would be handed to the next renderer as a live GL name it does not own.
+        from . import shadows, surfaces, vibrancy
+
+        shadows.release_all()
+        surfaces.release_all()
+        vibrancy.release_all()
         if _current is self:
             _current = None
         for tex in imgui.get_platform_io().textures:

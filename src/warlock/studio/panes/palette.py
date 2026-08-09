@@ -79,7 +79,15 @@ def draw(ctx: Any) -> None:
         (0.5, 0.0),
     )
     imgui.set_next_window_size((sp(WIDTH), 0))
+    # Translucent over what it covers (UX.md Phase 5). The background is
+    # cleared *here*, before ``begin`` paints it, and drawn back below -- as a
+    # blur of the app when there is one and as the solid fill when there is
+    # not, which is what keeps a cleared background from ever being a hole.
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
     imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
     opened, _ = imgui.begin_popup_modal(
         POPUP,
         None,
@@ -87,12 +95,20 @@ def draw(ctx: Any) -> None:
         | imgui.WindowFlags_.no_move.value
         | imgui.WindowFlags_.always_auto_resize.value,
     )
+    widgets.pop_surface_rounding()
     if not opened:
         # Dismissed by a click outside. The flag has to follow, or the next
         # frame reopens it.
         imgui.pop_style_var()
         close(ctx)
         return
+    # Raised, not overlay: the palette dims the screen behind it like a modal,
+    # but it is a thing you summon and dismiss in a second rather than a
+    # question blocking the app, and an overlay-depth shadow under a surface
+    # that appears on every Ctrl+K reads as heavy.
+    widgets.window_shadow("raised", radius=radius)
+    if frosted:
+        widgets.window_backdrop(radius=radius)
 
     found = rows(ctx)
     # Clamped every frame rather than when the query changes: the list shrinks

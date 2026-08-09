@@ -52,6 +52,28 @@ WORKSPACE_MODES = frozenset({"inker", "clay", "review", "plotter", "packwright"}
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
+# After which segment indices the switch leaves a wider gap (UX.md Phase 2).
+# Ten flat segments said that Manual and Settings were peers of the five
+# creative workspaces; a gap says they are not, and says it in the *spacing*,
+# so ``MODES``' order is untouched and every Alt+N position is exactly what it
+# was.
+#
+# **Derived from where the category changes, never written out.** The bullet
+# this comes from describes one gap, between the places (Home, Manual,
+# Settings) and the workspaces -- which is one gap only if the places are
+# contiguous, and in this list they are not: Settings sits eighth, between
+# Review and Plotter, because it was appended when it was added and the digits
+# were already in people's hands. So the honest rendering of "places are not
+# workspaces" against *this* order is a break at each transition, and the day
+# the order does group them the set collapses to a single break with nothing to
+# edit. A hand-written index would instead have put one gap in the middle of
+# the workspaces and called it a grouping.
+GROUP_BREAKS: frozenset[int] = frozenset(
+    index
+    for index, ((key, _l, _i), (nxt, _l2, _i2)) in enumerate(zip(MODES, MODES[1:], strict=False))
+    if (key in WORK_MODES) != (nxt in WORK_MODES)
+)
+
 # Alt+1..9 and Alt+0, positionally: the nth segment of the switch is the nth
 # digit, so the binding is the picture on screen rather than a second table to
 # keep in agreement with it. The tenth slot is Alt+0 for the reason every
@@ -96,9 +118,18 @@ def digit_for_mode(key: str) -> int | None:
             return index
     return None
 
-# Drawn in the switch, deliberately *not* in MODES. Quitting is an action, not
-# a place: it never lands in ``AppState.mode``, it has no pane, and the three
-# categories above have to partition KEYS exactly (``_build_ui``'s dispatch
-# ends in a bare ``else``). Same tuple shape only so the switch can splice it
-# onto the end of the list it already builds.
+# Deliberately *not* in MODES. Quitting is an action, not a place: it never
+# lands in ``AppState.mode``, it has no pane, and the three categories above
+# have to partition KEYS exactly (``_build_ui``'s dispatch ends in a bare
+# ``else``).
+#
+# It used to be spliced onto the end of the switch as an eleventh segment, and
+# it no longer is (UX.md Phase 2): a destructive action living inside the
+# control you navigate with is one click from every mode, and the
+# unconditional confirm in front of it was a mitigation rather than a fix. It
+# is drawn in the header's right-hand strip now, beside the two other controls
+# that are about the program rather than about the work. The tuple survives
+# because the name and the glyph are still one fact and the strip reads them
+# from here; the ``(key, label, icon)`` shape survives with it, even though
+# nothing splices it any more, because it is what makes that obvious.
 QUIT: tuple[str, str, str] = ("quit", "Quit", icons.POWER)

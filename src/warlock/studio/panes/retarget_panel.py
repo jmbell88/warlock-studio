@@ -75,7 +75,7 @@ def draw(ctx: Any, job: Any) -> None:
     if not available:
         form["profile"] = "raw"
         widgets.muted("Only full density is available: gltfpack is not installed.")
-    form["profile"] = widgets.combo("Budget", form["profile"], options)
+    form["profile"] = widgets.labeled_combo("Budget", form["profile"], options)
     widgets.help_marker(
         "Rebuilds model.glb from the untouched source.glb, so a budget can be "
         "retargeted any number of times without another reconstruction. It "

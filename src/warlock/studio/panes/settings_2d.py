@@ -31,12 +31,19 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import dialogs, profiles, theme, tokens, vector_presets, widgets
+from .. import dialogs, focus, profiles, theme, tokens, vector_presets, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
 
 PREVIEW_DEBOUNCE = 0.3
+
+# This pane's key in the focus ring (UX.md Phase 3). The controls on the common
+# path take a place in it and the ones behind the fold do not: the ring exists
+# so a first job can be composed and submitted without the mouse, and Tab
+# through forty controls is not that. Anything behind "More options" is reached
+# by opening it, which is one Tab and one Enter away.
+FOCUS_PANE = "2d"
 
 
 # What the submit block took last frame, in design pixels (K92). The same
@@ -58,6 +65,8 @@ def draw(ctx: Any) -> None:
     # past the taxonomy, press Generate, scroll back up. It is also where the
     # refusals are drawn, which is worse: a form that cannot be submitted said
     # why in a place the user had to go looking for.
+    focus.pump(state, FOCUS_PANE)
+    focus.begin(state, FOCUS_PANE)
     if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
         _presets(ctx, form)
         _vector_presets(ctx)
@@ -68,11 +77,8 @@ def draw(ctx: Any) -> None:
         _prompt(ctx, form)
         _history(ctx, form)
         _preview(ctx)
-
-        _guidance(ctx, form)
-        _reference(ctx, form)
-        _advanced(ctx, form)
         _run_controls(ctx, form)
+        _more(ctx, form)
     imgui.end_child()
     top = imgui.get_cursor_pos_y()
     _submit(ctx, form)
@@ -141,6 +147,80 @@ def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], 
     return tuple(out)
 
 
+# The one reveal (UX.md Phase 3), and what is behind it. A key rather than a
+# literal at three call sites because ``request_open`` names it too.
+MORE_KEY = "2d/more"
+
+
+def folded_fields(form: dict[str, Any]) -> tuple[str, ...]:
+    """Every form key that lives behind "More options".
+
+    Derived from the taxonomy groups rather than written out, so a field added
+    to ``GUIDANCE_GROUPS`` is folded by having been added -- and the three that
+    are not in a group are named here because they are genuinely a different
+    list, not because anybody chose to restate one.
+    """
+    grouped = tuple(f for _title, fields in GUIDANCE_GROUPS for f in fields)
+    return grouped + (
+        "platform",
+        "ref_path",
+        "ip_adapter",
+        "control",
+        "base_model",
+        "style_lora",
+        "negative_prompt",
+    )
+
+
+def more_summary(form: dict[str, Any]) -> str:
+    """What the fold is hiding, said while it is closed.
+
+    Disclosure, not deletion: the point of a reveal is that the user can see
+    there is something behind it and roughly what. The *count* is the half that
+    matters and the reason this is not a static caption -- a form restored with
+    a style, a genre and a conditioning image set looks identical to an empty
+    one with the fold shut, which is how somebody comes to spend two minutes of
+    GPU on settings they had forgotten were there.
+    """
+    from ..state import default_form_2d
+
+    defaults = default_form_2d()
+    set_count = sum(
+        1
+        for key in folded_fields(form)
+        if form.get(key) not in ("", None) and form.get(key) != defaults.get(key)
+    )
+    what = "Subject, Style, Surface, Reference and the model"
+    if not set_count:
+        return f"{what} - nothing set."
+    return f"{what} - {set_count} set."
+
+
+def _more(ctx: Any, form: dict[str, Any]) -> None:
+    """The twelve taxonomy selects, the reference and Advanced, behind one fold.
+
+    This pane was "twelve collapsible sections tall" by its own comment, and the
+    disclosure it had -- ``default_open=False`` on two of them -- did not help,
+    because the eight that were open are the ones a first job does not need. The
+    common path above is what the first screen shows: what to draw, what kind of
+    output, how many. Everything here refines that.
+
+    Nothing is removed and nothing is hidden that could refuse a submit
+    silently: the aggregate block above Generate still lists every problem, and
+    a refusal that names a control *in here* opens the fold on the next frame
+    rather than ringing a control nobody can see.
+    """
+    named = set(ctx.state.field_errors)
+    if named & set(folded_fields(form)):
+        widgets.request_open(MORE_KEY)
+    if not widgets.header("More options", default_open=False, persist_key=MORE_KEY):
+        widgets.muted_wrapped(more_summary(form))
+        return
+    _guidance(ctx, form)
+    _reference(ctx, form)
+    _advanced(ctx, form)
+
+
 def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
     """The sweep's own verdict on this field's current value, or None.
 
@@ -174,7 +254,14 @@ def _guidance(ctx: Any, form: dict[str, Any]) -> None:
                 widgets.field_label(field_label(field))
                 imgui.set_next_item_width(-1)
                 options = _field_options(ctx, field)
+                before = form[field]
                 form[field] = widgets.combo(f"##{field}", form[field], options, 0)
+                # One call site for twelve controls: the refusal is looked up by
+                # the field's own name, so the loop that draws the taxonomy is
+                # also the loop that points at whichever of them was refused.
+                widgets.field_error(ctx.state, field)
+                if form[field] != before:
+                    ctx.state.clear_field_error(field)
                 hint = _findings_hint(ctx, field, form[field])
                 if hint is not None:
                     widgets.hint_text(hint)
@@ -185,15 +272,29 @@ def _guidance(ctx: Any, form: dict[str, Any]) -> None:
         # the prompt compiler discards.
         return
     # Narrowed to leave room for the marker: a full-width combo pushes it off
-    # the panel, and the note is the whole reason this control is not the 3D
-    # pane's platform.
-    widgets.field_label("platform detail")
+    # the panel.
+    #
+    # "detail brief", not "platform detail" (UX.md Phase 3). This and the 3D
+    # pane's "Detail" were two near-identical names for a prompt fragment and a
+    # geometry resolution, kept apart by nothing but a tooltip on each
+    # apologising for the other -- and both were called after the *key*
+    # (``platform``), which is a storage name rather than a description of what
+    # the control does. It says "brief" because that is what it is: an
+    # instruction in the prompt about how much detail to draw, which the sampler
+    # may or may not honour. The key stays ``platform``: it is what every job on
+    # disk recorded and what the findings buckets are keyed on, and this is
+    # ``FIELD_LABELS``' own argument for keeping ``art_style``.
+    widgets.field_label("detail brief")
+    before = form["platform"]
     form["platform"] = widgets.combo(
         "##g_platform", form["platform"], _options(ctx, "platform"), width=-30
     )
+    widgets.field_error(ctx.state, "platform")
+    if form["platform"] != before:
+        ctx.state.clear_field_error("platform")
     widgets.help_marker(
-        "A prompt hint about how much detail to draw. The mesh resolution is "
-        "the 3D pane's own platform control."
+        "A prompt hint about how much detail to draw. How much geometry the "
+        "mesh gets is the 3D pane's Mesh resolution, and separate."
     )
 
 
@@ -217,7 +318,8 @@ def _presets(ctx: Any, form: dict[str, Any]) -> None:
     current = next((p["key"] for p in presets if _preset_matches(form, p)), "")
     options = [("", "Custom")] + [(p["key"], p["label"]) for p in presets]
     widgets.field_label("preset")
-    chosen = widgets.combo("##preset", current, options)
+    with focus.item(ctx.state, FOCUS_PANE, "preset"):
+        chosen = widgets.combo("##preset", current, options)
     if not chosen or chosen == current:
         return
     preset = next((p for p in presets if p["key"] == chosen), None)
@@ -287,11 +389,19 @@ def _output(ctx: Any, form: dict[str, Any]) -> None:
     mode and not as one more select in a column of selects.
     """
     before = form.get("output", "reference")
-    form["output"] = widgets.segmented_control(
-        "output",
-        [("reference", "Object"), ("tile", "Seamless tile")],
-        before,
-    )
+    with focus.item(ctx.state, FOCUS_PANE, "output") as focused:
+        form["output"] = widgets.segmented_control(
+            "output",
+            [("reference", "Object"), ("tile", "Seamless tile")],
+            before,
+        )
+        # A hand-drawn control, so imgui's focus does nothing for it and the
+        # keys are answered here. Left/Right rather than Enter, because it is a
+        # switch between two states rather than a thing to press.
+        if focused and imgui.is_key_pressed(imgui.Key.left_arrow):
+            form["output"] = "reference"
+        if focused and imgui.is_key_pressed(imgui.Key.right_arrow):
+            form["output"] = "tile"
     if form["output"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
     if form["output"] == "tile":
@@ -379,9 +489,12 @@ def _save_profile(ctx: Any, form: dict[str, Any], name: str) -> None:
 
 def _prompt(ctx: Any, form: dict[str, Any]) -> None:
     before = form["prompt"]
-    form["prompt"] = widgets.multiline("##prompt", before, 90, MAX_PROMPT)
+    with focus.item(ctx.state, FOCUS_PANE, "prompt"):
+        form["prompt"] = widgets.multiline("##prompt", before, 90, MAX_PROMPT)
+    widgets.field_error(ctx.state, "prompt")
     if form["prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("prompt")
     remaining = MAX_PROMPT - len(form["prompt"])
     widgets.text_colored(
         theme.WARN if remaining < 100 else theme.MUTED,
@@ -658,9 +771,15 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
         return
     before = form["base_model"]
-    form["base_model"] = widgets.combo("Model", form["base_model"], ctx.base_models)
+    form["base_model"] = widgets.labeled_combo("Model", form["base_model"], ctx.base_models)
+    # The refusal this most often carries is ``check_weights``' -- a model that
+    # is selected and not downloaded, with the ``hf download`` line in it -- and
+    # the control it names is three collapsed sections away from the button that
+    # was pressed. See ``widgets.field_error``.
+    widgets.field_error(ctx.state, "base_model")
     if form["base_model"] != before:
         ctx.state.preview[CLEARED_KEY] = clear_unusable(ctx, form)
+        ctx.state.clear_field_error("base_model")
     # Under the Model combo rather than beside each control it emptied: this is
     # about the change just made, and the structure control's own section is
     # behind a header the user may never open.
@@ -677,7 +796,11 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         # would make that selection vanish with no explanation of why the
         # submit is now refused.
         imgui.begin_disabled()
-    form["style_lora"] = widgets.combo("Style LoRA", form["style_lora"], ctx.style_loras)
+    was_lora = form["style_lora"]
+    form["style_lora"] = widgets.labeled_combo("Style LoRA", form["style_lora"], ctx.style_loras)
+    widgets.field_error(ctx.state, "style_lora")
+    if form["style_lora"] != was_lora:
+        ctx.state.clear_field_error("style_lora")
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
         imgui.same_line()
@@ -727,19 +850,44 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
     """
     widgets.section("Run")
     imgui.text("Tiles" if form.get("output") == "tile" else "References")
-    for count in (1, 2, 4, 8):
-        imgui.same_line()
-        if imgui.radio_button(f"{count}##count", form["count"] == count):
-            form["count"] = count
+    with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
+        for count in (1, 2, 4, 8):
+            imgui.same_line()
+            if imgui.radio_button(f"{count}##count", form["count"] == count):
+                form["count"] = count
+                ctx.state.clear_field_error("count")
+        # Hand-answered, as the output switch is: a row of radios is one
+        # control to the keyboard even though it is four items to imgui.
+        if focused:
+            choices = (1, 2, 4, 8)
+            here = choices.index(form["count"]) if form["count"] in choices else 0
+            if imgui.is_key_pressed(imgui.Key.left_arrow):
+                form["count"] = choices[(here - 1) % len(choices)]
+            if imgui.is_key_pressed(imgui.Key.right_arrow):
+                form["count"] = choices[(here + 1) % len(choices)]
+    # After the whole row rather than inside it: the ring goes round the last
+    # item drawn, and what was refused is "how many", not the fourth radio.
+    widgets.field_error(ctx.state, "count")
 
     imgui.set_next_item_width(sp(120))
-    changed, seed = imgui.input_int("Seed", int(form["seed"]), 0, 0)
+    with focus.item(ctx.state, FOCUS_PANE, "seed"):
+        changed, seed = imgui.input_int("Seed", int(form["seed"]), 0, 0)
     if changed:
         form["seed"] = max(0, seed)
-    imgui.same_line()
+    # No ring on the seed, deliberately: nothing in ``service`` raises a
+    # refusal naming it (the range check is fieldless, and the widget already
+    # clamps), and a call here would also have to sit after the Reroll and Lock
+    # controls that share its line -- where the rect it rings is the help
+    # marker's. A pointer at the wrong control is worse than no pointer.
+    # Wrapped rather than clipped: at 1.5 scale the seed field, its label,
+    # Reroll, Lock and the help marker come to more than the sidebar's content
+    # region, and ``same_line`` past the edge draws a control nowhere -- the
+    # bug that once hid seven of them. Found by the 1.5-scale half of the
+    # screenshot pass, which is the half that keeps finding these.
+    widgets.same_line_or_wrap(imgui.calc_text_size("Reroll").x + sp(tokens.SP_5))
     if imgui.button("Reroll"):
         form["seed"] = random_seed()
-    imgui.same_line()
+    widgets.same_line_or_wrap(imgui.calc_text_size("Lock").x + sp(tokens.SP_6 + tokens.SP_5))
     changed, locked = imgui.checkbox("Lock", bool(form["seed_locked"]))
     if changed:
         form["seed_locked"] = locked
@@ -763,10 +911,23 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         f"{count} {noun}s - a few seconds each" if count > 1 else f"One {noun} - a few seconds"
     )
     busy = ctx.busy("submit")
-    if widgets.primary_button("Generate", (-1, 34), enabled=not problems and not busy):
+    enabled = not problems and not busy
+    with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
+        pressed = widgets.primary_button("Generate", (-1, 34), enabled=enabled)
+        # Enter on the last stop of the ring, which is what makes the whole
+        # form keyboard-only: everything above it is a stock imgui control that
+        # answers the keyboard once it has focus, and this is the one that
+        # cannot be "typed into". Ctrl+Enter still works from anywhere.
+        if focused and enabled and _enter_pressed():
+            pressed = True
+    if pressed:
         generate(ctx, form)
     if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
         imgui.set_tooltip("Ctrl+Enter")
+
+
+def _enter_pressed() -> bool:
+    return imgui.is_key_pressed(imgui.Key.enter) or imgui.is_key_pressed(imgui.Key.keypad_enter)
 
 
 def validate(form: dict[str, Any]) -> list[str]:
@@ -865,6 +1026,10 @@ def anchor_kwargs(ctx: Any, form: dict[str, Any], kwargs: dict[str, Any]) -> str
 def generate(ctx: Any, form: dict[str, Any]) -> None:
     if validate(form):
         return
+    # A new submit is judged on its own: the rings from the last one describe a
+    # request that no longer exists, and leaving them up would have the app
+    # pointing at a control while it works on the value in it.
+    ctx.state.clear_field_errors()
     if not form["seed_locked"]:
         # Generation is deterministic in the seed, so an unchanged form would
         # otherwise produce the identical image twice and read as a no-op.

@@ -240,6 +240,17 @@ def fps_meter(ctx: Any, meter: Any) -> None:
     imgui.pop_style_color()
 
 
+# The last thing the progress card drew, so it has something to fade *out*
+# (UX.md Phase 4). Module state, and one slot rather than a history: there is
+# one running job at a time by construction, and what a fade-out needs is the
+# frame it is a fade of.
+_LAST_PROGRESS: dict[str, Any] = {}
+
+# How present the card is, 0 to 1. Keyed here rather than passed through,
+# exactly as every other animated value in the app is.
+_PROGRESS_KEY = "progress-card/present"
+
+
 def progress_card(ctx: Any, eta: Any) -> None:
     """The running job's narration, floating bottom-centre, or nothing.
 
@@ -247,37 +258,67 @@ def progress_card(ctx: Any, eta: Any) -> None:
     the viewport keeps its full height, and a trellis run stays visible from
     Paint. Drawn after the host window, so its Cancel wins hit-testing over the
     image beneath it.
+
+    It is "the one piece of UI the whole app is judged by", so it takes the same
+    depth treatment as every other floating surface (UX.md Phase 4): the surface
+    radius, the raised shadow, and an eased arrival and departure rather than a
+    rectangle appearing over the viewport between one frame and the next. The
+    fade-*out* is the half that needs state: the job is gone by then, so the
+    card is redrawn from the last snapshot it had, with its Cancel disabled --
+    a button that acts on a job that has finished is worse than no button.
     """
+    from .. import motion, tokens
     from ..tokens import sp
 
     job_id = ctx.runtime.current_job_id
     snapshot = ctx.runtime.progress()
-    if snapshot is None or job_id is None:
-        return
+    live = snapshot is not None and job_id is not None
+    if live:
+        _LAST_PROGRESS["snapshot"], _LAST_PROGRESS["job"] = snapshot, job_id
+    present = motion.value(_PROGRESS_KEY, 1.0 if live else 0.0, duration=tokens.DUR_BASE)
+    if not live:
+        if present <= 0.01:
+            return
+        snapshot = _LAST_PROGRESS.get("snapshot")
+        job_id = _LAST_PROGRESS.get("job")
+        if snapshot is None or job_id is None:
+            return
     percent = float(snapshot.get("percent") or 0.0)
     started = snapshot.get("started_at")
     elapsed = max(time.time() - float(started), 0.0) if started else 0.0
     cold = bool(snapshot.get("cold"))
 
     viewport = imgui.get_main_viewport()
+    # The rise is the departure read backwards: it comes up out of the bottom
+    # edge and goes back down into it, which is where a bottom-anchored surface
+    # belongs. Under reduce-motion ``present`` is already at its target, so the
+    # offset is zero and the card simply is or is not there.
     imgui.set_next_window_pos(
         (
             viewport.work_pos.x + viewport.work_size.x * 0.5,
-            viewport.work_pos.y + viewport.work_size.y - sp(18),
+            viewport.work_pos.y + viewport.work_size.y - sp(18) + sp(14) * (1.0 - present),
         ),
         imgui.Cond_.always.value,
         (0.5, 1.0),
     )
     imgui.set_next_window_size((sp(430), 0))
-    imgui.set_next_window_bg_alpha(0.94)
+    imgui.set_next_window_bg_alpha(0.94 * present)
     imgui.push_style_color(imgui.Col_.window_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, present)
+    radius = widgets.push_surface_rounding()
     flags = (
         imgui.WindowFlags_.no_decoration.value
         | imgui.WindowFlags_.no_saved_settings.value
         | imgui.WindowFlags_.always_auto_resize.value
         | imgui.WindowFlags_.no_focus_on_appearing.value
     )
-    if imgui.begin("##progress-card", None, flags)[0]:
+    opened = imgui.begin("##progress-card", None, flags)[0]
+    widgets.pop_surface_rounding()
+    if opened:
+        # Raised, and the shadow rides the same fade: a shadow left at full
+        # strength under a card on its way out is a dark rectangle hanging over
+        # the viewport with nothing in it.
+        widgets.window_shadow("raised", radius=radius)
         widgets.spinner()
         imgui.same_line()
         with fonts.label(imgui):
@@ -291,17 +332,21 @@ def progress_card(ctx: Any, eta: Any) -> None:
         widgets.muted(detail)
 
         line = format_duration(elapsed)
-        remaining = eta.update(job_id, percent, elapsed, cold)
+        # Only while the job is live: the estimator is keyed on a job id and
+        # feeding it samples from a fade-out would teach it about a job that
+        # has already stopped moving.
+        remaining = eta.update(job_id, percent, elapsed, cold) if live else None
         if remaining is not None:
             line += f" - about {format_duration(remaining)} left"
         widgets.muted(line)
 
-        if widgets.disabled_button("Cancel", not ctx.busy(f"cancel:{job_id}")):
+        if widgets.disabled_button("Cancel", live and not ctx.busy(f"cancel:{job_id}")):
             # No confirmation: this button says exactly what it does, sits on
             # the thing it acts on, and a blocking dialog would freeze the very
             # bar behind it.
             ctx.submit(f"cancel:{job_id}", svc_jobs.cancel_job, ctx.svc, job_id)
     imgui.end()
+    imgui.pop_style_var()
     imgui.pop_style_color()
 
 

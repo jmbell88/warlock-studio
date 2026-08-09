@@ -61,7 +61,9 @@ Above the list are four filters and a select-all:
   (`name:"a wooden chest"`). A prefix that is not one of those six is searched as ordinary text, so
   a colon you meant literally still works. Field terms *add* to the combos below rather than
   overriding them — `status:error` with **Status** on *done* is a contradiction and correctly shows
-  nothing.
+  nothing. Click into the box and the six prefixes appear under it as buttons; pressing one types it
+  into the query and puts the cursor back in the box, which is the same list the parser itself
+  reads, so nothing on that row can offer a prefix the search does not understand.
 - **Status**: any status, done, running, or failed.
 - **Kind**: any kind, references, meshes, rigs, or sheets. Note that "reference" and "mesh" are
   about what the job *produced*, not what was submitted — a text job that stopped at a reference and

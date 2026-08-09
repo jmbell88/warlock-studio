@@ -175,6 +175,88 @@ def ease(key: str, duration: float, *, curve: Any = ease_out_cubic) -> float:
     return curve(elapsed / duration)
 
 
+# -- springs -----------------------------------------------------------------
+#
+# The third primitive, and the one the other two cannot be (UX.md Phase 5).
+# :func:`value`'s exponential approach has no velocity: it decelerates into
+# every target from wherever it is, so a target that changes mid-move is
+# followed with a visible kink and a move that "arrives" does so by running out
+# of distance. A spring carries velocity, which is what makes a re-aimed pill
+# curve rather than corner, and -- being slightly under-damped -- what makes a
+# popover settle *into* place instead of creeping up to it.
+#
+# Semi-implicit Euler with a substep ceiling rather than the analytic solution:
+# the closed form is only closed for a *fixed* target, this module's whole
+# subject is targets that change under a value, and a 4 ms substep is exact
+# enough for a 200 ms move at a cost of at most five multiplies a frame.
+
+# Angular frequency per unit of duration: one full undamped period over the
+# duration asked for, so ``spring`` and ``value`` at the same duration take
+# roughly the same time to become still.
+_SPRING_OMEGA = 2.0 * math.pi
+
+# Slightly under one. At 1.0 (critical) a spring never overshoots from rest,
+# which is the whole of what this primitive was added for; below ~0.6 the
+# overshoot reads as a bounce, which is a different and much louder feeling.
+SPRING_DAMPING = 0.72
+
+# The longest step the integrator will take at once. A frame that hitched to
+# 250 ms is not a reason to integrate 250 ms of spring in one go: the explicit
+# step is only stable while ``h * omega`` stays small, and the failure is not a
+# slow spring but a divergent one.
+_SPRING_STEP = 0.004
+
+_VELOCITY: dict[str, float] = {}
+
+
+def spring(key: str, target: float, *, duration: float = tokens.DUR_BASE) -> float:
+    """Like :func:`value`, but carrying velocity: it settles rather than eases.
+
+    Falls back to :func:`value` -- exactly, including its state key -- when the
+    effect is switched off, so turning springs off restores the pre-Phase-5
+    motion rather than removing it. Under reduce-motion it snaps, like
+    everything else in this module.
+    """
+    from . import effects
+
+    if not effects.SPRINGS:
+        return value(key, target, duration=duration)
+    clock = _clock()
+    if REDUCED or clock is None or duration <= 0.0:
+        _STATE[key] = target
+        _VELOCITY[key] = 0.0
+        _TARGET[key] = target
+        _FRAME[key] = clock[1] if clock is not None else -1
+        return target
+    dt, frame = clock
+    current = _STATE.get(key)
+    _TARGET[key] = target
+    _FRAME[key] = frame
+    if current is None:
+        # A key's first sighting snaps, as everywhere else here: a pane being
+        # built for the first time should appear settled rather than assemble
+        # itself out of nothing.
+        _STATE[key] = target
+        _VELOCITY[key] = 0.0
+        return target
+    omega = _SPRING_OMEGA / duration
+    velocity = _VELOCITY.get(key, 0.0)
+    steps = max(1, min(int(dt / _SPRING_STEP) + 1, 64))
+    step = dt / steps
+    for _ in range(steps):
+        accel = -(omega * omega) * (current - target) - 2.0 * SPRING_DAMPING * omega * velocity
+        velocity += accel * step
+        current += velocity * step
+    # Settled: a spring approaches its target asymptotically, so without a floor
+    # it is *always* animating, which through ``animating()`` means the idle
+    # clamp never idles again.
+    if abs(target - current) < 1e-3 and abs(velocity) < 1e-2:
+        current, velocity = target, 0.0
+    _STATE[key] = current
+    _VELOCITY[key] = velocity
+    return current
+
+
 def restart(key: str) -> None:
     """Put a :func:`ease` key back at the start of its ramp."""
     _STATE[key] = 0.0
@@ -188,8 +270,14 @@ def seed(key: str, current: float) -> None:
     animated change made before the first tick would snap, because a key that
     is not live yet has nothing to move from. Saying where it starts is more
     honest than requiring the caller to have ticked once first.
+
+    Any velocity the key had is dropped: stating where a value *is* says
+    nothing about where it was going, and a spring re-seeded to 0 while still
+    carrying the velocity of its last arrival would leave at a speed nothing
+    asked for.
     """
     _STATE[key] = current
+    _VELOCITY.pop(key, None)
 
 
 def forget(key: str) -> None:
@@ -197,6 +285,7 @@ def forget(key: str) -> None:
     _STATE.pop(key, None)
     _TARGET.pop(key, None)
     _FRAME.pop(key, None)
+    _VELOCITY.pop(key, None)
 
 
 def reset() -> None:
@@ -204,3 +293,4 @@ def reset() -> None:
     _STATE.clear()
     _TARGET.clear()
     _FRAME.clear()
+    _VELOCITY.clear()

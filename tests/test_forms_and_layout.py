@@ -240,9 +240,15 @@ def test_the_tile_cursor_wraps():
     which is why the library's arrows clamp and these do not."""
     from types import SimpleNamespace
 
-    ctx = SimpleNamespace(state=SimpleNamespace(home_index=0))
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(home_index=0),
+        settings=SimpleNamespace(get=lambda *_a: None),
+    )
+    # Over the drawn cards rather than the table: since UX.md Phase 4 the
+    # chooser has an optional Continue card in front of ``TILES``, and with no
+    # job cache on this ctx there is none, so the two counts agree here.
     landing.move(ctx, -1)
-    assert ctx.state.home_index == len(landing.TILES) - 1
+    assert ctx.state.home_index == len(landing.rows(ctx)) - 1 == len(landing.TILES) - 1
     landing.move(ctx, 1)
     assert ctx.state.home_index == 0
 

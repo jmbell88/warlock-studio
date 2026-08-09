@@ -74,6 +74,12 @@ class Startup:
         self._done = threading.Event()
         self._quit = False
         self._thread: threading.Thread | None = None
+        # What the load says it is doing, written from the load thread and read
+        # from the frame thread every frame (UX.md Phase 4). A plain string
+        # assignment rather than a lock or a queue: a rebound attribute is
+        # atomic under the GIL, the reader wants only the newest value, and a
+        # missed intermediate line is a line nobody would have finished reading.
+        self._message = MESSAGE
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -112,6 +118,23 @@ class Startup:
     def request_quit(self) -> None:
         """The X button, during the splash. Never abandons the load."""
         self._quit = True
+
+    def note(self, text: str) -> None:
+        """What the load is doing now. Called from the load thread.
+
+        Passed to ``Runtime.start`` as its progress callback. A quit already
+        requested stops the narration rather than continuing to describe work
+        the user has asked to be done with -- the load is still waited out, but
+        "Starting the worker" under a window somebody just closed is the app
+        arguing with them.
+        """
+        if not self._quit:
+            self._message = str(text) or MESSAGE
+
+    @property
+    def message(self) -> str:
+        """The line under the logo. ``MESSAGE`` until the load says otherwise."""
+        return "Closing..." if self._quit else self._message
 
     def elapsed(self) -> float:
         return self._clock() - self.started_at
@@ -170,12 +193,37 @@ def release_logo(texture: Any, renderer: Any) -> None:
         texture.release()
 
 
+# How long the logo takes to arrive (UX.md Phase 4). Longer than any transition
+# inside the app: this is the first thing on screen after a cold launch, there
+# is nothing behind it to be impatient about, and a 200 ms fade at that moment
+# reads as a flicker rather than as an entrance.
+FADE_SECONDS = 0.6
+FADE_KEY = "splash/fade"
+
+
+def begin_fade() -> None:
+    """Put the logo's fade back at the start of its ramp.
+
+    Called once before the splash loop rather than lazily on the first
+    ``draw``: ``motion.ease`` on a key it has never seen reads 1.0 -- arrived --
+    which is the right default everywhere else in the app and is exactly wrong
+    here, where the whole point is that the first frame is empty.
+    """
+    from . import motion
+
+    motion.restart(FADE_KEY)
+
+
 def draw(texture: Any, window_size: tuple[int, int], message: str = MESSAGE) -> None:
     """One borderless window filling the host window: logo, then a line."""
     from imgui_bundle import imgui
 
-    from . import widgets
+    from . import motion, widgets
 
+    # Under reduce-motion this reads 1.0 on the first frame -- arrived, not
+    # never-appears, which is the failure a naive ``duration = 0`` has.
+    alpha = motion.ease(FADE_KEY, FADE_SECONDS)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     width, height = float(window_size[0]), float(window_size[1])
     imgui.set_next_window_pos(imgui.ImVec2(0.0, 0.0))
     imgui.set_next_window_size(imgui.ImVec2(width, height))
@@ -203,6 +251,7 @@ def draw(texture: Any, window_size: tuple[int, int], message: str = MESSAGE) -> 
         )
     widgets.muted(message)
     imgui.end()
+    imgui.pop_style_var()
 
 
 def _fit(source: tuple[int, int], window: tuple[float, float]) -> tuple[float, float]:

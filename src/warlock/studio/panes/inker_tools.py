@@ -315,7 +315,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
 
 def _canvas_options(state: Any) -> None:
     widgets.section("canvas")
-    state.symmetry = widgets.combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
+    state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
         imgui.set_next_item_width(sp(90))
         changed, count = imgui.slider_int(

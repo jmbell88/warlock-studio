@@ -179,14 +179,14 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
 
     options = ctx.sheet_options or {}
     sizes = [(str(s), f"{s} px") for s in (options.get("frame_sizes") or [64, 128, 256])]
-    picked = widgets.combo("Frame", str(form["frame_size"]), sizes)
+    picked = widgets.labeled_combo("Frame", str(form["frame_size"]), sizes)
     widgets.help_marker(
         "The size of one cell in the atlas, in pixels. The grid is worked out "
         "from it and the number of directions, and wraps to stay inside a "
         "texture an engine will accept."
     )
     form["frame_size"] = int(picked)
-    form["lighting"] = widgets.combo(
+    form["lighting"] = widgets.labeled_combo(
         "Lighting",
         form["lighting"],
         [(key, key) for key in (options.get("lighting") or ["flat", "lit"])],
@@ -226,8 +226,8 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
             # rows *are* the animation, and mixing static poses in would give
             # an importer no way to tell which rows loop.
             names = [(p["id"], p.get("name") or p["id"]) for p in poses]
-            form["clip_from"] = widgets.combo("From", form["clip_from"], names)
-            form["clip_to"] = widgets.combo("To", form["clip_to"], names)
+            form["clip_from"] = widgets.labeled_combo("From", form["clip_from"], names)
+            form["clip_to"] = widgets.labeled_combo("To", form["clip_to"], names)
             changed, frames = imgui.slider_int("Frames", form["clip_frames"], 2, 32)
             if changed:
                 form["clip_frames"] = frames

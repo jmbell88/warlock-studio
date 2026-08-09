@@ -88,18 +88,27 @@ def test_every_tile_key_is_one_activate_has_an_answer_for():
             assert ctx.state.landing_view == "choose"
 
 
-def test_the_tile_cursor_wraps_over_the_whole_table():
-    ctx = SimpleNamespace(state=SimpleNamespace(home_index=0))
+def test_the_tile_cursor_wraps_over_every_card_drawn():
+    """Over ``rows`` rather than ``TILES``: with a Continue card in front of the
+    table, a cursor that wrapped over the table would skip the last tile and
+    land on Continue twice."""
+    ctx = _ctx()
     landing.move(ctx, -1)
-    assert ctx.state.home_index == len(landing.TILES) - 1
+    assert ctx.state.home_index == len(landing.rows(ctx)) - 1 == len(landing.TILES) - 1
     landing.move(ctx, 1)
     assert ctx.state.home_index == 0
 
 
-def test_the_stack_height_is_measured_off_the_table():
-    """A literal tile count is how adding a tile pushes the bottom of the stack
-    off screen with nothing to say so."""
+def test_the_stack_height_is_measured_off_the_cards_it_draws():
+    """A literal card count is how adding one pushes the bottom of the stack off
+    screen with nothing to say so.
+
+    It is measured off ``rows`` rather than off ``TILES`` since UX.md Phase 4:
+    the drawn list has one optional card in front of the table (Continue), so
+    the table is no longer what is on screen.
+    """
     import inspect
 
     source = inspect.getsource(landing._choose)
-    assert "len(TILES)" in source
+    assert "len(drawn)" in source and "rows(ctx)" in source
+    assert "len(TILES)" not in source

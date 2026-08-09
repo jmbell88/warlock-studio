@@ -18,7 +18,7 @@ from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from .. import theme, widgets
+from .. import fonts, theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
@@ -414,7 +414,13 @@ def _write_field(ctx: Any, key: str, job_id: str, payload: Any, typed: str, curr
 
 def _header(ctx: Any, job: Any) -> None:
     job_id = job["id"]
-    name = widgets.input_text("##name", job.get("name") or "", max_length=120, hint="Name")
+    # The name *is* this pane's header (UX.md Phase 2), so it is drawn at
+    # heading size rather than at body size like the tag field under it. It
+    # stays an editable field rather than becoming a label with a pencil beside
+    # it: renaming an asset is one of the two things anybody does up here, and
+    # the input is what already carries the "Name" hint when there is none.
+    with fonts.heading(imgui):
+        name = widgets.input_text("##name", job.get("name") or "", max_length=120, hint="Name")
     _write_field(
         ctx, f"name:{job_id}", job_id, lambda v: {"name": v}, name, job.get("name") or ""
     )

@@ -85,7 +85,13 @@ def tick() -> None:
     SIDEBAR_W = motion.value(_SIDEBAR_KEY, SIDEBAR_TARGET, duration=tokens.DUR_BASE)
 
 
-PANE_PADDING = 5.0  # between a pane's border and its content
+# Between a pane's border and its content. 5 was the most utilitarian number in
+# the codebase: it made a pane's contents start one pixel-and-a-bit from the
+# hairline around them, which is what a mixer strip wants and not what a form
+# does. SP_3 rather than the window's own SP_4 (UX.md Phase 2) because a pane is
+# already inside the host window's gutter -- matching it would double the inset
+# on the two sidebars, which are the width-constrained case.
+PANE_PADDING = tokens.SP_3
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
 

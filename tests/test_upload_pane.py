@@ -82,11 +82,15 @@ def test_an_unreadable_file_becomes_a_readable_toast(tmp_path):
 
 class _Ctx2D:
     def __init__(self, **form) -> None:
-        from warlock.studio.state import default_form_2d
+        from warlock.studio.state import AppState, default_form_2d
 
-        self.state = SimpleNamespace(
-            form_2d={**default_form_2d(), **form}, remember_prompt=lambda p: None
-        )
+        # A real ``AppState`` for the parts that are state rather than stubs:
+        # ``generate`` clears the field-error rings before it submits (UX.md
+        # Phase 3), and a namespace that merely happens to carry ``form_2d``
+        # would have to grow a no-op for every method the pane learns to call.
+        state = AppState()
+        state.form_2d = {**default_form_2d(), **form}
+        self.state = state
         # No active profile is ever set, so anchor_kwargs's consultation of
         # ctx.settings / ctx.svc.config short-circuits before either is read
         # for real -- these only need to exist, the same as on the live

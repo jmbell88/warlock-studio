@@ -39,9 +39,18 @@ fragment — along with its token count and how many chunks it was split into. I
 third of a second after you stop typing, computed on a background thread because counting tokens
 means loading a tokenizer.
 
+## More options
+
+The pane opens on the short path: the preset picker, the Object / Seamless tile switch, the prompt,
+and **Run** — how many references and which seed. Everything else lives behind **More options**, one
+reveal that remembers whether you left it open. Nothing is removed by that; while it is closed the
+line under it names what is inside and how many of those fields are set, so a form carrying a style
+and a conditioning image does not look like an empty one. A refusal that names a control inside the
+fold opens it for you.
+
 ## Guidance fields
 
-Under the prompt are twelve optional selects, grouped by what they describe:
+Under **More options** are twelve optional selects, grouped by what they describe:
 
 | Group | Fields |
 | --- | --- |
@@ -67,11 +76,12 @@ answer rather than one with a settled answer.
 
 Two of these have effects beyond the text. **Category** supplies a default physical size when you
 do not give one — a prop is 0.4 m, a weapon 1 m, a character 1.8 m, a vehicle 4.5 m, an environment
-piece 8 m, a consumable 0.15 m. And **platform detail**, which sits on its own below the groups,
-is a hint about how much fine detail to draw — 2D or 3D, defaulting to 3D. It is *not* the mesh
-resolution; that is the 3D pane's own platform control, and the marker beside this one says so.
+piece 8 m, a consumable 0.15 m. And **detail brief**, which sits on its own below the groups,
+is a hint about how much fine detail to draw — 2D or 3D, defaulting to 3D. It is a *brief*, not a
+measurement: it goes into the prompt and the sampler may or may not honour it. How much geometry
+the mesh gets is the 3D pane's **Mesh resolution**, which is a different control entirely.
 
-Below the guidance groups you will also find **preset**, a picker of four complete shipped recipes
+At the top of the pane is **preset**, a picker of four complete shipped recipes
 (hand-painted fantasy prop, PS1 low-poly character, sci-fi hero weapon, modern consumable pickup).
 Choosing one fills in the prompt and every field it names and then gets out of the way — everything
 it set stays visible and editable, and the picker shows "Custom" the moment you change anything. A

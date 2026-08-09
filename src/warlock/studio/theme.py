@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import tokens
+from . import icons, tokens
 
 
 def __getattr__(name: str) -> int:
@@ -50,12 +50,21 @@ STATUS_COLORS = {
 # Glyphs rather than coloured dots alone: colour is the fast read, but a pill
 # that only differs by hue is unreadable to a chunk of people and unprintable
 # in a bug report.
+#
+# Lucide rather than the ASCII ``"..." / ">>" / "OK" / "!" / "x"`` these were
+# (UX.md Phase 2). The double encoding is the point and survives the change --
+# what improved is that the second channel is now a *shape* somebody can name:
+# ``OK`` in green and ``!`` in red differ by two letters and a hue, where a
+# check, a triangle and a circled cross differ by outline at any size and in
+# any palette. Chosen for that: no two of the five share a silhouette, and the
+# two that mean "this stopped" (error, cancelled) are deliberately the pair
+# furthest apart, because a cancel is the user's decision and a failure is not.
 STATUS_GLYPHS = {
-    "queued": "...",
-    "running": ">>",
-    "done": "OK",
-    "error": "!",
-    "cancelled": "x",
+    "queued": icons.ELLIPSIS,
+    "running": icons.LOADER,
+    "done": icons.CHECK,
+    "error": icons.TRIANGLE_ALERT,
+    "cancelled": icons.CIRCLE_X,
 }
 
 
@@ -106,9 +115,14 @@ def apply(imgui: Any) -> None:
     style.child_border_size = sp(tokens.BORDER)
     style.frame_border_size = 0.0
     style.popup_border_size = sp(tokens.BORDER)
-    style.window_padding = (sp(tokens.SP_3), sp(tokens.SP_3))
+    # Apple-scale gutters (UX.md Phase 2): 12 was the number a dense DAW panel
+    # wants, and beside ``layout.PANE_PADDING``'s 5 it was the reason a form
+    # read as pressed against the panel holding it. Both are steps of the scale
+    # now -- SP_4 out here, SP_3 inside a pane -- so the two gutters are one
+    # rhythm rather than two arbitrary numbers.
+    style.window_padding = (sp(tokens.SP_4), sp(tokens.SP_4))
     style.frame_padding = (sp(9), sp(6))
-    style.item_spacing = (sp(tokens.SP_2), sp(7))
+    style.item_spacing = (sp(tokens.SP_2), sp(tokens.SP_2))
     style.item_inner_spacing = (sp(6), sp(5))
     style.cell_padding = (sp(tokens.SP_1), sp(3))
     style.indent_spacing = sp(tokens.SP_4)

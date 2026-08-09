@@ -10,6 +10,23 @@ it — a stored mode would be a value with no reader, and the app would drift in
 itself about where it opens. The mode switch along the top always has a Home entry, so the chooser
 is one click away from anywhere.
 
+## The first-run card
+
+The first time you open the app there is a card above the tiles saying to start with **New 2D
+Image**, because the order of the two pipelines is the one fact that makes the rest of the screen
+make sense: a prompt becomes a reference image, and that reference becomes a mesh. Press **Got it**
+and it never comes back — the dismissal is stored, so it is gone for good rather than for the
+session.
+
+## Continue
+
+When there is a finished asset to come back to, a **Continue** card appears in front of the tiles
+and opens it in the pane that made it — 2D for a reference or a tile, 3D for anything else. It is
+the selected asset when something is selected and the newest finished one otherwise, and it is
+worked out from the library rather than remembered, so an asset you delete simply stops being the
+answer. Home still remembers no *mode*; resuming the work is a different promise from resuming a
+place.
+
 ## The tiles
 
 Each tile is a whole clickable card, not a button with a label beside it.

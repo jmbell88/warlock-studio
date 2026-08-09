@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from .. import doctor, vram
@@ -59,6 +60,10 @@ class Runtime:
         self.worker: Any = None
         self.svc: WarlockService | None = None
         self.tasks = TaskRunner()
+        # What ``start`` narrates to, replaced for the duration of a start that
+        # was given a listener. A no-op by default rather than an optional
+        # attribute, so every stage below can call it unconditionally.
+        self._note: Callable[[str], None] = lambda _text: None
         self.checks: list[doctor.Check] = []
         self.vram_plan: vram.Plan | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -67,7 +72,20 @@ class Runtime:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def start(self) -> WarlockService:
+    def start(self, note: Callable[[str], None] | None = None) -> WarlockService:
+        """Bring everything up. ``note`` is told what is happening, if anything
+        is listening (UX.md Phase 4).
+
+        A plain callback rather than a progress object: the caller is the splash
+        and what it wants is one line of prose, so a percentage would be a
+        number invented here to be rendered as a bar nothing can size honestly.
+        Every stage below is one *observable* pause on a cold start -- the
+        doctor's path probes and the worker's construction are seconds each --
+        and a stage that has never taken measurable time deliberately gets no
+        line, because a message that flickers past is noise rather than
+        narration.
+        """
+        self._note = note or (lambda _text: None)
         try:
             return self._start()
         except BaseException:
@@ -81,6 +99,7 @@ class Runtime:
             raise
 
     def _start(self) -> WarlockService:
+        self._note("Opening the job store")
         self.store = JobStore(self.config.db_path)
         # A job still 'running' at process start was orphaned by a crash or an
         # unclean shutdown -- surface it instead of silently re-running a
@@ -96,6 +115,7 @@ class Runtime:
         # Their rows say "still checking"; the header health poll's first tick
         # re-runs them on a task thread and replaces ``checks`` atomically,
         # which is the delivery path a mid-session change already uses.
+        self._note("Checking this install")
         self.checks = doctor.run_checks(self.config, probe_slow=False)
         for check in self.checks:
             if not check.ok:
@@ -106,8 +126,10 @@ class Runtime:
         # documented "read once at startup" invariant: queue.py goes on
         # reading a plain bool off the config and never learns that it was
         # resolved.
+        self._note("Measuring the graphics card")
         self.vram_plan = self._resolve_vram()
 
+        self._note("Starting the worker")
         self._ready.wait(10.0)
         if self._loop is None:
             raise RuntimeError("the worker loop did not start")

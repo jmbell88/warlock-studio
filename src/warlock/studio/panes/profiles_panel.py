@@ -140,8 +140,10 @@ def _editor(ctx: Any) -> None:
     )
 
     widgets.section("Model")
-    draft["base_model"] = widgets.combo("Model", draft.get("base_model", ""), ctx.base_models)
-    draft["style_lora"] = widgets.combo(
+    draft["base_model"] = widgets.labeled_combo(
+        "Model", draft.get("base_model", ""), ctx.base_models
+    )
+    draft["style_lora"] = widgets.labeled_combo(
         "Style LoRA", draft.get("style_lora", ""), ctx.style_loras
     )
     if draft["style_lora"]:

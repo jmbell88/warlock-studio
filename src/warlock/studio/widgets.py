@@ -14,7 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import fonts, icons, motion, theme, tokens
+from . import effects, fonts, icons, motion, theme, tokens
 from . import state as app_state
 from .tokens import sp
 
@@ -157,11 +157,47 @@ def cost_note(text: str) -> None:
 
 
 def section(label: str) -> None:
-    """A small heading with breathing room above it."""
-    imgui.dummy((0, sp(tokens.SP_1)))
-    with fonts.small(imgui):
-        text_colored(theme.MUTED, label.upper())
-    imgui.separator()
+    """A heading, with space above it instead of a rule under it.
+
+    Two changes, one argument (UX.md Phase 2). **The separator is gone**: a
+    rule is a line drawn where the rhythm failed, and a section that needs one
+    to be legible is a section too close to what precedes it -- so the gap
+    above went from ``SP_1`` (4 px, less than one line spacing) to ``SP_6``,
+    which is what actually says "a new thing starts here".
+
+    **And the label is sentence-case Medium at body size**, not small-caps
+    muted. Field labels stay small-caps -- they earn it in a dense form, where
+    a column of them has to read as chrome around the values. A *section*
+    heading is the thing they are grouped under, and drawing both registers the
+    same way flattened exactly the hierarchy the headings exist to create: on
+    the 2D pane, "SUBJECT" and "CATEGORY" were the same size, weight and
+    colour, one indent apart.
+    """
+    # ...except at the very top of a pane, where the gutter is already there
+    # and a heading pushed down by both would start a fifth of the way into the
+    # scroller. ``get_cursor_pos`` is window-relative, so "still at the padding"
+    # is the test for "nothing has been drawn above me".
+    if imgui.get_cursor_pos_y() > imgui.get_style().window_padding.y + 1.0:
+        imgui.dummy((0, sp(tokens.SP_6)))
+    with fonts.label(imgui):
+        imgui.text(label)
+
+
+def pane_title(label: str) -> None:
+    """What a whole pane is, at heading size (UX.md Phase 2).
+
+    A rung above :func:`section`, which names a group *inside* a pane -- and
+    the reason the ramp needed a fourth step at all: with the scale stopping at
+    16 the loudest thing a screen could say was a section heading, so a pane
+    that titled itself did it at exactly the weight of the six headings under
+    it. One loud thing per screen, and in a full-window pane this is it.
+
+    No gap above, unlike ``section``: this is the first thing in its pane, and
+    the window's own gutter is already there.
+    """
+    with fonts.heading(imgui):
+        imgui.text(label)
+    imgui.dummy((0, sp(tokens.SP_2)))
 
 
 def _chip(label: str, colour: tuple[float, float, float, float], fill: float) -> None:
@@ -354,6 +390,16 @@ def combo(label: str, value: str, options: list[tuple[str, str]], width: float =
     Keys rather than indices because every one of these is a guidance taxonomy
     whose order is free to change; an index would silently become a different
     option the next time a table gained an entry.
+
+    **``label`` should be ``##``-prefixed here; a visible name goes through
+    :func:`labeled_combo`.** imgui draws a combo's label to its *right*, and the
+    default width is ``-1``, so a named combo in a sidebar puts its name past
+    the content region -- where ``same_line`` clips instead of wrapping, i.e.
+    the name is simply not drawn. Nine call sites were doing that (Blend,
+    Symmetry, Model, Style LoRA, Budget, Frame, Lighting, From, To), which is
+    why this is written down here rather than fixed nine times: the rule was
+    already stated in ``settings_3d`` and it was stated somewhere nobody
+    reaching for ``combo`` would read it.
     """
     keys = [key for key, _ in options]
     labels = [text for _, text in options]
@@ -520,6 +566,287 @@ def drop_flash(state: Any, key: str) -> float:
     return (1.0 - age / DROP_FLASH_SECONDS) ** 0.6
 
 
+def shadow(
+    low: Any,
+    high: Any,
+    radius: float,
+    elevation: str = "resting",
+    *,
+    strength: float = 1.0,
+    draw: Any = None,
+) -> None:
+    """The one shadow, under one rectangle (UX.md Phase 2).
+
+    ``low``/``high`` are screen-space corners, in the ``(x, y)``-indexable shape
+    :func:`ring` already takes; ``radius`` is the surface's own corner radius,
+    which each band grows with so a rounded card does not get a square shadow.
+    ``elevation`` names how far off the surface behind it this one sits --
+    ``resting`` (a card), ``raised`` (a popup, the palette) or ``overlay`` (a
+    modal) -- and is the whole reason this is a helper rather than four lines in
+    ``card``: depth is one physical story, and three call sites each inventing a
+    pair of alphas is three stories.
+
+    ``strength`` scales the alphas alone, for a surface whose shadow deepens as
+    it lifts. It is *not* the elevation: raising a card on hover moves it
+    further from the panel, but a hovered card is still resting furniture.
+
+    Every band is **stroked**, not filled -- see ``tokens.SHADOW_STEPS``. That
+    is what lets the same recipe serve a card, whose shadow is drawn before the
+    surface, and an imgui window, whose background ``begin`` has already
+    painted by the time anything else can draw.
+    """
+    if strength <= 0.0:
+        return
+    scale = tokens.ELEVATION.get(elevation, 1.0)
+    draw = draw if draw is not None else imgui.get_window_draw_list()
+    if _sliced_shadow(low, high, radius, scale, strength, draw):
+        return
+    for inner, outer, alpha in tokens.SHADOW_STEPS:
+        mid = sp((inner + outer) * 0.5) * scale
+        thick = sp(outer - inner) * scale
+        drop = sp(outer * tokens.SHADOW_DROP) * scale
+        draw.add_rect(
+            (low[0] - mid, low[1] - mid + drop),
+            (high[0] + mid, high[1] + mid + drop),
+            imgui.get_color_u32((0.0, 0.0, 0.0, alpha * min(strength, 1.0))),
+            radius + mid,
+            thickness=thick,
+        )
+
+
+def _sliced_shadow(
+    low: Any, high: Any, radius: float, scale: float, strength: float, draw: Any
+) -> bool:
+    """:func:`shadow` from the blurred sprite. -> whether it drew anything.
+
+    Eight quads, never nine: the centre is left alone so this one recipe can be
+    drawn *under* a card and *over* an already-painted window background, which
+    is the property the stroked bands had and the reason they were stroked.
+
+    Returns False -- and the bands run instead -- in the two cases the slice
+    cannot serve. There is no sprite (switched off, no renderer, a build that
+    failed once), or the surface is smaller than its own corners: a shadow
+    whose corner blocks would overlap has to either shrink the blocks, which
+    distorts the blur, or draw them twice, which doubles the alpha exactly at
+    the corners. Neither is worth having, and the case is rare -- a control
+    smaller than about 40 px square at ``resting``.
+    """
+    from . import ninepatch, shadows
+
+    spread = sp(shadows.SPREAD) * scale
+    built = shadows.sprite(radius, spread)
+    if built is None:
+        return False
+    # The sprite is built from the *rounded* pair, so the reach it actually has
+    # is the rounded spread rather than the one asked for. Reading it back off
+    # the sprite's own corner (which is radius + spread) rather than trusting
+    # the argument is what keeps the drawn rect and the pixels in agreement to
+    # the pixel, which is the whole reason a nine-slice looks like a blur.
+    reach = float(built.corner) - float(round(radius))
+    drop = sp(shadows.SPREAD * tokens.SHADOW_DROP) * scale
+    colour = imgui.get_color_u32((0.0, 0.0, 0.0, shadows.PEAK * min(strength, 1.0)))
+    return ninepatch.paint(
+        draw,
+        built,
+        (low[0] - reach, low[1] - reach + drop),
+        (high[0] + reach, high[1] + reach + drop),
+        colour,
+        centre=False,
+    )
+
+
+def window_shadow(elevation: str = "raised", *, radius: float | None = None) -> None:
+    """:func:`shadow` under the imgui window being drawn right now.
+
+    Called just after ``begin``, and it has to escape the window's clip
+    rectangle to do anything at all -- the shadow is by definition outside the
+    window. ``push_clip_rect_full_screen`` is the render-level scissor and
+    touches no hit-testing, so nothing about where clicks land changes.
+
+    The rect is *this* frame's position and last frame's size, which for an
+    ``always_auto_resize`` popup is one frame stale on the frame it appears --
+    the frame its alpha is near zero anyway (:func:`popover_enter`).
+
+    ``radius`` has to be passed by any caller that pushed its own rounding for
+    this window, because the push is scoped to ``begin`` and is gone by the time
+    this runs -- reading the global style would draw a 6 px shadow around a 10
+    px surface, which shows as four bright corners.
+    """
+    if not _has_context():
+        return
+    try:
+        draw = imgui.get_window_draw_list()
+        pos, size = imgui.get_window_pos(), imgui.get_window_size()
+    except RuntimeError:
+        # A context but no *frame*: a headless test driving ``dialogs`` through
+        # its own stand-in imgui still reaches the real module here, and after
+        # some other test in the session has made a context that is an assert
+        # rather than the crash ``_has_context`` catches. Two guards because
+        # there are two failure modes, not because one of them is belt-and-
+        # braces: neither answers for the other.
+        return
+    draw.push_clip_rect_full_screen()
+    shadow(
+        (pos.x, pos.y),
+        (pos.x + size.x, pos.y + size.y),
+        imgui.get_style().window_rounding if radius is None else radius,
+        elevation,
+        draw=draw,
+    )
+    draw.pop_clip_rect()
+
+
+def surface_fill(
+    draw: Any,
+    low: Any,
+    high: Any,
+    radius: float,
+    colour: Any,
+    *,
+    border: Any = None,
+) -> bool:
+    """A filled surface with continuous-curvature corners. -> whether it drew.
+
+    The caller is expected to have cleared whatever imgui would have painted
+    (a child's ``child_bg``, a window's background alpha) *before* asking,
+    because this replaces the fill rather than sitting over it -- and to be
+    ready for a False, which means the pre-Phase-5 rounded rect should be drawn
+    instead: the effect is off, the radius is below the size the difference
+    shows at, or the surface is smaller than its own corners.
+
+    The hairline is drawn as the *same* shape one border-width larger rather
+    than as an outline. A superellipse fill under a circular-arc stroke would
+    disagree with itself by a pixel or two at exactly the four places this
+    whole item is about, and imgui's own border is a circular arc.
+    """
+    from . import ninepatch, surfaces
+
+    built = surfaces.sprite(radius)
+    if built is None:
+        return False
+    low = (low[0], low[1]) if not hasattr(low, "x") else (low.x, low.y)
+    high = (high[0], high[1]) if not hasattr(high, "x") else (high.x, high.y)
+    if border is not None:
+        edge = sp(tokens.BORDER)
+        if not ninepatch.paint(draw, built, low, high, imgui.get_color_u32(border)):
+            return False
+        low = (low[0] + edge, low[1] + edge)
+        high = (high[0] - edge, high[1] - edge)
+    return ninepatch.paint(draw, built, low, high, imgui.get_color_u32(colour))
+
+
+def frosted() -> bool:
+    """Whether the next window should ask for a blurred backdrop.
+
+    Asked *before* ``begin``, because the caller has to clear the window's own
+    background alpha there and cannot un-paint it afterwards. It is the same
+    question :func:`window_backdrop` answers again after ``begin`` -- and that
+    is why the second call paints a solid fill when the backdrop is not ready:
+    a window whose background was cleared on this answer and whose backdrop
+    then failed to arrive would be a floating surface with nothing in it.
+    """
+    from . import vibrancy
+
+    return _has_context() and vibrancy.available()
+
+
+def window_backdrop(*, radius: float | None = None, tint: float = 0.8) -> bool:
+    """Blur what is behind the window being drawn right now. -> did it?
+
+    Called immediately after ``begin``, beside :func:`window_shadow`, and it
+    replaces the window's own background rather than sitting under it: imgui
+    paints that during ``begin``, so the only way to be *behind* it is to cover
+    it. The caller therefore sets the window's background alpha to zero, and
+    what lands here is the blurred copy plus a tint of the fill colour -- which
+    is what a translucent material is.
+
+    ``tint`` is how much of the surface colour survives over the blur. High
+    enough that text stays readable over a bright backdrop, low enough that the
+    blur is visibly there: the two failure modes are a panel you cannot read
+    and a panel indistinguishable from the solid one it replaced.
+    """
+    from . import vibrancy
+
+    if not _has_context() or not vibrancy.available():
+        return False
+    try:
+        pos, size = imgui.get_window_pos(), imgui.get_window_size()
+    except RuntimeError:
+        return False
+    ref = vibrancy.backdrop()
+    low = (pos.x, pos.y)
+    high = (pos.x + size.x, pos.y + size.y)
+    rounding = imgui.get_style().window_rounding if radius is None else radius
+    draw = imgui.get_window_draw_list()
+    if ref is None:
+        # Nothing captured yet -- the first frames of a session, or a capture
+        # that has not come round since the window was resized. The caller has
+        # already cleared this window's background on ``frosted``'s word, so
+        # this paints the fill imgui would have.
+        draw.add_rect_filled(
+            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_2)), rounding
+        )
+        return False
+    window = imgui.get_io().display_size
+    uv_min, uv_max = vibrancy.uv_for(low, high, (window[0], window[1]))
+    draw.add_image_rounded(
+        ref,
+        low,
+        high,
+        uv_min,
+        uv_max,
+        imgui.get_color_u32((1.0, 1.0, 1.0, 1.0)),
+        rounding,
+    )
+    draw.add_rect_filled(
+        low,
+        high,
+        imgui.get_color_u32(theme.rgba(theme.ELEV_2, tint)),
+        rounding,
+    )
+    return True
+
+
+def _has_context() -> bool:
+    """Whether there is an imgui context to draw into at all.
+
+    ``fonts`` and ``motion`` both state this rule and both answer it their own
+    way; the three helpers below need it because they are the only ones in this
+    module reached by a caller that has substituted its *own* imgui. A headless
+    test driving ``dialogs`` through a stand-in still lands in here on the real
+    module, and ``push_style_var`` with no context is not an exception -- it is
+    an access violation, because imgui's null check is an assert compiled out of
+    the release build.
+    """
+    return imgui.get_current_context() is not None
+
+
+def push_surface_rounding() -> float:
+    """Round the *next* window like a surface rather than like a control.
+
+    -> the physical radius pushed, which is what :func:`window_shadow` then has
+    to be told (the push is scoped around ``begin`` and gone by then).
+
+    Both rounding vars, because a modal is a popup and imgui rounds a popup by
+    ``popup_rounding`` while rounding everything else by ``window_rounding`` --
+    a caller that pushed one and got the other would be debugging a corner.
+    Paired with :func:`pop_surface_rounding` immediately after ``begin``: window
+    rounding latches when the background is painted, so holding the push for the
+    whole body would round every child and tooltip inside it too.
+    """
+    radius = sp(tokens.RADIUS_L)
+    if not _has_context():
+        return radius
+    imgui.push_style_var(imgui.StyleVar_.window_rounding.value, radius)
+    imgui.push_style_var(imgui.StyleVar_.popup_rounding.value, radius)
+    return radius
+
+
+def pop_surface_rounding() -> None:
+    if _has_context():
+        imgui.pop_style_var(2)
+
+
 def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> None:
     """An outline around a rectangle, drawn into the current window.
 
@@ -535,6 +862,32 @@ def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> 
         sp(4),
         thickness=sp(thick),
     )
+
+
+def field_error(state: Any, field: str) -> bool:
+    """Ring the control just drawn, and say why, if a refusal named it (UX.md
+    Phase 3). -> whether anything was drawn.
+
+    Called immediately after the control, because it reads ``get_item_rect_*``
+    -- which is the whole reason this is a function taking a *name* rather than
+    a wrapper around every widget: the panes draw combos, sliders, radio rows
+    and hand-built segmented controls, and one shared "just drew a thing" hook
+    covers all of them where a wrapper per widget type would not.
+
+    One shared helper so every pane says it the same way. The aggregate block
+    above Generate (``settings_2d.validate``) stays: it is the list of
+    everything wrong, which is what somebody looking at a disabled button
+    wants, and this is the pointer to *which control* -- two views of one fact,
+    and the pointer is the half that was missing.
+    """
+    message = (getattr(state, "field_errors", None) or {}).get(field)
+    if not message:
+        return False
+    ring(imgui.get_item_rect_min(), imgui.get_item_rect_max(), theme.ERR, 0.9, thick=1.5)
+    imgui.push_text_wrap_pos(0.0)
+    text_colored(theme.ERR, message)
+    imgui.pop_text_wrap_pos()
+    return True
 
 
 def header(label: str, default_open: bool = True, persist_key: str | None = None) -> bool:
@@ -626,10 +979,20 @@ def popover_enter(key: str, appearing: bool) -> tuple[float, float]:
     too late for the alpha the same ``begin`` paints with.
     """
     motion_key = f"popover/{key}"
+    if not effects.SPRINGS:
+        if appearing:
+            motion.restart(motion_key)
+        t = motion.ease(motion_key, tokens.DUR_FAST)
+        return t, sp(POPOVER_RISE) * (1.0 - t)
+    # The sprung version (UX.md Phase 5): stated at 0 on the appearing frame and
+    # sprung to 1, so the surface comes to rest by settling rather than by
+    # running out of ramp. The alpha is *clamped* and the rise is not -- a
+    # spring goes a little past 1, which for an opacity is a value that does not
+    # exist and for a position is exactly the overshoot being asked for.
     if appearing:
-        motion.restart(motion_key)
-    t = motion.ease(motion_key, tokens.DUR_FAST)
-    return t, sp(POPOVER_RISE) * (1.0 - t)
+        motion.seed(motion_key, 0.0)
+    t = motion.spring(motion_key, 1.0, duration=tokens.DUR_BASE)
+    return min(max(t, 0.0), 1.0), sp(POPOVER_RISE) * (1.0 - t)
 
 
 # Which plain popups were open last frame. Module state keyed by name, exactly
@@ -724,8 +1087,16 @@ def grid_width(columns: int) -> float:
 
 
 def help_marker(text: str) -> None:
-    same_line_or_wrap(imgui.calc_text_size("(?)").x)
-    text_colored(theme.MUTED, "(?)")
+    """The hover-for-more mark beside a control.
+
+    A Lucide info glyph rather than the literal ``"(?)"`` it was (UX.md Phase
+    2) -- and the *same* glyph the manual's own help button uses, which is the
+    half worth stating: the two marks meant "there is more about this" and
+    "there is a chapter about this", drawn as three ASCII characters and a
+    circled i, so nothing about them said they were relatives.
+    """
+    same_line_or_wrap(imgui.calc_text_size(icons.INFO).x)
+    text_colored(theme.MUTED, icons.INFO)
     if imgui.is_item_hovered():
         imgui.set_tooltip(text)
 
@@ -744,31 +1115,68 @@ def hint_text(text: str) -> None:
     imgui.pop_text_wrap_pos()
 
 
-def segmented_control(seg_id: str, options: list[tuple[str, str]], current: str) -> str:
+def segmented_control(
+    seg_id: str,
+    options: list[tuple[str, str]],
+    current: str,
+    *,
+    breaks: Any = (),
+) -> str:
     """One rounded track with a sliding highlight; the macOS mode switch.
 
     Each segment is an ``invisible_button`` with a stable id
     (``{seg_id}/{key}``), which is what keeps this drivable from tests. The
     highlight's position animates; the click is honoured immediately.
+
+    ``breaks`` is a set of indices *after* which the track is split (UX.md
+    Phase 2). Splitting the track rather than merely spacing the segments is
+    the point: a gap inside one continuous track reads as a missing segment,
+    where two tracks read as two groups -- which is what the app's ten modes
+    needed, since three of them are places and seven are workspaces and a flat
+    row said they were all the same kind of thing. The pill still slides across
+    a break, because it is one selection over all of them.
     """
     draw = imgui.get_window_draw_list()
     pad_x, pad_y = sp(14), sp(6)
+    gap = sp(tokens.SP_2)
+    breaks = frozenset(breaks)
     with fonts.label(imgui):
         widths = [imgui.calc_text_size(label).x + pad_x * 2 for _, label in options]
         height = imgui.get_text_line_height() + pad_y * 2
         origin = imgui.get_cursor_screen_pos()
-        draw.add_rect_filled(
-            origin,
-            (origin.x + sum(widths), origin.y + height),
-            imgui.get_color_u32(theme.rgba(theme.ELEV_1)),
-            height * 0.5,
-        )
+        # One offset per segment, with a gap opened at each break.
+        offsets: list[float] = []
+        cursor = 0.0
+        for index, width in enumerate(widths):
+            offsets.append(cursor)
+            cursor += width + (gap if index in breaks else 0.0)
+        total = cursor
+        # One track per group. ``start`` walks the group boundaries, which are
+        # the breaks plus the end of the list.
+        start = 0
+        for index in range(len(options)):
+            if index not in breaks and index != len(options) - 1:
+                continue
+            draw.add_rect_filled(
+                (origin.x + offsets[start], origin.y),
+                (origin.x + offsets[index] + widths[index], origin.y + height),
+                imgui.get_color_u32(theme.rgba(theme.ELEV_1)),
+                height * 0.5,
+            )
+            start = index + 1
         # The sliding pill, at last frame's animated position.
-        offsets = [sum(widths[:i]) for i in range(len(options))]
         keys = [key for key, _ in options]
         index = keys.index(current) if current in keys else 0
-        x = motion.value(f"{seg_id}/x", offsets[index], duration=tokens.DUR_FAST)
-        w = motion.value(f"{seg_id}/w", widths[index], duration=tokens.DUR_FAST)
+        # Sprung rather than eased (UX.md Phase 5). This is the one control in
+        # the app whose target routinely changes *while it is still moving* --
+        # Alt+2 then Alt+5 before it has arrived -- and an exponential approach
+        # has no velocity to carry through the re-aim, so it decelerated into
+        # the first target and then started again towards the second. The
+        # duration is the base rather than the fast one because a spring spends
+        # part of it settling, and DUR_FAST left the overshoot looking like a
+        # twitch instead of a stop.
+        x = motion.spring(f"{seg_id}/x", offsets[index], duration=tokens.DUR_BASE)
+        w = motion.spring(f"{seg_id}/w", widths[index], duration=tokens.DUR_BASE)
         draw.add_rect_filled(
             (origin.x + x + sp(2), origin.y + sp(2)),
             (origin.x + x + w - sp(2), origin.y + height - sp(2)),
@@ -797,7 +1205,7 @@ def segmented_control(seg_id: str, options: list[tuple[str, str]], current: str)
                 label,
             )
         imgui.set_cursor_screen_pos((origin.x, origin.y))
-        imgui.dummy((sum(widths), height))
+        imgui.dummy((total, height))
     return selected
 
 
@@ -1014,33 +1422,51 @@ def destructive_button(
 def card(card_id: str, size: tuple[float, float]):
     """An elevated child: soft shadow, raised fill, hover lift.
 
-    The shadow is two translucent rounded rects on the parent's draw list,
-    drawn *before* the child so they sit beneath it; hover state comes from
-    last frame via the motion dict, because this frame's hover is not known
-    until the child has been drawn.
+    The shadow is :func:`shadow` at ``resting``, on the parent's draw list and
+    drawn *before* the child so it sits beneath it; hover state comes from last
+    frame via the motion dict, because this frame's hover is not known until the
+    child has been drawn.
     """
     origin = imgui.get_cursor_screen_pos()
-    draw = imgui.get_window_draw_list()
-    radius = sp(tokens.RADIUS_M)
+    radius = sp(tokens.RADIUS_L)
     # Peeked, not advanced: the target is set after ``end_child``, once hover is
     # known. Reading through ``value`` (with a target of 0.0, which is what this
     # used to do) stepped the easing twice a frame and towards the wrong target
     # first, so a card took visibly longer to lift than to settle.
     lift = motion.peek(f"card/{card_id}/lift")
-    for grow, alpha in ((sp(3), tokens.SHADOW_OUTER), (sp(1), tokens.SHADOW_INNER)):
-        draw.add_rect_filled(
-            (origin.x - 0, origin.y + grow),
-            (origin.x + size[0], origin.y + size[1] + grow),
-            imgui.get_color_u32((0, 0, 0, alpha * (0.6 + 0.4 * lift))),
-            radius + grow * 0.5,
-        )
+    shadow(
+        (origin.x, origin.y),
+        (origin.x + size[0], origin.y + size[1]),
+        radius,
+        "resting",
+        strength=0.6 + 0.4 * lift,
+    )
+    imgui.push_style_var(imgui.StyleVar_.child_rounding.value, radius)
     # Interpolated rather than switched at 0.5: the shadow fades continuously
     # and the fill did not, so mid-hover the background popped a step while the
     # shadow was still on its way -- one visible artifact on the app's first
     # screen, six times over.
+    fill = theme.mix(theme.ELEV_1, theme.ELEV_2, lift)
+    # Continuous corners (UX.md Phase 5). The card is where this item earns its
+    # keep: it is the app's most numerous surface and the one drawn at
+    # ``RADIUS_L``, which is the radius the difference is visible at. Drawn on
+    # the *parent's* list before the child begins, exactly as the shadow is, so
+    # the child's own content lands over it -- and imgui's fill and border are
+    # both cleared, because a circular-arc hairline over a superelliptical fill
+    # disagrees with itself at precisely the four corners this is about.
+    squircle = surface_fill(
+        imgui.get_window_draw_list(),
+        origin,
+        (origin.x + size[0], origin.y + size[1]),
+        radius,
+        fill,
+        border=theme.rgba(theme.EDGE),
+    )
+    if squircle:
+        imgui.push_style_var(imgui.StyleVar_.child_border_size.value, 0.0)
     imgui.push_style_color(
         imgui.Col_.child_bg.value,
-        imgui.ImVec4(*theme.mix(theme.ELEV_1, theme.ELEV_2, lift)),
+        imgui.ImVec4(0.0, 0.0, 0.0, 0.0) if squircle else imgui.ImVec4(*fill),
     )
     # No scrollbar. A card is a fixed-size tile whose content is laid out to
     # fit, so a scrollbar in one is a symptom rather than an affordance -- and
@@ -1059,26 +1485,42 @@ def card(card_id: str, size: tuple[float, float]):
     finally:
         imgui.end_child()
         imgui.pop_style_color()
+        # Two vars when the squircle drew its own border, one otherwise: the
+        # count has to match what was pushed, and imgui asserts rather than
+        # forgives -- which on a release build is an access violation.
+        imgui.pop_style_var(2 if squircle else 1)
         hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_blocked_by_active_item.value)
         motion.value(f"card/{card_id}/lift", 1.0 if hovered else 0.0, duration=tokens.DUR_FAST)
 
 
 def empty_state(icon: str, title: str, hint: str = "") -> None:
-    """A centred nothing-here: what this region is for, and what to do next."""
+    """A centred nothing-here: what this region is for, and what to do next.
+
+    Three registers rather than one (UX.md Phase 4). It used to be three lines
+    of muted text at three sizes, which says "there is nothing here" in the
+    typography as well as in the words -- and an empty state is structurally
+    everywhere in this app (an empty viewport, an empty library, an empty
+    trash, a filter that matches nothing), so it is one of the most-seen
+    surfaces there is. The glyph stays muted and grows, the title takes the
+    body colour at heading size because it is the one loud thing in an
+    otherwise empty region, and the hint -- the half that says what to *do* --
+    stays small and muted under it.
+    """
     avail = imgui.get_content_region_avail()
     imgui.dummy((0, max(avail.y * 0.5 - sp(40), 0)))
 
-    def centred(text: str) -> None:
+    def centred(text: str, colour: int = theme.MUTED) -> None:
         width = imgui.calc_text_size(text).x
         imgui.set_cursor_pos_x(max((imgui.get_content_region_avail().x - width) * 0.5, 0))
-        text_colored(theme.MUTED, text)
+        text_colored(colour, text)
 
-    with fonts.title(imgui):
+    with fonts.display(imgui):
         centred(icon)
-    imgui.dummy((0, sp(4)))
-    with fonts.label(imgui):
-        centred(title)
+    imgui.dummy((0, sp(tokens.SP_2)))
+    with fonts.heading(imgui):
+        centred(title, theme.TEXT)
     if hint:
+        imgui.dummy((0, sp(tokens.SP_1)))
         with fonts.small(imgui):
             centred(hint)
 
@@ -1086,7 +1528,19 @@ def empty_state(icon: str, title: str, hint: str = "") -> None:
 # What a toast's ``action`` draws as. A name with no entry here draws nothing,
 # so an action the UI has not learned yet degrades to a plain toast rather than
 # to a button that does something unexpected.
-TOAST_ACTIONS = {"log": "Open log", "show": "Show", "review": "Review"}
+TOAST_ACTIONS = {
+    "log": "Open log",
+    "show": "Show",
+    "review": "Review",
+    # Forgiveness over interrogation (UX.md Phase 3). The soft-delete trash has
+    # existed since migration 9 and the card's Delete already asks nothing --
+    # the argument being that the trash *is* the confirmation. What was missing
+    # was the other half of that bargain: the trash is a place you have to know
+    # about and navigate to, so "it is undoable" was true and invisible. An
+    # Undo inside the toast's own dwell is the offer the no-confirm rule was
+    # trading on.
+    "undo": "Undo",
+}
 
 # How many toasts are on screen at once. The rest are counted, not dropped
 # (H69): five stacked notices already reach a third of the way up the window,
@@ -1168,12 +1622,20 @@ def toasts(
         if not sticky and not label:
             flags |= imgui.WindowFlags_.no_inputs.value
         if imgui.begin(f"##toast{id(toast)}", None, flags)[0]:
+            # Raised, and the alpha rides the toast's own fade: a shadow that
+            # stayed solid while the notice faded would be a rectangle of dark
+            # left hanging over the viewport for the last 300 ms of its life.
+            window_shadow("raised")
             if imgui.is_window_hovered(imgui.HoveredFlags_.child_windows.value):
                 # Paused, not extended: the clock resumes where it stopped when
                 # the mouse leaves.
                 toast.born += delta
             if sticky:
-                if imgui.small_button("x"):
+                # A real icon button rather than a small_button holding the
+                # letter x (UX.md Phase 2): ``small_icon_button`` is the idiom
+                # that centres a glyph in a square, and this was the last
+                # hand-spelled close in the app.
+                if small_icon_button(f"{icons.X}##toast-close{id(toast)}", "Dismiss"):
                     dismissed.append(toast)
                 imgui.same_line()
             if glyph:

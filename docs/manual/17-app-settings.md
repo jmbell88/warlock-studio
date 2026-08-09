@@ -20,6 +20,21 @@ of the renderer rather than of the palette, and making it follow the theme means
 into the render-skip key so a theme switch triggers a redraw. It is a known gap, deliberately left
 open. *Show frame rate* is the same toggle as `F10`.
 
+*Reduce motion* turns off every animation in the app at once — the mode transition, hover, the
+sliding mode switch, a popover's rise. Nothing disappears and nothing behaves differently: things
+arrive in place instead of travelling there, and the few effects that are a *fade* rather than a
+move (a toast's opacity, the acknowledgement flash when a file is dropped) keep their timing and
+lose their ramp.
+
+**Effects.** Four switches over the app's rendering, all on by default and all safe to turn off:
+*Soft shadows* (real blurred shadows under cards, popups and modals, from a texture built once at
+startup — off falls back to concentric outlines), *Translucent panels* (the command palette, the
+modals and the two header popups blur what is behind them instead of covering it), *Spring motion*
+(the mode switch's pill and a popover settle rather than easing to a stop; *Reduce motion* turns
+this off too), and *Continuous corners* (a card's corners are a superellipse rather than a circular
+arc). Each falls back on its own if the graphics side cannot provide it, so turning one off is a
+preference rather than a repair — the usual reason to is a machine where frames are tight.
+
 **Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
 rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make
 the app look broken — but one number cannot suit a 1600-wide window and a 5120 one. *Reset pane

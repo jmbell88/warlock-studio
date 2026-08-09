@@ -73,13 +73,21 @@ SP_6 = 24
 
 RADIUS_S = 4.0
 RADIUS_M = 6.0
+# The *surface* radius (UX.md Phase 2), and the split is what it is for: a
+# control is a small rect and reads as a rounded rectangle at 4-6, while a
+# surface -- a card, a modal, the palette window -- is large enough that the
+# same radius reads as square. It arrives here now because its readers do:
+# ``widgets.card``, ``dialogs``' two modals and the palette window. Phase 0
+# deliberately left it out for exactly one frame longer than that.
+RADIUS_L = 10.0
 BORDER = 1.0
-# There is deliberately still no RADIUS_L, and no SP_8. Both were written into
-# UX.md Phase 0's list and both belong to Phase 2: the surface radius is read by
-# cards, modals and the palette window when *they* change, and SP_8 by whatever
-# gap turns out to want 32. Adding them here first would have put two names in
-# this file with nothing reading them, which is the exact state the comment
-# above records deleting them from -- and which
+# There is deliberately still no SP_8. UX.md Phase 0's list named it and Phase
+# 0's own note deferred it to "whatever gap turns out to want 32"; the section
+# rhythm this phase settled on is SP_6 above a heading and SP_4 inside a form,
+# and the two 32-ish numbers left in the tree (``landing``'s icon column,
+# ``empty_state``'s vertical offset) are *positions* rather than gaps, which
+# that note already permits to stay literal. A name with no reader is the exact
+# state the comment above records deleting SP_6 and RADIUS_L from -- and which
 # ``test_the_spacing_scale_carries_only_the_steps_in_use`` fails on.
 
 # -- type scale --------------------------------------------------------------
@@ -180,7 +188,37 @@ def colour(name: str) -> int:
 # other attribute error normally.
 COLOUR_NAMES = frozenset(PALETTES["dark"])
 
-# Shadow alphas for the layered-rect elevation trick (no real blur in the
-# backend): outer wide + inner tight.
-SHADOW_OUTER = 0.22
-SHADOW_INNER = 0.34
+# -- depth -------------------------------------------------------------------
+#
+# **One shadow, told everywhere** (UX.md Phase 2). There is no blur in the
+# backend, so a blur is *approximated*: four concentric bands, each further out
+# and fainter than the last, whose union has a soft edge where the old two
+# hard-edged rects had a visible step. Each entry is ``(inner, outer, alpha)``
+# in design px from the surface's own edge, and the bands tile -- band n's
+# outer bound is band n+1's inner -- so there is no gap to read as a ring.
+# The alphas fall off roughly quadratically, which is what the tail of a
+# Gaussian does.
+#
+# ``widgets.shadow`` draws each band as a *stroked* rounded rect rather than a
+# filled one, which is what lets the same recipe sit under a card (drawn before
+# the surface) and under a popup window (drawn after it, because a window's
+# background is painted by ``begin``): a stroke leaves the interior alone, so
+# the second case does not darken the surface it is meant to lift.
+SHADOW_STEPS: tuple[tuple[float, float, float], ...] = (
+    (0.0, 1.5, 0.22),
+    (1.5, 3.0, 0.14),
+    (3.0, 5.5, 0.09),
+    (5.5, 9.0, 0.05),
+)
+
+# How far off the surface behind it a thing sits, as a multiplier on the bands
+# above. Three names rather than a number at each call site, because "a card
+# rests, a popup floats, a modal blocks" is the physical story and the numbers
+# are one reading of it. An unknown name reads as ``resting``: this comes from
+# a call site rather than a file, but a shadow is not worth an exception.
+ELEVATION: dict[str, float] = {"resting": 1.0, "raised": 1.7, "overlay": 2.6}
+
+# How far the whole shadow is displaced downward, as a fraction of a band's
+# outer bound: the light is above, so a raised surface casts below itself. Kept
+# small -- a shadow a reader can measure is an object hanging in the air.
+SHADOW_DROP = 0.35

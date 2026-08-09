@@ -20,7 +20,7 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, jobs_cache, motion, theme, tokens, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, SORTS, card_kind, primary_action
+from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action
 from ..tokens import sp
 
 log = logging.getLogger(__name__)
@@ -266,6 +266,64 @@ def _load_more(ctx: Any) -> None:
 
 
 # --- filters ----------------------------------------------------------------
+#
+# The query syntax used to be a four-line tooltip on the box (J87), which is the
+# shape of help that is only ever read by somebody who already suspects it is
+# there: a tooltip cannot be discovered by a user who has no reason to hover, it
+# says nothing while you are typing, and none of its four lines can be acted on.
+# UX.md Phase 4 replaces it with the prefixes themselves, under the box, while
+# the box has focus -- in-flow discovery, and one click puts a prefix in the
+# query rather than describing it.
+
+# Whether the box should be given the keyboard on the *next* frame, because a
+# chip was clicked on this one. Module state rather than ``AppState``: it lives
+# for one frame and is meaningless to anything that is not this pane, which is
+# the same argument ``_footer_px`` above makes.
+_prefix_focus = [False]
+
+# Whether the chip row is up. Latched, because clicking a chip takes the
+# keyboard *off* the box: a row drawn only while the box is active would vanish
+# on the mouse-down and the click would land on whatever the layout collapsed
+# up into that space.
+_prefix_open = [False]
+
+
+def append_prefix(text: str, field: str) -> str:
+    """The query with ``field:`` appended, ready to be typed into.
+
+    Pure, so the rules are assertable without a frame. Two of them matter. A
+    prefix already at the end is not doubled -- clicking ``tag:`` twice is a
+    mis-click, not a request for ``tag:tag:`` -- and a prefix is separated from
+    whatever came before it by a space, because ``rustytag:wood`` is one word
+    that parses as free text and quietly matches nothing.
+    """
+    head = text.rstrip()
+    if head.endswith(f"{field}:"):
+        return text
+    return f"{head} {field}:" if head else f"{field}:"
+
+
+def _prefix_chips(filters: Any, *, active: bool) -> None:
+    """The clickable prefixes under the filter box, while it is in use."""
+    if active:
+        _prefix_open[0] = True
+    if not _prefix_open[0]:
+        return
+    hovered = False
+    for index, field in enumerate(QUERY_FIELDS):
+        # Derived from the parser's own table, never re-typed: a chip offering a
+        # prefix ``parse_query`` does not know is a button that turns the query
+        # into free text, which is precisely the failure the prefixes exist to
+        # avoid being silent about.
+        label = f"{field}:"
+        if index:
+            widgets.same_line_or_wrap(imgui.calc_text_size(label).x + sp(tokens.SP_3))
+        if imgui.small_button(f"{label}##filter-prefix-{field}"):
+            filters.text = append_prefix(filters.text, field)
+            _prefix_focus[0] = True
+        hovered = hovered or imgui.is_item_hovered()
+    if not active and not hovered:
+        _prefix_open[0] = False
 
 
 def _filters(ctx: Any, jobs: list[Any]) -> None:
@@ -284,6 +342,12 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     """
     filters = ctx.state.filters
     imgui.set_next_item_width(-1)
+    if _prefix_focus[0]:
+        # A *command*, issued on the frame after a chip was clicked and never
+        # again -- ``focus.py``'s rule, and for the same reason: asking every
+        # frame puts the caret back at the start of the box mid-word.
+        _prefix_focus[0] = False
+        imgui.set_keyboard_focus_here()
     # The hint carries the syntax (J87). Nowhere else can: the box is
     # full-width in a sidebar of 260 to 360 design px, so a (?) beside it would
     # push it off the edge at any of them, and a line of help under it would
@@ -291,13 +355,7 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     filters.text = widgets.input_text(
         "##filter", filters.text, max_length=120, hint="Filter... (tag: status: kind:)"
     )
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Words narrow by name, prompt, tag or id -- every word must match.\n"
-            "tag:wood  status:error  kind:model  stage:reference  id:ab12  name:chest\n"
-            'Quote a value with a space: name:"a wooden chest".\n'
-            "A prefix that is not one of these is searched as ordinary text."
-        )
+    _prefix_chips(filters, active=imgui.is_item_active())
     spacing = imgui.get_style().item_spacing.x
     half = (imgui.get_content_region_avail().x - spacing) * 0.5
     filters.status = widgets.combo(
@@ -956,7 +1014,13 @@ def delete_asset(ctx: Any, job_id: str) -> None:
     ctx.state.checked.discard(job_id)
     if ctx.state.selected == job_id:
         ctx.state.select(None)
-    ctx.submit(f"delete:{job_id}", svc_jobs.trash_job, ctx.svc, job_id)
+    if ctx.submit(f"delete:{job_id}", svc_jobs.trash_job, ctx.svc, job_id):
+        # The offer, in the one place the user is already looking (UX.md Phase
+        # 3). Raised on submission rather than on completion, which is the same
+        # optimism the row's disappearance already shows: the toast dwells for
+        # seconds and ``restore_job`` on a row that never got trashed is a
+        # no-op refusal the runner already toasts.
+        ctx.toast("Moved to trash.", "info", "undo", job_id)
 
 
 def restore_asset(ctx: Any, job_id: str) -> None:

@@ -145,6 +145,40 @@ def _ui_scale(settings: Any) -> float:
     return min(max(value, lo), hi)
 
 
+def filter_shortcuts(
+    sections: list[tuple[str, list[tuple[str, str]]]], query: str
+) -> list[tuple[str, list[tuple[str, str]]]]:
+    """The shortcut list narrowed by ``query`` (UX.md Phase 4).
+
+    Pure, and through ``palette.match`` rather than a substring test, because
+    the popup and the command palette are two lists of the same kind of thing
+    and a second matcher is a second answer to "does 'ctz' find Ctrl+Z".
+
+    A row matches on its keys, its description **or its group's name**, which is
+    the rule that makes "clay" list Clay's fifteen bindings rather than the two
+    whose text happens to say the word. A group whose heading matched keeps all
+    of its rows for the same reason; a group with no surviving row is dropped
+    entirely, because a heading over nothing reads as a section that broke.
+
+    Rows are deliberately *not* re-ordered by score: within a group they are in
+    a hand-chosen order, and a filter that also reshuffles is two changes to
+    read at once.
+    """
+    from . import palette
+
+    if not query.strip():
+        return list(sections)
+    out = []
+    for title, rows in sections:
+        if palette.match(query, title) is not None:
+            out.append((title, list(rows)))
+            continue
+        kept = [row for row in rows if palette.match(query, f"{row[0]} {row[1]}") is not None]
+        if kept:
+            out.append((title, kept))
+    return out
+
+
 def _right_column(
     ctx: Any,
     lay: Any,
@@ -236,6 +270,10 @@ class App:
         # reason _viewport_hovered exists: the host window is fullscreen, so
         # io.want_capture_mouse is always true and cannot be the gate.
         self._build_hovered = False
+        # What is typed into the shortcuts popup's own filter box (UX.md Phase
+        # 4). Not persisted and cleared on every open: it is a way through
+        # sixty rows, not a preference about them.
+        self._shortcuts_query = ""
 
     # -- setup -------------------------------------------------------------
 
@@ -327,19 +365,23 @@ class App:
         self.viewer = Viewer(self.ctx)
         self._monitor_scale = monitor_scale
 
-    def setup_runtime(self) -> None:
+    def setup_runtime(self, note: Any = None) -> None:
         """The slow half, run on a plain worker thread behind the splash.
 
         Nothing here touches GL or imgui: it opens the store, runs the doctor
         checks, starts the worker's loop thread and probes bpy in a
         subprocess. ``Ctx`` is deliberately *not* built here -- it constructs
         textures, and textures belong to the frame thread's one context.
+
+        ``note`` is the splash's line, and it is optional because this is also
+        called with nothing listening -- by the tests, and by any caller that
+        starts a runtime without a window.
         """
-        self.svc = self.runtime.start()
+        self.svc = self.runtime.start(note)
 
     def setup_context(self) -> None:
         """The Ctx and the state it carries. Frame thread only, after both."""
-        from . import motion, textures
+        from . import effects, motion, textures
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
         from .settings import restore_form
@@ -364,6 +406,10 @@ class App:
         # animates its own startup at somebody who asked it not to.
         state.reduce_motion = bool(settings.get("reduce_motion"))
         motion.set_reduced(state.reduce_motion)
+        # The four Phase 5 switches, for the same reason and at the same
+        # moment: they are read on the first frame, and a flag applied after it
+        # would show one frame of an effect somebody turned off.
+        effects.load(settings)
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
         state.history = list(settings.get("history") or [])
@@ -553,8 +599,9 @@ class App:
 
         from . import imgui_backend, splash
 
-        started = splash.Startup(self.setup_runtime)
+        started = splash.Startup(lambda: self.setup_runtime(started.note))
         started.start()
+        splash.begin_fade()
         logo = splash.load_logo(self.ctx)
         clock = pygame.time.Clock()
         try:
@@ -582,7 +629,11 @@ class App:
                 io.display_size = size
                 io.display_framebuffer_scale = (1.0, 1.0)
                 imgui.new_frame()
-                splash.draw(logo, size)
+                # The load's own words rather than one fixed sentence (UX.md
+                # Phase 4): the hold is at least three seconds and up to ten on
+                # a cold start, and "Starting Warlock Studio..." spends all of
+                # it saying nothing that was not already obvious from the logo.
+                splash.draw(logo, size, started.message)
                 imgui.render()
                 self.ctx.screen.use()
                 self.ctx.clear(*_background())
@@ -740,6 +791,15 @@ class App:
         self.ctx.screen.use()
         self.ctx.clear(*_background())
         self.imgui_renderer.render(imgui.get_draw_data())
+        # After the render and before the flip: what is on the default
+        # framebuffer now *is* the composed frame, which is the whole reason
+        # the translucent surfaces sample a captured frame rather than asking
+        # for the draw list to be split in two (UX.md Phase 5). It captures
+        # nothing on a frame where a floating surface sampled it, so a panel
+        # never blurs itself.
+        from . import vibrancy
+
+        vibrancy.capture(self.ctx, io.display_size)
         self.app_ctx.settings.tick()
 
     # -- frame steps -------------------------------------------------------
@@ -748,6 +808,18 @@ class App:
         ctx = self.app_ctx
         for done in ctx.tasks.poll():
             if not done.ok:
+                # The refusal's *address*, where it has one (UX.md Phase 3).
+                # ``ServiceError.field`` has been carried since the class was
+                # written and read by nothing, so a refusal about the seed and
+                # one about the style LoRA arrived as the same red toast in the
+                # corner. Recorded here rather than in each pane because this is
+                # the one place every task failure passes through -- and the
+                # toast still goes up either way: the ring says *which control*,
+                # not *that something happened*, and a pane the user has since
+                # navigated away from can draw no ring at all.
+                named = getattr(done.error, "field", None)
+                if isinstance(named, str):
+                    ctx.state.note_field_error(named, done.message or "")
                 ctx.toast(done.message or "That did not work.", "error", done.action)
                 # A failed save must not leave the document locked: saving
                 # disables every editing control, so without this one bad
@@ -2825,6 +2897,13 @@ class App:
             if job is not None:
                 self._set_mode("2d" if job.get("stage") in ("reference", "tile") else "3d")
             ctx.state.library_scroll_to = arg
+        elif name == "undo" and arg:
+            from .panes import library
+
+            # Through the library's own restore, so the tick set and the
+            # selection are handled exactly as they are when the trash view's
+            # own Restore button is pressed.
+            library.restore_asset(ctx, arg)
         elif name == "review":
             # The sweep is not named here: Review rescans on arrival and its
             # run list is the thing that knows which directories exist. Landing
@@ -2843,30 +2922,11 @@ class App:
         # quitting and closing a tab can lose pixels, and both ask.
         selected = widgets.segmented_control(
             "mode-seg",
-            [
-                (key, f"{icon} {label}")
-                for key, label, icon in [*modes.MODES, modes.QUIT]
-            ],
+            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
             state.mode,
+            breaks=modes.GROUP_BREAKS,
         )
-        if selected == modes.QUIT[0]:
-            # An action rather than a mode, so ``state.mode`` is never assigned
-            # here -- cancelling leaves the switch exactly where it was. The
-            # window's X keeps today's behaviour (the unsaved-work chain, no
-            # extra question); only this button always asks, because a switch
-            # segment is a click away from every other mode.
-            from . import dialogs
-
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Quit Warlock Studio?",
-                    message="Anything still generating is cancelled.",
-                    confirm_label="Quit",
-                    cancel_label="Stay",
-                    on_confirm=self._request_quit,
-                )
-            )
-        elif selected != state.mode:
+        if selected != state.mode:
             self._set_mode(selected)
 
         # Right-aligned health dot: green when everything passed, amber when a
@@ -2913,6 +2973,8 @@ class App:
             + imgui.get_frame_height()  # the ? button is square
             + spacing
             + health_w
+            + spacing
+            + imgui.get_frame_height()  # and so is Quit
         )
         widgets.same_line_or_wrap(strip)
         avail = imgui.get_content_region_avail().x
@@ -2928,6 +2990,11 @@ class App:
         # "Keyboard shortcuts" leaves the one binding that opens the
         # documentation reachable exclusively from the documentation.
         if widgets.icon_button("?", "Keyboard shortcuts - F1 opens the Manual"):
+            # Cleared on the way in rather than on the way out: a popup can be
+            # dismissed by clicking anywhere, which is not a moment this has a
+            # hook in, and reopening onto last time's query would look like a
+            # list that had lost most of its rows.
+            self._shortcuts_query = ""
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
         imgui.same_line()
@@ -2963,6 +3030,31 @@ class App:
             )
         self._diagnostics_popup(checks)
 
+        # Quit, out of the navigation control at last (UX.md Phase 2). It was
+        # the eleventh segment of the mode switch: a destructive action inside
+        # the thing you use to move around, one click from every mode, mitigated
+        # by an unconditional confirm -- which is a mitigation and not a fix.
+        # Here it sits with the other two app-level controls, the ones that are
+        # about the *program* rather than about the work.
+        #
+        # It is still an action rather than a mode, so nothing is ever assigned
+        # to ``state.mode`` and cancelling leaves the switch where it was; and it
+        # still always asks, because the window's own X is the path that carries
+        # the unsaved-work chain instead.
+        imgui.same_line()
+        if widgets.icon_button(modes.QUIT[2], f"{modes.QUIT[1]} Warlock Studio", danger=True):
+            from . import dialogs
+
+            ctx.confirms.ask(
+                dialogs.Confirm(
+                    title="Quit Warlock Studio?",
+                    message="Anything still generating is cancelled.",
+                    confirm_label="Quit",
+                    cancel_label="Stay",
+                    on_confirm=self._request_quit,
+                )
+            )
+
     # Every binding the app answers to, in one place the user can find. The
     # tuples are (keys, what), grouped; Inker's letters come from TOOL_KEYS so
     # this list cannot drift from the handler.
@@ -2973,22 +3065,33 @@ class App:
         from .tokens import sp
 
         alpha, rise = widgets.popup_enter("shortcuts")
+        # Translucent (UX.md Phase 5): cleared before ``begin`` paints it,
+        # painted back below as a blur of the app or as the solid fill.
+        frosted = widgets.frosted()
+        if frosted:
+            imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         if not imgui.begin_popup("shortcuts"):
             imgui.pop_style_var()
             return
+        rounding = imgui.get_style().popup_rounding
+        widgets.window_shadow("raised", radius=rounding)
+        if frosted:
+            widgets.window_backdrop(radius=rounding)
         if rise > 0.0:
             imgui.dummy((0, rise))
 
+        # Collected first, drawn after the box (UX.md Phase 4). The list is ~60
+        # rows over eight groups, which is a scroll and a read rather than a
+        # lookup -- and the subsequence matcher the command palette already
+        # carries is the right instrument, so it is reused rather than
+        # reimplemented. Every group's rows are gathered before anything is
+        # drawn because the query decides which *groups* survive: a heading over
+        # nothing is a section that looks broken.
+        sections: list[tuple[str, list[tuple[str, str]]]] = []
+
         def table(title: str, rows: list[tuple[str, str]]) -> None:
-            widgets.section(title)
-            if imgui.begin_table(f"keys/{title}", 2):
-                for keys, what in rows:
-                    imgui.table_next_column()
-                    widgets.muted(keys)
-                    imgui.table_next_column()
-                    imgui.text(what)
-                imgui.end_table()
+            sections.append((title, rows))
 
         from . import modes
 
@@ -3015,6 +3118,8 @@ class App:
             "2D / 3D",
             [
                 ("Ctrl+Enter", "Generate / Make 3D"),
+                ("Tab / Shift+Tab", "Move between the form's controls"),
+                ("Enter", "Press Generate / Make 3D when it is the one focused"),
                 ("Up / Down", "Previous / next asset in the library"),
                 ("Right-click a card", "Its actions menu"),
                 ("F", "Frame the model"),
@@ -3115,28 +3220,69 @@ class App:
                 ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
             ],
         )
+        self._draw_shortcut_rows(sections)
         imgui.end_popup()
         imgui.pop_style_var()
+
+    def _draw_shortcut_rows(self, sections: list[tuple[str, list[tuple[str, str]]]]) -> None:
+        """The filter box and whatever survives it."""
+        from imgui_bundle import imgui
+
+        from . import widgets
+        from .tokens import sp
+
+        imgui.set_next_item_width(sp(420))
+        self._shortcuts_query = widgets.input_text(
+            "##shortcuts-filter",
+            self._shortcuts_query,
+            max_length=60,
+            hint="Filter shortcuts...",
+        )
+        kept = filter_shortcuts(sections, self._shortcuts_query)
+        if not kept:
+            widgets.muted("No shortcut matches that.")
+            return
+        for title, rows in kept:
+            widgets.section(title)
+            if imgui.begin_table(f"keys/{title}", 2):
+                for keys, what in rows:
+                    imgui.table_next_column()
+                    widgets.muted(keys)
+                    imgui.table_next_column()
+                    imgui.text(what)
+                imgui.end_table()
 
     def _diagnostics_popup(self, checks: list[Any]) -> None:
         from imgui_bundle import imgui
 
-        from . import theme, widgets
+        from . import icons, theme, widgets
         from .tokens import sp
 
         ctx = self.app_ctx
         imgui.set_next_window_size((sp(460), 0))
         alpha, rise = widgets.popup_enter("diagnostics")
+        # Translucent (UX.md Phase 5): cleared before ``begin`` paints it,
+        # painted back below as a blur of the app or as the solid fill.
+        frosted = widgets.frosted()
+        if frosted:
+            imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         if not imgui.begin_popup("diagnostics"):
             imgui.pop_style_var()
             return
+        rounding = imgui.get_style().popup_rounding
+        widgets.window_shadow("raised", radius=rounding)
+        if frosted:
+            widgets.window_backdrop(radius=rounding)
         if rise > 0.0:
             imgui.dummy((0, rise))
         widgets.section("Diagnostics")
         for check in checks:
             colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
-            widgets.text_colored(colour, "o" if check.ok else "x")
+            # Lucide, as the status pills now are (UX.md Phase 2): "o" and "x"
+            # were the last hand-spelled state glyphs in the app, and a lowercase
+            # o at 11 px beside a red x is two letters rather than two shapes.
+            widgets.text_colored(colour, icons.CHECK if check.ok else icons.CIRCLE_X)
             imgui.same_line()
             imgui.text(check.name)
             imgui.same_line()
@@ -3157,10 +3303,9 @@ class App:
             # used to destroy the only copy of the text -- and a dead worker is
             # reported through that list and through no doctor row at all, so it
             # was recoverable from nothing.
-            imgui.separator()
             widgets.section("Dismissed")
             for message in ctx.state.dismissed_errors:
-                widgets.text_colored(theme.ERR, "!")
+                widgets.text_colored(theme.ERR, icons.TRIANGLE_ALERT)
                 imgui.same_line()
                 imgui.text_wrapped(message)
         imgui.separator()

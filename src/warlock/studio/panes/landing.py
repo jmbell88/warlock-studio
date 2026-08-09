@@ -108,9 +108,65 @@ def tiles(ctx: Any) -> list[tuple[str, str, str, str]]:
     return out
 
 
+def recent(ctx: Any) -> dict[str, Any] | None:
+    """The asset "Continue" would open, or ``None`` (UX.md Phase 4).
+
+    Home deliberately remembers no *mode* -- the app opens on the chooser every
+    launch, which is what the deleted ``state.landing`` flag used to mean --
+    but resuming *work* is a different promise from resuming a place, and the
+    library already knows which asset is the most recent. So this is derived
+    from the job list rather than persisted: nothing new is written, and a row
+    that has since been trashed or pruned simply stops being the answer.
+
+    The selection wins over the newest row when there is one, because a
+    selection is a statement and a timestamp is an inference. Only ``done``
+    rows: "continue" opening a job that is still queued would land on a pane
+    with nothing in it.
+    """
+    cache = getattr(ctx, "cache", None)
+    if cache is None:
+        return None
+    selected = cache.get(getattr(ctx.state, "selected", None))
+    if selected is not None and selected.get("status") == "done":
+        return selected
+    return next((job for job in cache.jobs if job.get("status") == "done"), None)
+
+
+def _continue_row(ctx: Any) -> tuple[str, str, str, str] | None:
+    job = recent(ctx)
+    if job is None:
+        return None
+    name = str(job.get("name") or job.get("prompt") or job.get("id") or "the last asset")
+    if len(name) > 44:
+        name = name[:43] + "-"
+    return ("continue", icons.PLAY, "Continue", f"Pick up {name} where you left it.")
+
+
+def rows(ctx: Any) -> list[tuple[str, str, str, str]]:
+    """Every card on the chooser this frame, in drawing order.
+
+    ``TILES`` stays the fixed table it was -- ``tests/test_panes_home_tiles.py``
+    is about *that* set and the modes it must cover -- and this is the drawn
+    list, which has one optional card in front of it. Three things index the
+    same list (the click, the arrow keys and Enter), so there is exactly one
+    function answering "what is the nth card", for the reason ``TILES`` is data
+    in the first place: a hand-kept keyboard index beside a hand-written column
+    of calls is two orderings.
+    """
+    row = _continue_row(ctx)
+    return ([row] if row is not None else []) + tiles(ctx)
+
+
 def activate(ctx: Any, index: int) -> None:
-    """Do what the ``index``-th tile does. Shared by the click and by Enter."""
-    key = TILES[index % len(TILES)][0]
+    """Do what the ``index``-th card does. Shared by the click and by Enter."""
+    drawn = rows(ctx)
+    key = drawn[index % len(drawn)][0]
+    if key == "continue":
+        job = recent(ctx)
+        if job is not None:
+            ctx.state.select(job.get("id"))
+            _continue(ctx, job)
+        return
     if key == "2d":
         start_2d(ctx)
     elif key == "3d":
@@ -132,12 +188,21 @@ def activate(ctx: Any, index: int) -> None:
 
 
 def move(ctx: Any, delta: int) -> None:
-    """Up/Down between the tiles. Wraps, unlike the library's arrow keys: a
+    """Up/Down between the cards. Wraps, unlike the library's arrow keys: a
     fixed ring of choices is a menu, where a two-hundred-row list is not."""
-    ctx.state.home_index = (ctx.state.home_index + delta) % len(TILES)
+    ctx.state.home_index = (ctx.state.home_index + delta) % len(rows(ctx))
 
 
-def _tile(ctx: Any, key: str, icon: str, name: str, caption: str, *, focused: bool = False) -> bool:
+def _tile(
+    ctx: Any,
+    key: str,
+    icon: str,
+    name: str,
+    caption: str,
+    *,
+    index: int = 0,
+    focused: bool = False,
+) -> bool:
     """A centred, clickable card: icon left, name and caption right."""
     width, height = sp(380), sp(64)
     _centre(width)
@@ -176,10 +241,11 @@ def _tile(ctx: Any, key: str, icon: str, name: str, caption: str, *, focused: bo
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
         # Hovering moves the keyboard cursor too, so the two never disagree
-        # about which tile Enter would take.
-        index = next((i for i, t in enumerate(TILES) if t[0] == key), None)
-        if index is not None:
-            ctx.state.home_index = index
+        # about which card Enter would take. The index is passed in rather than
+        # looked up by key: ``TILES`` is no longer the drawn list (the Continue
+        # card sits in front of it), so a lookup here would aim Enter one card
+        # off exactly when Continue is on screen.
+        ctx.state.home_index = index
     if focused:
         widgets.ring(
             origin, imgui.ImVec2(origin.x + width, origin.y + height), theme.ACCENT, 0.9
@@ -197,16 +263,103 @@ def _centre(width: float) -> None:
     imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail - width) * 0.5, 0.0))
 
 
+# --- first-run orientation --------------------------------------------------
+#
+# The other half of what Home already does for a broken install (``_setup_entry``
+# counts what is failing): a first run reaches a chooser that says what each
+# place *is* and nothing about which one to start in, and the two-step pipeline
+# this app is -- prompt to reference, reference to mesh -- is the one fact that
+# makes the rest of the screen make sense.
+#
+# Dismissed *permanently*, in the settings file, because an orientation that
+# comes back is not orientation. It is one key rather than a counter: "how many
+# times has this been seen" is a number with no reader, and a card that reappears
+# twice more is a card somebody has to dismiss three times.
+
+ORIENTATION_SETTING = "home_orientation_dismissed"
+
+# Design pixels. One row shorter than a tile plus its own two lines of body,
+# and it is measured here rather than inside the drawing code because
+# ``_choose`` has to reserve it in the stack it centres.
+ORIENTATION_HEIGHT = 80.0
+
+ORIENTATION_TITLE = "Start with New 2D Image"
+ORIENTATION_BODY = (
+    "A prompt becomes a reference image; that reference becomes a mesh. "
+    "Everything else here works on what those two steps produce."
+)
+
+
+def orientation_visible(ctx: Any) -> bool:
+    return not bool(ctx.settings.get(ORIENTATION_SETTING))
+
+
+def dismiss_orientation(ctx: Any) -> None:
+    ctx.settings.set(ORIENTATION_SETTING, True)
+
+
+def _orientation(ctx: Any) -> None:
+    """The one-time card above the tiles. Nothing when it has been dismissed."""
+    if not orientation_visible(ctx):
+        return
+    width, height = sp(380), sp(ORIENTATION_HEIGHT)
+    _centre(width)
+    with widgets.card("landing/orientation", (width, height)):
+        with fonts.title(imgui):
+            widgets.text_colored(theme.ACCENT, icons.INFO)
+        # The tiles' own icon column, so this card lines up with the stack
+        # under it rather than looking like a different kind of thing.
+        imgui.same_line(sp(48))
+        imgui.begin_group()
+        with fonts.label(imgui):
+            imgui.text(ORIENTATION_TITLE)
+        # Dismissed from the title's own line, right-aligned: a button on its
+        # own row is a third line in a card that is only ever seen once, and
+        # this screen is already the tallest in the app.
+        dismiss_w = imgui.calc_text_size("Got it").x + imgui.get_style().frame_padding.x * 2
+        imgui.same_line()
+        imgui.set_cursor_pos_x(
+            max(imgui.get_cursor_pos_x(), width - dismiss_w - sp(tokens.SP_4))
+        )
+        if imgui.small_button("Got it##landing-orientation"):
+            dismiss_orientation(ctx)
+        with fonts.small(imgui):
+            # Wrapped against the card's own region rather than the window's:
+            # a card is a child, so ``text_wrapped`` already measures the right
+            # width -- which is the whole reason the body sits inside one.
+            widgets.muted_wrapped(ORIENTATION_BODY)
+        imgui.end_group()
+    imgui.dummy((0, sp(tokens.SP_2)))
+
+
+# The focused card the last frame drew, so a move can be scrolled to and a
+# mouse scroll is left alone. Module state for the reason ``library``'s own
+# one-frame values are: it lives for a frame and means nothing off this pane.
+_last_focus = [-1]
+
+
 def _choose(ctx: Any) -> None:
     avail = imgui.get_content_region_avail()
-    # The tiles plus the title block; centre the stack in the upper half. Off
-    # ``len(TILES)`` rather than a literal, or adding a tile silently pushes the
-    # bottom of the stack off screen.
+    # The cards plus the title block; centre the stack in the upper half. Off
+    # the drawn list rather than a literal, or adding a card silently pushes the
+    # bottom of the stack off screen -- and the drawn list is ``rows`` rather
+    # than the table, since Continue is a card the table does not carry.
     # The title block's own height rides on the hero's size, so it is written
     # as the old figure plus what the hero grew by rather than as a new
     # constant: the number was measured against a 16 px title, and a display
     # ramp that changes again must not silently push the bottom tile off screen.
-    stack = sp(64 + 8) * len(TILES) + sp(110 + (tokens.TEXT_DISPLAY - tokens.TEXT_TITLE))
+    drawn = rows(ctx)
+    stack = sp(64 + 8) * len(drawn) + sp(110 + (tokens.TEXT_DISPLAY - tokens.TEXT_TITLE))
+    if orientation_visible(ctx):
+        # Measured rather than absorbed: it is on screen for exactly one
+        # session, and that is the session where the bottom tile going missing
+        # costs the most. The two extra cards are very nearly exclusive in
+        # practice -- a first run has no finished asset to continue, and a
+        # session that has one has usually dismissed the orientation -- which
+        # is what keeps the stack inside a default window; the host window
+        # scrolls in the case where both are up, as it already does at 1.5
+        # scale with neither.
+        stack += sp(ORIENTATION_HEIGHT + tokens.SP_2)
     imgui.dummy((0, max((avail.y - stack) * 0.4, sp(tokens.SP_6))))
 
     def centred(text: str, colour: int | None = None) -> None:
@@ -225,13 +378,26 @@ def _choose(ctx: Any) -> None:
     # column of full-width cards with no line to share.
     manual_render.help_button(ctx, "home")
     imgui.dummy((0, sp(tokens.SP_5)))
+    _orientation(ctx)
 
-    focus = ctx.state.home_index % len(TILES)
-    for index, (key, icon, name, caption) in enumerate(tiles(ctx)):
+    focus = ctx.state.home_index % len(drawn)
+    for index, (key, icon, name, caption) in enumerate(drawn):
         if index:
             imgui.dummy((0, sp(tokens.SP_2)))
-        if _tile(ctx, key, icon, name, caption, focused=index == focus):
+        if _tile(ctx, key, icon, name, caption, index=index, focused=index == focus):
             activate(ctx, index)
+        if index == focus and _last_focus[0] >= 0 and focus != _last_focus[0]:
+            # Keep the keyboard cursor on screen. The stack is taller than a
+            # default window at 1.5 scale (and than a small one at 1.0), so the
+            # arrows could walk the focus ring off the bottom with nothing
+            # following it -- the host window scrolls, but only if something
+            # asks it to. Only on the frame the cursor *moved*, or this would
+            # fight the scroll wheel every frame -- and never on the *first*
+            # frame, where "moved" is only true against the seed: the app opens
+            # on this screen, and centring the first card on frame one scrolls
+            # the mode switch off the top of the window at 1.5 scale.
+            imgui.set_scroll_here_y(0.5)
+    _last_focus[0] = focus
 
     imgui.dummy((0, sp(tokens.SP_2)))
     _setup_entry(ctx)

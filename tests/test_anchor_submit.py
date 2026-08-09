@@ -83,9 +83,13 @@ def test_generate_reads_the_anchor_on_a_task_thread(ctx, monkeypatch):
         settings_2d.svc_jobs, "create_job", lambda svc, **kw: seen.update(kw) or "id"
     )
     submitted = []
-    ctx.state = SimpleNamespace(
-        form_2d=default_form_2d(), preview_dirty_at=0.0, remember_prompt=lambda _p: None
-    )
+    # A real ``AppState``: ``generate`` also clears the field-error rings
+    # (UX.md Phase 3), and a namespace carrying only the three attributes this
+    # test happens to need grows a stub every time the pane learns a method.
+    from warlock.studio.state import AppState
+
+    ctx.state = AppState()
+    ctx.state.form_2d = default_form_2d()
     ctx.submit = lambda key, fn, *a, **k: (submitted.append((key, fn)), True)[1]
     ctx.state.form_2d["prompt"] = "a barrel"
 

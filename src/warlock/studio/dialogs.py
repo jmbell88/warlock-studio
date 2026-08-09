@@ -188,13 +188,28 @@ class ConfirmQueue:
         # and a dialog whose panel cuts in while its text fades up is worse
         # than the hard cut it replaced.
         alpha, rise = widgets.popover_enter(f"confirm/{confirm.title}", appearing)
+        # Translucent over the app it is blocking (UX.md Phase 5): the
+        # background is cleared before ``begin`` paints it and drawn back
+        # below, blurred where there is a capture to blur and solid where
+        # there is not.
+        frosted = widgets.frosted()
+        if frosted:
+            imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+        radius = widgets.push_surface_rounding()
         opened, _ = imgui.begin_popup_modal(
             confirm.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
+        widgets.pop_surface_rounding()
         if not opened:
             imgui.pop_style_var()
             return
+        # The deepest step of the ramp: a modal is the one surface that stops
+        # the app underneath it, and the shadow is what says so before the text
+        # is read.
+        widgets.window_shadow("overlay", radius=radius)
+        if frosted:
+            widgets.window_backdrop(radius=radius)
         if rise > 0.0:
             imgui.dummy((0, rise))
         imgui.text_wrapped(confirm.message)
@@ -279,13 +294,25 @@ class PromptQueue:
         centre = imgui.get_main_viewport().get_center()
         imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
         alpha, rise = widgets.popover_enter(f"prompt/{prompt.title}", appearing)
+        # Translucent over the app it is blocking (UX.md Phase 5): the
+        # background is cleared before ``begin`` paints it and drawn back
+        # below, blurred where there is a capture to blur and solid where
+        # there is not.
+        frosted = widgets.frosted()
+        if frosted:
+            imgui.set_next_window_bg_alpha(0.0)
         imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+        radius = widgets.push_surface_rounding()
         opened, _ = imgui.begin_popup_modal(
             prompt.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
+        widgets.pop_surface_rounding()
         if not opened:
             imgui.pop_style_var()
             return
+        widgets.window_shadow("overlay", radius=radius)
+        if frosted:
+            widgets.window_backdrop(radius=radius)
         if rise > 0.0:
             imgui.dummy((0, rise))
         imgui.set_next_item_width(sp(FIELD_W))

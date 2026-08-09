@@ -134,6 +134,15 @@ def main() -> int:
         help="turn the 2D viewport's tiled preview on",
     )
     ap.add_argument(
+        "--floating",
+        action="store_true",
+        help=(
+            "also capture the command palette open over each mode's own "
+            "backdrop, which is the only way Phase 5's translucency is visible "
+            "in a still: nothing in the mode pass ever opens a floating surface."
+        ),
+    )
+    ap.add_argument(
         "--scale",
         type=float,
         default=None,
@@ -182,6 +191,17 @@ def main() -> int:
             for mode in MODES:
                 app.app_ctx.state.mode = mode
                 _capture(app, args.out / f"{name}-{mode}.png")
+            if args.floating:
+                # Over 3D rather than over Home: the backdrop is what is being
+                # looked at, and a viewport with a mesh in it is the one screen
+                # where "is this a blur or a flat fill" cannot be argued about.
+                from warlock.studio.panes import palette as palette_pane
+
+                app.app_ctx.state.mode = "3d"
+                _capture(app, args.out / f"{name}-3d-clean.png")
+                palette_pane.toggle(app.app_ctx)
+                _capture(app, args.out / f"{name}-palette.png")
+                palette_pane.close(app.app_ctx)
     finally:
         app.teardown()
     return 0

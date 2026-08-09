@@ -94,7 +94,7 @@ def _actions(ctx: Any, doc: Any) -> None:
         was = _opacity_drag.pop(layer.uid, None)
         if was is not None:
             doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
-    blend = widgets.combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
+    blend = widgets.labeled_combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
     widgets.help_marker(
         "How this layer combines with everything under it. Saved into the .ora "
         "so other editors read it the same way."

@@ -32,7 +32,23 @@ def test_the_sidebars_are_one_of_three_named_sizes():
     ``tokens.SCALE`` is, because eight call sites read it directly."""
     assert layout_mod.SIDEBAR_WIDTHS["default"] == 300.0
     assert layout_mod.SIDEBAR_W in layout_mod.SIDEBAR_WIDTHS.values()
-    assert layout_mod.PANE_PADDING == 5.0
+
+
+def test_a_pane_is_inset_by_a_step_of_the_spacing_scale():
+    """This used to read ``PANE_PADDING == 5.0``, which froze one afternoon's
+    answer exactly as the spacing-scale test once did: 5 was not a step of
+    anything, and the number is a *taste* call UX.md Phase 2 settled against a
+    screenshot. What is not taste is that a pane's inset comes from the scale
+    rather than being invented, which is the rule this asserts instead.
+    """
+    from warlock.studio import tokens
+
+    steps = {v for k, v in vars(tokens).items() if k.startswith("SP_")}
+    assert layout_mod.PANE_PADDING in steps
+    # And it is tighter than the host window's own gutter: a pane sits inside
+    # that gutter already, so matching it would double the inset on the two
+    # sidebars, which are the width-constrained case.
+    assert layout_mod.PANE_PADDING < tokens.SP_4
 
 
 def test_an_unknown_stored_width_falls_back_rather_than_stopping_the_window():

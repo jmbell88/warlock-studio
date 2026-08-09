@@ -37,6 +37,10 @@ def draw(ctx: Any) -> None:
     if imgui.begin_child(
         "app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
     ):
+        # This mode is one pane filling the window, so it is the one surface in
+        # the app that has to say what it is out loud (UX.md Phase 2) -- the
+        # three-column modes are named by the switch segment that is lit.
+        widgets.pane_title("Settings")
         _interface(ctx)
         _layout(ctx)
         _config(ctx)
@@ -109,6 +113,30 @@ def _interface(ctx: Any) -> None:
     )
     if changed:
         _apply_reduce_motion(ctx, reduced)
+
+    _effects(ctx)
+
+
+def _effects(ctx: Any) -> None:
+    """The four GPU-tier switches (UX.md Phase 5).
+
+    The phase asks for one flag per item "while it stabilizes", and this is
+    where they live: they are appearance, so a settings pane is the honest
+    place for them, and each degrades to the pre-Phase-5 drawing on its own
+    when the GL side is missing -- so turning one off is a preference rather
+    than a repair. Derived from ``effects.KEYS`` rather than four hand-written
+    checkboxes, for the reason the palette's mode commands are derived: a
+    second list of what the app can do drifts.
+    """
+    from .. import effects
+
+    widgets.section("Effects")
+    for key, label, help_text in effects.KEYS:
+        changed, value = imgui.checkbox(label, effects.get(key))
+        widgets.help_marker(help_text)
+        if changed:
+            effects.set(key, value)
+            effects.store(ctx.settings, key)
 
 
 def _apply_reduce_motion(ctx: Any, reduced: bool) -> None:

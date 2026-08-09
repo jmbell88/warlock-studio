@@ -706,6 +706,28 @@ class AppState:
     # because the list it belongs to is short today, would be a panel that
     # silently hides half its contents on launch.
     list_filters: dict[str, str] = field(default_factory=dict)
+    # Which form control the last refusal named, and what it said (UX.md Phase
+    # 3). ``service.errors.ServiceError`` has carried a ``field`` since it was
+    # written, documented as "the UI highlights it", and nothing in ``studio/``
+    # read it: a refusal about the seed and a refusal about the style LoRA both
+    # arrived as the same red toast in the far corner of the window, and
+    # finding which of fifteen controls it meant was the reader's problem.
+    #
+    # A dict rather than one slot because a single submit can only be refused
+    # once but the two generate panes are both live, and keying by field name
+    # is what lets the *control* ask ("is anything wrong with me") rather than
+    # the pane switch on a remembered name. Not persisted: a refusal describes
+    # a submit, and a submit does not survive the session that made it.
+    field_errors: dict[str, str] = field(default_factory=dict)
+    # The keyboard focus ring (UX.md Phase 3), per pane: which control the
+    # cursor is on, what this frame's tab order is, and whether the cursor just
+    # moved -- see :mod:`.focus`, which owns every rule about them. Here rather
+    # than on the panes because a pane is a module of functions with no
+    # instance to hang state on, which is the same reason ``list_filters`` is
+    # here. Not persisted: a focus ring describes where somebody's hands are.
+    focus_key: dict[str, str] = field(default_factory=dict)
+    focus_order: dict[str, list[str]] = field(default_factory=dict)
+    focus_moved: bool = False
     # Whether the crash-recovery offer has been made this session. One-shot:
     # the autosave directory is *also* where this session's own copies land, so
     # asking again later would offer the user their own open documents back.
@@ -935,6 +957,33 @@ class AppState:
     def error_text(self) -> str:
         """Every outstanding failure as one block -- what Copy details copies."""
         return "\n".join(self.errors)
+
+    # -- field-level refusals ----------------------------------------------
+
+    def note_field_error(self, field_name: str, message: str) -> bool:
+        """Remember that ``field_name`` is why the last submit was refused.
+
+        -> whether it was recorded. A refusal that names no control is not one
+        of these and must keep going to the toast, which is the whole of what
+        the caller does with the answer.
+        """
+        if not field_name or not message:
+            return False
+        self.field_errors[str(field_name)] = str(message)
+        return True
+
+    def clear_field_error(self, field_name: str) -> None:
+        """Forget one, because the user has just changed it.
+
+        Editing the control the refusal named is the clearest possible "I have
+        dealt with that", and a ring that outlived it would be an app arguing
+        about a value that is no longer there.
+        """
+        self.field_errors.pop(field_name, None)
+
+    def clear_field_errors(self) -> None:
+        """Forget all of them: a new submit is about to be judged on its own."""
+        self.field_errors.clear()
 
     # -- history -----------------------------------------------------------
 

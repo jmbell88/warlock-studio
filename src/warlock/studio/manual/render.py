@@ -179,7 +179,12 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
             # from two literals: 22 and 17 were one file's private type scale,
             # near enough to TEXT_HEADING and TEXT_TITLE that nothing was
             # bought by their being different.
-            size = tokens.TEXT_HEADING if block.level == 1 else tokens.TEXT_TITLE
+            #
+            # The chapter title is the page's *one loud thing* (UX.md Phase 2),
+            # so it takes display size: a manual page is the one screen in the
+            # app that is entirely prose, and at heading size its title was the
+            # same weight as the four ``##`` sections under it.
+            size = tokens.TEXT_DISPLAY if block.level == 1 else tokens.TEXT_HEADING
             with fonts.push(imgui, fonts.SEMIBOLD, size):
                 imgui.text_wrapped(block.text)
             imgui.pop_text_wrap_pos()
@@ -188,7 +193,12 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
         if anchor == block.anchor:
             imgui.set_scroll_here_y(0.1)
         if block.level <= 2:
-            imgui.separator()
+            # Space rather than a rule (UX.md Phase 2), the same argument
+            # ``widgets.section`` makes: a heading followed by a hairline
+            # followed by a paragraph is three horizontal things where two
+            # would do, and it is the ruling that made the manual read as a
+            # settings dialog rather than as a page.
+            imgui.dummy((0, sp(tokens.SP_2)))
     elif isinstance(block, parser.Paragraph):
         _draw_spans(ctx, ms, block.spans)
         imgui.dummy((0, sp(4)))

@@ -1,7 +1,10 @@
 # Keyboard shortcuts
 
 A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
-is a condensed subset — the tables below are the full list.
+is a condensed subset — the tables below are the full list. It has a filter box of its own at the
+top, matched the way the command palette matches (so `ctz` finds `Ctrl+Z`) against a binding's keys,
+its description, or the name of the group it is in — typing `clay` lists all of Clay's rather than
+the two whose wording happens to say the word.
 
 One rule explains an apparent overlap between the tables below. Inker, Clay and Review each take
 every key while they are on screen — so in Inker `W` picks the wand rather than toggling wireframe,
