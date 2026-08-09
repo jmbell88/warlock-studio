@@ -693,6 +693,14 @@ class AppState:
     resources_at: float = 0.0
     wireframe: bool = False
     turntable: bool = False
+    # Draw a tile repeated in the 2D viewport rather than once. Off by default,
+    # and that is a decision rather than an oversight: every other view of an
+    # asset in this app -- the thumbnail, the exports, the Inker -- shows one
+    # cell, so a viewport that silently showed four would make the texture look
+    # a quarter of its size. What repetition answers that nothing else does is
+    # whether the pattern *reads* as repeating, which is a question the user
+    # asks deliberately; the seam question already has the wrapped view.
+    tile_preview: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
     # Every outstanding failure the banner is showing, oldest first. A list
     # rather than the single ``last_error`` slot it replaces: three writers

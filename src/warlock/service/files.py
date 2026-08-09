@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import shutil
 import time
@@ -17,6 +18,8 @@ from .validation import (
     check_job_id,
     not_done_message,
 )
+
+log = logging.getLogger(__name__)
 
 # The complete artifact allowlist. It is also the export allowlist: the point
 # is that a caller-supplied name never becomes a path component without
@@ -190,7 +193,7 @@ def inker_working_status(svc: Any, job_id: str) -> dict[str, Any]:
 
 def save_inker_working(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     """Store the layered source beside the reference it flattens to."""
-    _editable_reference(svc, job_id)
+    _editable_image(svc, job_id)
     if len(data) > MAX_INKER_BYTES:
         raise TooLarge("layered document too large")
     if not data.startswith(ORA_MAGIC):
@@ -270,24 +273,43 @@ def save_clay_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _editable_reference(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:
-    """The gates the 2D editor and promote_to_model agree on."""
+# The two stages whose input.png *is* the asset, and so the two that can be
+# hand-edited. A model job's input.png is the picture it was reconstructed
+# from, and editing it would change nothing about the mesh on disk while
+# invalidating the recipe that describes it.
+EDITABLE_STAGES = ("reference", "tile")
+
+
+def _editable_image(svc: Any, job_id: str) -> tuple[dict[str, Any], Path]:
+    """The gates every hand-edit path agrees on.
+
+    Both image stages, not just references. A tile's albedo is exactly as
+    editable as a reference's picture -- more so, arguably, since the whole
+    material set is derived from it and re-derives against its mtime for free
+    -- and the three writers below (flat save, revert, layered sidecar) are
+    stage-agnostic once the measurement is. ``_remeasure`` is the part that is
+    not, and it branches rather than being skipped.
+    """
     check_job_id(job_id)
     job = svc.store.get(job_id)
     if job is None:
         raise NotFound("no such job")
-    if job["stage"] != "reference":
-        raise Invalid("this job is not a reference")
+    stage = job["stage"]
+    if stage not in EDITABLE_STAGES:
+        raise Invalid("this job has no image to edit")
+    noun = "That tile" if stage == "tile" else "That reference"
     if job["status"] != "done":
-        raise Invalid(not_done_message("That reference", job["status"]))
+        raise Invalid(not_done_message(noun, job["status"]))
     src = svc.job_dir(job_id) / "input.png"
     if not src.exists():
-        raise Invalid("reference has no image")
+        raise Invalid(f"{noun.split()[-1]} has no image")
     return job, src
 
 
-def _remeasure(svc: Any, job_id: str, src: Path, *, hand_edited: bool) -> None:
-    """Re-run the reference measurement over the pixels that are now on disk.
+def _remeasure(
+    svc: Any, job_id: str, src: Path, *, hand_edited: bool, stage: str = "reference"
+) -> None:
+    """Re-run this stage's measurement over the pixels that are now on disk.
 
     promote_to_model refuses a reference whose stored report says it cannot
     reconstruct, and that report was measured from the *generated* pixels. An
@@ -295,15 +317,41 @@ def _remeasure(svc: Any, job_id: str, src: Path, *, hand_edited: bool) -> None:
     exists, so it is recomputed here. ``hand_edited`` rides along because
     ``params["recipe"]`` claims a seed and a model produced this image, which
     after an edit is no longer the whole truth.
-    """
-    from ..pipelines import reference
 
-    changes: dict[str, Any] = {"reference_report": reference.measure_file(src).as_dict()}
+    Which measurement is the stage's, and it is the same split ``queue._generate``
+    makes when the image is first drawn: a composition report is entirely about
+    where a *subject* sits, and a tile has none, so a tile gets its seam ratio
+    re-measured instead. Editing an albedo is in fact the likeliest way to
+    introduce a seam there is -- a brush stroke does not wrap -- so leaving the
+    generated verdict in place would be worse than having none.
+
+    A tile whose measurement fails keeps no stale verdict: the key is removed
+    rather than left describing pixels that are gone. That is the one place
+    this differs from ``queue``'s log-and-swallow, and the reason is that there
+    the alternative is no key at all, while here it is a wrong one.
+    """
+    changes: dict[str, Any] = {}
     remove: tuple[str, ...] = ()
+    if stage == "tile":
+        from ..pipelines import seam
+
+        try:
+            changes["seam_report"] = seam.report(src)
+        except Exception:
+            log.exception("seam re-measurement failed for job %s", job_id)
+            remove += ("seam_report",)
+    else:
+        from ..pipelines import reference
+
+        changes["reference_report"] = reference.measure_file(src).as_dict()
     if hand_edited:
         changes["hand_edited"] = True
     else:
-        remove = ("hand_edited",)
+        # Appended, never assigned: a failed tile measurement above has already
+        # put a key in here, and a plain assignment would drop it and leave the
+        # stale verdict on the row -- which is the one thing this branch exists
+        # to prevent.
+        remove += ("hand_edited",)
     # merge_params, not set_params: this runs off the frame thread while the
     # worker may be writing other keys on the same row.
     svc.store.merge_params(job_id, changes, remove=remove)
@@ -317,7 +365,7 @@ def reference_edit_status(svc: Any, job_id: str) -> dict[str, Any]:
     job_dir = svc.job_dir(job_id)
     editable = (
         job is not None
-        and job["stage"] == "reference"
+        and job["stage"] in EDITABLE_STAGES
         and job["status"] == "done"
         and (job_dir / "input.png").exists()
     )
@@ -333,7 +381,7 @@ def save_edited_image(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     is preserved once, on the first save, so the edit is still undoable after
     the session that made it is gone.
     """
-    _, dest = _editable_reference(svc, job_id)
+    job, dest = _editable_image(svc, job_id)
     if len(data) > MAX_UPLOAD_BYTES:
         raise TooLarge("image too large")
     if not data.startswith(PNG_MAGIC):
@@ -351,13 +399,13 @@ def save_edited_image(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     tmp = dest.with_suffix(".png.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, dest)
-    _remeasure(svc, job_id, dest, hand_edited=True)
+    _remeasure(svc, job_id, dest, hand_edited=True, stage=job["stage"])
     return {"ok": True}
 
 
 def revert_reference(svc: Any, job_id: str) -> dict[str, Any]:
     """Put the untouched generated image back, consuming the backup."""
-    _, dest = _editable_reference(svc, job_id)
+    job, dest = _editable_image(svc, job_id)
     original = dest.parent / ORIGINAL
     if not original.exists():
         raise Conflict("this reference has no unedited original")
@@ -371,7 +419,7 @@ def revert_reference(svc: Any, job_id: str) -> dict[str, Any]:
     # current -- the exact staleness the comparison exists to catch, in the
     # only direction where the content changes and the clock goes backwards.
     os.utime(dest)
-    _remeasure(svc, job_id, dest, hand_edited=False)
+    _remeasure(svc, job_id, dest, hand_edited=False, stage=job["stage"])
     return {"ok": True}
 
 

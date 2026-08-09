@@ -2931,12 +2931,25 @@ class App:
         from imgui_bundle import imgui
 
         from . import widgets
+        from .panes import overlay
 
         texture = self.viewer.reference
+        # UVs past 1.0 with the sampler set to repeat: one draw call, the
+        # inker canvas's checkerboard idiom, rather than N**2 images that would
+        # have to be positioned by hand and would show a seam of their own
+        # wherever the arithmetic left a sub-pixel gap.
+        repeat = 1
+        if self.app_ctx.state.tile_preview and overlay.shows_tiled(
+            self.app_ctx, self.app_ctx.job()
+        ):
+            repeat = overlay.TILE_REPEAT
+            texture.repeat_x = texture.repeat_y = True
         scale = min(width / texture.size[0], height / texture.size[1])
         imgui.image(
             widgets.texture_ref(texture),
             (texture.size[0] * scale, texture.size[1] * scale),
+            (0.0, 0.0),
+            (float(repeat), float(repeat)),
         )
 
     # -- teardown ----------------------------------------------------------

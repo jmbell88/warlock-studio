@@ -33,6 +33,28 @@ def offers_inker(ctx: Any, job: Any) -> bool:
     return ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job)
 
 
+# How many times across and down the tiled preview repeats. Two: enough to put
+# all four wrap edges on screen at once, which is the whole question, and few
+# enough that the texture is still drawn at half size rather than a ninth.
+TILE_REPEAT = 2
+
+
+def shows_tiled(ctx: Any, job: Any) -> bool:
+    """Whether the tiled-preview toggle belongs on this toolbar.
+
+    Named for ``offers_inker``'s reason: ``main._draw_reference`` has to ask
+    the same question to decide what to draw, and two spellings of "is this a
+    tile on screen in 2D" is how a toggle comes to be shown for something it
+    does not affect -- or, worse, to affect something that does not show it.
+    """
+    return (
+        ctx.state.mode == "2d"
+        and bool(job)
+        and job.get("stage") == "tile"
+        and job.get("status") == "done"
+    )
+
+
 def toolbar(ctx: Any) -> None:
     """The viewer's own controls, along the top of the viewport."""
     from .. import inker_mode
@@ -47,6 +69,16 @@ def toolbar(ctx: Any) -> None:
         # camera controls beside it do not apply to it at all.
         if imgui.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
+        imgui.same_line()
+    if shows_tiled(ctx, job):
+        # Only for a tile, and only in 2D: it is the one asset for which
+        # "repeated" is a true picture of the thing rather than a duplicate of
+        # it. The label carries the count so the scale change is stated -- the
+        # texture is drawn at half size, and a toggle that only said "Tiled"
+        # would leave the user wondering why the image shrank.
+        _changed, ctx.state.tile_preview = widgets.toggle(
+            f"Tiled {TILE_REPEAT}x{TILE_REPEAT}", ctx.state.tile_preview, tag="tile_preview"
+        )
         imgui.same_line()
     if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):
         viewer.frame()

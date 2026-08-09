@@ -69,6 +69,30 @@ def _seed(app) -> None:
     clay_mode.new_document(app.app_ctx)
 
 
+def _seed_tile(app, png: Path) -> None:
+    """A finished tile job holding ``png``, selected, with 2D showing it.
+
+    Enough of a job for the tile-only controls to be on screen. Writes into
+    whatever data directory the process was pointed at, so run this against a
+    throwaway ``WARLOCK_DATA_DIR`` rather than a real library.
+    """
+    import shutil
+
+    ctx = app.app_ctx
+    job_id = ctx.svc.store.create(
+        "text", "cobblestone", {"seed": 11}, stage="tile", status="done"
+    )
+    job_dir = ctx.svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(png, job_dir / "input.png")
+    from warlock.pipelines import seam
+
+    ctx.svc.store.merge_params(job_id, {"seam_report": seam.report(job_dir / "input.png")})
+    ctx.cache.invalidate()
+    ctx.cache.tick()
+    ctx.state.select(job_id)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
@@ -77,6 +101,16 @@ def main() -> int:
         "--seed",
         action="store_true",
         help="open an Inker canvas and a Clay model before capturing",
+    )
+    ap.add_argument(
+        "--tile",
+        type=Path,
+        help="seed a finished tile job from this PNG and select it",
+    )
+    ap.add_argument(
+        "--tile-preview",
+        action="store_true",
+        help="turn the 2D viewport's tiled preview on",
     )
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -95,6 +129,9 @@ def main() -> int:
     app.setup_context()
     if args.seed:
         _seed(app)
+    if args.tile:
+        _seed_tile(app, args.tile)
+    app.app_ctx.state.tile_preview = bool(args.tile_preview)
     try:
         for name in args.themes.split(","):
             tokens.set_theme(name)

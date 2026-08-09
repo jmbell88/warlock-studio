@@ -158,10 +158,19 @@ def can_edit_job(ctx: Any, job: Any) -> bool:
 
     From the cached row alone -- no filesystem calls, because the toolbar asks
     this every frame.
+
+    Both image stages, and the service's ``files.EDITABLE_STAGES`` is the
+    authority rather than a second list here: this is a *permission*, and a
+    pane that offered a button the service refuses is the drift
+    ``derived_2d_for`` exists to prevent one artifact set over. A tile's albedo
+    is the asset, its whole material set derives from it, and the derived maps
+    re-derive against its mtime for free.
     """
+    from ..service import files as svc_files
+
     return bool(
         job
-        and job.get("stage") == "reference"
+        and job.get("stage") in svc_files.EDITABLE_STAGES
         and job.get("status") == "done"
         and "input.png" in (job.get("files") or [])
     )
@@ -207,6 +216,10 @@ def _load_job(svc: Any, job_id: str, *, matte: bool = False) -> dict[str, Any]:
     # the title, the dedupe and the save all key on the reference.
     doc.path = flat
     edit = svc_files.reference_edit_status(svc, job_id)
+    # The tab says which kind of image it holds, because the two are edited for
+    # different reasons and a tile's tab called "reference" reads as the wrong
+    # asset opened. Blocking thread, so the extra row read is free here.
+    stage = (svc.store.get(job_id) or {}).get("stage")
     out = {
         "doc": doc,
         "path": flat,
@@ -214,7 +227,7 @@ def _load_job(svc: Any, job_id: str, *, matte: bool = False) -> dict[str, Any]:
         "job_id": job_id,
         "link_kind": "reference-edit",
         "has_original": bool(edit.get("has_original")),
-        "title": f"{job_id[:8]} reference",
+        "title": f"{job_id[:8]} {'tile' if stage == 'tile' else 'reference'}",
     }
     if matte:
         # Captured before the cut, and handed back as the tab's saved head: the

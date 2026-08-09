@@ -168,3 +168,95 @@ def test_a_failing_tile_quotes_the_threshold_it_went_over():
     )
     assert colour == theme.WARN
     assert f"{worst:.2f}" in text and f"{seam.SEAM_MAX:.2f}" in text
+
+
+# -- a tile is an editable image, and a repeating one -------------------------
+
+
+def test_a_tile_can_be_opened_in_the_inker(svc):
+    """The albedo is the asset, so it is as editable as a reference's picture.
+
+    The pane asks ``inker_mode.can_edit_job`` and the service enforces
+    ``files.EDITABLE_STAGES``; this pins that they agree, because a button the
+    service refuses is worse than no button.
+    """
+    from warlock.service import files as svc_files
+    from warlock.studio import inker_mode
+
+    job = {"id": "a" * 12, "stage": "tile", "status": "done", "files": ["input.png"]}
+    assert inker_mode.can_edit_job(None, job)
+    assert "tile" in svc_files.EDITABLE_STAGES
+
+
+def test_a_model_job_is_still_not_editable():
+    """A model's input.png is the picture it was reconstructed *from*: editing
+    it changes nothing about the mesh on disk while invalidating the recipe
+    that describes it."""
+    from warlock.studio import inker_mode
+
+    job = {"id": "a" * 12, "stage": "model", "status": "done", "files": ["input.png"]}
+    assert not inker_mode.can_edit_job(None, job)
+
+
+def test_editing_a_tile_re_measures_its_seam_rather_than_its_composition(svc):
+    """The split ``queue._generate`` already makes, applied to the edit path.
+
+    A composition report is entirely about where a subject sits and a tile has
+    none. A seam ratio is the thing an edit is most likely to break -- a brush
+    stroke does not wrap -- so the generated verdict must not survive one.
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    from warlock.service import files as svc_files
+
+    job_id = svc.store.create("text", "stone", {"seed": 1}, stage="tile", status="done")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    # A wrapping triangle wave: seamless, so the generated verdict is "tiles".
+    ramp = np.abs((np.arange(64) * 2.0 / 64) - 1.0)
+    arr = np.stack([np.tile((ramp * 255).astype(np.uint8), (64, 1))] * 3, axis=-1)
+    Image.fromarray(arr, "RGB").save(job_dir / "input.png")
+    svc.store.merge_params(job_id, {"seam_report": seam.report(job_dir / "input.png")})
+    assert svc.store.get(job_id)["params"]["seam_report"]["seamless"] is True
+
+    # Now hand-edit it into a hard step, which is exactly a seam.
+    edited = np.zeros((64, 64, 3), dtype=np.uint8)
+    edited[:, 32:] = 255
+    buf = io.BytesIO()
+    Image.fromarray(edited, "RGB").save(buf, "PNG")
+    svc_files.save_edited_image(svc, job_id, buf.getvalue())
+
+    params = svc.store.get(job_id)["params"]
+    assert params["hand_edited"] is True
+    assert params["seam_report"]["seamless"] is False
+    # And no composition verdict was invented for something with no subject.
+    assert "reference_report" not in params
+
+
+def test_the_tiled_toggle_is_offered_for_a_tile_in_2d_and_nowhere_else():
+    from types import SimpleNamespace
+
+    from warlock.studio.panes import overlay
+
+    def ctx(mode):
+        return SimpleNamespace(state=SimpleNamespace(mode=mode))
+
+    done_tile = {"stage": "tile", "status": "done"}
+    assert overlay.shows_tiled(ctx("2d"), done_tile)
+    # Not in 3D: the thing on screen there is a mesh.
+    assert not overlay.shows_tiled(ctx("3d"), done_tile)
+    assert not overlay.shows_tiled(ctx("2d"), {"stage": "reference", "status": "done"})
+    assert not overlay.shows_tiled(ctx("2d"), {"stage": "tile", "status": "running"})
+    assert not overlay.shows_tiled(ctx("2d"), None)
+
+
+def test_the_tiled_preview_is_off_by_default():
+    """Stated rather than assumed: every other view of an asset shows one cell,
+    so a viewport that silently showed four would make the texture look a
+    quarter of its size."""
+    from warlock.studio.state import AppState
+
+    assert AppState().tile_preview is False
