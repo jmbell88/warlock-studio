@@ -232,9 +232,29 @@ Two items were already satisfied and are recorded as such rather than re-done: *
 layer drag-reorder and the Clay outliner's Ctrl/Shift multi-select both existed, and both are gated
 on `busy`). K94's *disable-with-reason* landed; offering more tiers stays gated on R133.
 
-**Not visually verified.** Everything here has GL smoke coverage — every pane builds, in both
-palettes, at every sort and density — but no human has looked at a running window. The light theme
-and the compact library row are the two most likely to want an eye.
+**Visually verified 2026-08-08**, by `scripts/screenshot_modes.py` — the real `App`, every
+mode, both palettes, rendered and read back off the framebuffer. Four defects, none of which
+GL smoke coverage could have seen:
+
+- **41 of 83 icons drew Inter glyphs.** imgui resolves a merged font's sources in order, so
+  the base wins; Inter ships 745 PUA stylistic-set alternates and Lucide 0.525.0 spans
+  U+E038–E682, overlapping on 478 codepoints. Settings was a division sign, Clay's ruler a
+  question mark, Quit a digit six. `scripts/strip_font_pua.py` + `tests/test_fonts.py`.
+- **The smoke suite runs at UI scale 1.0 and nothing else does.** `theme.apply` sets
+  `item_spacing` through `sp()`, so grids subtracting a literal `8` per gap were exact at
+  1.0 and short at 1.5 — the Inker toolbox lost its fifth column, Clay its fourth button,
+  the Clay outliner reserved 32 px for a 58 px button. `widgets.grid_width`.
+- **Nine full-width sliders had no visible label**, because imgui draws one outside the
+  widget. `widgets.labeled_slider_int`/`_float`, `labeled_combo`'s rule.
+- **Every landing tile drew a scrollbar** over a few pixels of overflow, on the app's first
+  screen every launch. `widgets.card` takes `no_scrollbar`.
+
+One thing was found and deliberately **not** changed, because it is a design call rather than
+a defect: `viewer/env.BACKGROUND_HEX` is the literal dark `0x0F1014` and its comment says it
+"matches tokens.BG so the viewport and the panels around it read as one surface" — which the
+light palette breaks, leaving both 3D viewports black in a light UI. Making it follow
+`theme.BG` means threading a colour through `viewer/render.draw` (which already takes one)
+*and* adding it to `Viewer.render`'s B12 skip key, or a theme switch would not redraw.
 
 ---
 
@@ -406,28 +426,48 @@ both), a dedicated texture model third and only if the bake path proves insuffic
 Hard prerequisite: **Clay25** (generator UVs + box unwrap, Phase 4) — Clay geometry
 currently has no UVs, so nothing user-modelled is texturable until it lands.*
 
-### Tier 1 — Material generator (tileable PBR sets)
+### Tier 1 — Material generator (tileable PBR sets) — **done (2026-08-08)**
 
-1. **T1** — Calibrate `seam.SEAM_MAX` (currently 2.0, uncalibrated — TODO's deferred
-   table): stone / plaster / gravel / fabric tiles eyeballed. Corpus-keyed constant, so
-   it gets a `docs/measurements/` doc before it moves. First because everything in this
-   tier stands on the seam gate meaning something.
-2. **T2** — `output=texture` jobs through `service.jobs.create_job`: same validation
-   door, same VRAM admission, same directory-before-row ordering. Reuses the existing
-   `tile=True` circular-padding path (SDXL family only — refused for Flux at the door,
-   as today). New params join `service.validation.DERIVED_PARAMS` where the worker
-   records them.
-3. **T3** — PBR map derivation as a pure module (`pipelines/material.py`):
-   normal-from-luminance/height, roughness estimate — stdlib+numpy in the `vram.py`
-   purity sense, testable headlessly, a future native-kernel candidate (numpy reference
-   kept, per the invariant). Outputs land as derived artifacts under the
-   `_convert_locks` idiom.
-4. **T4** — Material packaging: a `material.zip` (albedo/normal/roughness[/height])
-   derived artifact, plus a glTF material export for engine import.
-5. **T5** — UI: a "Material" toggle on the 2D form (2D mode owns every prompt control;
-   a control belongs to exactly one pane), tiled 2×2 preview in the viewport, and an
-   "Open in Inker" path for hand-editing the albedo (the `paint.ora` staleness rule
-   applies: regenerating marks the layered source stale).
+*A record, not a queue. T1 is one commit, T3+T4 one, T5 one; the tests are
+`tests/test_material.py`, the additions to `tests/test_derive_2d.py`,
+`tests/test_tile_form.py` and `tests/test_inspector_exports.py`. Five things are worth
+carrying forward because they are decisions rather than edits:*
+
+- **`SEAM_MAX` is 3.5, and the corpus is the reason** — `docs/measurements/2026-08-08-seam-threshold.md`.
+  2.0 raised two false alarms on tiles that wrap perfectly, and the shape that breaks
+  the ratio is large flat cells with thin hard lines: the denominator is a mean over
+  every adjacent pair and so is tiny on a mostly-flat picture, while the numerator is
+  one column that may land on a grout line. The measured empty band is 2.50–5.52 and
+  3.5 is its geometric centre rounded. `scripts/calibrate_seam.py` and
+  `calibrate_seam_hard.py` rebuild the corpus from fixed seeds.
+- **T2 was already shipped as `output=tile`** and is recorded rather than re-done. It
+  goes through `create_job`, takes the same validation door, VRAM admission and
+  directory-before-row ordering, refuses non-SDXL families at the door and at the pipe,
+  and `seam_report` was already in `DERIVED_PARAMS`. Adding an `output=texture` spelling
+  would have been two names for one stage.
+- **`pipelines/material.py` says it is estimating.** Every map carries its one stated
+  assumption (darker is deeper; fine detail is roughness) *and* the case where that
+  assumption fails honestly. Metalness is not estimated at all — a metal and a dark
+  dielectric of the same colour are the same pixels — roughness is squeezed into
+  0.35–0.95 because neither end is a claim it has earned, and the height map is
+  deliberately not offered as `occlusionTexture`. Every Export label says "est." and the
+  zip repeats it in a README, because those are the only places the user reads.
+- **The wrap is the load-bearing part and the shift test is the proof.** Derivation
+  commutes with a cyclic shift iff every neighbourhood wraps, so
+  `derive(roll(x)) == roll(derive(x))` catches a clamped edge anywhere in the chain
+  without knowing where the chain's edges are. A clamped edge would put a seam in the
+  derived map that the albedo does not have — invisible until the material is on a
+  surface.
+- **`material.zip` re-derives rather than asking `get_file`.** It already holds its own
+  artifact lock, and reaching for three more would establish an ordering between four
+  locks where the module has one stated rule about two.
+- **T5's toggle already existed** (Object / Seamless tile) and the maps derive with
+  nothing to opt into, so what T5 actually needed was both directions of working with
+  the albedo: a tile is now openable in the Inker (`files.EDITABLE_STAGES`, with
+  `_remeasure` re-measuring the *seam* rather than a composition report a tile has no
+  subject for), and the 2D viewport can draw it repeated — off by default, because every
+  other view of an asset shows one cell and a viewport that silently showed four would
+  make the texture look a quarter of its size.
 
 ### Tier 2 — Mesh re-texturing (new look for an existing `model.glb`'s UVs)
 
