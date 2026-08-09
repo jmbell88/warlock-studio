@@ -281,6 +281,21 @@ def _first_base_colour(gltf: dict) -> int | None:
     return None
 
 
+def _has_uvs(gltf: dict) -> bool:
+    """Whether anything in the file has the ``TEXCOORD_0`` a texture is sampled by.
+
+    The one hard requirement for giving an *untextured* mesh a skin: without UVs
+    there is nowhere for the atlas to land, and attaching one anyway produces a
+    file that loads, renders a single texel's colour over everything, and looks
+    like the restyle failed rather than like the mesh was never unwrapped.
+    """
+    return any(
+        "TEXCOORD_0" in (primitive.get("attributes") or {})
+        for mesh in gltf.get("meshes") or []
+        for primitive in mesh.get("primitives") or []
+    )
+
+
 def _image_bytes(gltf: dict, buffer: bytes, image_index: int) -> bytes | None:
     image = (gltf.get("images") or [])[image_index]
     view_index = image.get("bufferView")
@@ -291,6 +306,45 @@ def _image_bytes(gltf: dict, buffer: bytes, image_index: int) -> bytes | None:
     view = (gltf.get("bufferViews") or [])[view_index]
     start = int(view.get("byteOffset", 0))
     return buffer[start : start + int(view["byteLength"])]
+
+
+def atlas_size(glb_path: Path) -> int | None:
+    """The square edge of the mesh's current albedo, or None.
+
+    What a re-texture should bake at unless told otherwise, and the measurement
+    is the reason it is asked rather than assumed
+    (``docs/measurements/2026-08-08-retexture-bake.md``). A trellis mesh's
+    atlas is 2048; baking at a fixed 1024 made no visible difference to the
+    parts a view covered -- and quietly halved the resolution of the ~63% that
+    no view covered and therefore *kept its old colour*, which is the half a
+    re-texture is supposed to leave alone.
+
+    Non-square or unreadable gives None: the whole pipeline is square, and a
+    caller falling back to ``TEXTURE_PX`` is a better answer than one atlas
+    axis silently deciding both.
+    """
+    import io
+
+    from PIL import Image
+
+    from .. import glbio
+
+    try:
+        gltf, buffer = glbio.read_glb(glb_path)
+        texture_index = _first_base_colour(gltf)
+        if texture_index is None:
+            return None
+        source = (gltf.get("textures") or [])[texture_index].get("source")
+        if not isinstance(source, int):
+            return None
+        raw = _image_bytes(gltf, buffer, source)
+        if raw is None:
+            return None
+        with Image.open(io.BytesIO(raw)) as im:
+            width, height = im.size
+    except Exception:
+        return None
+    return int(width) if width == height else None
 
 
 def extract_base_colour(glb_path: Path, dest: Path, *, size: int) -> bool:
@@ -359,7 +413,11 @@ def swap_base_colour(glb_path: Path, atlas_png: Path, dest: Path) -> bool:
         data = glb_path.read_bytes()
         header, gltf, rest = glbio.split_glb(data)
         texture_index = _first_base_colour(gltf)
-        if texture_index is None:
+        if texture_index is None and not _has_uvs(gltf):
+            # Nothing to attach a skin to. A Clay-built asset arrives with
+            # materials and no textures, which is fine; one with no UVs at all
+            # is not, and attaching an atlas anyway would render one texel's
+            # colour over the whole mesh and read as a failed restyle.
             return False
 
         # The BIN chunk, and everything after it kept verbatim.
@@ -389,18 +447,40 @@ def swap_base_colour(glb_path: Path, atlas_png: Path, dest: Path) -> bool:
         images = gltf.setdefault("images", [])
         images.append({"bufferView": len(views) - 1, "mimeType": "image/png"})
         textures = gltf.setdefault("textures", [])
-        sampler = textures[texture_index].get("sampler")
         new_texture = {"source": len(images) - 1}
-        if sampler is not None:
-            new_texture["sampler"] = sampler
+        if texture_index is not None:
+            sampler = textures[texture_index].get("sampler")
+            if sampler is not None:
+                new_texture["sampler"] = sampler
         textures.append(new_texture)
-        # Every material sampling the old texture as albedo, not only the first:
-        # _first_base_colour found *a* slot, and a multi-material mesh sharing
-        # one atlas would otherwise come back half restyled.
-        for material in gltf.get("materials") or []:
-            slot = (material.get("pbrMetallicRoughness") or {}).get("baseColorTexture")
-            if slot is not None and slot.get("index") == texture_index:
-                slot["index"] = len(textures) - 1
+        if texture_index is None:
+            # An untextured mesh gains the slot rather than being refused. This
+            # is the Clay case and it is the interesting one: a hand-modelled
+            # box carries a real box unwrap, where a reconstruction carries an
+            # atlas of roughly one texel per triangle.
+            materials = gltf.setdefault("materials", [])
+            if not materials:
+                materials.append({})
+                for mesh in gltf.get("meshes") or []:
+                    for primitive in mesh.get("primitives") or []:
+                        primitive.setdefault("material", 0)
+            for material in materials:
+                pbr = material.setdefault("pbrMetallicRoughness", {})
+                pbr["baseColorTexture"] = {"index": len(textures) - 1}
+                # A tinted base colour multiplies the atlas, which would show as
+                # the restyle coming back the wrong hue. The texture *is* the
+                # colour now.
+                pbr.pop("baseColorFactor", None)
+        else:
+            # Every material sampling the old texture as albedo, not only the
+            # first: _first_base_colour found *a* slot, and a multi-material
+            # mesh sharing one atlas would otherwise come back half restyled.
+            for material in gltf.get("materials") or []:
+                slot = (material.get("pbrMetallicRoughness") or {}).get(
+                    "baseColorTexture"
+                )
+                if slot is not None and slot.get("index") == texture_index:
+                    slot["index"] = len(textures) - 1
         buffers = gltf.setdefault("buffers", [{}])
         buffers[0]["byteLength"] = len(new_body)
 

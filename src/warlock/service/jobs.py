@@ -1266,8 +1266,13 @@ def retexture_job(
             f"and {models.IMG2IMG_STRENGTH_MAX}",
             field="strength",
         )
-    size = retexture.TEXTURE_PX if texture_size is None else int(texture_size)
-    if size not in retexture.TEXTURE_SIZES:
+    # None means "match the mesh's own atlas", resolved by the worker against
+    # the file rather than here: it is a property of the GLB, and reading it at
+    # the door would open a 26 MB file to answer a question the run is about to
+    # ask anyway. It rides in params as an absent key, which is also what makes
+    # a job row written before this existed still mean what it said.
+    size = None if texture_size is None else int(texture_size)
+    if size is not None and size not in retexture.TEXTURE_SIZES:
         raise Invalid(
             f"texture_size must be one of {list(retexture.TEXTURE_SIZES)}",
             field="texture_size",
@@ -1285,10 +1290,11 @@ def retexture_job(
         # verbatim.
         "source_job": job_id,
         "strength": value,
-        "texture_size": size,
         "seed": random_seed() if seed is None else int(seed),
         "base_model": base_key,
     }
+    if size is not None:
+        params["texture_size"] = size
     # At the door and before the row exists, as everywhere: six img2img passes
     # through one resident pipe is a real budget question beside a warm trellis.
     check_vram(svc, "retexture", "model", params)

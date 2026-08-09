@@ -303,6 +303,14 @@ def _png(colour, size=8) -> bytes:
     return buf.getvalue()
 
 
+def _bin(body: bytes) -> bytes:
+    import struct
+
+    from warlock import glbio
+
+    return struct.pack("<II", len(body), glbio.CHUNK_BIN) + body
+
+
 def _textured_glb(path, *, shared_image=False, materials=1) -> bytes:
     """A minimal GLB whose one image is the base colour of every material.
 
@@ -364,8 +372,6 @@ def test_a_mesh_with_no_albedo_is_a_false_rather_than_a_raise(tmp_path):
     header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
     glb.write_bytes(glbio.rebuild_glb(header, {"asset": {"version": "2.0"}}, b""))
     assert retexture.extract_base_colour(glb, tmp_path / "b.png", size=8) is False
-    assert retexture.swap_base_colour(glb, tmp_path / "b.png", tmp_path / "o.glb") is False
-    assert not (tmp_path / "o.glb").exists()
 
 
 def test_a_swapped_atlas_reads_back_as_the_new_albedo(tmp_path):
@@ -470,3 +476,82 @@ def test_the_surface_exports_are_a_stated_subset_of_the_derived_ones():
         "model.stl",
         "collision.glb",
     }
+
+
+def test_a_mesh_with_no_uvs_cannot_be_given_a_skin(tmp_path):
+    """Attaching an atlas anyway renders one texel's colour over everything,
+    which reads as a failed restyle rather than as an unwrapped mesh."""
+    import struct
+
+    from warlock import glbio
+
+    glb = tmp_path / "bare.glb"
+    header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
+    doc = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": 4}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+    }
+    glb.write_bytes(glbio.rebuild_glb(header, doc, _bin(bytes(4))))
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((1, 2, 3), size=4))
+    assert retexture.swap_base_colour(glb, atlas, tmp_path / "o.glb") is False
+    assert not (tmp_path / "o.glb").exists()
+
+
+def test_an_untextured_unwrapped_mesh_gains_the_slot(tmp_path):
+    """The Clay case, and the interesting one: a hand-modelled box carries a
+    real box unwrap where a reconstruction carries roughly one texel per
+    triangle. Refusing it would put the only meshes with usable UVs out of
+    reach of the one feature that needs them.
+    """
+    import struct
+
+    from warlock import glbio
+
+    glb = tmp_path / "clay.glb"
+    header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
+    doc = {
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": 4}],
+        "meshes": [
+            {"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}}]}
+        ],
+    }
+    glb.write_bytes(glbio.rebuild_glb(header, doc, _bin(bytes(4))))
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((200, 100, 50), size=16))
+    dest = tmp_path / "out.glb"
+    assert retexture.swap_base_colour(glb, atlas, dest) is True
+
+    gltf, _ = glbio.read_glb(dest)
+    # A material was minted and every primitive points at it.
+    assert gltf["meshes"][0]["primitives"][0]["material"] == 0
+    slot = gltf["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]
+    assert slot["index"] == 0
+    out = tmp_path / "read.png"
+    assert retexture.extract_base_colour(dest, out, size=16) is True
+    with Image.open(out) as im:
+        assert im.convert("RGB").getpixel((0, 0)) == (200, 100, 50)
+
+
+def test_the_default_atlas_size_is_the_mesh_s_own(tmp_path):
+    """Measured, not assumed. A fixed size changed nothing a view covered and
+    quietly halved the resolution of the ~63% no view did -- and that is the
+    half a re-texture is supposed to leave exactly as it found it.
+    """
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb)  # its atlas is 8 px square
+    assert retexture.atlas_size(glb) == 8
+
+
+def test_an_unreadable_or_absent_atlas_has_no_size(tmp_path):
+    import struct
+
+    from warlock import glbio
+
+    glb = tmp_path / "bare.glb"
+    header = struct.pack("<III", glbio.GLB_MAGIC, 2, 0)
+    glb.write_bytes(glbio.rebuild_glb(header, {"asset": {"version": "2.0"}}, b""))
+    assert retexture.atlas_size(glb) is None
+    assert retexture.atlas_size(tmp_path / "nothing.glb") is None

@@ -1,0 +1,22 @@
+{
+  "base_model": "sdxl_cfg",
+  "strength": 0.85,
+  "seed": 42,
+  "view_px": 1024,
+  "texture_px": 1024,
+  "subjects": {
+    "claycrate": {
+      "views": 6,
+      "coverage": 1.0,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 56.6,
+      "delta": null,
+      "prompt": "a weathered wooden crate bound with rusted iron bands, planks, sharp detail",
+      "had_base": false
+    }
+  }
+}

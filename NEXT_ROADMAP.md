@@ -469,42 +469,77 @@ carrying forward because they are decisions rather than edits:*
   other view of an asset shows one cell and a viewport that silently showed four would
   make the texture look a quarter of its size.
 
-### Tier 2 — Mesh re-texturing (new look for an existing `model.glb`'s UVs)
+### Tier 2 — Mesh re-texturing (new look for an existing `model.glb`'s UVs) — **done (2026-08-08)**
 
-6. **T6** — A new `blender_worker` op (`op_bake`): render N views of the mesh, run
-   img2img/inpaint over them with the prompt (IP-Adapter/ControlNet conditioning
-   already wired), project back onto the UV atlas, bake. Host side stays bpy-free (the
-   `rigging.py` split); subprocess in the kill-on-close job; writes temp names and
-   renames on success — the `rig.glb`/`rig.json` publication pattern verbatim. Shared
-   deliberately with TODO §11's retopo bake so the infrastructure is built once.
-7. **T7** — `service.jobs.retexture_job`, a near-sibling of `optimize_job`: `Conflict`
-   refusal on queued/running jobs, staged rewrite of the served `model.glb`
-   (`optimize.staged_copy` — it is a served file on a done job), deletion of every
-   derived artifact describing the old surface (STL/OBJ/FBX/`textures.zip`/
-   `collision.glb`), stale-artifact report to the panel before the button. `source.glb`
-   stays immutable — a retexture is derivation, never authorship.
-8. **T8** — VRAM admission: a declared entry in `vram.py`'s cost table (never sniffed),
-   `check_vram` at the door, `Worker._check_resources` at dispatch. Multi-view SDXL
-   passes beside resident trellis is a real budget question on the 32 GB card.
-9. **T9** — UI: a texture panel in the 3D inspector beside the retarget panel — not a
-   new mode (the mode list is closed; the retarget panel is the precedent for
-   "operation on a selected done job").
-10. **T10** — Pin that a retexture makes the rig **not** stale (a rig references
-    geometry, not pixels) with a test — the one place this differs from a retarget,
-    and worth a written assertion so nobody "fixes" it later.
-11. **T11** — Observations: whether a retexture writes an `observations` row is a
-    decision — the corpus is about what *generation* settings produce, and
-    `import_mesh`/the retarget re-audit deliberately write none. Default to none;
-    revisit if texture settings ever feed findings hints.
+*A record, not a queue. T6 is two commits (the pure host half, then `op_views`/`op_project`), T7 one,
+T8 one, T9/T10/T11 one; the tests are `tests/test_retexture.py` plus the re-texture sections of
+`tests/test_service.py`, `tests/test_vram.py` and `tests/test_studio_plumbing.py`. Seven decisions
+are worth carrying forward:*
 
-### Tier 3 — Dedicated texture model (only if Tier 2's bake proves insufficient)
+- **It is a queue job, and T7's "near-sibling of `optimize_job`" means the refusals, not the
+  placement.** A retarget is a two-second gltfpack subprocess and belongs inline; six SDXL passes
+  around two Blender runs need the resident pipe, so a TaskRunner thread would be the OOM that only
+  reproduces under load. What *is* the sibling: the `Conflict` on a queued or running source, the
+  untouched `source.glb`, and every refusal at the door rather than in the worker.
+- **The mesh is published into the source job's directory, by rename.** The rig's pattern verbatim,
+  and the same three consequences: a cancel deletes only the temp (`rigging.RETEXTURE_GLB_TMP`) and
+  this job's own renders, `_discard_artifacts` resolves `source_job`, and nothing ever sees a
+  partial `model.glb`.
+- **`SURFACE_DERIVED` is a stated subset of `files.DERIVED`, asserted in both directions.** STL and
+  the convex collision hull carry no material, and a re-texture changes no geometry, so deleting
+  them would cost a re-export to produce a byte-identical file. It lives in
+  `pipelines/retexture.py` because `queue.py` deletes them and may not import `service`; the
+  per-artifact lock it deletes them under is injected by `studio.runtime` for the same reason, and
+  defaults to a null lock.
+- **The atlas swap appends, and it goes through `glbio`.** Re-exporting through trimesh would
+  re-encode every texture and rewrite the node graph, which is where the grounding transform lives.
+  Overwriting the image in place is wrong the moment anything else references it, so a new image, a
+  new texture, and every material sampling the old one repointed. An untextured but unwrapped mesh
+  *gains* the slot; a mesh with no `TEXCOORD_0` is refused.
+- **T10's assertion has two halves.** The rig, its poses and its sheets are asserted not stale, and
+  the retarget's own report is asserted still to name all of them — equal-by-accident is the failure
+  a bare "is empty" check cannot see.
+- **T11: no observations row.** The corpus is about what *generation* settings produce, which is
+  `import_mesh`'s and the retarget re-audit's argument unchanged. It falls out of
+  `_observe_finished`'s existing kind gate, which is exactly why it is pinned by a test.
+- **The default atlas size is the mesh's own, and that is a measured correction.** A flat 1024
+  resampled every trellis mesh's 2048 atlas down by half — including the ~63% that no view covers
+  and that therefore *keeps its old colour*, which is the half a re-texture must leave alone.
 
-12. **T12** — A UV-space diffusion or material-decomposition model as a registry spec
-    in `models.py` (family/residency **declared**, never sniffed), a `models.Fetch`
-    entry deduped on `(repo_id, destination)`, download only through the `fetch_worker`
-    subprocess, `local_files_only=True` at load. Enters as an isolated backend A/B'd
-    against Tier 2's bake on a fixed corpus through Review — the TODO §12 pattern —
-    never as a replacement. Gets its own spec first.
+**The verdict on the bake: `docs/measurements/2026-08-08-retexture-bake.md`.** Sufficient as a
+recolour, insufficient as a re-texture, and the cause is **coverage** — 36–37% of the atlas over four
+real reconstructions, because a perforated mesh's interior walls project onto holes in the render and
+are masked out. Neither atlas resolution nor view count is the limit: 1024 and 2048 are
+indistinguishable, and front-plus-back reach 36.1% while the other four views add 1.0 pp between
+them. Two findings from the same runs are load-bearing elsewhere: the bake is **faithful** where it
+has something to bake (every plank seam and bolt mark survives in the one valid positive control),
+and **`clay/uv.py`'s box projection stacks all six faces of `primitives.box()` on one unit square**
+(24 corners, 4 distinct UVs) — so a Clay-authored asset has UVs and cannot carry a texture, and
+Phase 5's stated Clay25 prerequisite is only half met.
+
+### Tier 3 — **Superseded by the Tier 2 measurement.** Coverage, not fidelity
+
+*T12 as written — "a UV-space diffusion or material-decomposition model" — is no longer the
+indicated next step, and the measurement is the reason rather than a change of mind: a better
+texture model would improve the third of the atlas that is already being painted and would do
+nothing about the two thirds that are not. Kept here rather than deleted because it is a decision
+with evidence behind it, and the evidence is what a future reader needs. In order:*
+
+12. **Pack Clay's box unwrap.** The smallest of the three, a prerequisite Phase 5's own preamble
+    already names, and the difference between a feature that silently does nothing on authored
+    geometry and one that works. `clay/uv.py` is explicit that overlapping islands are what a cube
+    projection *is* and that the primitives able to pack cheaply should do so in their own
+    generator; `primitives.box()` is the one that does not. The strength-0.85 control shows the bake
+    is ready for it.
+13. **Attack coverage.** More axis views are measured not to help. What would: weighting by
+    *visibility* rather than by facing — a depth test from the camera, which also removes the
+    `occlusion_tested: false` overhang smear — and views chosen from the mesh rather than from a
+    fixed basis.
+14. **Only then reconsider a texture model**, as a registry spec with family/residency declared, a
+    `models.Fetch` deduped on `(repo_id, destination)`, download only through `fetch_worker`, and
+    `local_files_only=True` at load — the T12 shape, unchanged — A/B'd through Review against the
+    bake on a corpus whose coverage is high enough for the difference to be attributable to the
+    model. It gets its own spec first.
 
 **Phase 5 verification:** pure modules (T3) get headless tests; T6/T7 follow the rig
 worker's test patterns (temp-name publication, cancel semantics, `_discard_artifacts`

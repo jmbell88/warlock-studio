@@ -65,7 +65,13 @@ def draw(ctx: Any, job: Any) -> None:
     form["texture_size"] = widgets.combo(
         "Atlas size",
         form["texture_size"],
-        [(str(s), f"{s} px") for s in retexture.TEXTURE_SIZES],
+        [("", "Match the mesh")]
+        + [(str(s), f"{s} px") for s in retexture.TEXTURE_SIZES],
+    )
+    widgets.help_marker(
+        "The default keeps the mesh's current atlas resolution. A smaller one "
+        "would also shrink the parts no view covers, which keep their old "
+        "colour."
     )
 
     _warn(ctx, job)
@@ -84,7 +90,7 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
             "job_id": job_id,
             "prompt": "",
             "strength": models.DEFAULT_IMG2IMG_STRENGTH,
-            "texture_size": str(retexture.TEXTURE_PX),
+            "texture_size": "",
         }
         ctx.state.preview["retexture_form"] = form
     return form
@@ -125,7 +131,7 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
             job_id,
             form["prompt"].strip(),
             strength=float(form["strength"]),
-            texture_size=int(form["texture_size"]),
+            texture_size=int(form["texture_size"]) or None,
         )
 
 

@@ -32,3 +32,6 @@ imgui.ini
 # seeds), and 49 MB for the seam corpus alone. The results JSON beside them is
 # the evidence and is tracked.
 /docs/measurements/data/**/*.png
+# And the meshes, for the same reason and more so: a re-texture corpus is a
+# copy of the input GLB plus its re-textured output, which is 27 MB a pair.
+/docs/measurements/data/**/*.glb

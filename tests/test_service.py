@@ -612,7 +612,11 @@ def test_a_retexture_queues_a_job_carrying_only_inputs(svc):
     assert row["kind"] == "retexture" and row["status"] == "queued"
     assert row["params"]["source_job"] == job_id
     assert row["params"]["seed"] == 7
-    assert row["params"]["texture_size"] == retexture.TEXTURE_PX
+    # Absent means "match the mesh's own atlas", resolved by the worker against
+    # the file. A fixed default halved the resolution of everything no view
+    # covered -- which is the half that keeps its old colour.
+    assert "texture_size" not in row["params"]
+    assert retexture.TEXTURE_PX in retexture.TEXTURE_SIZES
     # Nothing derived rides in: what the run measures lands on the mesh's row.
     assert not [k for k in DERIVED_PARAMS if k in row["params"]]
 

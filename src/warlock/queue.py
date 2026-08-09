@@ -2003,7 +2003,18 @@ class Worker:
             raise RuntimeError("source job has no mesh to re-texture")
 
         views = list(retexture.VIEWS)
-        texture_size = int(params.get("texture_size", retexture.TEXTURE_PX))
+        # Absent means "match the mesh", which is the default and is measured:
+        # a fixed size changed nothing a view covered and halved the resolution
+        # of everything no view did.
+        asked = params.get("texture_size")
+        texture_size = (
+            int(asked)
+            if asked
+            else (
+                await asyncio.to_thread(retexture.atlas_size, model_glb)
+                or retexture.TEXTURE_PX
+            )
+        )
         strength = float(params.get("strength", models.DEFAULT_IMG2IMG_STRENGTH))
         seed = int(params.get("seed", 42))
         base_key = str(params.get("base_model") or self.config.t2i_model)

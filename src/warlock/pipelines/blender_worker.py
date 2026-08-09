@@ -873,7 +873,15 @@ def op_views(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     source = Path(spec["source_glb"])
     if not source.exists():
         raise RuntimeError(f"nothing to render at {source}")
-    views_dir = Path(spec["views_dir"])
+    # Resolved, and that is not tidiness. ``render.filepath`` is one of the
+    # paths Blender interprets *itself*, relative to the .blend file rather
+    # than to the process's directory -- and there is no .blend file here, so a
+    # relative path renders successfully and saves the PNG somewhere the caller
+    # will never look. Nothing raises: ``bpy.ops.render.render`` reports
+    # completion and ``op_views`` returns ok. ``op_sheet`` has always been safe
+    # only because its caller hands it a TemporaryDirectory, which is absolute
+    # by construction.
+    views_dir = Path(spec["views_dir"]).resolve()
     views_dir.mkdir(parents=True, exist_ok=True)
     views = spec["views"]
 
@@ -969,8 +977,12 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     source = Path(spec["source_glb"])
     if not source.exists():
         raise RuntimeError(f"nothing to project onto at {source}")
-    views_dir = Path(spec["views_dir"])
-    out_dir = Path(spec["out_dir"])
+    # Both resolved, for op_views' reason: ``Image.filepath_raw`` is the same
+    # kind of path as ``render.filepath`` and Blender resolves it the same way,
+    # so a relative out_dir saves every bake somewhere the host will not find
+    # and reports success doing it.
+    views_dir = Path(spec["views_dir"]).resolve()
+    out_dir = Path(spec["out_dir"]).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     views = spec["views"]
     texture_size = int(spec["texture_size"])

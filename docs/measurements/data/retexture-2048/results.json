@@ -1,0 +1,25 @@
+{
+  "base_model": "sdxl_cfg",
+  "strength": 0.55,
+  "seed": 42,
+  "view_px": 1024,
+  "texture_px": 2048,
+  "subjects": {
+    "f0a5fe72492e": {
+      "views": 6,
+      "coverage": 0.37215590476989746,
+      "size": [
+        2048,
+        2048
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 48.6,
+      "delta": {
+        "mean_abs_diff": 16.51882553100586,
+        "changed_fraction": 0.7759323120117188
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true
+    }
+  }
+}
