@@ -1174,7 +1174,11 @@ def _trash_bar(ctx: Any, jobs: list[Any]) -> None:
             dialogs.Confirm(
                 title="Empty the trash?",
                 message="Every trashed asset and everything derived from it is "
-                "removed from disk. This cannot be undone.",
+                "removed from disk. This cannot be undone.\n\n"
+                "Assets you accepted, and any image you labelled, are kept: "
+                "they are what the quality judge and the tier checks are "
+                "measured against. Delete those individually if you want them "
+                "gone.",
                 confirm_label="Empty",
                 cancel_label="Cancel",
                 on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
@@ -1212,7 +1216,8 @@ def _ask_prune(ctx: Any) -> None:
             # moved two hundred jobs into the trash would free nothing while
             # reporting that it had.
             message="Everything but the newest N jobs is deleted from disk. "
-            "Running jobs are kept. This cannot be undone.",
+            "Running jobs are kept, and so is anything you accepted or "
+            "labelled. This cannot be undone.",
             confirm_label="Prune",
             cancel_label="Cancel",
             body=body,

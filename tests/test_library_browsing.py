@@ -248,7 +248,10 @@ def test_emptying_the_trash_reads_all_of_it_not_a_page(svc):
         svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
         svc_jobs.trash_job(svc, job_id)
         ids.append(job_id)
-    assert svc_jobs.empty_trash(svc) == {"deleted": 3}
+    # Exact rather than a subset: the count is the claim, and ``kept`` is 0
+    # because none of these carries a verdict. A trashed job that does is held
+    # back -- see ``test_emptying_the_trash_keeps_a_labelled_image``.
+    assert svc_jobs.empty_trash(svc) == {"deleted": 3, "kept": 0}
     for job_id in ids:
         assert svc.store.get(job_id) is None
         assert not svc.job_dir(job_id).exists()

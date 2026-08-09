@@ -411,6 +411,14 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
     denormalization exists for -- the assets are disposable, what was learned
     from them is not.
 
+    **A unit carrying evidence is left behind too, and it is not "remaining".**
+    The two are counted apart because they mean opposite things to the reader:
+    ``remaining`` is transient and the answer is to press again in a moment,
+    while ``kept`` is permanent and pressing again will never change it. Folding
+    the second into the first would produce a button that asks to be pressed
+    forever. See ``jobs.retained_job_ids`` for which units qualify and why the
+    per-job ``delete_job`` is deliberately still able to remove one.
+
     **A unit the worker is still inside is left behind, and so is the sweep.**
     This used to call the unguarded ``store.delete`` and then rmtree, where
     ``delete_job`` and ``prune_jobs`` both go through ``delete_if_not_running``
@@ -427,7 +435,15 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
         raise NotFound("no such sweep")
     removed = 0
     remaining = 0
+    kept = 0
+    retained = jobs_mod.retained_job_ids(svc)
     for job in svc.store.sweep_jobs(sweep_id):
+        if job["id"] in retained:
+            # Checked before the cancel: a queued unit is not evidence yet, so
+            # this can only match a finished one, but reaching the cancel first
+            # would still be asking the worker to stop a job we are keeping.
+            kept += 1
+            continue
         if job["status"] in ("queued", "running"):
             # Through the service, so a running job's worker is actually asked
             # to stop rather than only having its row rewritten.
@@ -443,9 +459,13 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
             continue
         shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
         removed += 1
-    if remaining:
+    if remaining or kept:
         # The sweep row outlives its last unit deliberately: it is what the
-        # Review list offers the second press against.
-        return {"ok": True, "deleted": removed, "remaining": remaining}
+        # Review list offers the second press against -- and, for a kept unit,
+        # the only thing that still groups it. Dropping the row while its
+        # accepted units kept their ``sweep_id`` would hide them from the
+        # library (``Filters.matches`` excludes sweep units) with nothing left
+        # in Review to reach them by.
+        return {"ok": True, "deleted": removed, "remaining": remaining, "kept": kept}
     svc.store.delete_sweep(sweep_id)
-    return {"ok": True, "deleted": removed, "remaining": 0}
+    return {"ok": True, "deleted": removed, "remaining": 0, "kept": 0}

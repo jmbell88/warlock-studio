@@ -7,7 +7,7 @@ source rather than against the documents' own claims. `git log --diff-filter=D`
 finds all four if an old reference needs chasing.
 
 **Nothing here is ticked.** A finished item is deleted, not ticked: a plan whose
-boxes disagree with the tree is worse than no plan, and `CLAUDE.md` plus the
+boxes disagree with the tree is worse than no plan, and `../CLAUDE.md` plus the
 comments at each site are the record of what shipped and why.
 
 ## What the verification found, so it is not re-run
@@ -36,9 +36,9 @@ was lost:
   It is unused because it is waiting on a human, not on code (§7).
 
 Three citations in the deleted documents were stale and are corrected here rather
-than carried: the command palette is `src/warlock/studio/panes/palette.py` (with
-its pure half in `src/warlock/studio/palette.py`); the configuration chapter is
-`docs/manual/16-configuration.md`; `docs/manual/` is numbered `00-index` through
+than carried: the command palette is `../src/warlock/studio/panes/palette.py` (with
+its pure half in `../src/warlock/studio/palette.py`); the configuration chapter is
+`manual/16-configuration.md`; `manual` is numbered `00-index` through
 `21-extending`, twenty-two chapters. **Two of those three corrections were
 themselves wrong as first written** — the chapter was given as
 `14-configuration.md`, which is the *shortcuts* chapter, and the renumbering was
@@ -46,21 +46,21 @@ given as "01→19" — and both were repaired on 2026-08-09 against the tree. A
 correction is not exempt from the rule it enforces.
 
 **A bare path in this file means `src/warlock/<path>` unless it starts with
-`docs/`, `scripts/`, `tests/`, `native/` or `vendor/`.** That matters because a
-real top-level `bench/` output directory exists beside the `src/warlock/bench/`
+``, `../scripts`, `../tests`, `../native` or `../vendor`.** That matters because a
+real top-level `../bench` output directory exists beside the `../src/warlock/bench`
 package, so "`bench/findings.py`" is ambiguous on its face; where it could be
 read either way below, it is written out in full.
 
 ## The section numbers are load-bearing — do not renumber
 
 Eighteen source, test and script files cite `TODO.md §2`, `§3`, `§5`, `§7`, `§8`
-and `§10` **by number** — `src/warlock/judge.py`, `src/warlock/service/judge.py`,
-`src/warlock/service/findings.py`, `src/warlock/tiercheck.py`,
-`src/warlock/studio/widgets.py`, `src/warlock/studio/review_mode.py`,
-`scripts/sweep_confirm.py`, `scripts/sweep_rebaseline.py`,
-`scripts/sweep_rogue.py`, `scripts/qualify_tiers.py` and eight test docstrings.
-A further handful (`src/warlock/db.py`, `src/warlock/sweep.py`,
-`scripts/calibrate_seam.py`) name `TODO.md` without a section number, which is
+and `§10` **by number** — `../src/warlock/judge.py`, `../src/warlock/service/judge.py`,
+`../src/warlock/service/findings.py`, `../src/warlock/tiercheck.py`,
+`../src/warlock/studio/widgets.py`, `../src/warlock/studio/review_mode.py`,
+`../scripts/sweep_confirm.py`, `../scripts/sweep_rebaseline.py`,
+`../scripts/sweep_rogue.py`, `../scripts/qualify_tiers.py` and eight test docstrings.
+A further handful (`../src/warlock/db.py`, `../src/warlock/sweep.py`,
+`../scripts/calibrate_seam.py`) name `TODO.md` without a section number, which is
 the provenance case below. `§4` and `§6` are cited by nothing: §4 is carried
 anyway, and §6 was deleted when its three UI decisions shipped — the two test
 docstrings that still pointed at §6 now state the decision instead of citing it,
@@ -90,7 +90,7 @@ Four packages were built and tested entirely headless. Every claim below is
 proven at the level of bookkeeping, arithmetic and imgui frames building, and
 **unproven at the level of the thing actually working**. This has the shortest
 path to an unpleasant surprise of anything in the file, and nothing under
-`docs/measurements/` records any of the three.
+`measurements` records any of the three.
 
 1. **One real N-candidate promote.** Candidates 1/2/3 is proven as columns,
    seeds, admission, dissolve, filter and picker. Nothing has ever reconstructed
@@ -127,6 +127,14 @@ this is untidiness rather than a bug — but they should not be quoted as facts.
 *Code work is sweep-spec preparation and it is done. §3, §4, §5, §7 and §8 are
 all waiting on the output. Neither run has happened.*
 
+*Pre-registered 2026-08-09, before any unit was queued:
+[`2026-08-09-rebaseline.md`](measurements/2026-08-09-rebaseline.md) (which
+supersedes the hole-rate baseline and carries the go/no-go — **≥12 accepts of
+50**) and
+[`2026-08-09-framing-axis.md`](measurements/2026-08-09-framing-axis.md).
+The decision rules in both are binding; do not re-open them after seeing the
+labels.*
+
 ### What the review found
 
 **3 accepts in 83.** All three are `bg_removal=birefnet`; `auto` went 0 for 80.
@@ -152,7 +160,7 @@ At n=4 that would normally be a curiosity. Three things make it more:
 **The mechanism.** Without `birefnet.gguf`, matting falls back to a threshold
 cutout, and `auto` lets the server decide. A threshold cutout on a deliberately
 dark brief ("black and silver and blue") leaves background attached, and TRELLIS
-reconstructs it into a solid slab. `models/trellis2-gguf/birefnet.gguf` is
+reconstructs it into a solid slab. `../models/trellis2-gguf/birefnet.gguf` is
 present, so the learned matte was available the whole time and simply was not
 being asked for.
 
@@ -165,14 +173,14 @@ being asked for.
    single-reviewer, and the app shows the params. 8–12 units, birefnet against
    auto, labels hidden, is cheap next to a 3.7 h sweep. **Run this first** —
    everything else in this file leans on its answer.
-   `scripts/sweep_confirm.py`; Review's **Blind** toggle renames every unit *and
+   `../scripts/sweep_confirm.py`; Review's **Blind** toggle renames every unit *and
    reorders them*, because `expand` enqueues the baseline first and position
    names the arm as plainly as a label does.
 2. **Re-run the render sweep with birefnet as the baseline**, check the accept
    rate is workable, and only then re-run the depiction axes on top of it. The
    re-run also carries the **framing axis** for character subjects.
-   `scripts/sweep_rebaseline.py`. Both specs are validated headlessly by
-   `tests/test_campaign_specs.py`.
+   `../scripts/sweep_rebaseline.py`. Both specs are validated headlessly by
+   `../tests/test_campaign_specs.py`.
 
 Note the re-run measures more than one change: `PROMPT_TEMPLATE` moved
 (`PROMPT_VERSION` 3 → 4), so a unit from the new run is not comparable with one
@@ -181,14 +189,21 @@ landed before the re-run, which is the right order — a sweep around a broken b
 measures the brokenness — but the re-run is the first corpus in which any of them
 is measured.
 
-**The framing measurement document does not exist, and it is the missing half of
-a finished change.** `guidance.py` carries `framing` with `three_quarter` (the
-default) and `front_ortho`, threaded through `vectors.VECTOR_PARAMS`, and its own
-comment calls `front_ortho` "a measurement axis rather than a new default". So
-the code is done and nothing has been measured. After verdicts: write the
-document. If `front_ortho` wins for characters, flip the per-category default
-*then* — that is the `PROMPT_VERSION` 4 → 5 moment, and the findings-corpus split
-is the documented cost.
+**The framing measurement document is pre-registered and its Results section is
+empty** — [`2026-08-09-framing-axis.md`](measurements/2026-08-09-framing-axis.md).
+`guidance.py` carries `framing` with `three_quarter` (the default) and
+`front_ortho`, threaded through `vectors.VECTOR_PARAMS`, and its own comment calls
+`front_ortho` "a measurement axis rather than a new default". So the code is done
+and nothing has been measured. Two corrections the pre-registration makes to the
+sentence that used to stand here, both worth reading before the verdicts land.
+**There is no per-category framing machinery to flip**: `DEFAULT_FRAMING` is a
+single global, and `default_size_m` on `CATEGORIES` is the precedent for building
+one — so a win is two decisions, and the document fixes in advance that it adds
+`default_framing` to the `character` entry and leaves the global alone. And **a
+win at 5 pairs ships provisional**: p=0.031 does not survive Bonferroni over this
+run's nine contrasts, so the flip either waits on a 10-unit confirm or says
+"provisional" in its first line. It is still the `PROMPT_VERSION` 4 → 5 moment
+and the findings-corpus split is still the documented cost.
 
 ### `hole_worst` is not weakly informative. It is backwards.
 
@@ -202,7 +217,7 @@ median hole_worst — rejects 0.0000, accepts 0.0304
 The accepted meshes have *more* measured holes than the median discarded one,
 because a slab has no holes: `meshaudit` scores the dominant failure mode as
 perfect. Anywhere that reads a low hole fraction as evidence of quality is wrong.
-This supersedes `docs/measurements/2026-08-04-hole-rate-baseline.md`, which the
+This supersedes `measurements/2026-08-04-hole-rate-baseline.md`, which the
 re-run's measurement doc should say explicitly. The UI has already been audited
 for the inversion (`widgets.AUDIT_UNINFORMATIVE`, no green branch).
 
@@ -240,7 +255,7 @@ per-checkpoint rate and the hint under the base-model select reads it.
 
 *Binary present; corpus from §2.*
 
-`vendor/gltfpack/gltfpack.exe` arrived on 2026-08-07, so `pipelines/optimize.py`,
+`../vendor/gltfpack/gltfpack.exe` arrived on 2026-08-07, so `pipelines/optimize.py`,
 the config field, the doctor check and the retarget panel's full tier list are
 all live. What is *not* done is the qualification: a tier stays unqualified until
 it has been run against a chest, a sword and a rock and shown to keep UVs, both
@@ -249,7 +264,7 @@ and `panes/settings_3d.PROFILES` still offers `raw` alone, with the combo
 disabled and the reason stated.
 
 **The harness exists — what is missing is the corpus to point it at.**
-`scripts/qualify_tiers.py` runs draft/standard/detailed through `optimize.run`
+`../scripts/qualify_tiers.py` runs draft/standard/detailed through `optimize.run`
 (the same binary and flags a job uses) and `warlock/tiercheck.py` reads both
 GLBs' JSON chunks and names every loss: a primitive that lost `TEXCOORD_0`, a
 material count that fell, a primitive that came back unassigned, either PBR map
@@ -274,7 +289,19 @@ the correct answer: the accepts it wants are §2's output.
 **The qualification corpus is not the old sweep.** 80 of the 83 meshes were
 rejected, and a tier test needs meshes worth keeping: whether a tier *preserves*
 something cannot be judged on output that is already broken. The three accepted
-birefnet meshes are a start and are not enough.
+birefnet meshes were a start and were not enough — and they are **gone**: of the
+six model-stage accepts on record, exactly one still has a `source.glb` on disk
+(`44593039ccee`, copied to `../bench/tiers/corpus`). `delete_sweep` took the rest.
+
+**`../scripts/sweep_props.py` is what generates the corpus**, after §2's re-baseline
+fills in its `WINNER` dict — four no-axis plans at five seeds, twenty units:
+chest, sword and rock (whose prompts contain those words, because
+`qualify_tiers._warn_about_the_corpus` substring-matches `WANTED_SHAPES` against
+the prompt), plus one deliberately asymmetric knight that exists only for §4.
+Deliberately **not** `python -m warlock.bench run`: `core-v1` carries all three
+subjects, but `recipe.Recipe` has no `bg_removal` field, so a bench run would
+inherit the matte from whichever weights the host holds — in the one run whose
+whole premise is "at the winning settings".
 
 **The old triangle/watertight figures were measuring the wrong thing.** The
 triangle counts (177k–299k) stand. The watertight figure does not: `meshreport`
@@ -313,7 +340,7 @@ a measurement document.
 which is the only reason any of it matters. The detector tracks the inner edge of
 bulky armour rather than the limb's centre line, visible in the overlay, and may
 or may not cost anything once Blender's automatic weights run. The deformation
-battery (`src/warlock/templates/deform_qa/humanoid.json` — squat, arms overhead, elbow and
+battery (`../src/warlock/templates/deform_qa/humanoid.json` — squat, arms overhead, elbow and
 knee 90°, torso twist, rendered through the existing sheet pipeline as
 `rig_qa.png`, with a thumbnail in the inspector's rig section) is the artifact for
 judging this by eye. Scoring waits for the judge (§7).
@@ -400,13 +427,26 @@ disagrees with it is, on this evidence, more likely to be right.
 
 **Filing an `ai:` verdict is deliberately not part of it, and it is the one
 remaining seam.** `review_mode.SOURCE_AI = "ai:dino-probe"` is a constant nothing
-writes — `tests/test_review_mode.py` asserts no row carries it, and the live
+writes — `../tests/test_review_mode.py` asserts no row carries it, and the live
 database holds 117 verdict rows (107 `model`, 10 `reference`, as of
 2026-08-09), every one `source='human'` — which is the load-bearing half. The
 `(job_id, source, stage)` seam is built and tested, so the day §10's document
 exists this is one call. What it is waiting on is the threshold: a
 probability-to-accept cut is a constant the stored corpus is then keyed on, and
-that owes a measurement first.
+that owes a measurement first —
+[`2026-08-09-judge-threshold.md`](measurements/2026-08-09-judge-threshold.md),
+pre-registered with an empty Results section and blocked on a labelling session.
+
+**And it is blocked on pixels as much as on a human, which §7 used to
+understate.** Of the 117 verdict rows, **100 name job directories that no longer
+exist** — `delete_sweep` removed them under a confirmation that truthfully
+promised the verdicts would be kept, and they were; a probe trains on pixels.
+The `reference` stage stands at 6 accept / 4 reject against a `MIN_PER_CLASS` of
+8 per class, with 11 reference jobs left on disk to label from. So the labelling
+pass sits *behind* §2's runs rather than beside them.
+`service.jobs.retained_job_ids` is what stops the next corpus going the same
+way: the three bulk delete paths now skip a job carrying an accept at any stage
+or any label at an image stage, and count it apart from `remaining`.
 
 **The held-out accuracy figure is not built, and cannot be.** It is a measurement
 over labels that do not exist yet, and it is what §10 specifies — so the remaining
@@ -414,7 +454,7 @@ work here is: run a labelling session, then write the measurement document.
 
 ## 8. Phase 2 — the mesh judge
 
-Reuses `src/warlock/bench/views.py`'s 8-view render, adds the pooling adapter and the third
+Reuses `../src/warlock/bench/views.py`'s 8-view render, adds the pooling adapter and the third
 probe.
 
 **Not blocked on labelling — blocked on a corpus that contains acceptable
@@ -429,13 +469,13 @@ wasted — they are a clean negative set, and the matched pairs (identical
 precisely because everything except the matte is held constant.
 
 **The mesh probe must be max- or mean-over-8-views, never single-view.**
-`src/warlock/bench/views.py` records a calibration over 37 finished jobs spanning every
+`../src/warlock/bench/views.py` records a calibration over 37 finished jobs spanning every
 category: the per-job argmax scattered by 330° (`silhouette_iou`) and 300°
 (`dino_cosine`) against a `STABLE_YAW_SPREAD` of 30, the two metrics disagreed
 with each other, and it scattered *within* categories as well as across them. The
 recorded conclusion is that there is no fixed matched view at all. A single-view
 mesh classifier would be learning camera pose, not quality. See
-`docs/measurements/2026-08-04-view-calibration.md`.
+`measurements/2026-08-04-view-calibration.md`.
 
 ## 9. Phase 3 — earned authority
 
@@ -470,7 +510,7 @@ Only after §10's numbers exist. Candidates, in increasing order of risk:
   where they are: `vectors` ranked by Wilson lower bound, and `comparisons`
   recovered from sweep structure.
 - **Silent staleness.** A probe is a binary artifact built from a corpus that
-  keeps growing — the `vendor/warlockc` hazard exactly: an absent probe is
+  keeps growing — the `../vendor/warlockc` hazard exactly: an absent probe is
   obvious, a stale one quietly scoring last week's opinion is not. The `.npz`
   carries the corpus size, the label count and a schema version, and a retrain of
   the `blank` probe clears every score.
@@ -478,7 +518,7 @@ Only after §10's numbers exist. Candidates, in increasing order of risk:
 ## 10. What "it works" has to mean
 
 The threshold is a constant the stored corpus is keyed on, so by this repo's own
-rule it gets a **measurement document under `docs/measurements/`** before it is
+rule it gets a **measurement document under `measurements`** before it is
 baked in — the pattern `trellis_band`, `mesh_hole_max` and `SEAM_MAX` all set.
 
 Report, on a held-out split:
@@ -538,13 +578,13 @@ character meshes, with a QA note on bake fidelity before any UI default moves.
 **Its bake infrastructure overlaps §14's, and the overlap is the point** —
 `pipelines/retexture.py` and `blender_worker.op_views`/`op_project` already
 render views, project them onto a UV atlas and swap the atlas in through `glbio`,
-and `docs/measurements/2026-08-08-retexture-bake.md` already measures how well
+and `measurements/2026-08-08-retexture-bake.md` already measures how well
 that works. Build the second bake on the first rather than beside it.
 
 ## 12. External backend A/B
 
 *Last, and it gets its own spec first. Not started — SkinTokens, TokenRig and
-Hunyuan3D appear only in `docs/REPORT.md`'s research prose.*
+Hunyuan3D appear only in `REPORT.md`'s research prose.*
 
 - **SkinTokens/TokenRig** as an isolated out-of-process worker — the
   `trellis-server` / `blender_worker` pattern, kill-on-close job, weights by
@@ -561,8 +601,8 @@ Hunyuan3D appear only in `docs/REPORT.md`'s research prose.*
 ## 13. Inker and Clay — the nine items that did not land
 
 *Both engines are pure by invariant, so every engine-level item lands with
-headless tests in `tests/inker/` / `tests/clay/`; UI items follow the
-`tests/test_inker_mode.py` / `tests/test_clay_mode.py` patterns. Item numbers are
+headless tests in `../tests/inker` / `../tests/clay`; UI items follow the
+`../tests/test_inker_mode.py` / `../tests/test_clay_mode.py` patterns. Item numbers are
 `docs/LIST.md`'s, kept so the original observation is still traceable through
 `git log`.*
 
@@ -603,7 +643,7 @@ headless tests in `tests/inker/` / `tests/clay/`; UI items follow the
   `GENERATORS` still has box/plane/cylinder/cone/uv_sphere/torus, and `plane` is
   a single quad. One builder plus a defaults dict each, exactly how the registry
   was designed to grow — and each now owes **canonical UVs**, since every existing
-  generator produces them and `tests/clay/test_uv.py` asserts it registry-wide.
+  generator produces them and `../tests/clay/test_uv.py` asserts it registry-wide.
 - **Clay23 — bbox dimensions readout, and the camera in `.wblk`.** Not started.
   `clay_props` shows TRS only, in an app whose whole pipeline cares about
   `size_m`; add a read-only world-space W×D×H row. And `serialize.scene_json`
@@ -619,7 +659,7 @@ headless tests in `tests/inker/` / `tests/clay/`; UI items follow the
 ## 14. Texture coverage — what replaced the "dedicated texture model" tier
 
 **The measurement is the reason, not a change of mind.**
-`docs/measurements/2026-08-08-retexture-bake.md`: the bake is **faithful** where
+`measurements/2026-08-08-retexture-bake.md`: the bake is **faithful** where
 it has something to bake — every plank seam and bolt mark survives in the one
 valid positive control — and covers only **36–37% of the atlas** over four real
 reconstructions, because a perforated mesh's interior walls project onto holes in
@@ -656,7 +696,7 @@ being painted and do nothing about the two thirds that are not. So, in order:
 
 Small, and written down so they are not rediscovered as defects:
 
-- **`K93` is a floor, not an audit.** `tests/test_forms_and_layout.py` asserts
+- **`K93` is a floor, not an audit.** `../tests/test_forms_and_layout.py` asserts
   each of ten dense panes carries at least one `help_marker`/`set_tooltip`. The
   original ask was per-control tooltip coverage; the floor is what shipped.
 - **`M106` is configurable, not resizable.** `layout.SIDEBAR_WIDTHS` offers three
@@ -674,20 +714,56 @@ Small, and written down so they are not rediscovered as defects:
 
 | Item | Status |
 |---|---|
-| `docs/measurements/2026-08-06-pixel-art-xl.md` — "run not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). Independent of everything — good use of idle GPU time alongside §2. |
-| `seam.SEAM_MAX` | **Closed at 3.5** on 72 units — `docs/measurements/2026-08-08-seam-threshold.md`, corpus from `scripts/calibrate_seam.py` and `calibrate_seam_hard.py`. One checkpoint only (turbo at 4 steps); a CFG base draws harder edges and should re-run the scripts. |
+| `measurements/2026-08-06-pixel-art-xl.md` — "run not yet taken" | Unblocked: all three recipes and all weights verified present. A three-arm run settles which arm `pixel_sprite` names and where `GRID_RESIDUAL_MAX` belongs (0.05; the doc says "that number is a guess"). Independent of everything — good use of idle GPU time alongside §2. |
+| `seam.SEAM_MAX` | **Closed at 3.5** on 72 units — `measurements/2026-08-08-seam-threshold.md`, corpus from `../scripts/calibrate_seam.py` and `calibrate_seam_hard.py`. One checkpoint only (turbo at 4 steps); a CFG base draws harder edges and should re-run the scripts. The re-run is pre-registered — `measurements/2026-08-09-seam-threshold-cfg.md` — and its `--out` **must** be `docs/measurements/data/seam-cfg`: both scripts write identical filenames across checkpoints, so `.../seam` overwrites all 125 turbo files and makes the closed measurement unreproducible. |
 | Fused brush dab kernel (`warlockc_dab_u8`) | Deferred on purpose; the gate is "the brush shows up in a profile first". |
 | Merge-down and flatten on an animated Inker document | Refused rather than approximated (`Document.can_restructure`). Both are defined over one layer stack and an animated document has one per frame, so the honest versions are "merge these two tracks across every frame" — which has to decide what merging a linked cel with an unlinked one means — and "flatten this frame", which discards every other frame's cels. Real features; neither is v1. |
 | Cel thumbnails in the Inker timeline | Dots and chain glyphs instead. A per-cel texture on a grid that can be fifty columns wide is `viewer/sheet.StripRender`'s problem at a larger scale — worth doing on a per-frame upload budget, not worth doing by accident. The `layer_thumb` stamp pattern extends to it when it is. |
 | `studio/clay/ops_topo.py` hole-fill UV | Documented, deliberate approximation. |
-| View-matched reference ranking | Not built on purpose; the Scattered verdict *is* the deliverable (`docs/measurements/2026-08-04-view-calibration.md`). |
+| View-matched reference ranking | Not built on purpose; the Scattered verdict *is* the deliverable (`measurements/2026-08-04-view-calibration.md`). |
+
+## 17. The Apple-feel UX/UI programme
+
+*Design document: [`UX.md`](UX.md) — the review, the principles and
+the full phase specifications live there; this section is only the checklist.
+Sensibility, not macOS chrome: the shell stays, the substrate is rebuilt.*
+
+- [ ] **Phase 0 — Widen the vocabulary.** Type ramp to 20/28, spacing to
+      20/24/32, `RADIUS_L` back with readers, easing curves + `DUR_SLOW`,
+      reduce-motion setting honored centrally in `motion.py`; card fill
+      threshold artifact fixed in passing.
+- [ ] **Phase 1 — Motion everywhere.** Mode-transition crossfade, popover
+      enter fade+rise, hover interpolation on hand-drawn widgets, sidebar /
+      splitter / selection / splash eased; idle clamp learns that an active
+      animation means awake.
+- [ ] **Phase 2 — Visual refinement.** Whitespace up (`PANE_PADDING`,
+      `window_padding`), sections breathe instead of ruling, display type
+      lands, Lucide replaces the ASCII glyphs and `"(?)"`, one shadow helper
+      at three elevations, Quit out of the mode switch + places/workspaces
+      grouping gap.
+- [ ] **Phase 3 — Simplicity and disclosure.** `Invalid.field` wired to
+      inline rings at last, the 2D form gets a common path behind one honest
+      reveal, the platform-detail/Detail naming collision resolved, a scoped
+      focus model on the generate panes, "Undo" joins the toast action
+      vocabulary.
+- [ ] **Phase 4 — Small moments.** One-time Home orientation + Continue
+      tile, filter-prefix chips, searchable shortcuts popup, the splash
+      spends its three seconds, progress-card and empty-state polish.
+- [ ] **Phase 5 — The GPU tier.** In payoff order: blurred 9-slice shadow
+      atlas, vibrancy (offscreen copy + separable blur) for what floats,
+      critically-damped springs, squircle SDF corners — each independently
+      shippable behind its own gate.
+
+*(The usual rule applies per phase: a finished phase is deleted from this
+list, not ticked, and the section goes with the last one. `UX.md`
+outlives the section as the record of the design.)*
 
 ---
 
 ## Appendix — what a diff could not carry
 
 Kept because it was expensive to work out and is invisible in the resulting
-commits. `CLAUDE.md` holds the load-bearing invariants; this is the residue that
+commits. `../CLAUDE.md` holds the load-bearing invariants; this is the residue that
 does not belong there.
 
 **The file-contention map, and why the build waves were chains.** Logical
@@ -695,12 +771,12 @@ dependency was never the scheduling constraint — file contention was.
 `studio/widgets.py` was touched by the quality badge, `icon_button` and the
 library kind badge, so that chain ran serially in one worktree in that order;
 `panes/library.py` by four packages and `panes/inspector.py` by four more, which
-is why the second wave was a chain rather than a fan-out. `pyproject.toml`
+is why the second wave was a chain rather than a fan-out. `../pyproject.toml`
 belonged to exactly one package. Any future parallel run should be scheduled the
 same way.
 
 **A worktree needs the three `WARLOCK_*` environment variables**, because
-`vendor/` and `models/` are gitignored. Without them the suite reports
+`../vendor` and `../models` are gitignored. Without them the suite reports
 427 passed / 6 skipped instead of the full count, and the six look like
 regressions.
 
@@ -728,6 +804,6 @@ sets `item_spacing` through `sp()`, so a grid subtracting a literal `8` for its
 gaps is exact at 1.0 and short by 4.8 px per gap at 1.5 — which is the only scale
 anybody runs. That single cause produced three of the four defects the
 screenshot pass found (the Inker toolbox losing its fifth column, Clay its fourth
-button, the outliner reserving 32 px for a 58 px button). `scripts/screenshot_modes.py`
+button, the outliner reserving 32 px for a 58 px button). `../scripts/screenshot_modes.py`
 drives the **real** `App` and reads frames off the framebuffer, which is why it
 could see them and GL smoke coverage could not; re-run it after any layout work.

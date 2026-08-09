@@ -2405,7 +2405,10 @@ class App:
                         "and their reference images are deleted.\n\n"
                         "The verdicts you recorded are kept, and so are the findings "
                         "they feed -- each one carries its own copy of the settings it "
-                        "was filed against."
+                        "was filed against.\n\n"
+                        "Units you accepted, and any image you labelled, are kept with "
+                        "their files: a verdict's copy of the settings cannot stand in "
+                        "for the picture it was filed against."
                     ),
                     confirm_label="Delete",
                     cancel_label="Keep",

@@ -11,6 +11,10 @@ __pycache__/
 /bench/
 /models/
 /vendor/
+# Copies of assets/jobs.sqlite taken before a campaign submit. The job database
+# is under /assets/ and therefore untracked; a backup of it is no more tracked
+# than the original, and a sweep campaign takes one per run.
+/backups/
 # Intermediate objects from native/build.ps1. The DLL it produces lands in
 # /vendor/ with the other native binaries; this is just the scratch beside it.
 /native/obj/

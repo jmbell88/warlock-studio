@@ -218,13 +218,17 @@ def test_a_reroll_of_a_sweep_unit_leaves_the_sweep(svc):
 
 
 def test_deleting_a_sweep_removes_its_jobs_and_keeps_its_verdicts(svc):
+    """A model-stage *reject* is the case the denormalization argument is true
+    for: the finding is "this vector produced a bad mesh", which the row carries
+    whole, so the mesh is disposable. The accept case is the opposite and is
+    ``test_a_sweep_delete_keeps_the_units_it_cannot_regenerate`` below."""
     from warlock.service import verdicts as svc_verdicts
 
     plan = _plan(seeds=(1,), axes=(Axis("lora_weight", (0.6,)),))
     result = svc_sweeps.create_sweep(svc, plan)
     unit = svc.store.sweep_jobs(result["id"])[0]
     svc.store.set_status(unit["id"], "done")
-    svc_verdicts.record_verdict(svc, unit["id"], verdict="accept")
+    svc_verdicts.record_verdict(svc, unit["id"], verdict="reject")
 
     svc_sweeps.delete_sweep(svc, result["id"])
 
@@ -235,6 +239,42 @@ def test_deleting_a_sweep_removes_its_jobs_and_keeps_its_verdicts(svc):
 
     with pytest.raises(NotFound):
         svc_sweeps.delete_sweep(svc, result["id"])
+
+
+def test_a_sweep_delete_keeps_the_units_it_cannot_regenerate(svc):
+    """The 2026-08-09 regression, and it was not a crash: the database held 117
+    verdicts of which 100 named job directories that no longer existed, every
+    one destroyed by this button under a confirmation that truthfully promised
+    the verdicts would be kept. They were; the pixels were not, and three
+    blocked items needed the pixels.
+
+    ``kept`` is counted apart from ``remaining`` because they mean opposite
+    things to the reader: one is transient and invites a second press, the other
+    is permanent and would make that press a lie renewing itself."""
+    from warlock.service import verdicts as svc_verdicts
+
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    for unit in units:
+        svc.store.set_status(unit["id"], "done")
+    svc_verdicts.record_verdict(svc, units[0]["id"], verdict="accept")
+
+    outcome = svc_sweeps.delete_sweep(svc, result["id"])
+
+    assert outcome["kept"] == 1
+    assert outcome["remaining"] == 0
+    assert outcome["deleted"] == len(units) - 1
+    assert svc.store.get(units[0]["id"]) is not None
+    # And the sweep row survives, because ``Filters.matches`` hides a sweep unit
+    # from the library -- dropping it would leave the kept unit unreachable.
+    assert [s["id"] for s in svc_sweeps.list_sweeps(svc)] == [result["id"]]
+
+    # Pressing again changes nothing. That is the point, and it is why the toast
+    # for this case must not say "delete again in a moment".
+    again = svc_sweeps.delete_sweep(svc, result["id"])
+    assert (again["deleted"], again["kept"]) == (0, 1)
+    assert svc.store.get(units[0]["id"]) is not None
 
 
 def test_an_axis_that_changes_nothing_is_refused_rather_than_run_n_times(svc):

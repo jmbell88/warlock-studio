@@ -1,5 +1,16 @@
 # Hole-rate baseline, 2026-08-04
 
+> **Superseded in its interpretation, and read this first.**
+> [`2026-08-09-rebaseline.md`](2026-08-09-rebaseline.md) is the successor. The
+> distribution measured below is real and the arithmetic stands, but the metric
+> it is about has since been shown to point the **wrong way**:
+> AUC(`hole_worst` -> reject) = 0.115 over the 84-verdict review of 2026-08-07 --
+> not weakly informative, backwards, because the dominant failure mode is a
+> solid slab and a slab has no visible openings. **Nothing here licenses reading
+> a low hole fraction as evidence of quality.** Separately, every *watertight*
+> figure taken before 2026-08-08 is void: `meshreport` counted xatlas UV-seam
+> splits as boundary edges, and it now welds by position before judging.
+
 A measurement, taken before anything is built that reacts to it. Part A Task 7
 proposes an automatic remesh-and-retry keyed on `params["mesh_audit"]["worst"]`,
 and a retry threshold chosen against a number nobody has measured recently is

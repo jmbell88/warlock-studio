@@ -35,7 +35,11 @@ MANUAL = ROOT / "docs" / "manual"
 # the whole point here is that a link nobody walks is a link that rots.
 SOURCES = (
     ROOT / "README.md",
-    ROOT / "LEFTOVERS.md",
+    # Moved out of the repo root on 2026-08-09. A missing entry here is silent
+    # -- ``_manual_links`` skips a path that does not exist, so the count simply
+    # falls -- which is exactly what ``test_the_sources_actually_carry_manual_links``
+    # is for, and it is what caught the move.
+    ROOT / "docs" / "LEFTOVERS.md",
     ROOT / "CLAUDE.md",
     *sorted((ROOT / "docs" / "measurements").glob("*.md")),
 )
@@ -51,7 +55,20 @@ SOURCES = (
 # file presents as already corrected. A path a reader is expected to open is a
 # link whether or not it has brackets round it.
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
-MENTION = re.compile(r"`(docs/manual/[0-9A-Za-z._/-]+\.md(?:#[\w-]+)?)`")
+# A mention is resolved relative to the file that carries it, exactly as a link
+# is. It used to be treated as repo-root-relative, which was indistinguishable
+# from correct only while every source lived at the repo root: `docs/LEFTOVERS.md`
+# moved into `docs/` on 2026-08-09 and correctly re-spelled its citation as
+# `manual/16-configuration.md`, which the old root-anchored pattern then stopped
+# matching altogether -- a silent loss of coverage rather than a failure, which is
+# what the guard-on-the-guard below exists to turn into a failure.
+#
+# The optional prefix is what keeps both spellings honest: `README.md` and
+# `CLAUDE.md` are at the root and say `docs/manual/...`, a measurement document
+# says `../manual/...`, and each resolves against its own parent to the same
+# place. Anchoring on the opening backtick is load-bearing -- it is why
+# `tests/manual/test_docs.py` is not mistaken for a manual chapter.
+MENTION = re.compile(r"`((?:\.\./|docs/)?manual/[0-9A-Za-z._/-]+\.md(?:#[\w-]+)?)`")
 
 
 def _slug(heading: str) -> str:
@@ -76,14 +93,9 @@ def _manual_links() -> list[tuple[Path, str]]:
             continue
         text = source.read_text(encoding="utf-8")
         targets = [t for t in LINK.findall(text) if "manual/" in t]
-        # A backticked mention is repo-root-relative wherever it appears, so it
-        # is rewritten to be relative to the file that carries it before
-        # resolution -- ``_resolve`` joins against ``source.parent``.
-        for mention in MENTION.findall(text):
-            rel = (ROOT / mention.split("#")[0]).resolve()
-            anchor = mention.partition("#")[2]
-            spelled = rel.as_posix() + (f"#{anchor}" if anchor else "")
-            targets.append(spelled)
+        # No rewriting: a mention resolves against its own file's parent, which
+        # is what ``_resolve`` already does for a link. One rule for both shapes.
+        targets.extend(MENTION.findall(text))
         found.extend((source, t) for t in dict.fromkeys(targets))
     return found
 

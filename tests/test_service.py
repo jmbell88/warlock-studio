@@ -453,6 +453,106 @@ def test_prune_never_touches_a_running_job(svc):
     assert svc.store.get(ids[0]) is not None
 
 
+# --- what a bulk delete may not reclaim --------------------------------------
+#
+# ``verdicts.vector`` is denormalized so a review outlives its assets, and that
+# is exactly true of a model-stage reject and false of the other two cases. The
+# evidence is not hypothetical: on 2026-08-09 the live database held 117
+# verdicts of which 100 named directories that no longer existed.
+
+
+def _reviewable(svc, *, image: bool = False) -> str:
+    """A finished job, optionally with an image a label can be filed against."""
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    svc.store.set_status(job_id, "done")
+    if image:
+        svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
+        (svc.job_dir(job_id) / "input.png").write_bytes(b"not really a png")
+    return job_id
+
+
+def test_prune_keeps_what_a_verdict_cannot_stand_in_for(svc):
+    """An accept's value is the artifact -- ``tiercheck`` qualifies a gltfpack
+    tier against accepted ``source.glb`` files, and the mesh probe is fitted to
+    accepted meshes. A row saying "this was good" with no mesh behind it serves
+    neither."""
+    from warlock.service import verdicts as svc_verdicts
+
+    keeper = _reviewable(svc)
+    svc_verdicts.record_verdict(svc, keeper, verdict="accept")
+    doomed = [_reviewable(svc) for _ in range(3)]
+
+    outcome = svc_jobs.prune_jobs(svc, keep=0)
+
+    assert (outcome["deleted"], outcome["kept"]) == (3, 1)
+    assert svc.store.get(keeper) is not None
+    assert all(svc.store.get(job_id) is None for job_id in doomed)
+
+
+def test_prune_keeps_a_rejected_image_because_the_probe_trains_on_both_classes(svc):
+    """The half that is easy to get wrong. ``judge.fit`` embeds *pixels* and
+    refuses below ``MIN_PER_CLASS`` of **each** class, so a rejected reference
+    is training data every bit as much as an accepted one -- an accept-only
+    guard would quietly delete half a corpus."""
+    from warlock.service import verdicts as svc_verdicts
+
+    labelled = _reviewable(svc, image=True)
+    svc_verdicts.record_verdict(svc, labelled, verdict="reject", stage="reference")
+
+    outcome = svc_jobs.prune_jobs(svc, keep=0)
+
+    assert (outcome["deleted"], outcome["kept"]) == (0, 1)
+    assert svc.store.get(labelled) is not None
+
+
+def test_prune_still_reclaims_a_rejected_mesh(svc):
+    """The guard must not become "keep everything ever reviewed": 101 of the 117
+    verdicts on record are model-stage rejects, and their rows carry the whole
+    finding."""
+    from warlock.service import verdicts as svc_verdicts
+
+    job_id = _reviewable(svc)
+    svc_verdicts.record_verdict(svc, job_id, verdict="reject")
+
+    outcome = svc_jobs.prune_jobs(svc, keep=0)
+
+    assert (outcome["deleted"], outcome["kept"]) == (1, 0)
+    assert svc.store.get(job_id) is None
+
+
+def test_emptying_the_trash_keeps_a_labelled_image(svc):
+    """The trash is where a labelled reference most plausibly sits -- six of the
+    surviving accepted references were in it -- so this is the path that would
+    actually have destroyed one. "Empty" stops being literally true, which is
+    the lesser wrong: nothing on the card can regenerate a *specific* image."""
+    from warlock.service import verdicts as svc_verdicts
+
+    labelled = _reviewable(svc, image=True)
+    svc_verdicts.record_verdict(svc, labelled, verdict="accept", stage="reference")
+    junk = _reviewable(svc)
+    for job_id in (labelled, junk):
+        svc_jobs.trash_job(svc, job_id)
+
+    outcome = svc_jobs.empty_trash(svc)
+
+    assert (outcome["deleted"], outcome["kept"]) == (1, 1)
+    assert svc.store.get(labelled) is not None
+    assert svc.store.get(junk) is None
+
+
+def test_the_per_asset_delete_is_still_the_escape_hatch(svc):
+    """Guarding the bulk paths and not the deliberate one is the whole design:
+    a named asset on screen is a decision, a count in a dialog is not."""
+    from warlock.service import verdicts as svc_verdicts
+
+    job_id = _reviewable(svc)
+    svc_verdicts.record_verdict(svc, job_id, verdict="accept")
+
+    svc_jobs.delete_job(svc, job_id)
+
+    assert svc.store.get(job_id) is None
+
+
 # --- deleting something another job is writing into --------------------------
 #
 # A rig or a sheet is a separate row whose artifacts land beside the model.glb

@@ -401,11 +401,22 @@ def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
     if done.key == DELETE_KEY:
-        removed = remaining = 0
+        removed = remaining = kept = 0
         if isinstance(done.result, dict):
             removed = int(done.result.get("deleted") or 0)
             remaining = int(done.result.get("remaining") or 0)
-        if remaining:
+            kept = int(done.result.get("kept") or 0)
+        if kept and not remaining:
+            # Said apart from the transient case, and without "delete again":
+            # pressing again will never remove these, so an invitation to
+            # retry would be a lie that renews itself every press. What the
+            # user can still do is named, because the per-asset delete is the
+            # deliberate escape hatch this guard leaves open.
+            ctx.toast(
+                f"Deleted {removed} job(s); kept {kept} you reviewed. "
+                "Delete those from the library if you want them gone."
+            )
+        elif remaining:
             # A unit the worker is still inside is cancelled but not deleted --
             # its directory is being written to. Say so and say what to do,
             # rather than reporting a deletion that did not happen.

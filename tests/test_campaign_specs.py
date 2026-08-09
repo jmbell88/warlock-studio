@@ -42,7 +42,7 @@ def _campaign(name: str):
     return importlib.import_module(name)
 
 
-CAMPAIGNS = ("sweep_rogue", "sweep_confirm", "sweep_rebaseline")
+CAMPAIGNS = ("sweep_rogue", "sweep_confirm", "sweep_rebaseline", "sweep_props")
 
 
 @pytest.mark.parametrize("name", CAMPAIGNS)
@@ -56,7 +56,7 @@ def test_every_campaigns_plans_pass_the_admission_they_will_be_submitted_under(n
         sweeps_mod._validate(svc, plan, units)
 
 
-@pytest.mark.parametrize("name", ("sweep_confirm", "sweep_rebaseline"))
+@pytest.mark.parametrize("name", ("sweep_confirm", "sweep_rebaseline", "sweep_props"))
 def test_a_campaign_states_the_matte_it_runs_rather_than_inheriting_one(name, svc):
     """A sweep off an unstated baseline is not reproducible: ``bg_removal``'s
     own default is host-gated (``guidance.default_bg_removal`` reads the weights
@@ -170,3 +170,59 @@ def test_the_re_baseline_varies_how_the_reference_is_drawn_and_nothing_else(svc)
     (plan,) = module.PLANS
 
     assert {axis.param for axis in plan.axes} == {"base_model", "style_lora", "framing"}
+
+
+# --- the tier-qualification corpus -------------------------------------------
+
+
+def test_the_prop_corpus_measures_nothing(svc):
+    """`TODO.md` §3 needs meshes worth keeping, not a contrast. An axis here
+    would make it a sweep, and a sweep spends its units on a question nobody
+    asked -- the qualification wants several seeds of *one* configuration so
+    that some of them come out well."""
+    module = _campaign("sweep_props")
+
+    for plan in module.PLANS:
+        assert plan.axes == ()
+        assert plan.vectors == ()
+        units = sweeps_mod.expand(plan)
+        assert len(units) == len(plan.seeds)
+        assert {u.label for u in units} == {"baseline"}
+
+
+def test_the_prop_corpus_names_the_shapes_qualify_tiers_looks_for(svc):
+    """``qualify_tiers._warn_about_the_corpus`` substring-matches ``WANTED_SHAPES``
+    against a job's name or prompt, so a subject whose prompt does not contain
+    its own word is a corpus that warns about itself. This is why the rock is
+    "a large mossy rock" and not core-v1's "a large mossy boulder"."""
+    from qualify_tiers import WANTED_SHAPES
+
+    module = _campaign("sweep_props")
+    prompts = [plan.prompt.lower() for plan in module.PLANS]
+
+    for shape in WANTED_SHAPES:
+        assert any(shape in prompt for prompt in prompts), shape
+
+
+def test_the_prop_corpus_carries_one_asymmetric_humanoid(svc):
+    """§4's handedness check cannot be read off a bilaterally symmetric subject:
+    a mirrored skeleton looks perfectly plausible in a still, which is the whole
+    failure mode. ``pose2d`` fits only ``humanoid``, so no prop can answer it."""
+    module = _campaign("sweep_props")
+    figures = [plan for plan in module.PLANS if plan.base.get("category") == "character"]
+
+    (figure,) = figures
+    # The asymmetry has to be in the prompt, and it has to distinguish a side by
+    # name -- "asymmetric" alone would leave which side to chance, and the
+    # measurement document has to state the expected side before looking.
+    assert "right" in figure.prompt and "left" in figure.prompt
+
+
+def test_the_prop_corpus_states_its_framing_rather_than_inheriting_it(svc):
+    """``framing`` is an *axis* in the run next door, so its value here is not
+    something a later reader can recover from ``DEFAULT_FRAMING`` -- that
+    default is exactly what the re-baseline may move."""
+    module = _campaign("sweep_props")
+
+    for plan in module.PLANS:
+        assert plan.base.get("framing"), plan.label

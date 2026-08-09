@@ -11,6 +11,7 @@ from typing import Any
 
 from .. import guidance, models, rigging
 from . import matte
+from . import verdicts as verdicts_mod
 from .core import WarlockService
 from .errors import Conflict, Failed, Invalid, NotFound, TooLarge, invalid_from
 from .files import ImageTooLarge, attach_files, dir_size, measure_storage, to_png
@@ -552,6 +553,10 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
     # walk has already passed doesn't disturb the cursor.
     deleted = 0
     seen = 0
+    # Read once, outside the walk: it is a whole-table scan, and a prune of a
+    # long history would otherwise repeat it per page.
+    retained = retained_job_ids(svc)
+    kept = 0
     cursor: tuple[float, str] | None = None
     while True:
         page = svc.store.list(MAX_LIST_LIMIT, cursor)
@@ -561,6 +566,13 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
         for job in page:
             seen += 1
             if seen <= keep or job["status"] == "running":
+                continue
+            if job["id"] in retained:
+                # Counted, not silently skipped: a prune that reports "deleted
+                # 40" having kept 12 has described a smaller act than it
+                # performed in the one direction that matters least, and a
+                # larger reclaim than it achieved in the one that matters most.
+                kept += 1
                 continue
             # Skipped rather than refused, unlike delete_job: pruning is a bulk
             # reclaim, and one asset with a rig in flight is no reason to keep
@@ -574,7 +586,7 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
                 continue
             shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
             deleted += 1
-    return {"deleted": deleted}
+    return {"deleted": deleted, "kept": kept}
 
 
 def update_job(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -628,6 +640,46 @@ def dependent_jobs(svc: WarlockService, job_id: str) -> list[str]:
         for job in svc.store.active_jobs()
         if (job.get("params") or {}).get("source_job") == job_id
     ]
+
+
+def retained_job_ids(svc: WarlockService) -> set[str]:
+    """Jobs a *bulk* delete must skip, because their files are the evidence.
+
+    ``verdicts.vector`` is denormalized so that what a review taught outlives
+    the assets it was taught on, and ``delete_sweep`` says as much: "the assets
+    are disposable, what was learned from them is not". That is exactly true of
+    one case and false of two, and the difference is whether the claim can be
+    reconstructed from the row alone.
+
+    * **A model-stage reject** is fully carried by its row. The finding *is*
+      "this vector produced a bad mesh"; the mesh adds nothing. Still disposable.
+    * **An accept** is not. Its value is the artifact -- ``tiercheck`` qualifies
+      a gltfpack tier against accepted ``source.glb`` files, and the mesh probe
+      is fitted to accepted meshes. A row saying "this was good" with no mesh
+      behind it cannot serve either.
+    * **An image label of either class** is not, and this is the half that is
+      easy to get wrong. ``judge.fit`` embeds *pixels*, and it refuses below
+      ``MIN_PER_CLASS`` of **each** class -- so the rejected references are
+      training data every bit as much as the accepted ones, and deleting them
+      is deleting half a corpus.
+
+    This is not hypothetical. On 2026-08-09 the database held 117 verdicts, of
+    which **100 named job directories that no longer existed** -- every one of
+    them destroyed by a button whose confirmation truthfully said the verdicts
+    would be kept. They were. The pixels were not, and the pixels were what
+    three separate blocked items needed.
+
+    Per-job deletion is deliberately unaffected: :func:`delete_job` and
+    :func:`trash_job` are one deliberate act on one named asset, which is the
+    escape hatch when somebody really does want an accepted job gone. What is
+    guarded is the three bulk paths, where the asset is not on screen and the
+    count is the only thing the user sees.
+    """
+    keep: set[str] = set()
+    for verdict in svc.store.latest_verdicts():
+        if verdict["verdict"] == "accept" or verdict["stage"] in verdicts_mod.IMAGE_STAGES:
+            keep.add(verdict["job_id"])
+    return keep
 
 
 def _refuse_if_busy(svc: WarlockService, job_id: str) -> None:
@@ -684,9 +736,20 @@ def empty_trash(svc: WarlockService) -> dict[str, Any]:
     conditional delete as :func:`delete_job` -- a trashed job cannot be running,
     but it can have been *restored and resubmitted* between the read and the
     write, and that job's directory is not this call's to remove.
+
+    A job carrying evidence (:func:`retained_job_ids`) is kept even here, and
+    "empty" therefore stops being literally true -- which is the lesser of two
+    wrongs, because the trash is where a labelled reference most plausibly sits.
+    The rejected references are half a probe's training set and nothing on the
+    card can regenerate a *specific* one.
     """
     deleted = 0
+    retained = retained_job_ids(svc)
+    kept = 0
     for job in svc.store.trashed():
+        if job["id"] in retained:
+            kept += 1
+            continue
         if worker_is_inside(svc, job["id"]) or dependent_jobs(svc, job["id"]):
             # Skipped rather than refused, as prune does: one asset with a rig
             # in flight is no reason to keep the other two hundred.
@@ -695,7 +758,7 @@ def empty_trash(svc: WarlockService) -> dict[str, Any]:
             continue
         shutil.rmtree(svc.job_dir(job["id"]), ignore_errors=True)
         deleted += 1
-    return {"deleted": deleted}
+    return {"deleted": deleted, "kept": kept}
 
 
 def trash_size(svc: WarlockService) -> dict[str, Any]:
