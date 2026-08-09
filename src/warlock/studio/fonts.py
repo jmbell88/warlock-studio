@@ -109,3 +109,19 @@ def label(imgui: Any) -> Any:
 
 def title(imgui: Any) -> Any:
     return push(imgui, SEMIBOLD, tokens.TEXT_TITLE)
+
+
+def heading(imgui: Any) -> Any:
+    """One region's name: a pane header, a manual chapter."""
+    return push(imgui, SEMIBOLD, tokens.TEXT_HEADING)
+
+
+def display(imgui: Any) -> Any:
+    """The one loud thing on a screen. There is deliberately only ever one.
+
+    SemiBold rather than a fourth vendored face: at 28 px Inter SemiBold is
+    already emphatic, and Bold at display size reads as a warning rather than
+    as a title against near-black. The call was made against the screenshot
+    pass, which is the only way it could be made.
+    """
+    return push(imgui, SEMIBOLD, tokens.TEXT_DISPLAY)

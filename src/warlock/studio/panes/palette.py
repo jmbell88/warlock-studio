@@ -60,19 +60,26 @@ def draw(ctx: Any) -> None:
     state = ctx.state
     if not state.palette_open:
         return
-    if not imgui.is_popup_open(POPUP):
+    appearing = not imgui.is_popup_open(POPUP)
+    if appearing:
         imgui.open_popup(POPUP)
 
+    # The rise is spent on the *window position* here, not on a cursor offset:
+    # this is the one floating surface that already places itself every frame
+    # (``Cond_.always``, so the input never jumps as the list grows), so the
+    # whole panel can move instead of its contents sliding inside it.
+    alpha, rise = widgets.popover_enter("palette", appearing)
     viewport = imgui.get_main_viewport()
     imgui.set_next_window_pos(
         (
             viewport.pos.x + viewport.size.x * 0.5,
-            viewport.pos.y + viewport.size.y * TOP_FRACTION,
+            viewport.pos.y + viewport.size.y * TOP_FRACTION + rise,
         ),
         imgui.Cond_.always.value,
         (0.5, 0.0),
     )
     imgui.set_next_window_size((sp(WIDTH), 0))
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     opened, _ = imgui.begin_popup_modal(
         POPUP,
         None,
@@ -83,6 +90,7 @@ def draw(ctx: Any) -> None:
     if not opened:
         # Dismissed by a click outside. The flag has to follow, or the next
         # frame reopens it.
+        imgui.pop_style_var()
         close(ctx)
         return
 
@@ -117,6 +125,7 @@ def draw(ctx: Any) -> None:
         imgui.close_current_popup()
         close(ctx)
         imgui.end_popup()
+        imgui.pop_style_var()
         return
 
     if imgui.begin_child("palette-list", (0, sp(LIST_HEIGHT))):
@@ -141,6 +150,7 @@ def draw(ctx: Any) -> None:
         imgui.close_current_popup()
         close(ctx)
     imgui.end_popup()
+    imgui.pop_style_var()
 
 
 def _row(ctx: Any, kind: str, item: Any, current: bool) -> bool:

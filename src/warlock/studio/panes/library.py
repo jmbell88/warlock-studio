@@ -18,7 +18,7 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, icons, jobs_cache, theme, tokens, widgets
+from .. import dialogs, icons, jobs_cache, motion, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import ACTIONS, SORTS, card_kind, primary_action
 from ..tokens import sp
@@ -476,8 +476,17 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     job_id = job["id"]
     selected = state.selected == job_id
     imgui.push_id(job_id)
-    if selected:
-        imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ELEV_2)))
+    # The selection moves between cards rather than cutting: the card being
+    # left fades its fill and its accent edge out while the one being chosen
+    # fades them in, which is one number per card and no knowledge of where the
+    # selection was. Both halves ride the same value, or a card would keep its
+    # raised fill for 200 ms after its edge had gone.
+    chosen = motion.value(f"library/sel/{job_id}", 1.0 if selected else 0.0)
+    if chosen > 0.0:
+        imgui.push_style_color(
+            imgui.Col_.child_bg.value,
+            imgui.ImVec4(*theme.mix(theme.PANEL, theme.ELEV_2, chosen)),
+        )
     # Keyboard navigation asks the list to bring the selection into view (I79).
     # Before ``begin_child`` and not inside it: ``set_scroll_here_y`` scrolls
     # the *current* window, and inside the card that is the card. Consumed here
@@ -495,14 +504,17 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     # ``end_child`` and precede the click test below -- imgui treats a started
     # drag as not-a-click, which is what stops a drag from also selecting.
     draggable_source(ctx, job)
-    if selected:
+    if chosen > 0.0:
         imgui.pop_style_color()
         # The accent edge is the selection mark; a raised fill alone reads as
-        # hover, not choice.
+        # hover, not choice. It grows out of the card's middle as it arrives,
+        # so a selection reads as travelling down the list rather than as two
+        # unrelated things fading.
+        half = height * 0.5
         imgui.get_window_draw_list().add_rect_filled(
-            origin,
-            (origin.x + sp(3), origin.y + height),
-            imgui.get_color_u32(theme.rgba(theme.ACCENT)),
+            (origin.x, origin.y + half * (1.0 - chosen)),
+            (origin.x + sp(3), origin.y + half * (1.0 + chosen)),
+            imgui.get_color_u32(theme.rgba(theme.ACCENT, chosen)),
             sp(2),
         )
     # The whole card selects, not just a title: the card *is* the affordance.

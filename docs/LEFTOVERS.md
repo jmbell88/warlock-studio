@@ -728,14 +728,10 @@ Small, and written down so they are not rediscovered as defects:
 the full phase specifications live there; this section is only the checklist.
 Sensibility, not macOS chrome: the shell stays, the substrate is rebuilt.*
 
-- [ ] **Phase 0 — Widen the vocabulary.** Type ramp to 20/28, spacing to
-      20/24/32, `RADIUS_L` back with readers, easing curves + `DUR_SLOW`,
-      reduce-motion setting honored centrally in `motion.py`; card fill
-      threshold artifact fixed in passing.
-- [ ] **Phase 1 — Motion everywhere.** Mode-transition crossfade, popover
-      enter fade+rise, hover interpolation on hand-drawn widgets, sidebar /
-      splitter / selection / splash eased; idle clamp learns that an active
-      animation means awake.
+*Phases 0 and 1 shipped on 2026-08-09 and are gone from this list per the rule
+below; `UX.md` carries what they actually did, including the three places they
+departed from their own specification.*
+
 - [ ] **Phase 2 — Visual refinement.** Whitespace up (`PANE_PADDING`,
       `window_padding`), sections breathe instead of ruling, display type
       lands, Lucide replaces the ASCII glyphs and `"(?)"`, one shadow helper

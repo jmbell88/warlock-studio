@@ -174,10 +174,35 @@ Every phase ends green on the full suite and re-runs
 it" — at UI scale 1.0 *and* 1.5, both palettes (the 1.0-only trap is recorded
 in `LEFTOVERS.md`'s appendix).
 
-### Phase 0 — Widen the vocabulary
+### Phase 0 — Widen the vocabulary — **shipped 2026-08-09**
 
 *Tokens, fonts, motion primitives. Foundation for everything; nothing visible
 changes except the first readers.*
+
+**What shipped, and the one place it departed from this list.** `TEXT_HEADING`
+20 / `TEXT_DISPLAY` 28 with `fonts.heading()`/`fonts.display()` (SemiBold at
+28 — Inter Bold was not vendored, decided against the screenshot as this
+section required); `SP_5`/`SP_6`; `DUR_SLOW`; `ease_out_cubic` /
+`ease_in_out_cubic`; reduce-motion as an app-Settings toggle honoured centrally
+in `motion.py`; the card fill threshold lerped.
+
+**`RADIUS_L` and `SP_8` were deliberately *not* added.** Neither acquired a
+reader: the radius's call sites are Phase 2's by this document's own Phase 2
+bullet, and the two literals `SP_8` was to own (`landing.py`'s `sp(48)` icon
+column, `empty_state`'s `sp(40)`) are *positions*, not gaps, and this section
+already permits them to stay literal. Adding them anyway would have put two
+names in `tokens.py` with nothing reading them, which is the exact state the
+comment at `tokens.py:56-59` records deleting them from — and which
+`test_studio_wiring.test_the_spacing_scale_carries_only_the_steps_in_use`
+fails on. That test was rewritten in passing: it named `SP_6`/`SP_10`/
+`RADIUS_L` and asserted their absence, freezing one afternoon's answer, and
+now scans `studio/` for a reader of every `SP_*`/`RADIUS_*`/`TEXT_*`/`DUR_*`
+token — the rule instead of its 2026 output. **They arrive in Phase 2.**
+
+The Manual's chapter titles took `TEXT_HEADING`/`TEXT_TITLE` (replacing the
+private literals 22 and 17) rather than display size; "the Manual gets a real
+title size" stays Phase 2's, where the type pass is. Four primitives the phase
+turned out to need are new in `motion.py` and are described in Phase 1's note.
 
 - **Type ramp**: add `TEXT_HEADING = 20.0` and `TEXT_DISPLAY = 28.0` to
   `tokens.py`, with `fonts.heading()` and `fonts.display()` beside
@@ -208,10 +233,50 @@ changes except the first readers.*
 *Verification*: suite green; screenshot pass is pixel-identical everywhere
 except the named first readers.
 
-### Phase 1 — Motion everywhere
+### Phase 1 — Motion everywhere — **shipped 2026-08-09**
 
 *The imgui-native motion tier. The single highest feel-per-line phase: it is
 what makes the app stop popping.*
+
+**What shipped.** All six bullets: the mode crossfade, popover enter on the
+confirm modal / text prompt / palette / shortcuts / diagnostics, hover
+interpolation on `_glyph_button`, `primary_button` and `destructive_button`,
+the sidebar width / splitter hover / library selection / splash, and the idle
+clamp. Four notes a later session needs.
+
+**`motion.py` grew four primitives, and each answers a defect rather than a
+preference.** `peek` reads a value without advancing it — a button's colour is
+needed to *draw* the button and its hover is known only afterwards, and the
+"call `value` twice" alternative steps the easing twice a frame and towards the
+wrong target first, which is what made `card`'s lift take visibly longer to
+arrive than to leave. `animating()` is the idle clamp's wake condition and
+counts only keys the **last frame touched**: without that stamp a card hovered
+and then navigated away from keeps a target nothing will ask for again, and the
+app never idles again either. `ease` is the one-shot counterpart for a move
+with a known length (the veil, a popover), and under reduce-motion it reads
+1.0 on its first frame — *arrived*, not *never appears*, which is the failure
+a naive `duration = 0` has. `seed` states where an animated value starts, for
+`layout.SIDEBAR_W`, which lives outside the module and changes outside a frame.
+
+**The mode transition is a one-sided veil, not a two-buffer crossfade.** imgui
+has one framebuffer; keeping the previous frame's is Phase 5's offscreen copy.
+A full-viewport quad in the window background colour, easing `1 → 0`, on the
+foreground draw list so it also covers the modals — and painted only, so a
+transition can never eat a click. Measured: 13 frames to converge at
+`DUR_BASE`, and mean frame time 2.35 ms while switching against 2.48 ms
+steady, i.e. no cost the meter can see.
+
+**Chips were on this list and have no hover state to interpolate** —
+`widgets._chip` is a painted rect with no item behind it. Nothing was done to
+them and nothing should be until they become interactive.
+
+**`scripts/screenshot_modes.py` had to learn about motion, or the verification
+bar in Part IV would have stopped working in the phase that most needed it.**
+Its three warm-up frames are 50 ms of a 200 ms transition, so every capture
+after this phase was a picture of a half-cleared veil; it now waits (bounded,
+never a bare `while`) for `motion.animating()` to go false. It also gained
+`--scale`, because Part IV asks for 1.0 *and* 1.5 and the script could only
+capture whatever the monitor was.
 
 - **Mode transitions.** A short content crossfade on `_set_mode`: the frame
   after a switch draws a full-viewport overlay on the foreground draw list

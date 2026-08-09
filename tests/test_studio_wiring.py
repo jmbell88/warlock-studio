@@ -443,10 +443,40 @@ def test_the_type_ramp_has_no_helper_for_the_default_face():
 
 
 def test_the_spacing_scale_carries_only_the_steps_in_use():
-    for name in ("SP_6", "SP_10", "RADIUS_L"):
-        assert not hasattr(tokens, name)
-    for name in ("SP_1", "SP_2", "SP_3", "SP_4", "RADIUS_S", "RADIUS_M"):
-        assert hasattr(tokens, name)
+    """Every measurement token has a reader, and the rule is asserted rather
+    than a list of the names that happened to fail it once.
+
+    This used to name ``SP_6``, ``SP_10`` and ``RADIUS_L`` and assert their
+    absence, which froze one afternoon's answer: ``SP_6`` came back the moment
+    Home had a 24 px gap to own (UX.md Phase 0), and the test failed for the
+    right reason with no way to say so. What ``tokens.py`` actually states is
+    *a scale carries only the steps something spaces with* -- so the scan is
+    the assertion, and a token added ahead of its call sites fails here by
+    name.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(tokens.__file__).parent
+    sources = [
+        path.read_text(encoding="utf-8")
+        for path in root.rglob("*.py")
+        if path.name != "tokens.py"
+    ]
+    measurements = [
+        name
+        for name in vars(tokens)
+        if re.fullmatch(r"(SP|RADIUS|TEXT|DUR)_[A-Z0-9]+", name)
+    ]
+    # A sanity floor on the scan itself: a regex that matched nothing would
+    # make this pass by looking at an empty list.
+    assert {"SP_1", "SP_4", "RADIUS_S", "TEXT_BODY", "DUR_BASE"} <= set(measurements)
+    unread = [
+        name
+        for name in measurements
+        if not any(re.search(rf"\b{name}\b", text) for text in sources)
+    ]
+    assert unread == []
 
 
 def test_a_pending_task_carries_no_unread_timestamp():

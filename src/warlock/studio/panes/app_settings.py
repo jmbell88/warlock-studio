@@ -101,6 +101,30 @@ def _interface(ctx: Any) -> None:
         ctx.state.show_fps = show_fps
         ctx.settings.set("show_fps", show_fps)
 
+    reduced = bool(ctx.state.reduce_motion)
+    changed, reduced = imgui.checkbox("Reduce motion", reduced)
+    widgets.help_marker(
+        "Turns off every animation in the app -- transitions, hover, the "
+        "sliding mode switch. Everything still changes, just without moving."
+    )
+    if changed:
+        _apply_reduce_motion(ctx, reduced)
+
+
+def _apply_reduce_motion(ctx: Any, reduced: bool) -> None:
+    """The state, the module flag and the settings file, in one place.
+
+    Honoured *centrally* in ``motion``: every animated surface in the app reads
+    its number from that module, so this is one switch rather than one per
+    widget. Nothing has to be repainted or rebuilt -- unlike the theme and the
+    scale, motion is read per frame and the next one is already the new answer.
+    """
+    from .. import motion
+
+    ctx.state.reduce_motion = reduced
+    motion.set_reduced(reduced)
+    ctx.settings.set("reduce_motion", reduced)
+
 
 def _apply_theme(ctx: Any, name: str) -> None:
     from .. import theme as theme_mod

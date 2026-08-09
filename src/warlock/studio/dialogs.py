@@ -177,16 +177,26 @@ class ConfirmQueue:
         confirm = self.pending
         if confirm is None:
             return
-        if not confirm._open:
+        appearing = not confirm._open
+        if appearing:
             imgui.open_popup(confirm.title)
             confirm._open = True
         centre = imgui.get_main_viewport().get_center()
         imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+        # Fade and rise on the way in (UX.md Phase 1). Pushed around ``begin``
+        # rather than inside it: the modal's own background is painted there,
+        # and a dialog whose panel cuts in while its text fades up is worse
+        # than the hard cut it replaced.
+        alpha, rise = widgets.popover_enter(f"confirm/{confirm.title}", appearing)
+        imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         opened, _ = imgui.begin_popup_modal(
             confirm.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
         if not opened:
+            imgui.pop_style_var()
             return
+        if rise > 0.0:
+            imgui.dummy((0, rise))
         imgui.text_wrapped(confirm.message)
         if self.waiting:
             widgets.muted(f"{self.waiting} more to answer")
@@ -219,6 +229,7 @@ class ConfirmQueue:
         elif cancelled:
             self._answered()
         imgui.end_popup()
+        imgui.pop_style_var()
 
 
 @dataclass
@@ -261,16 +272,22 @@ class PromptQueue:
         prompt = self.pending
         if prompt is None:
             return
-        if not prompt._open:
+        appearing = not prompt._open
+        if appearing:
             imgui.open_popup(prompt.title)
             prompt._open = True
         centre = imgui.get_main_viewport().get_center()
         imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+        alpha, rise = widgets.popover_enter(f"prompt/{prompt.title}", appearing)
+        imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         opened, _ = imgui.begin_popup_modal(
             prompt.title, None, imgui.WindowFlags_.always_auto_resize.value
         )
         if not opened:
+            imgui.pop_style_var()
             return
+        if rise > 0.0:
+            imgui.dummy((0, rise))
         imgui.set_next_item_width(sp(FIELD_W))
         if not imgui.is_any_item_active():
             imgui.set_keyboard_focus_here()
@@ -296,3 +313,4 @@ class PromptQueue:
         elif cancelled:
             self._answered()
         imgui.end_popup()
+        imgui.pop_style_var()

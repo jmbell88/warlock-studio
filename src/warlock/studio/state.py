@@ -760,6 +760,13 @@ class AppState:
     # *detailed* view -- mean and worst frame -- and the always-on strip beside
     # the mode switch is the summary; see ``overlay.fps_meter``.
     show_fps: bool = False
+    # Suppress every animation in the app (accessibility: vestibular
+    # sensitivity). Persisted, because it is a property of the person rather
+    # than of the session. The flag itself lives in ``motion.REDUCED`` -- this
+    # is what the checkbox binds to and what the settings file remembers, and
+    # the two are kept in step by the one function that sets both
+    # (``app_settings._apply_reduce_motion``).
+    reduce_motion: bool = False
     # The status strip's last sample and when it was taken, throttled to
     # RESOURCE_PERIOD. A timestamp rather than a frame counter because the
     # thing being bounded is syscalls per second, not per frame.

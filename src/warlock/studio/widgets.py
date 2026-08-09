@@ -512,6 +512,11 @@ def drop_flash(state: Any, key: str) -> float:
     age = time.monotonic() - getattr(state, "drop_flash_at", 0.0)
     if age < 0 or age > DROP_FLASH_SECONDS:
         return 0.0
+    # Reduce-motion keeps the acknowledgement and drops the ramp: the outline is
+    # simply on for its dwell and then off. Collapsing the *dwell* instead would
+    # remove the answer rather than the animation.
+    if motion.REDUCED:
+        return 1.0
     return (1.0 - age / DROP_FLASH_SECONDS) ** 0.6
 
 
@@ -596,6 +601,75 @@ def tab_bar(bar_id: str, tabs: list[tuple[str, Any]]) -> None:
             draw_fn()
             imgui.end_tab_item()
     imgui.end_tab_bar()
+
+
+# How far a popover rises as it appears, in design px. Small on purpose: the
+# move is there to say "this arrived", and anything a reader can measure is a
+# thing sliding around rather than a surface settling.
+POPOVER_RISE = 6.0
+
+
+def popover_enter(key: str, appearing: bool) -> tuple[float, float]:
+    """``(alpha, rise)`` for a surface that is appearing. -> ``(1.0, 0.0)`` once
+    it has settled, and immediately under reduce-motion.
+
+    One helper because the four floating surfaces in the app -- the confirm
+    modal, the text prompt, the command palette, the two popups behind the
+    header -- were four hard cuts and would otherwise be four spellings of one
+    fade. The caller pushes ``alpha`` as a style var *around* ``begin`` (a
+    window's background is painted during ``begin``, so pushing after it fades
+    the contents over an already-solid panel) and spends ``rise`` as a cursor
+    offset inside it.
+
+    ``appearing`` is passed rather than read from ``is_window_appearing``
+    because that answer is only available *after* ``begin``, which is one frame
+    too late for the alpha the same ``begin`` paints with.
+    """
+    motion_key = f"popover/{key}"
+    if appearing:
+        motion.restart(motion_key)
+    t = motion.ease(motion_key, tokens.DUR_FAST)
+    return t, sp(POPOVER_RISE) * (1.0 - t)
+
+
+# Which plain popups were open last frame. Module state keyed by name, exactly
+# as ``motion``'s own is and for the same reason: the alternative was a set on
+# ``App``, which put a frame-loop attribute in the path of every pane that
+# opens a popup and of every test that drives one with a stand-in App.
+_POPUPS_OPEN: set[str] = set()
+
+
+def popup_enter(name: str) -> tuple[float, float]:
+    """:func:`popover_enter` for a popup that has no open flag of its own.
+
+    The header's shortcuts and diagnostics popups are opened by ``open_popup``
+    and closed by imgui itself, so there is nothing to read "is this the frame
+    it appeared" off. imgui knows -- but only through ``is_window_appearing``,
+    which answers *after* ``begin``, and the alpha is needed before it, because
+    ``begin`` is where the popup's own background is painted.
+    """
+    opened = imgui.is_popup_open(name)
+    appearing = opened and name not in _POPUPS_OPEN
+    if opened:
+        _POPUPS_OPEN.add(name)
+    else:
+        _POPUPS_OPEN.discard(name)
+    return popover_enter(f"popup/{name}", appearing)
+
+
+def _hover_amount(key: str) -> float:
+    """Last frame's hover for ``key``, 0..1. Set by :func:`note_hover`.
+
+    The one-frame lag is not a compromise, it is the only order available: a
+    button's colour is needed to draw the button, and whether it is hovered is
+    known only once it has been. ``card`` has always worked this way.
+    """
+    return motion.peek(f"hover/{key}")
+
+
+def note_hover(key: str, hovered: bool) -> None:
+    """Record this frame's hover so the next frame can draw the approach."""
+    motion.value(f"hover/{key}", 1.0 if hovered else 0.0, duration=tokens.DUR_FAST)
 
 
 def disabled_button(label: str, enabled: bool, size: tuple[float, float] = (0, 0)) -> bool:
@@ -795,14 +869,24 @@ def _glyph_button(
     padding this is about to change. Neither ``ICON_OFFSET`` (font metrics --
     it is what makes an icon sit right vertically) nor the global padding (it
     shapes every text button and every modal) is any part of the fix.
+
+    The hover is interpolated rather than switched (UX.md Phase 1). imgui's own
+    hover is a one-frame jump to a fully saturated accent, which across a
+    toolbar of eight icons is the single most "not Apple" thing in the app --
+    so ``button`` and ``button_hovered`` are pushed to the *same* interpolated
+    colour and the approach is what moves. The state is last frame's, which is
+    the only order available: see :func:`_hover_amount`.
     """
-    pushed = 0
+    key = f"glyph/{icon}/{tooltip}"
+    t = _hover_amount(key)
+    towards = theme.ERR if danger else theme.ACCENT
+    fill = theme.mix(theme.ELEV_2, towards, t, 1.0 - (0.2 if danger else 0.25) * t)
+    imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*fill))
+    imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.ImVec4(*fill))
+    pushed = 2
     if danger:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-        imgui.push_style_color(
-            imgui.Col_.button_hovered.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.8))
-        )
-        pushed = 2
+        pushed = 3
     if not enabled:
         imgui.begin_disabled()
     imgui.push_style_var(imgui.StyleVar_.frame_padding.value, imgui.ImVec2(0.0, 0.0))
@@ -811,8 +895,10 @@ def _glyph_button(
     imgui.pop_style_var(2)
     if not enabled:
         imgui.end_disabled()
+    hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value)
     imgui.pop_style_color(pushed)
-    if tooltip and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+    note_hover(key, hovered and enabled)
+    if tooltip and hovered:
         imgui.set_tooltip(tooltip)
     return clicked and enabled
 
@@ -875,16 +961,22 @@ def labeled_slider_float(label: str, value: float, low: float, high: float) -> t
 
 
 def primary_button(label: str, size: tuple[float, float] = (0, 0), *, enabled: bool = True) -> bool:
-    """The accent-filled call to action; one per pane."""
-    imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.ACCENT)))
-    imgui.push_style_color(
-        imgui.Col_.button_hovered.value, imgui.ImVec4(*theme.rgba(theme.ACCENT, 0.85))
-    )
+    """The accent-filled call to action; one per pane.
+
+    Hover lightens by approach rather than by swap (UX.md Phase 1); see
+    :func:`_glyph_button` for why ``button`` and ``button_hovered`` are pushed
+    to one colour.
+    """
+    key = f"primary/{label}"
+    fill = imgui.ImVec4(*theme.rgba(theme.ACCENT, 1.0 - 0.15 * _hover_amount(key)))
+    imgui.push_style_color(imgui.Col_.button.value, fill)
+    imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
     imgui.push_style_color(
         imgui.Col_.button_active.value, imgui.ImVec4(*theme.rgba(theme.ACCENT, 0.7))
     )
     with fonts.label(imgui):
         clicked = disabled_button(label, enabled, size)
+    note_hover(key, enabled and imgui.is_item_hovered())
     imgui.pop_style_color(3)
     return clicked
 
@@ -902,13 +994,16 @@ def destructive_button(
     """
     if not enabled:
         imgui.begin_disabled()
-    imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.85)))
-    imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
+    key = f"destructive/{label}"
+    fill = imgui.ImVec4(*theme.rgba(theme.ERR, 0.85 + 0.15 * _hover_amount(key)))
+    imgui.push_style_color(imgui.Col_.button.value, fill)
+    imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
     imgui.push_style_color(
         imgui.Col_.button_active.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.7))
     )
     with fonts.label(imgui):
         clicked = imgui.button(label, size)
+    note_hover(key, enabled and imgui.is_item_hovered())
     imgui.pop_style_color(3)
     if not enabled:
         imgui.end_disabled()
@@ -927,7 +1022,11 @@ def card(card_id: str, size: tuple[float, float]):
     origin = imgui.get_cursor_screen_pos()
     draw = imgui.get_window_draw_list()
     radius = sp(tokens.RADIUS_M)
-    lift = motion.value(f"card/{card_id}/lift", 0.0, duration=tokens.DUR_FAST)
+    # Peeked, not advanced: the target is set after ``end_child``, once hover is
+    # known. Reading through ``value`` (with a target of 0.0, which is what this
+    # used to do) stepped the easing twice a frame and towards the wrong target
+    # first, so a card took visibly longer to lift than to settle.
+    lift = motion.peek(f"card/{card_id}/lift")
     for grow, alpha in ((sp(3), tokens.SHADOW_OUTER), (sp(1), tokens.SHADOW_INNER)):
         draw.add_rect_filled(
             (origin.x - 0, origin.y + grow),
@@ -935,9 +1034,13 @@ def card(card_id: str, size: tuple[float, float]):
             imgui.get_color_u32((0, 0, 0, alpha * (0.6 + 0.4 * lift))),
             radius + grow * 0.5,
         )
+    # Interpolated rather than switched at 0.5: the shadow fades continuously
+    # and the fill did not, so mid-hover the background popped a step while the
+    # shadow was still on its way -- one visible artifact on the app's first
+    # screen, six times over.
     imgui.push_style_color(
         imgui.Col_.child_bg.value,
-        imgui.ImVec4(*theme.rgba(theme.ELEV_1 if lift < 0.5 else theme.ELEV_2)),
+        imgui.ImVec4(*theme.mix(theme.ELEV_1, theme.ELEV_2, lift)),
     )
     # No scrollbar. A card is a fixed-size tile whose content is laid out to
     # fit, so a scrollbar in one is a symptom rather than an affordance -- and
@@ -1039,7 +1142,13 @@ def toasts(
         fade_in = min(age / 0.18, 1.0)
         fade_out = min(max(toast.ttl - age, 0.0) / 0.3, 1.0)
         alpha = min(fade_in, fade_out)
-        rise = (1.0 - (1.0 - fade_in) ** 3) * sp(10) - sp(10)  # eased slide-up
+        # The slide-up, through the shared curve rather than through its own
+        # copy of it -- this was ``1 - (1 - t)**3`` written out, which is
+        # ``ease_out_cubic`` spelled a second time, and the second spelling is
+        # what reduce-motion could not reach. Under it the toast still fades,
+        # because a fade is not movement; only the travel goes.
+        travel = 0.0 if motion.REDUCED else sp(10)
+        rise = motion.ease_out_cubic(fade_in) * travel - travel
         sticky = toast.level in app_state.TOAST_STICKY
         colour, glyph = toast_style(toast.level)
         imgui.set_next_window_bg_alpha(0.96 * alpha)

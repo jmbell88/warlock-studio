@@ -42,12 +42,28 @@ MODES = _modes.KEYS
 # textures asked for on it to upload, one for anything those made visible.
 WARMUP = 3
 
+# How many further frames a capture will wait for the app to stop moving. A
+# mode change raises a content crossfade (UX.md Phase 1) and three warmup frames
+# is 50 ms of a 200 ms one, so without this every capture is a picture of a
+# half-cleared veil -- a harness that made the whole screenshot pass useless in
+# exactly the phase it exists to review. Bounded rather than a bare ``while``:
+# an animation that never settles is a bug this must report by capturing it,
+# not hang on.
+SETTLE_FRAMES = 40
+
 
 def _capture(app, path: Path) -> None:
     import pygame
     from PIL import Image
 
+    from warlock.studio import motion
+
     for _ in range(WARMUP):
+        app.frame(1.0 / 60.0)
+        pygame.display.flip()
+    for _ in range(SETTLE_FRAMES):
+        if not motion.animating():
+            break
         app.frame(1.0 / 60.0)
         pygame.display.flip()
     width, height = pygame.display.get_window_size()
@@ -117,6 +133,16 @@ def main() -> int:
         action="store_true",
         help="turn the 2D viewport's tiled preview on",
     )
+    ap.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help=(
+            "UI scale to capture at, overriding the monitor's. The pass is run "
+            "at 1.0 and 1.5: three shipped defects were invisible at 1.0, which "
+            "is the only scale the smoke suite runs at and the one nobody uses."
+        ),
+    )
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -130,6 +156,17 @@ def main() -> int:
 
     app = App(Runtime(get_config()))
     app.setup_window()
+    if args.scale is not None:
+        # After the window (which samples the monitor) and before the context
+        # (which makes textures): the atlas has to be re-baked at the new scale
+        # or every icon sits off-centre by a fraction of the difference, which
+        # is ``fonts.reload``'s whole reason for existing. Between frames is
+        # satisfied trivially here -- there has not been one yet.
+        from warlock.studio import fonts
+
+        tokens.set_scale(args.scale)
+        theme_mod.apply(imgui)
+        fonts.reload(imgui)
     app.setup_runtime()
     app.setup_context()
     if args.seed:

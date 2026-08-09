@@ -17,7 +17,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import fonts, icons, modes, profiles, theme, widgets
+from .. import fonts, icons, modes, profiles, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d
 from ..tokens import sp
@@ -144,7 +144,7 @@ def _tile(ctx: Any, key: str, icon: str, name: str, caption: str, *, focused: bo
     clicked = False
     origin = imgui.get_cursor_screen_pos()
     with widgets.card(f"landing/{key}", (width, height)):
-        imgui.dummy((0, sp(4)))
+        imgui.dummy((0, sp(tokens.SP_1)))
         # The icon is one line and the text beside it is two, so drawing both
         # from the same Y aligns the glyph with the *name* rather than with the
         # block as a whole. Half the difference is the optical centre.
@@ -159,6 +159,10 @@ def _tile(ctx: Any, key: str, icon: str, name: str, caption: str, *, focused: bo
         imgui.set_cursor_pos_y(top + max((group_h - icon_h) * 0.5, 0.0))
         with fonts.title(imgui):
             widgets.text_colored(theme.ACCENT, icon)
+        # A column position, not a gap: the text block starts here so that
+        # every tile's name lines up whatever its glyph advances to. Left a
+        # literal deliberately -- SP_8 + SP_4 would be arithmetic pretending to
+        # be a rhythm, and the number is a measurement of one layout.
         imgui.same_line(sp(48))
         imgui.set_cursor_pos_y(top)
         imgui.begin_group()
@@ -198,8 +202,12 @@ def _choose(ctx: Any) -> None:
     # The tiles plus the title block; centre the stack in the upper half. Off
     # ``len(TILES)`` rather than a literal, or adding a tile silently pushes the
     # bottom of the stack off screen.
-    stack = sp(64 + 8) * len(TILES) + sp(110)
-    imgui.dummy((0, max((avail.y - stack) * 0.4, sp(24))))
+    # The title block's own height rides on the hero's size, so it is written
+    # as the old figure plus what the hero grew by rather than as a new
+    # constant: the number was measured against a 16 px title, and a display
+    # ramp that changes again must not silently push the bottom tile off screen.
+    stack = sp(64 + 8) * len(TILES) + sp(110 + (tokens.TEXT_DISPLAY - tokens.TEXT_TITLE))
+    imgui.dummy((0, max((avail.y - stack) * 0.4, sp(tokens.SP_6))))
 
     def centred(text: str, colour: int | None = None) -> None:
         _centre(imgui.calc_text_size(text).x)
@@ -208,7 +216,7 @@ def _choose(ctx: Any) -> None:
         else:
             widgets.text_colored(colour, text)
 
-    with fonts.title(imgui):
+    with fonts.display(imgui):
         centred("Warlock Studio")
     with fonts.small(imgui):
         centred("A prompt becomes a reference image; a reference becomes a mesh.", theme.MUTED)
@@ -216,20 +224,20 @@ def _choose(ctx: Any) -> None:
     # right-aligns onto whatever line is current, and the tile stack below is a
     # column of full-width cards with no line to share.
     manual_render.help_button(ctx, "home")
-    imgui.dummy((0, sp(20)))
+    imgui.dummy((0, sp(tokens.SP_5)))
 
     focus = ctx.state.home_index % len(TILES)
     for index, (key, icon, name, caption) in enumerate(tiles(ctx)):
         if index:
-            imgui.dummy((0, sp(8)))
+            imgui.dummy((0, sp(tokens.SP_2)))
         if _tile(ctx, key, icon, name, caption, focused=index == focus):
             activate(ctx, index)
 
-    imgui.dummy((0, sp(8)))
+    imgui.dummy((0, sp(tokens.SP_2)))
     _setup_entry(ctx)
 
     if ctx.state.errors:
-        imgui.dummy((0, sp(16)))
+        imgui.dummy((0, sp(tokens.SP_4)))
         for message in ctx.state.errors:
             centred(message, theme.ERR)
 

@@ -214,6 +214,11 @@ class App:
         # mode can resync the viewer -- a mode change is not something the
         # job cache announces.
         self._last_mode: str | None = None
+        # How long the veil over the whole viewport takes to clear, or 0.0 for
+        # "there is no transition running". A duration rather than a bool
+        # because the two things that raise one want different lengths: a mode
+        # switch is DUR_BASE, the splash dissolving into the app is DUR_SLOW.
+        self._transition_duration = 0.0
         # Measured every frame, drawn only when state.show_fps is on (F10), and
         # logged once at teardown regardless -- the overlay answers "is it
         # smooth now", the log line is the evidence for "it ran at 60".
@@ -334,7 +339,7 @@ class App:
 
     def setup_context(self) -> None:
         """The Ctx and the state it carries. Frame thread only, after both."""
-        from . import textures
+        from . import motion, textures
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
         from .settings import restore_form
@@ -354,6 +359,11 @@ class App:
         # every launch (AppState's default), so a stored mode would be a key
         # with no reader that four call sites kept half-updated.
         state.show_fps = bool(settings.get("show_fps"))
+        # Both halves, here rather than at the checkbox: the stored value has to
+        # reach ``motion.REDUCED`` before the first frame is built, or the app
+        # animates its own startup at somebody who asked it not to.
+        state.reduce_motion = bool(settings.get("reduce_motion"))
+        motion.set_reduced(state.reduce_motion)
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
         state.history = list(settings.get("history") or [])
@@ -485,6 +495,15 @@ class App:
             if self._startup_with_splash():
                 self.setup_context()
                 in_setup = False
+                # The splash dissolves into the app rather than cutting to it
+                # (UX.md Phase 1). The same veil a mode switch uses, at the
+                # longer duration: the splash's last frame and the app's first
+                # are both on the window background, so a veil clearing over
+                # the app *is* the crossfade between them -- and the cheap half
+                # of one is indistinguishable from the whole against near-black.
+                from . import tokens as tokens_mod
+
+                self._start_transition(tokens_mod.DUR_SLOW)
                 self._running = True
                 clock = pygame.time.Clock()
                 while self._running:
@@ -606,6 +625,16 @@ class App:
         io = imgui.get_io()
         if io.want_text_input:
             return True  # the caret blinks
+        # An animation in flight is a reason the screen can change with no
+        # input at all -- which is exactly what the rest of this list
+        # enumerates. It counts only keys the last frame actually touched, so a
+        # widget that left the screen mid-move cannot hold the app at 60 fps
+        # (``motion.animating``), and it is constantly false under
+        # reduce-motion, where nothing is ever mid-move.
+        from . import motion
+
+        if motion.animating():
+            return True
         state = ctx.state
         if state.toasts:
             return True  # TTL fade
@@ -1637,7 +1666,8 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
-        from . import modes
+        from . import layout as layout_mod
+        from . import modes, tokens
         from .panes import (
             app_settings,
             inspector,
@@ -1648,6 +1678,10 @@ class App:
         )
 
         ctx = self.app_ctx
+        # Before any pane reads ``layout.SIDEBAR_W``: a width change eases, and
+        # a half-eased width read by the left sidebar and the settled one read
+        # by the right would be two columns disagreeing about the same frame.
+        layout_mod.tick()
         # Recomputed every frame by whoever draws the viewport image. Every
         # mode but 3D returns without drawing it, so it stays false there and
         # the viewer gets no events at all.
@@ -1663,6 +1697,13 @@ class App:
         # to show what was just picked.
         if ctx.state.mode != self._last_mode and ctx.state.mode in modes.VIEWPORT_MODES:
             self._sync_viewer()
+        if self._last_mode is not None and ctx.state.mode != self._last_mode:
+            # The content crossfade (UX.md Phase 1). One place, zero per-pane
+            # work: the mode switch's pill already slides, and before this the
+            # screen under it teleported. Not on the *first* frame -- there is
+            # no previous screen to have come from, and the splash's own fade
+            # already owns that moment.
+            self._start_transition(tokens.DUR_BASE)
         if ctx.state.mode != self._last_mode and ctx.state.mode == "review":
             # Arriving is the one moment a rescan is certainly wanted, and it
             # is a mode change rather than a job-cache tick, so nothing else
@@ -1719,7 +1760,6 @@ class App:
         # instead, so the left column is settings alone (nothing left to split
         # against) and the right column is the two-scroller stack that used to
         # live on the left.
-        from . import layout as layout_mod
         from .tokens import sp
 
         lay = self.layout
@@ -2723,6 +2763,47 @@ class App:
         palette.draw(ctx)
         ctx.confirms.draw()
         ctx.prompts.draw()
+        # Last, and on the foreground list, so it covers everything above --
+        # including the modals, which are part of the screen being crossfaded.
+        self._transition_overlay(viewport)
+
+    # -- transitions -------------------------------------------------------
+    #
+    # One full-viewport veil in the window's own background colour, fading
+    # out. It is not a crossfade between two rendered screens -- imgui has one
+    # framebuffer and keeping the previous frame's would be Phase 5's offscreen
+    # copy -- it is the cheap half of one, and against a near-black ground the
+    # difference is not visible at 200 ms. It paints only; the UI underneath
+    # stays live, which is why a transition can never eat a click.
+
+    TRANSITION_KEY = "app/transition"
+
+    def _start_transition(self, duration: float) -> None:
+        from . import motion
+
+        self._transition_duration = duration
+        motion.restart(self.TRANSITION_KEY)
+
+    def _transition_overlay(self, viewport: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import motion, theme
+
+        duration = self._transition_duration
+        if duration <= 0.0:
+            return
+        t = motion.ease(self.TRANSITION_KEY, duration)
+        if t >= 1.0:
+            # Latched off rather than re-eased every frame for the life of the
+            # session: ``ease`` on a finished key is cheap but not free, and a
+            # veil at alpha 0 is still a full-viewport quad in the draw list.
+            self._transition_duration = 0.0
+            return
+        low = viewport.pos
+        high = (low.x + viewport.size.x, low.y + viewport.size.y)
+        imgui.get_foreground_draw_list().add_rect_filled(
+            (low.x, low.y), high, imgui.get_color_u32(theme.rgba(theme.BG, 1.0 - t))
+        )
 
     def _toast_action(self, name: str, arg: str | None = None) -> None:
         """What a toast's action button does, kept out of the widget.
@@ -2891,8 +2972,13 @@ class App:
         from . import widgets
         from .tokens import sp
 
+        alpha, rise = widgets.popup_enter("shortcuts")
+        imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         if not imgui.begin_popup("shortcuts"):
+            imgui.pop_style_var()
             return
+        if rise > 0.0:
+            imgui.dummy((0, rise))
 
         def table(title: str, rows: list[tuple[str, str]]) -> None:
             widgets.section(title)
@@ -3030,6 +3116,7 @@ class App:
             ],
         )
         imgui.end_popup()
+        imgui.pop_style_var()
 
     def _diagnostics_popup(self, checks: list[Any]) -> None:
         from imgui_bundle import imgui
@@ -3039,8 +3126,13 @@ class App:
 
         ctx = self.app_ctx
         imgui.set_next_window_size((sp(460), 0))
+        alpha, rise = widgets.popup_enter("diagnostics")
+        imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
         if not imgui.begin_popup("diagnostics"):
+            imgui.pop_style_var()
             return
+        if rise > 0.0:
+            imgui.dummy((0, rise))
         widgets.section("Diagnostics")
         for check in checks:
             colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
@@ -3098,6 +3190,7 @@ class App:
         if manual_render.troubleshooting_button(ctx):
             imgui.close_current_popup()
         imgui.end_popup()
+        imgui.pop_style_var()
 
     def _toast_history_section(self, ctx: Any) -> None:
         """Every notice this session raised, newest first (H67).

@@ -18,7 +18,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import theme, tokens
+from . import motion, theme, tokens
 from .tokens import sp
 
 # The three sidebar widths on offer (M106), in design pixels. Three named
@@ -38,19 +38,53 @@ SIDEBAR_WIDTHS: dict[str, float] = {
 # this directly and threading a Layout through all of them would put the
 # measurement in eight places instead of one.
 SIDEBAR_W = SIDEBAR_WIDTHS["default"]
+# What ``SIDEBAR_W`` is on its way to. The two are the same number except
+# during the ~200 ms after the user picks a different size; see :func:`tick`.
+SIDEBAR_TARGET = SIDEBAR_W
+# The motion key the width eases on, named here because ``set_sidebar`` has to
+# forget it when it snaps.
+_SIDEBAR_KEY = "layout/sidebar"
 
 
-def set_sidebar(key: str) -> str:
+def set_sidebar(key: str, *, animate: bool = False) -> str:
     """Apply a named sidebar width. -> the key actually applied.
 
     An unknown key falls back to the default rather than raising: this is read
     from a settings file, and a value written by a build that offered a fourth
     size must not stop the window opening.
+
+    ``animate`` is the split between the two callers and it is not cosmetic.
+    The construction path (and every headless test) has to leave ``SIDEBAR_W``
+    correct *immediately* -- there may be no frame loop at all -- so it snaps;
+    the user changing the option in Settings goes through :func:`tick`, where
+    the two columns slide to their new widths instead of jumping.
     """
-    global SIDEBAR_W
+    global SIDEBAR_W, SIDEBAR_TARGET
     key = key if key in SIDEBAR_WIDTHS else "default"
-    SIDEBAR_W = SIDEBAR_WIDTHS[key]
+    SIDEBAR_TARGET = SIDEBAR_WIDTHS[key]
+    if animate:
+        # Stated rather than assumed: a key that is not live yet snaps on its
+        # first sighting, so an animated change made before the first tick --
+        # which is every change made in the same frame the option is read back
+        # -- would jump. Seeding says where the slide starts.
+        motion.seed(_SIDEBAR_KEY, SIDEBAR_W)
+    else:
+        SIDEBAR_W = SIDEBAR_TARGET
+        # Forgotten rather than assigned: motion snaps a key's first sighting,
+        # so dropping it is how the next tick starts settled at the new width
+        # rather than easing from the old one.
+        motion.forget(_SIDEBAR_KEY)
     return key
+
+
+def tick() -> None:
+    """Advance the sidebar width one frame. Called once, before anything reads
+    ``SIDEBAR_W`` -- a half-eased width read by the left column and the settled
+    one by the right would be two columns disagreeing about the same frame."""
+    global SIDEBAR_W
+    SIDEBAR_W = motion.value(_SIDEBAR_KEY, SIDEBAR_TARGET, duration=tokens.DUR_BASE)
+
+
 PANE_PADDING = 5.0  # between a pane's border and its content
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
@@ -70,7 +104,7 @@ class Layout:
         self.sidebar = set_sidebar(str(stored.get("sidebar", "default")))
 
     def set_sidebar_width(self, key: str) -> None:
-        self.sidebar = set_sidebar(key)
+        self.sidebar = set_sidebar(key, animate=True)
         self.save()
 
     def save(self) -> None:
@@ -133,7 +167,14 @@ def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> fl
         imgui.set_mouse_cursor(
             (imgui.MouseCursor_.resize_ew if vertical else imgui.MouseCursor_.resize_ns).value
         )
-    colour = theme.rgba(theme.ACCENT) if (hovered or active) else theme.rgba(theme.EDGE, 0.6)
+    # Faded rather than switched: a hairline that snaps from edge-grey to full
+    # accent as the pointer crosses it is the loudest hard cut left in the
+    # workspace, and it fires on every pass over the column boundary whether or
+    # not anybody meant to drag.
+    lit = motion.value(
+        f"splitter/{split_id}", 1.0 if (hovered or active) else 0.0, duration=tokens.DUR_FAST
+    )
+    colour = theme.mix(theme.EDGE, theme.ACCENT, lit, 0.6 + 0.4 * lit)
     draw = imgui.get_window_draw_list()
     if vertical:
         x = pos.x + grip * 0.5

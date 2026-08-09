@@ -68,6 +68,23 @@ def rgba(value: int, alpha: float = 1.0) -> tuple[float, float, float, float]:
     )
 
 
+def mix(
+    low: int, high: int, t: float, alpha: float = 1.0
+) -> tuple[float, float, float, float]:
+    """``low`` at ``t=0``, ``high`` at ``t=1``, interpolated in sRGB.
+
+    Two palette entries rather than two rgba tuples, because the callers are
+    animating between *roles* -- ELEV_1 to ELEV_2 as a card lifts, PANEL to
+    ELEV_2 as a library row is chosen -- and a role resolves against the
+    palette in force. Interpolating the encoded values is not physically
+    correct, but every pair this is used on is one step of the elevation ramp
+    apart, where the difference from a linear-light blend is under a level.
+    """
+    t = min(max(t, 0.0), 1.0)
+    a, b = rgba(low), rgba(high)
+    return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, alpha)
+
+
 def status_color(status: str) -> tuple[float, float, float, float]:
     return rgba(tokens.colour(STATUS_COLORS.get(status, "MUTED")))
 

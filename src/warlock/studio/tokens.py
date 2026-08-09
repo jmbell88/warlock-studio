@@ -57,28 +57,53 @@ def sp(n: float) -> float:
 # multiple "for completeness" is a menu of near-identical choices, which is how
 # two panes come to sit 24 and 20 apart for no stated reason -- SP_6, SP_10 and
 # RADIUS_L were exactly that and had no readers at all.
+#
+# The upper half (SP_5..SP_8) arrives with its readers, which is the same rule
+# read the other way round: the landing screen was inventing ``sp(20)``,
+# ``sp(40)`` and ``sp(48)`` inline because the scale stopped at 16, so the gaps
+# that carry the app's first screen were the only ones no module owned.
 SP_1 = 4
 SP_2 = 8
 SP_3 = 12
 SP_4 = 16
+SP_5 = 20
+SP_6 = 24
 
 # -- radii / strokes ---------------------------------------------------------
 
 RADIUS_S = 4.0
 RADIUS_M = 6.0
 BORDER = 1.0
+# There is deliberately still no RADIUS_L, and no SP_8. Both were written into
+# UX.md Phase 0's list and both belong to Phase 2: the surface radius is read by
+# cards, modals and the palette window when *they* change, and SP_8 by whatever
+# gap turns out to want 32. Adding them here first would have put two names in
+# this file with nothing reading them, which is the exact state the comment
+# above records deleting them from -- and which
+# ``test_the_spacing_scale_carries_only_the_steps_in_use`` fails on.
 
 # -- type scale --------------------------------------------------------------
 
 TEXT_SMALL = 11.0
 TEXT_BODY = 13.0
 TEXT_TITLE = 16.0
+# The loud end. Display type exists so a screen can have exactly one loud
+# thing: with the ramp topping out at 16 the largest type in the app was a
+# section heading, so the Home hero and a manual chapter title were the same
+# size as the label above a combo. HEADING names a region, DISPLAY names a
+# screen -- there is deliberately nothing between them and nothing above.
+TEXT_HEADING = 20.0
+TEXT_DISPLAY = 28.0
 
 # -- motion ------------------------------------------------------------------
 
 # Durations in seconds; motion.value() converts them to time constants.
 DUR_FAST = 0.12
 DUR_BASE = 0.20
+# Mode-scale transitions: a whole screen changing is a longer move than a
+# hover, and the same 0.20 that reads as instant on a pill reads as a glitch
+# across a viewport.
+DUR_SLOW = 0.30
 
 # -- palette (sRGB hex) ------------------------------------------------------
 

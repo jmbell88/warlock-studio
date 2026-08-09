@@ -23,6 +23,9 @@ class _Flags:
     appearing = _Enum()
     always_auto_resize = _Enum()
     enter_returns_true = _Enum()
+    # The modal fades and rises as it appears (UX.md Phase 1), which is one
+    # style var pushed around ``begin`` and a ``dummy`` inside it.
+    alpha = _Enum()
 
 
 class _Key:
@@ -44,6 +47,7 @@ class _FakeImgui:
     Cond_ = _Flags
     WindowFlags_ = _Flags
     InputTextFlags_ = _Flags
+    StyleVar_ = _Flags
     Key = _Key
 
     def __init__(self, *, typed: str, enter: bool = False, press: str | None = None) -> None:
@@ -57,6 +61,9 @@ class _FakeImgui:
         return type("V", (), {"get_center": staticmethod(lambda: (0.0, 0.0))})()
 
     def set_next_window_pos(self, *_a: Any) -> None: ...
+    def push_style_var(self, *_a: Any) -> None: ...
+    def pop_style_var(self, *_a: Any) -> None: ...
+    def dummy(self, *_a: Any) -> None: ...
     def begin_popup_modal(self, *_a: Any) -> tuple[bool, Any]:
         return (True, None)
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import fonts, icons, theme, widgets
+from .. import fonts, icons, theme, tokens, widgets
 from ..tokens import sp
 from . import loader, parser
 from .targets import HELP_TARGETS, TROUBLESHOOTING
@@ -175,7 +175,12 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
             # this module does not use; bracket it so a heading breaks on the
             # same column the prose under it does.
             imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + _measure())
-            with fonts.push(imgui, fonts.SEMIBOLD, 22 if block.level == 1 else 17):
+            # A chapter title and a section under it, from the ramp rather than
+            # from two literals: 22 and 17 were one file's private type scale,
+            # near enough to TEXT_HEADING and TEXT_TITLE that nothing was
+            # bought by their being different.
+            size = tokens.TEXT_HEADING if block.level == 1 else tokens.TEXT_TITLE
+            with fonts.push(imgui, fonts.SEMIBOLD, size):
                 imgui.text_wrapped(block.text)
             imgui.pop_text_wrap_pos()
         else:
