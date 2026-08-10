@@ -251,6 +251,13 @@ class App:
         # reason _viewport_hovered exists: the host window is fullscreen, so
         # io.want_capture_mouse is always true and cannot be the gate.
         self._build_hovered = False
+        # Poser's own Viewer and hover flag, for Clay's reasons: built on first
+        # entry (a session that never poses pays for no second renderer), and
+        # a separate instance so loading the armature preview can never call
+        # ``adopt_model``'s unconditional ``exit_pose_mode`` over an inspector
+        # pose session on the shared viewer.
+        self.poser_viewer = None
+        self._poser_hovered = False
         # What is typed into the shortcuts popup's own filter box (UX.md Phase
         # 4). Not persisted and cleared on every open: it is a way through
         # sixty rows, not a preference about them.
@@ -687,6 +694,9 @@ class App:
         clay = self.clay_view
         if clay is not None and state.mode == "clay" and not clay.camera.settled():
             return True
+        poser = self.poser_viewer
+        if poser is not None and state.mode == "poser" and not poser.camera.settled():
+            return True
         inker = state.inker
         tab = None if inker is None else inker.active
         return tab is not None and bool(getattr(tab, "playing", False))
@@ -841,6 +851,12 @@ class App:
                     # Same rule: ``scanning`` gates every button and key, so a
                     # failed scan that left it set would make the mode inert.
                     review_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("poser-"):
+                    from . import poser_mode
+
+                    # Same rule again: ``loading``/``building`` gate the pane
+                    # and the viewport's progress row.
+                    poser_mode.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -963,6 +979,11 @@ class App:
 
             review_mode.on_task_done(ctx, done)
             return
+        if key.startswith("poser-"):
+            from . import poser_mode
+
+            poser_mode.on_task_done(ctx, done)
+            return
         if key.startswith("matte-"):
             from . import matte_preview
 
@@ -1038,6 +1059,16 @@ class App:
             return
         if key == VIEWER_KEY:
             self._adopt_model(done)
+            return
+        if key.startswith("pose-library:"):
+            # The global pose library rows the asset Pose panel offers, keyed
+            # by job like poses:/sheets: so an answer that lands after the
+            # selection moved on is dropped rather than shown against the
+            # wrong asset.
+            job_id = key.partition(":")[2]
+            if job_id == ctx.state.selected and isinstance(done.result, dict):
+                ctx.state.preview["library_poses"] = done.result.get("poses") or []
+                ctx.state.preview["library_template"] = done.result.get("template")
             return
         if key.startswith("pose-"):
             if key.startswith("pose-save:") and self.viewer.pose_mode:
@@ -1303,18 +1334,22 @@ class App:
         poses on screen while the new one's are read would offer a list that
         applies to nothing.
         """
+        from ..service import poses as svc_poses
         from ..service import rig as svc_rig
         from ..service import sheets as svc_sheets
 
         ctx = self.app_ctx
         job = ctx.job()
-        for key in ("poses", "sheets", "bones"):
+        for key in ("poses", "sheets", "bones", "library_poses", "library_template"):
             ctx.state.preview.pop(key, None)
         if job is None:
             return
         job_id = job["id"]
         if "rig.glb" in (job.get("files") or []):
             ctx.submit(f"poses:{job_id}", svc_rig.list_poses, ctx.svc, job_id)
+            # The global pose library, filtered to this rig's own skeleton --
+            # what the Pose panel's "Library poses" section offers.
+            ctx.submit(f"pose-library:{job_id}", svc_poses.library_for_job, ctx.svc, job_id)
         ctx.submit(f"sheets:{job_id}", svc_sheets.list_sheets, ctx.svc, job_id)
 
     def load_presets(self, template: str | None) -> None:
@@ -1376,6 +1411,12 @@ class App:
             if ctx.state.mode == "clay":
                 self._build_event(event)
                 continue
+            # Poser too, and for a stronger reason: it has its own Viewer
+            # instance, so the shared-viewer path below must never see its
+            # events or one drag would orbit both cameras.
+            if ctx.state.mode == "poser":
+                self._poser_event(event)
+                continue
             # The viewer sees the mouse when it is over the viewport image, and
             # a drag already in progress keeps it wherever the cursor goes.
             if self._viewport_hovered or self.viewer._grab is not None:
@@ -1405,6 +1446,18 @@ class App:
         hovered = self._build_hovered
         if hovered or self.clay_view._grab is not None:
             self.clay_view.handle_event(tab.doc, event, hovered)
+
+    def _poser_event(self, event: Any) -> None:
+        """Route the mouse to Poser's viewer, on the same hover rule as Clay's.
+
+        A drag already in progress ignores the hover, so crossing onto a panel
+        mid-orbit does not drop it.
+        """
+        viewer = self.poser_viewer
+        if viewer is None:
+            return
+        if self._poser_hovered or viewer._grab is not None:
+            viewer.handle_event(event, hovered=self._poser_hovered)
 
     def _modal_open(self) -> bool:
         """Whether a confirm or a prompt is on screen and owns the keyboard."""
@@ -1517,6 +1570,14 @@ class App:
             clay_mode.handle_key(ctx, event)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
                 self._frame_clay_selection()
+            return
+        if ctx.state.mode == "poser":
+            from . import poser_mode
+
+            # Unconditional for the workspace-mode reason: handle_key returns
+            # False with nothing selected, and letting that fall through would
+            # let F/W/S act on the asset viewport Poser has replaced.
+            poser_mode.handle_key(ctx, event)
             return
         if ctx.state.mode == "review":
             from . import review_mode
@@ -1689,16 +1750,20 @@ class App:
         clicking "Keep editing" on the first still left two more questions to
         dismiss, after the user has already said they are not quitting.
         """
-        from . import clay_mode, inker_mode, packwright_mode, plotter_mode
+        from . import clay_mode, inker_mode, packwright_mode, plotter_mode, poser_mode
         from .panes import pose_panel
 
         ctx = self.app_ctx
+        # The two pose guards are mutually exclusive by construction: the
+        # inspector's asks about the shared viewer's editor, the Poser's about
+        # its own instance, so no press ever answers one question twice.
         guards = (
             inker_mode.guard,
             clay_mode.guard,
             plotter_mode.guard,
             packwright_mode.guard,
             pose_panel.guard,
+            poser_mode.guard,
         )
 
         def step(index: int) -> None:
@@ -1764,6 +1829,12 @@ class App:
             from . import review_mode
 
             review_mode.scan(ctx)
+        if ctx.state.mode != self._last_mode and ctx.state.mode == "poser":
+            # Review's rule: arriving refreshes the library and asks for the
+            # armature preview, both cheap on a warm cache.
+            from . import poser_mode
+
+            poser_mode.enter(ctx)
         self._last_mode = ctx.state.mode
 
         viewport = imgui.get_main_viewport()
@@ -1807,6 +1878,8 @@ class App:
                 profiles_panel.draw(ctx)
             elif mode == "clay":
                 self._clay_workspace()
+            elif mode == "poser":
+                self._poser_workspace()
             elif mode == "review":
                 self._review_workspace()
             elif mode == "plotter":
@@ -1852,6 +1925,86 @@ class App:
         if self.clay_view is None:
             self.clay_view = ClayView(self.ctx, self.app_ctx)
         return self.clay_view
+
+    def _poser_workspace(self) -> None:
+        """The sidebar / centre / sidebar skeleton, Poser's way:
+
+            [ poser_library ]  viewport  [ poser_controls ]
+
+        One pane per side rather than Clay's stacked pairs: the library and the
+        controls are each one scroller, and an empty half-pane would be chrome.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from .panes import poser_controls, poser_library
+        from .tokens import sp
+
+        ctx = self.app_ctx
+        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        if layout_mod.pane_child("poser-library", (sidebar_w, 0)):
+            poser_library.draw(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        width = layout_mod.centre_width()
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        if layout_mod.pane_child("poser-centre", (width, 0), flags):
+            self._poser_viewport(ctx)
+        imgui.end_child()
+
+        imgui.same_line()
+        if layout_mod.pane_child("poser-controls", (0, 0)):
+            poser_controls.draw(ctx)
+        imgui.end_child()
+
+    def _poser_viewport(self, ctx: Any) -> None:
+        from imgui_bundle import imgui
+
+        from . import poser_mode, widgets
+        from .panes import overlay
+
+        self._poser_hovered = False
+        state = poser_mode.ensure(ctx)
+        if not ctx.rigging_available:
+            overlay.placeholder(ctx)
+            return
+        viewer = self._ensure_poser_viewer()
+        showing = poser_mode.sync_preview(ctx, viewer)
+        if not showing:
+            if state.building:
+                imgui.dummy((0, 40))
+                widgets.muted("Building the skeleton preview...")
+                widgets.cost_note(
+                    "The armature is built by Blender once per skeleton and "
+                    "cached; the first open of a template takes a moment."
+                )
+            elif state.error:
+                imgui.dummy((0, 40))
+                widgets.muted(state.error)
+            else:
+                overlay.placeholder(ctx)
+            return
+        avail = imgui.get_content_region_avail()
+        rect = (
+            imgui.get_cursor_screen_pos().x,
+            imgui.get_cursor_screen_pos().y,
+            max(avail.x, 1.0),
+            max(avail.y, 1.0),
+        )
+        texture = viewer.render(rect, 1.0 / TARGET_FPS)
+        imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
+        self._poser_hovered = imgui.is_item_hovered()
+
+    def _ensure_poser_viewer(self) -> Any:
+        """Poser's own Viewer, built on first use for ClayView's reason -- and
+        mirrored onto the ctx so poser_mode's guard can reach the editor."""
+        from .viewer_embed import Viewer
+
+        if self.poser_viewer is None:
+            self.poser_viewer = Viewer(self.ctx)
+            self.app_ctx.poser_viewer = self.poser_viewer
+        return self.poser_viewer
 
     def _frame_clay_selection(self) -> None:
         """F, in Clay. Frames the selection, or the whole document."""
@@ -3577,6 +3730,9 @@ class App:
         clay_view = getattr(self, "clay_view", None)
         if clay_view is not None:
             _step("release clay view", clay_view.release)
+        poser_viewer = getattr(self, "poser_viewer", None)
+        if poser_viewer is not None:
+            _step("release poser viewer", poser_viewer.release)
         if self.imgui_renderer is not None:
             _step("shutdown imgui", self.imgui_renderer.shutdown)
         _step("pygame.quit", pygame.quit)

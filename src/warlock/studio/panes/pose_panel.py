@@ -267,7 +267,45 @@ def _joints(ctx: Any, job: Any, viewer: Any) -> None:
 # --- the saved list ---------------------------------------------------------
 
 
+def _library_list(ctx: Any, job: Any) -> None:
+    """Poses authored in the Poser, offered to any asset on the same skeleton.
+
+    Applying one *snapshots* it into this job's own poses/ directory (see
+    ``service.poses.apply_library_pose``): the copy is the provenance record,
+    so editing or deleting the library pose afterwards changes nothing here.
+    The rows come off the ``pose-library:{job_id}`` task the side-data refresh
+    already submits; an empty answer draws nothing at all, because an asset
+    with no applicable poses does not need a section saying so -- the Poser is
+    where the library is explained.
+    """
+    from ...service import poses as svc_poses
+
+    poses = (ctx.state.preview or {}).get("library_poses") or []
+    if not poses:
+        return
+    widgets.section("Library poses")
+    widgets.help_marker(
+        "Poses from the Poser workspace that fit this skeleton. Applying one "
+        "copies it onto this asset, so later library edits never change it."
+    )
+    job_id = job["id"]
+    needle = widgets.list_filter(ctx, "library-poses", len(poses))
+    for pose in poses:
+        pose_id = str(pose.get("id") or "")
+        name = str(pose.get("name") or pose_id)
+        if needle and needle not in name.lower():
+            continue
+        imgui.push_id(f"lib-{pose_id}")
+        imgui.text(name)
+        imgui.same_line()
+        key = f"pose-lib-apply:{job_id}:{pose_id}"
+        if widgets.disabled_button("Apply", not ctx.busy(key)):
+            ctx.submit(key, svc_poses.apply_library_pose, ctx.svc, job_id, pose_id)
+        imgui.pop_id()
+
+
 def _saved_list(ctx: Any, job: Any) -> None:
+    _library_list(ctx, job)
     poses = (ctx.state.preview or {}).get("poses") or []
     widgets.section("Saved poses")
     if not poses:
@@ -296,6 +334,11 @@ def _saved_list(ctx: Any, job: Any) -> None:
             continue
         imgui.push_id(pose_id)
         imgui.text(pose.get("name") or pose_id)
+        if pose.get("source_pose"):
+            # The provenance marker: this row is a snapshot applied from the
+            # global library, not a hand-made pose.
+            imgui.same_line()
+            widgets.muted("(library)")
         imgui.same_line()
         if imgui.small_button("Apply") and ctx.viewer is not None:
             # Overwrites the editor's rotations and clears dirty, so it is an

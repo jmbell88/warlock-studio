@@ -31,6 +31,7 @@ MODES: list[tuple[str, str, str]] = [
     ("3d", "3D", icons.BOX),
     ("inker", "Inker", icons.PEN_TOOL),
     ("clay", "Clay", icons.RULER),
+    ("poser", "Poser", icons.PERSON_STANDING),
     ("review", "Review", icons.CIRCLE_CHECK),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
@@ -50,7 +51,9 @@ MODES: list[tuple[str, str, str]] = [
 # Manual and Settings are places you pass through: they have no form to
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
-WORK_MODES = frozenset({"2d", "3d", "inker", "clay", "review", "plotter", "packwright"})
+WORK_MODES = frozenset(
+    {"2d", "3d", "inker", "clay", "poser", "review", "plotter", "packwright"}
+)
 
 # The subset that draws the *asset* viewport, and therefore the only modes
 # whose selection is worth loading a mesh for. Inker and Clay each own their
@@ -62,12 +65,13 @@ WORK_MODES = frozenset({"2d", "3d", "inker", "clay", "review", "plotter", "packw
 VIEWPORT_MODES = frozenset({"2d", "3d"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
-# its own three-column workspace. Inker, Clay, Review, Plotter and Packwright
-# are the five; Library and Profiles are single panes, not workspaces, and join
-# Home/Manual/Settings there. The three categories partition KEYS exactly -- which
-# matters because ``_build_ui``'s dispatch ends in a bare ``else``, so an
-# unlisted mode would draw one of these rather than fail.
-WORKSPACE_MODES = frozenset({"inker", "clay", "review", "plotter", "packwright"})
+# its own three-column workspace. Inker, Clay, Poser, Review, Plotter and
+# Packwright are the six; Library and Profiles are single panes, not
+# workspaces, and join Home/Manual/Settings there. The three categories
+# partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
+# in a bare ``else``, so an unlisted mode would draw one of these rather than
+# fail.
+WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "packwright"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 

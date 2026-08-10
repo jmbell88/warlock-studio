@@ -794,6 +794,122 @@ def test_a_landmark_informed_rig_builds_the_armature_from_the_landmarks(tmp_path
     assert head == pytest.approx([0.80, 0.0, -0.60], abs=1e-4)
 
 
+# --- the pose library's engine half ------------------------------------------
+#
+# pose_spec's root kwargs, save_pose's extra merge, root_offset_world and
+# armature_spec are what service.poses stands on; all four are host-side pure.
+
+
+def test_pose_spec_without_root_kwargs_is_byte_identical_to_the_old_shape(tmp_path):
+    """Backward compatibility is structural: a spec with no root offset must be
+    exactly the dict every pose bake has always sent, key for key."""
+    pose_id = "0123456789ab"
+    bones = {"hips": [0.0, 0.0, 0.0, 1.0]}
+    assert rigging.pose_spec(tmp_path, pose_id, bones) == {
+        "op": "pose",
+        "rig_glb": str(tmp_path / "rig.glb"),
+        "out_glb": str(rigging.pose_glb_path(tmp_path, pose_id)),
+        "result_path": str(rigging.pose_dir(tmp_path) / f".{pose_id}.result.json"),
+        "bones": bones,
+    }
+
+
+def test_pose_spec_adds_no_keys_for_a_zero_offset(tmp_path):
+    spec = rigging.pose_spec(
+        tmp_path, "0123456789ab", {}, root_bone="hips", root_offset=[0.0, 0.0, 0.0]
+    )
+    assert "root_bone" not in spec
+    assert "root_offset" not in spec
+
+
+def test_pose_spec_carries_a_nonzero_root_offset(tmp_path):
+    spec = rigging.pose_spec(
+        tmp_path, "0123456789ab", {}, root_bone="hips", root_offset=[0.1, 0, -0.2]
+    )
+    assert spec["root_bone"] == "hips"
+    assert spec["root_offset"] == [0.1, 0.0, -0.2]
+
+
+def test_save_pose_merges_extra_into_the_record(tmp_path):
+    pose = rigging.validate_pose({"name": "snap", "bones": {"hips": [0, 0, 0, 1]}})
+    record = rigging.save_pose(
+        tmp_path,
+        pose,
+        extra={"root_translation": [0.1, 0.0, 0.0], "source_pose": {"id": "abc"}},
+    )
+    back = rigging.read_pose(tmp_path, record["id"])
+    assert back["root_translation"] == [0.1, 0.0, 0.0]
+    assert back["source_pose"] == {"id": "abc"}
+    assert back["name"] == "snap"
+
+
+def test_save_pose_extra_may_not_override_what_the_record_owns(tmp_path):
+    pose = rigging.validate_pose({"name": "snap", "bones": {"hips": [0, 0, 0, 1]}})
+    for key in ("id", "name", "bones", "created"):
+        with pytest.raises(ValueError, match="may not override"):
+            rigging.save_pose(tmp_path, pose, extra={key: "x"})
+
+
+def test_root_offset_world_scales_by_the_rig_height():
+    bounds = {"min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 2.0]}
+    assert rigging.root_offset_world([0.1, 0.0, -0.25], bounds) == pytest.approx(
+        [0.2, 0.0, -0.5]
+    )
+
+
+def test_root_offset_world_degenerate_height_falls_back_to_the_largest_extent():
+    bounds = {"min": [-3.0, -1.0, 1.0], "max": [3.0, 1.0, 1.0]}  # flat in z
+    assert rigging.root_offset_world([0.5, 0.0, 0.0], bounds) == pytest.approx([3.0, 0.0, 0.0])
+
+
+def test_root_offset_world_point_box_degrades_to_as_authored():
+    bounds = {"min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}
+    assert rigging.root_offset_world([0.5, -0.5, 0.25], bounds) == [0.5, -0.5, 0.25]
+
+
+def test_root_offset_world_zero_stays_zero():
+    bounds = {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 5.0]}
+    assert rigging.root_offset_world([0.0, 0.0, 0.0], bounds) == [0.0, 0.0, 0.0]
+
+
+def test_armature_spec_validates_the_template_before_spawning_anything(tmp_path):
+    with pytest.raises(ValueError, match="unknown skeleton template"):
+        rigging.armature_spec("dragon", tmp_path / "a.glb", tmp_path)
+
+
+def test_armature_spec_shape(tmp_path):
+    spec = rigging.armature_spec("humanoid", tmp_path / ".preview.tmp.glb", tmp_path)
+    assert spec == {
+        "op": "armature",
+        "template": "humanoid",
+        "out_glb": str(tmp_path / ".preview.tmp.glb"),
+        "result_path": str(tmp_path / ".armature_result.json"),
+    }
+
+
+def test_interpolate_refuses_endpoint_poses_with_root_offsets():
+    """The TMX rule: a feature the lerp does not model is refused by name,
+    never dropped -- a clip that silently ignored a root offset would render a
+    sheet disagreeing with the pose's own bake."""
+    from warlock.pipelines import sheet as sheetlib
+
+    plain = {"id": "a" * 12, "name": "A", "bones": {"hips": [0, 0, 0, 1]}}
+    offset = {
+        "id": "b" * 12,
+        "name": "Leap",
+        "bones": {"hips": [0, 0, 0, 1]},
+        "root_translation": [0.0, 0.0, 0.3],
+    }
+    with pytest.raises(ValueError, match="Leap.*root offset"):
+        sheetlib.interpolate(plain, offset, 4)
+    with pytest.raises(ValueError, match="root offset"):
+        sheetlib.interpolate(offset, plain, 4)
+    # A zero offset is no offset: every record written before the field, and
+    # every pose that never touched the root, interpolates exactly as before.
+    zeroed = dict(plain, root_translation=[0.0, 0.0, 0.0])
+    assert len(sheetlib.interpolate(zeroed, plain, 4)) == 4
+
+
 def _glb_node_rotations(path) -> dict[str, list[float]]:
     """Every named node's local rotation, read straight out of the GLB.
 
@@ -908,6 +1024,177 @@ def test_a_glb_round_trips_through_the_worker_into_a_real_fbx(tmp_path):
     assert out.exists()
     # "Kaydara FBX Binary" is the magic every FBX reader looks for.
     assert out.read_bytes()[:18] == b"Kaydara FBX Binary"
+
+
+def _glb_doc(path) -> dict:
+    """The GLB's whole JSON chunk, read directly for _glb_node_rotations'
+    reason: reading it back through Blender would beg the question."""
+    import struct
+
+    data = path.read_bytes()
+    offset = 12
+    while offset < len(data):
+        length, kind = struct.unpack_from("<II", data, offset)
+        if kind == 0x4E4F534A:  # 'JSON'
+            return json.loads(data[offset + 8 : offset + 8 + length])
+        offset += 8 + length + (-length % 4)
+    raise AssertionError("GLB has no JSON chunk")
+
+
+def _glb_node_translations(path) -> dict[str, list[float]]:
+    return {
+        n["name"]: n.get("translation", [0.0, 0.0, 0.0])
+        for n in _glb_doc(path)["nodes"]
+        if "name" in n
+    }
+
+
+def _world_positions(doc) -> dict[str, list[float]]:
+    """Every named node's world position, composing T*R*S down the tree."""
+    import numpy as np
+
+    nodes = doc["nodes"]
+
+    def local(n):
+        m = np.eye(4)
+        r = n.get("rotation")
+        if r is not None:
+            x, y, z, w = (float(v) for v in r)
+            m[:3, :3] = np.array(
+                [
+                    [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                    [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                    [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+                ]
+            )
+        s = n.get("scale")
+        if s is not None:
+            m[:3, :3] = m[:3, :3] @ np.diag([float(v) for v in s])
+        t = n.get("translation")
+        if t is not None:
+            m[:3, 3] = [float(v) for v in t]
+        return m
+
+    out: dict[str, list[float]] = {}
+
+    def walk(i, parent):
+        m = parent @ local(nodes[i])
+        name = nodes[i].get("name")
+        if name:
+            out[name] = [float(v) for v in m[:3, 3]]
+        for c in nodes[i].get("children", []):
+            walk(c, m)
+
+    scene = doc["scenes"][doc.get("scene", 0)]
+    for root in scene.get("nodes", []):
+        walk(root, np.eye(4))
+    return out
+
+
+@pytest.mark.gpu
+def test_op_armature_exports_a_meshless_skeleton(tmp_path):
+    """The empirical gate the whole Poser preview stands on: Blender's glTF
+    exporter emits an armature with no mesh at all as one node per bone, named
+    exactly, correctly parented, with no skin -- so the preview the editor
+    rotates is built by the same code path (and therefore the same bone
+    frames) as every real rig."""
+    pytest.importorskip("bpy")
+    import bpy
+
+    from warlock import poselib
+    from warlock.pipelines import blender_worker
+
+    out = tmp_path / ".preview.tmp.glb"
+    result = blender_worker.op_armature(
+        bpy, rigging.armature_spec("humanoid", out, tmp_path)
+    )
+    assert result["ok"] is True
+    assert out.exists()
+
+    doc = _glb_doc(out)
+    # Measured, not assumed: Blender 5.2 exports a meshless armature with a
+    # joints-only ``skins`` palette but no mesh and nothing skinned -- so the
+    # assertion that matters is that nothing draws, not that the word "skins"
+    # is absent from the file.
+    assert "meshes" not in doc
+    assert not any("mesh" in n or "skin" in n for n in doc["nodes"])
+
+    template = rigging.get_template("humanoid")
+    bone_names = {b["name"] for b in template.bones}
+    named = [n["name"] for n in doc["nodes"] if n.get("name") in bone_names]
+    assert sorted(named) == sorted(bone_names), "one node per template bone, named exactly"
+
+    parent_of: dict[int, int] = {}
+    for i, node in enumerate(doc["nodes"]):
+        for child in node.get("children", []):
+            parent_of[child] = i
+    index_by_name = {n.get("name"): i for i, n in enumerate(doc["nodes"])}
+    for bone in template.bones:
+        parent_index = parent_of.get(index_by_name[bone["name"]])
+        parent_name = (
+            doc["nodes"][parent_index].get("name") if parent_index is not None else None
+        )
+        if bone["parent"] is not None:
+            assert parent_name == bone["parent"], f"{bone['name']} parented wrong"
+        else:
+            assert parent_name not in bone_names, "the root bone hangs off the armature node"
+
+    # Head positions land on the unit-box fit -- the canonical armature is
+    # exactly one character-height tall, which is what makes a stored
+    # root_translation mean character-height units literally. Blender world
+    # (x, y, z) reads back as glTF (x, z, -y).
+    world = _world_positions(doc)
+    for bone in rigging.fit_template(template, poselib.UNIT_LO, poselib.UNIT_HI):
+        bx, by, bz = bone["head"]
+        assert world[bone["name"]] == pytest.approx([bx, bz, -by], abs=1e-4), bone["name"]
+
+
+@pytest.mark.gpu
+def test_op_pose_bakes_the_root_offset_and_only_when_asked(tmp_path):
+    """A library pose's root translation reaches the baked GLB as exactly
+    ``rest + d`` on the root node, and a spec without the key bakes the same
+    root the rig was exported with."""
+    pytest.importorskip("bpy")
+    import bpy
+
+    from warlock.pipelines import blender_worker
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=1.0)
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.gltf(filepath=str(tmp_path / "model.glb"), export_format="GLB")
+    blender_worker.op_rig(bpy, rigging.rig_spec(tmp_path, "humanoid"))
+    rigging.finalize_rig(tmp_path)
+
+    rest_id, moved_id, ignored_id = "aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"
+    spec = rigging.pose_spec(tmp_path, rest_id, {})
+    assert "root_offset" not in spec
+    blender_worker.op_pose(bpy, spec)
+
+    offset = [0.15, -0.1, 0.2]
+    blender_worker.op_pose(
+        bpy,
+        rigging.pose_spec(tmp_path, moved_id, {}, root_bone="hips", root_offset=offset),
+    )
+
+    rest = _glb_node_translations(rigging.pose_glb_path(tmp_path, rest_id))["hips"]
+    moved = _glb_node_translations(rigging.pose_glb_path(tmp_path, moved_id))["hips"]
+    # The exporter emits the root joint's frame in glTF axes, so the world
+    # displacement _apply_root_translation guarantees reads back as
+    # (dx, dz, -dy) -- measured, and exactly the m3.blender_delta_to_gltf
+    # mapping the viewer already uses.
+    delta = [m - r for m, r in zip(moved, rest, strict=True)]
+    assert delta == pytest.approx([offset[0], offset[2], -offset[1]], abs=1e-4)
+
+    # A root the rig lacks is reported, never fatal -- the _apply_pose rule.
+    blender_worker.op_pose(
+        bpy,
+        rigging.pose_spec(
+            tmp_path, ignored_id, {}, root_bone="tail_99", root_offset=[0.5, 0.0, 0.0]
+        ),
+    )
+    ignored = _glb_node_translations(rigging.pose_glb_path(tmp_path, ignored_id))["hips"]
+    assert ignored == pytest.approx(rest, abs=1e-6)
 
 
 @pytest.mark.gpu

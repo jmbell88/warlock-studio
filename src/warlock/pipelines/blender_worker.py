@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .. import meshreport, rigging
+from .. import meshreport, poselib, rigging
 from . import sheet
 
 
@@ -357,6 +357,30 @@ def _reset_pose(arm_obj: Any) -> None:
         pbone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
         pbone.location = (0.0, 0.0, 0.0)
         pbone.scale = (1.0, 1.0, 1.0)
+
+
+def _apply_root_translation(arm_obj: Any, bone_name: Any, offset_world: Sequence[float]) -> bool:
+    """Displace one pose bone by a *world-space* offset. -> whether it applied.
+
+    ``pbone.location`` lives in the bone's own rest frame, so the world offset
+    is carried through the inverse of the bone's world rest orientation. For a
+    parentless root -- the only bone anything writes an offset against today --
+    the exporter then emits ``rest + d`` as the node translation exactly.
+
+    An unknown bone is reported like ``_apply_pose``'s unknowns, never fatal: a
+    library pose applied after a re-rig with a different template should cost
+    the offset, not the bake.
+    """
+    from mathutils import Vector
+
+    pbone = arm_obj.pose.bones.get(str(bone_name or ""))
+    if pbone is None:
+        print(f"root offset names a bone this rig does not have: {bone_name!r}", flush=True)
+        return False
+    pbone.location = (arm_obj.matrix_world @ pbone.bone.matrix_local).to_3x3().inverted() @ Vector(
+        [float(v) for v in offset_world]
+    )
+    return True
 
 
 def _apply_pose(arm_obj: Any, bones: dict[str, Any]) -> tuple[int, list[str]]:
@@ -696,11 +720,42 @@ def op_pose(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     applied, unknown = _apply_pose(arm_obj, spec["bones"])
     if unknown:
         print(f"pose names {len(unknown)} bone(s) this rig does not have: {unknown}", flush=True)
+    if spec.get("root_offset"):
+        # Only present when a library pose carried a nonzero root translation
+        # (rigging.pose_spec adds the keys conditionally), so a spec without it
+        # bakes exactly what it always did.
+        _apply_root_translation(arm_obj, spec.get("root_bone"), spec["root_offset"])
 
     progress(0.70, "Exporting pose")
     _export(bpy, Path(spec["out_glb"]))
     progress(1.0, "Pose complete")
     return {"ok": True, "bones": applied, "unknown": unknown}
+
+
+def op_armature(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Export one template's armature over the canonical unit box, meshless.
+
+    The Poser preview: no source mesh, no skinning, just the skeleton fitted to
+    ``poselib.UNIT_LO``/``UNIT_HI`` -- where ``fit_template``'s ``place()`` is
+    the identity on the normalized landmarks, so the exported armature is
+    exactly one character-height tall and a root translation authored against
+    it is in character-height units literally.
+
+    ``_build_armature`` and ``_export`` are the same calls ``op_rig`` makes, on
+    purpose: the preview's bone frames and a real bake's must be the same
+    frames, and sharing the code path is what makes that divergence-proof.
+    """
+    template = rigging.get_template(spec["template"])
+
+    progress(0.10, "Building armature")
+    _reset_scene(bpy)
+    bones = rigging.fit_template(template, poselib.UNIT_LO, poselib.UNIT_HI)
+    _build_armature(bpy, bones)
+
+    progress(0.60, "Exporting armature")
+    _export(bpy, Path(spec["out_glb"]))
+    progress(1.0, "Armature complete")
+    return {"ok": True, "template": template.key, "bones": len(bones)}
 
 
 def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
@@ -768,6 +823,12 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         if armature is not None and key != posed:
             _reset_pose(armature)
             _apply_pose(armature, cell.get("bones") or {})
+            if cell.get("root_offset"):
+                # A sheet built from snapshotted library poses must not
+                # silently disagree with the bake -- one meaning per pose.
+                # _reset_pose zeroes pbone.location between rows, so an offset
+                # never leaks into the next pose's cells.
+                _apply_root_translation(armature, cell.get("root_bone"), cell["root_offset"])
             posed = key
         _aim_camera(cam, centre, float(cell["yaw"]), elevation, distance)
         out = frames_dir / f"{cell['index']:04d}.png"
@@ -1068,6 +1129,7 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 OPS = {
     "rig": op_rig,
     "pose": op_pose,
+    "armature": op_armature,
     "sheet": op_sheet,
     "fbx": op_fbx,
     "views": op_views,

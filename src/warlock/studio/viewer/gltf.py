@@ -128,6 +128,11 @@ class Model:
             if node.name and node.name not in self.by_name:
                 self.by_name[node.name] = i
         self.rest_rotations = [n.rotation.copy() for n in nodes]
+        # The mirror of rest_rotations, for the one translation posing may
+        # move: the root joint, when the Poser previews a root offset as
+        # ``rest + delta``. Remembered for every node because which one is the
+        # root is the editor's knowledge, not the file's.
+        self.rest_translations = [n.translation.copy() for n in nodes]
         self.update_world()
 
     # -- transforms --------------------------------------------------------
@@ -189,6 +194,7 @@ class Model:
     def reset_all(self) -> None:
         for i, node in enumerate(self.nodes):
             node.rotation = self.rest_rotations[i].copy()
+            node.translation = self.rest_translations[i].copy()
         self.update_world()
 
     def pose(self) -> dict[str, list[float]]:

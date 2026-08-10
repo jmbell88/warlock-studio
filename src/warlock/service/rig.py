@@ -156,6 +156,31 @@ def delete_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[str, Any
     return {"ok": True}
 
 
+def _pose_bake_spec(job_dir: Path, pose_id: str, pose: dict[str, Any]) -> dict[str, Any]:
+    """The bake spec, with a snapshot's root translation scaled onto this rig.
+
+    A pose applied from the global library can carry ``root_translation`` in
+    character-height units; the rig's own height comes from rig.json's bounds
+    and the offset lands on its root bone. Absent or zero yields today's spec
+    exactly -- ``pose_spec`` adds no keys -- and a rig.json that cannot answer
+    (pre-template, unreadable) costs the offset, never the bake.
+    """
+    root = pose.get("root_translation")
+    if root and any(float(v) for v in root):
+        rig = rigging.read_rig(job_dir) or {}
+        bounds, bone = rig.get("bounds"), rig.get("root")
+        if bounds and bone:
+            return rigging.pose_spec(
+                job_dir,
+                pose_id,
+                pose["bones"],
+                root_bone=str(bone),
+                root_offset=rigging.root_offset_world(root, bounds),
+            )
+        log.warning("pose %s carries a root offset but rig.json cannot scale it", pose_id)
+    return rigging.pose_spec(job_dir, pose_id, pose["bones"])
+
+
 def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
     """The rig with one saved pose baked into it.
 
@@ -179,7 +204,7 @@ def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
         if not path.exists():
             if not (job_dir / "rig.glb").exists():
                 raise NotFound("job is not rigged")
-            spec = rigging.pose_spec(job_dir, pose_id, pose["bones"])
+            spec = _pose_bake_spec(job_dir, pose_id, pose)
             try:
                 rigging.run_worker(spec, timeout=svc.config.pose_timeout)
             except rigging.BlenderError as exc:

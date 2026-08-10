@@ -329,6 +329,65 @@ def test_a_failed_pose_write_leaves_the_previous_pose_intact(svc, assets, monkey
     assert leftovers == []
 
 
+def test_a_snapshot_with_a_root_offset_bakes_with_the_root_kwargs(
+    svc, assets, monkeypatch
+):
+    """posed_model scales a library snapshot's root translation onto this
+    rig's own height and hands it to the bake -- and only then."""
+    job_id = _rigged_job(svc, assets)
+    job_dir = assets / job_id
+    (job_dir / "rig.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "template": "humanoid",
+                "root": "hips",
+                "bounds": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 2.0]},
+                "bones": [{"name": n} for n in BONES],
+            }
+        )
+    )
+    pose = rigging.validate_pose(_pose("leap"), BONES)
+    record = rigging.save_pose(
+        job_dir, pose, extra={"root_translation": [0.1, 0.0, -0.25]}
+    )
+    calls = _fake_bake(monkeypatch)
+    svc_rig.posed_model(svc, job_id, record["id"])
+    spec, _ = calls[0]
+    assert spec["root_bone"] == "hips"
+    # Character-height units times a 2-unit-tall rig.
+    assert spec["root_offset"] == pytest.approx([0.2, 0.0, -0.5])
+
+
+def test_a_pose_without_a_root_offset_bakes_the_spec_it_always_did(
+    svc, assets, monkeypatch
+):
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+    calls = _fake_bake(monkeypatch)
+    svc_rig.posed_model(svc, job_id, record["id"])
+    spec, _ = calls[0]
+    assert "root_bone" not in spec
+    assert "root_offset" not in spec
+
+
+def test_a_root_offset_the_rig_cannot_scale_costs_the_offset_not_the_bake(
+    svc, assets, monkeypatch
+):
+    """_rigged_job's rig.json has no bounds and no root -- the pre-library
+    shape -- so the offset is dropped with a log line and the bake proceeds."""
+    job_id = _rigged_job(svc, assets)
+    pose = rigging.validate_pose(_pose("leap"), BONES)
+    record = rigging.save_pose(
+        assets / job_id, pose, extra={"root_translation": [0.1, 0.0, 0.0]}
+    )
+    calls = _fake_bake(monkeypatch)
+    path = svc_rig.posed_model(svc, job_id, record["id"])
+    assert path.exists()
+    spec, _ = calls[0]
+    assert "root_offset" not in spec
+
+
 # --- shipped preset library -------------------------------------------------
 
 

@@ -180,6 +180,17 @@ def interpolate(
     """
     if not 1 <= frames <= MAX_CLIP_FRAMES:
         raise ValueError(f"a clip must be 1-{MAX_CLIP_FRAMES} frames")
+    # A feature this interpolation does not model is refused by name, never
+    # dropped (the Plotter TMX rule): this lerps bones only, so a snapshotted
+    # library pose carrying a root offset would render a clip that silently
+    # disagrees with the pose's own bake. Refusing here covers both callers --
+    # the submit-time check and the worker's rebuild -- with one spelling.
+    for pose in (pose_a, pose_b):
+        if any(float(v) for v in (pose.get("root_translation") or ())):
+            raise ValueError(
+                f"pose {pose.get('name', '?')!r} carries a root offset, "
+                "which a clip cannot interpolate"
+            )
     bones_a = pose_a.get("bones") or {}
     bones_b = pose_b.get("bones") or {}
     names = sorted(set(bones_a) | set(bones_b))

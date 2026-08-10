@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from ... import rigging
+from ... import poselib, rigging
 from . import math3d as m3
 from .gltf import Model
 
@@ -45,6 +45,12 @@ class PoseEditor:
         # Where each marker started this joints-mode session, in model space.
         self.home: dict[str, np.ndarray] = {}
         self.handles: dict[str, np.ndarray] = {}
+        # Root-translation authoring (Poser only; pose_panel's entry path never
+        # sets these, which is what keeps asset pose mode behaviourally
+        # unchanged). ``root`` names the bone whose node translation may move;
+        # ``root_translate`` is whether the gizmo currently translates it.
+        self.root: str | None = None
+        self.root_translate = False
 
     # -- binding -----------------------------------------------------------
 
@@ -60,6 +66,8 @@ class PoseEditor:
         self.dirty = False
         self.moved.clear()
         self.home.clear()
+        self.root = None
+        self.root_translate = False
         self.handles = {b: model.nodes[model.by_name[b]].world[:3, 3].copy() for b in self.bones}
 
     def clear(self) -> None:
@@ -73,6 +81,8 @@ class PoseEditor:
         self.current = None
         self.dirty = False
         self.mode = "pose"
+        self.root = None
+        self.root_translate = False
 
     @property
     def bound(self) -> bool:
@@ -114,6 +124,8 @@ class PoseEditor:
         if self.model is None or bone is None:
             return
         self.model.set_rotation(bone, self.rest.get(bone, m3.quat_identity()))
+        if bone == self.root:
+            self._restore_root_rest()
         self.model.update_world()
         self._resync_handles()
         self.dirty = True
@@ -123,6 +135,9 @@ class PoseEditor:
             return
         for bone, quat in self.rest.items():
             self.model.set_rotation(bone, quat)
+        # The root's rest translation comes back with the rotations, which is
+        # also what makes a preset zero-translation: apply_preset resets first.
+        self._restore_root_rest()
         self.model.update_world()
         self._resync_handles()
         self.current = None
@@ -150,6 +165,12 @@ class PoseEditor:
         if not self.mirror_pairs:
             return
         self.apply(rigging.mirror_pose(self.pose(), self.mirror_pairs))
+        if self.root is not None:
+            # The positional half of the same reflection: a pose that steps
+            # left must step right when mirrored.
+            self.set_root_translation(
+                poselib.mirror_root_translation(self.root_translation())
+            )
 
     def _resync_handles(self) -> None:
         """Markers follow their bones -- except in joints mode, where a marker
@@ -159,6 +180,80 @@ class PoseEditor:
         self.handles = {
             b: self.model.nodes[self.model.by_name[b]].world[:3, 3].copy() for b in self.bones
         }
+
+    # -- root translation --------------------------------------------------
+    #
+    # Poser-only: ``root`` is set by the authoring session after bind, never
+    # by pose_panel's entry path, so asset pose mode cannot reach any of this.
+    # The offset previews live as ``node.translation = rest + delta`` -- the
+    # exact arithmetic the bake performs -- with the rest translation
+    # remembered on the Model the way rest_rotations already are.
+
+    def _root_index(self) -> int | None:
+        if self.model is None or self.root is None:
+            return None
+        return self.model.by_name.get(self.root)
+
+    def _restore_root_rest(self) -> None:
+        index = self._root_index()
+        if index is None:
+            return
+        self.model.nodes[index].translation = self.model.rest_translations[index].copy()
+
+    def move_root(self, point: Any) -> None:
+        """Place the root joint during a translate drag.
+
+        ``point`` is in model space -- the caller has already divided the
+        placement out, the ``move_handle`` convention. The displacement is
+        carried into the root's parent frame (where a glTF node translation
+        lives) and soft-clamped to ±MAX_ROOT_TRANSLATION per component: on the
+        canonical Poser armature model units are character heights literally,
+        and an offset past two of them is a slipped drag, not a pose.
+        """
+        index = self._root_index()
+        if index is None:
+            return
+        node = self.model.nodes[index]
+        # parent_world = world @ local^-1: no parent map needed.
+        parent_world = node.world @ np.linalg.inv(node.local())
+        target = np.linalg.inv(parent_world) @ np.array(
+            [float(point[0]), float(point[1]), float(point[2]), 1.0], dtype="f8"
+        )
+        rest = self.model.rest_translations[index]
+        delta = np.clip(
+            target[:3] - rest, -poselib.MAX_ROOT_TRANSLATION, poselib.MAX_ROOT_TRANSLATION
+        )
+        node.translation = rest + delta
+        self.model.update_world()
+        self._resync_handles()
+        self.dirty = True
+
+    def set_root_translation(self, v: Any, *, dirty: bool = True) -> None:
+        """Set the root offset from a stored record: Blender axes,
+        character-height units. Used when a saved pose is loaded back."""
+        index = self._root_index()
+        if index is None:
+            return
+        delta = np.clip(
+            m3.blender_delta_to_gltf(np.asarray(v, dtype="f8")),
+            -poselib.MAX_ROOT_TRANSLATION,
+            poselib.MAX_ROOT_TRANSLATION,
+        )
+        node = self.model.nodes[index]
+        node.translation = self.model.rest_translations[index] + delta
+        self.model.update_world()
+        self._resync_handles()
+        self.dirty = dirty
+
+    def root_translation(self) -> list[float]:
+        """The current root offset -- Blender axes, character-height units.
+        Zeros when nothing is bound or the root never moved, so a caller can
+        always store what this returns."""
+        index = self._root_index()
+        if index is None:
+            return [0.0, 0.0, 0.0]
+        delta = self.model.nodes[index].translation - self.model.rest_translations[index]
+        return [float(x) for x in m3.gltf_delta_to_blender(delta)]
 
     # -- joint placement ---------------------------------------------------
 

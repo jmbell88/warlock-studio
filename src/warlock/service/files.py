@@ -571,6 +571,11 @@ def storage_sizes(data_dir: Path) -> dict[str, int]:
     The decomposed form of :func:`measure_storage`, kept so an incremental
     accounting (a job finishing re-measures its own directory only) shares
     the walk with the full one rather than restating it.
+
+    ``autosave/`` and ``poser/`` live under data_dir too and are counted here
+    as if they were job directories -- a byte total under a different heading,
+    not a correctness issue, and cheaper than teaching the walk which names
+    are not jobs.
     """
     sizes: dict[str, int] = {}
     if data_dir.exists():

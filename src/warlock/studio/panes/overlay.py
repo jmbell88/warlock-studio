@@ -395,6 +395,11 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
     "3d": (icons.BOX, "No mesh on screen", "Pick a finished reference, or open an image."),
     "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
+    "poser": (
+        icons.PERSON_STANDING,
+        "No skeleton on screen",
+        "Pick a skeleton; the preview builds itself.",
+    ),
     "review": (icons.CIRCLE_CHECK, "No unit on screen", "Pick a sweep run to review."),
     "plotter": (icons.GRID, "No map open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "packwright": (

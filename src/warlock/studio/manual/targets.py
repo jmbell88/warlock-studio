@@ -14,6 +14,8 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "retarget": ("04-generating-meshes", "triangle-budget"),
     "retexture": ("04-generating-meshes", "surface-texture"),
     "pose": ("05-rigging-and-posing", "posing"),
+    "poser-library": ("05-rigging-and-posing", "the-pose-library"),
+    "poser-controls": ("05-rigging-and-posing", "the-poser"),
     "sheet": ("06-sprite-sheets", None),
     "inker-tools": ("07-inker", "tools"),
     "inker-layers": ("07-inker", "layers"),

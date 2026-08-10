@@ -857,6 +857,11 @@ class AppState:
     # and deliberately knows nothing about what a mode keeps.
     plotter: Any = None
     packwright: Any = None
+    # Poser's authoring session -- which template, what the library holds --
+    # built on first use by ``poser_mode.ensure``. Untyped and None for the
+    # reason the four above are. Its Viewer lives on the App/Ctx, not here:
+    # AppState carries no GL objects.
+    poser: Any = None
     # Whether ``findings.json`` is behind the evidence in the DB. A flag rather
     # than a submit, because ``TaskRunner.submit`` *refuses* a key already in
     # flight and nothing re-arms it: five verdicts in a second used to run one

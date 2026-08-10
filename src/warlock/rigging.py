@@ -708,12 +708,24 @@ def pose_glb_path(job_dir: Path, pose_id: str) -> Path:
     return pose_path(job_dir, pose_id).with_suffix(".glb")
 
 
-def save_pose(job_dir: Path, pose: dict[str, Any], pose_id: str | None = None) -> dict[str, Any]:
+def save_pose(
+    job_dir: Path,
+    pose: dict[str, Any],
+    pose_id: str | None = None,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Write a validated pose payload and return the stored record.
 
     Passing an existing ``pose_id`` overwrites it in place -- that is how the
     editor saves an edit rather than accumulating near-duplicates. The derived
     GLB is dropped on overwrite, since it no longer depicts the pose.
+
+    ``extra`` is merged into the record before the atomic write -- how a
+    library-pose snapshot carries ``root_translation`` and ``source_pose``
+    without every plain save learning those fields exist. It may not touch the
+    keys this function owns: an ``extra`` that renamed the pose or swapped its
+    bones would be a second writer of the same fact.
     """
     pose_id = pose_id or new_id()
     path = pose_path(job_dir, pose_id)
@@ -724,6 +736,11 @@ def save_pose(job_dir: Path, pose: dict[str, Any], pose_id: str | None = None) -
         "bones": pose["bones"],
         "created": time.time(),
     }
+    if extra:
+        protected = {"id", "name", "bones", "created"} & set(extra)
+        if protected:
+            raise ValueError(f"extra may not override {sorted(protected)}")
+        record.update(extra)
     # Staged beside the destination and renamed, like Settings.flush: an
     # overwrite that died mid-write used to leave the existing pose truncated,
     # and a pose file is the only record of the rotations. The GLB is dropped
@@ -1007,12 +1024,69 @@ def fbx_spec(source_glb: Path, out_fbx: Path, result_dir: Path) -> dict[str, Any
     }
 
 
-def pose_spec(job_dir: Path, pose_id: str, bones: dict[str, Any]) -> dict[str, Any]:
-    """The worker spec for baking one saved pose into its own GLB."""
-    return {
+def pose_spec(
+    job_dir: Path,
+    pose_id: str,
+    bones: dict[str, Any],
+    *,
+    root_bone: str | None = None,
+    root_offset: Sequence[float] | None = None,
+) -> dict[str, Any]:
+    """The worker spec for baking one saved pose into its own GLB.
+
+    ``root_bone``/``root_offset`` carry a library pose's root translation
+    (world units, Blender axes) into the bake. Both keys are added only when
+    there is a bone *and* a nonzero offset, so every spec built before the
+    fields existed -- and every pose without an offset -- is byte-identical to
+    what it always was: backward compatibility is structural, not versioned.
+    """
+    spec = {
         "op": "pose",
         "rig_glb": str(job_dir / "rig.glb"),
         "out_glb": str(pose_glb_path(job_dir, pose_id)),
         "result_path": str(pose_dir(job_dir) / f".{pose_id}.result.json"),
         "bones": bones,
     }
+    if root_bone is not None and root_offset is not None and any(float(v) for v in root_offset):
+        spec["root_bone"] = root_bone
+        spec["root_offset"] = [float(v) for v in root_offset]
+    return spec
+
+
+def armature_spec(template_key: str, out_glb: Path, result_dir: Path) -> dict[str, Any]:
+    """The worker spec for exporting one template's armature with no mesh.
+
+    What the Poser preview stands on: the skeleton is built and exported by the
+    *same* Blender code path a real rig uses (``_build_armature`` + ``_export``),
+    fitted over the canonical unit box, so the bone frames the editor rotates
+    are the frames every bake will see. ``out_glb`` must end in ``.glb`` -- the
+    exporter appends one to any path that does not (the RIG_GLB_TMP rule).
+    """
+    get_template(template_key)  # fail here, not three seconds into a subprocess
+    return {
+        "op": "armature",
+        "template": template_key,
+        "out_glb": str(out_glb),
+        "result_path": str(result_dir / ".armature_result.json"),
+    }
+
+
+def root_offset_world(root_translation: Sequence[float], bounds: dict[str, Any]) -> list[float]:
+    """A library pose's root offset, scaled from character heights to world units.
+
+    ``root_translation`` is stored in character-height units because the Poser
+    armature is exactly one character tall (``poselib.UNIT_LO``/``UNIT_HI``);
+    the target rig's height comes from rig.json's ``bounds``, which are Blender
+    world coordinates, Z up. A degenerate height falls back to the largest
+    extent -- the ``fit_template`` rule for a flat axis -- and to 1.0 when the
+    whole box is a point, so the offset degrades to "as authored" rather than
+    collapsing to zero.
+    """
+    lo = [float(v) for v in bounds["min"]]
+    hi = [float(v) for v in bounds["max"]]
+    h = hi[2] - lo[2]
+    if h <= 0:
+        h = max(b - a for a, b in zip(lo, hi, strict=True))
+        if h <= 0:
+            h = 1.0
+    return [float(u) * h for u in root_translation]

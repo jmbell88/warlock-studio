@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from .viewer import bonelines as bonelineslib
 from .viewer import capture, glctx, gltf, picking
 from .viewer import markers as markerslib
 from .viewer import math3d as m3
@@ -60,6 +61,10 @@ class Viewer:
         self.pose_job_id: str | None = None
         self.editor = PoseEditor()
         self.markers = markerslib.JointMarkers(ctx, self.renderer.programs)
+        self.bonelines = bonelineslib.BoneLines(ctx, self.renderer.programs)
+        # Which (parent, bone) pairs the skeleton lines connect; derived once
+        # per bind from the node graph, cleared on the way out.
+        self._bone_pairs: list[tuple[str, str]] = []
         self.rotate_gizmo = RotateGizmo(ctx, self.renderer.programs)
         self.translate_gizmo = TranslateGizmo(ctx, self.renderer.programs)
         self.on_pose_dirty: Any = None
@@ -196,6 +201,23 @@ class Viewer:
         self.renderer.fit_grid(lo, hi)
         return self.radius
 
+    def frame_bounds(self, lo: Any, hi: Any) -> float:
+        """Frame a box the *caller* knows about rather than the model's own.
+
+        The Poser armature has no mesh, so ``Model.bounds()`` is zeros and
+        :meth:`frame` would clamp the radius to 1e-4 -- the joint markers
+        become invisible and ``nearest_hit`` misses everything, because both
+        key off ``radius``. The caller computes the box host-side over every
+        fitted bone's head *and tail* (leaf tails have no nodes, so a
+        joint-node box would clip the skull) and hands it over.
+        """
+        self._render_dirty = True
+        lo = np.asarray(lo, dtype="f8")
+        hi = np.asarray(hi, dtype="f8")
+        self.radius = self.camera.frame(lo, hi)
+        self.renderer.fit_grid(lo, hi)
+        return self.radius
+
     def _world_bounds(self):
         lo, hi = self.model.bounds()
         corners = np.array(
@@ -257,6 +279,29 @@ class Viewer:
         self.editor.fitted = list((rig or {}).get("bones") or [])
         self.pose_mode = True
         self.pose_job_id = job_id
+        self._bone_pairs = bonelineslib.bone_segments(self.model, self.editor.bones)
+        self._render_dirty = True
+        self._notify_pose_dirty()
+        return True
+
+    def enter_pose_authoring(
+        self, bones: list[str], mirror_pairs: list[Any], token: str
+    ) -> bool:
+        """Bind the editor to a meshless armature with an explicit bone list.
+
+        A separate entry point rather than a relaxed ``enter_pose_mode``: that
+        one's skins check is its job-scoped contract (a mesh with no skin has
+        nothing to pose) and stays intact. ``token`` fills ``pose_job_id`` --
+        it can never equal a 12-hex job id, belt-and-braces under the separate
+        Poser Viewer instance, so a save can never be addressed to a job.
+        """
+        if self.model is None:
+            return False
+        self.editor.bind(self.model, bones)
+        self.editor.mirror_pairs = [list(p) for p in mirror_pairs]
+        self.pose_mode = True
+        self.pose_job_id = token
+        self._bone_pairs = bonelineslib.bone_segments(self.model, self.editor.bones)
         self._render_dirty = True
         self._notify_pose_dirty()
         return True
@@ -268,6 +313,7 @@ class Viewer:
         self.rotate_gizmo.end_drag()
         self.translate_gizmo.end_drag()
         self.editor.clear()
+        self._bone_pairs = []
         # Both ends of the editor's life report, or an indicator raised on the
         # way in survives every mesh loaded after it -- ``adopt_model`` and
         # ``clear`` both come through here.
@@ -294,6 +340,10 @@ class Viewer:
 
     def mirror(self) -> None:
         self.editor.mirror()
+        self._after_pose_change()
+
+    def set_root_translation(self, v: Any, *, dirty: bool = True) -> None:
+        self.editor.set_root_translation(v, dirty=dirty)
         self._after_pose_change()
 
     def _after_pose_change(self) -> None:
@@ -412,16 +462,25 @@ class Viewer:
         if not self.pose_mode or not self.editor.bound:
             return []
         radius = picking.marker_radius(self.radius)
-        items = self.markers.draws(
+        # Lines first, markers over them: the skeleton is context, the joints
+        # are the controls.
+        items = self.bonelines.draws(
+            self.editor.handles, self._bone_pairs, self.editor.selected, self.placement
+        )
+        items += self.markers.draws(
             self.editor.handles, radius, self.editor.selected, self.placement
         )
         gizmo = self._active_gizmo()
         if gizmo is not None and self.editor.selected is not None:
             origin = picking.to_world(self.placement, self.editor.handles[self.editor.selected])
+            # A translate gizmo always works in world axes -- the joints-mode
+            # convention, kept for the root translate; the rotate gizmo's
+            # rings are drawn in the joint's own frame.
+            node = self.model.nodes[self.model.by_name[self.editor.selected]]
             basis = (
-                self.placement @ self.model.nodes[self.model.by_name[self.editor.selected]].world
-                if self.editor.mode == "pose"
-                else m3.identity()
+                m3.identity()
+                if gizmo is self.translate_gizmo
+                else self.placement @ node.world
             )
             gizmo.place(origin, basis, self.camera, height)
             items += gizmo.draws()
@@ -430,7 +489,17 @@ class Viewer:
     def _active_gizmo(self):
         if not self.pose_mode:
             return None
-        return self.translate_gizmo if self.editor.mode == "joints" else self.rotate_gizmo
+        if self.editor.mode == "joints":
+            return self.translate_gizmo
+        if (
+            self.editor.root_translate
+            and self.editor.root is not None
+            and self.editor.selected == self.editor.root
+        ):
+            # Move-root in the authoring session: the root joint translates,
+            # every other joint keeps its rotate rings.
+            return self.translate_gizmo
+        return self.rotate_gizmo
 
     # -- capture -----------------------------------------------------------
 
@@ -594,12 +663,18 @@ class Viewer:
         elif self._grab == "gizmo":
             origin, direction = self._ray(local)
             gizmo = self._active_gizmo()
-            if self.editor.mode == "joints":
+            # Dispatch on which gizmo is active, not on the mode: pose mode
+            # holds the translate gizmo too while the root is being moved.
+            if gizmo is self.translate_gizmo:
                 moved = gizmo.update(origin, direction)
                 if moved is not None:
-                    self.editor.move_handle(
-                        self.editor.selected, picking.from_world(self.placement, moved)
-                    )
+                    point = picking.from_world(self.placement, moved)
+                    if self.editor.mode == "joints":
+                        self.editor.move_handle(self.editor.selected, point)
+                    else:
+                        self.editor.move_root(point)
+                        if self.gpu is not None:
+                            self.gpu.refresh_palettes()
             else:
                 delta = gizmo.update(origin, direction)
                 if delta is not None:
@@ -621,6 +696,7 @@ class Viewer:
         self.cancel_sheet_strip()
         self.exit_compare()
         self.markers.release()
+        self.bonelines.release()
         self.rotate_gizmo.release()
         self.translate_gizmo.release()
         self._forget(self.viewport.texture)

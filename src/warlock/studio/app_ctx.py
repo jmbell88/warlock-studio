@@ -92,6 +92,11 @@ class Ctx:
     tasks: Any
     settings: Any
     viewer: Any = None
+    # Poser's own Viewer instance, attached by the App when the mode is first
+    # entered. Separate from ``viewer`` on purpose: ``adopt_model`` there exits
+    # pose mode unconditionally, so sharing one instance would let loading the
+    # Poser preview silently discard unsaved inspector pose edits.
+    poser_viewer: Any = None
     textures: Any = None
     confirms: dialogs.ConfirmQueue = field(default_factory=dialogs.ConfirmQueue)
     prompts: dialogs.PromptQueue = field(default_factory=dialogs.PromptQueue)

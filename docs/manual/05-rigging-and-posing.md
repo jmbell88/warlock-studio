@@ -139,6 +139,52 @@ the posed bones are rather than where the rest skeleton is.
 
 Rigged meshes are also what [Sprite sheets](06-sprite-sheets.md) render rows from.
 
+## The Poser
+
+The **Poser** workspace is where a pose is authored once, against a skeleton rather than against any
+particular mesh. Pick a skeleton in the left panel and the viewport shows a preview armature — the
+bare skeleton, built by the same Blender code path as a real rig and exactly one character-height
+tall, so what you pose is precisely what every bake will see.
+
+Posing works the way the inspector's pose editor does: click a joint, drag the gizmo, **Reset
+joint** / **Reset all** / **Mirror** as usual. Two things are Poser-only:
+
+- **Move root.** Select the root joint and tick **Move root** to swap its gizmo for translation
+  arrows. Dragging them offsets the whole pose — a crouch that actually lowers, a leap that leaves
+  the ground. The offset is stored in character heights, so it scales with each asset: a half-height
+  offset lifts a gnome by half a gnome and a giant by half a giant.
+- **Save / Save as** write into the global pose library rather than into any asset. The pose keeps
+  the complete joint map, which is what makes it apply cleanly to any rig on the same skeleton
+  regardless of proportions.
+
+The preview armature is built by Blender once per skeleton and cached, so the first open of a
+template takes a moment and later ones are immediate. The Poser needs Blender for exactly that
+reason; without it the mode says so and offers nothing.
+
+Your editing session survives switching modes — like a document left open in the Inker — and only
+quitting, switching skeletons, or loading another pose over it asks about unsaved changes.
+
+## The pose library
+
+Poses saved in the Poser are stored globally, per skeleton, and offered on every rigged asset: the
+inspector's **Pose** panel grows a **Library poses** section listing the ones that fit the selected
+asset's skeleton. **Apply** copies the pose into that asset's own saved list — a snapshot, marked
+`(library)`, that behaves exactly like a pose you saved by hand.
+
+The snapshot is the point. Editing or deleting the library pose afterwards never changes what an
+asset already carries, so a bake you liked stays reproducible forever. The library itself has no
+trash: deleting a pose from it is permanent, which is why that one asks first.
+
+Two limits worth knowing:
+
+- Applying a snapshot with a root offset previews the **rotations only**; the offset appears in the
+  baked GLB (**Save GLB...**) and in sprite sheet rows, scaled onto that asset's own height.
+- An animated sheet clip cannot interpolate a root offset yet, so a clip whose endpoint poses carry
+  one is refused by name rather than rendered subtly wrong.
+
+Shipped presets appear in the Poser too, read-only: apply one, adjust it, then **Save as** to keep
+your version in the library.
+
 ## When rigging is unavailable
 
 Rigging, posing, sprite sheets and FBX export all need Blender, which the app installs as an

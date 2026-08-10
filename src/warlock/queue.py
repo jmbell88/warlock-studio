@@ -1711,16 +1711,39 @@ class Worker:
         # shares an id by construction, and keying on the id alone would render
         # frame 0 in every row of the clip.
         bones = {(r.get("id"), r.get("frame", 0)): r["bones"] for r in records}
-        cells = [
-            {
+        # A pose snapshotted from the global library can carry a root offset,
+        # and a sheet built from it must not silently disagree with the pose's
+        # own bake -- one meaning per pose. Rows without one gain no keys, so
+        # every pre-existing cell dict is byte-identical to what it always was.
+        # (Clip records can never reach this: sheetlib.interpolate refuses
+        # endpoint poses with root offsets by name.)
+        roots: dict[tuple[Any, int], list[float]] = {}
+        root_bone: Any = None
+        offset_records = [
+            r for r in records if any(float(v) for v in (r.get("root_translation") or ()))
+        ]
+        if offset_records:
+            rig_meta = await asyncio.to_thread(rigging.read_rig, source_dir) or {}
+            bounds, root_bone = rig_meta.get("bounds"), rig_meta.get("root")
+            if bounds and root_bone:
+                for r in offset_records:
+                    roots[(r.get("id"), r.get("frame", 0))] = rigging.root_offset_world(
+                        r["root_translation"], bounds
+                    )
+        cells = []
+        for c in layout.cells:
+            cell: dict[str, Any] = {
                 "index": c.index,
                 "yaw": c.yaw,
                 "pose": c.pose,
                 "frame": c.frame,
                 "bones": bones.get((c.pose, c.frame)) or {},
             }
-            for c in layout.cells
-        ]
+            offset = roots.get((c.pose, c.frame))
+            if offset:
+                cell["root_bone"] = root_bone
+                cell["root_offset"] = offset
+            cells.append(cell)
 
         self.progress.update(
             job_id, phase="sheet", label="Starting Blender", inner=0.0,

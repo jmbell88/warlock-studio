@@ -216,7 +216,13 @@ def test_request_quit_no_longer_nests_its_guards_by_hand():
 
 
 def test_the_quit_chain_stops_at_the_first_cancel():
-    from warlock.studio import clay_mode, inker_mode, packwright_mode, plotter_mode
+    from warlock.studio import (
+        clay_mode,
+        inker_mode,
+        packwright_mode,
+        plotter_mode,
+        poser_mode,
+    )
     from warlock.studio.panes import pose_panel
 
     quit_calls: list[str] = []
@@ -224,6 +230,7 @@ def test_the_quit_chain_stops_at_the_first_cancel():
         state=SimpleNamespace(inker=None, clay=None, plotter=None, packwright=None),
         confirms=dialogs.ConfirmQueue(),
         viewer=None,
+        poser_viewer=None,
     )
     app = SimpleNamespace(
         app_ctx=ctx, _quit=lambda: quit_calls.append("quit")
@@ -234,7 +241,9 @@ def test_the_quit_chain_stops_at_the_first_cancel():
     assert quit_calls == ["quit"]
     assert ctx.confirms.pending is None
     # And the guards are the ones this file names, in this order: painted
-    # pixels, built geometry, a map, an atlas, then a pose.
+    # pixels, built geometry, a map, an atlas, then the two pose editors --
+    # the inspector's and the Poser's, which read different viewers and so can
+    # never double-ask about one edit.
     source = inspect.getsource(main.App._request_quit)
     order = [
         "inker_mode.guard",
@@ -242,12 +251,13 @@ def test_the_quit_chain_stops_at_the_first_cancel():
         "plotter_mode.guard",
         "packwright_mode.guard",
         "pose_panel.guard",
+        "poser_mode.guard",
     ]
     positions = [source.index(name) for name in order]
     assert positions == sorted(positions)
     assert all(
         (inker_mode.guard, clay_mode.guard, plotter_mode.guard, packwright_mode.guard,
-         pose_panel.guard)
+         pose_panel.guard, poser_mode.guard)
     )
 
 
