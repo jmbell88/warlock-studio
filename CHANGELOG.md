@@ -6,6 +6,22 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.17 — 2026-08-10
+
+- **The Poser: a workspace for reusable poses.** Author a pose once against any
+  of the seven skeleton templates — on a bare armature preview, built by the
+  same Blender path as a real rig — and it lives in a global library rather
+  than inside one asset. Every rigged asset on the same skeleton offers the
+  library in its Pose panel; applying one copies it onto the asset, so later
+  library edits never change what an asset already carries.
+- **A pose can move its root.** Select the root joint in the Poser and tick
+  Move root to offset the whole pose — a crouch that actually lowers, a leap
+  that leaves the ground. The offset is stored in character heights and scaled
+  onto each asset's own rig at bake time, in posed GLBs and sprite sheet rows
+  alike. An animated clip cannot interpolate one yet and says so by name.
+- The pose editor draws the skeleton's bone lines between the joint markers,
+  so a bare armature reads as a skeleton rather than a cloud of dots.
+
 ## 0.0.16 — 2026-08-09
 
 - **A style LoRA now declares the architecture it was fitted to**, so the picker
