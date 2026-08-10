@@ -33,6 +33,8 @@ from typing import Any
 
 import numpy as np
 
+from . import composite as cp
+
 __all__ = ["FILTERS", "apply_named", "blur", "brightness_contrast", "hue_saturation",
            "levels", "sharpen"]
 
@@ -171,11 +173,25 @@ def _premultiplied(pixels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _straight(rgb: np.ndarray, alpha: np.ndarray, pixels: np.ndarray) -> np.ndarray:
+    """Divide the premultiplication back out and narrow to uint8.
+
+    The narrowing goes through :func:`composite.to_uint8_255` rather than
+    spelling ``clip(x + 0.5)`` again: that expression is what the shipped
+    ``warlockc_to_uint8_255_f32`` kernel computes, and ``out`` is C-contiguous
+    float32 by construction, so it satisfies that function's own gate. Worth
+    about 2% of ``blur`` on a 2048 square layer -- kept for the deduplicated
+    expression rather than for the speed.
+
+    The division writes into ``out`` directly. ``np.divide(..., out=zeros_like,
+    where=...)`` allocated a second full plane per call purely to supply the
+    zero an unlit pixel keeps, which ``out[..., :3] = 0.0`` states in place.
+    """
     out = np.empty(pixels.shape, dtype=np.float32)
     lit = alpha[..., None]
-    out[..., :3] = np.divide(rgb, lit, out=np.zeros_like(rgb), where=lit > 1e-6)
+    out[..., :3] = 0.0
+    np.divide(rgb, lit, out=out[..., :3], where=lit > 1e-6)
     out[..., 3] = alpha * 255.0
-    return np.clip(out + 0.5, 0.0, 255.0).astype(np.uint8)
+    return cp.to_uint8_255(out)
 
 
 def blur(pixels: np.ndarray, *, radius: float = 2.0) -> np.ndarray:
@@ -214,6 +230,24 @@ def _gaussian(plane: np.ndarray, radius: float) -> np.ndarray:
     here: it works on 8-bit channels, so premultiplying before it and dividing
     after would quantise twice and leave banding exactly where the halo used
     to be.
+
+    **This stays on ``np.convolve``, and a native kernel for it was built,
+    measured and rejected** -- see docs/measurements/2026-08-09-native-batch-2.md.
+    The short version is that the two halves of the usual argument pull against
+    each other here. ``np.convolve`` reaches ``cblas_sdot`` for contiguous
+    float32, so its summation order is OpenBLAS's and varies with CPU dispatch;
+    a kernel's bar in this repository is bit-identity, and there is no fixed
+    order here to be identical *to*. Writing a deterministic reference to
+    restore that bar costs 1.7x on its own (273 ms against 164 ms at 2048
+    square, radius 8), because a shifted-slice accumulation is 33 whole-array
+    passes where BLAS keeps a row in cache -- and a bit-identical kernel may not
+    vectorise its reduction, so it wins that back and little more. Net: 24%
+    faster with the DLL, 34% slower without one, and vendor/ is gitignored, so
+    the second is what a checkout gets.
+
+    What actually made the live preview affordable is upstream of here:
+    ``Document.preview_filter`` memoises the filtered array for the life of a
+    session, so this runs once per parameter change instead of once per frame.
     """
     kernel = _kernel(radius)
     if len(kernel) < 2:

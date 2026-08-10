@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 6
+ABI = 7
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -136,6 +136,17 @@ def _bind(lib: ctypes.CDLL) -> None:
 
     u8 = ctypes.POINTER(ctypes.c_uint8)
     i32 = ctypes.POINTER(ctypes.c_int32)
+
+    lib.warlockc_morph_u8.restype = None
+    lib.warlockc_morph_u8.argtypes = [
+        u8, i64,  # src, row stride in bytes
+        u8,  # scratch, h * w bytes
+        u8, i64,  # out, row stride in bytes
+        i64, i64,  # h, w
+        i64,  # radius
+        ctypes.c_int32,  # 0 max (grow), 1 min (shrink)
+    ]
+
     lib.warlockc_contours.restype = i64
     lib.warlockc_contours.argtypes = [
         u8, i64,  # mask, row stride in bytes
@@ -383,6 +394,31 @@ def to_uint8_255_f32(pixels: Any, out: Any, count: int) -> None:
         _ptr(pixels, ctypes.c_float),
         _ptr(out, ctypes.c_uint8),
         ctypes.c_int64(count),
+    )
+
+
+def morph_u8(src: Any, scratch: Any, out: Any, radius: int, op: int) -> None:
+    """Grow (``op`` 0) or shrink (``op`` 1) a uint8 mask by ``radius``.
+
+    ``src`` and ``out`` are 2-D C-contiguous uint8 of the same shape and must
+    not alias; ``scratch`` is ``h * w`` bytes. ``radius`` must be at least 1 --
+    the caller answers zero itself, since the reference's answer there is a
+    plain copy.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    height, width = src.shape
+    handle.warlockc_morph_u8(
+        _ptr(src, ctypes.c_uint8),
+        ctypes.c_int64(src.strides[0]),
+        _ptr(scratch, ctypes.c_uint8),
+        _ptr(out, ctypes.c_uint8),
+        ctypes.c_int64(out.strides[0]),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        ctypes.c_int64(radius),
+        ctypes.c_int32(op),
     )
 
 

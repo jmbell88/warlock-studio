@@ -391,9 +391,39 @@ def _morph(mask: np.ndarray, radius: int, combine) -> np.ndarray:
     """
     if radius <= 0:
         return mask.copy()
+    fast = _morph_native(mask, radius, combine)
+    if fast is not None:
+        return fast
     out = mask
     for step in range(radius):
         out = _spread(out, combine, diagonal=step % 2 == 1)
+    return out
+
+
+def _morph_native(mask: np.ndarray, radius: int, combine) -> np.ndarray | None:
+    """The kernel's half of :func:`_morph`, or None to use the numpy body.
+
+    None rather than an exception for every way of being unable to answer, and
+    the caller falls through -- the rule every kernel seam in this repository
+    follows. ``combine`` is matched by *identity* against the two functions the
+    callers actually pass: anything else is somebody's third operation, and
+    handing it to a kernel that only knows max and min would silently render it
+    as one of them.
+    """
+    if not native.available():
+        return None
+    if combine is np.maximum:
+        op = 0
+    elif combine is np.minimum:
+        op = 1
+    else:
+        return None
+    src = np.ascontiguousarray(mask, dtype=np.uint8)
+    if src.ndim != 2 or not src.size:
+        return None
+    out = np.empty(src.shape, dtype=np.uint8)
+    scratch = np.empty(src.shape, dtype=np.uint8)
+    native.morph_u8(src, scratch, out, int(radius), op)
     return out
 
 

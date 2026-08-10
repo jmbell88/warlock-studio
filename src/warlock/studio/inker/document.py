@@ -152,6 +152,11 @@ class Document:
     _filter: tuple[tuple[int, int, int, int], np.ndarray, int] | None = field(
         init=False, default=None, repr=False
     )
+    #: The last ``(name, params) -> filtered pixels`` a preview computed, for
+    #: the life of one filter session. See :meth:`preview_filter`.
+    _filter_memo: tuple[tuple[Any, ...], np.ndarray] | None = field(
+        init=False, default=None, repr=False
+    )
     _full: bool = field(init=False, default=True, repr=False)
     #: Cels autovivified by writes that have not yet been committed. They ride
     #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
@@ -1122,6 +1127,7 @@ class Document:
         x0, y0, x1, y1 = box
         layer = self.stack.active
         self._filter = (box, layer.pixels[y0:y1, x0:x1].copy(), layer.uid)
+        self._filter_memo = None
         return box
 
     def _filter_layer(self) -> Layer | None:
@@ -1157,6 +1163,7 @@ class Document:
         nothing. There is no target left to put the pixels back into, and the
         cel this session brought into existence has to go with it."""
         self._filter = None
+        self._filter_memo = None
         self._discard_pending_cel()
         return False
 
@@ -1167,6 +1174,17 @@ class Document:
         feathered edge fades the filter in, which is the same rule every other
         write in this class follows and the reason feathering means one thing
         across the whole app.
+
+        **The filter itself is memoised for the life of the session; the write
+        below it is not.** ``inker_bridge`` calls this on every frame the popup
+        is up, deliberately, because the combo can switch filters -- but
+        ``before`` is the snapshot :meth:`begin_filter` took and never changes,
+        so ``apply_named`` is a pure function of ``(name, params)`` within one
+        session and recomputing it sixty times a second is the whole of what
+        made a 2048 square blur unusable (measured at 1.1 s per call, i.e. per
+        frame). Only the expensive half is cached: the blend, the alpha lock
+        and the invalidate below still run every frame, so switching filters
+        still repaints exactly as before.
         """
         if self._filter is None:
             return False
@@ -1175,7 +1193,12 @@ class Document:
             return self._abandon_filter()
         box, before, _uid = self._filter
         x0, y0, x1, y1 = box
-        filtered = filters.apply_named(name, before, **params)
+        key = (name, tuple(sorted(params.items())))
+        if self._filter_memo is not None and self._filter_memo[0] == key:
+            filtered = self._filter_memo[1]
+        else:
+            filtered = filters.apply_named(name, before, **params)
+            self._filter_memo = (key, filtered)
         if self.mask is None:
             layer.pixels[y0:y1, x0:x1] = filtered
         else:
@@ -1198,6 +1221,7 @@ class Document:
             return self._abandon_filter()
         box, before, _uid = self._filter
         self._filter = None
+        self._filter_memo = None
         # ``_commit_patch`` compares before against after and pushes nothing
         # when they match, which is what makes opening a filter, moving nothing
         # and pressing Apply a no-op rather than a step that dirties the file.
@@ -1213,6 +1237,7 @@ class Document:
             return self._abandon_filter()
         box, before, _uid = self._filter
         self._filter = None
+        self._filter_memo = None
         x0, y0, x1, y1 = box
         layer.pixels[y0:y1, x0:x1] = before
         self._discard_pending_cel()

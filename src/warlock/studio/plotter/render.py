@@ -47,6 +47,31 @@ def _over(dst: np.ndarray, src: np.ndarray, opacity: float) -> None:
     with soft edges, and repeated 8-bit rounding through four or five of them
     shows as a visible dark fringe along every antialiased tile edge.
     """
+    alpha = src[..., 3]
+    if float(opacity) >= 1.0 and bool(((alpha == 255) | (alpha == 0)).all()):
+        # A source whose alpha is *binary*, at full opacity, is a masked copy --
+        # and exactly one, not an approximation. That is the shape a tile
+        # actually has (an opaque body with a transparent surround), which is
+        # why the test is this rather than the tempting all-255: an all-255 tile
+        # is rare, so an early-out gated on it fires almost never and measures
+        # beautifully on a synthetic benchmark. Roughly 20x off an export.
+        #
+        # Where src is opaque: sa is 1, out_a is 1, safe is 1, and rgb reduces
+        # to src's own channels -- uint8 widened to float32 and back, so rint
+        # and clip are identities on them.
+        #
+        # Where src is clear: sa is 0, so out_a is dst's own alpha and rgb is
+        # dst * da / da, which rint returns to dst exactly. The one pixel that
+        # is *not* left alone is where dst is clear too -- there safe is 1, so
+        # the full path writes rgb 0, discarding whatever colour was stored
+        # under a zero alpha. Reproduced rather than tidied up: bit-identity is
+        # the bar, and `dead` is computed before the copy for that reason.
+        opaque = alpha == 255
+        dead = ~opaque & (dst[..., 3] == 0)
+        np.copyto(dst, src, where=opaque[..., None])
+        if dead.any():
+            dst[..., :3][dead] = 0
+        return
     sa = (src[..., 3:4].astype(np.float32) / 255.0) * float(opacity)
     if not sa.any():
         return
@@ -75,6 +100,12 @@ def render_layer(doc: MapDoc, layer: TileLayer, out: np.ndarray) -> None:
     # carries is the one answer that costs a full scan of the list every time,
     # and a map that has lost a tileset is made entirely of them.
     resolved: dict[int, tuple | None] = {}
+    # The *oriented* tile is memoised beside the lookup, on (id, flags), because
+    # orientation is a pure function of that pair and a map is the same handful
+    # of tiles repeated thousands of times -- 64 tiles by 8 symmetries is a few
+    # megabytes against one numpy call per cell. Read-only by construction: the
+    # entries are only ever passed to ``_over`` as its source.
+    oriented: dict[tuple[int, int], np.ndarray] = {}
     for row in range(min(layer.height, doc.height)):
         for column in range(min(layer.width, doc.width)):
             tile_id = int(ids[row, column])
@@ -87,12 +118,15 @@ def render_layer(doc: MapDoc, layer: TileLayer, out: np.ndarray) -> None:
                 continue
             tileset, local = entry
             mask = int(flags[row, column])
-            pixels = orient(
-                tileset.tile_pixels(local),
-                bool(mask & gidlib.FLIP_H),
-                bool(mask & gidlib.FLIP_V),
-                bool(mask & gidlib.FLIP_D),
-            )
+            pixels = oriented.get((tile_id, mask))
+            if pixels is None:
+                pixels = orient(
+                    tileset.tile_pixels(local),
+                    bool(mask & gidlib.FLIP_H),
+                    bool(mask & gidlib.FLIP_V),
+                    bool(mask & gidlib.FLIP_D),
+                )
+                oriented[(tile_id, mask)] = pixels
             # A tileset whose tiles are larger than the map's grid is ordinary
             # -- a 32px map with 48px trees -- and Tiled anchors such a tile by
             # its *bottom* left, so it grows upward out of its cell. Clipped

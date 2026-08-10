@@ -46,7 +46,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 6
+#define WARLOCKC_ABI 7
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -209,6 +209,28 @@ WARLOCKC_API int64_t warlockc_contours(const uint8_t *mask, int64_t stride,
                                        uint8_t *scratch, int32_t *points_out,
                                        int64_t cap_pts, int32_t *loop_lens_out,
                                        int64_t cap_loops);
+
+/* Grow or shrink an 8-bit selection mask by `radius`, clamp-to-edge.
+ *
+ * Mirrors warlock.studio.inker.selection._morph / _spread exactly, including
+ * the neighbourhood: passes alternate between the 4-neighbour cross and the
+ * 8-neighbour box, starting with the cross, so radius r applies ceil(r/2)
+ * crosses and floor(r/2) boxes interleaved -- an *octagon*, which is neither a
+ * disc nor a square and is the whole reason this could not be one call to some
+ * library's dilate. The mask is 0..255 and soft, not binary: a max filter over
+ * an antialiased edge moves the edge and keeps it soft.
+ *
+ * `op` is 0 for max (grow) and 1 for min (shrink). `scratch` is h * w bytes of
+ * caller memory, contents ignored -- this file allocates nothing, and the two
+ * buffers are ping-ponged one pass at a time. `src` and `out` may not alias.
+ * Strides count bytes between row starts.
+ *
+ * Integer min/max, so bit-identity with the reference is arithmetic rather than
+ * a rounding argument. */
+WARLOCKC_API void warlockc_morph_u8(const uint8_t *src, int64_t src_stride,
+                                    uint8_t *scratch, uint8_t *out,
+                                    int64_t out_stride, int64_t h, int64_t w,
+                                    int64_t radius, int32_t op);
 
 #ifdef __cplusplus
 }

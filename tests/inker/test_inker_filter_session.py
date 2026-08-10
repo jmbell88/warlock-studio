@@ -238,3 +238,101 @@ def test_a_document_with_no_animation_still_takes_the_plain_path():
     assert doc.commit_filter() is True
     assert doc.history.head != head
     assert isinstance(doc.stack.active, Layer)
+
+
+# --- the session memo --------------------------------------------------------
+#
+# ``inker_bridge`` calls ``preview_filter`` on every frame the popup is up, on
+# purpose: the combo above it can switch filters, and a preview that only ran on
+# a slider move would leave the last filter's pixels under the new filter's
+# controls. That made a 2048-square blur cost its full ~1.1 s *per frame*. The
+# snapshot the session holds never changes, so the filtered array is a pure
+# function of (name, params) within one session and is memoised. Only that half:
+# the blend, the alpha lock and the invalidate still run every frame.
+
+
+def _counting_apply(calls: list[tuple]):
+    from warlock.studio.inker import filters as real
+
+    def apply_named(name, before, **params):
+        calls.append((name, tuple(sorted(params.items()))))
+        return real.FILTERS[name][1](before, **params)
+
+    return apply_named
+
+
+def test_an_unchanged_filter_and_params_is_computed_once_not_once_per_frame(monkeypatch):
+    from warlock.studio.inker import document as docmod
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(docmod.filters, "apply_named", _counting_apply(calls))
+    doc = _still()
+    doc.begin_filter()
+    for _ in range(10):
+        assert doc.preview_filter(FILTER, brightness=0.5) is True
+    assert len(calls) == 1
+
+
+def test_changing_a_parameter_recomputes(monkeypatch):
+    from warlock.studio.inker import document as docmod
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(docmod.filters, "apply_named", _counting_apply(calls))
+    doc = _still()
+    doc.begin_filter()
+    doc.preview_filter(FILTER, brightness=0.5)
+    doc.preview_filter(FILTER, brightness=0.75)
+    doc.preview_filter(FILTER, brightness=0.5)
+    assert len(calls) == 3
+
+
+def test_switching_filters_recomputes_which_is_why_the_frame_call_exists(monkeypatch):
+    from warlock.studio.inker import document as docmod
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(docmod.filters, "apply_named", _counting_apply(calls))
+    doc = _still()
+    doc.begin_filter()
+    doc.preview_filter(FILTER, brightness=0.5)
+    doc.preview_filter("blur", radius=2.0)
+    assert [c[0] for c in calls] == [FILTER, "blur"]
+
+
+def test_a_new_session_does_not_reuse_the_last_ones_pixels(monkeypatch):
+    """The memo is keyed on (name, params) and nothing else, so it *must* be
+    dropped when the snapshot underneath it changes -- otherwise the second
+    session previews the first session's layer."""
+    from warlock.studio.inker import document as docmod
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(docmod.filters, "apply_named", _counting_apply(calls))
+    doc = _still()
+    doc.begin_filter()
+    doc.preview_filter(FILTER, brightness=0.5)
+    doc.commit_filter()
+    doc.begin_filter()
+    doc.preview_filter(FILTER, brightness=0.5)
+    assert len(calls) == 2
+
+
+def test_the_memo_does_not_skip_the_write_so_the_pixels_are_right_every_frame():
+    """Ten identical previews must leave exactly what one leaves -- the cached
+    half is the filter, not the blend or the alpha lock beneath it."""
+    once = _still()
+    once.begin_filter()
+    once.preview_filter(FILTER, brightness=0.6)
+    expected = once.stack.active.pixels.copy()
+
+    many = _still()
+    many.begin_filter()
+    for _ in range(10):
+        many.preview_filter(FILTER, brightness=0.6)
+    assert np.array_equal(many.stack.active.pixels, expected)
+
+
+def test_cancelling_drops_the_memo_too():
+    doc = _still()
+    doc.begin_filter()
+    doc.preview_filter(FILTER, brightness=0.5)
+    doc.cancel_filter()
+    assert doc._filter_memo is None
