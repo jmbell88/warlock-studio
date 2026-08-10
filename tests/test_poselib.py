@@ -19,11 +19,20 @@ def _config(tmp_path):
     return SimpleNamespace(data_dir=tmp_path)
 
 
+def _full_bones(template="humanoid"):
+    """Every bone of the template at identity -- what ``get_pose()`` saves.
+
+    A record must carry the whole skeleton (the retargeting premise in the
+    module docstring), so the payload helper mirrors the only writer.
+    """
+    return {b["name"]: [0.0, 0.0, 0.0, 1.0] for b in rigging.get_template(template).bones}
+
+
 def _payload(**over):
     base = {
         "name": "Crouch",
         "template": "humanoid",
-        "bones": {"hips": [0.0, 0.0, 0.0, 1.0]},
+        "bones": _full_bones(),
         "root_translation": [0.1, 0.0, -0.2],
     }
     base.update(over)
@@ -44,7 +53,7 @@ def test_a_record_round_trips(tmp_path):
     assert back == stored
     assert back["name"] == "Crouch"
     assert back["template"] == "humanoid"
-    assert back["bones"] == {"hips": [0.0, 0.0, 0.0, 1.0]}
+    assert back["bones"] == _full_bones()
     assert back["root_translation"] == [0.1, 0.0, -0.2]
     assert [r["id"] for r in poselib.list_records(config)] == [stored["id"]]
 
@@ -96,7 +105,7 @@ def test_list_records_filters_by_template_and_sorts_by_name(tmp_path):
     fish = poselib.save_record(
         config,
         poselib.validate_record(
-            _payload(name="Swim", template="fish", bones={"spine_01": [0, 0, 0, 1]})
+            _payload(name="Swim", template="fish", bones=_full_bones("fish"))
         ),
     )
     # Case-insensitive by name: "Alpha" before "bravo" despite the capital.
@@ -145,7 +154,7 @@ def test_validate_record_normalizes(tmp_path):
     assert out == {
         "name": "Crouch",
         "template": "humanoid",
-        "bones": {"hips": [0.0, 0.0, 0.0, 1.0]},
+        "bones": _full_bones(),
         "root_translation": [0.1, 0.0, -0.2],
     }
 
@@ -187,8 +196,24 @@ def test_root_translation_is_finite_checked_before_range_checked(bad):
 
 
 def test_validate_record_rejects_a_bone_the_template_lacks():
+    bones = _full_bones()
+    bones["tentacle"] = [0, 0, 0, 1]
     with pytest.raises(poselib.RecordError, match="unknown bone"):
-        poselib.validate_record(_payload(bones={"tentacle": [0, 0, 0, 1]}))
+        poselib.validate_record(_payload(bones=bones))
+
+
+def test_validate_record_refuses_a_partial_record():
+    """Exactly the template's bone set, not a subset: the module docstring's
+    retargeting argument stands on a record carrying every bone, and a partial
+    record applied over a posed editor keeps stale rotations which get_pose()
+    would then save as authored. Completeness is the right bar for what is on
+    disk too -- Poser's only writer is get_pose(), which is always complete."""
+    bones = _full_bones()
+    bones.pop("hips")
+    bones.pop("spine")
+    with pytest.raises(poselib.RecordError, match="missing 2 of") as info:
+        poselib.validate_record(_payload(bones=bones))
+    assert info.value.field == "bones"
 
 
 def test_record_error_is_a_value_error():
@@ -288,6 +313,18 @@ def test_an_epoch_bump_invalidates(tmp_path, monkeypatch):
     assert poselib.preview_valid(config, "humanoid", "bpy 4.5.0") is False
 
 
+def test_a_vanished_template_file_answers_stale_not_a_raise(tmp_path, monkeypatch):
+    """The registry loads once per process, so the file can go missing under
+    it. A cache-validity question must answer "rebuild", never throw a
+    FileNotFoundError out of service.poses.template_preview unframed."""
+    config = _config(tmp_path)
+    _seed_preview(config)
+    rigging.get_template("humanoid")  # the registry is loaded and cached
+    monkeypatch.setattr(rigging, "TEMPLATE_DIR", tmp_path / "gone")
+    assert poselib.template_digest("humanoid") is None
+    assert poselib.preview_valid(config, "humanoid", "bpy 4.5.0") is False
+
+
 def test_template_digest_tracks_the_file_bytes(tmp_path, monkeypatch):
     (tmp_path / "humanoid.json").write_text(json.dumps({
         "key": "humanoid", "label": "H", "root": "a",
@@ -320,3 +357,19 @@ def test_unit_box_constants():
     assert poselib.UNIT_LO == (-0.5, -0.5, 0.0)
     assert poselib.UNIT_HI == (0.5, 0.5, 1.0)
     assert poselib.MAX_ROOT_TRANSLATION == 2.0
+
+
+def test_copy_names_count_up_the_way_clay_ops_names_do():
+    """The four-line judgement -- count up, never prefix -- is stated twice on
+    purpose (this module may not import studio, says the comment beside
+    ``_SUFFIX``); this pins that the two spellings still agree."""
+    from warlock.studio.clay.ops import _next_name
+
+    cases = (
+        ("Crouch", ()),
+        ("Crouch", ("Crouch.001",)),
+        ("Crouch.002", ()),
+        ("Crouch.002", ("Crouch.003", "Crouch.004")),
+    )
+    for name, taken in cases:
+        assert poselib.next_copy_name(name, taken) == _next_name(name, taken)

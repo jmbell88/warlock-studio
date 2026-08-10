@@ -108,19 +108,31 @@ def parse(text: str) -> list[Release]:
     return out
 
 
+# One parse per path per process: Home draws the result every frame, and the
+# file ships inside the wheel, so it cannot change under a running process.
+# Keyed on the path rather than a single slot because the tests hand ``entries``
+# their own files; ``parse`` stays pure and uncached for the same reason.
+_CACHE: dict[Path, list[Release]] = {}
+
+
 def entries(path: Path | None = None) -> list[Release]:
     """Every release, newest first. ``[]`` when there is nothing to read."""
     target = path or changelog_path()
+    cached = _CACHE.get(target)
+    if cached is not None:
+        return cached
+    releases: list[Release] = []
     try:
         text = target.read_text(encoding="utf-8")
     except OSError:
         log.debug("no changelog at %s", target)
-        return []
-    try:
-        return parse(text)
-    except Exception:
-        log.exception("could not parse %s", target)
-        return []
+    else:
+        try:
+            releases = parse(text)
+        except Exception:
+            log.exception("could not parse %s", target)
+    _CACHE[target] = releases
+    return releases
 
 
 def current(version: str, path: Path | None = None) -> Release | None:

@@ -101,8 +101,27 @@ def create_sheet(
         try:
             records = sheetlib.interpolate(ends[0], ends[1], clip_frames)
         except ValueError as exc:
+            # A refusal names the control it came from, and interpolate can
+            # refuse for two: a bad frame count (the slider), or an endpoint
+            # pose carrying a root offset (one of the two selects). Which one
+            # is decided from the inputs already in hand, on the refusal path
+            # only, in interpolate's own checking order -- the unready_reason
+            # rule: interpolate stays the authority on *whether*, and a field
+            # that disagreed would be a slightly wrong highlight rather than a
+            # wrong permission. Ringing clip_frames for a pose's offset sent
+            # the user to change a slider the message never mentions.
+            offending = "clip_frames"
+            if 1 <= int(clip_frames) <= sheetlib.MAX_CLIP_FRAMES:
+                offending = next(
+                    (
+                        name
+                        for name, end in (("clip_from", ends[0]), ("clip_to", ends[1]))
+                        if any(float(v) for v in (end.get("root_translation") or ()))
+                    ),
+                    "clip_frames",
+                )
             raise invalid_from(
-                exc, "That clip cannot be built", field="clip_frames"
+                exc, "That clip cannot be built", field=offending
             ) from exc
 
     try:
@@ -261,6 +280,31 @@ def create_pixel_sheet(
     if seed is not None:
         check_seed("seed", seed)
 
+    # The restyle's identity is the pixel-art LoRA, so a base that adapter
+    # does not fit is refused here rather than queued: the worker would drop
+    # the style and ship a sheet that merely got smaller, which is a minute of
+    # GPU for a result the request did not mean. The base below is this
+    # function's own constant today, which makes this read like a guard on a
+    # pair of constants -- it is, and deliberately: params outlive today's UI,
+    # and the day base_model becomes a parameter this refusal is already at
+    # the door. Worded as guidance.normalize words the same pairing refusal,
+    # field naming the control the sentence mentions.
+    base_key = "sdxl_cfg"
+    base = models.BASE_MODELS[base_key]
+    pixel_lora = models.STYLE_LORAS[models.PIXEL_SHEET_LORA]
+    if not models.lora_fits(base, pixel_lora):
+        fitting = sorted(
+            key
+            for key, loras in models.loras_by_base().items()
+            if models.PIXEL_SHEET_LORA in loras
+        )
+        raise Invalid(
+            f"base_model {base.key!r} is {base.family} and the pixel-sheet "
+            f"LoRA {pixel_lora.key!r} is fitted to {pixel_lora.family}; "
+            f"pick one of {fitting}",
+            field="base_model",
+        )
+
     params = {
         # Every one of these is an *input*: the restyle's own recipe is
         # recorded in the pixel sidecar, not here, so nothing in this dict is
@@ -273,7 +317,7 @@ def create_pixel_sheet(
         "strength": value,
         "structure_lock": bool(structure_lock),
         "seed": random_seed() if seed is None else int(seed),
-        "base_model": "sdxl_cfg",
+        "base_model": base_key,
     }
     # At the door, exactly as create_job does, and before the row exists: an
     # img2img restyle wants SDXL plus a ControlNet, which is the shape of

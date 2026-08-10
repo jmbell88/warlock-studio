@@ -145,6 +145,20 @@ def vram_gib() -> tuple[float, float] | None:
     return (torch.cuda.memory_allocated() / gib, torch.cuda.memory_reserved() / gib)
 
 
+def _resident_t2i_gib(base_key: str | None) -> float:
+    """What the resident pipe is worth when torch cannot be asked, in GiB.
+
+    The dispatch credit's fallback used a flat SDXL_GIB, which is wrong the
+    moment the resident base is an OFFLOAD entry -- the 10 GiB klein pipe
+    credited at 7 would refuse a job the card actually holds. The registry
+    already declares each base's footprint, so the fallback reads it, keeping
+    SDXL_GIB only for a key the registry no longer carries -- the tolerance
+    _generate already applies to a stored base_model.
+    """
+    spec = models.BASE_MODELS.get(base_key or "")
+    return spec.vram_gib if spec is not None else vram.SDXL_GIB
+
+
 def _log_mem(when: str) -> None:
     """Log VRAM *and* host memory at a stage boundary.
 
@@ -280,6 +294,47 @@ def _observe_finished(store: JobStore, job_id: str) -> bool:
         metrics=metrics,
     )
     return True
+
+
+def _sheet_root_offsets(
+    records: list[dict[str, Any]], rig_meta: dict[str, Any] | None
+) -> tuple[dict[tuple[Any, int], list[float]], Any]:
+    """(pose id, frame) -> world root offset for the records that carry one,
+    plus the root bone they land on.
+
+    A pose snapshotted from the global library can carry a root offset, and a
+    sheet built from it must not silently disagree with the pose's own bake --
+    one meaning per pose. Rows without one gain no keys, so every pre-existing
+    cell dict is byte-identical to what it always was. (Clip records can never
+    reach this: sheetlib.interpolate refuses endpoint poses with root offsets
+    by name.)
+
+    A rig.json that cannot answer (pre-template, unreadable) costs the offset,
+    never the sheet -- and says so, one warning per pose, the same sentence
+    service.rig._pose_bake_spec logs for the same case. Matched by hand rather
+    than shared, because queue.py may not import service: two spellings of one
+    sentence, accepted, and this comment is the tie between them.
+    """
+    roots: dict[tuple[Any, int], list[float]] = {}
+    offset_records = [
+        r for r in records if any(float(v) for v in (r.get("root_translation") or ()))
+    ]
+    if not offset_records:
+        return roots, None
+    meta = rig_meta or {}
+    bounds, root_bone = meta.get("bounds"), meta.get("root")
+    if not (bounds and root_bone):
+        for r in offset_records:
+            log.warning(
+                "pose %s carries a root offset but rig.json cannot scale it",
+                r.get("id"),
+            )
+        return roots, None
+    for r in offset_records:
+        roots[(r.get("id"), r.get("frame", 0))] = rigging.root_offset_world(
+            r["root_translation"], bounds
+        )
+    return roots, root_bone
 
 
 def commit_fraction() -> float | None:
@@ -582,8 +637,10 @@ class Worker:
             # when the resident base is not the one this job wants.
             # Image-kind jobs get no credit: their `need` carries no SDXL
             # term, and coexist keeps the pipe resident beside trellis.
+            # The unmeasurable case reads the registry: a flat SDXL_GIB is
+            # 3 GiB short of the offloaded klein entry's declared peak.
             mem = vram_gib()
-            headroom += mem[1] if mem is not None else vram.SDXL_GIB
+            headroom += mem[1] if mem is not None else _resident_t2i_gib(self._t2i_key)
         if need > headroom:
             # The submit-time refusal's remedies, shared rather than restated
             # (N113): this is the check that fires *after* the user has waited
@@ -1711,25 +1768,15 @@ class Worker:
         # shares an id by construction, and keying on the id alone would render
         # frame 0 in every row of the clip.
         bones = {(r.get("id"), r.get("frame", 0)): r["bones"] for r in records}
-        # A pose snapshotted from the global library can carry a root offset,
-        # and a sheet built from it must not silently disagree with the pose's
-        # own bake -- one meaning per pose. Rows without one gain no keys, so
-        # every pre-existing cell dict is byte-identical to what it always was.
-        # (Clip records can never reach this: sheetlib.interpolate refuses
-        # endpoint poses with root offsets by name.)
+        # The why lives on _sheet_root_offsets, which is module-level so a test
+        # can drive the map-building without a Worker or a Blender fake. The
+        # read stays here: it is I/O, and only worth doing when some record
+        # actually carries an offset.
         roots: dict[tuple[Any, int], list[float]] = {}
         root_bone: Any = None
-        offset_records = [
-            r for r in records if any(float(v) for v in (r.get("root_translation") or ()))
-        ]
-        if offset_records:
-            rig_meta = await asyncio.to_thread(rigging.read_rig, source_dir) or {}
-            bounds, root_bone = rig_meta.get("bounds"), rig_meta.get("root")
-            if bounds and root_bone:
-                for r in offset_records:
-                    roots[(r.get("id"), r.get("frame", 0))] = rigging.root_offset_world(
-                        r["root_translation"], bounds
-                    )
+        if any(float(v) for r in records for v in (r.get("root_translation") or ())):
+            rig_meta = await asyncio.to_thread(rigging.read_rig, source_dir)
+            roots, root_bone = _sheet_root_offsets(records, rig_meta)
         cells = []
         for c in layout.cells:
             cell: dict[str, Any] = {
@@ -1869,6 +1916,20 @@ class Worker:
         if base_key not in models.BASE_MODELS:
             base_key = "sdxl_cfg"
         spec = models.BASE_MODELS[base_key]
+        pixel_style = models.STYLE_LORAS[models.PIXEL_SHEET_LORA]
+        lora: str | None = models.PIXEL_SHEET_LORA
+        if not models.lora_fits(spec, pixel_style):
+            # The same tolerance _generate applies to a stored style the base
+            # cannot take, and needed here for the same reason: params outlive
+            # the service that wrote them, and create_pixel_sheet's refusal
+            # guards only the door. Without this, a klein base ran the restyle
+            # bare while the sidecar below claimed the pixel LoRA styled it.
+            log.warning(
+                "base model %s (%s) cannot take the pixel-sheet LoRA %s (%s); "
+                "restyling without it",
+                spec.key, spec.family, pixel_style.key, pixel_style.family,
+            )
+            lora = None
         if self.config.vram_exclusive or self.trellis.running:
             # The same handoff a text job makes, and the same reasoning: the
             # restyle needs SDXL plus a ControlNet, which does not fit beside a
@@ -1928,10 +1989,8 @@ class Worker:
                             # One seed for every band, so a multi-band sheet
                             # keeps one identity all the way down the atlas.
                             seed=seed,
-                            lora=models.PIXEL_SHEET_LORA,
-                            lora_weight=models.STYLE_LORAS[
-                                models.PIXEL_SHEET_LORA
-                            ].default_weight,
+                            lora=lora,
+                            lora_weight=pixel_style.default_weight,
                             conditioning=cond,
                             on_state=lambda s: self._t2i_state(job_id, s),
                             on_step=lambda i, n: self._t2i_step(job_id, i, n),
@@ -1973,21 +2032,27 @@ class Worker:
 
         out_png = rigging.sheet_pixel_png_path(source_dir, sheet_id)
         await asyncio.to_thread(reduced.save, out_png, "PNG")
+        # The recipe records what ran, not what was asked for -- the rule
+        # guidance.normalize applies to a stored lora_weight. A style dropped
+        # above is simply absent, exactly as structure_lock already reads
+        # False when the base has no ControlNet to lock with.
+        recipe: dict[str, Any] = {
+            "base_model": base_key,
+            "strength": strength,
+            "structure_lock": bool(structure and spec.controlnet),
+            "seed": seed,
+            "colors": colors,
+            "prompt": t2i.last_prompt or prompt,
+            "bands": len(plan),
+        }
+        if lora is not None:
+            recipe["style_lora"] = lora
         doc = pixelsheet.pixel_sidecar(
             meta,
             image=out_png.name,
             logical_size=logical,
             palette=palette,
-            recipe={
-                "base_model": base_key,
-                "style_lora": models.PIXEL_SHEET_LORA,
-                "strength": strength,
-                "structure_lock": bool(structure and spec.controlnet),
-                "seed": seed,
-                "colors": colors,
-                "prompt": t2i.last_prompt or prompt,
-                "bands": len(plan),
-            },
+            recipe=recipe,
             created=time.time(),
         )
         # Last, and only after the PNG: this file is what the service treats as

@@ -121,8 +121,17 @@ def animating() -> bool:
     if REDUCED or clock is None:
         return False
     frame = clock[1]
+    # Distance *or* velocity: a spring's overshoot passes through zero distance
+    # at full speed -- the exact moment its damping exists to produce -- so
+    # "settled" is both under the floor and "still moving" is either over it.
+    # The floors are :func:`spring`'s own settle floors, one judgement shared,
+    # or the idle clamp sleeps through the half of the move it was woken for.
     return any(
-        _FRAME.get(key) == frame and abs(_STATE.get(key, target) - target) > 1e-3
+        _FRAME.get(key) == frame
+        and (
+            abs(_STATE.get(key, target) - target) >= _SETTLE_DISTANCE
+            or abs(_VELOCITY.get(key, 0.0)) >= _SETTLE_VELOCITY
+        )
         for key, target in _TARGET.items()
     )
 
@@ -206,6 +215,13 @@ SPRING_DAMPING = 0.72
 # slow spring but a divergent one.
 _SPRING_STEP = 0.004
 
+# The settle floors, shared with :func:`animating`: under both a spring is
+# declared arrived, so over either it is still moving. One judgement in one
+# place, because a clamp that used its own thresholds would disagree with the
+# spring about the frame the move ends on.
+_SETTLE_DISTANCE = 1e-3
+_SETTLE_VELOCITY = 1e-2
+
 _VELOCITY: dict[str, float] = {}
 
 
@@ -220,6 +236,11 @@ def spring(key: str, target: float, *, duration: float = tokens.DUR_BASE) -> flo
     from . import effects
 
     if not effects.SPRINGS:
+        # The exponential carries no velocity, so the key's must not survive
+        # the switch: springs turned back on would otherwise resume with the
+        # speed of a move the fallback already finished -- ``seed``, ``forget``
+        # and ``reset`` all clear it, and this path has to as well.
+        _VELOCITY.pop(key, None)
         return value(key, target, duration=duration)
     clock = _clock()
     if REDUCED or clock is None or duration <= 0.0:
@@ -250,7 +271,7 @@ def spring(key: str, target: float, *, duration: float = tokens.DUR_BASE) -> flo
     # Settled: a spring approaches its target asymptotically, so without a floor
     # it is *always* animating, which through ``animating()`` means the idle
     # clamp never idles again.
-    if abs(target - current) < 1e-3 and abs(velocity) < 1e-2:
+    if abs(target - current) < _SETTLE_DISTANCE and abs(velocity) < _SETTLE_VELOCITY:
         current, velocity = target, 0.0
     _STATE[key] = current
     _VELOCITY[key] = velocity

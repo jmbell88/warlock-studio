@@ -48,6 +48,12 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 # same reason: config.job_dir() and every path built under it do no sanitisation.
 RESOURCE_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
+# A template's key is interpolated into filenames -- the Poser preview cache
+# (``poselib.preview_path``) and its digest both build ``<key>.glb`` /
+# ``<key>.json`` paths from it -- so the key must be a safe path component,
+# and it comes out of the JSON body, not the filename.
+TEMPLATE_KEY_RE = re.compile(r"^[a-z0-9_]+$")
+
 # Progress lines the worker prints. Anything else on its stdout is log noise.
 PROGRESS_PREFIX = "[blender]"
 RE_PROGRESS = re.compile(r"^\[blender\]\s+([\d.]+)\s+(.*)$")
@@ -91,7 +97,17 @@ def _load_templates() -> dict[str, Template]:
     for path in sorted(TEMPLATE_DIR.glob("*.json")):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            found[raw["key"]] = _parse_template(raw)
+            template = _parse_template(raw)
+            # The key <-> filename convention is enforced here rather than
+            # assumed downstream: ``poselib.template_digest`` reads
+            # ``TEMPLATE_DIR/<key>.json`` back, and a key that named a
+            # different file would make the preview cache hash the wrong
+            # bytes -- or nothing at all.
+            if template.key != path.stem:
+                raise ValueError(
+                    f"template key {template.key!r} does not match filename {path.name}"
+                )
+            found[template.key] = template
         except Exception:
             # A malformed template must cost you that template, not the app.
             log.exception("skipping unusable skeleton template %s", path)
@@ -99,6 +115,8 @@ def _load_templates() -> dict[str, Template]:
 
 
 def _parse_template(raw: dict[str, Any]) -> Template:
+    if not TEMPLATE_KEY_RE.match(str(raw["key"])):
+        raise ValueError(f"template key {raw['key']!r} is not a safe path component")
     bones = raw["bones"]
     names = {b["name"] for b in bones}
     if len(names) != len(bones):
@@ -111,6 +129,14 @@ def _parse_template(raw: dict[str, Any]) -> Template:
                 raise ValueError(f"bone {b['name']!r} {end} is not a 3-vector")
     if raw["root"] not in names:
         raise ValueError(f"root {raw['root']!r} is not a bone")
+    # The root must be parentless: rig.json's ``root`` is this bone, and
+    # ``blender_worker._apply_root_translation`` inverts only the bone's own
+    # rest frame -- sound exactly while no parent's *pose* sits above it. Every
+    # shipped template already satisfies this; enforcing it keeps the premise a
+    # fact rather than a habit.
+    root_parent = next(b["parent"] for b in bones if b["name"] == raw["root"])
+    if root_parent is not None:
+        raise ValueError(f"root {raw['root']!r} must be parentless")
     return Template(
         key=raw["key"],
         label=raw["label"],
@@ -1067,7 +1093,12 @@ def armature_spec(template_key: str, out_glb: Path, result_dir: Path) -> dict[st
         "op": "armature",
         "template": template_key,
         "out_glb": str(out_glb),
-        "result_path": str(result_dir / ".armature_result.json"),
+        # Named per template: two previews building concurrently share the
+        # previews directory, and ``run_worker`` unlinks and then watches the
+        # result path -- one shared name would let each build eat the other's
+        # answer. The per-template lock in ``template_preview`` serializes one
+        # template's builds; this is what keeps two *different* ones apart.
+        "result_path": str(result_dir / f".{template_key}.armature_result.json"),
     }
 
 

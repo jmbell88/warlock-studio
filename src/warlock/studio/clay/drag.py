@@ -38,6 +38,7 @@ from ..viewer import math3d as m3
 
 __all__ = [
     "AXES",
+    "FALLOFF_CHUNK_PAIRS",
     "MAX_FALLOFF_PAIRS",
     "DragInput",
     "constrain_rotation",
@@ -203,8 +204,35 @@ def constrain_rotation(quat: np.ndarray, drag: DragInput) -> np.ndarray:
 #: The search is a broadcast rather than a spatial index, which is right for the
 #: blockout geometry Clay authors and quadratic on an imported reconstruction --
 #: so past this it declines, and the drag is an ordinary one. Declining beats
-#: both a stall at the press and a spatial index nothing else here needs.
+#: both a stall at the press and a spatial index nothing else here needs. This
+#: is the **time** cap; the memory cap is the chunk below, because at this
+#: count the one-shot broadcast materialised ``pairs x 3 x float64`` -- close to
+#: a gigabyte, on the frame thread, at the press of a drag.
 MAX_FALLOFF_PAIRS = 40_000_000
+
+#: How many pairs one chunk of the search materialises: ~48 MB of delta at
+#: float64, and gone before the next chunk allocates. The result is
+#: bit-identical to the one-shot broadcast -- every per-element value is
+#: computed by the same expression in the same order, and the running
+#: ``minimum`` fold only *selects* among them, which is the native-kernel bar
+#: applied to a rewrite that never left numpy.
+FALLOFF_CHUNK_PAIRS = 2_000_000
+
+
+def _min_distance(positions: np.ndarray, anchors: np.ndarray) -> np.ndarray:
+    """Per-vertex distance to the nearest of *anchors*, in bounded memory.
+
+    Chunked over the anchor rows under a running minimum rather than one
+    broadcast over all of them: the peak temporary is one chunk's delta, not
+    the whole ``anchors x positions`` block, and the answer cannot differ --
+    ``min`` over chunk minima is ``min`` over the same values.
+    """
+    rows = max(1, FALLOFF_CHUNK_PAIRS // max(len(positions), 1))
+    nearest = np.full(len(positions), np.inf)
+    for start in range(0, len(anchors), rows):
+        delta = positions[None, :, :] - anchors[start : start + rows][:, None, :]
+        np.minimum(nearest, np.sqrt((delta**2).sum(axis=2)).min(axis=0), out=nearest)
+    return nearest
 
 
 def falloff(distance: np.ndarray, radius: float) -> np.ndarray:
@@ -233,10 +261,14 @@ def proportional_set(
     through, so dragging one end of a long selected strip would fade out along
     the strip itself.
 
-    The selected vertices come back first and at weight 1, and every vertex
-    strictly inside the radius follows. A vertex at exactly the radius weighs
-    zero and is dropped, because carrying it means a drag that reports moving
-    geometry it does not move.
+    The set is the selected vertices -- all present, all at weight 1 -- plus
+    every vertex strictly inside the radius, **in vertex-index order**: the
+    caller pairs each entry with its weight and indexes the mesh with the lot,
+    so no ordering beyond that alignment is promised. A vertex at exactly the
+    radius weighs zero and is dropped, because carrying it means a drag that
+    reports moving geometry it does not move. The two declining paths -- zero
+    radius, or a mesh past ``MAX_FALLOFF_PAIRS`` -- hand the selection back in
+    the order it arrived, at weight 1 throughout.
     """
     positions = np.asarray(positions, dtype="f8").reshape(-1, 3)
     selected = np.asarray(selected, dtype="i8").reshape(-1)
@@ -245,8 +277,7 @@ def proportional_set(
     if len(selected) * len(positions) > MAX_FALLOFF_PAIRS:
         return selected.astype("i4"), np.ones(len(selected))
 
-    delta = positions[None, :, :] - positions[selected][:, None, :]
-    distance = np.sqrt((delta**2).sum(axis=2)).min(axis=0)
+    distance = _min_distance(positions, positions[selected])
     weights = falloff(distance, radius)
     weights[selected] = 1.0
     keep = np.flatnonzero(weights > 0.0)

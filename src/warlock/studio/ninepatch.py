@@ -58,6 +58,16 @@ class Sprite:
         return self.corner / size, (self.corner + 1.0) / size
 
 
+def fits(corner: int) -> bool:
+    """Whether a sprite with corners this size is under the guard.
+
+    One owner for the threshold, so a cache declining a request *before* it
+    rasterises the pixels and :func:`build` refusing the upload after cannot
+    come to disagree about where the line is.
+    """
+    return 2 * corner + 1 <= MAX_SIZE
+
+
 def build(alpha: Any, corner: int) -> Sprite | None:
     """Upload a square ``uint8`` alpha image as a nine-patch. ``None`` if not now.
 
@@ -66,7 +76,7 @@ def build(alpha: Any, corner: int) -> Sprite | None:
     giving up on permanently and the second is worth trying again next frame.
     """
     renderer = _renderer()
-    if renderer is None or 2 * corner + 1 > MAX_SIZE:
+    if renderer is None or not fits(corner):
         return None
     import moderngl
     from imgui_bundle import imgui
@@ -90,6 +100,19 @@ def have_renderer() -> bool:
     return _renderer() is not None
 
 
+def covers(sprite: Sprite, low: tuple[float, float], high: tuple[float, float]) -> bool:
+    """Whether the rectangle is big enough for the sprite's corner blocks.
+
+    :func:`paint`'s own refusal, exposed so a caller composing *two* paints
+    (a border with a fill inset inside it) can decide both before drawing
+    either -- painting the first and then discovering the second is refused
+    leaves half a surface on screen, under whatever the caller's fallback
+    draws on the False.
+    """
+    corner = float(sprite.corner)
+    return (high[0] - low[0]) >= 2.0 * corner + 1.0 and (high[1] - low[1]) >= 2.0 * corner + 1.0
+
+
 def paint(
     draw: Any,
     sprite: Sprite,
@@ -111,9 +134,9 @@ def paint(
     the shape the sprite exists to be exact about, or to draw them overlapping,
     which doubles the alpha in precisely the four places a reader is looking.
     """
-    corner = float(sprite.corner)
-    if (high[0] - low[0]) < 2.0 * corner + 1.0 or (high[1] - low[1]) < 2.0 * corner + 1.0:
+    if not covers(sprite, low, high):
         return False
+    corner = float(sprite.corner)
     lo_uv, hi_uv = sprite.splits()
     xs = (low[0], low[0] + corner, high[0] - corner, high[0])
     ys = (low[1], low[1] + corner, high[1] - corner, high[1])

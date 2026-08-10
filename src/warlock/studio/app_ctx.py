@@ -97,6 +97,14 @@ class Ctx:
     # pose mode unconditionally, so sharing one instance would let loading the
     # Poser preview silently discard unsaved inspector pose edits.
     poser_viewer: Any = None
+    # Clay's live viewport, attached by the App when the mode's viewport is
+    # first built and cleared again at teardown. The App owns the instance;
+    # this is how clay_mode and the panes reach it -- the drag keyboard, the
+    # axis views and the per-tab camera all read ``getattr(ctx, "clay_view",
+    # None)``, and a field nothing assigned left every one of them silently
+    # inert, because getattr-with-a-default is exactly the spelling that turns
+    # a missing wire into None rather than an AttributeError.
+    clay_view: Any = None
     textures: Any = None
     confirms: dialogs.ConfirmQueue = field(default_factory=dialogs.ConfirmQueue)
     prompts: dialogs.PromptQueue = field(default_factory=dialogs.PromptQueue)

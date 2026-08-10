@@ -155,6 +155,26 @@ def test_an_unknown_base_model_falls_back_to_the_sdxl_figure(params):
     )
 
 
+def test_the_dispatch_credit_reads_the_registry_when_torch_cannot_answer():
+    """The other place a resident pipe is priced. When vram_gib() cannot
+    measure, the credit for the to-be-freed pipe falls back to the resident
+    spec's own declared footprint -- a flat SDXL_GIB is 3 GiB short of the
+    offloaded klein entry's 10.0, which under-credits the headroom and refuses
+    a job the card actually holds. A key the registry no longer carries keeps
+    the SDXL figure, the tolerance the estimate above already applies."""
+    from warlock import models
+    from warlock.queue import _resident_t2i_gib
+
+    klein = models.BASE_MODELS["flux_klein_distilled"]
+    assert klein.vram_gib != vram.SDXL_GIB
+    assert _resident_t2i_gib("flux_klein_distilled") == pytest.approx(klein.vram_gib)
+    assert _resident_t2i_gib("turbo") == pytest.approx(
+        models.BASE_MODELS["turbo"].vram_gib
+    )
+    assert _resident_t2i_gib("gone") == pytest.approx(vram.SDXL_GIB)
+    assert _resident_t2i_gib(None) == pytest.approx(vram.SDXL_GIB)
+
+
 def test_a_rig_job_costs_no_vram():
     assert vram.estimate("rig", "model", {}, exclusive=False) == 0.0
 

@@ -28,7 +28,7 @@ from imgui_bundle import imgui
 from ... import changelog
 from .. import fonts, icons, layout, modes, profiles, recents, theme, tokens, widgets
 from ..manual import render as manual_render
-from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes
+from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes, set_mode
 from ..tokens import sp
 
 # How many Resume rows are offered. A shortlist rather than a history: past a
@@ -88,6 +88,13 @@ def _asset_rows(ctx: Any) -> list[Row]:
         return []
     out: list[Row] = []
     for job in cache.jobs:
+        # The cache page is the workshop and the trash together (that is what
+        # lets ``Filters.trash`` be a view), so the trash is excluded here on
+        # the row's own ``deleted_at`` -- a column already on the row, costing
+        # no DB scan, and independent of whatever the library's filter bar is
+        # set to. Home is not the library.
+        if job.get("deleted_at"):
+            continue
         if job.get("status") != "done":
             continue
         name = str(job.get("name") or job.get("prompt") or job.get("id") or "asset")
@@ -153,7 +160,7 @@ def open_row(ctx: Any, row: Row) -> None:
         job = ctx.cache.get(row.key) if getattr(ctx, "cache", None) else None
         ctx.state.select(row.key)
         stage = (job or {}).get("stage")
-        ctx.state.mode = "2d" if stage in ("reference", "tile") else "3d"
+        set_mode(ctx.state, "2d" if stage in ("reference", "tile") else "3d")
         return
     path = Path(row.key)
     if not path.exists():
@@ -170,7 +177,7 @@ def open_row(ctx: Any, row: Row) -> None:
     }.get(row.kind)
     if opener is None:
         return
-    ctx.state.mode = row.kind
+    set_mode(ctx.state, row.kind)
     opener()
 
 
@@ -336,9 +343,13 @@ def draw(ctx: Any) -> None:
     column = max((avail.x - spacing) * 0.5, sp(240))
     height = max(avail.y - sp(tokens.SP_2), sp(200))
 
+    # Once per draw: ``_news`` measures what ``_status`` will occupy off the
+    # same rows ``_status`` then draws, and each recomputing the answer is two
+    # walks over the runtime checks and the queue for one column of sentences.
+    status = status_rows(ctx)
     if layout.pane_child("landing/news", (column, height)):
-        _news(ctx)
-        _status(ctx)
+        _news(ctx, status)
+        _status(ctx, status)
     imgui.end_child()
     imgui.same_line()
     if layout.pane_child("landing/resume", (0, height)):
@@ -362,13 +373,23 @@ def _header(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_3)))
 
 
+# The installed version, once: ``main._version`` is an importlib.metadata
+# distribution walk, the header and the news block both ask, and an installed
+# version cannot change under a running process -- the changelog cache's own
+# argument, applied to the other half of "what build is this".
+_VERSION: str | None = None
+
+
 def _version() -> str:
-    from ..main import _version as installed
+    global _VERSION
+    if _VERSION is None:
+        from ..main import _version as installed
 
-    return installed()
+        _VERSION = installed()
+    return _VERSION
 
 
-def _news(ctx: Any) -> None:
+def _news(ctx: Any, status: list[Status]) -> None:
     widgets.section("what's new")
     releases = changelog.entries()
     if not releases:
@@ -383,7 +404,7 @@ def _news(ctx: Any) -> None:
     # off the rows that block will actually draw rather than a reserved literal:
     # a fixed reservation is a gap on an install with nothing wrong and a
     # clipped row on one with four things wrong, which is the wrong way round.
-    reserved = _status_height(ctx)
+    reserved = _status_height(status)
     inner = max(imgui.get_content_region_avail().y - reserved, sp(120))
     if imgui.begin_child("landing/news-scroll", (0, inner)):
         for index, release in enumerate(releases):
@@ -398,18 +419,17 @@ def _news(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_3)))
 
 
-def _status_height(ctx: Any) -> float:
+def _status_height(status: list[Status]) -> float:
     """What :func:`_status` will occupy, so the scroller above it can take the
     rest. A clickable row is a frame tall and a plain one is a line."""
     style = imgui.get_style()
-    rows = status_rows(ctx)
     line = imgui.get_frame_height_with_spacing()
-    return line * (len(rows) + 1) + style.item_spacing.y + sp(tokens.SP_3)
+    return line * (len(status) + 1) + style.item_spacing.y + sp(tokens.SP_3)
 
 
-def _status(ctx: Any) -> None:
+def _status(ctx: Any, status: list[Status]) -> None:
     widgets.section("status")
-    for row in status_rows(ctx):
+    for row in status:
         widgets.text_colored(row.colour, row.icon)
         imgui.same_line()
         if row.target:
@@ -419,7 +439,7 @@ def _status(ctx: Any) -> None:
             if imgui.is_item_hovered():
                 imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
             if clicked:
-                ctx.state.mode = row.target
+                set_mode(ctx.state, row.target)
         else:
             widgets.text_colored(row.colour, row.text)
 
@@ -505,20 +525,20 @@ def start_2d(ctx: Any) -> None:
     """
     ctx.state.form_2d = profiles.apply(default_form_2d(), profiles.active_fields(ctx.settings))
     ctx.state.select(None)
-    ctx.state.mode = "2d"
+    set_mode(ctx.state, "2d")
 
 
 def start_3d(ctx: Any) -> None:
     ctx.state.form_3d = dict(DEFAULT_FORM_3D)
     ctx.state.select(None)
-    ctx.state.mode = "3d"
+    set_mode(ctx.state, "3d")
 
 
 def start_inker(ctx: Any) -> None:
     """Inker keeps whatever was open: unlike the two generate panes, there is
     no "fresh form" here -- the documents *are* the work, and its own empty
     state offers the canvas sizes."""
-    ctx.state.mode = "inker"
+    set_mode(ctx.state, "inker")
 
 
 def start_clay(ctx: Any) -> None:
@@ -531,7 +551,7 @@ def start_clay(ctx: Any) -> None:
     """
     from .. import clay_mode
 
-    ctx.state.mode = "clay"
+    set_mode(ctx.state, "clay")
     if not clay_mode.ensure(ctx).docs:
         clay_mode.new_document(ctx)
 
@@ -539,7 +559,7 @@ def start_clay(ctx: Any) -> None:
 def start_plotter(ctx: Any) -> None:
     from .. import plotter_mode
 
-    ctx.state.mode = "plotter"
+    set_mode(ctx.state, "plotter")
     if not plotter_mode.ensure(ctx).docs:
         plotter_mode.new_document(ctx)
 
@@ -547,6 +567,6 @@ def start_plotter(ctx: Any) -> None:
 def start_packwright(ctx: Any) -> None:
     from .. import packwright_mode
 
-    ctx.state.mode = "packwright"
+    set_mode(ctx.state, "packwright")
     if not packwright_mode.ensure(ctx).docs:
         packwright_mode.new_document(ctx)

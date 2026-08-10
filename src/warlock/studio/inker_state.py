@@ -140,6 +140,19 @@ def clamp_zoom(zoom: float) -> float:
     return max(MIN_ZOOM, min(MAX_ZOOM, float(zoom)))
 
 
+def _quarter(view: PaintView) -> int:
+    """ROTATIONS' index for the view's rotation, in one spelling.
+
+    A rotation somehow off the quarter lattice reads as 0 -- the answer
+    ``basis`` has always given -- rather than raising out of ``index()``.
+    Only code can produce one today, which is exactly why the guard lives
+    here: ``rotate_view`` restated the lookup without it, so the two answered
+    the same bad value differently, one silently and one with a ValueError.
+    """
+    rotation = int(view.rotation)
+    return ROTATIONS.index(rotation % 360) if rotation % 90 == 0 else 0
+
+
 def basis(view: PaintView) -> tuple[tuple[float, float], tuple[float, float]]:
     """The view's 2x2 orientation, as rows. Orthonormal, determinant +-1.
 
@@ -148,7 +161,7 @@ def basis(view: PaintView) -> tuple[tuple[float, float], tuple[float, float]]:
     along it, so a transform that scaled would have to be threaded through that
     arithmetic, and one that only turns does not.
     """
-    quarter = ROTATIONS.index(int(view.rotation) % 360 if view.rotation % 90 == 0 else 0)
+    quarter = _quarter(view)
     # (x, y) -> (-y, x) is one clockwise quarter turn on a screen whose y grows
     # downward, which is the direction the button's icon points.
     rows = (
@@ -224,7 +237,7 @@ def rotate_view(view: PaintView, quarter_turns: int = 1) -> None:
     rather than by clearing ``fitted``, which would also re-scale and throw away
     a zoom the user chose.
     """
-    view.rotation = ROTATIONS[(ROTATIONS.index(int(view.rotation) % 360) + int(quarter_turns)) % 4]
+    view.rotation = ROTATIONS[(_quarter(view) + int(quarter_turns)) % 4]
     view.pending_zoom = view.zoom
 
 

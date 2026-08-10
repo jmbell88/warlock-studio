@@ -883,7 +883,12 @@ class Text2Image:
             "models": provenance.model_fingerprints({"base_model": self._model_dir}),
             "versions": provenance.versions(),
         }
-        if lora:
+        if lora and lora in self._adapters:
+            # Applied, not merely requested -- the predicate the trigger
+            # prepend already uses. A style that never loaded (not downloaded,
+            # or fitted to another family) did not shape this image, and
+            # recording it anyway is how a row comes to claim a style that
+            # never ran.
             out["style_lora"] = lora
             out["lora_weight"] = lora_weight
         if conditioning:

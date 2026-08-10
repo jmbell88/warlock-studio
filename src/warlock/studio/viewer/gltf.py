@@ -191,12 +191,6 @@ class Model:
         index = self.by_name.get(bone)
         return None if index is None else self.nodes[index].rotation.copy()
 
-    def reset_all(self) -> None:
-        for i, node in enumerate(self.nodes):
-            node.rotation = self.rest_rotations[i].copy()
-            node.translation = self.rest_translations[i].copy()
-        self.update_world()
-
     def pose(self) -> dict[str, list[float]]:
         """Every joint whose rotation differs from rest, as XYZW lists."""
         out: dict[str, list[float]] = {}

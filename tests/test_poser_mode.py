@@ -110,17 +110,27 @@ class FakeViewer:
         self.editor.reset_all(dirty=dirty)
 
 
+def _full_bones(template="humanoid"):
+    """Every bone at identity -- validate_record requires the whole skeleton,
+    which is what get_pose(), the library's only real writer, produces."""
+    return {b["name"]: [0.0, 0.0, 0.0, 1.0] for b in rigging.get_template(template).bones}
+
+
 def _armature_model() -> Model:
-    nodes = [
-        Node(name="rig", children=[1]),
-        Node(name="hips", translation=m3.vec3(0.0, 0.53, 0.0), children=[2]),
-        Node(name="spine", translation=m3.vec3(0.0, 0.07, 0.0)),
-    ]
+    """One node per humanoid bone under a 'rig' object node -- flat, because
+    the editor needs only names and positions here, and a save built off this
+    must carry the template's *whole* skeleton (validate_record's bar)."""
+    names = [b["name"] for b in rigging.get_template("humanoid").bones]
+    nodes = [Node(name="rig", children=list(range(1, len(names) + 1)))]
+    for i, name in enumerate(names):
+        nodes.append(Node(name=name, translation=m3.vec3(0.0, 0.1 * i, 0.0)))
     return Model(nodes, roots=[0], meshes=[], skins=[])
 
 
 def _bound_viewer() -> FakeViewer:
-    viewer = FakeViewer(_armature_model(), ["hips", "spine"])
+    viewer = FakeViewer(
+        _armature_model(), [b["name"] for b in rigging.get_template("humanoid").bones]
+    )
     viewer.editor.root = "hips"
     return viewer
 
@@ -144,8 +154,7 @@ def test_enter_refreshes_the_library_and_requests_the_preview(svc, monkeypatch):
     _fake_blender(monkeypatch)
     stored = svc_poses.create_library_pose(
         svc,
-        {"name": "Crouch", "template": "humanoid",
-         "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+        {"name": "Crouch", "template": "humanoid", "bones": _full_bones()},
     )
     ctx = FakeCtx(svc)
     poser_mode.enter(ctx)
@@ -237,6 +246,25 @@ def test_apply_pose_loads_the_record_clean(svc):
     assert viewer.editor.root_translation() == pytest.approx([0.1, 0.0, 0.2])
 
 
+def test_applying_a_pose_after_another_leaves_no_residue(svc):
+    """apply_pose resets first, the apply_preset order: set_pose writes only
+    the bones the record lists, so a partial record (pre-completeness saves
+    exist on disk) applied over a posed editor would keep stale rotations --
+    which get_pose() would then save as authored."""
+    ctx = FakeCtx(svc)
+    state = poser_mode.ensure(ctx)
+    viewer = ctx.poser_viewer = _bound_viewer()
+    state.poses = [
+        {"id": "0123456789ab", "name": "Twist",
+         "bones": {"spine": [0.0, 0.0, 0.7071068, 0.7071068]}},
+        {"id": "0123456789ac", "name": "Idle", "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+    ]
+    poser_mode.apply_pose(ctx, "0123456789ab")
+    poser_mode.apply_pose(ctx, "0123456789ac")
+    assert viewer.editor.pose()["spine"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
+    assert viewer.editor.current == "0123456789ac"
+
+
 def test_apply_preset_resets_the_root(svc):
     """A preset lists rotations only; the reset-first rule is what makes it
     zero-translation rather than inheriting the last pose's offset."""
@@ -272,8 +300,7 @@ def test_dirty_clears_only_when_the_save_lands(svc):
 def test_save_over_the_edited_pose_updates_in_place(svc):
     stored = svc_poses.create_library_pose(
         svc,
-        {"name": "Crouch", "template": "humanoid",
-         "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+        {"name": "Crouch", "template": "humanoid", "bones": _full_bones()},
     )
     ctx = FakeCtx(svc)
     state = poser_mode.ensure(ctx)
@@ -292,8 +319,7 @@ def test_save_over_the_edited_pose_updates_in_place(svc):
 def test_deleting_the_edited_pose_clears_current(svc):
     stored = svc_poses.create_library_pose(
         svc,
-        {"name": "Crouch", "template": "humanoid",
-         "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+        {"name": "Crouch", "template": "humanoid", "bones": _full_bones()},
     )
     ctx = FakeCtx(svc)
     viewer = ctx.poser_viewer = _bound_viewer()

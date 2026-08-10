@@ -286,6 +286,35 @@ def test_the_unreviewed_count_is_never_read_on_the_frame_thread():
     assert "unverdicted_models" not in inspect.getsource(landing.status_rows)
 
 
+def test_the_status_rows_are_computed_once_per_draw():
+    """C3: ``_status_height`` and ``_status`` are two consumers of one answer,
+    and each used to recompute it -- ``draw`` asks once and hands it down."""
+    import inspect
+
+    assert inspect.getsource(landing.draw).count("status_rows(") == 1
+    for helper in (landing._news, landing._status, landing._status_height):
+        assert "status_rows(" not in inspect.getsource(helper), helper.__name__
+
+
+def test_the_version_string_is_asked_for_once_per_process(monkeypatch):
+    """C3: ``main._version`` is an importlib.metadata distribution walk, and
+    the header and the news block both used to ask every frame. An installed
+    version cannot change under a running process."""
+    from warlock.studio import main
+
+    calls: list[int] = []
+
+    def counted() -> str:
+        calls.append(1)
+        return "9.9.9"
+
+    monkeypatch.setattr(main, "_version", counted)
+    monkeypatch.setattr(landing, "_VERSION", None)
+    assert landing._version() == "9.9.9"
+    assert landing._version() == "9.9.9"
+    assert calls == [1]
+
+
 def test_the_stamp_only_moves_when_the_submit_was_accepted():
     """``TaskRunner.submit`` refuses a key already in flight and nothing else
     re-arms it, so moving the stamp on a refusal strands the row on a figure

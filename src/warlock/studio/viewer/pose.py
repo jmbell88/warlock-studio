@@ -164,7 +164,11 @@ class PoseEditor:
         """Copy every posed bone onto its mirror partner, reflected."""
         if not self.mirror_pairs:
             return
-        self.apply(rigging.mirror_pose(self.pose(), self.mirror_pairs))
+        # ``pose_id=self.current``: apply's clearing of ``current`` is for
+        # *loading* a different pose, and a mirror is still the same one --
+        # dirty yes, identity no. Without it, Mirror silently turned the next
+        # Save into Save-as.
+        self.apply(rigging.mirror_pose(self.pose(), self.mirror_pairs), pose_id=self.current)
         if self.root is not None:
             # The positional half of the same reflection: a pose that steps
             # left must step right when mirrored.

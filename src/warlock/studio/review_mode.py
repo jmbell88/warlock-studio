@@ -110,7 +110,7 @@ SCORE_QUESTION = "will this reconstruct"
 # The sign-then-digit shape is what keeps eleven values inside six keys, and it
 # is deliberately the *same* ``R`` the binary loop used to arm a reject with:
 # the muscle memory is "R then say more", and what "more" means got richer.
-GRADE_KEYS = {str(i): i for i in range(1, 6)}
+GRADE_KEYS = {str(i): i for i in range(1, verdicts_mod.GRADE_MAX + 1)}
 
 # Digit -> tag, positional, which is the whole reason each vocabulary is five
 # long. Modifiers pick the polarity: Ctrl for good, Shift for bad. Derived from

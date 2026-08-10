@@ -381,10 +381,58 @@ def test_a_successful_fetch_moves_the_files_in_and_renames(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert (dest / "lcm-lora-sdxl.safetensors").read_bytes() == b"w"
+    # The rename happened inside staging, before the move: the generic name
+    # never lands in loras/ at all -- which is the whole point of the rename,
+    # since two repos ship the same generic filename into one flat directory.
+    assert not (dest / "pytorch_lora_weights.safetensors").exists()
     # A shared destination gains files rather than being replaced.
     assert (dest / "already.safetensors").read_bytes() == b"keep"
     # huggingface_hub's resume bookkeeping does not follow the weights in.
     assert not (dest / ".cache").exists()
+
+
+def test_a_rename_whose_source_never_arrived_fails_the_fetch(tmp_path):
+    """fetch_one applies a rename unconditionally, and loudly. A repo that
+    stopped shipping the declared filename must fail the whole fetch rather
+    than move in a directory missing the file the presence probes key on --
+    ``pixelklein`` (the first ``filenames=`` plus ``rename=`` entry) would
+    otherwise read as downloaded forever while loading nothing."""
+    dest = tmp_path / "models" / "loras"
+    result = tmp_path / "result.json"
+    spec = {
+        "repo_id": "acme/lora",
+        "dest": str(dest),
+        "filenames": ["pytorch_lora_weights.safetensors"],
+        "allow_patterns": [],
+        "ignore_patterns": [],
+        "rename": ["pytorch_lora_weights.safetensors", "pixel-art-klein.safetensors"],
+        "size_gib": 0.1,
+        "result_path": str(result),
+    }
+    stub = (
+        "import sys, types, pathlib\n"
+        "mod = types.ModuleType('huggingface_hub')\n"
+        "def snapshot_download(**kw):\n"
+        "    root = pathlib.Path(kw['local_dir'])\n"
+        "    (root / 'something_else.safetensors').write_bytes(b'w')\n"
+        "mod.snapshot_download = snapshot_download\n"
+        "sys.modules['huggingface_hub'] = mod\n"
+        "from warlock.pipelines import fetch_worker\n"
+        "raise SystemExit(fetch_worker.main())\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", stub],
+        input=json.dumps(spec),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1, proc.stderr
+    payload = json.loads(result.read_text(encoding="utf-8"))
+    assert payload["ok"] is False and "did not provide" in payload["error"]
+    # The staging promise holds on this path too: nothing lands, nothing
+    # lingers, and neither spelling of the filename reaches loras/.
+    assert not dest.exists()
+    assert not list((tmp_path / "models").glob("*.part"))
 
 
 def test_the_fetch_worker_spawn_is_in_the_kill_on_close_job():

@@ -103,10 +103,20 @@ def _blur(mask: np.ndarray, spread: float) -> np.ndarray:
     return np.apply_along_axis(lambda col: np.convolve(col, kernel, mode="same"), 0, out)
 
 
-# Built sprites, keyed by the two numbers that decide one. Small and bounded:
-# three elevations times the handful of radii the app draws, times a UI scale
-# that changes rarely.
-_SPRITES: dict[tuple[int, int], ninepatch.Sprite] = {}
+# Built sprites, keyed by the two numbers that decide one -- or ``None`` where
+# those two numbers were refused by the size guard, so an oversize request is
+# decided once rather than retried on every frame that asks. Small and
+# bounded: three elevations times the handful of radii the app draws, at one
+# UI scale -- see :data:`_SCALE`.
+_SPRITES: dict[tuple[int, int], ninepatch.Sprite | None] = {}
+
+# The UI scale the cache was built at. The keys are physical pixels, so a
+# scale change re-keys every request and the old scale's entries would sit
+# resident until shutdown with nothing ever asking for them again -- swept on
+# the first request at the new scale instead. That release is safe on the
+# frame thread because the scale changes *between* frames (the font atlas
+# rebake's rule), so no draw list is left holding a swept texture.
+_SCALE = tokens.SCALE
 
 # Set once, for good, when anything about building a sprite fails.
 _BROKEN = False
@@ -121,14 +131,25 @@ def available() -> bool:
 
 def sprite(radius: float, spread: float) -> ninepatch.Sprite | None:
     """The sprite for a surface of this radius and reach, building it if new."""
+    global _SCALE
+
     if not available():
         return None
+    if tokens.SCALE != _SCALE:
+        release_all()
+        _SCALE = tokens.SCALE
     radius = max(float(radius), 0.0)
     spread = max(float(spread), 1.0)
     key = (int(round(radius)), int(round(spread)))
-    found = _SPRITES.get(key)
-    if found is not None:
-        return found
+    if key in _SPRITES:
+        return _SPRITES[key]
+    if not ninepatch.fits(_corner(float(key[0]), float(key[1]))):
+        # Declined *before* the mask is rasterised, and remembered: the guard
+        # used to live only in ``ninepatch.build``, after the argument had
+        # already blurred the whole mask -- and the refusal was not cached, so
+        # an oversize request paid that price on every frame that asked again.
+        _SPRITES[key] = None
+        return None
     built = _build(float(key[0]), float(key[1]))
     if built is not None:
         _SPRITES[key] = built
@@ -153,5 +174,5 @@ def _build(radius: float, spread: float) -> ninepatch.Sprite | None:
 
 def release_all() -> None:
     """Drop every built sprite. Frame thread only, at teardown or a rebuild."""
-    ninepatch.release(_SPRITES.values())
+    ninepatch.release(built for built in _SPRITES.values() if built is not None)
     _SPRITES.clear()

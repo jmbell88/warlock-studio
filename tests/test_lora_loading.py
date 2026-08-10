@@ -27,6 +27,8 @@ class FakePipe:
         self.enabled = 0
         # The order the pipe was driven in, which is half of what is under test.
         self.calls: list[str] = []
+        # Real pipelines carry one; _recipe records its type name.
+        self.scheduler = None
 
     def load_lora_weights(self, _dir, weight_name, adapter_name, **_kw) -> None:
         self.loaded.append(adapter_name)
@@ -163,3 +165,58 @@ def test_enabling_precedes_the_weights_it_is_meant_to_restore(tmp_path):
     t2i._load_loras()
     t2i._apply_adapters(pipe, _fitting("turbo")[0], 0.5)
     assert pipe.calls.index("enable") < pipe.calls.index("set")
+
+
+def test_the_fake_defines_nothing_the_real_pipeline_classes_lack():
+    """FakePipe fidelity. Every method the fake answers, the real pinned
+    pipeline classes must answer too -- otherwise the whole suite passes over
+    a call that AttributeErrors on the first real job. The klein pipeline is
+    the case that motivated this: _apply_adapters calls enable_lora() on
+    whatever _load built, and no test with a fake could notice a family whose
+    real class lacked it.
+
+    Class-level hasattr only: no weights load, and importing the classes is
+    offline-safe (nothing in diffusers downloads at import; HF_HUB_OFFLINE is
+    already 1 via the warlock import above).
+    """
+    diffusers = pytest.importorskip("diffusers")
+    real = [
+        # What AutoPipelineForText2Image resolves for the SDXL entries, and
+        # the three from_pipe classes _conditioned builds over it.
+        diffusers.StableDiffusionXLPipeline,
+        diffusers.StableDiffusionXLImg2ImgPipeline,
+        diffusers.StableDiffusionXLControlNetPipeline,
+        diffusers.StableDiffusionXLControlNetImg2ImgPipeline,
+        # And what it resolves for family flux2klein. Verified present on the
+        # pinned diffusers (0.39.0) rather than guarded: the registry's klein
+        # entries depend on this class existing at all.
+        diffusers.Flux2KleinPipeline,
+    ]
+    fake_methods = [
+        name
+        for name, value in vars(FakePipe).items()
+        if callable(value) and not name.startswith("__")
+    ]
+    assert fake_methods, "FakePipe stopped defining methods; the test is vacuous"
+    for cls in real:
+        for name in fake_methods:
+            assert hasattr(cls, name), f"{cls.__name__} lacks {name}"
+
+
+def test_the_recipe_records_a_style_only_when_it_actually_applied(tmp_path):
+    """Applied, not requested -- the trigger prepend's own predicate. A style
+    that never loaded (not downloaded, or another family's) did not shape the
+    image, and a recipe naming it anyway is the pixel-sheet sidecar bug in
+    provenance form."""
+    t2i, _pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras()
+    chosen = _fitting("turbo")[0]
+    assert t2i._recipe(1, "p", None, chosen, 0.5, None, 1, False)["style_lora"] == chosen
+
+    bare_root = tmp_path / "bare"
+    bare_root.mkdir()
+    bare, _pipe = _t2i(bare_root, "turbo", [])
+    bare._load_loras()
+    recipe = bare._recipe(1, "p", None, chosen, 0.5, None, 1, False)
+    assert "style_lora" not in recipe
+    assert "lora_weight" not in recipe

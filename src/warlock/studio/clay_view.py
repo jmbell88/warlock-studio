@@ -246,12 +246,21 @@ class _Composite:
 class _Entry:
     """One object's GPU state, and the key that says whether it is still valid."""
 
-    __slots__ = ("key", "gpu", "model")
+    __slots__ = ("key", "gpu", "model", "mesh")
 
-    def __init__(self, key: Any, gpu: Any, model: Any) -> None:
+    def __init__(self, key: Any, gpu: Any, model: Any, mesh: Any) -> None:
         self.key = key
         self.gpu = gpu
         self.model = model
+        # The Mesh whose id() the key carries, held so that id cannot be
+        # recycled while the entry lives. Nothing in ``model`` keeps the Mesh
+        # *instance* alive -- ``_submesh`` builds fresh arrays on the way to
+        # the GPU -- so a freed mesh's address coming back on different
+        # geometry would make ``entry.key == key`` true of a stale upload:
+        # the viewport drawing the old shape forever, the exact failure the
+        # identity key's soundness argument forbids. The reference dies with
+        # the entry at the next key mismatch, so nothing leaks.
+        self.mesh = mesh
 
 
 def _materials_key(doc: Any) -> tuple[int, ...]:
@@ -394,7 +403,7 @@ class ClayView:
         prims = bd.to_primitives(obj, doc.materials)
         node = gltf.Node(name=obj.name, mesh=0)
         model = gltf.Model([node], [0], [prims], [])
-        return _Entry(key, scenelib.GpuModel(self.ctx, model), model)
+        return _Entry(key, scenelib.GpuModel(self.ctx, model), model, obj.mesh)
 
     def clear(self) -> None:
         for entry in self._cache.values():

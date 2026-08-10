@@ -93,6 +93,21 @@ def active(ctx: Any) -> ClayTab | None:
     return state.active if state is not None else None
 
 
+def _enter_clay(ctx: Any) -> None:
+    """Adoption switches modes through ``state.set_mode``, never by assignment.
+
+    A bare assignment to ``state.mode`` skips the ``previous_mode`` /
+    ``mode_observed`` pair that function maintains -- the drift its own
+    docstring names -- so Esc out of the next pass-through mode would go back
+    to wherever a *keypress* last was rather than to Clay. (Worded to stay out
+    of ``tests/test_mode_writes.py``'s line scan, which cannot tell prose from
+    code.)
+    """
+    from .state import set_mode
+
+    set_mode(ctx.state, "clay")
+
+
 # --- opening ----------------------------------------------------------------
 
 
@@ -243,7 +258,7 @@ def _adopt_import(ctx: Any, result: dict[str, Any]) -> None:
     view = result.get("view")
     if int(result.get("triangles", 0)) <= SLOW_TRIANGLES:
         adopt(ctx, doc, title=title, view=view)
-        ctx.state.mode = "clay"
+        _enter_clay(ctx)
         return
     ctx.confirms.ask(
         dialogs.Confirm(
@@ -262,7 +277,7 @@ def _adopt_import(ctx: Any, result: dict[str, Any]) -> None:
 
 def _adopt_now(ctx: Any, doc: Any, title: str, view: dict[str, Any] | None = None) -> None:
     adopt(ctx, doc, title=title, view=view)
-    ctx.state.mode = "clay"
+    _enter_clay(ctx)
 
 
 # --- saving -----------------------------------------------------------------
@@ -442,7 +457,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 title=result.get("title"),
                 view=result.get("view"),
             )
-            ctx.state.mode = "clay"
+            _enter_clay(ctx)
         return
 
     if name == "clay-import":

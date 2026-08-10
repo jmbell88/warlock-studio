@@ -418,6 +418,37 @@ def test_every_tag_key_names_a_real_tag():
     assert list(review_mode.GRADE_KEYS.values()) == [1, 2, 3, 4, 5]
 
 
+def test_the_grade_scale_is_derived_from_vectors_everywhere():
+    """``vectors.py`` owns GRADE_MIN/GRADE_MAX; the button row and the grade
+    keyboard must be derived from it, so widening the scale there moves the UI
+    with it rather than leaving it drawing last week's buttons."""
+    from warlock import vectors
+    from warlock.studio import widgets
+
+    assert tuple(range(vectors.GRADE_MIN, vectors.GRADE_MAX + 1)) == widgets.GRADES
+    assert {str(i): i for i in range(1, vectors.GRADE_MAX + 1)} == review_mode.GRADE_KEYS
+
+
+def test_the_tag_rows_and_the_tag_keyboard_share_one_order():
+    """The positional contract: the digit that presses a tag button is the
+    digit that names its tag. Both sides must iterate the vocabulary tuples
+    themselves -- a hand-ordered row would silently disagree with Ctrl/Shift+1-5.
+    """
+    import inspect
+
+    from warlock import vectors
+    from warlock.studio import widgets
+
+    assert list(review_mode.GOOD_TAG_KEYS.values()) == list(vectors.GOOD_TAGS)
+    assert list(review_mode.BAD_TAG_KEYS.values()) == list(vectors.BAD_TAGS)
+    source = inspect.getsource(widgets.tag_toggles)
+    # The widget iterates the vocabulary objects, not a re-spelling of them,
+    # and draws Good before Bad -- the order the modifiers read in.
+    assert "verdicts_mod.GOOD_TAGS" in source
+    assert "verdicts_mod.BAD_TAGS" in source
+    assert source.index("GOOD_TAGS") < source.index("BAD_TAGS")
+
+
 def test_tags_are_toggled_by_modifier_and_ride_the_next_grade(ctx, svc):
     sweep_id, _ = _sweep(svc)
     state = _scanned(ctx)

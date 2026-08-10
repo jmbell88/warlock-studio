@@ -18,6 +18,9 @@ from ..manual import render as manual_render
 
 def draw(ctx: Any) -> None:
     state = poser_mode.ensure(ctx)
+    # The pane is Poser's per-frame heartbeat, so the refresh flag is pumped
+    # here -- the findings_dirty idiom; ``refresh`` only raises the flag.
+    poser_mode.pump(ctx)
     if not widgets.header("Pose library"):
         return
     manual_render.help_button(ctx, "poser-library")

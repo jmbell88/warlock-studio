@@ -146,6 +146,17 @@ def validate_record(payload: dict[str, Any]) -> dict[str, Any]:
         pose = rigging.validate_pose({"name": name, "bones": payload.get("bones")}, known)
     except ValueError as exc:
         raise RecordError(str(exc)) from None
+    # Exactly the template's bone set, not a subset: the module docstring's
+    # retargeting argument stands on a record carrying *every* bone, and a
+    # partial record applied over a posed editor keeps whatever the missing
+    # bones were doing. Poser's own saves are ``get_pose()``, which is always
+    # complete, so this refuses only a hand-built payload.
+    missing = [b for b in known if b not in pose["bones"]]
+    if missing:
+        raise RecordError(
+            f"pose is missing {len(missing)} of this skeleton's {len(known)} bones",
+            field="bones",
+        )
 
     raw = payload.get("root_translation")
     if raw is None:
@@ -315,17 +326,25 @@ def mirror_root_translation(v: Any) -> list[float]:
 # the invalidation rule.
 
 
-def template_digest(template_key: str) -> str:
-    """SHA-256 of the template file's bytes.
+def template_digest(template_key: str) -> str | None:
+    """SHA-256 of the template file's bytes, or None when it cannot be read.
 
     File bytes rather than the parsed structure: the file is what op_armature's
     fit reads through the registry, and hashing the source is the cheapest
     answer that can never miss a change. Template files are named by their key
-    -- the convention every shipped template follows.
+    -- enforced at registry load (``rigging._load_templates``), not merely a
+    convention. None rather than a raise for a file the cached registry still
+    names but the disk no longer holds: the registry loads once per process,
+    so the file can vanish underneath it, and a cache-validity question must
+    answer "stale", never throw out of a preview request.
     """
     rigging.get_template(template_key)
     path = rigging.TEMPLATE_DIR / f"{template_key}.json"
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        log.exception("unreadable skeleton template at %s", path)
+        return None
 
 
 def read_preview_sidecar(config: Any, template_key: str) -> dict[str, Any] | None:
@@ -352,8 +371,14 @@ def preview_valid(config: Any, template_key: str, blender_version: str) -> bool:
     sidecar = read_preview_sidecar(config, template_key)
     if sidecar is None:
         return False
+    digest = template_digest(template_key)
+    if digest is None:
+        # An unreadable template can neither confirm nor deny the cache; and
+        # a sidecar that recorded None must not match it -- both answers here
+        # are "rebuild", never a raise out of template_preview.
+        return False
     return (
-        sidecar.get("template_sha256") == template_digest(template_key)
+        sidecar.get("template_sha256") == digest
         and sidecar.get("blender_version") == blender_version
         and sidecar.get("preview_epoch") == PREVIEW_EPOCH
     )

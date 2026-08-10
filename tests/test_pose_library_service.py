@@ -150,6 +150,16 @@ def test_a_malformed_create_carries_its_field(svc):
     assert info.value.field == "root_translation"
 
 
+def test_a_partial_record_is_refused_naming_the_field(svc):
+    """A library pose carries the whole skeleton -- the retargeting premise --
+    and the refusal arrives framed and addressed like every other bad field."""
+    body = _payload()
+    body["bones"] = {"hips": IDENTITY}
+    with pytest.raises(Invalid, match="missing") as info:
+        svc_poses.create_library_pose(svc, body)
+    assert info.value.field == "bones"
+
+
 @pytest.mark.parametrize("bad", ["not-an-id", "ABCDEF012345", ""])
 def test_malformed_ids_are_not_found(svc, bad):
     with pytest.raises(NotFound):

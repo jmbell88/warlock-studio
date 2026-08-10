@@ -125,6 +125,40 @@ def test_a_widget_that_leaves_the_screen_mid_move_stops_holding_the_app_awake(cl
     assert not motion.animating()
 
 
+def test_a_spring_crossing_its_target_at_speed_is_still_animating(clock):
+    """``animating`` used to read only distance-to-target, and a spring's
+    overshoot passes through zero distance at full speed -- the exact moment
+    ``SPRING_DAMPING`` exists to produce (H12). Settled is distance *and*
+    velocity under the floor, so still-moving is either over it."""
+    motion._STATE["s"] = 1.0
+    motion._TARGET["s"] = 1.0
+    motion._VELOCITY["s"] = 0.5
+    motion._FRAME["s"] = clock["frame"]
+    assert motion.animating()
+    # The frame-stamp discipline is untouched: a key nothing drew this frame
+    # cannot hold the app awake, however fast it was going.
+    clock["tick"]()
+    assert not motion.animating()
+
+
+def test_springs_toggled_off_and_on_again_start_from_zero_velocity(clock, monkeypatch):
+    """The SPRINGS-off fallback is the one path that dropped a key without
+    clearing its velocity (H12): seed, forget and reset all do, so re-enabling
+    the effect resumed a move at a speed nothing asked for."""
+    from warlock.studio import effects
+
+    monkeypatch.setattr(effects, "SPRINGS", True)
+    motion.seed("k", 0.0)
+    for _ in range(10):
+        clock["tick"]()
+        motion.spring("k", 1.0)
+    assert motion._VELOCITY["k"] != 0.0
+    monkeypatch.setattr(effects, "SPRINGS", False)
+    clock["tick"]()
+    motion.spring("k", 1.0)
+    assert motion._VELOCITY.get("k", 0.0) == 0.0
+
+
 # --- reduce motion -----------------------------------------------------------
 
 

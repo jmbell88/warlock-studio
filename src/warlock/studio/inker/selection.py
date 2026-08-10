@@ -400,23 +400,33 @@ def _morph(mask: np.ndarray, radius: int, combine) -> np.ndarray:
     return out
 
 
+# The kernel takes the operation as a number, and MORPH_MAX / MORPH_MIN in
+# native/morph.c spell the same two out -- the C header owns the numbers.
+# Written out rather than implied by branch order (the composite._MODE_IDS
+# rule): a combine that is not in this map falls back to numpy, whereas two
+# bare literals in an if/elif were one swapped pair away from handing the
+# kernel a number it reads as the *other* operation -- silently, which is the
+# one thing a fallback path must never be.
+_MORPH_OPS: dict[Any, int] = {
+    np.maximum: 0,  # MORPH_MAX -- dilate, what grown() asks for
+    np.minimum: 1,  # MORPH_MIN -- erode, what shrunk() asks for
+}
+
+
 def _morph_native(mask: np.ndarray, radius: int, combine) -> np.ndarray | None:
     """The kernel's half of :func:`_morph`, or None to use the numpy body.
 
     None rather than an exception for every way of being unable to answer, and
     the caller falls through -- the rule every kernel seam in this repository
     follows. ``combine`` is matched by *identity* against the two functions the
-    callers actually pass: anything else is somebody's third operation, and
-    handing it to a kernel that only knows max and min would silently render it
-    as one of them.
+    callers actually pass (``_MORPH_OPS``): anything else is somebody's third
+    operation, and handing it to a kernel that only knows max and min would
+    silently render it as one of them.
     """
     if not native.available():
         return None
-    if combine is np.maximum:
-        op = 0
-    elif combine is np.minimum:
-        op = 1
-    else:
+    op = _MORPH_OPS.get(combine)
+    if op is None:
         return None
     src = np.ascontiguousarray(mask, dtype=np.uint8)
     if src.ndim != 2 or not src.size:

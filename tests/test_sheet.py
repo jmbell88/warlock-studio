@@ -498,6 +498,49 @@ def test_a_clip_end_that_no_longer_exists_is_not_found(svc, assets):
         svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to="b" * 12)
 
 
+def _offset_pose(job_dir, name, pose_id=None):
+    """A library-pose snapshot: carries a root offset the way save_pose's
+    ``extra`` channel writes one."""
+    return rigging.save_pose(
+        job_dir,
+        {"name": name, "bones": {"hips": IDENTITY}},
+        pose_id,
+        extra={"root_translation": [0.0, 0.0, 0.25]},
+    )
+
+
+def test_a_clip_end_with_a_root_offset_rings_the_select_that_chose_it(svc, assets):
+    """A refusal names the control it came from: interpolate's root-offset
+    refusal is about a pose, so the field is that end's own select rather than
+    the frame slider the message never mentions -- which is where this refusal
+    used to point."""
+    job_id = _mesh_job(svc, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
+    b = _offset_pose(assets / job_id, "B")
+
+    with pytest.raises(Invalid, match="root offset") as exc:
+        svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to=b["id"])
+    assert exc.value.field == "clip_to"
+
+    with pytest.raises(Invalid, match="root offset") as exc:
+        svc_sheets.create_sheet(svc, job_id, clip_from=b["id"], clip_to=a["id"])
+    assert exc.value.field == "clip_from"
+
+
+def test_a_bad_frame_count_rings_the_slider_even_beside_an_offset_pose(svc, assets):
+    """interpolate checks the count first, and the field follows the sentence
+    it wraps -- ringing a select for a message about frames would be the same
+    mismatch the other way round."""
+    job_id = _mesh_job(svc, assets, rigged=True)
+    a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
+    b = _offset_pose(assets / job_id, "B")
+    with pytest.raises(Invalid, match="frames") as exc:
+        svc_sheets.create_sheet(
+            svc, job_id, clip_from=a["id"], clip_to=b["id"], clip_frames=999
+        )
+    assert exc.value.field == "clip_frames"
+
+
 # --- the queue --------------------------------------------------------------
 
 
@@ -719,6 +762,64 @@ async def test_a_clip_whose_pose_was_deleted_fails_the_job(worker, monkeypatch):
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
     assert "no longer exists" in worker.store.get(job_id)["error"]
     await worker.shutdown()
+
+
+# --- the root-offset map -----------------------------------------------------
+#
+# Module-level and pure precisely so these tests need no Worker, no Blender
+# fake and no job row: the map is arithmetic over records and a rig.json dict.
+
+
+def test_root_offsets_key_on_pose_and_frame_and_scale_through_the_rig():
+    from warlock.queue import _sheet_root_offsets
+
+    records = [
+        {"id": "a" * 12, "frame": 0, "bones": {}, "root_translation": [0.0, 0.1, 0.5]},
+        {"id": "b" * 12, "bones": {}},
+    ]
+    rig_meta = {"bounds": {"min": [0, 0, 0], "max": [1, 1, 2.0]}, "root": "hips"}
+
+    roots, bone = _sheet_root_offsets(records, rig_meta)
+
+    assert bone == "hips"
+    # Scaled by the rig's own height, exactly as the pose's bake scales it --
+    # one meaning per pose is the whole point of carrying the offset here.
+    assert roots == {
+        ("a" * 12, 0): rigging.root_offset_world([0.0, 0.1, 0.5], rig_meta["bounds"])
+    }
+
+
+def test_a_rig_that_cannot_scale_an_offset_warns_and_costs_only_the_offset(caplog):
+    """The sheet path used to drop the offset silently where the pose's own
+    bake (service.rig._pose_bake_spec) warned -- same case, same sentence now,
+    matched by hand because queue may not import service."""
+    from warlock.queue import _sheet_root_offsets
+
+    records = [{"id": "c" * 12, "bones": {}, "root_translation": [0.0, 0.0, 0.5]}]
+    for rig_meta in (None, {}, {"bounds": {"min": [0] * 3, "max": [1] * 3}}):
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            roots, bone = _sheet_root_offsets(records, rig_meta)
+        assert (roots, bone) == ({}, None)
+        assert any(
+            "carries a root offset but rig.json cannot scale it" in r.getMessage()
+            for r in caplog.records
+        ), f"no warning for rig_meta={rig_meta!r}"
+
+
+def test_records_without_offsets_build_nothing_and_warn_about_nothing(caplog):
+    """A zero offset is "no offset" -- pose_spec's rule -- so every
+    pre-existing cell dict stays byte-identical and the log stays quiet."""
+    from warlock.queue import _sheet_root_offsets
+
+    records = [
+        {"id": "a" * 12, "bones": {}},
+        {"id": "b" * 12, "bones": {}, "root_translation": [0.0, 0.0, 0.0]},
+    ]
+    with caplog.at_level("WARNING"):
+        roots, bone = _sheet_root_offsets(records, None)
+    assert (roots, bone) == ({}, None)
+    assert not caplog.records
 
 
 # --- the real renderer ------------------------------------------------------

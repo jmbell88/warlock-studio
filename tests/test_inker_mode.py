@@ -854,3 +854,28 @@ def test_neither_rotation_nor_flip_is_an_edit():
     inker_state.rotate_view(view)
     inker_state.flip_view(view)
     assert (doc.history.head, doc.rev) == (head, rev)
+
+
+def test_a_rotation_off_the_quarter_lattice_reads_as_zero_everywhere():
+    """Only code can put one on the view today, which is exactly why the two
+    readers must agree about it: ``basis`` always answered such a value as 0,
+    while ``rotate_view`` restated the lookup without the guard and raised a
+    ValueError out of ``index()`` -- one bad state, two different verdicts."""
+    from warlock.studio import inker_state
+
+    view = _view(45)
+    assert inker_state.basis(view) == inker_state.basis(_view(0))
+    inker_state.rotate_view(view)
+    assert view.rotation == 90
+    assert view.pending_zoom == view.zoom
+
+
+def test_an_over_wound_multiple_of_ninety_still_turns_from_where_it_reads():
+    """The other side of the shared spelling: 450 is 90 on screen, and a turn
+    from it lands on 180 rather than raising or restarting at zero."""
+    from warlock.studio import inker_state
+
+    view = _view(450)
+    assert inker_state.basis(view) == inker_state.basis(_view(90))
+    inker_state.rotate_view(view)
+    assert view.rotation == 180

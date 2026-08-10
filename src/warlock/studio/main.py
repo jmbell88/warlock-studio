@@ -58,7 +58,7 @@ IDLE_FPS = 12
 # The modes that fill the host window with one pane. Inker, Clay, Review,
 # Plotter and Packwright are not here: each fills it with a three-column
 # *workspace* instead, which is ``modes.WORKSPACE_MODES``. Those three
-# categories partition ``modes.KEYS`` exactly (twelve modes today), and the
+# categories partition ``modes.KEYS`` exactly (thirteen modes today), and the
 # partition is the guard on ``_build_ui``'s dispatch.
 _SINGLE_PANE_MODES = ("home", "manual", "settings", "library", "profiles")
 
@@ -1068,7 +1068,6 @@ class App:
             job_id = key.partition(":")[2]
             if job_id == ctx.state.selected and isinstance(done.result, dict):
                 ctx.state.preview["library_poses"] = done.result.get("poses") or []
-                ctx.state.preview["library_template"] = done.result.get("template")
             return
         if key.startswith("pose-"):
             if key.startswith("pose-save:") and self.viewer.pose_mode:
@@ -1340,7 +1339,7 @@ class App:
 
         ctx = self.app_ctx
         job = ctx.job()
-        for key in ("poses", "sheets", "bones", "library_poses", "library_template"):
+        for key in ("poses", "sheets", "bones", "library_poses"):
             ctx.state.preview.pop(key, None)
         if job is None:
             return
@@ -1540,11 +1539,11 @@ class App:
             return
 
         if ctx.state.mode not in modes.WORK_MODES:
-            # Home, the Manual and Settings have no form to submit and no
+            # The Manual, Settings and Profiles have no form to submit and no
             # viewport to frame; every one of these would act on a pane that is
             # not on screen. Esc is the one exception, and it is about the mode
-            # rather than about anything in it: these are the three modes with
-            # nothing of their own for Esc to drop.
+            # rather than about anything in it. Home and the Library are lists,
+            # and a list the user is looking at takes the arrows and Enter.
             if event.type != pygame.KEYDOWN:
                 return
             if event.key == pygame.K_ESCAPE:
@@ -1560,6 +1559,16 @@ class App:
                     landing.move(ctx, -1 if event.key == pygame.K_UP else 1)
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     landing.activate(ctx, ctx.state.home_index)
+            elif ctx.state.mode == "library":
+                # The Home idiom exactly: the same selection-move the 2D/3D
+                # fall-through routes the arrows to, so the library pane has
+                # one keyboard whichever mode it is drawn in.
+                from .panes import library
+
+                if event.key in (pygame.K_UP, pygame.K_DOWN):
+                    library.select_relative(ctx, -1 if event.key == pygame.K_UP else 1)
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    library.open_selected(ctx)
             return
         if ctx.state.mode == "clay":
             from . import clay_mode
@@ -1920,10 +1929,15 @@ class App:
         self._overlays(viewport)
 
     def _ensure_build_view(self) -> Any:
+        """Clay's viewport, built on first use -- and mirrored onto the ctx,
+        ``_ensure_poser_viewer``'s way: clay_mode's drag keyboard, the axis
+        views and ``camera_of`` all read ``ctx.clay_view``, and without the
+        mirror every one of them found None forever."""
         from .clay_view import ClayView
 
         if self.clay_view is None:
             self.clay_view = ClayView(self.ctx, self.app_ctx)
+            self.app_ctx.clay_view = self.clay_view
         return self.clay_view
 
     def _poser_workspace(self) -> None:
@@ -3116,7 +3130,7 @@ class App:
         # No mode switch is destructive: Inker's documents are still open when
         # you come back, because it is a mode rather than a takeover. Only
         # quitting and closing a tab can lose pixels, and both ask.
-        # Twelve segments do not fit the resize floor at 1.5 UI scale, and a
+        # Thirteen segments do not fit the resize floor at 1.5 UI scale, and a
         # clipped segment is an unreachable mode. So the switch has a compact
         # form -- the glyph alone, with the label in a tooltip -- taken when the
         # full one will not fit the width actually available. Both labellings
@@ -3300,7 +3314,7 @@ class App:
         table(
             "Everywhere",
             [
-                # No per-mode digit: twelve modes against ten digits is either
+                # No per-mode digit: thirteen modes against ten digits is either
                 # two modes with no key or a table saying which two, and the
                 # palette is the keyboard route to all of them.
                 ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
@@ -3730,6 +3744,11 @@ class App:
         clay_view = getattr(self, "clay_view", None)
         if clay_view is not None:
             _step("release clay view", clay_view.release)
+            # The ctx mirror dies with the view: a released view left on it
+            # would hand the call sites dead GL objects, where None is the
+            # answer every one of them already refuses.
+            if ctx is not None:
+                ctx.clay_view = None
         poser_viewer = getattr(self, "poser_viewer", None)
         if poser_viewer is not None:
             _step("release poser viewer", poser_viewer.release)

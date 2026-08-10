@@ -261,6 +261,73 @@ def test_the_quit_chain_stops_at_the_first_cancel():
     )
 
 
+# --- the library's arrows and Enter ------------------------------------------
+#
+# Home's Resume list set the precedent (M107): a list the user is looking at
+# takes Up/Down and Enter, or the keyboard cannot reach what the mouse can.
+# The library is a mode now, so its cards get the same three keys, routed to
+# the same helpers the 2D/3D fall-through already uses -- one selection-move,
+# not a second spelling of it.
+
+
+def _library_app(jobs: list[dict], selected: str | None = None) -> SimpleNamespace:
+    state = AppState()
+    state.mode = state.mode_observed = state.previous_mode = "library"
+    state.selected = selected
+    by_id = {job["id"]: job for job in jobs}
+    app = SimpleNamespace(
+        app_ctx=SimpleNamespace(
+            state=state,
+            cache=SimpleNamespace(
+                visible=lambda _filters: jobs,
+                get=lambda job_id: by_id.get(job_id),
+            ),
+        ),
+    )
+    for name in ("_note_mode", "_set_mode", "_escape_mode"):
+        setattr(app, name, MethodType(getattr(main.App, name), app))
+    return app
+
+
+def test_the_library_arrows_move_the_selection(no_mods):
+    jobs = [
+        {"id": "aaa", "stage": "model", "status": "done"},
+        {"id": "bbb", "stage": "model", "status": "done"},
+    ]
+    app = _library_app(jobs, selected="aaa")
+    _press(app, pygame.K_DOWN)
+    assert app.app_ctx.state.selected == "bbb"
+    _press(app, pygame.K_UP)
+    assert app.app_ctx.state.selected == "aaa"
+    assert app.app_ctx.state.mode == "library", "the arrows never change mode"
+
+
+def test_enter_opens_the_selected_asset_in_the_mode_that_shows_it(no_mods):
+    """The same routing Home's Resume list applies to an asset row: a
+    reference or a tile is the 2D pane's, everything else the 3D pane's."""
+    jobs = [
+        {"id": "aaa", "stage": "reference", "status": "done"},
+        {"id": "bbb", "stage": "model", "status": "done"},
+    ]
+    app = _library_app(jobs, selected="bbb")
+    _press(app, pygame.K_RETURN)
+    assert app.app_ctx.state.mode == "3d"
+    # Through set_mode, so Esc still knows it came from the library.
+    assert app.app_ctx.state.previous_mode == "library"
+
+    app = _library_app(jobs, selected="aaa")
+    _press(app, pygame.K_RETURN)
+    assert app.app_ctx.state.mode == "2d"
+
+
+def test_enter_with_no_selection_stays_in_the_library(no_mods):
+    """Enter with no cursor has nothing it could mean, and bouncing to an
+    empty 3D pane would read as the library losing the user's place."""
+    app = _library_app([], selected=None)
+    _press(app, pygame.K_RETURN)
+    assert app.app_ctx.state.mode == "library"
+
+
 # --- I77: the keyboard reaches the modal, and only the modal -----------------
 
 

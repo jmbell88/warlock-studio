@@ -658,6 +658,73 @@ def test_editing_an_asset_with_no_mesh_raises_rather_than_opening_nothing(
         clay_mode.edit_asset_in_clay(ctx, {"id": "0123456789ef", "name": "Empty"})
 
 
+# --- adoption switches modes through set_mode (H14) --------------------------
+#
+# ``state.set_mode`` is the one implementation, and a bare ``ctx.state.mode =``
+# skips the ``previous_mode``/``mode_observed`` pair it maintains -- so Esc out
+# of the next pass-through mode would go back to wherever a *keypress* last
+# was, not to Clay. The three adopt paths are the ones that used to assign.
+
+
+def test_opening_a_document_records_where_clay_was_entered_from(svc, tmp_path) -> None:
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    path = tmp_path / "scene.wblk"
+    _save(ctx, tab, path)
+
+    fresh = FakeCtx(svc)
+    fresh.state.mode = "library"
+    clay_mode.open_path(fresh, path)
+    clay_mode.on_task_done(fresh, _Done("clay-open", fresh.result))
+
+    assert fresh.state.mode == "clay"
+    assert fresh.state.previous_mode == "library"
+    assert fresh.state.mode_observed == "clay"
+
+
+def test_an_adopted_import_records_where_clay_was_entered_from(tmp_path: Path) -> None:
+    ctx = FakeCtx()
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+    clay_mode.import_glb_path(ctx, path)
+    clay_mode.on_task_done(ctx, _Done("clay-import:1", ctx.result))
+
+    assert ctx.state.mode == "clay"
+    assert ctx.state.previous_mode == "home"
+    assert ctx.state.mode_observed == "clay"
+
+
+def test_a_confirmed_big_import_records_where_clay_was_entered_from(tmp_path: Path) -> None:
+    ctx = FakeCtx()
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+    clay_mode.import_glb_path(ctx, path)
+    result = dict(ctx.result, triangles=clay_mode.SLOW_TRIANGLES + 1)
+    clay_mode.on_task_done(ctx, _Done("clay-import:1", result))
+
+    ctx.confirms.pending.on_confirm()
+    assert ctx.state.mode == "clay"
+    assert ctx.state.previous_mode == "home"
+    assert ctx.state.mode_observed == "clay"
+
+
+def test_adopting_while_already_in_clay_keeps_the_escape_history(tmp_path: Path) -> None:
+    """``set_mode`` early-returns on the mode it is already in -- the exact
+    drift the palette's hand copy had: without it, ``previous_mode`` becomes
+    ``clay`` itself and Esc's history is gone."""
+    ctx = FakeCtx()
+    ctx.state.mode = "clay"
+    ctx.state.previous_mode = "3d"
+    ctx.state.mode_observed = "clay"
+    path = tmp_path / "thing.glb"
+    path.write_bytes(_glb_bytes())
+    clay_mode.import_glb_path(ctx, path)
+    clay_mode.on_task_done(ctx, _Done("clay-import:1", ctx.result))
+
+    assert ctx.state.mode == "clay"
+    assert ctx.state.previous_mode == "3d"
+
+
 # --- the way in -------------------------------------------------------------
 
 

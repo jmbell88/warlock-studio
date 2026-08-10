@@ -920,6 +920,23 @@ def select_relative(ctx: Any, delta: int) -> None:
     ctx.state.library_scroll_to = ids[index]
 
 
+def open_selected(ctx: Any) -> None:
+    """Enter, from the library mode's keyboard path.
+
+    Opens the selected asset in the mode that shows it -- the same routing
+    Home's Resume list applies to an asset row, so the two lists cannot
+    disagree about where an asset opens. Through ``state.set_mode`` rather
+    than assignment, so Esc still knows it came from the library. Silently
+    nothing with no selection: Enter with no cursor has nothing it could mean.
+    """
+    from ..state import set_mode
+
+    job = ctx.cache.get(ctx.state.selected)
+    if job is None:
+        return
+    set_mode(ctx.state, "2d" if job.get("stage") in ("reference", "tile") else "3d")
+
+
 def _copy_settings(ctx: Any, job: Any) -> None:
     """Load a job's recipe back into the 2D form, so it can be varied.
 

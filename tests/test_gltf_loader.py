@@ -228,11 +228,14 @@ def test_an_unknown_bone_is_reported_not_ignored(skinned_glb):
 def test_a_pose_reports_only_what_moved(skinned_glb):
     model = gltf.load(skinned_glb)
     assert model.pose() == {}
+    rest = model.get_rotation("tip")
     q = m3.quat_from_axis_angle(m3.vec3(1, 0, 0), 0.3)
     model.set_rotation("tip", q)
     assert list(model.pose()) == ["tip"]
     assert model.pose()["tip"] == pytest.approx(list(q))
-    model.reset_all()
+    # Back to rest through the same setter -- resetting wholesale is the
+    # PoseEditor's job, and the Model deliberately carries no method for it.
+    model.set_rotation("tip", rest)
     assert model.pose() == {}
 
 

@@ -46,6 +46,19 @@ you the command exists or which mode owns it.
 Typing also searches your assets by name, prompt or job id; picking one selects it and opens it in
 the pane that made it.
 
+## Home and the Library
+
+Both screens are lists, and both take the same keys — the Resume list on Home, the asset cards in
+the Library.
+
+| Keys | Action |
+| --- | --- |
+| Up / Down | Move through the rows / the cards |
+| Enter | Open the highlighted row — a Library asset opens in the mode that shows it |
+
+In the Library the arrows move through the cards exactly as they do in the 2D and 3D sidebars: the
+same filtered, sorted list the cards are drawn from, clamped at the ends rather than wrapping.
+
 ## 2D and 3D
 
 | Keys | Action |

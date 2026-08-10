@@ -14,6 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ..vectors import GRADE_MAX, GRADE_MIN
 from . import effects, fonts, icons, motion, theme, tokens
 from . import state as app_state
 from .tokens import sp
@@ -726,13 +727,20 @@ def surface_fill(
         return False
     low = (low[0], low[1]) if not hasattr(low, "x") else (low.x, low.y)
     high = (high[0], high[1]) if not hasattr(high, "x") else (high.x, high.y)
-    if border is not None:
-        edge = sp(tokens.BORDER)
-        if not ninepatch.paint(draw, built, low, high, imgui.get_color_u32(border)):
-            return False
-        low = (low[0] + edge, low[1] + edge)
-        high = (high[0] - edge, high[1] - edge)
-    return ninepatch.paint(draw, built, low, high, imgui.get_color_u32(colour))
+    if border is None:
+        return ninepatch.paint(draw, built, low, high, imgui.get_color_u32(colour))
+    edge = sp(tokens.BORDER)
+    inner_low = (low[0] + edge, low[1] + edge)
+    inner_high = (high[0] - edge, high[1] - edge)
+    # Both rectangles are decided before either is painted. The inset one is
+    # the smaller, so there is a window of sizes about two border-pixels wide
+    # where the border fits and the fill does not -- and painting the border
+    # first meant returning False with it already on screen, under the
+    # fallback fill the caller then draws on that False.
+    if not (ninepatch.covers(built, low, high) and ninepatch.covers(built, inner_low, inner_high)):
+        return False
+    ninepatch.paint(draw, built, low, high, imgui.get_color_u32(border))
+    return ninepatch.paint(draw, built, inner_low, inner_high, imgui.get_color_u32(colour))
 
 
 def frosted() -> bool:
@@ -1090,6 +1098,12 @@ def grid_width(columns: int) -> float:
 # than leaving one button alone on a third line.
 GRADES_PER_ROW = 6
 
+# The scale itself, derived from the constants ``vectors.py`` owns rather than
+# spelled again here -- widening the scale there must move this row, not leave
+# it drawing last week's buttons. ``vectors`` is pure stdlib, so the import
+# costs the frame loop nothing.
+GRADES = tuple(range(GRADE_MIN, GRADE_MAX + 1))
+
 
 def grade_buttons(id_prefix: str, enabled: bool) -> int | None:
     """The -5..+5 mesh grade row. -> the grade clicked, or ``None``.
@@ -1120,7 +1134,7 @@ def grade_buttons(id_prefix: str, enabled: bool) -> int | None:
 
     clicked: int | None = None
     width = grid_width(GRADES_PER_ROW)
-    for index, grade in enumerate(range(-5, 6)):
+    for index, grade in enumerate(GRADES):
         if index % GRADES_PER_ROW:
             imgui.same_line()
         if disabled_button(f"{grade_text(grade)}##{id_prefix}-grade{grade}", enabled,
@@ -1220,9 +1234,9 @@ def segmented_control(
     ``breaks`` is a set of indices *after* which the track is split (UX.md
     Phase 2). Splitting the track rather than merely spacing the segments is
     the point: a gap inside one continuous track reads as a missing segment,
-    where two tracks read as two groups -- which is what the app's ten modes
-    needed, since three of them are places and seven are workspaces and a flat
-    row said they were all the same kind of thing. The pill still slides across
+    where two tracks read as two groups -- which is what the app's thirteen
+    modes needed, since five of them are places and eight are workspaces and a
+    flat row said they were all the same kind of thing. The pill still slides across
     a break, because it is one selection over all of them.
 
     ``compact`` is a second labelling of the same segments -- in practice the

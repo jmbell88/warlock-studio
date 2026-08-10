@@ -175,6 +175,12 @@ def capture(gl: Any, window: tuple[float, float]) -> None:
 
     used, _USED = _USED, False
     if not available() or used:
+        # The switch going off takes the pipeline with it, here rather than in
+        # the settings pane: this is the one call the frame loop already makes
+        # every frame, so the resources follow the flag with nobody having to
+        # remember to release them -- and it is a no-op once they are gone.
+        if not available():
+            _release_pipeline()
         return
     now = time.monotonic()
     if now - _LAST_CAPTURE < CAPTURE_INTERVAL:
@@ -182,8 +188,11 @@ def capture(gl: Any, window: tuple[float, float]) -> None:
     size = _target_size(window)
     try:
         if _PIPELINE is None or _PIPELINE.size != size:
-            if _PIPELINE is not None:
-                _PIPELINE.release()
+            # Through the paired release, never ``_PIPELINE.release()`` bare:
+            # the pong is registered with the imgui renderer, and releasing a
+            # registered texture leaves the backend holding a dead object
+            # under a GL name the driver will reuse.
+            _release_pipeline()
             _PIPELINE = _Pipeline(gl, size)
         gl.copy_framebuffer(_PIPELINE.clean_fbo, gl.screen)
     except Exception:

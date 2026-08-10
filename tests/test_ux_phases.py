@@ -250,7 +250,10 @@ def test_a_refusal_behind_the_fold_opens_it():
     """A ring round a control nobody can see is not a pointer."""
     source = inspect.getsource(settings_2d._more)
     assert "request_open" in source
-    assert "folded_fields" in source
+    # The which-folds decision moved into ``folds_to_open`` (which consults
+    # ``folded_fields`` and adds the nested Advanced header when the refusal
+    # names one of its fields); the pane is pinned to route through it.
+    assert "folds_to_open" in source
 
 
 def test_the_first_screen_is_the_common_path():

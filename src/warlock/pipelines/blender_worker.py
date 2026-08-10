@@ -377,6 +377,15 @@ def _apply_root_translation(arm_obj: Any, bone_name: Any, offset_world: Sequence
     if pbone is None:
         print(f"root offset names a bone this rig does not have: {bone_name!r}", flush=True)
         return False
+    if pbone.parent is not None:
+        # The inverse below carries the offset through the bone's *rest* frame
+        # only; a parented bone composes through its parent's pose, which this
+        # arithmetic never sees. Every shipped template's root is parentless
+        # (enforced at registry load in rigging._parse_template), so this is a
+        # foreign or hand-edited rig.json -- it costs the offset, not the bake,
+        # the same rule as an unknown bone above.
+        print(f"root offset bone {bone_name!r} has a parent; skipping the offset", flush=True)
+        return False
     pbone.location = (arm_obj.matrix_world @ pbone.bone.matrix_local).to_3x3().inverted() @ Vector(
         [float(v) for v in offset_world]
     )

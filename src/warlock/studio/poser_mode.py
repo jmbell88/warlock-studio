@@ -66,6 +66,11 @@ class PoserState:
     poses: list[dict[str, Any]] = field(default_factory=list)
     presets: list[dict[str, Any]] = field(default_factory=list)
     loading: bool = False
+    # Whether the library on screen is behind the store -- the findings_dirty
+    # idiom: ``TaskRunner.submit`` refuses a key already in flight and nothing
+    # else re-arms it, so a refresh wanted *while the list task runs* must be
+    # a flag something pumps, cleared only when a submit is accepted.
+    refresh_dirty: bool = False
     # The preview build in flight, and its answer once landed. The path is
     # bound to the viewer by ``sync_preview`` on the frame thread -- the
     # ``viewer.path`` comparison idiom Review uses, so an answer landing after
@@ -119,21 +124,41 @@ def _collect(svc: Any, template: str) -> dict[str, Any]:
     """The library rows and the shipped presets, in one task -- both are disk
     reads and the panes need them together."""
     from ..service import poses as svc_poses
+    from ..service import rig as svc_rig
 
     return {
         "template": template,
         "poses": svc_poses.list_library(svc, template)["poses"],
-        "presets": rigging.preset_poses(template),
+        # Through the service, like the library rows beside it: the service
+        # layer is the only business logic, and its refusal wording is the one
+        # the generic failure toast shows.
+        "presets": svc_rig.template_presets(template)["poses"],
     }
 
 
 def refresh(ctx: Any) -> None:
-    """Re-read the library for the current template, off the frame thread."""
+    """Ask for the library to be re-read. The read itself is ``pump``'s."""
+    ensure(ctx).refresh_dirty = True
+    pump(ctx)
+
+
+def pump(ctx: Any) -> None:
+    """Submit the wanted refresh if nothing stands in the way.
+
+    Called every frame from the library pane's draw, and again when the list
+    task lands -- the frame pump is what covers a submit the runner refused,
+    and the landing pump is what lets a save that arrived mid-list re-read
+    without waiting for a frame. The flag clears *only* when the submit is
+    accepted, the findings_dirty rule; a refusal leaves it set for the next
+    pump rather than dropping the refresh for good.
+    """
     state = ensure(ctx)
-    if state.loading or not state.template:
+    if not state.refresh_dirty or state.loading or not state.template:
         return
     state.loading = True
-    if not ctx.submit(LIST_KEY, _collect, ctx.svc, state.template):
+    if ctx.submit(LIST_KEY, _collect, ctx.svc, state.template):
+        state.refresh_dirty = False
+    else:
         # The runner refuses a key already in flight; leaving the flag set
         # would make the mode permanently inert after a double press.
         state.loading = False
@@ -255,6 +280,11 @@ def apply_pose(ctx: Any, pose_id: str) -> None:
         return
 
     def proceed() -> None:
+        # Reset first, the apply_preset order: set_pose writes only the bones
+        # the record lists, so a partial record (pre-completeness saves exist
+        # on disk) applied over a posed editor would keep stale rotations --
+        # and get_pose() would then save them as authored.
+        viewer.reset_all(dirty=False)
         viewer.set_pose(record.get("bones") or {}, pose_id=record["id"], dirty=False)
         viewer.set_root_translation(
             record.get("root_translation") or [0.0, 0.0, 0.0], dirty=False
@@ -292,6 +322,20 @@ def _payload(state: PoserState, viewer: Any, name: str) -> dict[str, Any]:
     }
 
 
+def _mutate(ctx: Any, key: str, fn: Any, *args: Any) -> bool:
+    """Submit a library write, saying so when the runner refuses it.
+
+    A refusal means the previous write on this key is still in flight.
+    Dropping the click strands nothing -- dirty clears only on landing -- but
+    it also answers nothing, and a press that does nothing reads as a broken
+    button, so the refusal becomes a sentence rather than silence.
+    """
+    if ctx.submit(key, fn, *args):
+        return True
+    ctx.toast("Still working on the previous pose-library change.", "info")
+    return False
+
+
 def save(ctx: Any) -> None:
     """Save over the pose being edited, or fall through to Save-as."""
     from ..service import poses as svc_poses
@@ -307,7 +351,8 @@ def save(ctx: Any) -> None:
         return
     # Dirty is cleared when the save *lands* (on_task_done), never at submit:
     # a failed write must leave the guard standing in front of the exits.
-    ctx.submit(
+    _mutate(
+        ctx,
         SAVE_KEY,
         svc_poses.update_library_pose,
         ctx.svc,
@@ -325,8 +370,8 @@ def save_as(ctx: Any) -> None:
         return
 
     def accept(name: str) -> None:
-        ctx.submit(
-            SAVE_KEY, svc_poses.create_library_pose, ctx.svc, _payload(state, viewer, name)
+        _mutate(
+            ctx, SAVE_KEY, svc_poses.create_library_pose, ctx.svc, _payload(state, viewer, name)
         )
 
     ctx.prompts.ask(dialogs.Prompt(title="Name this pose", label="Name", on_accept=accept))
@@ -341,7 +386,7 @@ def rename(ctx: Any, pose_id: str) -> None:
         return
 
     def accept(name: str) -> None:
-        ctx.submit(RENAME_KEY, svc_poses.rename_library_pose, ctx.svc, pose_id, name)
+        _mutate(ctx, RENAME_KEY, svc_poses.rename_library_pose, ctx.svc, pose_id, name)
 
     ctx.prompts.ask(
         dialogs.Prompt(
@@ -356,7 +401,7 @@ def rename(ctx: Any, pose_id: str) -> None:
 def duplicate(ctx: Any, pose_id: str) -> None:
     from ..service import poses as svc_poses
 
-    ctx.submit(DUPLICATE_KEY, svc_poses.duplicate_library_pose, ctx.svc, pose_id)
+    _mutate(ctx, DUPLICATE_KEY, svc_poses.duplicate_library_pose, ctx.svc, pose_id)
 
 
 def delete(ctx: Any, pose_id: str) -> None:
@@ -371,7 +416,7 @@ def delete(ctx: Any, pose_id: str) -> None:
     def proceed() -> None:
         # The id rides in the key so the completion knows which pose died --
         # the result of a delete is only {"ok": True}.
-        ctx.submit(f"{DELETE_KEY}:{pose_id}", svc_poses.delete_library_pose, ctx.svc, pose_id)
+        _mutate(ctx, f"{DELETE_KEY}:{pose_id}", svc_poses.delete_library_pose, ctx.svc, pose_id)
 
     ctx.confirms.ask(
         dialogs.Confirm(
@@ -442,6 +487,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(done.result, dict) and done.result.get("template") == state.template:
             state.poses = list(done.result.get("poses") or ())
             state.presets = list(done.result.get("presets") or ())
+        # A save landing while this list was in flight set refresh_dirty and
+        # could submit nothing; the landing is the moment the key is free.
+        pump(ctx)
         return
     if key.startswith(PREVIEW_KEY_PREFIX):
         state.building = False
@@ -480,6 +528,8 @@ def on_task_failed(ctx: Any, done: Any) -> None:
     if done.key == LIST_KEY:
         # ``loading`` gates the refresh; leaving it set makes the mode inert.
         state.loading = False
+        # A refresh wanted while the failed list was in flight is still wanted.
+        pump(ctx)
         return
     if done.key.startswith(PREVIEW_KEY_PREFIX):
         state.building = False

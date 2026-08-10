@@ -151,6 +151,13 @@ def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], 
 # literal at three call sites because ``request_open`` names it too.
 MORE_KEY = "2d/more"
 
+# The header nested one level deeper inside the fold, and the fields it draws
+# refusals against. Named beside MORE_KEY because a refusal reaching one of
+# these must open *both* headers: opening the outer fold alone rings a control
+# the inner, still-collapsed "Advanced" header never draws.
+ADVANCED_KEY = "2d/advanced"
+ADVANCED_FIELDS = ("base_model", "style_lora", "negative_prompt")
+
 
 def folded_fields(form: dict[str, Any]) -> tuple[str, ...]:
     """Every form key that lives behind "More options".
@@ -210,15 +217,29 @@ def _more(ctx: Any, form: dict[str, Any]) -> None:
     a refusal that names a control *in here* opens the fold on the next frame
     rather than ringing a control nobody can see.
     """
-    named = set(ctx.state.field_errors)
-    if named & set(folded_fields(form)):
-        widgets.request_open(MORE_KEY)
+    for key in folds_to_open(set(ctx.state.field_errors), form):
+        widgets.request_open(key)
     if not widgets.header("More options", default_open=False, persist_key=MORE_KEY):
         widgets.muted_wrapped(more_summary(form))
         return
     _guidance(ctx, form)
     _reference(ctx, form)
     _advanced(ctx, form)
+
+
+def folds_to_open(named: set[str], form: dict[str, Any]) -> tuple[str, ...]:
+    """Which persist keys a refusal naming ``named`` fields must reveal.
+
+    A pure function of the error set and the form, so the safety property --
+    a refusal never rings a control nothing draws -- is assertable without a
+    GL context. Outer fold first: ``request_open`` is order-insensitive, but
+    the tuple reads as the path the user will watch open.
+    """
+    if not named & set(folded_fields(form)):
+        return ()
+    if named & set(ADVANCED_FIELDS):
+        return (MORE_KEY, ADVANCED_KEY)
+    return (MORE_KEY,)
 
 
 def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
@@ -835,7 +856,7 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
 
 
 def _advanced(ctx: Any, form: dict[str, Any]) -> None:
-    if not widgets.header("Advanced", default_open=False, persist_key="2d/advanced"):
+    if not widgets.header("Advanced", default_open=False, persist_key=ADVANCED_KEY):
         return
     before = form["base_model"]
     form["base_model"] = widgets.labeled_combo("Model", form["base_model"], ctx.base_models)

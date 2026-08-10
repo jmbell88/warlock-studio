@@ -32,7 +32,7 @@ import math
 
 import numpy as np
 
-from . import ninepatch
+from . import ninepatch, tokens
 
 log = logging.getLogger(__name__)
 
@@ -79,8 +79,18 @@ def pixels(radius: float, exponent: float = EXPONENT) -> np.ndarray:
     return (coverage * 255.0 + 0.5).astype(np.uint8)
 
 
-_SPRITES: dict[int, ninepatch.Sprite] = {}
+# ``None`` marks a radius the size guard refused, so an oversize request is
+# decided once rather than supersampled again on every frame that asks.
+_SPRITES: dict[int, ninepatch.Sprite | None] = {}
 _BROKEN = False
+
+# The UI scale the cache was built at -- :mod:`.shadows`' rule, for the same
+# reason: the keys are physical pixels, so a scale change re-keys every
+# request, and the old scale's sprites are swept on the first request at the
+# new one rather than sitting resident until shutdown. The scale changes
+# between frames (the font atlas rebake's rule), so the sweep cannot pull a
+# texture out from under this frame's draw list.
+_SCALE = tokens.SCALE
 
 
 def available() -> bool:
@@ -97,12 +107,22 @@ def enabled_for(radius: float) -> bool:
 
 def sprite(radius: float) -> ninepatch.Sprite | None:
     """The sprite for this corner radius, building it if it is new."""
+    global _SCALE
+
     if not enabled_for(radius):
         return None
+    if tokens.SCALE != _SCALE:
+        release_all()
+        _SCALE = tokens.SCALE
     key = int(round(radius))
-    found = _SPRITES.get(key)
-    if found is not None:
-        return found
+    if key in _SPRITES:
+        return _SPRITES[key]
+    if not ninepatch.fits(max(int(math.ceil(float(key))), 2)):
+        # Declined before the supersampled mask is rasterised, and remembered
+        # -- ``ninepatch.build``'s guard ran after the rasterise and cached
+        # nothing, which made an oversize request a per-frame cost.
+        _SPRITES[key] = None
+        return None
     built = _build(float(key))
     if built is not None:
         _SPRITES[key] = built
@@ -124,5 +144,5 @@ def _build(radius: float) -> ninepatch.Sprite | None:
 
 def release_all() -> None:
     """Drop every built sprite. Frame thread only, at teardown."""
-    ninepatch.release(_SPRITES.values())
+    ninepatch.release(built for built in _SPRITES.values() if built is not None)
     _SPRITES.clear()

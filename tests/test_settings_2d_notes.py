@@ -370,3 +370,34 @@ def test_every_note_stays_inside_the_default_atlas_range():
         for note in (settings_2d.lora_note(ctx, form), settings_2d.lora_filter_note(ctx, form)):
             if note is not None:
                 assert all(ord(ch) < 0x100 for ch in note)
+
+
+def test_the_catalog_and_the_registry_agree_about_which_loras_fit():
+    """The pane's draw path reads ``ctx.guidance["loras_by_base"]`` while
+    ``validate`` asks ``models.loras_by_base()`` directly -- one map behind two
+    doors, so the two answers are pinned equal here."""
+    assert guidance.catalog()["loras_by_base"] == models.loras_by_base()
+
+
+def test_a_refusal_naming_a_folded_field_opens_the_fold():
+    from warlock.studio.state import default_form_2d
+
+    form = default_form_2d()
+    assert settings_2d.folds_to_open({"art_style"}, form) == (settings_2d.MORE_KEY,)
+    assert settings_2d.folds_to_open(set(), form) == ()
+    # A field the fold does not hold opens nothing: the control is on screen.
+    assert settings_2d.folds_to_open({"prompt"}, form) == ()
+
+
+def test_a_refusal_on_an_advanced_field_opens_both_headers():
+    """check_weights' refusal most often names base_model or style_lora, which
+    live inside the nested Advanced header: opening the outer fold alone rings
+    a control the inner, still-collapsed header never draws."""
+    from warlock.studio.state import default_form_2d
+
+    form = default_form_2d()
+    for field in settings_2d.ADVANCED_FIELDS:
+        assert settings_2d.folds_to_open({field}, form) == (
+            settings_2d.MORE_KEY,
+            settings_2d.ADVANCED_KEY,
+        )

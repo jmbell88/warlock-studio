@@ -18,6 +18,7 @@ would be a record of the library that the library could contradict.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,8 +141,6 @@ def remember(settings: Any, kind: str, path: Any, *, when: float | None = None) 
     """
     if path is None or kind not in KINDS:
         return
-    import time
-
     text = str(path)
     if not text:
         return

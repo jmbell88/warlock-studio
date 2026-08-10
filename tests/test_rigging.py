@@ -119,6 +119,63 @@ def test_malformed_template_is_skipped_not_fatal(tmp_path, monkeypatch):
     assert set(rigging.templates()) == {"good"}
 
 
+def test_a_template_whose_key_mismatches_its_filename_is_skipped(tmp_path, monkeypatch):
+    """The key comes out of the JSON body and is interpolated into the preview
+    cache's filenames -- and ``poselib.template_digest`` reads
+    ``TEMPLATE_DIR/<key>.json`` back, so a key naming a different file would
+    hash the wrong bytes or none at all. Enforced at load, log-and-skip like
+    every other malformed template."""
+    (tmp_path / "renamed.json").write_text(
+        json.dumps(
+            {
+                "key": "original",
+                "label": "Original",
+                "root": "a",
+                "bones": [{"name": "a", "parent": None, "head": [0, 0, 0], "tail": [0, 0, 1]}],
+            }
+        )
+    )
+    monkeypatch.setattr(rigging, "TEMPLATE_DIR", tmp_path)
+    monkeypatch.setattr(rigging, "_templates", None)
+    assert rigging.templates() == {}
+
+
+def test_a_path_unsafe_template_key_is_rejected():
+    with pytest.raises(ValueError, match="not a safe path component"):
+        rigging._parse_template(
+            {
+                "key": "../evil",
+                "label": "X",
+                "root": "a",
+                "bones": [{"name": "a", "parent": None, "head": [0, 0, 0], "tail": [0, 0, 1]}],
+            }
+        )
+
+
+def test_a_parented_root_is_rejected():
+    """``blender_worker._apply_root_translation`` inverts only the root's own
+    rest frame, which is sound exactly while no parent's pose sits above it --
+    so the registry refuses the template rather than the worker guessing."""
+    with pytest.raises(ValueError, match="must be parentless"):
+        rigging._parse_template(
+            {
+                "key": "x",
+                "label": "X",
+                "root": "b",
+                "bones": [
+                    {"name": "a", "parent": None, "head": [0, 0, 0], "tail": [0, 0, 1]},
+                    {"name": "b", "parent": "a", "head": [0, 0, 1], "tail": [0, 0, 2]},
+                ],
+            }
+        )
+
+
+def test_every_shipped_template_root_is_parentless():
+    for key, template in rigging.templates().items():
+        parent = next(b["parent"] for b in template.bones if b["name"] == template.root)
+        assert parent is None, f"{key}: root {template.root!r} is parented"
+
+
 def test_template_with_unknown_parent_is_rejected():
     with pytest.raises(ValueError, match="unknown parent"):
         rigging._parse_template(
@@ -883,8 +940,17 @@ def test_armature_spec_shape(tmp_path):
         "op": "armature",
         "template": "humanoid",
         "out_glb": str(tmp_path / ".preview.tmp.glb"),
-        "result_path": str(tmp_path / ".armature_result.json"),
+        "result_path": str(tmp_path / ".humanoid.armature_result.json"),
     }
+
+
+def test_armature_specs_for_different_templates_use_different_result_files(tmp_path):
+    """The preview lock is per template, so two templates may build at once --
+    and ``run_worker`` unlinks and then watches the result path, so a shared
+    name would let each build eat the other's answer."""
+    a = rigging.armature_spec("humanoid", tmp_path / "a.glb", tmp_path)
+    b = rigging.armature_spec("fish", tmp_path / "b.glb", tmp_path)
+    assert a["result_path"] != b["result_path"]
 
 
 def test_interpolate_refuses_endpoint_poses_with_root_offsets():

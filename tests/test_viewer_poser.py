@@ -182,6 +182,25 @@ def test_mirror_reflects_the_root_translation():
     assert editor.root_translation() == pytest.approx([-0.3, 0.1, 0.2])
 
 
+def test_mirror_keeps_the_pose_being_edited():
+    """Mirror goes through apply, whose clearing of ``current`` is for
+    *loading* -- a mirror is still the same pose, so it stays addressed and
+    the next Save saves rather than silently becoming Save-as."""
+    editor = _editor()
+    editor.apply({"arm.L": [0.0, 0.0, 0.7071068, 0.7071068]}, pose_id="0123456789ab")
+    editor.mirror()
+    assert editor.current == "0123456789ab"
+    assert editor.dirty is True
+
+
+def test_reset_all_clears_the_pose_being_edited():
+    """new_pose's half of the pair: back to rest is back to nothing-open."""
+    editor = _editor()
+    editor.apply({"arm.L": [0.0, 0.0, 0.7071068, 0.7071068]}, pose_id="0123456789ab")
+    editor.reset_all(dirty=False)
+    assert editor.current is None
+
+
 def test_without_a_root_nothing_moves():
     """pose_panel's entry path never sets editor.root, which is what keeps
     asset pose mode behaviourally unchanged."""
