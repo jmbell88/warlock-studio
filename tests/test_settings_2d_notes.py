@@ -17,6 +17,9 @@ def _ctx():
     return SimpleNamespace(
         guidance=catalog,
         base_models=[(m["key"], m["label"]) for m in catalog["fields"]["base_model"]],
+        # Matching main.py's Ctx: the picker's own labels, which the pane needs
+        # to name a style in a sentence and to list the fitting ones.
+        style_loras=[(m["key"], m["label"]) for m in catalog["fields"]["style_lora"]],
     )
 
 
@@ -108,9 +111,18 @@ def test_the_structure_note_names_the_bases_that_can_run_one():
 # --- what a change of base model clears --------------------------------------
 
 
-def _other_family():
-    """A base a style LoRA cannot be loaded onto, whichever one that is."""
-    return next(k for k in models.BASE_MODELS if k not in models.lora_bases())
+def _mismatched_pair():
+    """A (base_model, style_lora) the registry does not pair, by construction.
+
+    Replaces a "base that takes no LoRA at all", which stops existing the
+    moment every architecture in the registry has an adapter -- at which point
+    a next() over it raises StopIteration rather than failing an assertion.
+    """
+    for base in models.BASE_MODELS.values():
+        for lora in models.STYLE_LORAS.values():
+            if not models.lora_fits(base, lora):
+                return base.key, lora.key
+    raise AssertionError("the registry holds only one architecture")
 
 
 def _form(**over):
@@ -135,8 +147,9 @@ def test_choosing_a_base_that_cannot_use_a_lora_clears_the_style():
     reach. Clearing it is the only recovery that does not require guessing
     which earlier choice to undo.
     """
-    form = _form(style_lora=next(iter(models.STYLE_LORAS)), lora_weight=0.4)
-    form["base_model"] = _other_family()
+    base_key, lora_key = _mismatched_pair()
+    form = _form(style_lora=lora_key, lora_weight=0.4)
+    form["base_model"] = base_key
     cleared = settings_2d.clear_unusable(_ctx(), form)
     assert form["style_lora"] == ""
     assert form["lora_weight"] == models.DEFAULT_LORA_WEIGHT
@@ -151,8 +164,9 @@ def test_switching_back_does_not_resurrect_the_cleared_style():
     reconfigured around.
     """
     ctx = _ctx()
-    form = _form(style_lora=next(iter(models.STYLE_LORAS)))
-    form["base_model"] = _other_family()
+    base_key, lora_key = _mismatched_pair()
+    form = _form(style_lora=lora_key)
+    form["base_model"] = base_key
     settings_2d.clear_unusable(ctx, form)
     form["base_model"] = models.lora_bases()[0]
     settings_2d.clear_unusable(ctx, form)
@@ -189,8 +203,9 @@ def test_the_negative_prompt_is_deliberately_not_cleared():
 
 
 def test_the_clear_is_explained_rather_than_silent():
-    form = _form(style_lora=next(iter(models.STYLE_LORAS)))
-    form["base_model"] = _other_family()
+    base_key, lora_key = _mismatched_pair()
+    form = _form(style_lora=lora_key)
+    form["base_model"] = base_key
     cleared = settings_2d.clear_unusable(_ctx(), form)
     assert any("style" in note.lower() and "cleared" in note.lower() for note in cleared)
     # Inside imgui's default Basic-Latin+Latin-1 atlas range.
@@ -220,9 +235,12 @@ def test_a_restored_form_is_not_rewritten_merely_by_being_opened():
     assert len(calls) == 1, "one call site, or the guard is not the only path"
     assert re.search(r'if form\["base_model"\] != before:', lines[calls[0] - 1])
     # And nothing else in the pane reaches it: the notes stay pure reads.
-    form = _form(style_lora=next(iter(models.STYLE_LORAS)), base_model=_other_family())
+    base_key, lora_key = _mismatched_pair()
+    form = _form(style_lora=lora_key, base_model=base_key)
     ctx = _ctx()
     settings_2d.lora_note(ctx, form)
+    settings_2d.lora_filter_note(ctx, form)
+    settings_2d.lora_options(ctx, form)
     settings_2d.structure_note(ctx, form)
     settings_2d.validate(form)
     assert form["style_lora"] != ""
@@ -286,3 +304,69 @@ def test_the_blank_option_is_named_by_the_pane_not_by_the_key():
     options = settings_2d._field_options(_ctx(), "art_style")
     assert options[0] == ("", "era style...")
     assert settings_2d._field_options(_ctx(), "palette")[0] == ("", "palette...")
+
+
+# --- which styles the picker offers ------------------------------------------
+
+
+def _synth_ctx(by_base, loras):
+    """A catalog the registry does not have to hold, so the wording is
+    independent of what ships today."""
+    catalog = dict(guidance.catalog())
+    catalog["loras_by_base"] = by_base
+    catalog["lora_bases"] = [k for k, v in by_base.items() if v]
+    return SimpleNamespace(
+        guidance=catalog,
+        base_models=[(k, k.upper()) for k in by_base],
+        style_loras=loras,
+    )
+
+
+def test_the_picker_lists_only_the_styles_fitted_to_the_chosen_base():
+    ctx = _synth_ctx({"a": ["one"], "b": ["two"]}, [("one", "One"), ("two", "Two")])
+    keys = [k for k, _ in settings_2d.lora_options(ctx, {"base_model": "a"})]
+    assert keys == ["one"]
+
+
+def test_a_stale_selection_stays_listed_and_is_marked():
+    """widgets.combo falls back to index 0 for a value it cannot find, so
+    dropping the entry would draw "no style LoRA" over a selection validate is
+    refusing -- the dead end clear_unusable exists to prevent, by another
+    door."""
+    ctx = _synth_ctx({"a": ["one"], "b": ["two"]}, [("one", "One"), ("two", "Two")])
+    options = settings_2d.lora_options(ctx, {"base_model": "a", "style_lora": "two"})
+    assert ("two" in [k for k, _ in options])
+    label = next(label for key, label in options if key == "two")
+    assert "not fitted" in label
+
+
+def test_the_disabled_note_fires_only_for_a_base_no_style_fits():
+    ctx = _synth_ctx({"a": ["one"], "b": []}, [("one", "One")])
+    assert settings_2d.lora_note(ctx, {"base_model": "a"}) is None
+    note = settings_2d.lora_note(ctx, {"base_model": "b"})
+    assert note is not None and "architecture" in note
+    # And it names a base the user can actually pick, by its own label.
+    assert "A" in note
+
+
+def test_the_filter_note_names_what_is_listed_and_defers_when_nothing_fits():
+    ctx = _synth_ctx({"a": ["one"], "b": []}, [("one", "One"), ("two", "Two")])
+    narrowed = settings_2d.lora_filter_note(ctx, {"base_model": "a"})
+    assert narrowed is not None and "One" in narrowed
+    # lora_note owns the empty case; saying it twice is one control saying two
+    # things under a disabled combo.
+    assert settings_2d.lora_filter_note(ctx, {"base_model": "b"}) is None
+
+
+def test_the_filter_note_is_silent_when_the_whole_list_is_offered():
+    ctx = _synth_ctx({"a": ["one", "two"]}, [("one", "One"), ("two", "Two")])
+    assert settings_2d.lora_filter_note(ctx, {"base_model": "a"}) is None
+
+
+def test_every_note_stays_inside_the_default_atlas_range():
+    ctx = _ctx()
+    for base in models.BASE_MODELS:
+        form = _form(base_model=base)
+        for note in (settings_2d.lora_note(ctx, form), settings_2d.lora_filter_note(ctx, form)):
+            if note is not None:
+                assert all(ord(ch) < 0x100 for ch in note)

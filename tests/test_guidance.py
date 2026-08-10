@@ -436,22 +436,56 @@ def test_a_control_on_a_distilled_base_is_refused_by_name():
         guidance.normalize({"control": "canny", "base_model": "turbo"})
 
 
-def test_a_style_lora_on_a_non_sdxl_base_is_refused_by_name():
-    """Stronger than the ControlNet refusal above: a style LoRA's tensors name
-    SDXL UNet modules, so loading one onto another architecture raises at load
-    time with the checkpoint already in VRAM. The message names the bases that
-    do work."""
-    with pytest.raises(ValueError, match="style LoRA"):
-        guidance.normalize({"style_lora": "render3d", "base_model": "flux_klein"})
+def _mismatched_pair() -> tuple[str, str]:
+    """A (base_model, style_lora) the registry does not pair, by construction.
+
+    Written out rather than "the first non-SDXL base": once every architecture
+    in the registry has some adapter, "a base that takes no LoRA" stops
+    existing and a next() over it raises StopIteration.
+    """
+    for base in models.BASE_MODELS.values():
+        for lora in models.STYLE_LORAS.values():
+            if not models.lora_fits(base, lora):
+                return base.key, lora.key
+    raise AssertionError("the registry holds only one architecture")
+
+
+def test_a_cross_family_style_lora_is_refused_by_name():
+    """Stronger than the ControlNet refusal above: an adapter's tensors name
+    one architecture's modules, so loading it onto another raises at load time
+    with the checkpoint already in VRAM."""
+    base_key, lora_key = _mismatched_pair()
+    with pytest.raises(ValueError) as exc:
+        guidance.normalize({"style_lora": lora_key, "base_model": base_key})
+    assert "style" in str(exc.value)
+    # The field is the half the app reads, and which control it names depends
+    # on where the remedy is: when some adapter fits this base, the base is
+    # fine and the style is wrong; when none does, the other way round.
+    fitting = models.loras_by_base()[base_key]
+    assert exc.value.field == ("style_lora" if fitting else "base_model")
     # And the same base without a style is fine -- the refusal is about the
     # pairing, not about the checkpoint.
-    assert guidance.normalize({"base_model": "flux_klein"})["base_model"] == "flux_klein"
+    assert guidance.normalize({"base_model": base_key})["base_model"] == base_key
+
+
+def test_a_base_no_adapter_fits_is_refused_naming_the_base():
+    """The second branch, verbatim as it was before the pairing existed."""
+    empty = [k for k, v in models.loras_by_base().items() if not v]
+    if not empty:
+        pytest.skip("every base in the registry now takes some style LoRA")
+    with pytest.raises(ValueError, match="cannot take a style LoRA") as exc:
+        guidance.normalize({"style_lora": "render3d", "base_model": empty[0]})
+    assert exc.value.field == "base_model"
 
 
 def test_lora_bases_reaches_the_ui_through_the_catalog():
     catalog = guidance.catalog()
     assert catalog["lora_bases"] == models.lora_bases()
-    assert "flux_klein" not in catalog["lora_bases"]
+
+
+def test_loras_by_base_reaches_the_ui_through_the_catalog():
+    # What the picker lists, beside what greys it.
+    assert guidance.catalog()["loras_by_base"] == models.loras_by_base()
 
 
 def test_the_composed_prompt_never_sees_a_conditioning_field():

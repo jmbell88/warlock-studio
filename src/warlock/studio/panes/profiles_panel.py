@@ -143,8 +143,13 @@ def _editor(ctx: Any) -> None:
     draft["base_model"] = widgets.labeled_combo(
         "Model", draft.get("base_model", ""), ctx.base_models
     )
+    # The same pairing question the generate pane asks, and the same answer:
+    # only the adapters fitted to the drafted base, plus a stale selection kept
+    # visible and marked so it cannot become the value the user cannot see.
+    # The *summary* above deliberately still reads the full ctx.style_loras --
+    # it must be able to name a selection the draft's base does not take.
     draft["style_lora"] = widgets.labeled_combo(
-        "Style LoRA", draft.get("style_lora", ""), ctx.style_loras
+        "Style LoRA", draft.get("style_lora", ""), settings_2d.lora_options(ctx, draft)
     )
     if draft["style_lora"]:
         changed, value = imgui.slider_float("Strength", float(draft["lora_weight"]), 0.0, 1.5)

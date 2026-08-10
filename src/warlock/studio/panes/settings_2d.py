@@ -695,19 +695,75 @@ def negative_prompt_note(ctx: Any, form: dict[str, Any]) -> str | None:
     )
 
 
+def _lora_labels(ctx: Any, keys: list[str]) -> str:
+    """The picker's own labels for a set of style-LoRA keys.
+
+    _base_labels' argument applied to the other combo: a message naming
+    "pixelklein" points at something the user cannot find in the list.
+    """
+    labels = [label for key, label in (ctx.style_loras or []) if key in keys]
+    return ", ".join(labels or keys)
+
+
 def lora_note(ctx: Any, form: dict[str, Any]) -> str | None:
     """Why the style LoRA picker is inert here, or None when it is live.
 
-    A LoRA is fitted against a specific architecture's UNet, so on anything
-    that is not SDXL-family it is not a weak effect but a refusal: the service
-    rejects the submit outright rather than generating without it.
+    The narrow question -- whether *any* adapter in the registry is fitted to
+    this architecture -- which is the only case where the control has nothing
+    at all to do. An adapter names one architecture's modules, so a mismatch is
+    not a weak effect but a refusal: the service rejects the submit outright
+    rather than generating without it.
     """
     bases = ctx.guidance.get("lora_bases") or []
     if (form.get("base_model") or "") in bases:
         return None
     return (
-        "Style LoRAs are fitted to SDXL, so this model cannot use one. "
-        f"These can: {_base_labels(ctx, bases)}."
+        "No style LoRA in the registry is fitted to this model's architecture. "
+        f"These models can use one: {_base_labels(ctx, bases)}."
+    )
+
+
+def lora_options(ctx: Any, form: dict[str, Any]) -> list[tuple[str, str]]:
+    """The style-LoRA combo's entries for the chosen base.
+
+    Those fitted to it, plus whatever the form already holds, marked. Keeping a
+    stale selection listed is load-bearing rather than tidy: widgets.combo
+    falls back to index 0 for a value it cannot find, so dropping it would draw
+    "no style LoRA" over a selection ``validate`` is refusing -- making the
+    value that keeps Generate off the one control the user cannot see. That is
+    exactly the dead end ``clear_unusable`` exists to prevent, arriving by
+    another door. The marking mirrors what main.py puts on a base whose weights
+    are missing.
+    """
+    fitting = (ctx.guidance.get("loras_by_base") or {}).get(form.get("base_model") or "") or []
+    options: list[tuple[str, str]] = []
+    for key, label in ctx.style_loras or []:
+        if key in fitting:
+            options.append((key, label))
+        elif key and key == (form.get("style_lora") or ""):
+            options.append((key, f"{label} - not fitted to this model"))
+    return options
+
+
+def lora_filter_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Why the picker lists fewer styles than the registry holds, or None.
+
+    A second function rather than a branch inside ``lora_note`` for
+    ``tile_bases``' reason: that one explains a control that cannot act at all,
+    this one a control acting on less than the whole list. Folded together,
+    one sentence comes to say both things under a disabled combo.
+    """
+    by_base = ctx.guidance.get("loras_by_base") or {}
+    fitting = by_base.get(form.get("base_model") or "") or []
+    if not fitting:
+        # lora_note owns this case; saying it twice is the fold above.
+        return None
+    everything = [key for key, _ in (ctx.style_loras or [])]
+    if len(fitting) >= len(everything):
+        return None
+    return (
+        "A style LoRA is fitted to one architecture, so this model is offered "
+        f"only: {_lora_labels(ctx, fitting)}."
     )
 
 
@@ -750,13 +806,24 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
     """
     cleared: list[str] = []
     base = form.get("base_model") or ""
-    if form.get("style_lora") and base not in (ctx.guidance.get("lora_bases") or []):
+    # The *pair*, not the base. Asking "is this base in lora_bases()" was right
+    # only while one architecture had adapters and the others had none: with
+    # both families covered that test is never true, and the clear would
+    # silently stop happening. An unknown stored base resolves to [] and
+    # therefore clears, the pane's standing rule for a settings-file value.
+    fitting = (ctx.guidance.get("loras_by_base") or {}).get(base) or []
+    if form.get("style_lora") and form["style_lora"] not in fitting:
         form["style_lora"] = ""
         # The weight goes back to the default with it: it scales a selection
         # that no longer exists, and a strength left at 0.2 would silently
         # apply to whatever style is picked next.
         form["lora_weight"] = modelslib.DEFAULT_LORA_WEIGHT
-        cleared.append("The style LoRA was cleared: this model cannot use one.")
+        cleared.append(
+            "The style LoRA was cleared: it is not fitted to this model's "
+            "architecture."
+            if fitting
+            else "The style LoRA was cleared: this model cannot use one."
+        )
     if form.get("control") and base not in (ctx.guidance.get("controlnet_bases") or []):
         # Only the selection, exactly as the Clear-reference button does: the
         # strengths are hidden with it and never submitted without it.
@@ -797,7 +864,9 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         # submit is now refused.
         imgui.begin_disabled()
     was_lora = form["style_lora"]
-    form["style_lora"] = widgets.labeled_combo("Style LoRA", form["style_lora"], ctx.style_loras)
+    form["style_lora"] = widgets.labeled_combo(
+        "Style LoRA", form["style_lora"], lora_options(ctx, form)
+    )
     widgets.field_error(ctx.state, "style_lora")
     if form["style_lora"] != was_lora:
         ctx.state.clear_field_error("style_lora")
@@ -822,6 +891,13 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if no_lora is not None:
         imgui.end_disabled()
         widgets.muted(no_lora)
+    else:
+        # One sentence at a time: lora_note explains a control that cannot act,
+        # lora_filter_note one acting on less than the whole list, and both
+        # under a disabled combo would be one control saying two things.
+        narrowed = lora_filter_note(ctx, form)
+        if narrowed is not None:
+            widgets.muted(narrowed)
     inert = negative_prompt_note(ctx, form)
     if inert is not None:
         # Disabled rather than hidden, and with the reason underneath: the
@@ -955,8 +1031,10 @@ def validate(form: dict[str, Any]) -> list[str]:
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
-    if form.get("style_lora") and form["base_model"] not in modelslib.lora_bases():
-        problems.append("Style LoRAs need an SDXL model.")
+    if form.get("style_lora") and form["style_lora"] not in (
+        modelslib.loras_by_base().get(form["base_model"]) or []
+    ):
+        problems.append("The style LoRA is not fitted to this model's architecture.")
     if form.get("output") == "tile" and form["base_model"] not in modelslib.tile_bases():
         problems.append("Seamless tiles need an SDXL model.")
     return problems

@@ -8,6 +8,16 @@ file behind.
 
 ## 0.0.16 — 2026-08-09
 
+- **A style LoRA now declares the architecture it was fitted to**, so the picker
+  offers each model the styles that fit it rather than being disabled wholesale
+  off SDXL. Adds a FLUX.2 klein pixel-art LoRA and a distilled FLUX.2-klein-4B
+  base for it to run on at the 4-step recipe it was trained against.
+- **Fixed: one job generated without a style LoRA silently disabled the adapter
+  for every later job in the process.** `disable_lora()` sets a flag that
+  `set_adapters()` never clears, and the pipe stays resident across jobs, so the
+  state outlived the job that set it. It read as working because the trigger
+  words are still prepended — the output changed when a style was picked, it just
+  was not the adapter doing it. SDXL was affected identically.
 - **A mesh verdict is a grade, not a bit.** Review files −5..+5 instead of
   accept/reject, and the five rejection reasons became optional tags — legal at
   any grade, with five good ones added beside them — because a solid slab and a

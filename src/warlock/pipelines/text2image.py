@@ -214,6 +214,19 @@ class Text2Image:
         self.last_recipe: dict[str, Any] = {}
 
     @property
+    def _has_adapters(self) -> bool:
+        """Whether anything was ever loaded -- i.e. whether there is PEFT state
+        for ``disable_lora`` to disable.
+
+        The family early return this replaces answered the question by proxy,
+        and got one case wrong even for SDXL: ``turbo`` has no base LoRA, so on
+        a host with no loras/ directory the empty branch already called
+        disable_lora() on a pipe with no adapters. The correct predicate was
+        never "is this SDXL", it was "is there anything to disable".
+        """
+        return self._base_adapter is not None or bool(self._adapters)
+
+    @property
     def loaded(self) -> bool:
         return self._pipe is not None
 
@@ -270,13 +283,9 @@ class Text2Image:
         is a 4-step run of undistilled SDXL, i.e. noise -- so that one raises.
         """
         assert self._pipe is not None
-        if self.spec.family != models.FAMILY_SDXL:
-            # Every LoRA in the registry is fitted against an SDXL UNet, and
-            # loading one onto another architecture's transformer raises rather
-            # than degrading -- so the "a missing LoRA is skipped, not fatal"
-            # tolerance below is the wrong tolerance for it. guidance.normalize
-            # refuses the selection at the door; this is the other half.
-            return
+        # ``spec.base_lora`` needs no family guard of its own: it is a declared
+        # field, None on every non-SDXL entry, so the ``is not None`` below
+        # already is the guard.
         if self.spec.base_lora is not None:
             path = self._lora_dir / self.spec.base_lora
             if not path.exists():
@@ -292,6 +301,11 @@ class Text2Image:
             )
             self._base_adapter = models.BASE_LORA_ADAPTER
         for lora in models.STYLE_LORAS.values():
+            if not models.lora_fits(self.spec, lora):
+                # Deliberately *not* the missing-file tolerance below: the file
+                # is on disk and names another architecture's modules, so
+                # loading it would raise with the checkpoint already resident.
+                continue
             path = self._lora_dir / lora.filename
             if not path.exists():
                 log.info("style LoRA %s not downloaded (%s); skipping", lora.key, path)
@@ -320,11 +334,6 @@ class Text2Image:
         generates without the style LoRA.
         """
         assert self._pipe is not None
-        if self.spec.family != models.FAMILY_SDXL:
-            # Symmetric with _load_loras' early return: nothing was ever
-            # loaded, so there is no adapter set to apply -- and the empty case
-            # below would call disable_lora() on a pipe that has no PEFT state.
-            return
         names: list[str] = []
         weights: list[float] = []
         if self._base_adapter is not None:
@@ -341,8 +350,24 @@ class Text2Image:
                 names.append(lora)
                 weights.append(weight)
         if names:
+            # enable_lora() first, and it is not belt-and-braces: disable_lora()
+            # sets ``_disable_adapters`` on every PEFT layer, and set_adapters()
+            # writes the *scaling* without ever clearing that flag. So one job
+            # generated with no style LoRA silently switched every later job in
+            # the same process to no style LoRA too -- the pipe stays resident
+            # across jobs, so the state outlives the job that set it, and the
+            # only recovery was the idle unload. It reads as working because
+            # the trigger words are still prepended, so the output does change
+            # when a style is picked; it just is not the adapter doing it.
+            #
+            # Measured on FLUX.2 klein (docs/measurements/2026-08-10-pixel-art
+            # -klein.md): three weights after a no-LoRA run came back
+            # byte-identical to each other, and none of them matched the same
+            # weight run first. Nothing is family-specific about it -- this is
+            # a plain PEFT state machine, so SDXL was affected identically.
+            pipe.enable_lora()
             pipe.set_adapters(names, weights)
-        else:
+        elif self._has_adapters:
             pipe.disable_lora()
 
     def _conditioned(self, cond) -> tuple[Any, dict[str, Any], Callable[[], None]]:

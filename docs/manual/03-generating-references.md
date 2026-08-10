@@ -138,7 +138,7 @@ still listed, with "— weights missing" appended to its name, so you learn at p
 job-failure time. Run `warlock doctor` for the exact download command.
 
 **Style LoRAs** are the opposite: they are adapters on whatever pipeline is already resident and
-switch for free, with no reload. Four ship:
+switch for free, with no reload. Five ship:
 
 - **3D render** — a general 3D-render look.
 - **3D render (Redmond)** — a second, differently trained take on the same idea.
@@ -149,11 +149,22 @@ switch for free, with no reload. Four ship:
   that the output keeps SDXL's anti-aliased gradients, and no downscale recovers a clean grid from
   them. The **Pixel-art sprite** preset picks it together with the LCM base and the NES-era art
   style, whose flat shading and bold silhouette are what survive a reduction.
+- **Pixel art (FLUX.2 klein)** — the same idea for the other architecture, and the only adapter here
+  that is not an SDXL one. It is offered on the two FLUX.2 klein entries and on nothing else. Its
+  default strength is 0.0625, far below every other entry, because the adapter declares a trained
+  scale of 16 where an ordinary one declares about 2 — the slider means the same thing it always
+  did, and this adapter's own strength is simply much larger. Anything above about 0.13 smears and
+  the range its model card recommends produces black frames.
+
+An adapter is fitted to one architecture, so the picker offers a model only the styles that fit it.
+Choosing a model no style fits disables the picker with a note; choosing one that some styles fit
+lists those and says so. A style you picked under a different model stays visible and marked rather
+than vanishing, and changing the model clears it with an explanation.
 
 Choosing one reveals a **Strength** slider, from 0 to 1.5, defaulting to the LoRA's own tuned
-weight of 0.9. The slider is hidden entirely when no LoRA is chosen. LoRAs are trained against full
-SDXL at 20 to 25 steps with guidance, so they land noticeably stronger on the SDXL entries than on
-Turbo — and they do not apply at all on FLUX.2, where the whole picker is disabled.
+weight — 0.9 unless the entry says otherwise. The slider is hidden entirely when no LoRA is chosen.
+The SDXL LoRAs are trained against full SDXL at 20 to 25 steps with guidance, so they land
+noticeably stronger on the SDXL entries than on Turbo.
 
 ## Seeds and candidates
 

@@ -226,23 +226,70 @@ def test_a_probe_path_agrees_with_the_variant(key):
         assert not rel.startswith("/") and "\\" not in rel
 
 
-def test_lora_bases_are_exactly_the_sdxl_family():
+def test_lora_bases_are_exactly_the_bases_some_adapter_fits():
+    """The derivation changed and the meaning did not: no longer "is this
+    SDXL" but "does the registry hold an adapter fitted to this
+    architecture"."""
     bases = models.lora_bases()
+    by_base = models.loras_by_base()
     assert bases
-    assert all(models.BASE_MODELS[b].family == models.FAMILY_SDXL for b in bases)
-    assert all(
-        m.key in bases
-        for m in models.BASE_MODELS.values()
-        if m.family == models.FAMILY_SDXL
-    )
-    # The registry's whole point here is that it now holds more than one
-    # architecture; if it did not, none of the family plumbing is exercised.
-    assert set(bases) != set(models.BASE_MODELS)
+    assert bases == [key for key, loras in by_base.items() if loras]
+    for key in bases:
+        base = models.BASE_MODELS[key]
+        assert all(
+            models.lora_fits(base, models.STYLE_LORAS[k]) for k in by_base[key]
+        )
 
 
-def test_tile_bases_are_a_separate_question_with_the_same_answer_today():
-    # Same list, deliberately not the same function -- see models.tile_bases.
-    assert models.tile_bases() == models.lora_bases()
+def test_loras_by_base_never_pairs_two_architectures():
+    by_base = models.loras_by_base()
+    # Every base answered, so a picker reading it can never miss one.
+    assert set(by_base) == set(models.BASE_MODELS)
+    for base_key, lora_keys in by_base.items():
+        base = models.BASE_MODELS[base_key]
+        # And it is exactly the fitting ones -- neither a subset nor a superset.
+        assert lora_keys == [
+            lora.key
+            for lora in models.STYLE_LORAS.values()
+            if lora.family == base.family
+        ]
+
+
+def test_every_style_lora_declares_a_known_family():
+    # Mirror of the BaseModel.family assertion: a typo'd family is an adapter
+    # that silently fits nothing at all.
+    assert all(lora.family in models.FAMILIES for lora in models.STYLE_LORAS.values())
+
+
+def test_tile_bases_are_a_separate_question_from_lora_bases():
+    """Seamlessness is circular padding over Conv2d; a LoRA is a set of some
+    architecture's tensors. The two lists once agreed and now genuinely
+    differ, which is exactly why they were never one function."""
+    assert set(models.tile_bases()) == {
+        m.key for m in models.BASE_MODELS.values() if m.family == models.FAMILY_SDXL
+    }
+
+
+def test_a_renaming_fetch_names_the_file_the_registry_expects():
+    """``lora.filename in lora.download`` is satisfied by the rename line
+    alone, so a wrong *source* filename in the hf download half passes it.
+    Both ends are checked here."""
+    for lora in models.STYLE_LORAS.values():
+        for one in lora.fetch:
+            if one.rename is None:
+                continue
+            assert one.rename[1] == lora.filename
+            assert one.rename[0] in one.filenames
+
+
+def test_every_lora_file_on_disk_has_a_distinct_name():
+    """loras/ is flat and shared across families, so two entries naming one
+    file is one file -- silently the wrong weights under one of the keys."""
+    names = [lora.filename for lora in models.STYLE_LORAS.values()]
+    names += [
+        m.base_lora for m in models.BASE_MODELS.values() if m.base_lora is not None
+    ]
+    assert len(names) == len(set(names))
 
 
 def test_flux_download_skips_the_redundant_single_file_checkpoint():
@@ -257,9 +304,25 @@ def test_flux_download_skips_the_redundant_single_file_checkpoint():
     # Undistilled, so CFG runs and the negative prompt is honoured -- which is
     # the entire reason -base was chosen over the distilled klein.
     assert spec.key in models.cfg_bases()
-    # And every SDXL-only feature is off.
+    # Conditioning and tiles are off; style LoRAs are per-architecture.
     assert not spec.controlnet
-    assert spec.key not in models.lora_bases()
+    assert spec.key not in models.tile_bases()
+
+
+def test_the_distilled_klein_is_the_mirror_of_klein_base():
+    """Same architecture, opposite recipe -- and the negative prompt is inert
+    on it, which needs no new code because cfg_bases() filters on the guidance
+    scale and 1.0 excludes it."""
+    spec = models.BASE_MODELS["flux_klein_distilled"]
+    base = models.BASE_MODELS["flux_klein"]
+    assert spec.family == base.family == models.FAMILY_FLUX2_KLEIN
+    assert spec.dir_name != base.dir_name
+    assert spec.steps == 4 and spec.guidance_scale == 1.0
+    assert spec.key not in models.cfg_bases()
+    assert '--exclude "flux-2-klein-4b.safetensors"' in spec.download
+    # Every SDXL-only feature is off on it too.
+    assert not spec.controlnet
+    assert spec.key not in models.tile_bases()
 
 
 def test_lightning_is_a_second_distillation_arm_over_the_same_weights():

@@ -124,6 +124,12 @@ uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
   PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
 uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+# Pixel art for FLUX.2 klein. Renamed for the same reason the LCM LoRA above is:
+# loras/ is flat and shared across architectures, and this repo ships the same
+# generic filename. It is offered only on the two klein entries.
+uvx hf download Limbicnation/pixel-art-lora `
+  pytorch_lora_weights.safetensors --local-dir models/loras
+Rename-Item models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
 ```
 
 The SDXL 1.0 weights serve three entries in the model list — the Hyper-SD one above, and a full-CFG

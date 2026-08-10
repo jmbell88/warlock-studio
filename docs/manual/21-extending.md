@@ -64,6 +64,24 @@ only the latter. Model keys and LoRA keys are validated in `guidance.py` so that
 produces one kind of error from one place, but they contribute nothing to the composed prompt: its
 text is byte-identical with and without any of them.
 
+The entry also declares the architecture family it was fitted to, and that declaration is the whole
+of the pairing: an adapter names one architecture's modules, so applying it to another raises at load
+time with the checkpoint already in VRAM rather than merely producing a weak result. The picker
+offers each model only the styles that fit it, the service refuses a mismatched pair by name, and a
+stored job carrying one drops the style and logs it rather than failing. Declared rather than sniffed
+from the file's key prefixes, for the reason a base model's family is declared: a load attempt is not
+a cheap probe. The default is SDXL, so an SDXL adapter needs no new field.
+
+The `loras/` directory is flat and shared across families, which makes a rename mandatory whenever an
+upstream repository ships a generically named file — two entries naming `pytorch_lora_weights.safetensors`
+would be one file on disk, silently the wrong weights under one of the keys. The `Fetch` record
+carries the rename, and it is applied inside the staging directory before anything is moved into
+place, so the generic name never lands in `loras/` at all.
+
+A default weight is a per-entry number and sometimes has to be measured rather than taken from the
+model card: the weight is a multiplier on whatever scale the adapter's own metadata declares, and an
+adapter trained with `use_rslora` declares a much larger one than an ordinary adapter does.
+
 A missing LoRA file is skipped at load time rather than failing the job, and the diagnostics name it.
 See [Models and style LoRAs](03-generating-references.md#models-and-style-loras) and
 [Optional image models and style LoRAs](15-installation.md#optional-image-models-and-style-loras).

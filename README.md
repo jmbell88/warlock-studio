@@ -79,16 +79,29 @@ uvx hf download Lykon/dreamshaper-xl-1-0 `
 
 # FLUX.2 klein-base 4B (~16 GB): the one non-SDXL architecture -- one Qwen3 text
 # encoder at 512 tokens instead of two CLIPs at 77, and a DiT instead of a UNet.
-# Style LoRAs, conditioning and seamless tiles are all SDXL-only and are refused
-# on it; the negative prompt does work, which is why this is the undistilled
-# -base variant rather than the distilled FLUX.2-klein-4B (that one hardwires
-# is_distilled=True, which switches classifier-free guidance off entirely).
+# Conditioning and seamless tiles are SDXL-only and are refused on it. Style
+# LoRAs are per-architecture rather than SDXL-only: an adapter declares the
+# family it was fitted to, and the picker offers a base only the ones that fit.
+# The negative prompt does work here, which is why this is the undistilled
+# -base variant rather than the distilled FLUX.2-klein-4B below (that one
+# hardwires is_distilled=True, which switches classifier-free guidance off
+# entirely).
 # Streamed onto the card a submodule at a time, so it peaks near 10 GB rather
 # than 16 and still coexists with trellis. The --exclude skips a redundant
 # 7.75 GB single-file checkpoint the repo ships beside the diffusers layout.
 uvx hf download black-forest-labs/FLUX.2-klein-base-4B `
   --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
   --exclude "flux-2-klein-base-4b.safetensors" --local-dir models/flux2-klein-base-4b
+
+# FLUX.2 klein 4B distilled (~16 GB): the same architecture at the opposite
+# recipe -- 4 steps at guidance 1.0 rather than 50 at 4.0. It registers
+# is_distilled=True, so classifier-free guidance never runs and the negative
+# prompt is inert on it; pick klein-base above when a negative prompt is
+# wanted. It is here because the FLUX.2 pixel-art LoRA below was trained
+# against it.
+uvx hf download black-forest-labs/FLUX.2-klein-4B `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-4b.safetensors" --local-dir models/flux2-klein-4b
 
 # Style LoRAs -> models/loras/
 uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
@@ -98,6 +111,12 @@ uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
   PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
 uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+# Pixel art for FLUX.2 klein -- the one non-SDXL adapter, offered only on the two
+# klein entries above. Renamed on the way in because loras/ is flat and shared
+# across families, and lcm-lora-sdxl ships the same generic filename.
+uvx hf download Limbicnation/pixel-art-lora `
+  pytorch_lora_weights.safetensors --local-dir models/loras
+Rename-Item models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
 ```
 
 ### Optional conditioning, matting and measurement models

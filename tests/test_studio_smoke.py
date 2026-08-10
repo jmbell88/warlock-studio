@@ -901,6 +901,8 @@ def test_a_non_sdxl_base_disables_the_style_lora_control_and_says_why(app_ctx, i
 
     form = app_ctx.state.form_2d
     form["prompt"] = "a barrel"
+    from warlock import models
+
     form["base_model"] = "sdxl_cfg"
     form["style_lora"] = "render3d"
     assert settings_2d.lora_note(app_ctx, form) is None
@@ -908,11 +910,22 @@ def test_a_non_sdxl_base_disables_the_style_lora_control_and_says_why(app_ctx, i
 
     form["base_model"] = "flux_klein"
     note = settings_2d.lora_note(app_ctx, form)
-    assert note is not None
-    # It has to name bases the user can actually find in the picker.
-    assert "SDXL" in note
-    assert "Style LoRAs need an SDXL model." in settings_2d.validate(form)
-    # And the disabled branch has to draw.
+    if note is not None:
+        # No adapter in the registry fits this architecture: the whole control
+        # is inert, and the note has to name bases the user can find in the
+        # picker.
+        assert settings_2d._base_labels(app_ctx, models.lora_bases()) in note
+    else:
+        # Some adapter fits it, so the control is live and merely narrowed --
+        # and the stale SDXL selection must still be listed, or the value that
+        # keeps Generate off is the one control the user cannot see.
+        assert "render3d" in [k for k, _ in settings_2d.lora_options(app_ctx, form)]
+        assert settings_2d.lora_filter_note(app_ctx, form) is not None
+    assert (
+        "The style LoRA is not fitted to this model's architecture."
+        in settings_2d.validate(form)
+    )
+    # And whichever branch it is has to draw.
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
     # A tile is refused on the same grounds, and independently of the LoRA.

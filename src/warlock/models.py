@@ -224,6 +224,12 @@ class StyleLora:
     # scaffolding, not creative direction, so they don't belong in guidance.py.
     trigger: str = ""
     default_weight: float = DEFAULT_LORA_WEIGHT
+    # Which architecture's modules this adapter names, from FAMILIES. Declared
+    # for the reason BaseModel.family is: an adapter must not become
+    # "SDXL-shaped" because its key prefixes happen to look like one, and a
+    # load attempt is not a cheap probe -- it raises with the base already
+    # resident in VRAM. The default keeps every SDXL entry unedited.
+    family: str = FAMILY_SDXL
     fetch: tuple[Fetch, ...] = ()
 
     @property
@@ -544,6 +550,46 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             ),
         ),
     ),
+    BaseModel(
+        # The distilled sibling of flux_klein above, and the other side of that
+        # entry's argument. This one *does* register is_distilled=True, so
+        # Flux2KleinPipeline.do_classifier_free_guidance is permanently False
+        # and the negative prompt is inert on it -- which needs no new code,
+        # because cfg_bases() filters on guidance_scale > 1.0 and 1.0 excludes
+        # it. Pick klein-base when a negative prompt is wanted.
+        #
+        # It exists so the pixel-art style LoRA can run at the recipe it was
+        # trained on: 4 steps at CFG 1.0. The two checkpoints are the same
+        # architecture, so an adapter fitted to either loads onto both; which
+        # one *expresses* a style is a recipe fact, measured rather than
+        # assumed (docs/measurements/2026-08-10-pixel-art-klein.md).
+        #
+        # Same layout, same probe, same offload argument, same redundant
+        # single-file checkpoint to ignore as klein-base.
+        "flux_klein_distilled",
+        "FLUX.2 klein 4B (distilled, 4-step)",
+        "flux2-klein-4b",
+        image_size=1024,
+        steps=4,
+        guidance_scale=1.0,
+        variant=None,
+        family=FAMILY_FLUX2_KLEIN,
+        residency=OFFLOAD,
+        vram_gib=10.0,
+        probe=(
+            "transformer/diffusion_pytorch_model.safetensors",
+            "text_encoder/model-00001-of-00002.safetensors",
+        ),
+        fetch=(
+            Fetch(
+                "black-forest-labs/FLUX.2-klein-4B",
+                "flux2-klein-4b",
+                allow_patterns=("*.json", "*.txt", "*.jinja", "*.safetensors"),
+                ignore_patterns=("flux-2-klein-4b.safetensors",),
+                size_gib=16.0,
+            ),
+        ),
+    ),
 )
 
 STYLE_LORAS: dict[str, StyleLora] = _table(
@@ -612,6 +658,63 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 "loras",
                 filenames=("pixel-art-xl.safetensors",),
                 size_gib=0.2,
+            ),
+        ),
+    ),
+    StyleLora(
+        # The registry's first non-SDXL adapter, and the reason StyleLora has a
+        # ``family`` at all. Trained against the *distilled* FLUX.2-klein-4B;
+        # klein-base is the same architecture, so it loads onto both, and which
+        # one expresses the style is a recipe fact rather than an architecture
+        # one -- measured in docs/measurements/2026-08-10-pixel-art-klein.md.
+        #
+        # "pixelklein" names the architecture the way "pixelxl" does. A bare
+        # "pixel" is banned: it is a BASE_MODELS key, and keys are adapter
+        # names on one pipeline.
+        #
+        # The trigger is the card's declared trigger_word, so like every other
+        # trigger here it is model-facing scaffolding and may never appear in
+        # guidance.py's fragments -- which tests/test_guidance.py already pins
+        # for the word "pixel", the word this one contains.
+        #
+        # The rename is mandatory rather than tidy: loras/ is flat and shared
+        # across families, and "pytorch_lora_weights.safetensors" is also what
+        # latent-consistency/lcm-lora-sdxl ships. Two generic names in one flat
+        # directory is one file, silently the wrong weights under one of the
+        # keys. fetch_worker performs the rename inside staging, before the
+        # move, so the generic name never lands in loras/ at all.
+        #
+        # The repo also ships a .comfyui.safetensors variant, deliberately not
+        # used: it carries no lora_adapter_metadata and no kohya .alpha keys,
+        # so peft would load it at scale 1.0 against a trained alpha/sqrt(r) of
+        # 16.0 -- a 16x under-application no strength slider could reach. The
+        # diffusers file declares r=64, alpha=128, use_rslora=True in its own
+        # header and is restored exactly.
+        "pixelklein",
+        "Pixel art (FLUX.2 klein)",
+        "pixel-art-klein.safetensors",
+        trigger="pixel art sprite",
+        family=FAMILY_FLUX2_KLEIN,
+        # Measured, and far below every other entry here for one declared
+        # reason: this adapter trained with use_rslora=True, so peft restores a
+        # scale of alpha/sqrt(r) = 128/8 = 16.0 where an ordinary alpha/r LoRA
+        # restores about 2. The slider's meaning is unchanged -- it has always
+        # been a multiplier on whatever the checkpoint declares -- so 0.0625 is
+        # the number that puts this one at an effective 1.0.
+        #
+        # The model card's own 0.85-1.4 assumes a loader that ignores rslora;
+        # honoured, that range is an effective 13.6-22.4 and every image in it
+        # is a black frame. The usable band is 0.02-0.08, and by 0.125 the
+        # lattice is already smearing. All of that is measured, per prompt and
+        # per weight, in docs/measurements/2026-08-10-pixel-art-klein.md.
+        default_weight=0.0625,
+        fetch=(
+            Fetch(
+                "Limbicnation/pixel-art-lora",
+                "loras",
+                filenames=("pytorch_lora_weights.safetensors",),
+                rename=("pytorch_lora_weights.safetensors", "pixel-art-klein.safetensors"),
+                size_gib=0.3,
             ),
         ),
     ),
@@ -840,27 +943,59 @@ def cfg_bases() -> list[str]:
     return [m.key for m in BASE_MODELS.values() if m.guidance_scale > 1.0]
 
 
-def lora_bases() -> list[str]:
-    """Base models a style LoRA may be applied to.
+def lora_fits(base: BaseModel, lora: StyleLora) -> bool:
+    """Whether this adapter can be loaded onto this checkpoint.
 
-    Derived from ``family`` rather than declared, unlike ``controlnet``: "does
-    an SDXL LoRA fit this pipe" *is* the architecture -- the adapter's tensors
-    name UNet modules -- whereas "is a ControlNet qualified against this
-    checkpoint" is a judgement no property can make. Loading one onto a Flux
-    transformer is a load error, not a weak result, which is why this refuses
-    rather than degrading the way a missing LoRA file does.
+    The single owner of the pairing. Two *declared* families compared, never a
+    file inspected: guidance.normalize's refusal, the pane's picker, the
+    loader's filter and the worker's tolerance are all this one line, so they
+    cannot come to disagree about a pair. Loading a mismatched adapter is a
+    load error with the base already resident, not a weak result, which is why
+    every one of those sites refuses rather than degrading the way a missing
+    LoRA file does.
     """
-    return [m.key for m in BASE_MODELS.values() if m.family == FAMILY_SDXL]
+    return lora.family == base.family
+
+
+def loras_by_base() -> dict[str, list[str]]:
+    """Which style LoRAs fit each base, keyed by base key -- the picker's question.
+
+    Not "may this base have a style" but "which styles": a flat list of bases
+    was enough only while every adapter in the registry named one
+    architecture's modules.
+    """
+    return {
+        m.key: [lora.key for lora in STYLE_LORAS.values() if lora_fits(m, lora)]
+        for m in BASE_MODELS.values()
+    }
+
+
+def lora_bases() -> list[str]:
+    """Base models that can take *some* style LoRA -- what greys the picker.
+
+    Keeps its name, signature and meaning; only its derivation changed. The
+    question is no longer "is this SDXL" but "does the registry hold an adapter
+    fitted to this architecture", so no caller of it is a rename.
+
+    Sharing a derivation with ``loras_by_base`` is right here and is *not* the
+    ``tile_bases`` hazard below. That one is two independent questions with
+    coincidentally equal answers; this is a single question -- whether the map's
+    entry is non-empty -- so sharing is precisely what keeps the greyed picker
+    and the populated picker in agreement rather than how they would drift.
+    """
+    return [key for key, loras in loras_by_base().items() if loras]
 
 
 def tile_bases() -> list[str]:
     """Base models that can produce a seamless tile.
 
-    Its own name rather than a second reader of ``lora_bases()``, which today
-    returns the same list: seamlessness is circular padding over ``Conv2d``,
-    and a LoRA is a set of UNet tensors. They agree only because both are SDXL
-    facts right now, and a shared list is how two questions quietly become one
-    wrong answer.
+    Its own name rather than a second reader of ``lora_bases()``:
+    seamlessness is circular padding over ``Conv2d``, and a LoRA is a set of
+    some architecture's tensors. The two lists once agreed, because both were
+    SDXL facts; they genuinely differ now that the registry carries a FLUX.2
+    adapter, so the shared list this avoided would already have made a DiT
+    "tileable" -- an image that looks seamless in a thumbnail and seams in a
+    material.
     """
     return [m.key for m in BASE_MODELS.values() if m.family == FAMILY_SDXL]
 

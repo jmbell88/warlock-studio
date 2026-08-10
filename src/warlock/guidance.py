@@ -473,15 +473,27 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
                 field="lora_weight",
             )
 
-    if style_lora is not None and base_model.family != models.FAMILY_SDXL:
+    if style_lora is not None and not models.lora_fits(base_model, style_lora):
         # Symmetric with the ControlNet refusal below, and refused for a
-        # stronger reason: every style LoRA in the registry names SDXL UNet
-        # modules, so loading one onto another architecture raises at load time
-        # with the checkpoint already in VRAM rather than merely doing nothing.
-        # ``base_model``, not ``style_lora``: two controls are in conflict and
-        # only one of them can be highlighted, so it is the one the message
-        # already tells the user to change. A highlight that disagreed with the
-        # sentence beside it would be worse than none.
+        # stronger reason: an adapter names one architecture's modules, so
+        # loading it onto another raises at load time with the checkpoint
+        # already in VRAM rather than merely doing nothing.
+        #
+        # Two controls are in conflict and only one can be highlighted, so it
+        # is the one the message tells the user to change -- and which one that
+        # is depends on whether a remedy exists on the style side. When some
+        # adapter fits this base, the base is fine and the style is wrong; when
+        # none does, the style is fine and the base is. Ringing the other would
+        # highlight a control the sentence does not mention, which is worse
+        # than ringing nothing.
+        fitting = models.loras_by_base().get(base_model.key) or []
+        if fitting:
+            raise GuidanceError(
+                f"style_lora {style_lora.key!r} is fitted to {style_lora.family} "
+                f"and base_model {base_model.key!r} is {base_model.family}; "
+                f"pick one of {fitting}",
+                field="style_lora",
+            )
         raise GuidanceError(
             f"base_model {base_model.key!r} cannot take a style LoRA; "
             f"pick one of {models.lora_bases()}",
@@ -830,6 +842,11 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
         # And again for the style LoRA: what the UI checks before it offers the
         # picker as a live control rather than a disabled one with a reason.
         "lora_bases": models.lora_bases(),
+        # And which ones, once the picker is live. Deliberately not a family on
+        # each style_lora option: that would be a second spelling of the
+        # pairing, and the UI never needs an adapter's family, only whether the
+        # chosen base is offered it.
+        "loras_by_base": models.loras_by_base(),
         # Copied, not handed out: the UI reads these and a shared dict would let
         # a caller mutate the shipped table.
         "presets": [dict(p) for p in PRESETS],

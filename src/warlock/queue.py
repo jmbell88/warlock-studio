@@ -915,15 +915,22 @@ class Worker:
             style_lora = params.get("style_lora") or None
             lora_weight = float(params.get("lora_weight", models.DEFAULT_LORA_WEIGHT))
             spec = models.BASE_MODELS[base_key]
-            if style_lora is not None and spec.family != models.FAMILY_SDXL:
+            style = models.STYLE_LORAS.get(style_lora or "")
+            if style is not None and not models.lora_fits(spec, style):
                 # The same tolerance _conditioning applies to a ControlNet the
                 # base cannot run, and reachable the same two ways: a stored
                 # base_model fell back to the default above, or a row predates
                 # the base changing family. Dropping the style beats failing a
                 # job whose params the user can no longer edit.
+                #
+                # A style_lora naming a key the registry no longer holds
+                # resolves to None here and passes through untouched, which is
+                # today's behaviour exactly -- _apply_adapters logs "not
+                # downloaded" for it. That is a pre-existing tolerance.
                 log.warning(
-                    "base model %s cannot take a style LoRA; generating without %s",
-                    spec.key, style_lora,
+                    "base model %s (%s) cannot take the style LoRA %s (%s); "
+                    "generating without it",
+                    spec.key, spec.family, style.key, style.family,
                 )
                 style_lora = None
             cond = await self._conditioning(job_dir, params, spec)

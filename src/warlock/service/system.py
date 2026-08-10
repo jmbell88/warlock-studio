@@ -141,6 +141,10 @@ def prompt_preview(
     # Same gate the real run applies (text2image.generate only prepends a
     # trigger for an adapter that actually loaded): a LoRA missing on disk must
     # not show its trigger in the preview and then drop it at run time.
+    #
+    # Presence is the only question left here. Fitness needs no test: normalize
+    # ran above in this same function and refuses a cross-family pair, so a
+    # style that reaches this line is one the chosen base can take.
     trigger = (
         style.trigger
         if style and (svc.config.t2i_model_root / "loras" / style.filename).exists()
