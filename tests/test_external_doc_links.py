@@ -35,11 +35,12 @@ MANUAL = ROOT / "docs" / "manual"
 # the whole point here is that a link nobody walks is a link that rots.
 SOURCES = (
     ROOT / "README.md",
-    # Moved out of the repo root on 2026-08-09. A missing entry here is silent
-    # -- ``_manual_links`` skips a path that does not exist, so the count simply
-    # falls -- which is exactly what ``test_the_sources_actually_carry_manual_links``
-    # is for, and it is what caught the move.
-    ROOT / "docs" / "LEFTOVERS.md",
+    # LEFTOVERS.md until 2026-08-10, when the roadmap was rewritten as
+    # TODO.md. A missing entry here is silent -- ``_manual_links`` skips a path
+    # that does not exist, so the count simply falls -- which is exactly what
+    # ``test_the_sources_actually_carry_manual_links`` is for, and it caught
+    # both this rename and the 2026-08-09 move out of the repo root.
+    ROOT / "docs" / "TODO.md",
     ROOT / "CLAUDE.md",
     *sorted((ROOT / "docs" / "measurements").glob("*.md")),
 )
