@@ -104,6 +104,11 @@ def test_the_engine_never_imports_the_queue():
     for path in _modules():
         for name in _outward(path):
             assert not name.startswith("warlock.queue"), f"{path.name} imports {name}"
+            # ``warlock._q_*`` too: the queue's worker halves are the same
+            # dependency wearing a different name, and importing one of those
+            # would drag torch behind a headless test as surely as importing
+            # ``queue`` itself.
+            assert not name.startswith("warlock._q"), f"{path.name} imports {name}"
 
 
 def test_the_only_outward_imports_are_the_ones_written_down():

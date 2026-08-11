@@ -176,6 +176,40 @@ def test_every_document_edit_re_arms_the_pack():
     assert tab.pack_dirty
 
 
+def test_a_pack_that_cannot_fit_carries_the_engines_remedy(monkeypatch):
+    """``layout`` raises with the number *and* what to do about it, and only a
+    ``ServiceError``'s text survives the task classifier -- so an unframed
+    ``ValueError`` put "see the log for details" in the items pane instead."""
+    from warlock.service.errors import ServiceError
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.set_settings(ctx, tab, mode="maxrects", max_size=1)
+    tab.pack_dirty = True
+    with pytest.raises(ServiceError) as caught:
+        packwright_mode.request_pack(ctx, tab)
+    assert caught.value.message.startswith("That pack did not work")
+    assert "raise the max size" in caught.value.message
+
+
+def test_an_edit_made_during_a_pack_survives_its_adoption():
+    """``adopt_pack`` must not touch ``pack_dirty``: the edit that arrived while
+    the pack was in flight is not in the layout landing now, and the flag is
+    cleared at the submit rather than at the adoption."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.request_pack(ctx, tab)
+    result = ctx.result
+    packwright_mode.set_settings(ctx, tab, padding=6)
+    assert tab.pack_dirty
+
+    packwright_mode.on_task_done(ctx, _Done(f"packwright-pack:{tab.uid}", result))
+    assert tab.pack_dirty
+    ctx.submitted.clear()
+    packwright_mode.pump(ctx)
+    assert ctx.submitted == [f"packwright-pack:{tab.uid}"]
+
+
 def test_a_failed_pack_clears_packing_and_says_why():
     """An empty items list that looks like success is the worst outcome of a
     pack that could not fit."""
@@ -241,6 +275,46 @@ def test_an_inker_document_contributes_one_sprite_per_frame():
 
     packwright_mode.add_inker_document(ctx, inker_tab)
     assert [s.key for s in tab.doc.sprites()] == ["walk#frame0000", "walk#frame0001"]
+
+
+def test_an_unknown_setting_is_a_framed_toast_rather_than_a_crash():
+    """``dataclasses.replace`` raises ``TypeError`` for a field that does not
+    exist, which the ``ValueError``-only clause let through as a crash."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.set_settings(ctx, tab, nonsense=1)
+    assert ctx.toasts[-1][1] == "error"
+    assert ctx.toasts[-1][0].startswith("That setting was not applied:")
+
+
+def test_renaming_a_source_re_arms_the_pack():
+    """The pane used to write onto the document, so the name changed in the
+    list and the *layout* -- which is what the sidecar's ``filename`` comes
+    from -- kept the old one until something else dirtied the pack."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _pack(ctx, tab)
+    packwright_mode.rename_source(ctx, tab, tab.doc.sources[0].uid, "hero")
+    assert tab.pack_dirty
+    _pack(ctx, tab)
+    assert [f.name for f in tab.layout.frames if f.key == "s0"] == ["hero"]
+
+
+def test_a_rename_while_saving_is_ignored():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    packwright_mode.rename_source(ctx, tab, tab.doc.sources[0].uid, "hero")
+    assert tab.doc.sources[0].name == "s0"
+
+
+def test_a_name_the_sidecar_could_not_carry_is_refused_with_the_reason():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.rename_source(ctx, tab, tab.doc.sources[0].uid, "sub/hero")
+    assert ctx.toasts[-1][1] == "error"
+    assert ctx.toasts[-1][0].startswith("That name was not applied:")
+    assert tab.doc.sources[0].name == "s0"
 
 
 def test_removing_the_selected_source_clears_the_selection():
@@ -400,6 +474,61 @@ def test_undo_re_arms_the_pack(monkeypatch):
     event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z)
     assert packwright_mode.handle_key(ctx, event) is True
     assert tab.pack_dirty
+
+
+def test_ctrl_shift_z_redoes(monkeypatch):
+    """What Inker, Clay and Plotter all accept. Ctrl+Y keeps working: this adds
+    a spelling rather than replacing one."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.set_settings(ctx, tab, padding=6)
+    tab.doc.undo()
+    assert tab.doc.settings.padding != 6
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL | pygame.KMOD_SHIFT)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z)
+    assert packwright_mode.handle_key(ctx, event) is True
+    assert tab.doc.settings.padding == 6
+
+
+def test_delete_after_an_undo_does_not_crash(monkeypatch):
+    """Ctrl+Z after adding a source left ``selected`` naming a detached uid,
+    and Delete then raised a bare ``KeyError`` into the pygame key dispatch."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=1)
+    state = packwright_mode.ensure(ctx)
+    added = tab.doc.add_source(_sprite("new"))
+    state.selected = added.uid
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
+    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z))
+    assert state.selected is None
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE))
+    assert len(tab.doc.sources) == 1
+
+
+def test_an_undo_that_keeps_the_source_keeps_the_selection(monkeypatch):
+    """Narrower than Plotter's unconditional clear: a source's uid survives
+    every step but the one that detaches it, so an undone *rename* has no
+    business deselecting the row it renamed."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = packwright_mode.ensure(ctx)
+    uid = tab.doc.sources[0].uid
+    tab.doc.rename_source(uid, "hero")
+    state.selected = uid
+
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
+    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z))
+    assert state.selected == uid
 
 
 def test_delete_removes_the_selected_source(monkeypatch):

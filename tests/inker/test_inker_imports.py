@@ -130,6 +130,22 @@ def test_the_engine_never_imports_the_service_layer():
             assert "warlock.service" not in name, f"{path.name} imports {name}"
 
 
+def test_the_engine_never_imports_the_queue():
+    """The one pin this file did not have, and its three siblings did. Both
+    spellings: ``warlock.queue`` is the front door and ``warlock._q_*`` are the
+    worker halves behind it, and importing either would put a job queue and
+    torch under a headless test of what a brush does to a pixel.
+
+    ``pipelines`` is deliberately not named here, unlike in the Clay and
+    Plotter pins -- this suite's allowlist already decides what the raster
+    editor may reach for there, and a second rule would be a second answer.
+    """
+    for path in _modules():
+        for name in _outward(path):
+            assert not name.startswith("warlock.queue"), f"{path.name} imports {name}"
+            assert not name.startswith("warlock._q"), f"{path.name} imports {name}"
+
+
 def test_the_engine_never_imports_the_other_pure_packages():
     """Four engines, not one with four front doors."""
     for path in _modules():

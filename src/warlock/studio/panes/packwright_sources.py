@@ -91,7 +91,10 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
     if selected and editable:
         name = widgets.input_text("##rename", source.name, max_length=64)
         if name != source.name:
-            tab.doc.rename_source(source.uid, name)
+            # Through the mode, not onto the document: the mode is what re-arms
+            # the pack, and a name that never reaches the layout is a name the
+            # exported sidecar does not carry.
+            packwright_mode.rename_source(ctx, tab, source.uid, name)
         if widgets.destructive_button(f"{icons.TRASH} Remove", (-1, 0)):
             packwright_mode.remove_source(ctx, source.uid, tab)
     imgui.pop_id()

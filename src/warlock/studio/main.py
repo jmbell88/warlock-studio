@@ -3593,6 +3593,9 @@ class App:
                 ("Ctrl+N / O / W", "New / open / close"),
                 ("Ctrl+Tab", "Next atlas"),
                 ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+                # Middle drag alone, not "Space / middle drag" as Plotter's row
+                # says: there is no space-pan in this mode to advertise.
+                ("Middle drag", "Pan (wheel zooms)"),
             ],
         )
         self._draw_shortcut_rows(sections)

@@ -31,6 +31,17 @@ from .sources import Sprite
 
 _uids = itertools.count(1)
 
+# What every "no such source" refusal says. A ``ValueError`` rather than the
+# bare ``KeyError`` these used to raise: the mode frames a ``ValueError`` into a
+# toast and lets anything else through to the log, so a uid that went stale --
+# a selection surviving an undo, say -- reached the key dispatch as a crash.
+MISSING_SOURCE = "that source is not in this pack"
+
+# The pane's own ``max_length``, mirrored here because this is where it has to
+# be true: a name typed into the field is bounded by the widget, and a name that
+# arrived in a hand-edited manifest is not bounded by anything.
+MAX_NAME_LEN = 64
+
 
 def new_uid() -> int:
     return next(_uids)
@@ -162,7 +173,7 @@ class PackDoc:
         for index, entry in enumerate(self.sources):
             if entry.uid == uid:
                 return index
-        raise KeyError(f"no source {uid}")
+        raise ValueError(MISSING_SOURCE)
 
     def has_key(self, key: str) -> bool:
         return any(entry.key == key for entry in self.sources)
@@ -208,10 +219,25 @@ class PackDoc:
         self._detach(source)
 
     def rename_source(self, uid: int, name: str) -> None:
+        """Rename one source, or clear the override with an empty string.
+
+        The name is a *door*: it lands verbatim in the TexturePacker sidecar's
+        ``filename`` and in a ``.tsx``, which are read by other programs, so a
+        path separator or a control character in it is a name that means
+        something else once it leaves here. The empty string stays legal --
+        that is how the override is cleared, and what the sprite is then called
+        is what it came in as.
+        """
         source = self.source(uid)
         if source is None:
-            raise KeyError(f"no source {uid}")
+            raise ValueError(MISSING_SOURCE)
         after = str(name)
+        if len(after) > MAX_NAME_LEN:
+            raise ValueError(f"a sprite name is at most {MAX_NAME_LEN} characters")
+        if any(ch in after for ch in "/\\") or any(ch < " " for ch in after):
+            raise ValueError(
+                "a sprite name cannot hold a path separator or a control character"
+            )
         if after == source.name_override:
             return
         self.history.push(SourceRenameEdit(uid=int(uid), before=source.name_override, after=after))
@@ -232,12 +258,12 @@ class PackDoc:
             if entry is source:
                 del self.sources[index]
                 return
-        raise KeyError("that source is not in this pack")
+        raise ValueError(MISSING_SOURCE)
 
     def _apply_name(self, uid: int, name: str) -> None:
         source = self.source(uid)
         if source is None:
-            raise KeyError(f"no source {uid}")
+            raise ValueError(MISSING_SOURCE)
         source.name_override = name
 
     def _apply_settings(self, settings: PackSettings) -> None:

@@ -36,7 +36,7 @@ def draw(ctx: Any) -> None:
     if tab is None:
         imgui.dummy((0, 8))
         widgets.muted_wrapped("Start an atlas, open one, or drop images on the window.")
-        _recent(ctx, state)
+        _recent(ctx)
         return
 
     ready = not tab.busy
@@ -47,6 +47,10 @@ def draw(ctx: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Save as...", ready, (width, 0)):
         packwright_mode.save_as(ctx, tab)
+    if tab.busy:
+        # What the two greyed buttons above mean. ``clay_bridge._facts`` is the
+        # model: a disabled control with nothing saying why reads as broken.
+        widgets.muted("Saving...")
     if tab.path is not None:
         widgets.muted(str(tab.path))
     if tab.dirty:
@@ -74,21 +78,13 @@ def draw(ctx: Any) -> None:
         "beside it so it can be reopened from the library."
     )
 
-    _recent(ctx, state)
+    _recent(ctx)
 
 
-def _recent(ctx: Any, state: Any) -> None:
+def _recent(ctx: Any) -> None:
     from pathlib import Path
 
-    from imgui_bundle import imgui
-
-    found = packwright_mode.recent_paths(ctx)
-    if not found:
-        return
-    imgui.dummy((0, 8))
-    widgets.section("recent")
-    for path in found[:6]:
-        if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
-            packwright_mode.open_path(ctx, Path(path))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(path)
+    widgets.recent_files(
+        packwright_mode.recent_paths(ctx),
+        lambda path: packwright_mode.open_path(ctx, Path(path)),
+    )

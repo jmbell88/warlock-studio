@@ -22,20 +22,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from .. import docmodes
+
 PREFIX = "plotter_tex:"
 
 
 def _slot(uid: str, name: str) -> str:
     return f"{PREFIX}{uid}:{name}"
-
-
-def _forget(ctx: Any, texture: Any) -> None:
-    from .. import imgui_backend
-
-    renderer = imgui_backend.current()
-    if renderer is not None:
-        renderer.forget_texture(texture)
-    texture.release()
 
 
 def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
@@ -55,7 +48,7 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
     # under it would draw the old atlas forever with nothing in the data to
     # say why.
     if texture is not None and ctx.state.preview.get(stamp_key) != id(tileset.pixels):
-        _forget(ctx, texture)
+        docmodes.forget_texture(texture)
         texture = None
     if texture is None:
         pixels = tileset.pixels
@@ -74,15 +67,8 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
 
 def release_doc(ctx: Any, uid: str) -> None:
     """Drop every texture belonging to one closed tab."""
-    prefix = f"{PREFIX}{uid}:"
-    for key in [k for k in list(ctx.state.preview) if k.startswith(prefix)]:
-        value = ctx.state.preview.pop(key, None)
-        if value is not None and hasattr(value, "release"):
-            _forget(ctx, value)
+    docmodes.release_prefix(ctx, f"{PREFIX}{uid}:")
 
 
 def release_all(ctx: Any) -> None:
-    for key in [k for k in list(ctx.state.preview) if k.startswith(PREFIX)]:
-        value = ctx.state.preview.pop(key, None)
-        if value is not None and hasattr(value, "release"):
-            _forget(ctx, value)
+    docmodes.release_prefix(ctx, PREFIX)

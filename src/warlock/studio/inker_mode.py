@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, filetypes, inker_state, recents
+from . import dialogs, docmodes, filetypes, inker_state, recents
 from .inker import animation
 from .inker_state import InkerDoc, InkerState
 from .state import set_mode
@@ -601,10 +601,9 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
         path.write_bytes(doc.png_bytes())
 
 
-def _start(ctx: Any, tab: InkerDoc, key: str, run: Any) -> None:
-    tab.saving = True
-    if not ctx.submit(key, run):
-        tab.saving = False
+# One rule for all four document modes: see :func:`docmodes.start_save` for why
+# a refused submit has to clear the flag.
+_start = docmodes.start_save
 
 
 def _save_linked(ctx: Any, tab: InkerDoc) -> None:
@@ -984,21 +983,7 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     and going Home are not, because Paint is a mode rather than a takeover and
     its tabs are still there when you come back.
     """
-    state = ctx.state.inker
-    if state is None or not state.any_dirty:
-        proceed()
-        return True
-    count = sum(1 for doc in state.docs if doc.dirty)
-    what = "one drawing has" if count == 1 else f"{count} drawings have"
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved work?",
-            message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
-            f" if you {verb}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    return docmodes.guard(ctx, "inker", "drawing", "drawings", verb, proceed)
 
 
 # --- free transform ---------------------------------------------------------

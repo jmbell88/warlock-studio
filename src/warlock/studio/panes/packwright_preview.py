@@ -105,14 +105,14 @@ def _tabs(ctx: Any, state: Any) -> None:
 def _empty(ctx: Any) -> None:
     from imgui_bundle import imgui
 
-    imgui.dummy((0, 40))
+    imgui.dummy((0, sp(40)))
     imgui.text("Nothing open")
     widgets.muted("Start an atlas, open a .wpack, or drop images on the window.")
-    imgui.dummy((0, 16))
-    if imgui.button("New atlas", (240, 0)):
+    imgui.dummy((0, sp(16)))
+    if imgui.button("New atlas", (sp(240), 0)):
         packwright_mode.new_document(ctx)
-    imgui.dummy((0, 8))
-    if imgui.button("Open a file...", (240, 0)):
+    imgui.dummy((0, sp(8)))
+    if imgui.button("Open a file...", (sp(240), 0)):
         packwright_mode.ask_open(ctx)
 
 

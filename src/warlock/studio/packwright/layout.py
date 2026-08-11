@@ -38,6 +38,18 @@ MODES = ("grid", "maxrects")
 DEFAULT_PADDING = 2
 DEFAULT_MAX_SIZE = 2048
 
+# A gutter wider than the largest atlas tile is not a gutter, and the sliders
+# offer 16 and 8 -- so this refuses only a hand-edited manifest, where a padding
+# of a billion is a grid whose first cell is past the size ceiling and whose
+# arithmetic overflows nothing but the user's patience.
+MAX_PADDING = 256
+
+# The most sprites one atlas may hold. MaxRects is quadratic in the free-rect
+# list, so a document claiming a million sources is not a slow pack but a hung
+# frame thread; 4096 is well past any real sheet (a 64x64 grid at the 8192px
+# ceiling) and short of where the search stops answering.
+MAX_SPRITES = 4096
+
 
 def next_pot(value: int) -> int:
     """The smallest power of two at or above ``value``. ``1`` for anything
@@ -59,6 +71,10 @@ class PackSettings:
             raise ValueError(f"mode must be one of {list(MODES)}")
         if self.padding < 0 or self.extrude < 0:
             raise ValueError("padding and extrude cannot be negative")
+        if self.padding > MAX_PADDING:
+            raise ValueError(f"padding must be at most {MAX_PADDING}px")
+        if self.extrude > MAX_PADDING:
+            raise ValueError(f"extrude must be at most {MAX_PADDING}px")
         if self.padding < self.extrude * 2:
             raise ValueError(
                 f"padding must be at least twice extrude "
@@ -152,7 +168,15 @@ def _measure(sprites: list[Sprite], settings: PackSettings) -> list[_Measured]:
     the layout*: grid mode places row-major in it, and maxrects sorts from it.
     A caller's list order comes from a document the user reorders, which is not
     an order a file format should depend on.
+
+    The sprite-count ceiling is asked here rather than in either packer, which
+    is what makes it one door: every caller of either mode comes through this.
     """
+    if len(sprites) > MAX_SPRITES:
+        raise ValueError(
+            f"this pack holds {len(sprites)} sprites; {MAX_SPRITES} is the most one "
+            "atlas will take -- split it into several packs"
+        )
     out = []
     for sprite in sorted(sprites, key=lambda s: s.key):
         x, y, w, h, empty = trim_rect(sprite.pixels, enabled=settings.trim)

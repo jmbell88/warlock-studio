@@ -57,18 +57,19 @@ Warlock Studio — UX/UI Review Report
  2048² clip is a multi-second dead-looking hang. Use the incremental step_sheet_strip model or flag-then-draw-one-frame.
  - "Fix matte" can silently do nothing (inker_mode._cut_matte:293-308 logs and swallows on the explicit-button path).
  - Clickable lies while busy: Plotter's layer controls are FIXED (the eye button and the three context-menu items are wrapped in
- begin_disabled while the tab is saving; the selectable stays live because choosing a layer changes no document). Packwright settings
- (packwright_settings.py:49-80 — slider moves then snaps back) still draw live and discard the click; the anti-pattern is documented and
- fixed in clay_tools/clay_menu. Fix: begin_disabled(tab.busy).
- - No "Saving..." indication in Packwright/Plotter bridges (packwright_bridge.py:42, plotter_bridge.py:43); clay_bridge._facts:62-65 is the
- model. "Render sheet" lacks the spinner its neighbours have (sheet_panel._submit:255).
+ begin_disabled while the tab is saving; the selectable stays live because choosing a layer changes no document). Packwright settings are
+ FIXED too (the whole control block is wrapped in begin_disabled(tab.busy); the "Saving..." line stays outside it, being the explanation).
+ The anti-pattern is documented and fixed in clay_tools/clay_menu.
+ - No "Saving..." indication in the Plotter bridge (plotter_bridge.py:43); clay_bridge._facts:62-65 is the model, and Packwright's bridge now
+ follows it. "Render sheet" lacks the spinner its neighbours have (sheet_panel._submit:255).
  - A filed Review verdict auto-advances with no confirmation of what was filed and no visible undo route (record:696-729; the "Recorded"
  line describes the next unit). Recovery exists (Left + re-grade) but nothing says so.
  - Ctrl+Enter Generate silently no-ops on an invalid form from the palette/shortcut path (palette.py:139-145 → settings_2d.py:1104); the
  button path shows problems, the keyboard path shows nothing.
  - Raw str(exc) toasts vs the house style (plain sentence + action="log"): the two Plotter sites are FIXED (the resize form and the
- tileset-from-Inker path now frame the detail — "The map was not resized: ..."), leaving packwright_mode.py:229/274, review_mode.py:1027 and
- candidates_panel.py:94; Invalid without field wrapping raw OS errors at settings_2d.py:1129, settings_3d.py:626.
+ tileset-from-Inker path now frame the detail — "The map was not resized: ..."), and Packwright's two are FIXED as well ("That setting was
+ not applied: ...", "Those frames were not added: ..."), leaving review_mode.py:1027 and candidates_panel.py:94; Invalid without field
+ wrapping raw OS errors at settings_2d.py:1129, settings_3d.py:626.
  - Autosave failure surfaces as an unexplained generic red toast (inker_mode._write_autosave:1293 → generic collector message).
 
  C. Accessibility
@@ -87,17 +88,17 @@ Warlock Studio — UX/UI Review Report
 
  D. UI-scale 1.5 (new instances of the known class)
 
- Unscaled literals: both primary CTAs (-1, 34) (settings_2d.py:992, settings_3d.py:339); (240, 0) buttons (packwright_preview.py:105;
- Plotter's are FIXED); unscaled set_next_item_width (inker_tools.py:333, retarget_panel.py:86; plotter_layers' two are FIXED); unscaled
- dummies (dialogs.py:219 — in the file that documents this exact mistake; settings_2d.py:977; settings_3d.py:320/527); two of four
- workspace empty states still unscaled (_clay_empty:2049, packwright_preview._empty:101 — Inker's and Plotter's use sp()). The
+ Unscaled literals: both primary CTAs (-1, 34) (settings_2d.py:992, settings_3d.py:339); Packwright's and Plotter's (240, 0) buttons are
+ FIXED; unscaled set_next_item_width (inker_tools.py:333, retarget_panel.py:86; plotter_layers' two are FIXED); unscaled
+ dummies (dialogs.py:219 — in the file that documents this exact mistake; settings_2d.py:977; settings_3d.py:320/527); one of four
+ workspace empty states still unscaled (_clay_empty:2049 — Inker's, Plotter's and Packwright's use sp()). The
  viewport toolbar never wraps — panes/overlay.py has 12 same_line(), 0 same_line_or_wrap; tail controls vanish at 1.5 scale
  (inspector/settings_3d/app_settings/landing same shape, lower risk). Verify any fixes with scripts/screenshot_modes.py at 1.5.
 
  E. Discoverability & navigation (load-bearing since Alt+digit removal)
 
  - The shortcuts popup itself has no shortcut and no palette command (main.py:3042, mouse-only ? button).
- - Palette gaps: no New map / New atlas (Home has all six); no Save/Save as/Export/Undo/Redo/Quit/Open log/Show trash/Empty trash;
+ - Palette gaps: no New map (Home has all six); no Save/Save as/Export/Undo/Redo/Quit/Open log/Show trash/Empty trash;
  quick-open doesn't match tags. Disabled rows never say why (contradicting palette.py:20-24's own docstring); Enter on a greyed row
  silently returns.
  - disabled_button promises a tooltip it doesn't draw — docstring says "a greyed one with a tooltip says why"; takes no reason, 86 call
@@ -123,12 +124,10 @@ Warlock Studio — UX/UI Review Report
 
  F. Consistency
 
- - Redo: Ctrl+Shift+Z accepted in Inker/Clay and now Plotter too, Ctrl+Y-only in Packwright. Ctrl+W closes docs in 3 of 4 editors (see A3). Ctrl+E
+ - Redo: Ctrl+Shift+Z accepted in all four editors now. Ctrl+W closes docs in 3 of 4 editors (see A3). Ctrl+E
  export-to-library in 3 modes, absent in Inker (where Ctrl+Shift+E means Export PNG but Export .tmx/atlas elsewhere). Ctrl+1 = 100% zoom
  in four workspaces, front-view in Clay (defensible; needs a cue).
  - Undo/redo has on-screen controls only in Inker; Clay/Plotter/Packwright have none.
- - Dirty markers: Inker and Plotter both use TabItemFlags_.unsaved_document (with a rationale comment); Packwright still prepends "* " to
- the title — the exact thing the comment argues against.
  - 16 widgets.toggle vs 22 raw imgui.checkbox (mixed within single panes); 20 raw sliders vs labeled_slider_* (app_settings.py:64
  hand-rolls the very slider the helper was written for); raw collapsing_header at 2 sites loses persist_key (section forgets open state);
  hand-rolled problem lines in both settings panes (third error register, no glyph); shortcuts button is ASCII "?" while help_marker
@@ -136,8 +135,9 @@ Warlock Studio — UX/UI Review Report
  - Card-vs-palette delete disagree: card trashes with no confirm (deliberate — trash is the confirm), palette's identical command raises a
  Confirm and its label promises a dialog.
  - Silent input truncation: input_text/multiline clamp out[:max_length] with no notice.
- - Shortcuts popup omissions: Inker animation keys entirely absent; Clay axis views absent; Packwright documents no pan. (The Plotter row
- no longer advertises a broken space-pan: the latch is fixed — see A1.)
+ - Shortcuts popup omissions: Inker animation keys entirely absent; Clay axis views absent. (The Plotter row
+ no longer advertises a broken space-pan: the latch is fixed — see A1; Packwright's row now names middle-drag pan, and only that, since it
+ has no space-pan to advertise.)
  - Stale content: comments at widgets.py:317, inspector.py:942, review_mode.py:1118 still quote the retired AUC 0.115 "inverted" figure
  (LEFTOVERS §2 re-baseline: 0.756, corpus-dependent — behaviour stays, comments should update); widgets.py:324 cites TODO.md §2 which is
  now docs/LEFTOVERS.md.

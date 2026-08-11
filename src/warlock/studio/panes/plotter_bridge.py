@@ -39,7 +39,7 @@ def draw(ctx: Any) -> None:
         widgets.muted_wrapped(
             f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window."
         )
-        _recent(ctx, state)
+        _recent(ctx)
         return
 
     ready = not tab.busy
@@ -80,23 +80,13 @@ def draw(ctx: Any) -> None:
         "kept beside it so this document can be reopened from the library."
     )
 
-    _recent(ctx, state)
+    _recent(ctx)
 
 
-def _recent(ctx: Any, state: Any) -> None:
+def _recent(ctx: Any) -> None:
     from pathlib import Path
 
-    from imgui_bundle import imgui
-
-    found = plotter_mode.recent_paths(ctx)
-    if not found:
-        return
-    imgui.dummy((0, 8))
-    widgets.section("recent")
-    for path in found[:6]:
-        # The path is in the id, not just the label: two maps can share a
-        # basename and one imgui id between them is one row.
-        if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
-            plotter_mode.open_path(ctx, Path(path))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(path)
+    widgets.recent_files(
+        plotter_mode.recent_paths(ctx),
+        lambda path: plotter_mode.open_path(ctx, Path(path)),
+    )

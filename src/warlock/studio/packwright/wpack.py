@@ -38,7 +38,23 @@ SOURCE_DIR = "sources"
 
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 
-WPACK_SUFFIX = ".wpack"
+# A zip's directory declares what each member unpacks to and nothing makes that
+# number honest -- a few kilobytes of archive can claim terabytes, and the read
+# that discovers this is the one that has already exhausted memory. One gigabyte
+# is far past any atlas document this editor produces (a few hundred sprites of
+# a megapixel each is tens of megabytes) and far short of a machine's RAM, so
+# the ceiling is only ever hit by a file that was not written by us. The
+# ``clay/serialize.py`` constant verbatim, read from module globals at call time
+# for its reason too: a test lowers it rather than building a gigabyte.
+MAX_DECOMPRESSED_BYTES = 1 << 30
+
+# And a ceiling per source image, because the byte ceiling above is about the
+# archive rather than about any one member: a single 60000-square PNG deflates
+# to very little and decodes to fourteen gigabytes of RGBA. The number mirrors
+# ``service.validation.MAX_IMAGE_PIXELS`` rather than importing it -- this
+# package may not reach for the service layer, which its import pin enforces --
+# so the two are one answer written twice on purpose.
+MAX_SOURCE_PIXELS = 16_000_000
 
 
 def manifest_json(doc: PackDoc) -> str:
@@ -86,28 +102,68 @@ def read_wpack(data: bytes) -> PackDoc:
     Restored by construction, so the document reads clean: a file that has just
     been opened is not unsaved.
     """
-    from PIL import Image
+    from . import layout as laylib
 
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
-        manifest = json.loads(zf.read(MANIFEST))
-    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock atlas document") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("this atlas document's manifest is malformed")
 
-    version = int(manifest.get("version", 0))
-    if version > VERSION:
-        raise ValueError(
-            f"this atlas document was written by a newer version of Warlock "
-            f"(format {version}, this build reads {VERSION})"
-        )
-
+    # Everything that can raise is inside the ``with``, the version check and
+    # the manifest parse included. They used to sit in the gap between the open
+    # and the ``with``, where a refusal -- the one thing they exist to do --
+    # left the archive open with nothing to close it but the collector. The
+    # ``clay/serialize.read_wblk`` and ``wmap.read_wmap`` shape, third instance.
     with zf:
+        # Before anything is read: the directory says what every member unpacks
+        # to, and the cheapest place to refuse an archive that claims more than
+        # this build will hold is before the first ``read``.
+        claimed = sum(int(info.file_size) for info in zf.infolist())
+        ceiling = MAX_DECOMPRESSED_BYTES
+        if claimed > ceiling:
+            raise ValueError(
+                f"this atlas document claims {claimed} bytes unpacked, "
+                f"past the {ceiling} this build will read"
+            )
+
+        try:
+            manifest = json.loads(zf.read(MANIFEST))
+        except (
+            zipfile.BadZipFile,
+            KeyError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise ValueError("this is not a Warlock atlas document") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("this atlas document's manifest is malformed")
+
+        try:
+            version = int(manifest.get("version", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("this atlas document's manifest is malformed") from exc
+        if version > VERSION:
+            raise ValueError(
+                f"this atlas document was written by a newer version of Warlock "
+                f"(format {version}, this build reads {VERSION})"
+            )
+
+        entries = manifest.get("sources", [])
+        if not isinstance(entries, list):
+            raise ValueError("this atlas document's manifest is malformed")
+        # The same ceiling the packer refuses at, asked before any of them is
+        # decoded: a manifest listing a million sources is a million PNG decodes
+        # ahead of the refusal that was always going to come.
+        if len(entries) > laylib.MAX_SPRITES:
+            raise ValueError(
+                f"this atlas document lists {len(entries)} sources; "
+                f"{laylib.MAX_SPRITES} is the most this build will open"
+            )
+
         settings = _settings_from(manifest.get("settings"))
         sources: list[Source] = []
         seen: set[str] = set()
-        for entry in manifest.get("sources", []):
+        for entry in entries:
             if not isinstance(entry, dict):
                 raise ValueError("this atlas document holds a malformed source")
             key = str(entry.get("key", ""))
@@ -126,14 +182,13 @@ def read_wpack(data: bytes) -> PackDoc:
                     f"this atlas document names a source image the file does not "
                     f"carry ({name})"
                 ) from exc
-            image = Image.open(io.BytesIO(raw)).convert("RGBA")
             sources.append(
                 Source(
                     uid=new_uid(),
                     sprite=Sprite(
                         key=key,
                         name=str(entry.get("name", key)),
-                        pixels=np.asarray(image, dtype=np.uint8),
+                        pixels=_pixels_from(raw, name),
                     ),
                     name_override=str(entry.get("name_override", "")),
                 )
@@ -144,17 +199,49 @@ def read_wpack(data: bytes) -> PackDoc:
     return doc
 
 
+def _pixels_from(raw: bytes, name: str) -> np.ndarray:
+    """One embedded member as RGBA, refused at the door if it is not one.
+
+    ``UnidentifiedImageError`` is an ``OSError``, so a member that is not an
+    image at all and one that is a truncated PNG come out of the same clause.
+    The pixel ceiling is asked *before* ``convert``, because that is the call
+    that allocates: a header saying 60000 squared is four bytes on disk and
+    fourteen gigabytes decoded.
+    """
+    from PIL import Image
+
+    try:
+        image = Image.open(io.BytesIO(raw))
+    except (OSError, Image.DecompressionBombError) as exc:
+        raise ValueError(
+            f"this atlas document's {name} is not an image this build can read"
+        ) from exc
+    with image:
+        if image.width * image.height > MAX_SOURCE_PIXELS:
+            raise ValueError(
+                f"this atlas document's {name} is {image.width}x{image.height}; "
+                f"the limit is {MAX_SOURCE_PIXELS} pixels"
+            )
+        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
+
+
 def _settings_from(entry: Any) -> PackSettings:
     values = entry if isinstance(entry, dict) else {}
     default = PackSettings()
-    # ``PackSettings`` validates on construction -- including the
-    # padding-against-extrude rule -- so a hand-edited manifest is refused here
-    # rather than producing an atlas that bleeds at some zoom levels.
-    return PackSettings(
-        mode=str(values.get("mode", default.mode)),
-        padding=int(values.get("padding", default.padding)),
-        extrude=int(values.get("extrude", default.extrude)),
-        trim=bool(values.get("trim", default.trim)),
-        max_size=int(values.get("max_size", default.max_size)),
-        power_of_two=bool(values.get("power_of_two", default.power_of_two)),
-    )
+    try:
+        kwargs = {
+            "mode": str(values.get("mode", default.mode)),
+            "padding": int(values.get("padding", default.padding)),
+            "extrude": int(values.get("extrude", default.extrude)),
+            "trim": bool(values.get("trim", default.trim)),
+            "max_size": int(values.get("max_size", default.max_size)),
+            "power_of_two": bool(values.get("power_of_two", default.power_of_two)),
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValueError("this atlas document's settings are malformed") from exc
+    # Constructed *outside* the coercion guard on purpose. ``PackSettings``
+    # validates on construction -- including the padding-against-extrude rule --
+    # so a hand-edited manifest is refused with the reason rather than producing
+    # an atlas that bleeds at some zoom levels, and catching that here would
+    # replace "padding must be at least twice extrude" with a generic sentence.
+    return PackSettings(**kwargs)

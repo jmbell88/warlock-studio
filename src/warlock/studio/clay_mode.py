@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import clay_state, dialogs, recents
+from . import clay_state, dialogs, docmodes, recents
 from .clay_state import ClayState, ClayTab
 
 log = logging.getLogger(__name__)
@@ -321,12 +321,10 @@ def apply_camera(ctx: Any, tab: ClayTab) -> None:
     tab.view.fitted = True
 
 
-def _start(ctx: Any, tab: ClayTab, key: str, run: Any) -> None:
-    tab.saving = True
-    if not ctx.submit(key, run):
-        # The runner refuses a key that is already in flight. Leaving the flag
-        # set here is what makes a tab read-only forever after a double press.
-        tab.saving = False
+# The submit-or-unlock helper is one rule for all four document modes and lives
+# in :mod:`.docmodes`; bound here as an assignment rather than wrapped, because
+# every call site in this file reaches for one object.
+_start = docmodes.start_save
 
 
 def save_to(ctx: Any, tab: ClayTab, path: Path) -> None:
@@ -523,21 +521,7 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     is not, because Clay is a mode rather than a takeover and its tabs are
     still there when you come back.
     """
-    state = ctx.state.clay
-    if state is None or not state.any_dirty:
-        proceed()
-        return True
-    count = sum(1 for doc in state.docs if doc.dirty)
-    what = "one document has" if count == 1 else f"{count} documents have"
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved work?",
-            message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
-            f" if you {verb}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    return docmodes.guard(ctx, "clay", "document", "documents", verb, proceed)
 
 
 def close_tab(ctx: Any, uid: str) -> None:

@@ -18,6 +18,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .. import docmodes
+
 # How often one layer's panel thumbnail may re-render while its pixels keep
 # changing (B24). During a stroke ``doc.rev`` ticks per dab, and every tick
 # used to re-shrink and re-upload *every* layer's 48-square -- per frame. The
@@ -37,15 +39,6 @@ def _slot(uid: str, name: str) -> str:
     return f"inker_tex:{uid}:{name}"
 
 
-def _forget(ctx: Any, texture: Any) -> None:
-    from .. import imgui_backend
-
-    renderer = imgui_backend.current()
-    if renderer is not None:
-        renderer.forget_texture(texture)
-    texture.release()
-
-
 def _cached(ctx: Any, key: str, size: tuple[int, int], data: Callable[[], bytes]) -> Any:
     """Create or resize a texture in a named slot.
 
@@ -57,7 +50,7 @@ def _cached(ctx: Any, key: str, size: tuple[int, int], data: Callable[[], bytes]
     gl = ctx.viewer.ctx
     texture = ctx.state.preview.get(key)
     if texture is not None and texture.size != size:
-        _forget(ctx, texture)
+        docmodes.forget_texture(texture)
         texture = None
         ctx.state.preview.pop(f"{key}:rev", None)
     if texture is None:
@@ -86,7 +79,7 @@ def release_dropped(ctx: Any, tab: Any) -> None:
         texture = ctx.state.preview.pop(key, None)
         ctx.state.preview.pop(f"{key}:rev", None)
         if texture is not None:
-            _forget(ctx, texture)
+            docmodes.forget_texture(texture)
 
 
 def composite(ctx: Any, tab: Any, *, nearest: bool) -> Any:
@@ -229,24 +222,17 @@ _PER_TAB_KEYS = ("paint_ants:", "inker_resize:")
 
 def release_doc(ctx: Any, uid: str) -> None:
     """Drop every texture belonging to one closed tab, and its cached state."""
-    prefix = f"inker_tex:{uid}:"
-    for key in [k for k in list(ctx.state.preview) if k.startswith(prefix)]:
-        value = ctx.state.preview.pop(key, None)
-        if value is not None and hasattr(value, "release"):
-            _forget(ctx, value)
+    docmodes.release_prefix(ctx, f"inker_tex:{uid}:")
     for name in _PER_TAB_KEYS:
         ctx.state.preview.pop(f"{name}{uid}", None)
 
 
 def release_all(ctx: Any) -> None:
-    for key in [k for k in list(ctx.state.preview) if k.startswith("inker_tex:")]:
-        value = ctx.state.preview.pop(key, None)
-        if value is not None and hasattr(value, "release"):
-            _forget(ctx, value)
+    docmodes.release_prefix(ctx, "inker_tex:")
     for key in [
         k for k in list(ctx.state.preview) if k.startswith(_PER_TAB_KEYS)
     ]:
         ctx.state.preview.pop(key, None)
     checker_texture = ctx.state.preview.pop(_CHECKER_KEY, None)
     if checker_texture is not None:
-        _forget(ctx, checker_texture)
+        docmodes.forget_texture(checker_texture)

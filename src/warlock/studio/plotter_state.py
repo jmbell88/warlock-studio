@@ -32,6 +32,7 @@ from typing import Any
 
 import numpy as np
 
+from . import docmodes
 from .inker_state import PaintView
 
 # What Plotter can open and what each suffix means. ``wmap`` is the project
@@ -286,8 +287,8 @@ def active(ctx: Any) -> PlotterDoc | None:
     return state.active if state is not None else None
 
 
-def title_for(path: Path | None) -> str:
-    return path.name if path is not None else "Untitled"
+# The same answer in three of the four modes; Clay's is on ``stem`` on purpose.
+title_for = docmodes.title_for
 
 
 def format_for(path: Path | None) -> str:

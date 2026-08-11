@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, plotter_state, recents
+from . import dialogs, docmodes, plotter_state, recents
 
 # ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
 # but ``ctx.state.plotter`` -- and the file layer lives in :mod:`.plotter_io`.
@@ -320,21 +320,7 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     is a mode rather than a takeover and its tabs are still there on the way
     back.
     """
-    state = ctx.state.plotter
-    if state is None or not state.any_dirty:
-        proceed()
-        return True
-    count = sum(1 for doc in state.docs if doc.dirty)
-    what = "one map has" if count == 1 else f"{count} maps have"
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved work?",
-            message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
-            f" if you {verb}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    return docmodes.guard(ctx, "plotter", "map", "maps", verb, proceed)
 
 
 def close_tab(ctx: Any, uid: str) -> None:

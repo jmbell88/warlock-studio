@@ -379,3 +379,7 @@ def test_no_effect_module_reaches_the_service_layer_or_the_queue():
             for module in found:
                 assert not module.startswith("warlock.service"), f"{name} imports {module}"
                 assert not module.startswith("warlock.queue"), f"{name} imports {module}"
+                # ``warlock._q_*`` too: the queue's worker halves are the same
+                # dependency wearing a different name, and the pin named only
+                # the front door.
+                assert not module.startswith("warlock._q"), f"{name} imports {module}"

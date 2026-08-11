@@ -130,6 +130,41 @@ def test_removing_a_source_is_visible_in_the_next_layout():
     assert len(doc.layout().frames) == 3
 
 
+def test_addressing_a_source_that_is_not_there_is_a_refusal_not_a_key_error():
+    """A ``KeyError`` reached the pygame key dispatch as a crash: the mode
+    frames a ``ValueError`` into a toast and lets everything else through to
+    the log. A uid goes stale for ordinary reasons -- a selection that survived
+    an undo is the one that bit."""
+    doc = _doc()
+    for call in (
+        lambda: doc.remove_source(9999),
+        lambda: doc.index_of(9999),
+        lambda: doc.rename_source(9999, "x"),
+    ):
+        with pytest.raises(ValueError, match="not in this pack"):
+            call()
+
+
+def test_a_name_that_would_mean_something_else_in_the_sidecar_is_refused():
+    """The value lands verbatim in the TexturePacker ``filename`` and in a
+    ``.tsx``, both of which are read by other programs."""
+    doc = _doc()
+    uid = doc.sources[0].uid
+    for bad in ("sub/hero", "sub\\hero", "hero\nname"):
+        with pytest.raises(ValueError, match="path separator or a control"):
+            doc.rename_source(uid, bad)
+    with pytest.raises(ValueError, match="at most 64 characters"):
+        doc.rename_source(uid, "h" * 65)
+
+
+def test_an_empty_name_stays_legal_because_it_clears_the_override():
+    doc = _doc()
+    source = doc.sources[1]
+    assert source.name == "hero"
+    doc.rename_source(source.uid, "")
+    assert source.name == source.sprite.name
+
+
 # --- the file -----------------------------------------------------------------
 
 
@@ -197,6 +232,22 @@ def _rewrite(doc: PackDoc, mutate) -> bytes:
     return out.getvalue()
 
 
+def _rewrite_member(doc: PackDoc, name: str, blob: bytes) -> bytes:
+    """One member's bytes replaced, the manifest left alone.
+
+    The companion to :func:`_rewrite`: a hostile ``.wpack`` is as likely to
+    carry a manifest that is fine and a member that is not.
+    """
+    with zipfile.ZipFile(io.BytesIO(wpack.wpack_bytes(doc))) as zf:
+        members = {entry: zf.read(entry) for entry in zf.namelist()}
+    members[name] = blob
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        for entry, data in members.items():
+            zf.writestr(entry, data)
+    return out.getvalue()
+
+
 def test_a_file_from_a_newer_version_is_refused():
     with pytest.raises(ValueError, match="newer version"):
         wpack.read_wpack(_rewrite(_doc(), lambda m: m.update(version=wpack.VERSION + 1)))
@@ -242,3 +293,85 @@ def test_settings_that_would_bleed_are_refused_at_the_door():
 def test_something_that_is_not_an_archive_is_refused():
     with pytest.raises(ValueError, match="not a Warlock atlas"):
         wpack.read_wpack(b"just some bytes")
+
+
+# --- the doors ----------------------------------------------------------------
+
+
+def test_an_archive_claiming_more_than_the_ceiling_is_refused(monkeypatch):
+    """A zip's directory declares what it unpacks to and nothing makes that
+    honest, so the refusal has to come off the directory rather than off the
+    read that has already exhausted memory. The constant is lowered rather than
+    a gigabyte being built, which is why it is read at call time."""
+    data = wpack.wpack_bytes(_doc())
+    monkeypatch.setattr(wpack, "MAX_DECOMPRESSED_BYTES", 16)
+    with pytest.raises(ValueError, match="bytes unpacked"):
+        wpack.read_wpack(data)
+
+
+def test_more_sources_than_one_atlas_will_take_are_refused(monkeypatch):
+    """Asked off the manifest, before any of them is decoded: a file listing a
+    million sources is a million PNG decodes ahead of the refusal that was
+    always going to come out of the packer anyway."""
+    from warlock.studio.packwright import layout as lay
+
+    data = wpack.wpack_bytes(_doc(4))
+    monkeypatch.setattr(lay, "MAX_SPRITES", 2)
+    with pytest.raises(ValueError, match="is the most this build will open"):
+        wpack.read_wpack(data)
+
+
+@pytest.mark.parametrize("version", [[], "abc", {"a": 1}])
+def test_a_junk_version_is_a_refusal_rather_than_a_type_error(version):
+    """``int([])`` is a ``TypeError``, which is not a ``ValueError`` and so
+    reaches the user as the generic log-pointer toast."""
+    with pytest.raises(ValueError, match="malformed"):
+        wpack.read_wpack(_rewrite(_doc(), lambda m: m.update(version=version)))
+
+
+def test_a_junk_sources_list_is_a_refusal():
+    with pytest.raises(ValueError, match="malformed"):
+        wpack.read_wpack(_rewrite(_doc(), lambda m: m.update(sources=7)))
+
+
+def test_junk_settings_are_a_refusal_rather_than_a_value_error_from_int():
+    def junk(manifest):
+        manifest["settings"]["padding"] = "wide"
+
+    with pytest.raises(ValueError, match="settings are malformed"):
+        wpack.read_wpack(_rewrite(_doc(), junk))
+
+
+def test_a_member_that_is_not_an_image_is_refused_by_name():
+    """``UnidentifiedImageError`` is an ``OSError``; without this clause it
+    escaped the ``ValueError`` contract every caller of this function reads."""
+    data = _rewrite_member(_doc(), "sources/1.png", b"not a png at all")
+    with pytest.raises(ValueError, match="sources/1.png is not an image"):
+        wpack.read_wpack(data)
+
+
+def test_a_source_image_past_the_pixel_ceiling_is_refused(monkeypatch):
+    """The byte ceiling is about the archive; one 60000-square PNG deflates to
+    very little and decodes to fourteen gigabytes."""
+    data = wpack.wpack_bytes(_doc())
+    monkeypatch.setattr(wpack, "MAX_SOURCE_PIXELS", 4)
+    with pytest.raises(ValueError, match="the limit is 4 pixels"):
+        wpack.read_wpack(data)
+
+
+def test_a_refusal_does_not_leave_the_archive_open(monkeypatch):
+    """Every refusal moved inside the ``with``: they used to sit in the gap
+    between ``ZipFile(...)`` and the block, where the one thing that block
+    exists to do left the archive to the collector."""
+    closed: list[bool] = []
+    real_close = zipfile.ZipFile.close
+
+    def note(self):
+        closed.append(True)
+        real_close(self)
+
+    data = _rewrite(_doc(), lambda m: m.update(version=wpack.VERSION + 1))
+    monkeypatch.setattr(zipfile.ZipFile, "close", note)
+    with pytest.raises(ValueError, match="newer version"):
+        wpack.read_wpack(data)
+    assert closed

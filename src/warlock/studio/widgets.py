@@ -201,6 +201,30 @@ def pane_title(label: str) -> None:
     imgui.dummy((0, sp(tokens.SP_2)))
 
 
+#: How many recent files a bridge pane offers. One screenful beside the Save
+#: and Export rows; the full history is the mode's own menu.
+RECENT_SHOWN = 6
+
+
+def recent_files(paths: list[str], on_open: Any) -> None:
+    """The "recent" block a document mode's bridge pane draws, or nothing.
+
+    The path is in the imgui id and not just in the label: two maps can share a
+    basename, and one id between them is one row.
+    """
+    from pathlib import Path
+
+    if not paths:
+        return
+    imgui.dummy((0, 8))
+    section("recent")
+    for path in paths[:RECENT_SHOWN]:
+        if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
+            on_open(path)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(path)
+
+
 def _chip(label: str, colour: tuple[float, float, float, float], fill: float) -> None:
     """One rounded chip, sized to its own text and laid out as a single item.
 

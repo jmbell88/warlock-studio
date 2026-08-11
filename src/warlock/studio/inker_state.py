@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import docmodes
+
 MIN_ZOOM = 0.05
 MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
@@ -387,8 +389,8 @@ class InkerDoc:
         self.saving = False
 
 
-def title_for(path: Path | None) -> str:
-    return path.name if path is not None else "Untitled"
+# The same answer in three of the four modes; Clay's is on ``stem`` on purpose.
+title_for = docmodes.title_for
 
 
 def _tool_option(name: str) -> property:

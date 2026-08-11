@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-from . import dialogs, plotter_state
+from . import dialogs, docmodes, plotter_state
 from .plotter_state import PlotterDoc, active, ensure
 
 MAP_FILTER = [
@@ -52,12 +52,10 @@ TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
 # --- image loading ------------------------------------------------------------
 
 
-def _decode(path: Path) -> np.ndarray:
-    """One image file as RGBA. Task thread only."""
-    from PIL import Image
-
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
+# The lazy-PIL RGBA decode is one rule for every mode that opens an image;
+# ``_within_ceiling`` below is *not*, because it reads the map document's own
+# ceiling.
+_decode = docmodes.decode_rgba
 
 
 def _within_ceiling(path: Path) -> Path:
@@ -201,12 +199,9 @@ def open_path(ctx: Any, path: Path) -> None:
 # --- saving -------------------------------------------------------------------
 
 
-def _start(ctx: Any, tab: PlotterDoc, key: str, run: Any) -> None:
-    tab.saving = True
-    if not ctx.submit(key, run):
-        # The runner refuses a key already in flight. Leaving the flag set is
-        # what makes a tab read-only forever after a double press.
-        tab.saving = False
+# One rule for all four document modes: see :func:`docmodes.start_save` for why
+# a refused submit has to clear the flag.
+_start = docmodes.start_save
 
 
 def _encode(doc: Any, file_format: str) -> dict[str, bytes]:

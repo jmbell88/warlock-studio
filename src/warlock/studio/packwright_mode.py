@@ -28,29 +28,40 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+from . import dialogs, docmodes, packwright_io, packwright_state, recents
 
-from . import dialogs, filetypes, packwright_state, recents
-from .packwright_state import PackTab, PackwrightState
+# ``ensure`` and ``active`` live in :mod:`.packwright_state` -- they touch
+# nothing but ``ctx.state.packwright`` -- and the file layer lives in
+# :mod:`.packwright_io`. Both are re-exported here, as **plain imports rather
+# than wrappers**, because every pane, every key binding and every test says
+# ``packwright_mode.save(ctx)``: a wrapper would be a second object where the
+# callers reach for one, and a wiring test parametrizes over ``IMAGE_FILTER``
+# by identity besides.
+from .packwright_io import (  # noqa: F401
+    IMAGE_FILTER,
+    PNG_FILTER,
+    WPACK_FILTER,
+    _decode,
+    _load,
+    _start,
+    ask_open,
+    edit_asset_in_packwright,
+    export_files,
+    export_library,
+    open_path,
+    save,
+    save_as,
+    save_to,
+)
+from .packwright_state import (  # noqa: F401
+    PackTab,
+    PackwrightState,
+    active,
+    ensure,
+)
 from .state import set_mode
 
 log = logging.getLogger(__name__)
-
-WPACK_FILTER = ["Warlock atlas (*.wpack)", "*.wpack"]
-# Label *and* patterns from ``filetypes``, which is the whole point: the label
-# was hand-written and named three of the five suffixes the pattern list
-# accepted, so the dialog told the user two of the formats it would have opened
-# were unsupported.
-IMAGE_FILTER = [filetypes.describe("Images"), *filetypes.globs()]
-PNG_FILTER = ["PNG image (*.png)", "*.png"]
-
-
-def ensure(ctx: Any) -> PackwrightState:
-    state = ctx.state.packwright
-    if state is None:
-        state = PackwrightState()
-        ctx.state.packwright = state
-    return state
 
 
 def remember_path(ctx: Any, path: Any) -> None:
@@ -84,19 +95,6 @@ def persist(ctx: Any) -> None:
     comes to skip a write that mattered later."""
 
 
-
-def active(ctx: Any) -> PackTab | None:
-    state = ctx.state.packwright
-    return state.active if state is not None else None
-
-
-def _decode(path: Path) -> np.ndarray:
-    from PIL import Image
-
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
-
-
 # --- documents ----------------------------------------------------------------
 
 
@@ -118,37 +116,6 @@ def new_document(ctx: Any) -> PackTab:
     from .packwright.document import PackDoc
 
     return adopt(ctx, PackDoc(), title="Untitled")
-
-
-def _load(path: Path) -> dict[str, Any]:
-    from .packwright import wpack
-
-    path = Path(path)
-    return {
-        "doc": wpack.read_wpack(path.read_bytes()),
-        "path": str(path),
-        "title": packwright_state.title_for(path),
-    }
-
-
-def ask_open(ctx: Any) -> None:
-    ensure(ctx)
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.open_file("Open an atlas document", WPACK_FILTER)
-        return None if path is None else _load(path)
-
-    ctx.submit("packwright-open", run)
-
-
-def open_path(ctx: Any, path: Path) -> None:
-    state = ensure(ctx)
-    path = Path(path)
-    existing = state.find_path(path)
-    if existing is not None:
-        state.activate(existing.uid)
-        return
-    ctx.submit(f"packwright-open:{abs(hash(str(path)))}", _load, path)
 
 
 # --- sources ------------------------------------------------------------------
@@ -190,7 +157,13 @@ def add_source_paths(ctx: Any, paths: list[Path]) -> None:
 
 
 def add_job_source(ctx: Any, job: Any) -> None:
-    """A library asset's reference image as one sprite."""
+    """A library asset's reference image as one sprite.
+
+    No ceiling in front of the decode, unlike the ``.wpack`` path: a job's
+    ``input.png`` was bounded by ``service.files`` when it was written, and a
+    second door on the way back out would be a second answer to a question that
+    already has one.
+    """
     tab = active(ctx)
     if tab is None:
         ctx.toast("Start or open an atlas first.", "error")
@@ -227,7 +200,7 @@ def add_inker_document(ctx: Any, inker_tab: Any) -> None:
     try:
         sprites = sprites_from_document(inker_tab.doc, prefix=prefix)
     except ValueError as exc:
-        ctx.toast(str(exc), "error")
+        ctx.toast(f"Those frames were not added: {exc}", "error")
         return
     added = _add_sprites(ctx, tab, sprites)
     ctx.toast(f"Added {added} sprite(s)." if added else "Every frame is already in this atlas.")
@@ -256,11 +229,34 @@ def remove_source(ctx: Any, uid: int, tab: PackTab | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.busy:
         return
+    if tab.doc.source(uid) is None:
+        # A uid goes stale for ordinary reasons -- an undone add is the one that
+        # bit -- and Delete against one is a no-op rather than a refusal: there
+        # is nothing to tell the user that they did not already see.
+        return
     tab.doc.remove_source(uid)
     tab.pack_dirty = True
     state = ensure(ctx)
     if state.selected == uid:
         state.selected = None
+
+
+def rename_source(ctx: Any, tab: PackTab | None, uid: int, name: str) -> None:
+    """Rename one source. **The pack is re-armed**, which is the whole reason
+    this exists: the pane used to call ``tab.doc.rename_source`` directly, so
+    the name changed in the list and the *layout* -- which is what the
+    TexturePacker sidecar's ``filename`` is written from -- kept the old one
+    until something else happened to dirty the pack. An export in between
+    carried a name nothing on screen still showed."""
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return
+    try:
+        tab.doc.rename_source(uid, name)
+    except ValueError as exc:
+        ctx.toast(f"That name was not applied: {exc}", "error")
+        return
+    tab.pack_dirty = True
 
 
 def set_settings(ctx: Any, tab: PackTab | None = None, **values: Any) -> None:
@@ -271,8 +267,13 @@ def set_settings(ctx: Any, tab: PackTab | None = None, **values: Any) -> None:
         return
     try:
         tab.doc.set_settings(**values)
-    except ValueError as exc:
-        ctx.toast(str(exc), "error")
+    except (ValueError, TypeError) as exc:
+        # ``TypeError`` as well: ``dataclasses.replace`` raises it for a field
+        # that does not exist, which is what a stale keyword from a pane would
+        # be -- and an uncaught one here is a crash rather than a refusal.
+        # Framed rather than forwarded, the house rule: a bare ``str(exc)``
+        # toast is library text with no subject in front of it.
+        ctx.toast(f"That setting was not applied: {exc}", "error")
         return
     tab.pack_dirty = True
 
@@ -299,7 +300,16 @@ def request_pack(ctx: Any, tab: PackTab | None = None) -> None:
     uid = tab.uid
 
     def run() -> dict[str, Any]:
-        result = laylib.layout(sprites, settings)
+        from ..service.errors import invalid_from
+
+        try:
+            result = laylib.layout(sprites, settings)
+        except ValueError as exc:
+            # Framed, because only a ``ServiceError``'s text survives the task
+            # classifier: the engine's *remedy* sentence -- raise the max size,
+            # trim them, or split the pack -- is what ``pack_error`` is for, and
+            # a bare ValueError put "see the log for details" there instead.
+            raise invalid_from(exc, "That pack did not work") from exc
         return {"layout": result, "atlas": composelib.compose(sprites, result), "uid": uid}
 
     tab.packing = True
@@ -316,152 +326,6 @@ def pump(ctx: Any) -> None:
     """Called from the preview pane's draw, which is the only thing that runs
     every frame in this mode -- the ``motion.py`` idiom."""
     request_pack(ctx)
-
-
-# --- saving and exporting -----------------------------------------------------
-
-
-def _start(ctx: Any, tab: PackTab, key: str, run: Any) -> None:
-    tab.saving = True
-    if not ctx.submit(key, run):
-        tab.saving = False
-
-
-def save_to(ctx: Any, tab: PackTab, path: Path) -> None:
-    from .packwright import wpack
-
-    path = Path(path)
-    head = tab.doc.history.head
-    data = wpack.wpack_bytes(tab.doc)
-
-    def run() -> dict[str, Any]:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
-        return {"head": head, "path": str(path), "retitle": True}
-
-    _start(ctx, tab, f"packwright-save:{tab.uid}", run)
-
-
-def save(ctx: Any, tab: PackTab | None = None) -> None:
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if tab.path is None:
-        save_as(ctx, tab)
-        return
-    save_to(ctx, tab, tab.path)
-
-
-def save_as(ctx: Any, tab: PackTab | None = None) -> None:
-    from .packwright import wpack
-
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    head = tab.doc.history.head
-    data = wpack.wpack_bytes(tab.doc)
-    stem = Path(tab.title).stem or "atlas"
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.save_file(
-            "Save the atlas document", f"{stem}{packwright_state.WPACK_SUFFIX}", WPACK_FILTER
-        )
-        if path is None:
-            return None
-        path = path.with_suffix(packwright_state.WPACK_SUFFIX)
-        path.write_bytes(data)
-        return {"head": head, "path": str(path), "retitle": True}
-
-    _start(ctx, tab, f"packwright-saveas:{tab.uid}", run)
-
-
-def export_files(ctx: Any, tab: PackTab | None = None) -> None:
-    """The atlas PNG, the JSON sidecar, and a ``.tsx`` when the pack is a grid.
-
-    One picker for the PNG; the others take its stem and sit beside it, which is
-    the layout every consumer expects and the only one where the sidecar's
-    ``meta.image`` resolves.
-    """
-    from .packwright import compose as composelib
-    from .packwright import texturepacker, tsxout
-
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if tab.layout is None or tab.atlas is None:
-        ctx.toast("Nothing packed yet.", "error")
-        return
-    layout, atlas = tab.layout, tab.atlas
-    stem = Path(tab.title).stem or "atlas"
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.save_file("Export the atlas", f"{stem}.png", PNG_FILTER)
-        if path is None:
-            return None
-        path = path.with_suffix(".png")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(composelib.png_bytes(atlas))
-        path.with_suffix(".json").write_bytes(
-            texturepacker.tp_bytes(layout, image_name=path.name)
-        )
-        written = 2
-        if layout.is_grid:
-            path.with_suffix(".tsx").write_bytes(
-                tsxout.grid_tsx(layout, atlas, name=stem, image_name=path.name)
-            )
-            written = 3
-        return {"exported": str(path), "files": written}
-
-    _start(ctx, tab, f"packwright-export:{tab.uid}", run)
-
-
-def export_library(ctx: Any, tab: PackTab | None = None) -> None:
-    """Mint an ordinary asset from the atlas, with ``pack.wpack`` beside it."""
-    from .packwright import compose as composelib
-    from .packwright import wpack
-
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if tab.atlas is None:
-        ctx.toast("Nothing packed yet.", "error")
-        return
-    png = composelib.png_bytes(tab.atlas)
-    source = wpack.wpack_bytes(tab.doc)
-    title = tab.title
-
-    def run() -> dict[str, Any]:
-        from ..service import files as svc_files
-        from ..service import jobs as svc_jobs
-
-        result = svc_jobs.import_reference(
-            ctx.svc, png, name=title, prompt=title, authored="packwright"
-        )
-        job_id = result["id"]
-        svc_files.save_packwright_source(ctx.svc, job_id, source)
-        return {"job_id": job_id, "exported_asset": True}
-
-    _start(ctx, tab, f"packwright-library:{tab.uid}", run)
-
-
-def edit_asset_in_packwright(ctx: Any, job: Any) -> None:
-    job_id = job["id"] if isinstance(job, dict) else str(job)
-    ensure(ctx)
-
-    def run() -> dict[str, Any]:
-        from ..service import files as svc_files
-        from .packwright import wpack
-
-        path = svc_files.packwright_source_path(ctx.svc, job_id)
-        return {
-            "doc": wpack.read_wpack(Path(path).read_bytes()),
-            "path": "",
-            "title": "Atlas",
-        }
-
-    ctx.submit(f"packwright-open:{job_id}", run)
 
 
 # --- task results -------------------------------------------------------------
@@ -534,6 +398,15 @@ def on_task_failed(ctx: Any, done: Any) -> None:
     """A failed save must not leave the document locked, and a failed *pack*
     must clear ``packing`` and record why -- an empty items list that looks
     like success is the worst outcome of a pack that could not fit."""
+    if done.key.startswith(packwright_io.OPEN_PREFIX):
+        # Before the tab lookup, because an open that failed has no tab: what it
+        # has is a path that does not open, and a Resume list that keeps
+        # offering one is worse than a short one. The key carries the path
+        # rather than a hash of it precisely so this can be done. An
+        # ``edit_asset`` key carries a job id instead, and forgetting one of
+        # those is a lookup that matches nothing.
+        forget_path(ctx, done.key.split(":", 1)[1])
+        return
     state = ctx.state.packwright
     if state is None or ":" not in done.key:
         return
@@ -550,21 +423,14 @@ def on_task_failed(ctx: Any, done: Any) -> None:
 
 
 def guard(ctx: Any, verb: str, proceed: Any) -> bool:
-    state = ctx.state.packwright
-    if state is None or not state.any_dirty:
-        proceed()
-        return True
-    count = sum(1 for doc in state.docs if doc.dirty)
-    what = "one atlas has" if count == 1 else f"{count} atlases have"
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved work?",
-            message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
-            f" if you {verb}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    """Ask before losing unsaved work. -> whether it went ahead now.
+
+    One question for all of them, the ``clay_mode.guard`` shape. Only quitting
+    and closing a tab are destructive: switching modes is not, because
+    Packwright is a mode rather than a takeover and its tabs are still there on
+    the way back.
+    """
+    return docmodes.guard(ctx, "packwright", "atlas", "atlases", verb, proceed)
 
 
 def close_tab(ctx: Any, uid: str) -> None:
@@ -596,8 +462,6 @@ def release_all(ctx: Any) -> None:
 
     packwright_textures.release_all(ctx)
 
-
-TOOL_KEYS: dict[str, str] = {"r": "repack"}
 
 _MUTATING_CTRL = frozenset({"z", "y"})
 
@@ -635,6 +499,20 @@ def handle_key(ctx: Any, event: Any) -> bool:
     return False
 
 
+def _drop_stale_selection(state: PackwrightState, tab: PackTab) -> None:
+    """Clear the selection if the step just undone detached what it names.
+
+    Narrower than ``plotter_mode``'s unconditional clear, and deliberately:
+    Plotter's selected *object* is a position in a layer that any step can move,
+    while a source's uid survives every step but the one that removes it -- so
+    keeping the row selected through an undo of a rename is the right answer,
+    and only a detached uid has to go. Leaving it was a crash: Delete then
+    addressed a uid the document no longer holds.
+    """
+    if state.selected is not None and tab.doc.source(state.selected) is None:
+        state.selected = None
+
+
 def _ctrl_key(
     ctx: Any, state: PackwrightState, tab: PackTab | None, name: str, *, shift: bool
 ) -> bool:
@@ -656,12 +534,18 @@ def _ctrl_key(
         export_files(ctx, tab) if shift else export_library(ctx, tab)
         return True
     if name == "z":
-        tab.doc.undo()
+        # Ctrl+Shift+Z redoes as well, which is what Inker, Clay and Plotter
+        # accept and what a user arriving from any of them already has in their
+        # hand. Ctrl+Y keeps working: this adds a spelling rather than
+        # replacing one.
+        tab.doc.redo() if shift else tab.doc.undo()
         tab.pack_dirty = True
+        _drop_stale_selection(state, tab)
         return True
     if name == "y":
         tab.doc.redo()
         tab.pack_dirty = True
+        _drop_stale_selection(state, tab)
         return True
     if name == "tab":
         state.cycle(-1 if shift else 1)

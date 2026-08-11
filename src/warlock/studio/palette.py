@@ -236,6 +236,11 @@ def commands(ctx: Any) -> list[Command]:
 
         clay_mode.new_document(ctx)
 
+    def new_atlas(ctx: Any) -> None:
+        from . import packwright_mode
+
+        packwright_mode.new_document(ctx)
+
     def wireframe(ctx: Any) -> None:
         ctx.state.wireframe = not ctx.state.wireframe
         if ctx.viewer is not None:
@@ -266,6 +271,7 @@ def commands(ctx: Any) -> list[Command]:
         ),
         Command(key="new-drawing", label="New drawing", group="Actions", run=new_drawing),
         Command(key="new-clay", label="New Clay document", group="Actions", run=new_clay),
+        Command(key="new-atlas", label="New atlas", group="Actions", run=new_atlas),
         Command(
             key="reroll",
             label="Reroll the selected asset",

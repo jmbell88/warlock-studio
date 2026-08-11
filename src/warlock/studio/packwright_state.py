@@ -26,6 +26,7 @@ from typing import Any
 
 import numpy as np
 
+from . import docmodes
 from .inker_state import PaintView
 
 WPACK_SUFFIX = ".wpack"
@@ -82,7 +83,14 @@ class PackTab:
         self.saving = False
 
     def adopt_pack(self, layout: Any, atlas: np.ndarray) -> None:
-        """Take a finished pack. The one place ``pack_generation`` moves."""
+        """Take a finished pack. The one place ``pack_generation`` moves.
+
+        **``pack_dirty`` is deliberately not touched here.** An edit made while
+        a pack was in flight set it, and that edit is not in the layout landing
+        now -- clearing it would drop the edit for good, because ``request_pack``
+        clears the flag only on an accepted submit and nothing else re-arms it.
+        The flag is cleared at the submit, never at the adoption.
+        """
         self.layout = layout
         self.atlas = atlas
         self.pack_generation += 1
@@ -156,5 +164,27 @@ class PackwrightState:
 
 
 
-def title_for(path: Path | None) -> str:
-    return path.name if path is not None else "Untitled"
+def ensure(ctx: Any) -> PackwrightState:
+    """The mode's state, built on first use.
+
+    Here rather than in ``packwright_mode`` because this and :func:`active`
+    touch exactly one thing -- ``ctx.state.packwright`` -- which is this
+    module's whole charter, and neither knows a job or a task thread exists.
+    The ``plotter_state`` shape.
+    """
+    state = ctx.state.packwright
+    if state is None:
+        state = PackwrightState()
+        ctx.state.packwright = state
+    return state
+
+
+def active(ctx: Any) -> PackTab | None:
+    """The focused tab, or ``None``. Deliberately *not* through :func:`ensure`:
+    asking which atlas is open must not create the state that says none is."""
+    state = ctx.state.packwright
+    return state.active if state is not None else None
+
+
+# The same answer in three of the four modes; Clay's is on ``stem`` on purpose.
+title_for = docmodes.title_for

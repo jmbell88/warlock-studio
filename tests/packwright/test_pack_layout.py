@@ -67,6 +67,29 @@ def test_negative_settings_are_refused():
         PackSettings(max_size=0)
 
 
+def test_a_gutter_wider_than_an_atlas_is_refused():
+    """The sliders offer 16 and 8, so this only ever refuses a hand-edited
+    manifest -- which is exactly the input with no other door in front of it.
+    Each message names its own field, because a single "padding and extrude"
+    sentence sends the user to look at the one that was fine."""
+    PackSettings(padding=lay.MAX_PADDING, extrude=lay.MAX_PADDING // 2)
+    with pytest.raises(ValueError, match="padding must be at most"):
+        PackSettings(padding=lay.MAX_PADDING + 1)
+    with pytest.raises(ValueError, match="extrude must be at most"):
+        PackSettings(padding=lay.MAX_PADDING, extrude=lay.MAX_PADDING + 1)
+
+
+def test_more_sprites_than_one_atlas_will_take_are_refused(monkeypatch):
+    """In ``_measure``, which is what makes it one door: both packers and every
+    caller of either come through it."""
+    monkeypatch.setattr(lay, "MAX_SPRITES", 3)
+    lay.layout(_sprites(3), PackSettings())
+    with pytest.raises(ValueError, match="is the most one"):
+        lay.layout(_sprites(4), PackSettings())
+    with pytest.raises(ValueError, match="is the most one"):
+        lay.layout(_sprites(4), PackSettings(mode="maxrects"))
+
+
 def test_next_pot_is_the_smallest_power_of_two_at_or_above():
     assert [next_pot(n) for n in (0, 1, 2, 3, 5, 64, 65)] == [1, 1, 2, 4, 8, 64, 128]
 
