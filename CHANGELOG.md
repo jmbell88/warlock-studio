@@ -6,6 +6,31 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.20 — 2026-08-11
+
+- **Groundwork for Plotter's ground tile sets.** The engine for generated
+  terrain tilesets — blob autotiling, both map projections, and the generator
+  itself — but **no user interface yet**, so nothing in this release is
+  reachable from the app. Four new pure modules: the 47-case blob collapse,
+  cell-to-pixel placement for orthogonal *and* isometric maps, the terrain
+  model, and a procedural generator that emits a flat-fill-plus-outline base
+  set from a list of named terrains. A terrain is read back off the tile's own
+  id rather than stored beside it, so there is nothing that can disagree with
+  the picture; and a cell where three terrains meet resolves to one tile,
+  because a terrain's list position is its precedence and a cell's neighbours
+  count only from its own rank upward. The generator is deterministic to the
+  byte — no randomness and no floating point in any coverage decision — so a
+  polished set can be diffed against the base it was painted over.
+- **A drag in Plotter is one undo step.** It used to be one *per cell*: a stamp
+  pulled across forty cells pushed forty steps and forty entries against the
+  history's byte budget. Painting now opens a stroke session, writes the live
+  layer with no history while the button is down, and pushes a single patch
+  over everything that moved when it is released — the same three calls the
+  raster editor has always used, over tile ids instead of pixels.
+- A tileset's art can be replaced in place, keeping its ids, its position and
+  its declared terrains. A replacement with a different tile count is refused
+  by name rather than silently renumbering every cell already painted.
+
 ## 0.0.19 — 2026-08-11
 
 - **Indexed colour in Inker.** A document can now carry a palette, and every

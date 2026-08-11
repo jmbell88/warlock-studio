@@ -1,0 +1,329 @@
+"""A tileset's declared roles, read back off the cells that use them.
+
+**A terrain is derived from the gid, never stored beside it.** A parallel
+per-cell terrain array would be a second source of truth that ``.wmap``, the
+undo stack and every Tiled round trip would each have to keep honest, and the
+first time one of them missed, the map would paint edges for a field that is not
+the one on screen. A terrain set makes the gid answer on its own -- the tileset
+says which row is which terrain, and :meth:`Tileset.terrain_of` reads it back --
+so a terrain stroke is nothing but an ordinary patch of gids, and a cell someone
+stamped by hand with the plain stamp tool joins the field for free.
+
+**Precedence is list position, and membership is "ranked at or above me".**
+Blob autotiling encodes *self against not-self*; it cannot say which not-self,
+so a single tile in a single layer is only well defined at a two-terrain
+boundary unless "not-self" is made unambiguous. Ranking does that. Take grass,
+sand and water in that order and put all three around one point:
+
+======  =================  =======  ======  =======  ==========================
+cell    membership test    grass    sand    water   picture
+======  =================  =======  ======  =======  ==========================
+grass   ``rank >= 0``      member   member  member   interior fill, no outline
+sand    ``rank >= 1``      no       member  member   outlined against grass
+water   ``rank >= 2``      no       no      member   outlined against both
+======  =================  =======  ======  =======  ==========================
+
+Every cell gets exactly one tile at a junction of any number of terrains, and
+the outline always belongs to the higher-precedence terrain -- a statable art
+convention rather than an artifact of the encoding.
+
+**The cost, stated so nobody quietly "fixes" it:** a terrain's edge art cannot
+vary by which terrain is on the other side. Sand against grass and sand against
+stone draw the same tile. For a set that is a flat fill plus a darker outline
+that is right by construction, because the outline is a property of the terrain
+rather than of the boundary; when someone eventually wants a shoreline that
+differs from a cliff base, the answer is a second terrain set on a second layer,
+which this model already supports. Changing the membership test instead would
+break every three-terrain junction at once.
+
+Everything here is a pure function over one layer's array returning a
+:data:`~.tools.Region`, for :mod:`.tools`' reasons and under its rules: nothing
+mutates, nothing pushes a step, a placement wholly off the map is ``None``, and
+a computation that changed nothing is ``None`` rather than an empty write.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Iterable
+
+import numpy as np
+
+from . import blob
+from . import gid as gidlib
+from .tileset import TerrainSpec, TilesetRef
+from .tools import Region
+
+#: What an empty cell, or one belonging to some other tileset, ranks as. Below
+#: every terrain, so nothing is ever outlined against the terrain it is not.
+RANK_VOID: int = -1
+
+#: The base set, in precedence order: grass gives way to nothing, water gives
+#: way to everything. The colours are flat and the outlines are the same hue
+#: darkened -- this is the *outline base* set that a polished one is painted
+#: over, so it is deliberately plain and deliberately legible at 16 pixels.
+DEFAULT_TERRAINS: tuple[TerrainSpec, ...] = (
+    TerrainSpec("Grass", (106, 153, 78, 255), (62, 96, 44, 255)),
+    TerrainSpec("Dirt", (156, 122, 84, 255), (98, 74, 48, 255)),
+    TerrainSpec("Sand", (214, 195, 132, 255), (156, 136, 82, 255)),
+    TerrainSpec("Stone", (140, 142, 150, 255), (86, 88, 96, 255)),
+    TerrainSpec("Water", (78, 122, 178, 255), (44, 74, 118, 255)),
+)
+
+
+def rank_field(data: np.ndarray, ref: TilesetRef) -> np.ndarray:
+    """Every cell's terrain rank, or :data:`RANK_VOID`.
+
+    ``int16`` rather than ``uint8`` so the void is a real negative and every
+    comparison in this module reads as the inequality it is. Vectorised over the
+    whole layer because a retile needs one pass per terrain and a Python loop
+    over cells would put a 200x200 map inside a mouse-move handler.
+    """
+    tileset = ref.tileset
+    ids = gidlib.tile_ids(np.asarray(data, dtype=gidlib.DTYPE))
+    ranks = np.full(ids.shape, RANK_VOID, dtype=np.int16)
+    if not tileset.is_terrain_set:
+        return ranks
+    inside = (ids >= ref.firstgid) & (ids <= ref.last_gid)
+    rows = (ids.astype(np.int64) - ref.firstgid) // blob.TILE_COUNT
+    known = inside & (rows >= 0) & (rows < len(tileset.terrains))
+    ranks[known] = rows[known].astype(np.int16)
+    return ranks
+
+
+def terrain_at(data: np.ndarray, x: int, y: int, ref: TilesetRef) -> int | None:
+    """The terrain under one point, for an eyedropper. ``None`` off-map or void."""
+    height, width = np.asarray(data).shape
+    x, y = int(x), int(y)
+    if not (0 <= x < width and 0 <= y < height):
+        return None
+    tile_id = int(data[y, x]) & gidlib.GID_MASK
+    if not ref.holds(tile_id):
+        return None
+    return ref.tileset.terrain_of(ref.local(tile_id))
+
+
+def gid_for(ref: TilesetRef, terrain: int, blob_index: int) -> int:
+    """The encoded cell for one terrain's one blob case.
+
+    Through :func:`gid.compose` rather than by addition, so a set whose ids ran
+    past the id space raises here instead of silently setting a transform flag
+    and drawing a mirrored tile from nowhere.
+    """
+    return gidlib.compose(ref.firstgid + ref.tileset.local_for(terrain, blob_index))
+
+
+def _box(
+    cells: Iterable[tuple[int, int]], shape: tuple[int, int], grow: int
+) -> tuple[int, int, int, int] | None:
+    """The clipped half-open rectangle around some cells, grown by ``grow``."""
+    height, width = shape
+    xs = [int(x) for x, _y in cells]
+    ys = [int(y) for _x, y in cells]
+    if not xs:
+        return None
+    x0 = max(0, min(xs) - grow)
+    y0 = max(0, min(ys) - grow)
+    x1 = min(width, max(xs) + grow + 1)
+    y1 = min(height, max(ys) + grow + 1)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+
+def _retile_into(
+    work: np.ndarray, ref: TilesetRef, box: tuple[int, int, int, int], outside: bool
+) -> None:
+    """Recompute the blob case of every terrain cell inside ``box``.
+
+    One pass per terrain rather than per cell: ``ranks >= r`` is the whole
+    membership field for rank ``r``, and :func:`blob.indices_from` turns it into
+    every cell's case in eight array ORs. Five terrains is five passes over the
+    layer, which is cheaper than one Python loop over the box.
+
+    The masks are computed over the *whole* layer, not the box, because a cell
+    on the box's edge needs its neighbours -- which is also why every caller
+    grows the box by one before writing it.
+    """
+    tileset = ref.tileset
+    if not tileset.is_terrain_set:
+        return
+    x0, y0, x1, y1 = box
+    ranks = rank_field(work, ref)
+    window = ranks[y0:y1, x0:x1]
+    for rank in range(len(tileset.terrains)):
+        chosen = window == rank
+        if not chosen.any():
+            continue
+        cases = blob.indices_from(ranks >= rank, outside=outside)[y0:y1, x0:x1]
+        base = ref.firstgid + rank * blob.TILE_COUNT
+        work[y0:y1, x0:x1][chosen] = (base + cases[chosen]).astype(gidlib.DTYPE)
+
+
+def _finish(
+    data: np.ndarray, work: np.ndarray, box: tuple[int, int, int, int]
+) -> Region | None:
+    x0, y0, x1, y1 = box
+    region = work[y0:y1, x0:x1]
+    if np.array_equal(region, data[y0:y1, x0:x1]):
+        return None
+    return x0, y0, np.ascontiguousarray(region, dtype=gidlib.DTYPE)
+
+
+def retile(
+    data: np.ndarray,
+    ref: TilesetRef,
+    *,
+    x0: int = 0,
+    y0: int = 0,
+    x1: int | None = None,
+    y1: int | None = None,
+    outside: bool = True,
+) -> Region | None:
+    """Re-fit every terrain cell in a rectangle to its neighbours.
+
+    The repair primitive: after any change to the field -- a paint, an erase, a
+    plain stamp somebody made by hand -- this is what makes the edges agree
+    again. Reads one cell beyond the rectangle on every side and writes only
+    inside it.
+    """
+    height, width = np.asarray(data).shape
+    box = (
+        max(0, int(x0)),
+        max(0, int(y0)),
+        min(width, width if x1 is None else int(x1)),
+        min(height, height if y1 is None else int(y1)),
+    )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return None
+    work = np.array(data, dtype=gidlib.DTYPE)
+    _retile_into(work, ref, box, outside)
+    return _finish(data, work, box)
+
+
+def paint_terrain_cells(
+    data: np.ndarray,
+    cells: Iterable[tuple[int, int]],
+    terrain: int,
+    ref: TilesetRef,
+    *,
+    outside: bool = True,
+) -> Region | None:
+    """Set some cells to a terrain and re-fit them and the ring around them.
+
+    **One region, not a list.** The eight-neighbour fix-up lives inside the same
+    rectangle as the paint, so a single :meth:`MapDoc.write_region` is already
+    atomic and no compound step is needed -- which is what lets a whole drag
+    become one undo step rather than one per cell.
+    """
+    height, width = np.asarray(data).shape
+    inside = [
+        (int(x), int(y)) for x, y in cells if 0 <= int(x) < width and 0 <= int(y) < height
+    ]
+    box = _box(inside, (height, width), 1)
+    if box is None:
+        return None
+    work = np.array(data, dtype=gidlib.DTYPE)
+    # The case is a placeholder: the retile below computes the real one from the
+    # field this write has just changed. Writing rank-correct nonsense first and
+    # fixing it in one pass is what keeps the two steps from disagreeing.
+    placeholder = gid_for(ref, terrain, blob.FULL)
+    for x, y in inside:
+        work[y, x] = placeholder
+    _retile_into(work, ref, box, outside)
+    return _finish(data, work, box)
+
+
+def paint_terrain(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    terrain: int,
+    ref: TilesetRef,
+    *,
+    radius: int = 0,
+    outside: bool = True,
+) -> Region | None:
+    """One click: a square of side ``2 * radius + 1``, re-fitted with its ring."""
+    span = range(-int(radius), int(radius) + 1)
+    cells = [(int(x) + dx, int(y) + dy) for dy in span for dx in span]
+    return paint_terrain_cells(data, cells, terrain, ref, outside=outside)
+
+
+def erase_terrain(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    ref: TilesetRef,
+    *,
+    radius: int = 0,
+    outside: bool = True,
+) -> Region | None:
+    """Clear a square back to nothing and re-fit what surrounded it.
+
+    Erasing a terrain cell is not the same as erasing a tile: the hole has to
+    grow an outline on everything that now borders it, which is why this is here
+    rather than a call to ``tools.erase``.
+    """
+    height, width = np.asarray(data).shape
+    span = range(-int(radius), int(radius) + 1)
+    cells = [
+        (int(x) + dx, int(y) + dy)
+        for dy in span
+        for dx in span
+        if 0 <= int(x) + dx < width and 0 <= int(y) + dy < height
+    ]
+    box = _box(cells, (height, width), 1)
+    if box is None:
+        return None
+    work = np.array(data, dtype=gidlib.DTYPE)
+    for cx, cy in cells:
+        work[cy, cx] = gidlib.EMPTY
+    _retile_into(work, ref, box, outside)
+    return _finish(data, work, box)
+
+
+def fill_terrain(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    terrain: int,
+    ref: TilesetRef,
+    *,
+    outside: bool = True,
+) -> Region | None:
+    """Flood the connected run of one terrain, and re-fit the result.
+
+    **The flood is over the rank field, not the gids.** ``tools.flood_fill``
+    matches on the full encoded value -- correctly, for its own purpose -- so it
+    would stop at the boundary between two of grass's own forty-seven cases and
+    fill a one-cell-wide ribbon along an edge. What a user means by "fill the
+    grass" is the terrain, so that is what is compared.
+
+    Four-connected, for ``tools.flood_fill``'s reason: a diagonal leak through a
+    corner where two fields only touch at a point is how a fill escapes.
+    """
+    height, width = np.asarray(data).shape
+    x, y = int(x), int(y)
+    if not (0 <= x < width and 0 <= y < height):
+        return None
+    ranks = rank_field(data, ref)
+    target = int(ranks[y, x])
+    if target == int(terrain):
+        return None
+
+    seen = np.zeros((height, width), dtype=bool)
+    seen[y, x] = True
+    queue: deque[tuple[int, int]] = deque([(x, y)])
+    while queue:
+        cx, cy = queue.popleft()
+        for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+            inside = 0 <= nx < width and 0 <= ny < height
+            if inside and not seen[ny, nx] and ranks[ny, nx] == target:
+                seen[ny, nx] = True
+                queue.append((nx, ny))
+
+    ys, xs = np.nonzero(seen)
+    return paint_terrain_cells(
+        data, zip(xs.tolist(), ys.tolist(), strict=True), terrain, ref, outside=outside
+    )

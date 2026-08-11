@@ -25,6 +25,43 @@ from typing import Any
 
 import numpy as np
 
+from . import blob
+
+RGBA = tuple[int, int, int, int]
+
+
+def _rgba(colour: Any, what: str) -> RGBA:
+    values = tuple(int(part) for part in colour)
+    if len(values) != 4 or any(part < 0 or part > 255 for part in values):
+        raise ValueError(f"{what} must be four channels of 0..255")
+    return values  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class TerrainSpec:
+    """One terrain a tileset declares: what it is called and what it is made of.
+
+    Here rather than in :mod:`.terrain` because it is a *field* of
+    :class:`Tileset` -- the roles are a fact about the atlas, not about any map
+    that loads it, so the same generated set embedded in two ``.wmap`` files
+    carries them in both. Putting it next door would make the two modules import
+    each other.
+
+    **A terrain's position in the tuple is its precedence**, which is the whole
+    of how a cell with three terrains around it picks one picture: a cell's blob
+    membership is every neighbour ranked at or above its own. So this is a
+    tuple, and every serialisation of it is an ordered list.
+    """
+
+    name: str
+    fill: RGBA
+    outline: RGBA
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", str(self.name))
+        object.__setattr__(self, "fill", _rgba(self.fill, "a terrain fill"))
+        object.__setattr__(self, "outline", _rgba(self.outline, "a terrain outline"))
+
 
 def frozen_rgba(pixels: Any, what: str = "a tileset image") -> np.ndarray:
     """A private RGBA copy nothing can write through.
@@ -60,11 +97,15 @@ class Tileset:
     margin: int = 0
     # Preserved verbatim from a .tsx so a round trip does not quietly drop it.
     properties: dict[str, Any] = field(default_factory=dict)
+    # Empty for an ordinary atlas. Non-empty makes this a *terrain set*: one row
+    # per terrain, one column per blob case, so a tile's role is its position.
+    terrains: tuple[TerrainSpec, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
         for name in ("tile_w", "tile_h", "spacing", "margin"):
             object.__setattr__(self, name, int(getattr(self, name)))
+        object.__setattr__(self, "terrains", tuple(self.terrains))
         if self.tile_w < 1 or self.tile_h < 1:
             raise ValueError("a tile must be at least one pixel across")
         if self.spacing < 0 or self.margin < 0:
@@ -75,6 +116,21 @@ class Tileset:
                 f"{self.tile_w}x{self.tile_h} tiles at margin {self.margin}, "
                 f"spacing {self.spacing}"
             )
+        # Validated here for the reason the slicing above is: a terrain set
+        # whose geometry does not match its declaration is a file or a form
+        # somebody got wrong, and the useful moment to say so is now rather than
+        # when a paint stroke indexes past the end of a row.
+        if self.terrains:
+            if self.columns != blob.TILE_COUNT:
+                raise ValueError(
+                    f"a terrain set is {blob.TILE_COUNT} columns wide, one blob case "
+                    f"per column; this one is {self.columns}"
+                )
+            if self.rows < len(self.terrains):
+                raise ValueError(
+                    f"{len(self.terrains)} terrains need {len(self.terrains)} rows, "
+                    f"and this image holds {self.rows}"
+                )
 
     # -- geometry ------------------------------------------------------------
 
@@ -133,6 +189,39 @@ class Tileset:
         nothing."""
         x, y, w, h = self.tile_rect(local_id)
         return self.pixels[y : y + h, x : x + w]
+
+    # -- terrain -------------------------------------------------------------
+
+    @property
+    def is_terrain_set(self) -> bool:
+        return bool(self.terrains)
+
+    def terrain_of(self, local_id: int) -> int | None:
+        """Which terrain a tile belongs to, or ``None`` if it is not one.
+
+        **This is the only place a cell's terrain comes from.** There is no
+        parallel per-cell terrain array anywhere in the package: the gid names a
+        tileset and a local id, the local id's row names the terrain, and one
+        answer cannot disagree with itself. A stored field would be a second
+        source of truth that ``.wmap``, undo and every Tiled round trip would
+        each have to keep honest.
+        """
+        if not self.terrains:
+            return None
+        index = int(local_id)
+        if index < 0 or index >= self.tile_count:
+            return None
+        row = index // blob.TILE_COUNT
+        return row if row < len(self.terrains) else None
+
+    def local_for(self, terrain: int, blob_index: int) -> int:
+        """The local id of one terrain's one blob case. The layout, in one line."""
+        row, column = int(terrain), int(blob_index)
+        if row < 0 or row >= len(self.terrains):
+            raise IndexError(f"terrain {row} is outside this set (0..{len(self.terrains) - 1})")
+        if column < 0 or column >= blob.TILE_COUNT:
+            raise IndexError(f"blob case {column} is outside 0..{blob.TILE_COUNT - 1}")
+        return row * blob.TILE_COUNT + column
 
     def uv(self, local_id: int) -> tuple[float, float, float, float]:
         """``(u0, v0, u1, v1)`` for one tile, for a draw-list quad.

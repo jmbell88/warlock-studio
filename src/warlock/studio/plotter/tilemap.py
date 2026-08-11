@@ -31,6 +31,7 @@ this uid a layer or an object" a question nothing has to ask.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +40,7 @@ import numpy as np
 
 from ..undo import CompoundEdit, Edit, UndoStack
 from . import gid as gidlib
+from . import project
 from .edits import (
     LayerAddEdit,
     LayerMoveEdit,
@@ -50,6 +52,7 @@ from .edits import (
     ResizeEdit,
     TilePatchEdit,
     TilesetAddEdit,
+    TilesetReplaceEdit,
 )
 from .tileset import Tileset, TilesetRef
 
@@ -171,7 +174,7 @@ Layer = TileLayer | ObjectLayer
 
 
 class MapDoc:
-    """One orthogonal tile map, its tilesets, its layers and its history."""
+    """One tile map, its projection, its tilesets, its layers and its history."""
 
     def __init__(
         self,
@@ -182,11 +185,15 @@ class MapDoc:
         *,
         layers: list[Layer] | None = None,
         tilesets: list[TilesetRef] | None = None,
+        projection: str = project.ORTHOGONAL,
     ) -> None:
         self.width = _dimension(width, "width")
         self.height = _dimension(height, "height")
         self.tile_w = _dimension(tile_w, "tile width")
         self.tile_h = _dimension(tile_h, "tile height")
+        # Refused by name here rather than at the first draw, for ``_dimension``'s
+        # reason: a map placed by arithmetic nothing implements is not a map.
+        self.projection = project.check(projection)
         self.layers: list[Layer] = list(layers or [])
         self.tilesets: list[TilesetRef] = list(tilesets or [])
         self.properties: dict[str, Any] = {}
@@ -201,6 +208,9 @@ class MapDoc:
         # undoable "which layer am I on" would move the head and make a document
         # ask to be saved because the user clicked a different row.
         self.active_layer: int | None = self.layers[0].uid if self.layers else None
+        # The open stroke session, or None. View-adjacent and never serialized:
+        # a document is always saved with its strokes closed.
+        self._stroke: dict[str, Any] | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -218,13 +228,57 @@ class MapDoc:
         """
         self.saved_head = self.history.head if head is None else int(head)
 
+    # -- projection ----------------------------------------------------------
+    #
+    # Placement is deferred to ``project`` rather than inlined here, because the
+    # canvas and the flat renderer must agree about where a cell is or an export
+    # stops being a picture of the screen -- the same reason they both take
+    # orientation from ``gid``.
+
+    @property
+    def isometric(self) -> bool:
+        return self.projection == project.ISOMETRIC
+
     @property
     def pixel_width(self) -> int:
-        return self.width * self.tile_w
+        return project.map_size(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h
+        )[0]
 
     @property
     def pixel_height(self) -> int:
-        return self.height * self.tile_h
+        return project.map_size(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h
+        )[1]
+
+    def cell_origin(self, column: int, row: int) -> tuple[float, float]:
+        """The top-left of a cell's image rectangle, in map pixels."""
+        return project.cell_origin(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h, column, row
+        )
+
+    def cell_corner(self, column: float, row: float) -> tuple[float, float]:
+        """A lattice node -- where four cells meet. What a grid line joins."""
+        return project.cell_corner(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h, column, row
+        )
+
+    def cell_at(self, x: float, y: float) -> tuple[int, int]:
+        """Which cell a map-pixel point lands in. Unclamped; every tool clips."""
+        return project.cell_at(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h, x, y
+        )
+
+    def cell_bounds(
+        self, x0: float, y0: float, x1: float, y1: float
+    ) -> tuple[int, int, int, int]:
+        return project.cell_bounds(
+            self.projection, self.width, self.height, self.tile_w, self.tile_h, x0, y0, x1, y1
+        )
+
+    def draw_order(self):
+        """Every cell, back to front for this projection."""
+        return project.draw_order(self.projection, self.width, self.height)
 
     # -- lookup --------------------------------------------------------------
 
@@ -299,6 +353,38 @@ class MapDoc:
                 del self.tilesets[index]
                 return
         raise KeyError("that tileset is not in this map")
+
+    def replace_tileset(self, index: int, tileset: Tileset) -> TilesetRef:
+        """Swap one tileset's art, keeping its ids and its declared terrains.
+
+        What the Inker polish round trip comes back through. A different tile
+        count is **refused by name**, because that is exactly the case which
+        would renumber: same count and same ``firstgid`` means every cell
+        already painted keeps its tile and simply redraws.
+
+        The terrains come from the *old* set unless the new one declares its
+        own, so an atlas that went out to a paint program and came back as plain
+        pixels does not silently stop being a terrain set.
+        """
+        at = int(index)
+        if at < 0 or at >= len(self.tilesets):
+            raise IndexError(f"no tileset {at} in this map")
+        old = self.tilesets[at]
+        if tileset.tile_count != old.tileset.tile_count:
+            raise ValueError(
+                f"{old.tileset.name} holds {old.tileset.tile_count} tiles and the "
+                f"replacement holds {tileset.tile_count}; the map's cells are numbered "
+                "against the old count, so this would renumber them"
+            )
+        if not tileset.terrains and old.tileset.terrains:
+            tileset = dataclasses.replace(tileset, terrains=old.tileset.terrains)
+        ref = TilesetRef(firstgid=old.firstgid, tileset=tileset, source=old.source)
+        self.history.push(TilesetReplaceEdit(index=at, before=old, after=ref))
+        self._swap_tileset(at, ref)
+        return ref
+
+    def _swap_tileset(self, index: int, ref: TilesetRef) -> None:
+        self.tilesets[int(index)] = ref
 
     # -- layers --------------------------------------------------------------
 
@@ -409,6 +495,99 @@ class MapDoc:
             TilePatchEdit(layer_uid=int(uid), x0=x0, y0=y0, before=before, after=block)
         )
         self._blit(uid, x0, y0, block)
+        return True
+
+    # -- strokes -------------------------------------------------------------
+    #
+    # A drag is one gesture and must be one undo step. Before this existed,
+    # ``_apply`` called ``write_region`` on every frame the button was down, so
+    # a stamp dragged across forty cells pushed forty steps -- forty things to
+    # undo for one movement, and forty entries competing for the history's byte
+    # budget. ``compound`` cannot repair that after the fact: the steps are
+    # already pushed and the stack has no squash.
+    #
+    # So this is ``inker.Document``'s stroke session over gids, and deliberately
+    # the same three calls in the same order: take a copy at press, write the
+    # live array with no history at all while the button is down, and push one
+    # patch over the union of what moved at release. It is the second write door
+    # into a layer, which is why ``end_stroke`` is idempotent and the pane closes
+    # any open stroke on the first frame the mouse is not down -- a session left
+    # open is a document whose pixels are ahead of its head.
+
+    @property
+    def stroking(self) -> bool:
+        return self._stroke is not None
+
+    def begin_stroke(self, uid: int) -> None:
+        """Open a session on one tile layer. Re-opening is harmless."""
+        layer = self.layer(uid)
+        if not isinstance(layer, TileLayer):
+            raise KeyError(f"no tile layer {uid}")
+        if self._stroke is not None:
+            self.end_stroke()
+        self._stroke = {
+            "uid": int(uid),
+            "before": np.array(layer.data, dtype=gidlib.DTYPE),
+            "box": None,
+        }
+
+    def stroke_write(self, x0: int, y0: int, after: np.ndarray) -> bool:
+        """Write into the open session's layer, pushing nothing.
+
+        Falls back to :meth:`write_region` when no session is open, so a caller
+        that lost its press event degrades to the old one-step-per-call
+        behaviour rather than dropping the paint on the floor.
+        """
+        if self._stroke is None:
+            raise RuntimeError("no stroke is open")
+        block = np.ascontiguousarray(after, dtype=gidlib.DTYPE)
+        uid = int(self._stroke["uid"])
+        layer = self.layer(uid)
+        if not isinstance(layer, TileLayer):
+            raise KeyError(f"no tile layer {uid}")
+        h, w = block.shape
+        x0, y0 = int(x0), int(y0)
+        if x0 < 0 or y0 < 0 or x0 + w > layer.width or y0 + h > layer.height:
+            raise ValueError("that region falls outside the layer")
+        if np.array_equal(layer.data[y0 : y0 + h, x0 : x0 + w], block):
+            return False
+        self._blit(uid, x0, y0, block)
+        box = self._stroke["box"]
+        self._stroke["box"] = (
+            (x0, y0, x0 + w, y0 + h)
+            if box is None
+            else (min(box[0], x0), min(box[1], y0), max(box[2], x0 + w), max(box[3], y0 + h))
+        )
+        return True
+
+    def end_stroke(self) -> bool:
+        """Close the session and push one step. ``False`` if nothing moved.
+
+        Idempotent on purpose: a release can be missed -- focus loss, a tab
+        switch, Esc, a save beginning mid-drag -- and every one of those recovery
+        paths would otherwise need to know whether a stroke was open.
+        """
+        stroke, self._stroke = self._stroke, None
+        if stroke is None or stroke["box"] is None:
+            return False
+        x0, y0, x1, y1 = stroke["box"]
+        uid = int(stroke["uid"])
+        layer = self.layer(uid)
+        if not isinstance(layer, TileLayer):
+            return False
+        before = stroke["before"][y0:y1, x0:x1]
+        after = layer.data[y0:y1, x0:x1]
+        if np.array_equal(before, after):
+            return False
+        self.history.push(
+            TilePatchEdit(
+                layer_uid=uid,
+                x0=x0,
+                y0=y0,
+                before=before,
+                after=np.ascontiguousarray(after, dtype=gidlib.DTYPE),
+            )
+        )
         return True
 
     def _blit(self, uid: int, x0: int, y0: int, block: np.ndarray) -> None:

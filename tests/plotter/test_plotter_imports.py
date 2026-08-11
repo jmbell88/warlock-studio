@@ -77,7 +77,7 @@ def _modules() -> list[Path]:
 def test_there_are_modules_to_check():
     """A glob that matched nothing would make every test below vacuously
     pass."""
-    assert len(_modules()) >= 8
+    assert len(_modules()) >= 12
 
 
 def test_the_engine_never_imports_a_window():
@@ -124,9 +124,13 @@ def test_the_package_imports_with_no_optional_dependency_present():
     """Importing every module is the cheapest possible smoke test that the
     lazy-import rule above is actually being followed."""
     from warlock.studio.plotter import (  # noqa: F401
+        blob,
         edits,
         gid,
+        project,
         render,
+        terrain,
+        tilegen,
         tilemap,
         tileset,
         tmx,

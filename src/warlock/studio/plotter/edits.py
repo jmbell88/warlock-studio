@@ -179,6 +179,38 @@ class TilesetAddEdit(Edit):
 
 
 @dataclass
+class TilesetReplaceEdit(Edit):
+    """Swapping one tileset's art for another of the same shape.
+
+    The smallest relaxation of "tilesets are never removed" that a polish pass
+    needs, and it relaxes nothing that rule was defending: the replacement keeps
+    the same ``firstgid`` and the same tile count, so every gid already painted
+    still resolves to the same row and column of the same grid and simply draws
+    the new art. What is refused -- at the call site, by name -- is a different
+    tile count, which is the case that *would* renumber.
+
+    The cost is both atlases, because while this edit stands it is the only
+    thing keeping the original's pixels alive.
+    """
+
+    index: int
+    before: Any
+    after: Any
+
+    def __post_init__(self) -> None:
+        self.cost = sum(
+            int(getattr(getattr(ref, "tileset", None), "pixels", np.empty(0)).nbytes)
+            for ref in (self.before, self.after)
+        )
+
+    def undo(self, doc: Any) -> None:
+        doc._swap_tileset(self.index, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._swap_tileset(self.index, self.after)
+
+
+@dataclass
 class ObjectAddEdit(Edit):
     layer_uid: int
     obj: Any
