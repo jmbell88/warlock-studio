@@ -36,6 +36,18 @@ _COMPONENT = {
 }
 _NCOMP = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
 
+#: Ceilings on what a hand-supplied file may declare. ``check_glb`` at the
+#: import door is deliberately structural-only, so a ≤100 MB GLB reaches this
+#: loader with whatever numbers its JSON chunk claims -- and this loader runs on
+#: the frame thread. Both are module-level so a test can lower them rather than
+#: craft a hostile asset.
+#:
+#: A JSON chunk declaring millions of nodes is a hang, not a scene.
+MAX_NODES = 100_000
+#: Mirrors ``service.validation.MAX_IMAGE_PIXELS`` without importing service
+#: into the viewer (the viewer imports no business-logic layer).
+MAX_TEXTURE_PIXELS = 16_000_000
+
 
 @dataclass
 class Material:
@@ -145,9 +157,18 @@ class Model:
         an exporter need not be, and a blown stack in the frame loop is not a
         failure mode worth having.
         """
+        # ``seen`` and the range check are not defensiveness about our own
+        # exporter: a hand-supplied GLB whose children form a cycle, or name a
+        # node index that does not exist, is reachable through import (which is
+        # deliberately structural-only) and would spin or raise here -- on the
+        # frame thread. A malformed graph costs the malformed part of itself.
+        seen: set[int] = set()
         stack = [(r, m3.identity()) for r in reversed(self.roots)]
         while stack:
             index, parent = stack.pop()
+            if index in seen or not 0 <= index < len(self.nodes):
+                continue
+            seen.add(index)
             node = self.nodes[index]
             node.world = parent @ node.local()
             for child in reversed(node.children):
@@ -270,6 +291,9 @@ def load(path: Path | bytes) -> Model:
             "this GLB requires glTF extensions this viewer does not implement: "
             + ", ".join(sorted(required))
         )
+    declared = len(gltf.get("nodes", []))
+    if declared > MAX_NODES:
+        raise ValueError(f"this GLB declares {declared} nodes, more than this viewer will load")
     reader = _Reader(gltf, buffer)
     materials = [reader.material(m) for m in gltf.get("materials", [])]
     meshes = [
@@ -504,6 +528,19 @@ class _Reader:
             return None
         try:
             with Image.open(io.BytesIO(data)) as im:
+                # ``open`` is lazy, so the size is known before any pixel is
+                # decoded: an absurd one costs a log line rather than the RAM.
+                # Same policy as a corrupt map -- the texture, not the model.
+                if im.width * im.height > MAX_TEXTURE_PIXELS:
+                    log.warning(
+                        "skipping a %dx%d texture: over this viewer's %d-pixel ceiling",
+                        im.width,
+                        im.height,
+                        MAX_TEXTURE_PIXELS,
+                    )
+                    self.skipped += 1
+                    self._images[source] = None
+                    return None
                 rgba = im.convert("RGBA")
                 decoded = rgba.width, rgba.height, rgba.tobytes()
         except Exception:

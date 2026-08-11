@@ -109,6 +109,9 @@ class FakeViewer:
     def reset_all(self, *, dirty=True) -> None:
         self.editor.reset_all(dirty=dirty)
 
+    def mirror(self) -> None:
+        self.editor.mirror()
+
 
 def _full_bones(template="humanoid"):
     """Every bone at identity -- validate_record requires the whole skeleton,
@@ -356,6 +359,100 @@ def test_guard_proceeds_with_no_session(svc):
     ran: list[str] = []
     assert poser_mode.guard(ctx, "quit", lambda: ran.append("go")) is True
     assert ran == ["go"]
+
+
+# --- Mirror, behind the same guard -------------------------------------------
+#
+# Mirror rewrites every rotation and this mode has no undo at all: it was the
+# last control that could discard an unsaved pose with no way back.
+
+
+def _mirrored_viewer():
+    viewer = _bound_viewer()
+    viewer.editor.mirror_pairs = [["upper_arm.L", "upper_arm.R"]]
+    return viewer
+
+
+def _left_arm(viewer):
+    return list(viewer.editor.pose()["upper_arm.L"])
+
+
+def test_mirror_over_unsaved_edits_asks_first_and_moves_nothing(svc):
+    ctx = FakeCtx(svc)
+    viewer = _mirrored_viewer()
+    ctx.poser_viewer = viewer
+    viewer.editor.apply({"upper_arm.R": [0.0, 0.0, 0.7071068, 0.7071068]})
+    before = _left_arm(viewer)
+
+    assert poser_mode.guard(ctx, "mirror the pose", viewer.mirror) is False
+    assert len(ctx.confirms.asked) == 1
+    assert "mirror the pose" in ctx.confirms.asked[0].message
+    assert _left_arm(viewer) == before, "nothing moved before the answer"
+
+    ctx.confirms.asked[0].on_confirm()
+    assert _left_arm(viewer) != before
+
+
+def test_mirror_on_a_clean_editor_just_runs(svc):
+    ctx = FakeCtx(svc)
+    viewer = _mirrored_viewer()
+    ctx.poser_viewer = viewer
+    viewer.editor.apply({"upper_arm.R": [0.0, 0.0, 0.7071068, 0.7071068]}, dirty=False)
+    before = _left_arm(viewer)
+
+    assert poser_mode.guard(ctx, "mirror the pose", viewer.mirror) is True
+    assert ctx.confirms.asked == []
+    assert _left_arm(viewer) != before
+
+
+@pytest.mark.parametrize(
+    ("module", "guard_name"),
+    [("poser_controls", "poser_mode.guard"), ("pose_panel", "guard")],
+)
+def test_both_mirror_buttons_go_through_their_pane_s_guard(module, guard_name):
+    """Source-scanned rather than clicked: the button lives inside an imgui
+    frame, and what is being pinned is that no bare ``viewer.mirror()`` call
+    comes back -- which is a fact about the text."""
+    import importlib
+    import inspect
+
+    source = inspect.getsource(importlib.import_module(f"warlock.studio.panes.{module}"))
+    assert f'{guard_name}(ctx, "mirror the pose", viewer.mirror)' in source
+    assert "viewer.mirror()" not in source
+
+
+# --- task-key routing --------------------------------------------------------
+
+
+def test_every_poser_task_key_is_prefixed_poser():
+    """The prefix is the routing, so it is not a naming convention: a Poser key
+    that did not start with ``poser-`` would be handed to another mode's
+    handler by ``main._on_task_done``."""
+    keys = [
+        poser_mode.LIST_KEY,
+        poser_mode.SAVE_KEY,
+        poser_mode.DELETE_KEY,
+        poser_mode.DUPLICATE_KEY,
+        poser_mode.RENAME_KEY,
+        poser_mode.PREVIEW_KEY_PREFIX,
+    ]
+    assert all(k.startswith("poser-") for k in keys), keys
+
+
+def test_poser_results_are_claimed_before_the_asset_pose_branches():
+    """``"poser-save"`` also starts with ``"pose-"``. Nothing but the order of
+    two ``if`` statements keeps a Poser result out of the inspector's pose
+    handler, and the fix if they were ever swapped is not obvious from either
+    site -- so the order is the pin.
+    """
+    import inspect
+
+    from warlock.studio import main
+
+    source = inspect.getsource(main.App._on_task_done)
+    poser = source.index('key.startswith("poser-")')
+    assert poser < source.index('key.startswith("pose-library:")')
+    assert poser < source.index('key.startswith("pose-")')
 
 
 # --- the preview binding -----------------------------------------------------

@@ -704,10 +704,21 @@ def read_rig(job_dir: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        size = path.stat().st_size
+        if size > MAX_RECORD_BYTES:
+            log.warning("ignoring rig.json at %s: %d bytes, over the ceiling", path, size)
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError covers both halves of "not our JSON": UnicodeDecodeError
+        # for bytes that are not UTF-8, JSONDecodeError for text that is not
+        # JSON. Either way the file costs itself, never the pane reading it.
         log.exception("unreadable rig.json at %s", path)
         return None
+    if not isinstance(record, dict):
+        log.warning("ignoring rig.json at %s: the document is not an object", path)
+        return None
+    return record
 
 
 def rig_bone_names(job_dir: Path) -> list[str] | None:
@@ -729,6 +740,34 @@ POSE_DIR_NAME = "poses"
 # A ceiling so a scripted client can't turn a job directory into a million
 # files. Far above any plausible hand-authored set.
 MAX_POSES = 500
+
+# A rig or pose record is a few KB of bone names and quaternions; a megabyte is
+# already three orders of magnitude of headroom. Checked by stat *before* the
+# read so a blob dropped into a job directory costs a log line rather than the
+# RAM to parse it. Shared with poselib, which stores the same shape of record.
+MAX_RECORD_BYTES = 1 << 20
+
+
+def write_json_staged(path: Path, payload: dict[str, Any], *, prefix: str) -> None:
+    """Write one JSON document by staging it beside its destination.
+
+    The Settings.flush rule, held in one place because three callers had a
+    byte-identical copy of it: an overwrite that died mid-write used to leave
+    the existing record truncated, and a pose file is the only copy of its
+    rotations. ``prefix`` names the temp after what it will become, so a
+    stranded one is attributable; ``BaseException`` rather than ``Exception``
+    because a KeyboardInterrupt between the write and the rename must still
+    take the dotfile with it.
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=prefix, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def pose_dir(job_dir: Path) -> Path:
@@ -783,20 +822,10 @@ def save_pose(
         if protected:
             raise ValueError(f"extra may not override {sorted(protected)}")
         record.update(extra)
-    # Staged beside the destination and renamed, like Settings.flush: an
-    # overwrite that died mid-write used to leave the existing pose truncated,
-    # and a pose file is the only record of the rotations. The GLB is dropped
-    # only after the JSON has landed, so the pair is never inconsistent the
-    # other way round.
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{pose_id}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(record, fh, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    # Staged beside the destination and renamed. The GLB is dropped only after
+    # the JSON has landed, so the pair is never inconsistent the other way
+    # round -- which is the part ``write_json_staged`` does not know about.
+    write_json_staged(path, record, prefix=f".{pose_id}.")
     pose_glb_path(job_dir, pose_id).unlink(missing_ok=True)
     return record
 
@@ -806,10 +835,29 @@ def read_pose(job_dir: Path, pose_id: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        size = path.stat().st_size
+        if size > MAX_RECORD_BYTES:
+            log.warning("ignoring pose at %s: %d bytes, over the ceiling", path, size)
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         log.exception("unreadable pose at %s", path)
         return None
+    if not isinstance(record, dict):
+        log.warning("ignoring pose at %s: the document is not an object", path)
+        return None
+    return record
+
+
+def _created_key(record: dict[str, Any]) -> float:
+    """Sort key for ``created``, tolerant of a hand-edited file.
+
+    A string timestamp sorted against floats raises and costs the whole list;
+    an unusable one sorts as 0.0 instead, and a stable sort leaves equal keys
+    in the filename order they were globbed in.
+    """
+    value = record.get("created", 0.0)
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
 def list_poses(job_dir: Path) -> list[dict[str, Any]]:
@@ -822,9 +870,19 @@ def list_poses(job_dir: Path) -> list[dict[str, Any]]:
         if not is_valid_id(path.stem):
             continue
         record = read_pose(job_dir, path.stem)
-        if record is not None:
-            poses.append(record)
-    poses.sort(key=lambda p: p.get("created", 0.0))
+        if record is None:
+            continue
+        if record.get("id") != path.stem:
+            # The filename is the address every caller uses -- read, delete and
+            # overwrite all go through pose_path(stem). A record whose internal
+            # id disagrees is listed under its stem so it stays reachable; the
+            # next save writes the reconciled id back.
+            log.warning(
+                "pose %s records id %r; listing it under its filename", path, record.get("id")
+            )
+            record = dict(record, id=path.stem)
+        poses.append(record)
+    poses.sort(key=_created_key)
     return poses
 
 

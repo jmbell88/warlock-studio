@@ -20,14 +20,11 @@ Everything here is decidable with the filesystem and the template registry.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
 import math
-import os
 import re
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -215,15 +212,7 @@ def save_record(
         "created": existing.get("created", now) if existing else now,
         "updated": now,
     }
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{pose_id}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(stored, fh, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    rigging.write_json_staged(path, stored, prefix=f".{pose_id}.")
     return stored
 
 
@@ -232,10 +221,20 @@ def read_record(config: Any, pose_id: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        size = path.stat().st_size
+        if size > rigging.MAX_RECORD_BYTES:
+            log.warning("ignoring library pose at %s: %d bytes, over the ceiling", path, size)
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError as well as JSONDecodeError: a
+        # file some other program wrote costs itself, never the library pane.
         log.exception("unreadable library pose at %s", path)
         return None
+    if not isinstance(record, dict):
+        log.warning("ignoring library pose at %s: the document is not an object", path)
+        return None
+    return record
 
 
 def list_records(config: Any, template: str | None = None) -> list[dict[str, Any]]:
@@ -251,6 +250,17 @@ def list_records(config: Any, template: str | None = None) -> list[dict[str, Any
         record = read_record(config, path.stem)
         if record is None:
             continue
+        if record.get("id") != path.stem:
+            # The stem is the address: read/save/delete all go through
+            # pose_path(stem). Listing the record's own disagreeing id made a
+            # rename write a *second* file and leave the original in place --
+            # a phantom duplicate. The stem wins; the next save reconciles it.
+            log.warning(
+                "library pose %s records id %r; listing it under its filename",
+                path,
+                record.get("id"),
+            )
+            record = dict(record, id=path.stem)
         if template is not None and record.get("template") != template:
             continue
         records.append(record)
@@ -352,10 +362,18 @@ def read_preview_sidecar(config: Any, template_key: str) -> dict[str, Any] | Non
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        size = path.stat().st_size
+        if size > rigging.MAX_RECORD_BYTES:
+            log.warning("ignoring preview sidecar at %s: %d bytes, over the ceiling", path, size)
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         log.exception("unreadable preview sidecar at %s", path)
         return None
+    if not isinstance(record, dict):
+        log.warning("ignoring preview sidecar at %s: the document is not an object", path)
+        return None
+    return record
 
 
 def preview_valid(config: Any, template_key: str, blender_version: str) -> bool:
@@ -393,12 +411,4 @@ def write_preview_sidecar(config: Any, template_key: str, blender_version: str) 
         "blender_version": blender_version,
         "preview_epoch": PREVIEW_EPOCH,
     }
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{template_key}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    rigging.write_json_staged(path, payload, prefix=f".{template_key}.")

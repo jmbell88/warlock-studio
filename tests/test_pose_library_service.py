@@ -294,3 +294,71 @@ def test_a_failed_build_caches_nothing(svc, monkeypatch):
         svc_poses.template_preview(svc, "humanoid")
     assert not poselib.preview_path(svc.config, "humanoid").exists()
     assert poselib.read_preview_sidecar(svc.config, "humanoid") is None
+
+
+def test_a_rename_that_cannot_be_swapped_in_is_a_failure_not_a_traceback(svc, monkeypatch):
+    """Blender succeeded; the os.replace after it did not. Same sentence,
+    because the preview is still what was not built."""
+    _fake_probe(monkeypatch)
+    _fake_worker(monkeypatch)
+    monkeypatch.setattr(
+        svc_poses.os, "replace", lambda *a: (_ for _ in ()).throw(PermissionError("held"))
+    )
+    with pytest.raises(Failed, match="pose preview"):
+        svc_poses.template_preview(svc, "humanoid")
+
+
+# --- a record some other program edited ---------------------------------------
+#
+# The library is a directory of files. Validation used to run only at the write
+# door, so anything that got in another way reached the panes as a KeyError.
+
+
+def _break_on_disk(svc, pose_id: str) -> None:
+    """Strip ``bones`` from a stored record, in place."""
+    path = poselib.pose_path(svc.config, pose_id)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.pop("bones")
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+@pytest.mark.parametrize("action", ["rename", "duplicate", "apply", "update"])
+def test_using_a_broken_saved_pose_is_invalid_not_a_key_error(svc, assets, action):
+    job_id = _rigged_job(svc, assets)
+    stored = svc_poses.create_library_pose(svc, _payload())
+    _break_on_disk(svc, stored["id"])
+
+    with pytest.raises(Invalid, match="could not be read"):
+        if action == "rename":
+            svc_poses.rename_library_pose(svc, stored["id"], "New")
+        elif action == "duplicate":
+            svc_poses.duplicate_library_pose(svc, stored["id"])
+        elif action == "apply":
+            svc_poses.apply_library_pose(svc, job_id, stored["id"])
+        else:
+            svc_poses.update_library_pose(svc, stored["id"], {"name": "New"})
+
+
+def test_a_broken_saved_pose_is_still_listed_and_still_deletable(svc):
+    """The two deliberate exemptions: a record the user cannot see is a record
+    they cannot delete, and a record that will not validate must still go."""
+    stored = svc_poses.create_library_pose(svc, _payload())
+    _break_on_disk(svc, stored["id"])
+
+    assert [p["id"] for p in svc_poses.list_library(svc)["poses"]] == [stored["id"]]
+    assert svc_poses.delete_library_pose(svc, stored["id"]) == {"ok": True}
+    assert svc_poses.list_library(svc)["poses"] == []
+
+
+def test_a_locked_file_delete_reports_as_a_failure(svc, monkeypatch):
+    stored = svc_poses.create_library_pose(svc, _payload())
+    monkeypatch.setattr(
+        poselib, "delete_record", lambda *a: (_ for _ in ()).throw(PermissionError("held"))
+    )
+    with pytest.raises(Failed, match="locked"):
+        svc_poses.delete_library_pose(svc, stored["id"])
+
+
+def test_deleting_a_pose_that_is_not_there_says_so(svc):
+    with pytest.raises(NotFound, match="not in the library"):
+        svc_poses.delete_library_pose(svc, rigging.new_id())

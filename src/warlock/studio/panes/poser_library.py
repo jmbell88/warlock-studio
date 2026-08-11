@@ -59,11 +59,13 @@ def _library(ctx: Any, state: Any) -> None:
     viewer = poser_mode.viewer_of(ctx)
     editing = None if viewer is None else viewer.editor.current
     needle = widgets.list_filter(ctx, "poser-library", len(state.poses))
+    shown = 0
     for pose in state.poses:
         pose_id = str(pose.get("id") or "")
         name = str(pose.get("name") or pose_id)
         if needle and needle not in name.lower():
             continue
+        shown += 1
         imgui.push_id(pose_id)
         if pose_id == editing:
             widgets.text_colored(theme.ACCENT, name)
@@ -87,6 +89,7 @@ def _library(ctx: Any, state: Any) -> None:
         if imgui.small_button("Delete"):
             poser_mode.delete(ctx, pose_id)
         imgui.pop_id()
+    widgets.no_matches(needle, shown)
 
 
 def _presets(ctx: Any, state: Any) -> None:

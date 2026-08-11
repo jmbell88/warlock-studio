@@ -58,9 +58,11 @@ def _list(ctx: Any) -> None:
     # J86. A style library grows one profile at a time and is never pruned, so
     # it is the panel list most likely to outgrow a scroll.
     needle = widgets.list_filter(ctx, "profiles", len(saved))
+    shown = 0
     for name in sorted(saved):
         if needle and needle not in name.lower():
             continue
+        shown += 1
         imgui.push_id(name)
         if name == active:
             widgets.text_colored(theme.ACCENT, f"{name} (active)")
@@ -93,6 +95,7 @@ def _list(ctx: Any) -> None:
             )
         imgui.separator()
         imgui.pop_id()
+    widgets.no_matches(needle, shown)
 
 
 def _summary(ctx: Any, fields: dict[str, Any]) -> str:

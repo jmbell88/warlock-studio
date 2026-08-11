@@ -36,11 +36,30 @@ log = logging.getLogger(__name__)
 
 
 def _record_or_not_found(svc: WarlockService, pose_id: str) -> dict[str, Any]:
+    """The semantic read door for every operation that *uses* a saved pose.
+
+    Validated on the way in, not only on the way out: the library is a
+    directory of files any other program can edit, and a record that had lost
+    its ``bones`` reached the panes as a KeyError rather than as a refusal.
+
+    Two callers deliberately do not come through here. ``delete_library_pose``
+    must never validate -- a corrupt record that cannot be deleted is worse
+    than one that cannot be applied -- and ``list_library`` must not either,
+    because a record the user cannot see is a record they cannot delete.
+
+    The validated fields overwrite the stored ones; ``created``/``updated``
+    survive because they are storage's, not the payload's. ``id`` is pinned to
+    the id that was addressed, which is the filename.
+    """
     check_pose_id(pose_id)
     record = poselib.read_record(svc.config, pose_id)
     if record is None:
-        raise NotFound("no such pose")
-    return record
+        raise NotFound("That pose is not in the library.")
+    try:
+        validated = poselib.validate_record(record)
+    except ValueError as exc:
+        raise invalid_from(exc, "That saved pose could not be read") from exc
+    return dict(record, **validated, id=pose_id)
 
 
 def _check_name_free(
@@ -132,10 +151,22 @@ def duplicate_library_pose(
 
 
 def delete_library_pose(svc: WarlockService, pose_id: str) -> dict[str, Any]:
+    # Deliberately not through _record_or_not_found: a record too corrupt to
+    # validate must still be removable, or the only way out of a bad file is a
+    # file manager.
     check_pose_id(pose_id)
     with svc.convert_lock("poser", "store"):
-        if not poselib.delete_record(svc.config, pose_id):
-            raise NotFound("no such pose")
+        try:
+            deleted = poselib.delete_record(svc.config, pose_id)
+        except OSError as exc:
+            # The wrap lives here, not in poselib: the pure half may not import
+            # service, and a locked file is a real failure, not a bug report.
+            log.error("deleting library pose %s failed: %s", pose_id, exc)
+            raise Failed(
+                "That pose could not be deleted; a file may be locked by another program."
+            ) from exc
+        if not deleted:
+            raise NotFound("That pose is not in the library.")
     return {"ok": True}
 
 
@@ -171,12 +202,12 @@ def apply_library_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[s
     job_dir = svc.job_dir(job_id)
     rig = rigging.read_rig(job_dir)
     if rig is None:
-        raise NotFound("job is not rigged")
+        raise NotFound("That asset is not rigged yet.")
     record = _record_or_not_found(svc, pose_id)
 
     if str(rig.get("template") or "") != record["template"]:
         label = rigging.get_template(record["template"]).label
-        raise Conflict(f"that pose is for the {label} skeleton")
+        raise Conflict(f"That pose was authored for the {label} skeleton.")
 
     known = [b["name"] for b in rig.get("bones", [])]
     try:
@@ -234,6 +265,12 @@ def template_preview(svc: WarlockService, template: str) -> Path:
             os.replace(tmp, path)
         except rigging.BlenderError as exc:
             log.error("building the %s pose preview failed: %s", key, exc)
+            raise Failed("could not build the pose preview") from exc
+        except OSError as exc:
+            # The rename is the one step after Blender succeeded, and it fails
+            # for reasons Blender never sees -- an antivirus holding the temp,
+            # a full disk. Same sentence: the preview is what was not built.
+            log.error("renaming the %s pose preview into place failed: %s", key, exc)
             raise Failed("could not build the pose preview") from exc
         finally:
             # A Blender that died part way through leaves its staging GLB

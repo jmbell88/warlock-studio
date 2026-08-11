@@ -48,11 +48,8 @@ Warlock Studio — UX/UI Review Report
 
  B. Destructive actions & feedback holes
 
- - Permanent deletes with no confirm: saved pose (pose_panel.py:314-318, sits beside "Save GLB..."), rendered sprite sheet
- (sheet_panel.py:323-330 — costs rows×yaws Blender renders). Both should route through ctx.confirms.ask per the house pattern
- (_review_delete_button).
- - Pose editor has no undo at all; bare "Reset all" (pose_panel.py:185) and joints "Revert" (:261) are unguarded while the preset-apply
- path is guarded; Ctrl+Z no-ops in this mode alone.
+ - Pose editor has no undo at all; Ctrl+Z no-ops in this mode alone. (Every destructive control in it — Reset all, Revert, apply-a-preset,
+ and Mirror as of 2026-08-11 — now routes through the pane's guard, so the remainder is the missing history, not the missing confirms.)
  - Inker sheet export freezes the frame thread: export_sheet:399 snapshots (a flatten per frame) before the busy flag at :428 — a 40-frame
  2048² clip is a multi-second dead-looking hang. Use the incremental step_sheet_strip model or flag-then-draw-one-frame.
  - "Fix matte" can silently do nothing (inker_mode._cut_matte:293-308 logs and swallows on the explicit-button path).
@@ -104,8 +101,9 @@ Warlock Studio — UX/UI Review Report
  - disabled_button promises a tooltip it doesn't draw — docstring says "a greyed one with a tooltip says why"; takes no reason, 86 call
  sites, 0 explanations. One reason="" param unlocks all of them (_glyph_button already shows the allow_when_disabled pattern). Worst case:
  "Download selected (0)".
- - Five list_filter panes have no "no matches" state (sweeps list, profiles, clay outliner, inker layers, poses) — a filtered-to-empty
- panel looks like a lost panel; widgets.list_filter is the one place to fix all five.
+ - FIXED. The filtered panes now say "Nothing matches the filter." (widgets.no_matches, called from the sweeps list, profiles, the clay
+ outliner, inker layers, and both pose lists). Note the original diagnosis was wrong about the fix: list_filter is *not* "the one place",
+ because every caller owns its own loop and only the caller can count what survived it — so the helper takes the count.
  - A weights refusal rings a control two collapsed folds deep: field errors open "More options" but not the nested "Advanced" header
  holding base_model/style_lora (settings_2d.py:838; request_open("2d/advanced") is never called) — ring lands on an undrawn control.
  Related: field-error rings survive mode switches, and platform names two different controls in 2D vs 3D, so a 2D refusal rings 3D's "Mesh
@@ -167,7 +165,8 @@ Warlock Studio — UX/UI Review Report
  Recommended priority (if/when fixes are commissioned)
 
  1. One-line bugs on the primary feedback/input paths: A5 ("warning" typo ×2), A2 (shortcut gate on text input).
- 2. Data-safety: B confirms on pose/sheet delete; pose-editor Reset/Revert guards.
+ 2. Data-safety: DONE — pose/sheet delete confirms and the pose-editor Reset/Revert/Mirror guards all landed. What is left in this
+ category is the pose editor's absent undo stack, filed under B.
  3. Review loop integrity: A7 (armed sign), verdict-filed feedback, inline key hints, mesh_lines caveat — the findings corpus depends on
  this loop.
  4. Clay tab bar + Ctrl+W (A3) — largest dead end, mostly copied from Plotter.

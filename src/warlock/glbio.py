@@ -21,12 +21,21 @@ CHUNK_BIN = 0x004E4942  # 'BIN\0'
 
 def split_glb(data: bytes) -> tuple[bytes, dict, bytes]:
     """-> (12-byte header, parsed JSON chunk, every following byte verbatim)."""
-    magic, version, _length = struct.unpack_from("<III", data, 0)
+    # struct.error is not what callers key on: every other refusal in this
+    # module is a ValueError, and a file too short to hold its own header is a
+    # refusal like any other rather than an unpacking accident.
+    try:
+        magic, version, _length = struct.unpack_from("<III", data, 0)
+    except struct.error:
+        raise ValueError("truncated GLB: shorter than its 12-byte header") from None
     if magic != GLB_MAGIC:
         raise ValueError("not a GLB file")
     if version != 2:
         raise ValueError(f"unsupported GLB version {version}")
-    chunk_len, chunk_type = struct.unpack_from("<II", data, 12)
+    try:
+        chunk_len, chunk_type = struct.unpack_from("<II", data, 12)
+    except struct.error:
+        raise ValueError("truncated GLB: missing its first chunk header") from None
     if chunk_type != CHUNK_JSON:
         raise ValueError("first GLB chunk is not JSON")
     if 20 + chunk_len > len(data):

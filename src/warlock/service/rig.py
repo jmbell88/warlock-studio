@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import uuid
 from pathlib import Path
@@ -161,7 +162,17 @@ def delete_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[str, Any
     # bake is in flight let the bake recreate <pose_id>.glb after its .json
     # was gone, leaving an orphan GLB nothing could ever reach or clean up.
     with svc.convert_lock(job_id, f"pose:{pose_id}"):
-        if not rigging.delete_pose(svc.job_dir(job_id), pose_id):
+        try:
+            deleted = rigging.delete_pose(svc.job_dir(job_id), pose_id)
+        except OSError as exc:
+            # The wrap lives here, not in rigging: the storage half may not
+            # import service, and a file another program is holding open is a
+            # real failure with a real remedy, not a generic error.
+            log.error("deleting pose %s/%s failed: %s", job_id, pose_id, exc)
+            raise Failed(
+                "That pose could not be deleted; a file may be locked by another program."
+            ) from exc
+        if not deleted:
             raise NotFound("no such pose")
     return {"ok": True}
 
@@ -174,19 +185,41 @@ def _pose_bake_spec(job_dir: Path, pose_id: str, pose: dict[str, Any]) -> dict[s
     and the offset lands on its root bone. Absent or zero yields today's spec
     exactly -- ``pose_spec`` adds no keys -- and a rig.json that cannot answer
     (pre-template, unreadable) costs the offset, never the bake.
+
+    Every question asked of those two files is asked tolerantly, because both
+    are read off disk: a string where a number belongs, a NaN, a ``bounds``
+    that is a list rather than a box -- all fall through to the same
+    offset-less spec the warn path below already documents.
+    ``root_offset_world`` itself stays pure and raising; the tolerance belongs
+    at the boundary, not in the arithmetic.
     """
     root = pose.get("root_translation")
-    if root and any(float(v) for v in root):
+    values: list[float] = []
+    if isinstance(root, (list, tuple)) and len(root) == 3:
+        try:
+            values = [float(v) for v in root]
+        except (TypeError, ValueError):
+            values = []
+        if not all(math.isfinite(v) for v in values):
+            values = []
+    if values and any(values):
         rig = rigging.read_rig(job_dir) or {}
         bounds, bone = rig.get("bounds"), rig.get("root")
-        if bounds and bone:
-            return rigging.pose_spec(
-                job_dir,
-                pose_id,
-                pose["bones"],
-                root_bone=str(bone),
-                root_offset=rigging.root_offset_world(root, bounds),
-            )
+        if isinstance(bounds, dict) and "min" in bounds and "max" in bounds and bone:
+            try:
+                return rigging.pose_spec(
+                    job_dir,
+                    pose_id,
+                    pose["bones"],
+                    root_bone=str(bone),
+                    root_offset=rigging.root_offset_world(values, bounds),
+                )
+            except (TypeError, ValueError, IndexError):
+                # IndexError as well as the plan's two: a two-element "min" is
+                # exactly as plausible a hand edit as a string one, and
+                # root_offset_world indexes [2] for the height.
+                log.warning("pose %s has a root offset rig.json cannot scale", pose_id)
+                return rigging.pose_spec(job_dir, pose_id, pose["bones"])
         log.warning("pose %s carries a root offset but rig.json cannot scale it", pose_id)
     return rigging.pose_spec(job_dir, pose_id, pose["bones"])
 
@@ -228,6 +261,12 @@ def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
                 os.replace(tmp, path)
             except rigging.BlenderError as exc:
                 log.error("posing %s/%s failed: %s", job_id, pose_id, exc)
+                raise Failed("could not bake this pose") from exc
+            except OSError as exc:
+                # The rename after a Blender that succeeded: an antivirus
+                # holding the staging file, a full disk. The pose is still what
+                # was not baked, so it says the same thing.
+                log.error("renaming the bake of %s/%s into place failed: %s", job_id, pose_id, exc)
                 raise Failed("could not bake this pose") from exc
             finally:
                 with contextlib.suppress(OSError):

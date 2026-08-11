@@ -289,6 +289,22 @@ def test_not_a_glb_is_refused_by_the_container_reader(tmp_path):
         gltf.load(path)
 
 
+def test_a_file_too_short_for_a_header_is_a_refusal_not_a_struct_error(tmp_path):
+    """struct.error is not a ValueError, so it went straight past every caller
+    keying on the module's own refusal channel."""
+    path = tmp_path / "stub.glb"
+    path.write_bytes(b"glTF")
+    with pytest.raises(ValueError, match="12-byte header"):
+        gltf.load(path)
+
+
+def test_a_file_that_stops_before_its_first_chunk_is_a_refusal(tmp_path):
+    path = tmp_path / "headeronly.glb"
+    path.write_bytes(struct.pack("<III", 0x46546C67, 2, 0) + b"\x00\x00\x00")
+    with pytest.raises(ValueError, match="chunk header"):
+        gltf.load(path)
+
+
 # --- the real thing ---------------------------------------------------------
 
 
@@ -642,3 +658,70 @@ def test_a_texture_in_a_separate_file_is_skipped_with_an_honest_message(caplog):
         model = gltf.load(data)
     assert model.meshes[0][0].material.base_color is None
     assert "separate file" in caplog.text
+
+
+# --- hostile input: ceilings and malformed graphs -----------------------------
+#
+# check_glb at the import door is deliberately structural-only, so a file under
+# the size limit reaches this loader with whatever its JSON chunk claims -- and
+# this loader runs on the frame thread.
+
+
+def _graph(nodes: list[dict], roots: list[int]) -> bytes:
+    doc = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": roots}],
+        "nodes": nodes,
+    }
+    return _glb(doc, b"")
+
+
+def test_a_cycle_in_the_node_graph_does_not_spin_the_frame_thread():
+    model = gltf.load(_graph([{"children": [1]}, {"children": [0]}], [0]))
+    model.update_world()  # the loop terminates, which is the whole assertion
+    assert len(model.nodes) == 2
+
+
+def test_a_child_index_that_names_no_node_is_skipped_not_raised():
+    model = gltf.load(_graph([{"translation": [1.0, 0.0, 0.0], "children": [7]}], [0]))
+    model.update_world()
+    assert np.allclose(model.nodes[0].world[:3, 3], [1.0, 0.0, 0.0])
+
+
+def test_a_node_count_over_the_ceiling_is_refused_at_load(monkeypatch):
+    monkeypatch.setattr(gltf, "MAX_NODES", 2)
+    with pytest.raises(ValueError, match="more than this viewer will load"):
+        gltf.load(_graph([{}, {}, {}], [0]))
+
+
+def test_an_oversized_texture_costs_the_texture_and_not_the_model(monkeypatch, caplog):
+    """Same policy as a corrupt map. The ceiling is lowered rather than a
+    16-megapixel image built, which would cost the suite more than the bug."""
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    monkeypatch.setattr(gltf, "MAX_TEXTURE_PIXELS", 3)
+    buf = _io.BytesIO()
+    Image.new("RGBA", (2, 2), (10, 20, 30, 255)).save(buf, "PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    binary = np.zeros((3, 3), dtype="<f4").tobytes()
+    data = _minimal(
+        [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}],
+        [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
+        binary,
+        images=[{"uri": uri}],
+        textures=[{"source": 0}],
+        materials=[{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        meshes=[{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+    )
+    with caplog.at_level("WARNING"):
+        model = gltf.load(data)
+
+    assert len(model.meshes[0][0].positions) == 3, "the mesh still loads"
+    assert model.meshes[0][0].material.base_color is None
+    assert model.skipped_textures == 1
+    assert "ceiling" in caplog.text

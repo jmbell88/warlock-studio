@@ -35,9 +35,7 @@ def draw(ctx: Any) -> None:
 
 
 def _banner(state: Any, viewer: Any) -> None:
-    record = next(
-        (p for p in state.poses if p.get("id") == viewer.editor.current), None
-    )
+    record = state.find(viewer.editor.current)
     label = str(record.get("name")) if record else "New pose"
     if viewer.editor.has_unsaved_edits():
         label += " - unsaved changes"
@@ -64,7 +62,11 @@ def _joint(ctx: Any, viewer: Any) -> None:
         # no mirror pairs has nothing to mirror.
         imgui.same_line()
         if imgui.button("Mirror"):
-            viewer.mirror()
+            # Behind the guard for Reset all's reason: mirroring rewrites every
+            # rotation, this mode has no undo at all, and it was the last bare
+            # route to losing an unsaved pose. It does prompt mid-authoring --
+            # accepted, because the alternative is an undo stack.
+            poser_mode.guard(ctx, "mirror the pose", viewer.mirror)
 
 
 def _root(viewer: Any) -> None:

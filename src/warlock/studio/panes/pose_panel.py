@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import rig as svc_rig
-from .. import dialogs, icons, theme, widgets
+from .. import dialogs, docmodes, icons, theme, widgets
 from ..manual import render as manual_render
 
 log = logging.getLogger(__name__)
@@ -142,20 +142,16 @@ def _enter(ctx: Any, job: Any) -> None:
 
 
 def guard(ctx: Any, action: str, proceed: Any) -> bool:
-    """Ask before discarding unsaved edits. -> whether it went ahead now."""
+    """Ask before discarding unsaved edits. -> whether it went ahead now.
+
+    Over the *shared* viewer, which is what makes this and ``poser_mode.guard``
+    mutually exclusive by construction. The noun is computed here rather than
+    in ``docmodes``: joints mode is an inspector-only state, and a joint
+    correction is a different thing to lose than a pose.
+    """
     viewer = ctx.viewer
-    if viewer is None or not viewer.pose_mode or not viewer.editor.has_unsaved_edits():
-        proceed()
-        return True
-    what = "joint" if viewer.editor.mode == "joints" else "pose"
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved changes?",
-            message=f"Unsaved {what} changes will be lost if you {action}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    what = "joint" if viewer is not None and viewer.editor.mode == "joints" else "pose"
+    return docmodes.viewer_guard(ctx, viewer, what, action, proceed)
 
 
 def leave(ctx: Any) -> None:
@@ -194,7 +190,10 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
         # nothing to mirror, and a button that can only no-op is worse than none.
         imgui.same_line()
         if imgui.button("Mirror"):
-            viewer.mirror()
+            # Reset all's reason again: mirroring rewrites every rotation and
+            # nothing here has an undo, so it takes the same confirm rather
+            # than being the one bare route to the same loss.
+            guard(ctx, "mirror the pose", viewer.mirror)
 
     presets = ctx.state.preview.get("presets") if ctx.state.preview else None
     if presets:
@@ -302,11 +301,13 @@ def _library_list(ctx: Any, job: Any) -> None:
     )
     job_id = job["id"]
     needle = widgets.list_filter(ctx, "library-poses", len(poses))
+    shown = 0
     for pose in poses:
         pose_id = str(pose.get("id") or "")
         name = str(pose.get("name") or pose_id)
         if needle and needle not in name.lower():
             continue
+        shown += 1
         imgui.push_id(f"lib-{pose_id}")
         imgui.text(name)
         imgui.same_line()
@@ -314,6 +315,7 @@ def _library_list(ctx: Any, job: Any) -> None:
         if widgets.disabled_button("Apply", not ctx.busy(key)):
             ctx.submit(key, svc_poses.apply_library_pose, ctx.svc, job_id, pose_id)
         imgui.pop_id()
+    widgets.no_matches(needle, shown)
 
 
 def _saved_list(ctx: Any, job: Any) -> None:
@@ -340,10 +342,12 @@ def _saved_list(ctx: Any, job: Any) -> None:
     )
     job_id = job["id"]
     needle = widgets.list_filter(ctx, "poses", len(poses))
+    shown = 0
     for pose in poses:
         pose_id = pose["id"]
         if needle and needle not in str(pose.get("name") or pose_id).lower():
             continue
+        shown += 1
         imgui.push_id(pose_id)
         imgui.text(pose.get("name") or pose_id)
         if pose.get("source_pose"):
@@ -375,6 +379,7 @@ def _saved_list(ctx: Any, job: Any) -> None:
         if imgui.small_button("Delete"):
             _ask_delete(ctx, job_id, pose_id, pose.get("name") or pose_id)
         imgui.pop_id()
+    widgets.no_matches(needle, shown)
 
 
 def _ask_delete(ctx: Any, job_id: str, pose_id: str, name: str) -> None:

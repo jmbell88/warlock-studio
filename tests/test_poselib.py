@@ -74,14 +74,20 @@ def test_overwrite_keeps_created_and_bumps_updated(tmp_path, monkeypatch):
 
 def test_a_failed_write_leaves_the_existing_record_intact(tmp_path, monkeypatch):
     """The mkstemp+replace staging: a save that dies mid-write must not
-    truncate the only copy, and must not leave its temp behind."""
+    truncate the only copy, and must not leave its temp behind.
+
+    Patched through ``rigging`` because that is where the staged writer lives
+    now (``rigging.write_json_staged``, one copy for three callers); ``os`` is
+    one module object either way, so this intercepts the same function the
+    previous spelling did.
+    """
     config = _config(tmp_path)
     stored = poselib.save_record(config, poselib.validate_record(_payload()))
 
     def boom(src, dest):
         raise OSError("disk full")
 
-    monkeypatch.setattr(poselib.os, "replace", boom)
+    monkeypatch.setattr(rigging.os, "replace", boom)
     with pytest.raises(OSError):
         poselib.save_record(config, poselib.validate_record(_payload(name="B")), stored["id"])
     monkeypatch.undo()
@@ -96,6 +102,51 @@ def test_a_corrupt_file_costs_itself_not_the_list(tmp_path):
     bad_id = rigging.new_id()
     poselib.library_dir(config).joinpath(f"{bad_id}.json").write_text("{not json")
     assert [r["id"] for r in poselib.list_records(config)] == [good["id"]]
+
+
+def test_a_record_that_is_not_utf8_returns_none_rather_than_raising(tmp_path):
+    config = _config(tmp_path)
+    poselib.save_record(config, poselib.validate_record(_payload()))
+    bad_id = rigging.new_id()
+    poselib.library_dir(config).joinpath(f"{bad_id}.json").write_bytes(b"\xff\xfe nope")
+    assert poselib.read_record(config, bad_id) is None
+    assert len(poselib.list_records(config)) == 1
+
+
+def test_a_record_that_is_a_json_array_returns_none(tmp_path):
+    """It parses, so the old guard let it through -- and every caller above
+    does record["bones"] on it."""
+    config = _config(tmp_path)
+    bad_id = rigging.new_id()
+    poselib.library_dir(config).mkdir(parents=True, exist_ok=True)
+    poselib.library_dir(config).joinpath(f"{bad_id}.json").write_text(
+        json.dumps(["Crouch"]), encoding="utf-8"
+    )
+    assert poselib.read_record(config, bad_id) is None
+    assert poselib.list_records(config) == []
+
+
+def test_an_oversized_record_is_refused_without_being_parsed(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    stored = poselib.save_record(config, poselib.validate_record(_payload()))
+    monkeypatch.setattr(rigging, "MAX_RECORD_BYTES", 32)
+    assert poselib.read_record(config, stored["id"]) is None
+
+
+def test_a_record_whose_id_disagrees_with_its_filename_edits_the_real_file(tmp_path):
+    """The phantom-duplicate fix: listing the record's own id made a rename
+    write a second file and leave the original sitting there."""
+    config = _config(tmp_path)
+    stored = poselib.save_record(config, poselib.validate_record(_payload()))
+    path = poselib.pose_path(config, stored["id"])
+    path.write_text(json.dumps(dict(stored, id="somethingelse")), encoding="utf-8")
+
+    [listed] = poselib.list_records(config)
+    assert listed["id"] == stored["id"]
+
+    poselib.save_record(config, poselib.validate_record(_payload(name="Renamed")), listed["id"])
+    assert [p.name for p in poselib.library_dir(config).glob("*.json")] == [path.name]
+    assert poselib.read_record(config, stored["id"])["name"] == "Renamed"
 
 
 def test_list_records_filters_by_template_and_sorts_by_name(tmp_path):

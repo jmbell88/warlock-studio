@@ -907,6 +907,78 @@ def test_save_pose_extra_may_not_override_what_the_record_owns(tmp_path):
             rigging.save_pose(tmp_path, pose, extra={key: "x"})
 
 
+# --- pose storage against a hand-edited job directory ------------------------
+#
+# The read door, not the write door. Everything below arrives as a file some
+# other program wrote: nothing here may cost the caller more than the one
+# record it is about, because the pane that lists them has no other recourse.
+
+
+def _pose_file(job_dir, pose_id: str):
+    directory = job_dir / rigging.POSE_DIR_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{pose_id}.json"
+
+
+def test_a_pose_that_is_not_utf8_costs_itself(tmp_path):
+    pose_id = rigging.new_id()
+    _pose_file(tmp_path, pose_id).write_bytes(b"\xff\xfe not text at all")
+    assert rigging.read_pose(tmp_path, pose_id) is None
+    assert rigging.list_poses(tmp_path) == []
+
+
+def test_a_pose_that_is_a_json_array_costs_itself(tmp_path):
+    """json.loads succeeds; every caller then does record["bones"] on a list."""
+    pose_id = rigging.new_id()
+    _pose_file(tmp_path, pose_id).write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    assert rigging.read_pose(tmp_path, pose_id) is None
+
+
+def test_an_oversized_pose_is_refused_without_being_parsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(rigging, "MAX_RECORD_BYTES", 32)
+    pose_id = rigging.new_id()
+    _pose_file(tmp_path, pose_id).write_text(
+        json.dumps({"id": pose_id, "name": "x" * 200, "bones": {}}), encoding="utf-8"
+    )
+    assert rigging.read_pose(tmp_path, pose_id) is None
+
+
+def test_a_pose_whose_id_disagrees_with_its_filename_lists_under_the_stem(tmp_path):
+    """The stem is the address every caller uses, so the stem wins: the pose
+    stays readable and deletable instead of naming a file that isn't there."""
+    pose_id = rigging.new_id()
+    _pose_file(tmp_path, pose_id).write_text(
+        json.dumps({"id": "somethingelse", "name": "drift", "bones": {}, "created": 1.0}),
+        encoding="utf-8",
+    )
+    [listed] = rigging.list_poses(tmp_path)
+    assert listed["id"] == pose_id
+    assert rigging.delete_pose(tmp_path, listed["id"]) is True
+
+
+def test_a_string_created_stamp_does_not_break_the_whole_list(tmp_path):
+    for pose_id, created in ((rigging.new_id(), 2.0), (rigging.new_id(), "yesterday")):
+        _pose_file(tmp_path, pose_id).write_text(
+            json.dumps({"id": pose_id, "name": "p", "bones": {}, "created": created}),
+            encoding="utf-8",
+        )
+    assert len(rigging.list_poses(tmp_path)) == 2
+
+
+def test_a_rig_json_that_is_not_an_object_costs_itself(tmp_path):
+    (tmp_path / "rig.json").write_text(json.dumps(["hips"]), encoding="utf-8")
+    assert rigging.read_rig(tmp_path) is None
+    assert rigging.rig_bone_names(tmp_path) is None
+
+
+def test_an_oversized_rig_json_is_refused_without_being_parsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(rigging, "MAX_RECORD_BYTES", 32)
+    (tmp_path / "rig.json").write_text(
+        json.dumps({"bones": [{"name": "hips"}] * 20}), encoding="utf-8"
+    )
+    assert rigging.read_rig(tmp_path) is None
+
+
 def test_root_offset_world_scales_by_the_rig_height():
     bounds = {"min": [-1.0, -1.0, 0.0], "max": [1.0, 1.0, 2.0]}
     assert rigging.root_offset_world([0.1, 0.0, -0.25], bounds) == pytest.approx(

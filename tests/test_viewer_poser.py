@@ -9,6 +9,8 @@ object out of a logic test.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -180,6 +182,59 @@ def test_mirror_reflects_the_root_translation():
     editor.set_root_translation([0.3, 0.1, 0.2])
     editor.mirror()
     assert editor.root_translation() == pytest.approx([-0.3, 0.1, 0.2])
+
+
+# --- the render path --------------------------------------------------------
+
+
+def _overlay_stub(editor, model):
+    """The attributes ``_overlays`` touches, and nothing else -- the
+    unbound-method-over-a-stub pattern this file already uses, so no GL object
+    goes anywhere near a logic test."""
+    return SimpleNamespace(
+        pose_mode=True,
+        editor=editor,
+        model=model,
+        radius=1.0,
+        placement=m3.identity(),
+        _bone_pairs=[],
+        bonelines=SimpleNamespace(draws=lambda *a, **k: ["lines"]),
+        markers=SimpleNamespace(draws=lambda *a, **k: ["markers"]),
+        # Non-None so the gizmo branch is entered at all; never called, because
+        # the lookups bail before ``place``.
+        _active_gizmo=lambda: object(),
+    )
+
+
+def test_a_selection_the_model_no_longer_carries_costs_the_gizmo_not_the_frame():
+    """``_overlays`` runs on the frame thread, so a stale selection has to be a
+    missing gizmo for a frame rather than a KeyError out of the render loop."""
+    model = _armature_model()
+    editor = _editor()
+    editor.selected = "gone"
+
+    items = Viewer._overlays(_overlay_stub(editor, model), 600)
+
+    assert items == ["lines", "markers"]
+
+
+def test_a_live_selection_still_reaches_the_gizmo():
+    """The bail is the exception, not the rule: a real selection gets past both
+    lookups and asks the gizmo to place itself."""
+    model = _armature_model()
+    editor = _editor()
+    editor.selected = "spine"
+    placed = []
+    stub = _overlay_stub(editor, model)
+    stub.translate_gizmo = object()
+    stub.rotate_gizmo = SimpleNamespace(
+        place=lambda *a: placed.append(a), draws=lambda: ["rings"]
+    )
+    stub.camera = None
+    stub._active_gizmo = lambda: stub.rotate_gizmo
+
+    assert Viewer._overlays(stub, 600) == ["lines", "markers", "rings"]
+    assert placed
 
 
 def test_mirror_keeps_the_pose_being_edited():

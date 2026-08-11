@@ -8,12 +8,16 @@ of a rule are not merely untidy -- they are four places for the rule to change
 in three of them. This module holds the ones that are genuinely one rule; the
 ones that differ on purpose stay where they are, and say why there.
 
+:func:`viewer_guard` is the same question asked over a *viewer* instead of a
+document list -- what the two pose editors ask, where the unsaved work lives in
+a ``PoseEditor`` rather than in tabs.
+
 **Import discipline is what makes this importable from anywhere.** stdlib,
 typing and numpy at module scope and nothing else: ``dialogs`` is imported
-inside :func:`guard`, ``imgui_backend`` inside :func:`forget_texture`, and PIL
-inside :func:`decode_rgba` -- so a ``*_state`` module can reach for
-:func:`title_for` without dragging a window in, and the lazy-Pillow rule the
-engines follow holds here too.
+inside :func:`guard` and :func:`viewer_guard`, ``imgui_backend`` inside
+:func:`forget_texture`, and PIL inside :func:`decode_rgba` -- so a ``*_state``
+module can reach for :func:`title_for` without dragging a window in, and the
+lazy-Pillow rule the engines follow holds here too.
 """
 
 from __future__ import annotations
@@ -102,6 +106,31 @@ def guard(ctx: Any, attr: str, singular: str, plural: str, verb: str, proceed: A
             title="Discard unsaved work?",
             message=f"{what[0].upper()}{what[1:]} unsaved changes, which will be lost"
             f" if you {verb}.",
+            on_confirm=proceed,
+        )
+    )
+    return False
+
+
+def viewer_guard(ctx: Any, viewer: Any, noun: str, verb: str, proceed: Any) -> bool:
+    """:func:`guard`'s rule over a pose viewer. -> whether it went ahead now.
+
+    The two pose editors keep their unsaved work in a ``PoseEditor`` rather
+    than in a tab list, but they ask the same question in the same words. The
+    caller passes the viewer *and* the noun because which viewer is the right
+    one is the whole distinction between them -- the Poser reads its own
+    instance, the inspector reads the shared one, and no edit can live in both
+    -- and the inspector's noun changes with the editor's mode.
+    """
+    from . import dialogs
+
+    if viewer is None or not viewer.pose_mode or not viewer.editor.has_unsaved_edits():
+        proceed()
+        return True
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Discard unsaved changes?",
+            message=f"Unsaved {noun} changes will be lost if you {verb}.",
             on_confirm=proceed,
         )
     )

@@ -80,6 +80,15 @@ class PoserState:
     preview_template: str = ""
     error: str = ""
 
+    def find(self, pose_id: Any) -> dict[str, Any] | None:
+        """The library record with this id, or None.
+
+        One method rather than five copies of the same generator expression:
+        every caller here is answering "which record is the editor on", and a
+        list is the right shape for a library the user reads top to bottom.
+        """
+        return next((p for p in self.poses if p.get("id") == pose_id), None)
+
 
 def ensure(ctx: Any) -> PoserState:
     """The mode's state, built on first use -- lazy for the reason Clay's is."""
@@ -219,13 +228,23 @@ def preview_bounds(template_key: str) -> tuple[list[float], list[float]]:
     ((x, z, -y), the ``m3.blender_delta_to_gltf`` mapping) and padded ~10%.
     Pure, so the framing is assertable with no GL and no file.
     """
+    # Function-level, the module's own rule: nothing under this import may pull
+    # in a GL context, and math3d is only wanted by this one function.
+    from .viewer import math3d as m3
+
     template = rigging.get_template(template_key)
     fitted = rigging.fit_template(template, poselib.UNIT_LO, poselib.UNIT_HI)
-    points = [p for bone in fitted for p in (bone["head"], bone["tail"])]
-    lo = [min(p[i] for p in points) for i in range(3)]
-    hi = [max(p[i] for p in points) for i in range(3)]
-    glo = [lo[0], lo[2], -hi[1]]
-    ghi = [hi[0], hi[2], -lo[1]]
+    # Converted first, then boxed. The hand-coded corner swap this replaces was
+    # mathematically the same thing -- min/max commute with a signed axis
+    # permutation -- but it restated the mapping, which is exactly what
+    # ``blender_delta_to_gltf`` exists to be the only copy of. Its
+    # delta-not-absolute caveat does not apply: these are freshly computed fits
+    # in the unit box, not offsets against some other frame.
+    points = [
+        m3.blender_delta_to_gltf(p) for bone in fitted for p in (bone["head"], bone["tail"])
+    ]
+    glo = [min(float(p[i]) for p in points) for i in range(3)]
+    ghi = [max(float(p[i]) for p in points) for i in range(3)]
     pad = 0.10 * max(b - a for a, b in zip(glo, ghi, strict=True))
     return [v - pad for v in glo], [v + pad for v in ghi]
 
@@ -274,7 +293,7 @@ def apply_pose(ctx: Any, pose_id: str) -> None:
     """Load a library pose into the editor, behind the guard -- it overwrites
     whatever is being authored."""
     state = ensure(ctx)
-    record = next((p for p in state.poses if p.get("id") == pose_id), None)
+    record = state.find(pose_id)
     viewer = viewer_of(ctx)
     if record is None or viewer is None or not viewer.pose_mode:
         return
@@ -345,7 +364,7 @@ def save(ctx: Any) -> None:
     if viewer is None or not viewer.pose_mode:
         return
     existing = viewer.editor.current
-    record = next((p for p in state.poses if p.get("id") == existing), None)
+    record = state.find(existing)
     if record is None:
         save_as(ctx)
         return
@@ -381,7 +400,7 @@ def rename(ctx: Any, pose_id: str) -> None:
     from ..service import poses as svc_poses
 
     state = ensure(ctx)
-    record = next((p for p in state.poses if p.get("id") == pose_id), None)
+    record = state.find(pose_id)
     if record is None:
         return
 
@@ -410,7 +429,7 @@ def delete(ctx: Any, pose_id: str) -> None:
     from ..service import poses as svc_poses
 
     state = ensure(ctx)
-    record = next((p for p in state.poses if p.get("id") == pose_id), None)
+    record = state.find(pose_id)
     name = str((record or {}).get("name") or "this pose")
 
     def proceed() -> None:
@@ -441,18 +460,9 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     survives on its own viewer, like an open Inker document -- so this runs
     only on quit and on destructive in-mode actions.
     """
-    viewer = viewer_of(ctx)
-    if viewer is None or not viewer.pose_mode or not viewer.editor.has_unsaved_edits():
-        proceed()
-        return True
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Discard unsaved changes?",
-            message=f"Unsaved pose changes will be lost if you {verb}.",
-            on_confirm=proceed,
-        )
-    )
-    return False
+    from . import docmodes
+
+    return docmodes.viewer_guard(ctx, viewer_of(ctx), "pose", verb, proceed)
 
 
 # --- keys and task results ---------------------------------------------------

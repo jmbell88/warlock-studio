@@ -556,6 +556,24 @@ def list_filter(ctx: Any, tag: str, count: int, *, minimum: int = 8) -> str:
     return store[tag].strip().lower()
 
 
+def no_matches(needle: str, shown: int) -> None:
+    """The row a filtered list draws when the filter matched nothing.
+
+    A separate call rather than something ``list_filter`` could do on its own:
+    every caller owns its loop and its own idea of what "shown" means -- a
+    layer, a profile, an outliner node -- so only the caller can count. A
+    filtered-to-empty panel with no such row looks exactly like a panel that
+    has lost its contents, which is what a search box appearing above nothing
+    at all reads as.
+
+    Not an ``empty_state``: that is the centred three-register treatment for a
+    region with nothing *in* it, and this list is full -- it is the query that
+    matches none of it.
+    """
+    if needle and shown == 0:
+        muted("Nothing matches the filter.")
+
+
 def request_open(persist_key: str) -> None:
     """Open a collapsible section the next time it is drawn.
 

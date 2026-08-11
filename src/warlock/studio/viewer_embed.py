@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from ._viewer_pose import PoseOps
 from .viewer import bonelines as bonelineslib
 from .viewer import capture, glctx, gltf, picking
 from .viewer import markers as markerslib
@@ -33,8 +34,12 @@ from .viewer.render import Renderer
 log = logging.getLogger(__name__)
 
 
-class Viewer:
-    """The 3D pane, from the UI's point of view."""
+class Viewer(PoseOps):
+    """The 3D pane, from the UI's point of view.
+
+    The pose half is inherited rather than written here (``_viewer_pose``), the
+    ``ClayView`` split: methods only, every attribute still built below.
+    """
 
     def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
@@ -259,132 +264,10 @@ class Viewer:
     def comparing(self) -> bool:
         return self.compare_gpu is not None
 
-    # -- pose --------------------------------------------------------------
-
-    def enter_pose_mode(self, rig: dict[str, Any] | None = None, job_id: str | None = None) -> bool:
-        """Bind the editor to the loaded rig. ``job_id`` is *whose* rig it is.
-
-        Recorded because the editor outlives the selection: ``_sync_viewer``
-        deliberately does not reload while posing, so clicking another asset
-        leaves this rig on screen with the inspector pointing somewhere else.
-        Without a bound id the panel used the selected job for both, and Save
-        wrote one asset's rotations into another's pose directory while joints
-        mode re-skinned it against the wrong skeleton -- silently, because rig
-        validation checks bone *names* and two jobs on one template share them.
-        """
-        if self.model is None or not self.model.skins:
-            return False
-        self.editor.bind(self.model)
-        self.editor.mirror_pairs = list((rig or {}).get("mirror_pairs") or [])
-        self.editor.fitted = list((rig or {}).get("bones") or [])
-        self.pose_mode = True
-        self.pose_job_id = job_id
-        self._bone_pairs = bonelineslib.bone_segments(self.model, self.editor.bones)
-        self._render_dirty = True
-        self._notify_pose_dirty()
-        return True
-
-    def enter_pose_authoring(
-        self, bones: list[str], mirror_pairs: list[Any], token: str
-    ) -> bool:
-        """Bind the editor to a meshless armature with an explicit bone list.
-
-        A separate entry point rather than a relaxed ``enter_pose_mode``: that
-        one's skins check is its job-scoped contract (a mesh with no skin has
-        nothing to pose) and stays intact. ``token`` fills ``pose_job_id`` --
-        it can never equal a 12-hex job id, belt-and-braces under the separate
-        Poser Viewer instance, so a save can never be addressed to a job.
-        """
-        if self.model is None:
-            return False
-        self.editor.bind(self.model, bones)
-        self.editor.mirror_pairs = [list(p) for p in mirror_pairs]
-        self.pose_mode = True
-        self.pose_job_id = token
-        self._bone_pairs = bonelineslib.bone_segments(self.model, self.editor.bones)
-        self._render_dirty = True
-        self._notify_pose_dirty()
-        return True
-
-    def exit_pose_mode(self) -> None:
-        self._render_dirty = True
-        self.pose_mode = False
-        self.pose_job_id = None
-        self.rotate_gizmo.end_drag()
-        self.translate_gizmo.end_drag()
-        self.editor.clear()
-        self._bone_pairs = []
-        # Both ends of the editor's life report, or an indicator raised on the
-        # way in survives every mesh loaded after it -- ``adopt_model`` and
-        # ``clear`` both come through here.
-        self._notify_pose_dirty()
-
-    def get_pose(self) -> dict[str, list[float]]:
-        return self.editor.pose()
-
-    def set_pose(self, bones: dict[str, Any], *, pose_id: str | None = None, dirty=True) -> None:
-        self.editor.apply(bones, pose_id=pose_id, dirty=dirty)
-        self._after_pose_change()
-
-    def apply_preset(self, preset: dict[str, Any]) -> None:
-        self.editor.apply_preset(preset)
-        self._after_pose_change()
-
-    def reset_bone(self) -> None:
-        self.editor.reset_bone()
-        self._after_pose_change()
-
-    def reset_all(self, *, dirty: bool = True) -> None:
-        self.editor.reset_all(dirty=dirty)
-        self._after_pose_change()
-
-    def mirror(self) -> None:
-        self.editor.mirror()
-        self._after_pose_change()
-
-    def set_root_translation(self, v: Any, *, dirty: bool = True) -> None:
-        self.editor.set_root_translation(v, dirty=dirty)
-        self._after_pose_change()
-
-    def _after_pose_change(self) -> None:
-        self._render_dirty = True
-        if self.gpu is not None:
-            self.gpu.refresh_palettes()
-        self._notify_pose_dirty()
-
-    def _notify_pose_dirty(self) -> None:
-        """Tell the listener whether unsaved pose edits exist *right now*.
-
-        Answered as ``pose_mode and ...`` rather than by asking the editor
-        alone, so leaving the editor -- or loading another mesh, which exits it
-        -- reports False. A listener told "dirty" on the way out and never told
-        otherwise would keep an indicator up for edits nothing can reach any
-        more, which is worse than no indicator at all.
-
-        The listener is a mirror, never the authority: ``pose_panel.guard``
-        goes on asking ``editor.has_unsaved_edits()`` itself, so a missed
-        notification costs a stale marker rather than discarded work.
-        """
-        if self.on_pose_dirty is not None:
-            self.on_pose_dirty(self.pose_mode and self.editor.has_unsaved_edits())
-
-    @property
-    def selected_bone(self) -> str | None:
-        return self.editor.selected
-
-    def enter_joints_mode(self) -> None:
-        self.editor.enter_joints_mode()
-        self._after_pose_change()
-
-    def exit_joints_mode(self) -> None:
-        self.editor.exit_joints_mode()
-        self._after_pose_change()
-
-    def joint_moves(self) -> dict[str, list[float]]:
-        return dict(self.editor.moved)
-
-    def corrected_bones(self) -> list[dict[str, Any]]:
-        return self.editor.corrected_bones()
+    # -- pose ----------------------------------------------------------------
+    #
+    # In ``_viewer_pose.PoseOps``, which this class inherits: the editor, the
+    # dirty listener, the two gizmos and their overlays. State stays here.
 
     # -- rendering ---------------------------------------------------------
 
@@ -458,48 +341,9 @@ class Viewer:
         if renderer is not None:
             renderer.forget_texture(texture)
 
-    def _overlays(self, height: int) -> list[Any]:
-        if not self.pose_mode or not self.editor.bound:
-            return []
-        radius = picking.marker_radius(self.radius)
-        # Lines first, markers over them: the skeleton is context, the joints
-        # are the controls.
-        items = self.bonelines.draws(
-            self.editor.handles, self._bone_pairs, self.editor.selected, self.placement
-        )
-        items += self.markers.draws(
-            self.editor.handles, radius, self.editor.selected, self.placement
-        )
-        gizmo = self._active_gizmo()
-        if gizmo is not None and self.editor.selected is not None:
-            origin = picking.to_world(self.placement, self.editor.handles[self.editor.selected])
-            # A translate gizmo always works in world axes -- the joints-mode
-            # convention, kept for the root translate; the rotate gizmo's
-            # rings are drawn in the joint's own frame.
-            node = self.model.nodes[self.model.by_name[self.editor.selected]]
-            basis = (
-                m3.identity()
-                if gizmo is self.translate_gizmo
-                else self.placement @ node.world
-            )
-            gizmo.place(origin, basis, self.camera, height)
-            items += gizmo.draws()
-        return items
-
-    def _active_gizmo(self):
-        if not self.pose_mode:
-            return None
-        if self.editor.mode == "joints":
-            return self.translate_gizmo
-        if (
-            self.editor.root_translate
-            and self.editor.root is not None
-            and self.editor.selected == self.editor.root
-        ):
-            # Move-root in the authoring session: the root joint translates,
-            # every other joint keeps its rotate rings.
-            return self.translate_gizmo
-        return self.rotate_gizmo
+    # ``_overlays`` and ``_active_gizmo`` live in ``PoseOps`` with the rest of
+    # the pose half: both return nothing outside pose mode, and the gizmo
+    # choice is a function of the editor's mode.
 
     # -- capture -----------------------------------------------------------
 

@@ -414,6 +414,96 @@ def test_a_root_offset_the_rig_cannot_scale_costs_the_offset_not_the_bake(
     assert "root_offset" not in spec
 
 
+# --- a pose file or a rig.json some other program edited ----------------------
+#
+# Both are read off disk, so every question the bake spec asks of them is asked
+# tolerantly: the answer to an unusable one is the offset-less spec above, never
+# a traceback out of a click.
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["left", ["x", 0.0, 0.0], [float("nan"), 0.0, 0.0], [0.1, 0.0], {"x": 0.1}],
+    ids=["string", "not-numeric", "nan", "short", "mapping"],
+)
+def test_a_malformed_root_offset_costs_the_offset_not_the_bake(
+    svc, assets, monkeypatch, root
+):
+    job_id = _rigged_job(svc, assets)
+    job_dir = assets / job_id
+    (job_dir / "rig.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "template": "humanoid",
+                "root": "hips",
+                "bounds": {"min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 2.0]},
+                "bones": [{"name": n} for n in BONES],
+            }
+        )
+    )
+    pose = rigging.validate_pose(_pose("leap"), BONES)
+    record = rigging.save_pose(job_dir, pose, extra={"root_translation": root})
+    calls = _fake_bake(monkeypatch)
+
+    assert svc_rig.posed_model(svc, job_id, record["id"]).exists()
+    spec, _ = calls[0]
+    assert "root_offset" not in spec
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [[], "box", {"min": "x", "max": [1.0, 1.0, 2.0]}, {"min": [0.0, 0.0], "max": [1.0, 1.0]}],
+    ids=["list", "string", "not-numeric", "short"],
+)
+def test_a_rig_json_that_cannot_answer_costs_the_offset_not_the_bake(
+    svc, assets, monkeypatch, bounds
+):
+    job_id = _rigged_job(svc, assets)
+    job_dir = assets / job_id
+    (job_dir / "rig.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "template": "humanoid",
+                "root": "hips",
+                "bounds": bounds,
+                "bones": [{"name": n} for n in BONES],
+            }
+        )
+    )
+    pose = rigging.validate_pose(_pose("leap"), BONES)
+    record = rigging.save_pose(job_dir, pose, extra={"root_translation": [0.1, 0.0, 0.0]})
+    calls = _fake_bake(monkeypatch)
+
+    assert svc_rig.posed_model(svc, job_id, record["id"]).exists()
+    spec, _ = calls[0]
+    assert "root_offset" not in spec
+
+
+def test_a_locked_pose_file_delete_reports_as_a_failure(svc, assets, monkeypatch):
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+    monkeypatch.setattr(
+        rigging, "delete_pose", lambda *a: (_ for _ in ()).throw(PermissionError("held"))
+    )
+    with pytest.raises(Failed, match="locked"):
+        svc_rig.delete_pose(svc, job_id, record["id"])
+
+
+def test_a_bake_whose_rename_fails_is_a_failure_not_a_traceback(svc, assets, monkeypatch):
+    """One screen from the BlenderError arm: Blender succeeded, the swap did
+    not, and the caller still asked for a posed GLB it did not get."""
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+    _fake_bake(monkeypatch)
+    monkeypatch.setattr(
+        svc_rig.os, "replace", lambda *a: (_ for _ in ()).throw(PermissionError("held"))
+    )
+    with pytest.raises(Failed, match="bake this pose"):
+        svc_rig.posed_model(svc, job_id, record["id"])
+
+
 # --- shipped preset library -------------------------------------------------
 
 

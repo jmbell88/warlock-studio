@@ -62,11 +62,14 @@ def draw(ctx: Any) -> None:
     # and then find every control on it refusing the click.
     needle = widgets.list_filter(ctx, "clay-outliner", len(doc.objects))
     _visibility_row(doc)
+    shown = 0
     for index in range(len(doc.objects) - 1, -1, -1):
         obj = doc.objects[index]
         if needle and needle not in (obj.name or "").lower():
             continue
+        shown += 1
         _row(ctx, state, doc, obj, index, filtered=bool(needle))
+    widgets.no_matches(needle, shown)
     imgui.end_disabled()
 
 

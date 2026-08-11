@@ -2812,9 +2812,11 @@ class App:
         # J86: a bench directory accumulates a run per experiment and nothing
         # ever removes one, so this is the panel list that grows fastest.
         needle = widgets.list_filter(ctx, "sweeps", len(state.sweeps))
+        shown = 0
         for sweep in state.sweeps:
             if needle and needle not in str(sweep["label"]).lower():
                 continue
+            shown += 1
             todo = sweep["todo"]
             total = len(sweep["units"])
             selected = sweep["id"] == state.sweep_id
@@ -2823,6 +2825,7 @@ class App:
             widgets.muted(f"   {total - todo}/{total} reviewed")
             if selected and sweep["id"] != review_mode.RECENT_ID:
                 self._review_delete_button(ctx, state, review_mode, sweep)
+        widgets.no_matches(needle, shown)
         imgui.separator()
         # The labelling passes, beside the sweep list rather than in a mode of
         # their own: the judge is meant to improve as the corpus is reviewed,
