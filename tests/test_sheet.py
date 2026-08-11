@@ -1252,3 +1252,103 @@ async def test_every_band_is_generated_under_one_seed(worker):
     assert all(pipe.sheets)
     assert {lora for lora, _weight in pipe.lora_calls} == {models.PIXEL_SHEET_LORA}
     assert all(c.uses_init for c in pipe.conditionings)
+
+
+# --- staged writes onto served names -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_torn_restyle_png_never_reaches_the_served_name(worker, monkeypatch):
+    """``sheets.py`` serves ``<sheet_id>.pixel.png`` as soon as a *previous*
+    restyle's sidecar exists, and restyling the same sheet again is allowed --
+    so a bare save tears a file that is already being served, with the old
+    sidecar still calling it ready."""
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    source_dir = worker.config.job_dir(source)
+    png = rigging.sheet_pixel_png_path(source_dir, sheet_id)
+
+    real = Image.Image.save
+
+    def tamper(self, fp, *a, **k):
+        if Path(fp).name.endswith(".pixel.png.tmp"):
+            Path(fp).write_bytes(b"\x89PNG half")
+            raise OSError("the disk filled up")
+        return real(self, fp, *a, **k)
+
+    monkeypatch.setattr(Image.Image, "save", tamper)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 3},
+    )
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    assert not png.exists()
+    assert rigging.read_sheet_pixel(source_dir, sheet_id) is None
+    assert list(png.parent.glob("*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_torn_restyle_sidecar_leaves_no_marker_and_no_strand(worker, monkeypatch):
+    """The sidecar is the completion marker: a half-written one advertises an
+    atlas nobody can parse, and the previous restyle's marker is what a reader
+    would otherwise be holding while it was truncated."""
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    source_dir = worker.config.job_dir(source)
+
+    real = Path.write_text
+
+    def tamper(self, text, *a, **k):
+        if self.name.endswith(".pixel.json.tmp"):
+            real(self, text[: len(text) // 2], *a, **k)
+            raise OSError("the disk filled up")
+        return real(self, text, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", tamper)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 3},
+    )
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    assert not rigging.sheet_pixel_path(source_dir, sheet_id).exists()
+    assert rigging.read_sheet_pixel(source_dir, sheet_id) is None
+    assert list(rigging.sheet_pixel_path(source_dir, sheet_id).parent.glob("*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_torn_sheet_sidecar_leaves_no_marker_and_no_strand(worker, monkeypatch):
+    """``list_sheets`` treats the sidecar as the completion marker, the same
+    way rig.json is for a rig."""
+    calls = _fake_render(monkeypatch)
+    source = _source_job(worker, rigged=True)
+    source_dir = worker.config.job_dir(source)
+    pose = rigging.save_pose(source_dir, {"name": "idle", "bones": {"hips": IDENTITY}})
+    sheet_id = rigging.new_id()
+
+    real = Path.write_text
+
+    def tamper(self, text, *a, **k):
+        if self.name == f".{sheet_id}.json.tmp":
+            real(self, text[: len(text) // 2], *a, **k)
+            raise OSError("the disk filled up")
+        return real(self, text, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", tamper)
+    job_id = worker.store.create(
+        "sheet",
+        None,
+        {"source_job": source, "sheet_id": sheet_id, "poses": [pose["id"]],
+         "frame_size": 64, "elevation": 20.0, "lighting": "flat"},
+    )
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    assert calls, "the render never ran"
+    assert not rigging.sheet_path(source_dir, sheet_id).exists()
+    assert list(rigging.sheet_path(source_dir, sheet_id).parent.glob("*.tmp")) == []

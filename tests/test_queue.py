@@ -2404,3 +2404,49 @@ async def test_rank_candidates_on_consults_the_anchor_when_one_exists(tmp_path, 
 
     worker._rank_reference(job_dir / "input.png", {"reference_report": {}})
     assert asked == [True]
+
+
+# --- the layering rule, pinned ----------------------------------------------
+
+
+async def test_the_worker_never_imports_service_studio_or_imgui():
+    """``queue.py`` may not import ``service`` -- and now neither may the
+    ``_q_*.py`` siblings that hold the rest of ``Worker``'s methods.
+
+    The rule is old and the reason has not changed: the worker is the layer
+    *below* the service, it runs on its own thread with no imgui context, and
+    an import in the other direction would make the dependency a cycle the
+    moment ``service`` reached for a queue constant. Function-body imports
+    count -- this package's house style uses them for deferral, and one of
+    those is exactly how the rule would be broken by accident.
+
+    ``async def`` only because this module marks every test asyncio; there is
+    nothing to await.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__import__("warlock").__file__).parent
+    files = [src / "queue.py"] + sorted(src.glob("_q_*.py"))
+    assert len(files) >= 6, "the mixin siblings are not being scanned"
+
+    offenders: list[str] = []
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                # level>0 is a relative import; ``from . import x`` has no
+                # module, and ``from .service import jobs`` has module
+                # "service" -- both spellings have to be caught.
+                base = node.module or ""
+                names = [base] if base else []
+                names += [f"{base}.{a.name}" if base else a.name for a in node.names]
+            for name in names:
+                root = name.split(".")[0]
+                if root in ("service", "studio") or "imgui" in name:
+                    offenders.append(f"{path.name}: {name}")
+                if name.startswith(("warlock.service", "warlock.studio")):
+                    offenders.append(f"{path.name}: {name}")
+    assert offenders == []

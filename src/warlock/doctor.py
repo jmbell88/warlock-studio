@@ -420,7 +420,7 @@ def _metric_checks(config: Config) -> list[Check]:
         path = config.t2i_model_root / spec.dir_name
         ok = fetch.present(config, "metric", spec)
         # Weights present is not the same claim as "ranking is on", and the two
-        # used to be indistinguishable here. queue._rank_candidate catches
+        # used to be indistinguishable here. Worker._rank_reference catches
         # every exception out of metrics.reference_cosine and scores on
         # composition alone, so a torchvision that will not import costs the
         # anchor similarity with nothing on screen to say so. Now that

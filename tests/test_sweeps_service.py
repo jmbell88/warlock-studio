@@ -359,3 +359,20 @@ def test_sweep_units_are_hidden_from_the_library(svc):
     filters = Filters()
     assert filters.matches({"id": "a", "status": "done"})
     assert not filters.matches({"id": "b", "status": "done", "sweep_id": "abc"})
+
+
+def test_a_sweep_naming_a_base_model_that_is_not_on_disk_is_refused(svc, monkeypatch):
+    """Only the VRAM half of the admission door was asked here. A sweep whose
+    checkpoint was never downloaded minted every row and was then refused unit
+    by unit inside create_job -- the partial run all-or-nothing exists to
+    prevent."""
+    from warlock import fetch
+
+    monkeypatch.setattr(fetch, "base_model_state", lambda *a, **k: (False, None))
+    plan = _plan(seeds=(1,), base={"base_model": "sdxl"})
+    with pytest.raises(Invalid) as caught:
+        svc_sweeps.create_sweep(svc, plan)
+    assert caught.value.field == "base_model"
+    assert "Download it with" in caught.value.message
+    assert svc_sweeps.list_sweeps(svc) == []
+    assert svc.store.list(limit=50) == []

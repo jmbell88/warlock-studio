@@ -148,11 +148,16 @@ def run(
             f"gltfpack exited {proc.returncode}: {(proc.stderr or proc.stdout)[:500]}"
         )
 
-    achieved = _triangles(tmp)
-    if achieved <= 0:
+    # Every other exit from this function unlinks the staging file; the tail
+    # did not, so a _triangles() that raised (a mesh trimesh cannot parse) left
+    # a .glb.opt.tmp beside the served model for the next reader to find.
+    try:
+        achieved = _triangles(tmp)
+        if achieved <= 0:
+            raise OptimizeError("gltfpack produced a mesh with no triangles")
+        tmp.replace(dest)
+    finally:
         tmp.unlink(missing_ok=True)
-        raise OptimizeError("gltfpack produced a mesh with no triangles")
-    tmp.replace(dest)
     log.info(
         "optimized %s: %d -> %d triangles (asked %d)",
         source.name, source_triangles, achieved, target_triangles,

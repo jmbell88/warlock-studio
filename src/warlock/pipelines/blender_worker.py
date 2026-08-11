@@ -1153,7 +1153,18 @@ OPS = {
 
 
 def main() -> int:
-    spec = json.loads(sys.stdin.read())
+    # ``fetch_worker``'s rule: a malformed spec is reported in a sentence and
+    # an exit code, never as a traceback. The host reads the tail of stdout to
+    # build its error message, and a stack trace from a JSON decoder tells the
+    # user nothing about the job they submitted. The result path is resolved
+    # here rather than after the op, so a spec that could never hand anything
+    # back is refused before Blender spends minutes on it.
+    try:
+        spec = json.loads(sys.stdin.read())
+        result_path = Path(spec["result_path"])
+    except (ValueError, TypeError, KeyError) as exc:
+        print(f"the worker spec on stdin is not usable: {exc}", file=sys.stderr)
+        return 2
     op = OPS.get(spec.get("op"))
     if op is None:
         print(f"unknown op {spec.get('op')!r}", file=sys.stderr)
@@ -1164,7 +1175,16 @@ def main() -> int:
         print(f"Blender (bpy) is not installed: {exc}", file=sys.stderr)
         return 3
     result = op(bpy, spec)
-    Path(spec["result_path"]).write_text(json.dumps(result), encoding="utf-8")
+    # Staged and renamed, like every other write onto a name something else
+    # reads: the host polls for this file's existence, so a partial write is a
+    # result it would parse as a failure of the op rather than of the write.
+    tmp = result_path.with_name(result_path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(result), encoding="utf-8")
+        tmp.replace(result_path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
     return 0
 
 

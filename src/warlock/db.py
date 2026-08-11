@@ -579,9 +579,12 @@ class JobStore:
         idiom every params writer uses; a hypothetical in-place mutation of a
         listed job's params would be a bug against ``set_params`` regardless.
         The top-level dict is still copied per row so a caller may add or
-        replace keys on its own view. Bounded by wholesale clearing: a page is
-        a few hundred distinct strings, and the simplest bound that cannot
-        leak is to start over.
+        replace keys on its own view -- and that copy is *shallow*: a nested
+        value (a ``retexture`` report, a ``guidance`` block) is the memo's own
+        object, so it is read-only to every caller, and a writer changes params
+        by rebuilding the key rather than mutating what it was handed.
+        Bounded by wholesale clearing: a page is a few hundred distinct
+        strings, and the simplest bound that cannot leak is to start over.
         """
         d = dict(row)
         raw = d["params"] or "{}"

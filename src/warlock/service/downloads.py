@@ -227,7 +227,17 @@ def _run_worker(
                     payload = json.loads(line)
                 except ValueError:
                     continue
-                on_progress(float(payload.get("percent") or 0.0), str(payload.get("label") or ""))
+                if not isinstance(payload, dict):
+                    # A bare JSON scalar is valid JSON; huggingface_hub prints
+                    # into the same stream the progress lines go down.
+                    continue
+                try:
+                    percent = float(payload.get("percent") or 0.0)
+                except (TypeError, ValueError):
+                    # A non-numeric percent is a malformed line, not a reason
+                    # to abandon a download that is otherwise working.
+                    continue
+                on_progress(percent, str(payload.get("label") or ""))
             code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
         except subprocess.TimeoutExpired:
             _kill_and_reap(proc)

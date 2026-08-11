@@ -479,8 +479,14 @@ def run_worker(
     and checks nothing, so killing the process is the only thing that stops it.
     """
     result_path = Path(spec["result_path"])
+    # The worker stages its result beside the served name and renames it in, so
+    # the same three cleanup sites that clear a stale result have to clear the
+    # staging file too -- a worker killed mid-write leaves the .tmp, not the
+    # result, and it would otherwise sit in the source job's directory forever.
+    result_tmp = result_path.with_name(result_path.name + ".tmp")
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.unlink(missing_ok=True)
+    result_tmp.unlink(missing_ok=True)
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "warlock.pipelines.blender_worker"],
@@ -558,6 +564,7 @@ def run_worker(
         proc.kill()
         proc.wait()
         result_path.unlink(missing_ok=True)
+        result_tmp.unlink(missing_ok=True)
         raise BlenderError(f"Blender worker timed out after {timeout:.0f}s") from None
     finally:
         if proc.poll() is None:
@@ -573,13 +580,22 @@ def run_worker(
         # A killed-late worker may still have written the handoff file; it
         # would otherwise sit in the source job's directory until the next run.
         result_path.unlink(missing_ok=True)
+        result_tmp.unlink(missing_ok=True)
         raise BlenderError(f"Blender worker exited with code {code}:\n{output}")
     if not result_path.exists():
         raise BlenderError(f"Blender worker wrote no result:\n{output}")
-    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        # An exit 0 with an unreadable result is the one way this could still
+        # raise a raw decoder error at the caller. Typed like every other way
+        # the worker can disappoint, and carrying the worker's own tail.
+        result_path.unlink(missing_ok=True)
+        raise BlenderError(f"Blender worker wrote an unreadable result:\n{output}") from exc
     # The handoff file has served its purpose; a rig writes it into the source
     # job's directory, where it would otherwise sit next to model.glb forever.
     result_path.unlink(missing_ok=True)
+    result_tmp.unlink(missing_ok=True)
     return payload
 
 

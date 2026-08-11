@@ -42,9 +42,13 @@ the job's params, and it is the finding that decides whether Tier 3 is needed
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import math
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # The directions the mesh is rendered and projected from, as (yaw, pitch) in
 # degrees with yaw 0 looking along +Y in Blender -- `sheet.py`'s convention,
@@ -128,6 +132,10 @@ def _read(path: Path, mode: str) -> Any | None:
             im.load()
             return np.asarray(im.convert(mode), dtype=np.float32) / 255.0
     except Exception:
+        # None is this module's contract, but a silent one leaves a re-texture
+        # refusal with nothing behind it: which of twelve files was unreadable,
+        # and why, is only knowable here.
+        log.exception("could not read %s as %s", path, mode)
         return None
 
 
@@ -226,7 +234,14 @@ def assemble(
             continue
         colours.append(colour)
         weights.append(weight)
-    if not colours:
+    if len(colours) != count:
+        # Every requested pair, or none. A partial set averages fine and looks
+        # like a finished re-texture, but the views that failed to read back
+        # are exactly the ones whose surface keeps its old skin -- so what
+        # ships is a mesh restyled on three sides, with nothing anywhere
+        # saying so. Refusing fails the job, which is a thing a user can act
+        # on. Still ``None`` rather than an exception: this module's contract
+        # is stated in its docstring and the caller turns it into the error.
         return None
     shape = colours[0].shape
     if any(c.shape != shape for c in colours):
@@ -343,6 +358,9 @@ def atlas_size(glb_path: Path) -> int | None:
         with Image.open(io.BytesIO(raw)) as im:
             width, height = im.size
     except Exception:
+        # Falling back to TEXTURE_PX is a decision worth a line in the log: it
+        # silently halves the resolution of the part a re-texture leaves alone.
+        log.exception("could not measure the albedo of %s", glb_path)
         return None
     return int(width) if width == height else None
 
@@ -385,6 +403,10 @@ def extract_base_colour(glb_path: Path, dest: Path, *, size: int) -> bool:
         dest.parent.mkdir(parents=True, exist_ok=True)
         atlas.save(dest, "PNG")
     except Exception:
+        # False is a legitimate answer here (an untextured mesh has no base),
+        # which is exactly why a *failure* to read one that exists must not
+        # look identical to it in the log.
+        log.exception("could not extract the base colour of %s", glb_path)
         return False
     return True
 
@@ -492,6 +514,18 @@ def swap_base_colour(glb_path: Path, atlas_png: Path, dest: Path) -> bool:
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(glbio.rebuild_glb(header, gltf, new_rest))
+    except OSError:
+        # An I/O failure is not "this mesh has no albedo slot", and returning
+        # False for it made the caller say so -- sending the user to look at a
+        # mesh that was fine. The two semantic ``return False`` paths above
+        # keep the module's contract; this one is a fact about the disk.
+        log.exception("could not write the re-skinned %s", dest)
+        with contextlib.suppress(OSError):
+            dest.unlink(missing_ok=True)
+        raise
     except Exception:
+        log.exception("could not re-skin %s", glb_path)
+        with contextlib.suppress(OSError):
+            dest.unlink(missing_ok=True)
         return False
     return True

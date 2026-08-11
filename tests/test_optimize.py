@@ -137,3 +137,34 @@ def test_resolve_maps_names_and_validates_custom():
         optimize.resolve("custom", 1)
     with pytest.raises(ValueError):
         optimize.resolve("nonsense")
+
+
+def test_an_unmeasurable_output_leaves_no_staging_file_behind(tmp_path, monkeypatch):
+    """Every other exit from run() unlinks the .glb.opt.tmp; the tail did not.
+    A gltfpack output trimesh cannot parse raised straight past it and left the
+    staging file sitting beside the served model."""
+    def fake_run(argv, **kwargs):
+        from pathlib import Path
+
+        Path(argv[argv.index("-o") + 1]).write_bytes(b"optimised")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(winjob, "run", fake_run)
+    calls: list[str] = []
+
+    def counting(path):
+        calls.append(path.name)
+        if len(calls) > 1:
+            raise ValueError("this is not a mesh")
+        return 100_000
+
+    monkeypatch.setattr(optimize, "_triangles", counting)
+    exe = tmp_path / "gltfpack.exe"
+    exe.write_bytes(b"")
+    src = tmp_path / "source.glb"
+    src.write_bytes(b"glb")
+    dest = tmp_path / "model.glb"
+    with pytest.raises(ValueError, match="not a mesh"):
+        optimize.run(src, dest, target_triangles=50_000, exe=exe)
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.opt.tmp")) == []

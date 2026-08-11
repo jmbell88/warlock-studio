@@ -8,6 +8,8 @@ pretends there was an occlusion test.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -187,11 +189,20 @@ def test_assemble_with_no_bakes_at_all_is_a_none(tmp_path):
     assert retexture.assemble(tmp_path, None, tmp_path / "out.png", count=3) is None
 
 
-def test_assemble_skips_a_view_whose_pair_is_incomplete(tmp_path):
+def test_a_missing_pair_refuses_the_whole_assembly(tmp_path):
+    """It used to average whatever it could read. A partial set looks like a
+    finished re-texture and ships a mesh restyled on some sides only, with
+    nothing anywhere saying so -- and the sides that failed are exactly the
+    ones that keep their old skin, which is indistinguishable from the stated
+    "a texel no view saw keeps its colour" behaviour."""
     n = _bakes(tmp_path, n=2)
     (tmp_path / "weight_01.png").unlink()
-    report = retexture.assemble(tmp_path, None, tmp_path / "out.png", count=n)
-    assert report["views"] == 1
+    assert retexture.assemble(tmp_path, None, tmp_path / "out.png", count=n) is None
+
+
+def test_more_views_asked_for_than_were_baked_is_a_refusal(tmp_path):
+    _bakes(tmp_path, n=2)
+    assert retexture.assemble(tmp_path, None, tmp_path / "out.png", count=3) is None
 
 
 def test_a_bake_of_the_wrong_size_refuses_rather_than_broadcasting(tmp_path):
@@ -555,3 +566,39 @@ def test_an_unreadable_or_absent_atlas_has_no_size(tmp_path):
     glb.write_bytes(glbio.rebuild_glb(header, {"asset": {"version": "2.0"}}, b""))
     assert retexture.atlas_size(glb) is None
     assert retexture.atlas_size(tmp_path / "nothing.glb") is None
+
+
+def test_a_swap_that_cannot_read_the_mesh_raises_rather_than_saying_no_albedo(tmp_path):
+    """An I/O failure is not "this mesh has no albedo slot". Returning False
+    for it made the caller raise that message and send the user to look at a
+    mesh that was fine."""
+    with pytest.raises(OSError):
+        retexture.swap_base_colour(
+            tmp_path / "missing.glb", tmp_path / "atlas.png", tmp_path / "out.glb"
+        )
+    assert not (tmp_path / "out.glb").exists()
+
+
+def test_a_torn_write_leaves_nothing_behind(tmp_path):
+    """The destination is model.glb's replacement. A half-written one that
+    survived the failure would be renamed over the served mesh by the caller's
+    next line."""
+    glb = tmp_path / "model.glb"
+    _textured_glb(glb)
+    atlas = tmp_path / "atlas.png"
+    atlas.write_bytes(_png((200, 100, 50), size=16))
+    dest = tmp_path / "new.glb"
+
+    real = Path.write_bytes
+
+    def tamper(self, data):
+        if self == dest:
+            real(self, data[: len(data) // 2])
+            raise OSError("the disk filled up")
+        return real(self, data)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "write_bytes", tamper)
+        with pytest.raises(OSError, match="disk filled up"):
+            retexture.swap_base_colour(glb, atlas, dest)
+    assert not dest.exists()

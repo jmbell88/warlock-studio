@@ -721,3 +721,55 @@ def test_the_battery_kill_switch_reads_the_environment(monkeypatch):
     monkeypatch.setenv("WARLOCK_DEFORM_QA", "1")
     monkeypatch.setattr(config_mod, "_config", None)
     assert config_mod.get_config().deform_qa is True
+
+
+# --- the worker's own stdin/result contract ----------------------------------
+
+
+def test_a_spec_that_is_not_json_exits_two_with_a_sentence(monkeypatch, capsys, tmp_path):
+    """fetch_worker's rule on the other worker: a malformed spec is reported in
+    a sentence and an exit code, never as a traceback the user cannot read."""
+    import io
+    import sys as _sys
+
+    from warlock.pipelines import blender_worker
+
+    monkeypatch.setattr(_sys, "stdin", io.StringIO("not json"))
+    assert blender_worker.main() == 2
+    assert "not usable" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_spec_with_no_result_path_exits_two_rather_than_running_the_op(monkeypatch, capsys):
+    import io
+    import sys as _sys
+
+    from warlock.pipelines import blender_worker
+
+    def explode(_bpy, _spec):
+        raise AssertionError("the op ran for a spec that could not hand anything back")
+
+    monkeypatch.setitem(blender_worker.OPS, "rig", explode)
+    monkeypatch.setattr(_sys, "stdin", io.StringIO(json.dumps({"op": "rig"})))
+    assert blender_worker.main() == 2
+    assert "not usable" in capsys.readouterr().err
+
+
+def test_a_good_run_stages_its_result_and_leaves_no_tmp_sibling(monkeypatch, tmp_path):
+    """The host polls for this file's existence, so a partial write is a result
+    it would parse as a failure of the op rather than of the write."""
+    import io
+    import sys as _sys
+    import types
+
+    from warlock.pipelines import blender_worker
+
+    result = tmp_path / ".blender_result.json"
+    monkeypatch.setitem(blender_worker.OPS, "rig", lambda _bpy, _spec: {"ok": True, "bones": 3})
+    monkeypatch.setitem(_sys.modules, "bpy", types.ModuleType("bpy"))
+    monkeypatch.setattr(
+        _sys, "stdin", io.StringIO(json.dumps({"op": "rig", "result_path": str(result)}))
+    )
+    assert blender_worker.main() == 0
+    assert json.loads(result.read_text(encoding="utf-8")) == {"ok": True, "bones": 3}
+    assert [p.name for p in tmp_path.iterdir()] == [result.name]

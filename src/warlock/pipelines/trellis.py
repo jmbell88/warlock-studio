@@ -29,6 +29,13 @@ log = logging.getLogger(__name__)
 
 STARTUP_TIMEOUT = 300.0  # health endpoint answers in ~1 s; weights load on first generate
 GENERATE_TIMEOUT = 1800.0
+# The largest response body ``generate`` will buffer. A GLB at the resolutions
+# this project asks for is single-digit megabytes; half a gigabyte is far past
+# any legitimate answer and well short of what a runaway (or a misaddressed
+# server streaming something else entirely) can do to a process that reads the
+# whole body into RAM before looking at it. Read from module globals at call
+# time so a test can lower it.
+MAX_GLB_BYTES = 512 * 1024 * 1024
 LOG_MAX_BYTES = 5 * 1024 * 1024  # the log used to grow forever; roll it instead
 # Respawn backoff: 5 s doubling to a 5-minute ceiling, and one give-up line
 # after five consecutive failures. Jobs still fail fast with the reason -- the
@@ -454,20 +461,39 @@ class TrellisServer:
         data = {"seed": str(seed), "resolution": str(resolution)}
         if bg_removal is not None:
             data["bg_removal"] = bg_removal
+        # Streamed rather than buffered by httpx, so the ceiling below can be
+        # applied while the body is still arriving: `r.content` on a plain post
+        # has already read the whole thing by the time anything could refuse it.
+        limit = MAX_GLB_BYTES
+        chunks: list[bytes] = []
+        received = 0
         async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:
             with image_path.open("rb") as fh:
-                r = await client.post(
+                async with client.stream(
+                    "POST",
                     f"{self.base_url}/generate",
                     files={"image": (image_path.name, fh)},
                     data=data,
-                )
-        if r.status_code >= 400:
-            detail = r.text[:500] if r.text else "(no body; see trellis.log)"
-            raise RuntimeError(f"trellis-server {r.status_code}: {detail}")
+                ) as r:
+                    if r.status_code >= 400:
+                        # The error shape is unchanged; a streamed response has
+                        # to be read before `.text` is available.
+                        body = await r.aread()
+                        detail = r.text[:500] if body else "(no body; see trellis.log)"
+                        raise RuntimeError(f"trellis-server {r.status_code}: {detail}")
+                    async for chunk in r.aiter_bytes():
+                        received += len(chunk)
+                        if received > limit:
+                            raise RuntimeError(
+                                f"trellis-server returned more than {limit} bytes; "
+                                "refusing to buffer it"
+                            )
+                        chunks.append(chunk)
+        content = b"".join(chunks)
         # Off the loop thread: parsing and flushing a multi-megabyte GLB
         # inline would block cancellation and every call_on_loop for its
         # duration.
-        def _finish(content: bytes = r.content) -> None:
+        def _finish(content: bytes = content) -> None:
             _validate_glb(content)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(output_path, content)

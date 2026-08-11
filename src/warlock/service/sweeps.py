@@ -53,6 +53,7 @@ from .validation import (
     check_trellis_band,
     check_trellis_tex_res,
     check_vram,
+    check_weights,
 )
 
 log = logging.getLogger(__name__)
@@ -284,7 +285,15 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
         # The same check create_job runs, including the gltfpack-presence
         # gate: a sweep unit that would finish wearing a tier the missing
         # binary never applied poisons the verdict corpus.
-        jobs_mod._resolve_profile(svc, {}, kwargs["profile"], kwargs.get("custom_triangles"))
+        jobs_mod.resolve_profile(svc, {}, kwargs["profile"], kwargs.get("custom_triangles"))
+    # Both halves of the admission door, in ``create_job``'s order. Only the
+    # VRAM half was asked here, so a sweep whose base model (or style LoRA) was
+    # not on disk was admitted, minted every row, and then refused unit by unit
+    # inside ``create_job`` -- which is precisely the partial run this module's
+    # all-or-nothing rule exists to prevent. A style_lora fails *silently* at
+    # load, so the alternative for that axis is worse still: N finished units
+    # whose rows claim a style that never ran, in a corpus keyed on it.
+    check_weights(svc, "text", params)
     check_vram(svc, "text", plan.stage, params)
     # What this unit would actually submit: ``normalize``'s output for
     # everything it was handed -- so a setting it *dropped* is absent here too,

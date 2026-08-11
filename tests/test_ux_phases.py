@@ -195,12 +195,27 @@ def test_the_frame_loop_carries_the_refusals_address_to_the_state():
 def test_the_service_still_names_the_controls_the_panes_ring():
     """The two halves are wired by *name*, so a rename on either side is a ring
     that never appears. These are the fields both sides agree on."""
+    import importlib
+    import pkgutil
+
     from warlock import guidance
+    from warlock import service as svc_pkg
     from warlock.service import jobs as svc_jobs
     from warlock.service import validation
 
+    # ``jobs`` is a facade over ``_jobs_*.py`` siblings, so the refusals it used
+    # to raise are raised from those -- scanned here so the claim this test
+    # makes about the *service* stays a claim about the service rather than
+    # about one file's current contents.
+    siblings = [
+        importlib.import_module(f"warlock.service.{m.name}")
+        for m in pkgutil.iter_modules(svc_pkg.__path__)
+        if m.name.startswith("_jobs_")
+    ]
+    assert siblings, "the jobs siblings are not being scanned"
+
     named = set()
-    for module in (svc_jobs, validation, guidance):
+    for module in (svc_jobs, validation, guidance, *siblings):
         for line in inspect.getsource(module).splitlines():
             if 'field="' in line:
                 named.add(line.split('field="', 1)[1].split('"', 1)[0])

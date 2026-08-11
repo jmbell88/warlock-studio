@@ -29,6 +29,12 @@ def split_glb(data: bytes) -> tuple[bytes, dict, bytes]:
     chunk_len, chunk_type = struct.unpack_from("<II", data, 12)
     if chunk_type != CHUNK_JSON:
         raise ValueError("first GLB chunk is not JSON")
+    if 20 + chunk_len > len(data):
+        # A slice past the end is silently short in Python, so a body truncated
+        # mid-JSON would reach json.loads as a partial document and fail there
+        # with a decoder's error rather than the format's. Callers key on
+        # ValueError either way; this one says what actually went wrong.
+        raise ValueError("truncated GLB: the JSON chunk overruns the file")
     start = 20
     return data[:12], json.loads(data[start : start + chunk_len]), data[start + chunk_len :]
 

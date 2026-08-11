@@ -8,9 +8,15 @@ canonicalized, how it is keyed -- therefore sits where both can reach it.
 ``service.findings`` re-exports the three names that were already spelled
 against it (``VECTOR_PARAMS``, ``config_vector``, ``vector_key``), so callers
 that learned the old import path never notice the move; ``prompt_hash`` and
-``observation_metrics`` are new here and are imported from here. Pure stdlib,
-and it must stay that way: it is imported before torch exists and inside the
-frame loop's reach.
+``observation_metrics`` are new here and are imported from here.
+
+**What this module may import, exactly**: the standard library, and the one
+name it takes from ``pipelines.reference`` (``REFUSAL_CODES``, whose own module
+is stdlib-only at module scope). Never ``service``, never ``studio``, never
+torch, never imgui -- it is imported before torch exists and inside the frame
+loop's reach, and it is what the worker writes observations through. The rule
+is not prose: ``tests/test_vectors_evidence.py`` imports this module in a
+subprocess and refuses any of those having been dragged in.
 
 The mesh-verdict **grade scale** and its **tag vocabulary** are here for exactly
 the same reason and not a related one: ``service/verdicts.py`` imports

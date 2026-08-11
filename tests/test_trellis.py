@@ -26,11 +26,29 @@ def _valid_glb(meshes: list | None = None) -> bytes:
     return rebuild_glb(header, gltf, chunk)
 
 
-def _run_generate(tmp_path, monkeypatch, body, sent=None):
+def _run_generate(tmp_path, monkeypatch, body, sent=None, *, status=200):
     class FakeResponse:
-        status_code = 200
+        status_code = status
         content = body
-        text = ""
+        text = body.decode("utf-8", "replace") if status >= 400 else ""
+
+        async def aread(self):
+            return body
+
+        async def aiter_bytes(self):
+            # One chunk, which is what a small GLB arrives as anyway. The
+            # ceiling is a running total, so a single oversized chunk trips it
+            # exactly as a hundred small ones would.
+            yield body
+
+    class _Stream:
+        """``client.stream(...)``'s async context manager."""
+
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *exc):
+            return False
 
     class FakeClient:
         def __init__(self, *a, **k):
@@ -42,10 +60,10 @@ def _run_generate(tmp_path, monkeypatch, body, sent=None):
         async def __aexit__(self, *exc):
             return False
 
-        async def post(self, url, files=None, data=None):
+        def stream(self, method, url, files=None, data=None):
             if sent is not None:
                 sent.update(data)
-            return FakeResponse()
+            return _Stream()
 
     monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", FakeClient)
     server = trellis_mod.TrellisServer(tmp_path / "x.exe", tmp_path, 1234)
@@ -86,6 +104,24 @@ def test_generate_rejects_a_glb_with_no_meshes(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="no meshes"):
         _run_generate(tmp_path, monkeypatch, _valid_glb(meshes=[]))
     assert not (tmp_path / "out.glb").exists()
+
+
+def test_generate_refuses_a_body_past_the_ceiling(tmp_path, monkeypatch):
+    """An unbounded read of whatever the server sends is a way for one bad (or
+    misaddressed) response to take the whole process out of memory. The refusal
+    happens while the body is still arriving, so nothing is written."""
+    monkeypatch.setattr(trellis_mod, "MAX_GLB_BYTES", 16)
+    with pytest.raises(RuntimeError, match="more than 16 bytes"):
+        _run_generate(tmp_path, monkeypatch, _valid_glb())
+    assert not (tmp_path / "out.glb").exists()
+    assert list(tmp_path.glob("out.glb*")) == []
+
+
+def test_generate_still_reports_an_error_status_in_the_servers_words(tmp_path, monkeypatch):
+    """A streamed response has to be read before ``.text`` exists; the error
+    shape a user sees is unchanged."""
+    with pytest.raises(RuntimeError, match="trellis-server 503: out of memory"):
+        _run_generate(tmp_path, monkeypatch, b"out of memory", status=503)
 
 
 async def _noop_async(*_a, **_k):

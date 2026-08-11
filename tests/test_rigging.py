@@ -1291,3 +1291,20 @@ def test_op_rig_builds_the_armature_from_supplied_joints_not_the_fit(tmp_path):
     for bone in override:
         assert built[bone["name"]]["head"] == pytest.approx(bone["head"])
         assert built[bone["name"]]["tail"] == pytest.approx(bone["tail"])
+
+
+def test_a_garbage_result_from_an_exit_zero_worker_is_a_blender_error(tmp_path, monkeypatch):
+    """The one way run_worker could still raise a raw JSON decoder error at the
+    caller: the worker exits 0 and the file it left is not JSON. Typed like
+    every other way the worker can disappoint, and the file does not survive."""
+    real_popen = subprocess.Popen
+    result = tmp_path / "r.json"
+
+    def fake_popen(_cmd, **kw):
+        result.write_text("half a resu", encoding="utf-8")
+        return real_popen([sys.executable, "-c", "pass"], **kw)
+
+    monkeypatch.setattr(rigging.subprocess, "Popen", fake_popen)
+    with pytest.raises(rigging.BlenderError, match="unreadable result"):
+        rigging.run_worker({"op": "rig", "result_path": str(result)}, timeout=30)
+    assert not result.exists()

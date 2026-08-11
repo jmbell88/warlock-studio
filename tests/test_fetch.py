@@ -646,3 +646,29 @@ def test_the_child_clears_the_flag_only_in_its_own_environment(tmp_path):
     )
     assert proc.stdout.strip() == "0", proc.stderr
     assert os.environ["HF_HUB_OFFLINE"] == before == "1"
+
+
+def test_a_malformed_progress_line_does_not_abandon_the_download(tmp_path, monkeypatch):
+    """The drain loop used to call float() on whatever ``percent`` held. A
+    child printing a non-numeric percent -- or a bare JSON scalar, which
+    huggingface_hub can put down the same stream -- would raise inside the
+    loop, kill the child and report a download that was working as failed."""
+    from warlock.service import downloads
+
+    stub = _STUB_WORKER.replace(
+        "from warlock.pipelines import fetch_worker",
+        "print('5'); print('{\"percent\": \"wat\", \"label\": \"x\"}');"
+        " print('[1, 2]'); sys.stdout.flush()\n"
+        "from warlock.pipelines import fetch_worker",
+    )
+    cfg = _config(tmp_path)
+    monkeypatch.setattr(fetch, "free_gib", lambda _path: 5000.0)
+    monkeypatch.setattr(downloads, "worker_argv", lambda: [sys.executable, "-c", stub])
+    seen: list[tuple[float, str]] = []
+    downloads.download(
+        _Svc(cfg),
+        ["lora:pixelxl"],
+        on_progress=lambda percent, label: seen.append((percent, label)),
+    )
+    assert (cfg.t2i_model_root / "loras" / "pixel-art-xl.safetensors").read_bytes() == b"weights"
+    assert seen and seen[-1] == (100.0, "")

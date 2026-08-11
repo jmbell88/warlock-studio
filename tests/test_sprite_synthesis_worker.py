@@ -313,3 +313,31 @@ async def test_an_unknown_sheet_type_errors_rather_than_defaulting(worker):
 
     assert row["status"] == "error"
     assert "unknown sprite sheet type" in (row["error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_a_torn_draft_sidecar_leaves_no_marker_and_no_strand(worker, monkeypatch):
+    """``rigging.list_sprite_drafts`` treats the sidecar as the completion
+    marker, so a half-written one advertises a draft whose record cannot be
+    parsed -- and a re-synthesis of the same draft_id would be truncating a
+    marker that is already saying ready."""
+    from pathlib import Path
+
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+
+    real = Path.write_text
+
+    def tamper(self, text, *a, **k):
+        if self.name == f".{draft_id}.json.tmp":
+            real(self, text[: len(text) // 2], *a, **k)
+            raise OSError("the disk filled up")
+        return real(self, text, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", tamper)
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    source_dir = worker.config.job_dir(source)
+    assert not rigging.sprite_draft_path(source_dir, draft_id).exists()
+    assert list(rigging.sprite_draft_path(source_dir, draft_id).parent.glob("*.tmp")) == []

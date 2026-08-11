@@ -370,3 +370,19 @@ def test_a_model_with_a_skin_is_refused_rather_than_silently_flattened() -> None
     model = gltf.Model([gltf.Node(name="n")], [0], [], [gltf.Skin([0], np.eye(4)[None])])
     with pytest.raises(ValueError, match="skin"):
         glbwrite.write_glb(model)
+
+
+def test_a_glb_whose_json_chunk_overruns_the_file_is_refused() -> None:
+    """A body cut short mid-transfer used to reach json.loads as a partial
+    document, so what came back named the JSON decoder rather than the
+    truncation -- and ``_validate_glb``'s message is what a user reads when
+    trellis-server dies mid-response."""
+    model = gltf.Model([gltf.Node(name="n")], [0], [], [])
+    data = glbwrite.write_glb(model)
+    with pytest.raises(ValueError, match="truncated GLB"):
+        read_glb(data[: len(data) // 2])
+    # Lying in the header is the same failure without losing a byte.
+    chunk_len = struct.unpack_from("<I", data, 12)[0]
+    lied = data[:12] + struct.pack("<I", chunk_len + len(data)) + data[16:]
+    with pytest.raises(ValueError, match="truncated GLB"):
+        read_glb(lied)
