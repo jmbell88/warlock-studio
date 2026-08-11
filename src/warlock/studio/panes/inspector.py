@@ -29,6 +29,7 @@ from . import (
     pose_panel,
     retarget_panel,
     sheet_panel,
+    sprite_panel,
     stamps,
     texture_panel,
 )
@@ -156,6 +157,7 @@ def _details_tab(ctx: Any, job: Any) -> None:
     _settings(ctx, job)
     _reference(ctx, job)
     _pixel(ctx, job)
+    sprite_panel.draw(ctx, job)
     _seam(ctx, job)
     if ctx.state.mode == "3d":
         _quality(ctx, job)

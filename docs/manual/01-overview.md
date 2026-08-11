@@ -42,16 +42,16 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A switch at the top of the window chooses between twelve modes, and that switch is the single thing
+A switch at the top of the window chooses between thirteen modes, and that switch is the single thing
 that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
-There is no per-mode keyboard shortcut: twelve modes against ten digits is either two modes with no
-key or a table saying which two, so the command palette (`Ctrl+K`) is the keyboard route — see
+There is no per-mode keyboard shortcut: thirteen modes against ten digits is either three modes with no
+key or a table saying which three, so the command palette (`Ctrl+K`) is the keyboard route — see
 [Keyboard shortcuts](14-shortcuts.md).
 
 The switch is drawn as three groups, and the grouping is derived from what a mode *is* rather than
-written down: the two ways in, then the seven workspaces that own a viewport or a form, then the
+written down: the two ways in, then the eight workspaces that own a viewport or a form, then the
 three places that are about the program and its shelves rather than about a piece of work. If the
-window is too narrow for twelve labels the switch shows the glyphs alone, all of them, with each
+window is too narrow for thirteen labels the switch shows the glyphs alone, all of them, with each
 label in a tooltip — abbreviating only the segments that did not fit would be one control saying two
 different kinds of thing, and which two would change as you dragged the window.
 
@@ -70,6 +70,9 @@ different kinds of thing, and which two would change as you dragged the window.
   [Inker](07-inker.md).
 - **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
   export a `.glb` or import the document as an asset. Covered in [Clay](08-clay.md).
+- **Poser.** Authoring reusable poses against a skeleton template, kept in a global pose library
+  rather than belonging to any one asset. Covered in
+  [Rigging and posing](05-rigging-and-posing.md#the-poser).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
   works" findings the verdicts add up to. Covered in [Review](13-review.md).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an

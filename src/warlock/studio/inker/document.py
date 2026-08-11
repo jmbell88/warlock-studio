@@ -1265,6 +1265,8 @@ class Document:
         spacing: float | None = None,
         mode: str = "paint",
         strength: float = 0.5,
+        nib: str = "soft",
+        pixel_perfect: bool = False,
         symmetry: str = "none",
         axis: tuple[float, float] | None = None,
         radial: int = brush_mod.DEFAULT_RADIAL,
@@ -1285,6 +1287,8 @@ class Document:
             spacing=DEFAULT_SPACING if spacing is None else spacing,
             mode=mode,
             strength=strength,
+            nib=nib,
+            pixel_perfect=pixel_perfect,
             symmetry=symmetry,
             axis=axis,
             radial=radial,
@@ -1312,6 +1316,13 @@ class Document:
     def end_stroke(self) -> bool:
         """Close the stroke and make it exactly one undo step."""
         stroke, self._stroke = self._stroke, None
+        if stroke is not None and stroke.pending:
+            # The pixel-perfect filter holds one pixel back to see whether the
+            # next makes it an elbow, and at release there is no next: without
+            # this flush a click marks nothing and every stroke is one pixel
+            # short. Before the ``dirty is None`` test, since for a click the
+            # flush is the only thing that makes it non-None.
+            stroke.finish(self.stack.by_uid(stroke.layer_uid).pixels)
         if stroke is None or stroke.dirty is None:
             # A brush-down with no dab. ``begin_stroke`` may have autovivified a
             # cel for it, and nothing below will reach ``_commit_patch`` to
@@ -1783,11 +1794,15 @@ class Document:
         return self.lift()
 
     def transform_floating(
-        self, *, angle: float | None = None, scale: tuple[float, float] | None = None
+        self,
+        *,
+        angle: float | None = None,
+        scale: tuple[float, float] | None = None,
+        resample: str = "smooth",
     ) -> bool:
         if self.floating is None:
             return False
-        self.floating.transform(angle=angle, scale=scale)
+        self.floating.transform(angle=angle, scale=scale, resample=resample)
         self.rev += 1
         return True
 
@@ -2236,9 +2251,11 @@ class Document:
         self.commit_floating()
         self._replay(lambda: self._map_planes(lambda plane: tf.rotate90(plane, quarters)))
 
-    def scale(self, size: tuple[int, int]) -> None:
+    def scale(self, size: tuple[int, int], *, resample: str = "smooth") -> None:
         self.commit_floating()
-        self._replay(lambda: self._map_planes(lambda plane: tf.scale(plane, size)))
+        self._replay(
+            lambda: self._map_planes(lambda plane: tf.scale(plane, size, resample=resample))
+        )
 
     def crop(self, rect: tuple[int, int, int, int]) -> bool:
         box = self.clip(rect)

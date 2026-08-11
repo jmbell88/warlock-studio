@@ -41,6 +41,23 @@ MODES = ("paint", "erase", "blur", "smudge")
 
 SYMMETRY = ("none", "x", "y", "xy", "radial")
 
+#: The three nibs, and the split is between *antialiased* and *not*.
+#:
+#: ``soft`` is the disc this brush has always stamped: a smoothstep falloff with
+#: an antialiased rim even at hardness 1, which is right for everything the 3D
+#: pipeline wants a reference painted for and wrong for every pixel-art use of
+#: the same tool. The other two produce coverage that is exactly 0 or 1 -- no
+#: fractional pixel anywhere, so a stroke has hard edges and a colour count that
+#: does not grow -- ``pixel`` as a disc and ``square`` as the flat nib a
+#: one-pixel pencil actually wants. Hardness means nothing to either: coverage
+#: with no intermediate values has no falloff to shape, which is why
+#: ``_stamp`` passes 1.0 for them rather than letting the slider quietly widen
+#: the cache with values that change nothing.
+NIBS = ("soft", "pixel", "square")
+
+#: The nibs whose dabs land on whole pixels and whose coverage is binary.
+PIXEL_NIBS = frozenset(NIBS[1:])
+
 # How many ways a radial symmetry divides the circle by default. Six is the
 # snowflake/mandala number every tool that has this control opens on.
 DEFAULT_RADIAL = 6
@@ -69,18 +86,32 @@ def clamp_brush(size: int) -> int:
 
 
 @lru_cache(maxsize=256)
-def make_stamp(diameter: int, hardness: float) -> np.ndarray:
-    """A float32 coverage disc, ``diameter`` square, 0..1.
+def make_stamp(diameter: int, hardness: float, nib: str = "soft") -> np.ndarray:
+    """A float32 coverage stamp, ``diameter`` square, 0..1.
 
-    Even at hardness 1 the rim is antialiased over the last half pixel: a hard
-    brush should have a crisp edge, not a jagged one, and a stamp that is
-    exactly 0/1 is how you get a staircase on every diagonal.
+    For the ``soft`` nib the rim is antialiased over the last half pixel even at
+    hardness 1: a hard brush should have a crisp edge, not a jagged one, and a
+    stamp that is exactly 0/1 is how you get a staircase on every diagonal.
+
+    For the two pixel nibs that staircase *is* the drawing, so their coverage is
+    exactly 0 or 1 and hardness is not read at all. The assertion those two owe
+    is one a test can make directly: no value strictly between the two, ever, at
+    any diameter -- which is what stops a "hard" stroke laying down a fringe of
+    near-colours that a palette, an outline pass or a colour-key export then has
+    to deal with.
     """
     diameter = max(1, int(diameter))
     hardness = min(1.0, max(0.0, float(hardness)))
     radius = diameter / 2.0
     axis = np.arange(diameter, dtype=np.float32) + 0.5 - radius
+    if nib == "square":
+        return np.ones((diameter, diameter), dtype=np.float32)
     distance = np.hypot(axis[None, :], axis[:, None])
+    if nib == "pixel":
+        # ``<=`` rather than ``<``: at diameter 1 the single sample sits exactly
+        # on the radius, and a strict test would make the one-pixel pencil --
+        # the whole reason this nib exists -- stamp nothing at all.
+        return (distance <= radius).astype(np.float32)
 
     # Where the falloff starts. At hardness 1 that is half a pixel in from the
     # rim, which is exactly the AA band.
@@ -139,6 +170,70 @@ def _mirror(
     return points
 
 
+def _whole(point: tuple[float, float]) -> tuple[int, int]:
+    """The pixel a float position is inside. Floor, not round: a position is
+    inside the pixel whose index is its floor, and rounding would put the left
+    half of pixel 3 into pixel 2."""
+    return (int(math.floor(point[0])), int(math.floor(point[1])))
+
+
+def _centre(pixel: tuple[int, int]) -> tuple[float, float]:
+    """A whole pixel back as the float position ``_stamp`` and ``_mirror`` take.
+
+    The centre rather than the corner, so a mirror about the canvas -- which
+    reflects positions, not indices -- sends a pixel to a pixel rather than to a
+    boundary between two.
+    """
+    return (pixel[0] + 0.5, pixel[1] + 0.5)
+
+
+def line_pixels(a: tuple[int, int], b: tuple[int, int]) -> list[tuple[int, int]]:
+    """Every whole pixel between two, inclusive of both. Bresenham.
+
+    A pixel nib cannot use the spacing walk: that places dabs a *fraction of a
+    diameter* apart along a float segment, which for a one-pixel pencil means
+    either a gap wherever the mouse moved faster than one pixel per frame or a
+    second dab on a pixel already drawn. Neither is visible with a soft brush --
+    coverage accumulates with maximum, so a repeat is free and a sub-pixel gap
+    is filled by the rim -- and both are the whole failure mode at one pixel.
+    """
+    x0, y0 = int(a[0]), int(a[1])
+    x1, y1 = int(b[0]), int(b[1])
+    dx, dy = abs(x1 - x0), -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    error = dx + dy
+    out = [(x0, y0)]
+    while (x0, y0) != (x1, y1):
+        double = error * 2
+        if double >= dy:
+            error += dy
+            x0 += sx
+        if double <= dx:
+            error += dx
+            y0 += sy
+        out.append((x0, y0))
+    return out
+
+
+def is_corner(a: tuple[int, int], b: tuple[int, int], c: tuple[int, int]) -> bool:
+    """Whether ``b`` is the elbow of an L that ``a`` and ``c`` already imply.
+
+    Pixel-perfect drawing is exactly this predicate and nothing else: a diagonal
+    line drawn freehand comes out as a staircase with a doubled pixel at every
+    step, and each doubled pixel is an ``a``/``c`` pair one diagonal apart with
+    ``b`` orthogonally adjacent to both. Dropping ``b`` leaves the two touching
+    at their corner, which is what a clean pixel diagonal is.
+
+    It is asked *before* ``b`` is stamped rather than by erasing it afterwards,
+    because coverage accumulates with maximum and has no subtraction -- undoing
+    a dab would mean recomputing the whole stroke's coverage from its history.
+    """
+    if abs(c[0] - a[0]) != 1 or abs(c[1] - a[1]) != 1:
+        return False
+    return b in ((a[0], c[1]), (c[0], a[1]))
+
+
 @dataclass
 class StrokeState:
     """One stroke, from press to release, on one layer.
@@ -158,6 +253,14 @@ class StrokeState:
     spacing: float = DEFAULT_SPACING
     mode: str = "paint"
     strength: float = 0.5
+    #: Which stamp; see NIBS. ``soft`` is every stroke this class drew before
+    #: the pixel nibs existed, and the default keeps it that way.
+    nib: str = "soft"
+    #: Drop the elbow of every staircase step; see :func:`is_corner`. Only
+    #: meaningful for a pixel nib -- a soft dab has a rim wider than the elbow
+    #: it would remove -- and ignored for the others rather than refused, since
+    #: it is a checkbox that stays ticked while the user tries a soft brush.
+    pixel_perfect: bool = False
     symmetry: str = "none"
     #: Where the mirrors reflect and a radial symmetry turns. None is the
     #: canvas centre, which is where it was fixed before it was a field.
@@ -188,6 +291,10 @@ class StrokeState:
     _target: tuple[float, float] | None = field(init=False, default=None)
     #: The tapered diameter carried between segments; see TAPER_SMOOTHING.
     _width: float = field(init=False, default=0.0)
+    #: The pixel-perfect filter's two-pixel window: the last dab stamped, and
+    #: the candidate held back to see whether the next one makes it an elbow.
+    _prev_pixel: tuple[int, int] | None = field(init=False, default=None)
+    _pending_pixel: tuple[int, int] | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         width, height = self.size
@@ -203,18 +310,31 @@ class StrokeState:
     def step(self) -> float:
         return max(0.5, self.diameter * self.spacing)
 
+    @property
+    def pixel(self) -> bool:
+        """Whether this stroke walks whole pixels rather than the spacing."""
+        return self.nib in PIXEL_NIBS
+
     def begin(self, point: tuple[float, float], target: np.ndarray) -> None:
         """A click is one dab -- press must mark, not wait for a drag.
 
         The stabiliser starts *at* the press rather than lagging into it: a
         brush that crept toward the first click would put the dab somewhere the
         user did not press, which is the one place a lag is not forgivable.
+
+        Under the pixel-perfect filter the press is *held* rather than stamped,
+        because whether it is an elbow is not known until two more pixels have
+        arrived. ``finish`` is what makes a click still mark: it flushes the
+        held pixel, so a press and release with no movement draws exactly one.
         """
         self._last = point
         self._target = point
         self._carry = 0.0
         self._width = float(self.diameter)
-        self._dab(point, target)
+        if self.pixel:
+            self._feed(_whole(point), target)
+        else:
+            self._dab(point, target)
 
     def to(self, point: tuple[float, float], target: np.ndarray) -> None:
         if self._last is None:
@@ -241,6 +361,14 @@ class StrokeState:
         self, goal: tuple[float, float], speed: float, target: np.ndarray
     ) -> None:
         assert self._last is not None
+        if self.pixel:
+            # Every whole pixel between here and there, and no carry: the walk
+            # is the line rather than a spacing along it. The first is the one
+            # already fed on the previous segment, so it is dropped.
+            for pixel in line_pixels(_whole(self._last), _whole(goal))[1:]:
+                self._feed(pixel, target)
+            self._last = goal
+            return
         x0, y0 = self._last
         x1, y1 = goal
         length = math.hypot(x1 - x0, y1 - y0)
@@ -271,6 +399,52 @@ class StrokeState:
         self._width += (wanted - self._width) * (1.0 - TAPER_SMOOTHING)
         return max(MIN_BRUSH, int(round(self._width)))
 
+    # -- the pixel walk ----------------------------------------------------
+
+    def _feed(self, pixel: tuple[int, int], target: np.ndarray) -> None:
+        """Offer one whole pixel to the stroke, through the corner filter."""
+        if not self.pixel_perfect:
+            self._dab(_centre(pixel), target)
+            return
+        held = self._pending_pixel
+        if held is None:
+            self._pending_pixel = pixel
+            return
+        if pixel == held:
+            return
+        if self._prev_pixel is not None and is_corner(self._prev_pixel, held, pixel):
+            # The elbow goes, and ``_prev_pixel`` stays where it was: the pixel
+            # before the elbow is still the one the *next* triple is measured
+            # from, and advancing it to the dropped pixel would let a long
+            # diagonal shed a second pixel per step.
+            self._pending_pixel = pixel
+            return
+        self._dab(_centre(held), target)
+        self._prev_pixel = held
+        self._pending_pixel = pixel
+
+    @property
+    def pending(self) -> bool:
+        """Whether the corner filter is holding a pixel that is not drawn yet.
+
+        Asked by ``Document.end_stroke`` so the flush -- and the layer lookup it
+        needs -- is reached only by a stroke that has something to flush, which
+        is none of them unless the pixel-perfect filter is on.
+        """
+        return self._pending_pixel is not None
+
+    def finish(self, target: np.ndarray) -> None:
+        """Stamp whatever the corner filter is still holding back.
+
+        Called once, at release. Idempotent, because ``end_stroke`` is reached
+        from several places and a second flush would otherwise re-stamp the last
+        pixel -- harmless under maximum-coverage, but only by accident.
+        """
+        held, self._pending_pixel = self._pending_pixel, None
+        if held is not None:
+            self._dab(_centre(held), target)
+            self._prev_pixel = held
+
     # -- one dab -----------------------------------------------------------
 
     def _dab(
@@ -281,10 +455,21 @@ class StrokeState:
 
     def _stamp(self, point: tuple[float, float], target: np.ndarray, diameter: int) -> None:
         width, height = self.size
-        stamp = make_stamp(diameter, self.hardness)
+        # 1.0 rather than ``self.hardness`` for a pixel nib: neither reads it,
+        # and passing it through would key the shared stamp cache on a value
+        # that cannot change the answer.
+        stamp = make_stamp(diameter, 1.0 if self.pixel else self.hardness, self.nib)
         radius = diameter / 2.0
-        left = int(math.floor(point[0] - radius + 0.5))
-        top = int(math.floor(point[1] - radius + 0.5))
+        if self.pixel:
+            # Anchored on the pixel the dab is *on*, so an odd nib is centred on
+            # it and an even one grows down and right. The rounding form below
+            # is a half-pixel out for an even diameter, which a soft rim hides
+            # and a hard one does not.
+            left = int(math.floor(point[0])) - (diameter - 1) // 2
+            top = int(math.floor(point[1])) - (diameter - 1) // 2
+        else:
+            left = int(math.floor(point[0] - radius + 0.5))
+            top = int(math.floor(point[1] - radius + 0.5))
 
         x0, y0 = max(0, left), max(0, top)
         x1 = min(width, left + diameter)

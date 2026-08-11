@@ -107,6 +107,28 @@ def _image_model_cost(params: dict[str, Any] | None) -> float:
     return SDXL_GIB if spec is None else spec.vram_gib
 
 
+def offloaded_base(params: dict[str, Any] | None) -> bool:
+    """Whether this job's checkpoint runs under ``models.OFFLOAD``.
+
+    An offloaded pipe is the opposite shape from a resident one:
+    ``enable_model_cpu_offload()`` keeps the whole checkpoint in *host* RAM for
+    the life of the pipe and streams one submodule to the device at a time. So
+    its ``vram_gib`` is honest about VRAM and says nothing about commit -- and
+    under WDDM trellis-server's ~16 GiB device allocation is charged against
+    the same commit limit as those host weights. Running the two side by side
+    is the 2026-08-03 Resource-Exhaustion crash approached from the host side.
+
+    So an offloaded base is a *mandatory* sequential handoff, whatever
+    ``WARLOCK_VRAM_EXCLUSIVE`` says, and ``estimate`` has to price it that way
+    or the gate over-charges the one job that is careful about VRAM.
+    ``queue._needs_handoff`` is the enforcing half; this is the accounting one.
+    """
+    from . import models
+
+    spec = models.BASE_MODELS.get(str((params or {}).get("base_model") or ""))
+    return spec is not None and spec.residency == models.OFFLOAD
+
+
 def estimate(
     kind: str,
     stage: str,
@@ -124,6 +146,12 @@ def estimate(
     smaller card rather than only refusing it.
     """
     params = params or {}
+    # An offloaded checkpoint hands off whether or not the flag is set, because
+    # its cost is in host commit rather than in VRAM and nothing about the
+    # coexist budget describes it (see ``offloaded_base``). Applied here, at the
+    # top, so every kind below inherits it -- for ``image``/``rig`` the image
+    # term is zero and the two forms are arithmetically identical anyway.
+    exclusive = exclusive or offloaded_base(params)
     if kind == "retexture":
         # Six img2img passes over one mesh's renders, one at a time, through
         # the same resident pipe -- so the peak is one pass, not six, and the
@@ -154,6 +182,18 @@ def estimate(
         # "sdxl_cfg" into it.
         pixel = _image_model_cost(params) + CONTROLNET_GIB
         return pixel if exclusive else pixel + TRELLIS_GIB
+    if kind == "sprite_synthesis":
+        # Two txt2img passes, one after the other through the same resident
+        # pipe, each carrying both adapters at once -- so the peak is one pass
+        # with a ControlNet *and* an IP-Adapter resident, not two of anything.
+        # Unconditional rather than read from params: unlike a text job, this
+        # kind always conditions on both (the pose guide and the reference are
+        # the entire idea), so a params-gated term could only ever be wrong.
+        #
+        # The matte is a CPU flood fill in this process and the reduction is
+        # Pillow, so neither costs this budget anything.
+        sprite = _image_model_cost(params) + CONTROLNET_GIB + IP_ENCODER_GIB
+        return sprite if exclusive else sprite + TRELLIS_GIB
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.
         return 0.0

@@ -384,7 +384,7 @@ def test_pose_model_row_is_not_fatal_and_names_the_consequence(tmp_path):
     for."""
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
     # The model root pinned empty rather than left at PROJECT_ROOT/models,
-    # which is the rule CLAUDE.md states for warlockc.dll and gltfpack: a test
+    # which is the rule docs/INVARIANTS.md states for warlockc.dll and gltfpack: a test
     # about what happens when weights are *missing* must own that they are.
     # Downloading vitpose on 2026-08-07 duly turned this red.
     config = _config(tmp_path, t2i_model_root=tmp_path / "no-models")

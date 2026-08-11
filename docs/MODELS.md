@@ -1,0 +1,160 @@
+# Optional models
+
+Everything on this page is optional and independently skippable. The core setup in the
+[README](../README.md) — TRELLIS.2 plus SDXL-Turbo — is enough to generate assets; what follows
+widens the choices. `warlock doctor` lists every entry here with the exact command to fetch it,
+and **Settings → Models** inside the app downloads any of them without touching a terminal (via
+the out-of-process fetch worker described in the README — the app process itself stays offline).
+
+The reference image is the single biggest lever on final mesh quality — TRELLIS can only be as
+good as the picture it is handed — so the image model and an optional style LoRA are per-job
+choices in the guidance panel (`manual/03-generating-references.md`). Base models are
+one-resident-at-a-time (a 32 GB card holds trellis plus a single SDXL-class pipe, not two), so
+switching between jobs costs a reload; style LoRAs are adapters on the resident pipe and switch
+for free.
+
+## Image models and style LoRAs
+
+```powershell
+# SDXL 1.0 + Hyper-SD (~7 GB + 787 MB). Style LoRAs are trained against full
+# SDXL at 20-25 steps with CFG, so they land noticeably stronger here than on
+# Turbo's 4 steps at guidance 0. Hyper-SD buys the step count back.
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
+uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir models/loras
+
+# SDXL 1.0 full CFG (no extra download): the same sdxl-base-1.0 weights run
+# undistilled -- 30 steps at CFG 7.0. Slowest of the SDXL entries and the one
+# with real structural control: it takes ControlNet, and the negative prompt
+# carries full weight. Appears in the model picker as soon as the base weights
+# above are present.
+
+# Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
+uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/playground-v2.5
+
+# SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
+# guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
+# LCM LoRA has to be renamed: loras/ is flat, and the upstream filename is
+# generic enough that any other repo's default-named adapter would overwrite it.
+uvx hf download latent-consistency/lcm-lora-sdxl `
+  pytorch_lora_weights.safetensors --local-dir models/loras
+Rename-Item models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
+
+# SDXL 1.0 + Lightning (394 MB, reuses the sdxl-base-1.0 weights above): a
+# second 4-step distillation, adversarial where Hyper-SD is trajectory-
+# consistency, so the two are directly comparable with everything else fixed.
+uvx hf download ByteDance/SDXL-Lightning `
+  sdxl_lightning_4step_lora.safetensors --local-dir models/loras
+
+# Juggernaut XL v9 (~6.9 GB): a photoreal SDXL finetune, DPM++ 2M Karras at 35
+# steps with CFG 4.0 -- the middle of the ranges its own model card gives.
+uvx hf download RunDiffusion/Juggernaut-XL-v9 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/juggernaut-xl-v9
+
+# DreamShaper XL (~6.9 GB): the stylised counterpart, DEIS at 25 steps per its card.
+uvx hf download Lykon/dreamshaper-xl-1-0 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/dreamshaper-xl
+
+# FLUX.2 klein-base 4B (~16 GB): the one non-SDXL architecture -- one Qwen3 text
+# encoder at 512 tokens instead of two CLIPs at 77, and a DiT instead of a UNet.
+# Conditioning and seamless tiles are SDXL-only and are refused on it. Style
+# LoRAs are per-architecture rather than SDXL-only: an adapter declares the
+# family it was fitted to, and the picker offers a base only the ones that fit.
+# The negative prompt does work here, which is why this is the undistilled
+# -base variant rather than the distilled FLUX.2-klein-4B below (that one
+# hardwires is_distilled=True, which switches classifier-free guidance off
+# entirely).
+# Streamed onto the card a submodule at a time, so it peaks near 10 GB rather
+# than 16 and still coexists with trellis. The --exclude skips a redundant
+# 7.75 GB single-file checkpoint the repo ships beside the diffusers layout.
+uvx hf download black-forest-labs/FLUX.2-klein-base-4B `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-base-4b.safetensors" --local-dir models/flux2-klein-base-4b
+
+# FLUX.2 klein 4B distilled (~16 GB): the same architecture at the opposite
+# recipe -- 4 steps at guidance 1.0 rather than 50 at 4.0. It registers
+# is_distilled=True, so classifier-free guidance never runs and the negative
+# prompt is inert on it; pick klein-base above when a negative prompt is
+# wanted. It is here because the FLUX.2 pixel-art LoRA below was trained
+# against it.
+uvx hf download black-forest-labs/FLUX.2-klein-4B `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-4b.safetensors" --local-dir models/flux2-klein-4b
+
+# Style LoRAs -> models/loras/
+uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
+uvx hf download artificialguybr/3DRedmond-V1 `
+  3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir models/loras
+uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
+  PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
+# Pixel art: generates on a pixel grid rather than being downscaled into one.
+uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+# Pixel art for FLUX.2 klein -- the one non-SDXL adapter, offered only on the two
+# klein entries above. Renamed on the way in because loras/ is flat and shared
+# across families, and lcm-lora-sdxl ships the same generic filename.
+uvx hf download Limbicnation/pixel-art-lora `
+  pytorch_lora_weights.safetensors --local-dir models/loras
+Rename-Item models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
+```
+
+## Conditioning, matting and measurement models
+
+Four more registry entries, none of them required to generate anything. They lived only in
+`models.py` until the download machinery started generating both lists from the same `Fetch`
+records; `warlock doctor` reports each one and the Settings pane can fetch it.
+
+```powershell
+# IP-Adapter Plus (~3.5 GB): condition on a reference image's appearance. Both
+# halves are needed -- the weights alone load fine and then fail at the first call.
+uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
+  --local-dir models/ip-adapter
+uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir models/ip-adapter
+
+# ControlNet, Canny (~2.5 GB): lock the silhouette to a reference image's edges.
+uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
+  --include "*.json" --include "*fp16.safetensors" --local-dir models/controlnet-canny-sdxl
+
+# BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
+# alpha comes from a corner flood fill, with visibly rougher edges. Its own
+# modelling code runs on load and imports einops/kornia/timm/torchvision, so it
+# also wants `uv sync --extra text2image`.
+uvx hf download ZhengPeng7/BiRefNet `
+  --include "*.json" --include "*.py" --include "*.safetensors" --local-dir models/birefnet
+
+# DINOv2 base (~400 MB): the identity metric `python -m warlock.bench` scores
+# with. A missing one costs a number, never a job.
+uvx hf download facebook/dinov2-base `
+  --include "*.json" --include "*.safetensors" --local-dir models/dinov2-base
+```
+
+## Landmark-informed joint placement (rigging)
+
+```powershell
+uvx hf download usyd-community/vitpose-base-simple `
+  --include "*.json" --include "*.safetensors" --local-dir models/vitpose-base
+```
+
+Without it, a humanoid rig places its joints by scaling the template onto the mesh's bounding box
+— which is right when the reference is standing in a T-pose and progressively wrong as it departs
+from one. With it, the *reference image the mesh was reconstructed from* is read for the subject's
+actual shoulders, elbows, hips, knees and ankles, and those positions are used for the skeleton's
+X and Z. Depth still comes from the template: one view cannot supply it.
+
+It runs on the CPU, beside the resident trellis and SDXL rather than taking VRAM from them, and it
+costs about a second per rig. Nothing about it is required: it engages by itself when the weights
+are present, the template is `humanoid`, the job has a reference image, and the detection clears
+its sanity gates — and falls back wholesale to the bounding-box fit otherwise, never partially,
+since a skeleton half-measured and half-assumed is worse than either. `rig.json` records which fit
+produced the joints under `fit.method` (`pose2d`, `bbox`, or `manual` after an adjust-joints
+pass), and `WARLOCK_POSE_FIT=0` turns the whole thing off.
+
+## FLUX proper is not offered
+
+Both `dev` and `schnell` are click-through gated on Hugging Face, and 12B parameters will not
+coexist with trellis on one card. To use a local FLUX copy anyway: download it yourself
+(`uvx hf auth login` for the download only), point `WARLOCK_T2I_DIR` at it, and set
+`WARLOCK_VRAM_EXCLUSIVE=1`. Note that `WARLOCK_T2I_DIR` only redirects *where* the built-in
+`turbo` entry loads from — it still runs at that entry's settings (512 px, 4 steps, guidance 0),
+which suit schnell-like distilled checkpoints and nothing else. A model that needs different
+settings wants a `models.py` entry, not this variable.

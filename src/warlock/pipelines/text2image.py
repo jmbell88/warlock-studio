@@ -253,36 +253,60 @@ class Text2Image:
         if on_state is not None:
             on_state("load")
         log.info("loading %s", self._model_dir)
-        self._pipe = AutoPipelineForText2Image.from_pretrained(
+        # Configured on a *local* and published as the last statement. self._pipe
+        # used to be assigned straight out of from_pretrained, so `loaded` went
+        # true before the scheduler swap, the device placement and the LoRA
+        # attachment had run -- and a failure in any of those (a missing base
+        # LoRA raises by design, an OOM in .to("cuda"), a cancel) left a
+        # half-configured pipe that every later load() returned early on, with
+        # the weights resident and nothing able to reach them.
+        pipe = AutoPipelineForText2Image.from_pretrained(
             str(self._model_dir),
             torch_dtype=torch.bfloat16,
             variant=self.spec.variant,
             local_files_only=True,
         )
-        if self.spec.scheduler is not None:
-            self._pipe.scheduler = _scheduler(self.spec.scheduler, self._pipe.scheduler)
-        if self.spec.residency == models.OFFLOAD:
-            # One submodule on the device at a time, so a ~16 GB checkpoint
-            # peaks near the larger of its two big modules and still coexists
-            # with trellis-server. Mutually exclusive with the branch below:
-            # accelerate's hooks assume the modules start on the host, and a
-            # preceding .to("cuda") defeats the whole mechanism.
-            self._pipe.enable_model_cpu_offload()
-        else:
-            # Fully resident: SDXL bf16 is ~7 GB, which fits the 32 GB card even
-            # alongside trellis-server.
-            self._pipe.to("cuda")
-        self._load_loras()
+        try:
+            if self.spec.scheduler is not None:
+                pipe.scheduler = _scheduler(self.spec.scheduler, pipe.scheduler)
+            if self.spec.residency == models.OFFLOAD:
+                # One submodule on the device at a time, so a ~16 GB checkpoint
+                # peaks near the larger of its two big modules and still coexists
+                # with trellis-server. Mutually exclusive with the branch below:
+                # accelerate's hooks assume the modules start on the host, and a
+                # preceding .to("cuda") defeats the whole mechanism.
+                pipe.enable_model_cpu_offload()
+            else:
+                # Fully resident: SDXL bf16 is ~7 GB, which fits the 32 GB card
+                # even alongside trellis-server.
+                pipe.to("cuda")
+            self._load_loras(pipe)
+        except BaseException:
+            # BaseException, not Exception: a cancel landing mid-load is
+            # precisely the case that most needs the weights dropped, and
+            # KeyboardInterrupt/CancelledError are not Exceptions.
+            #
+            # `del pipe` before _reclaim(), never inside it: this frame's local
+            # is a live reference, so a collect that ran with it still bound
+            # would free nothing at all.
+            del pipe
+            self._reclaim()
+            raise
+        self._pipe = pipe
 
-    def _load_loras(self) -> None:
+    def _load_loras(self, pipe) -> None:
         """Attach the base step-distillation LoRA and every style LoRA on disk.
 
         A missing file is skipped, not fatal: the LoRAs are separate optional
         downloads and a user who fetched one of the three must still be able to
         generate. The base LoRA is the exception -- without it a Hyper-SD base
         is a 4-step run of undistilled SDXL, i.e. noise -- so that one raises.
+
+        Takes ``pipe`` explicitly rather than reading ``self._pipe``: that is
+        what lets ``load`` configure everything on a local and publish it only
+        once this has returned, so the raise above cannot leave a resident,
+        half-configured pipe behind.
         """
-        assert self._pipe is not None
         # ``spec.base_lora`` needs no family guard of its own: it is a declared
         # field, None on every non-SDXL entry, so the ``is not None`` below
         # already is the guard.
@@ -293,7 +317,7 @@ class Text2Image:
                     f"{self.spec.label} requires {self.spec.base_lora}, missing at "
                     f"{path}. Download once with:\n  {self.spec.download}"
                 )
-            self._pipe.load_lora_weights(
+            pipe.load_lora_weights(
                 str(path.parent),
                 weight_name=path.name,
                 adapter_name=models.BASE_LORA_ADAPTER,
@@ -310,7 +334,7 @@ class Text2Image:
             if not path.exists():
                 log.info("style LoRA %s not downloaded (%s); skipping", lora.key, path)
                 continue
-            self._pipe.load_lora_weights(
+            pipe.load_lora_weights(
                 str(path.parent),
                 weight_name=path.name,
                 adapter_name=lora.key,
@@ -572,18 +596,37 @@ class Text2Image:
         gib = 1024**3
         before = torch.cuda.memory_allocated() / gib if torch.cuda.is_available() else 0.0
         self._pipe = None
-        self._adapters = set()
-        self._base_adapter = None
-        gc.collect()
-        # Guarded: unload() is reachable on a CPU-only or driver-lost host --
-        # notably from shutdown() -- where a bare empty_cache() raises and
-        # turns a cleanup path into a crash.
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        self._reclaim()
         after = torch.cuda.memory_allocated() / gib if torch.cuda.is_available() else 0.0
         log.info(
             "unloaded %s: %.2f -> %.2f GiB allocated", self._model_dir, before, after
         )
+
+    def _reclaim(self) -> None:
+        """Reset the adapter bookkeeping and give the allocator's pool back.
+
+        Factored out of ``unload`` so the failure path in ``load`` releases by
+        the *same* implementation rather than a second, drifting copy of it.
+
+        **It deliberately takes no pipe.** The obvious shape -- ``_release(pipe)``
+        with a ``del pipe`` inside -- frees nothing: a parameter binding is a
+        live reference for exactly as long as this frame runs, and the caller's
+        own local is alive too, so the ``gc.collect()`` below reaches a pipe
+        that two frames still hold. Every caller therefore drops its reference
+        *first* and then calls this. (Measured, not reasoned: with the
+        argument-taking version, the GPU tests' pipes stayed on the card and the
+        next thirty queue tests were refused by dispatch-time VRAM admission.)
+        """
+        import torch
+
+        self._adapters = set()
+        self._base_adapter = None
+        gc.collect()
+        # Guarded: this is reachable on a CPU-only or driver-lost host --
+        # notably from shutdown() -- where a bare empty_cache() raises and
+        # turns a cleanup path into a crash.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def trim(self) -> None:
         """Return cached-but-unused memory to the driver. Keeps the pipe loaded.

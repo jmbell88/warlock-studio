@@ -17,6 +17,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import inker_mode, theme, widgets
+from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -148,11 +149,20 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     changed_h, height = imgui.input_int("H", int(height), 0)
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
+    state = inker_mode.ensure(ctx)
+    state.resample = widgets.labeled_combo(
+        "Resample", state.resample, [(k, k) for k in transform.RESAMPLES]
+    )
+    widgets.help_marker(
+        "Nearest copies each source pixel whole, which is what pixel art needs "
+        "-- a filtered scale of a 32x32 sprite comes back blurred and with "
+        "thousands of colours in it. Smooth is right for everything else."
+    )
     anchor = _anchor_grid(ctx, tab)
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
     if imgui.button("Scale image", (sp(180), 0)):
-        tab.doc.scale((max(1, width), max(1, height)))
+        tab.doc.scale((max(1, width), max(1, height)), resample=state.resample)
         tab.view.fitted = False
         imgui.close_current_popup()
     # Two different operations that a single "resize" would conflate: one

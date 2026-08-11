@@ -18,6 +18,7 @@ from PIL import Image
 
 from warlock.studio import inker
 from warlock.studio.inker import animation
+from warlock.studio.inker import ora as inker_ora
 from warlock.studio.inker.animation import Tag
 
 RED = (255, 0, 0, 255)
@@ -500,3 +501,117 @@ def test_tags_survive_a_round_trip(tmp_path: Path):
         ("walk", 0, 1, True),
         ("hit", 1, 1, False),
     ]
+
+
+def test_a_tags_direction_survives_a_round_trip(tmp_path: Path):
+    doc = _animated()
+    doc.add_tag("swing", 0, 1)
+    doc.set_tag(len(doc.anim.tags) - 1, direction="pingpong")
+    path = tmp_path / "swing.ora"
+    inker.write_ora(doc, path)
+
+    back = inker.Document.load(path)
+    assert [t.direction for t in back.anim.tags] == ["forward", "pingpong"]
+
+
+def test_a_file_written_before_directions_existed_reads_as_forward(tmp_path: Path):
+    """The field is additive and the version is unchanged, so this is the file
+    an older build writes -- and it has to keep opening rather than failing the
+    whole grid over how a tag *plays*."""
+    doc = _animated()
+    path = tmp_path / "old.ora"
+    inker.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    payload = json.loads(members[inker_ora.ANIMATION_MEMBER])
+    for tag in payload["tags"]:
+        del tag["direction"]
+    members[inker_ora.ANIMATION_MEMBER] = json.dumps(payload).encode("utf-8")
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+    back = inker.Document.load(path)
+    assert back.anim is not None
+    assert [t.direction for t in back.anim.tags] == ["forward"]
+
+
+# --- the directional layout -------------------------------------------------
+
+
+def _layout_doc(kind="walk"):
+    doc = _animated()
+    doc.anim.layout = animation.DirectionalLayout(kind)
+    return doc
+
+
+def test_a_layout_round_trips(tmp_path):
+    path = tmp_path / "sheet.ora"
+    inker_ora.write_ora(_layout_doc(), path)
+    assert inker_ora.read_ora(path).anim.layout == animation.DirectionalLayout("walk")
+
+
+def test_a_layout_less_document_writes_the_animation_json_it_always_did(tmp_path):
+    """Additive means additive: the key is written only when it is set, so an
+    ordinary animation's ``animation.json`` is byte-identical to before."""
+    plain = tmp_path / "plain.ora"
+    inker_ora.write_ora(_animated(), plain)
+    with zipfile.ZipFile(plain) as zf:
+        payload = json.loads(zf.read(inker_ora.ANIMATION_MEMBER))
+    assert "layout" not in payload
+    assert payload["version"] == inker_ora.ANIMATION_VERSION
+
+
+def test_the_layout_does_not_bump_the_version(tmp_path):
+    path = tmp_path / "sheet.ora"
+    inker_ora.write_ora(_layout_doc(), path)
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read(inker_ora.ANIMATION_MEMBER))
+    assert payload["version"] == inker_ora.ANIMATION_VERSION
+    assert payload["layout"] == {"kind": "walk"}
+
+
+def test_saving_a_layout_document_twice_is_byte_identical(tmp_path):
+    first, second = tmp_path / "a.ora", tmp_path / "b.ora"
+    doc = _layout_doc()
+    inker_ora.write_ora(doc, first)
+    inker_ora.write_ora(doc, second)
+    assert first.read_bytes() == second.read_bytes()
+
+
+def _rewrite_animation(src, dest, mutate):
+    with zipfile.ZipFile(src) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    payload = json.loads(members[inker_ora.ANIMATION_MEMBER])
+    mutate(payload)
+    members[inker_ora.ANIMATION_MEMBER] = json.dumps(payload).encode("utf-8")
+    with zipfile.ZipFile(dest, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+
+def test_a_malformed_layout_costs_the_layout_and_not_the_grid(tmp_path):
+    """Its own guard, outside the block that rebuilds the timeline: the pixels
+    are all present and correct, so a bad layout must not fall the file back to
+    a flat read."""
+    src, dest = tmp_path / "a.ora", tmp_path / "b.ora"
+    inker_ora.write_ora(_layout_doc(), src)
+    _rewrite_animation(src, dest, lambda p: p.update(layout={"nope": 1}))
+    doc = inker_ora.read_ora(dest)
+    assert doc.anim is not None and len(doc.anim.frames) == 2
+    assert doc.anim.layout is None
+
+
+def test_a_layout_this_build_does_not_know_degrades_to_none(tmp_path):
+    src, dest = tmp_path / "a.ora", tmp_path / "b.ora"
+    inker_ora.write_ora(_layout_doc(), src)
+    _rewrite_animation(src, dest, lambda p: p.update(layout={"kind": "isometric"}))
+    doc = inker_ora.read_ora(dest)
+    assert doc.anim is not None and doc.anim.layout is None
+
+
+def test_a_file_written_before_layouts_existed_reads_as_none(tmp_path):
+    path = tmp_path / "old.ora"
+    inker_ora.write_ora(_animated(), path)
+    assert inker_ora.read_ora(path).anim.layout is None

@@ -957,6 +957,93 @@ def delete_sheet(job_dir: Path, sheet_id: str) -> bool:
     return True
 
 
+# --- sprite sheet drafts ----------------------------------------------------
+#
+# Same storage shape again, and for the same reasons -- but with one rule the
+# others do not have: a draft is **write-once**. Every generate run mints a new
+# id, so no draft is ever rewritten in place, and the pane can therefore cache
+# this listing behind the directory's mtime without a stale record surviving an
+# edit that never happens. Deleting is the only mutation.
+#
+# A draft is a *pair* of candidates from one run, so it is three files: the two
+# PNGs, then the sidecar last, which is the completion marker -- the same order
+# and the same reason as sheets.
+
+SPRITE_DIR_NAME = "sprites"
+
+# Two files per draft and a thumbnail per candidate in the sidebar; well under
+# MAX_SHEETS because these accumulate per *attempt* rather than per keeper.
+MAX_SPRITE_DRAFTS = 50
+
+SPRITE_CANDIDATES = ("a", "b")
+
+
+def sprite_dir(job_dir: Path) -> Path:
+    return job_dir / SPRITE_DIR_NAME
+
+
+def sprite_draft_path(job_dir: Path, draft_id: str) -> Path:
+    if not is_valid_id(draft_id):
+        raise ValueError(f"malformed sprite draft id {draft_id!r}")
+    return sprite_dir(job_dir) / f"{draft_id}.json"
+
+
+def sprite_draft_png_path(job_dir: Path, draft_id: str, candidate: str) -> Path:
+    """``<id>.a.png`` / ``<id>.b.png``, beside the sidecar.
+
+    The candidate letter is checked here rather than trusted: it arrives from a
+    UI route, and ``<id>.<anything>.png`` would otherwise be a path a caller
+    chooses. ``<id>.a`` also fails ``is_valid_id``, so ``list_sprite_drafts``
+    skips the PNGs for free without knowing this naming exists.
+    """
+    if candidate not in SPRITE_CANDIDATES:
+        raise ValueError(f"unknown sprite candidate {candidate!r}")
+    return sprite_draft_path(job_dir, draft_id).with_suffix(f".{candidate}.png")
+
+
+def read_sprite_draft(job_dir: Path, draft_id: str) -> dict[str, Any] | None:
+    path = sprite_draft_path(job_dir, draft_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.exception("unreadable sprite draft at %s", path)
+        return None
+
+
+def list_sprite_drafts(job_dir: Path) -> list[dict[str, Any]]:
+    """Every finished draft, oldest first. A draft missing a PNG is not one."""
+    directory = sprite_dir(job_dir)
+    if not directory.is_dir():
+        return []
+    drafts = []
+    for path in sorted(directory.glob("*.json")):
+        if not is_valid_id(path.stem):
+            continue
+        if not all(
+            path.with_suffix(f".{c}.png").exists() for c in SPRITE_CANDIDATES
+        ):
+            continue
+        record = read_sprite_draft(job_dir, path.stem)
+        if record is not None:
+            drafts.append(record)
+    drafts.sort(key=lambda d: d.get("created", 0.0))
+    return drafts
+
+
+def delete_sprite_draft(job_dir: Path, draft_id: str) -> bool:
+    """The trio. A draft is one run, so its two candidates go together."""
+    paths = [sprite_draft_path(job_dir, draft_id)] + [
+        sprite_draft_png_path(job_dir, draft_id, c) for c in SPRITE_CANDIDATES
+    ]
+    if not any(p.exists() for p in paths):
+        return False
+    for path in paths:
+        path.unlink(missing_ok=True)
+    return True
+
+
 def sheet_spec(
     source_glb: Path,
     frames_dir: Path,

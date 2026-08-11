@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from warlock import vram
+from warlock import models, vram
 from warlock.config import Config
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "warlock"
@@ -339,6 +339,37 @@ def test_armed_answers_without_raising():
     assert isinstance(winjob.armed(), bool)
 
 
+def test_an_offloaded_base_is_priced_sequentially_whatever_the_flag_says():
+    """The accounting half of the mandatory offload handoff.
+
+    ``queue._needs_handoff`` stops trellis before an OFFLOAD checkpoint loads
+    whether or not WARLOCK_VRAM_EXCLUSIVE is set, so the estimate has to agree
+    -- otherwise the gate charges the sum of two stages that are never resident
+    together and refuses the one job that is careful about VRAM.
+    """
+    params = {"base_model": "flux_klein"}
+    assert vram.offloaded_base(params) is True
+    assert vram.offloaded_base({"base_model": "sdxl"}) is False
+    assert vram.offloaded_base({}) is False
+
+    coexist = vram.estimate("text", "model", params, exclusive=False)
+    sequential = vram.estimate("text", "model", params, exclusive=True)
+    assert coexist == sequential
+    # And it really is the max of the two stages, not their sum.
+    assert coexist == max(
+        models.BASE_MODELS["flux_klein"].vram_gib, vram.TRELLIS_GIB
+    )
+
+
+def test_a_resident_base_is_still_priced_by_the_flag():
+    # The other half: nothing about SDXL's accounting moved.
+    params = {"base_model": "sdxl"}
+    assert vram.estimate("text", "model", params, exclusive=False) == (
+        vram.SDXL_GIB + vram.TRELLIS_GIB
+    )
+    assert vram.estimate("text", "model", params, exclusive=True) == vram.TRELLIS_GIB
+
+
 def test_a_tile_costs_what_a_reference_costs():
     # Same pipe, same size, one sample -- the circular padding changes no
     # allocation. A stage the estimate did not know would fall through to the
@@ -349,3 +380,35 @@ def test_a_tile_costs_what_a_reference_costs():
     assert vram.estimate("text", "tile", {}, exclusive=False) == vram.estimate(
         "text", "reference", {}, exclusive=False
     )
+
+
+# --- sprite synthesis --------------------------------------------------------
+
+
+def test_a_sprite_synthesis_is_priced_and_never_silently_zero():
+    """A kind with no branch falls through to ``return 0.0`` and the admission
+    gate becomes a no-op that refuses nothing -- which is the failure mode this
+    guards, not the exact number."""
+    exclusive = vram.estimate("sprite_synthesis", "model", {"base_model": "sdxl_cfg"},
+                              exclusive=True)
+    coexist = vram.estimate("sprite_synthesis", "model", {"base_model": "sdxl_cfg"},
+                            exclusive=False)
+    assert exclusive > 0.0
+    # Both adapters ride every pass, unconditionally: the guide *is* the
+    # ControlNet and the identity *is* the IP-Adapter.
+    assert exclusive >= vram.CONTROLNET_GIB + vram.IP_ENCODER_GIB
+    # Coexist adds a warm trellis holding its own memory, exactly as the other
+    # image-model kinds account for.
+    assert coexist == pytest.approx(exclusive + vram.TRELLIS_GIB)
+
+
+def test_a_sprite_synthesis_is_priced_from_its_own_checkpoint():
+    offloaded = next(
+        key for key, spec in models.BASE_MODELS.items()
+        if spec.residency == models.OFFLOAD
+    )
+    priced = vram.estimate("sprite_synthesis", "model", {"base_model": offloaded},
+                           exclusive=True)
+    plain = vram.estimate("sprite_synthesis", "model", {"base_model": "sdxl_cfg"},
+                          exclusive=True)
+    assert priced != plain

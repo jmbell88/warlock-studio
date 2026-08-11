@@ -42,6 +42,14 @@ SOURCES = (
     # both this rename and the 2026-08-09 move out of the repo root.
     ROOT / "docs" / "TODO.md",
     ROOT / "CLAUDE.md",
+    # The invariants reference CLAUDE.md's detail moved into on 2026-08-10. It
+    # carries no manual mentions yet, but it is exactly the file that will grow
+    # them, and the rule here is that sources are named, not globbed.
+    ROOT / "docs" / "INVARIANTS.md",
+    # The optional-model catalogue the README's download sections moved into on
+    # 2026-08-10. It points readers at the guidance-panel chapter, so its links
+    # rot with a renumbering exactly the way README.md's do.
+    ROOT / "docs" / "MODELS.md",
     *sorted((ROOT / "docs" / "measurements").glob("*.md")),
 )
 

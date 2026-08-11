@@ -135,7 +135,9 @@ def test_durations_and_tags_round_trip_in_timeline_order():
         {"cell_index": 1, "duration_ms": 120},
         {"cell_index": 2, "duration_ms": 40},
     ]
-    assert block["tags"] == [{"name": "walk", "start": 0, "end": 2, "loop": False}]
+    assert block["tags"] == [
+        {"name": "walk", "start": 0, "end": 2, "loop": False, "direction": "forward"}
+    ]
 
 
 def test_every_cell_index_in_the_block_names_a_real_cell():
@@ -317,7 +319,7 @@ def test_a_snapshot_survives_the_document_recompositing_underneath_it():
     entries rather than writing into them, so a later flatten on the frame
     thread cannot rewrite a sheet that is halfway to disk."""
     doc = _animated()
-    frames, _durations, _tags = sheetout.snapshot(doc)
+    frames, _durations, _tags, _layout = sheetout.snapshot(doc)
     taken = [plane.copy() for plane in frames]
 
     doc.set_current_frame(1)
@@ -326,3 +328,95 @@ def test_a_snapshot_survives_the_document_recompositing_underneath_it():
         doc.frame_flat(frame.uid)
 
     assert all(np.array_equal(a, b) for a, b in zip(frames, taken, strict=True))
+
+
+# --- the directional grid ---------------------------------------------------
+
+
+def _layout(kind):
+    from warlock.studio.inker.animation import DirectionalLayout
+
+    return DirectionalLayout.of(kind)
+
+
+def test_a_turnaround_lays_out_two_by_two_with_its_yaws():
+    plan = sheetout.plan_frames(4, 10, 10, layout=_layout("turnaround"))
+    assert (plan.columns, plan.rows) == (2, 2)
+    assert [(c.x, c.y) for c in plan.cells] == [(0, 0), (10, 0), (0, 10), (10, 10)]
+    assert [c.pose_name for c in plan.cells] == ["front", "left", "right", "back"]
+    assert [c.yaw for c in plan.cells] == [0.0, 90.0, 270.0, 180.0]
+    assert [c.frame for c in plan.cells] == [0, 0, 0, 0]
+
+
+def test_a_walk_lays_out_four_by_four_with_frames_restarting_per_row():
+    plan = sheetout.plan_frames(16, 8, 8, layout=_layout("walk"))
+    assert (plan.columns, plan.rows) == (4, 4)
+    assert [c.frame for c in plan.cells] == [0, 1, 2, 3] * 4
+    assert [c.pose_name for c in plan.cells[:4]] == ["front"] * 4
+    assert [c.pose_name for c in plan.cells[12:]] == ["back"] * 4
+    for index, cell in enumerate(plan.cells):
+        assert (cell.x, cell.y) == ((index % 4) * 8, (index // 4) * 8)
+
+
+def test_a_frame_count_that_does_not_fill_the_grid_is_refused():
+    """Padded would be worse: a sheet with a hole where "back, frame 3" should
+    be is the one outcome a game would not notice until it played it."""
+    with pytest.raises(ValueError, match="16 frames and this document has 15"):
+        sheetout.plan_frames(15, 8, 8, layout=_layout("walk"))
+
+
+def test_the_grid_is_fixed_even_when_a_wrap_would_fit_more():
+    """Without the layout, 16 eight-pixel frames wrap into one row."""
+    wrapped = sheetout.plan_frames(16, 8, 8)
+    assert wrapped.columns == 16
+    assert sheetout.plan_frames(16, 8, 8, layout=_layout("walk")).columns == 4
+
+
+def test_no_layout_is_byte_for_byte_the_grid_it_always_was():
+    a = sheetout.plan_frames(7, 32, 32)
+    b = sheetout.plan_frames(7, 32, 32, layout=None)
+    assert a == b
+
+
+def test_the_layout_rides_the_sidecars_animation_block():
+    from warlock.studio.inker.animation import DIRECTION_ORDER
+
+    layout = _layout("turnaround")
+    plan = sheetout.plan_frames(4, 10, 10, layout=layout)
+    block = sheetout.animation_block(plan, [100] * 4, (), layout=layout)
+    assert block["layout"] == {
+        "kind": "turnaround",
+        "directions": list(DIRECTION_ORDER),
+    }
+    # Every key that was there is still there and still means the same thing.
+    assert [f["cell_index"] for f in block["frames"]] == [0, 1, 2, 3]
+
+
+def test_an_ordinary_export_has_no_layout_key():
+    plan = sheetout.plan_frames(3, 10, 10)
+    assert "layout" not in sheetout.animation_block(plan, [100] * 3, ())
+
+
+def test_animation_is_still_the_last_key_of_the_sidecar():
+    """``pipelines.sheet``'s square path is pinned byte-for-byte with the
+    animation block last; adding a key inside it must not move it."""
+    layout = _layout("turnaround")
+    frames = [_frame(10, 10, RED) for _ in range(4)]
+    _image, plan, extra = sheetout.compose(frames, [100] * 4, (), layout)
+    meta = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+    )
+    assert list(meta)[-1] == "animation"
+    assert meta["animation"]["layout"]["kind"] == "turnaround"
+
+
+def test_compose_still_takes_a_snapshot_positionally():
+    """``compose(*snapshot(doc))`` has to keep holding: a keyword-only fourth
+    element would have made that spelling drop the grid silently."""
+    doc = _animated()
+    doc.anim.layout = _layout("turnaround")
+    while len(doc.anim.frames) < 4:
+        doc.add_frame()
+    _image, plan, _extra = sheetout.compose(*sheetout.snapshot(doc))
+    assert (plan.columns, plan.rows) == (2, 2)

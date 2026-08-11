@@ -229,10 +229,11 @@ class Filters:
 
     text: str = ""
     status: str = "all"  # all | done | running | error
-    # all | reference | tile | model | rig | sheet -- the same six the library's
-    # combo offers, in its order. ``tile`` is a reference the seamless path
-    # produced, and it is a kind of its own because its next step is an export
-    # rather than a mesh (see ``card_kind``/``card_action``).
+    # all | reference | tile | model | rig | sheet | sprite -- the same seven
+    # the library's combo offers, in its order. ``tile`` is a reference the
+    # seamless path produced, and it is a kind of its own because its next step
+    # is an export rather than a mesh (see ``card_kind``/``card_action``);
+    # ``sprite`` is a sprite-sheet draft, which is 2D and goes to Inker.
     kind: str = "all"
     favorites_only: bool = False
     # One of SORTS. Persisted with the rest of the filter bar, because a
@@ -470,6 +471,11 @@ def card_kind(job: dict[str, Any]) -> str:
     """
     if job.get("kind") in ("rig", "sheet"):
         return job["kind"]
+    if job.get("kind") == "sprite_synthesis":
+        # A kind of its own rather than the "model" every other follow-up job
+        # falls through to: a sprite draft is 2D and its next step is Inker, so
+        # a workshop filtered to meshes should not be showing it.
+        return "sprite"
     stage = job.get("stage")
     if stage in ("reference", "tile"):
         return stage

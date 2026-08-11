@@ -38,7 +38,7 @@ from .config import Config
 from .db import JobStore
 from .pipelines import control, pose2d, reference, seam
 from .pipelines import prompt as prompt_lib
-from .pipelines.trellis import TrellisServer
+from .pipelines.trellis import TrellisServer, TrellisStopFailed
 from .progress import ProgressBus, TrellisProgressParser
 
 log = logging.getLogger(__name__)
@@ -196,6 +196,193 @@ something a job can fail on, so the only useful place to stand is *before* the
 next allocation. It needs no watchdog thread: the stage boundaries _log_mem
 already runs at are exactly the moments the number can be acted on.
 """
+
+
+_ALWAYS_CONDITIONED = object()
+"""Stand-in ``cond`` for a caller whose every pass is conditioned.
+
+``_pixel_sheet`` and ``_retexture`` build a fresh ``Conditioning`` per band and
+per view, inside the loop, so there is no single object to hand ``_needs_handoff``
+at the point the decision is made -- and passing ``None`` would silently drop the
+one term that is *always* true of them. A named sentinel says that out loud;
+the predicate only ever asks whether it is None.
+"""
+
+
+def _needs_handoff(
+    spec: models.BaseModel | None,
+    cond: Any,
+    *,
+    exclusive: bool,
+    trellis_running: bool,
+) -> bool:
+    """Must trellis be stopped before this image model loads?
+
+    Three independent reasons, and the predicate has one owner because three
+    call sites (``_generate``, ``_pixel_sheet``, ``_retexture``) ask it and a
+    fourth spelling is how they come to disagree.
+
+    * ``exclusive`` -- WARLOCK_VRAM_EXCLUSIVE, the original reason.
+    * conditioning beside a *running* trellis -- a ControlNet plus the
+      CLIP-ViT-H encoder is ~6 GiB over the plain budget, which does not fit
+      beside a resident server on a 32 GiB card. Asked as "is trellis actually
+      holding VRAM" rather than exempting the reference stage, because trellis
+      stays warm for ``trellis_idle_timeout`` after the previous model job.
+    * an ``OFFLOAD`` checkpoint -- unconditionally, whatever the flag says.
+      ``enable_model_cpu_offload()`` keeps the whole ~16 GiB checkpoint in host
+      RAM for the life of the pipe, so its VRAM figure is honest and irrelevant:
+      what collides with trellis is *commit*, and under WDDM trellis' ~16 GiB
+      device allocation is charged against the same limit. Measured on this
+      machine as Python private commit climbing 24.4 -> 45.2 GiB across three
+      FLUX.2 klein jobs, with system commit at 99%. "Coexist" was written when
+      every image model was RESIDENT and says nothing about this shape.
+
+    The accepted cost of the third term is a trellis restart per offloaded text
+    job. ``vram.offloaded_base`` is the accounting half of the same rule.
+    """
+    if exclusive:
+        return True
+    if cond is not None and trellis_running:
+        return True
+    return spec is not None and spec.residency == models.OFFLOAD
+
+
+# --- sprite synthesis helpers -----------------------------------------------
+#
+# Module-level and blocking, so ``_sprite_synthesis`` can push each of them
+# through one ``asyncio.to_thread`` call: the matte is a model or a flood fill,
+# the assembly is sixteen flood fills and a median cut, and neither belongs on
+# the loop that drives dispatch and cancellation. They live here rather than in
+# ``pipelines/spritesynth`` because each is a *sequence* of that module's pure
+# steps plus this process's config -- which is the worker's business, not the
+# pure module's.
+
+
+def _sprite_source(src: Path, config: Config) -> tuple[Any, Any, str]:
+    """The reference as a cutout, its measurement, and which matte produced it.
+
+    The one place the heavy matting model is allowed to run on this path. The
+    cutout feeds both halves of the job: the IP-Adapter image (so the adapter
+    conditions on the character rather than on the background it happened to be
+    drawn against) and the front-cell paste, which needs real alpha.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from .pipelines import matting
+
+    with Image.open(src) as opened:
+        opened.load()
+        flat = opened.convert("RGBA") if reference.has_alpha(opened) else opened.convert("RGB")
+    found, matte_source = matting.mask(flat, config)
+    rgb = np.asarray(flat.convert("RGB"))
+    alpha = np.where(np.asarray(found), 255, 0).astype(np.uint8)
+    cut = Image.fromarray(np.dstack([rgb, alpha]), "RGBA")
+    # Measured on the cutout, not on the file: ``front_fits`` is asking whether
+    # the *subject* is clean and single, and the alpha channel is the answer we
+    # just computed rather than a second, weaker guess at it.
+    return (cut, reference.measure(cut), matte_source)
+
+
+def _sprite_ip_image(cut: Any, size: int | None = None) -> Any:
+    """The reference framed for the IP-Adapter: subject only, on neutral grey.
+
+    Cropped to the subject so the adapter's sixteen patch tokens are spent on
+    the character instead of on empty margin, and composited onto mid-grey for
+    ``pixelsheet.BAND_BACKGROUND``'s reason -- an RGB conversion of a
+    transparent background reads as black and puts a dark rim in the tokens.
+    """
+    from PIL import Image
+
+    from .pipelines import pixelsheet, spritesynth
+
+    side = spritesynth.ATLAS_PX if size is None else int(size)
+    box = cut.getbbox()
+    subject = cut.crop(box) if box else cut
+    scale = min(side / max(1, subject.width), side / max(1, subject.height)) * 0.9
+    nw = max(1, round(subject.width * scale))
+    nh = max(1, round(subject.height * scale))
+    subject = subject.resize((nw, nh), Image.LANCZOS)
+    canvas = Image.new("RGB", (side, side), pixelsheet.BAND_BACKGROUND)
+    canvas.paste(subject, ((side - nw) // 2, (side - nh) // 2), subject)
+    return canvas
+
+
+def _sprite_assemble(
+    atlas: Any,
+    geom: Any,
+    logical: int,
+    colors: int,
+    source_rgba: Any,
+    source_report: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """One generated atlas turned into a publishable candidate.
+
+    The order is the whole argument: warnings are measured on what the model
+    actually drew (before anything is nudged), the baseline is shared before
+    the front cell is replaced (so the paste has a line to stand on), and the
+    front paste happens before the reduction and the palette (so the one cell
+    that is definitely the right character is not also the one that does not
+    match the sheet).
+    """
+    from .pipelines import pixelsheet, spritesynth
+
+    matted, took = spritesynth.matte_cells(atlas, geom)
+    warnings = spritesynth.structural_warnings(matted, geom, took)
+    aligned = spritesynth.baseline_align(matted, geom)
+
+    front_preserved = False
+    front_note = ""
+    if geom.kind == "turnaround":
+        front = geom.cells[0]
+        ok, front_note = spritesynth.front_fits(
+            source_report, reference.measure(aligned.crop(front.box))
+        )
+        if ok:
+            aligned = spritesynth.preserve_front(aligned, geom, source_rgba)
+            front_preserved = True
+
+    reduced = spritesynth.reduce_atlas(aligned, geom, logical)
+    try:
+        quantized, palette = pixelsheet.quantize_shared(reduced, colors)
+    except ValueError as exc:
+        # quantize_shared refuses an atlas with no opaque pixels at all, which
+        # here means the model drew nothing anywhere -- worth a sentence naming
+        # that rather than the sheet-shaped message it was written for.
+        raise RuntimeError(
+            "the generated sprite sheet came out empty in every cell"
+        ) from exc
+    return (
+        quantized,
+        {
+            "palette": palette,
+            "warnings": warnings,
+            "front_preserved": front_preserved,
+            "front_note": front_note,
+        },
+    )
+
+
+def _require_commit_headroom(when: str, remedy: str) -> None:
+    """Refuse to go on if host commit is at the ceiling. Raises RuntimeError.
+
+    The enforcing half of what ``_log_mem`` only records. It was one check, at
+    dispatch, before ``_generate`` -- and nothing re-asked it across the whole
+    stop-trellis / load-image-model / generate / unload / start-trellis
+    sequence, which is precisely where the charge moves.
+
+    ``when`` is a clause appended to "committed" (with its own leading space,
+    or empty), and ``remedy`` is the rest of the sentence, because the two call
+    sites have genuinely different news: refusing at dispatch costs nothing,
+    and refusing between the stages costs a reconstruction the user has already
+    waited for the image half of.
+    """
+    pressure = commit_fraction()
+    if pressure is not None and pressure >= COMMIT_CEILING:
+        raise RuntimeError(
+            f"host memory is {pressure * 100:.0f}% committed{when}, at or past the "
+            f"{COMMIT_CEILING * 100:.0f}% ceiling. {remedy}"
+        )
 
 
 def _landmark_bones(
@@ -372,6 +559,13 @@ class Worker:
         # loop in request_cancel -- a plain attribute assignment either way,
         # and only ever non-None for the one job the queue is running.
         self._blender: Any = None
+        # When the last job finished, and whether the host-side inference caches
+        # have already been dropped since. Unlike trellis and the image pipe,
+        # BiRefNet/pose/DINO carry no last_used of their own -- and unload() on
+        # an empty cache is a cheap no-op, so without the latch _maybe_evict_idle
+        # would hop to a thread three times every idle poll, forever.
+        self._last_job_at: float = time.monotonic()
+        self._caches_evicted = False
         # How to take the lock guarding one derived artifact of one job, as
         # (job_id, name) -> a context manager. The worker holds no service and
         # may not import one, so ``studio.runtime`` injects
@@ -463,7 +657,13 @@ class Worker:
             # in-flight client.post then dies with a TransportError, which
             # _process below turns into a cancelled status because the
             # cancel event is already set.
-            await asyncio.to_thread(self.trellis.stop)
+            #
+            # Suppressed: a stop that cannot confirm death must not turn a
+            # cancel into an exception on the loop thread. stop() has already
+            # logged it at critical and kept the handle, so the next
+            # ensure_started reaps or refuses.
+            with contextlib.suppress(TrellisStopFailed):
+                await asyncio.to_thread(self.trellis.stop)
         elif phase in ("rig", "sheet", "views", "project"):
             # Same story as trellis: bpy is inside a C weighting solve (or an
             # EEVEE render) and checks nothing, so killing the subprocess is
@@ -487,7 +687,11 @@ class Worker:
                 self._task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-        await asyncio.to_thread(self.trellis.stop)
+        # Suppressed: a raise here strands the shutdown with the image pipe
+        # still loaded and the runtime half torn down. The critical log inside
+        # stop() is the record.
+        with contextlib.suppress(TrellisStopFailed):
+            await asyncio.to_thread(self.trellis.stop)
         # Shutdown used to stop trellis and leave SDXL loaded. Harmless when
         # the process exits immediately after -- but shutdown() is also reached
         # on paths that keep the interpreter alive, and the pipeline's several
@@ -521,17 +725,23 @@ class Worker:
                 break
 
     async def _maybe_evict_idle(self) -> None:
-        # Both evictions go through a thread. The queue being idle does not
-        # make them cheap: stop() blocks for up to ~20 s if the server ignores
-        # SIGTERM, and unload() pays a gc.collect() plus empty_cache(). On the
-        # event loop either one freezes the progress snapshot the frame loop
-        # reads, and every other job with it.
+        # Every eviction goes through a thread. The queue being idle does not
+        # make them cheap: stop() blocks for up to ~25 s if the server ignores
+        # SIGTERM, unload() pays a gc.collect() plus empty_cache(), and
+        # matting.unload() is now a subprocess kill. On the event loop any one
+        # of them freezes the progress snapshot the frame loop reads, and every
+        # other job with it.
         if (
             self.trellis.running
             and time.monotonic() - self.trellis.last_used > self.config.trellis_idle_timeout
         ):
             log.info("evicting idle trellis-server")
-            await asyncio.to_thread(self.trellis.stop)
+            # Suppressed: eviction is advisory and runs with no job in flight,
+            # so a server that will not die is a logged fact rather than an
+            # exception out of the worker loop. The next dispatch's
+            # _check_resources still sees the VRAM it is holding.
+            with contextlib.suppress(TrellisStopFailed):
+                await asyncio.to_thread(self.trellis.stop)
         # In exclusive mode the per-job finally already unloaded it, so
         # loaded is never True here and this branch is inert.
         if (
@@ -541,6 +751,43 @@ class Worker:
         ):
             log.info("evicting idle SDXL pipeline")
             await asyncio.to_thread(self._text2image.unload)
+        await self._maybe_evict_caches()
+
+    async def _maybe_evict_caches(self) -> None:
+        """Drop the host-side inference caches an idle session is not using.
+
+        Three session-long caches whose release functions existed and were
+        called from nothing in ``src/``: BiRefNet (~1.5 GB of host RSS, and now
+        a child process), the 2D pose model, and ``bench.metrics``' DINOv2 --
+        which is the one of the three that can hold *VRAM*, because its cache
+        key carries the device and the benchmark path resolves ``None`` to cuda.
+
+        Latched on ``_caches_evicted`` and stamped off the last finished job
+        rather than off each cache, because none of the three records a
+        last-used of its own and an unload of an empty cache is a no-op worth
+        no thread at all.
+        """
+        if self._caches_evicted:
+            return
+        if time.monotonic() - self._last_job_at <= self.config.trellis_idle_timeout:
+            return
+        self._caches_evicted = True
+        log.info("evicting idle host inference caches")
+
+        def _drop() -> None:
+            from .bench import metrics
+            from .pipelines import matting
+
+            for unload in (matting.unload, pose2d.unload, metrics.unload):
+                # One that fails must not strand the other two: these are
+                # advisory releases on an idle queue, exactly as _audit_mesh is
+                # advisory on a finished job.
+                try:
+                    unload()
+                except Exception:  # noqa: BLE001
+                    log.exception("evicting an idle inference cache failed")
+
+        await asyncio.to_thread(_drop)
 
     # --- progress plumbing ---
 
@@ -598,13 +845,10 @@ class Worker:
         climbed to the wall while the job sat in the queue. Failing here costs
         a job; not failing here has cost the machine.
         """
-        pressure = commit_fraction()
-        if pressure is not None and pressure >= COMMIT_CEILING:
-            raise RuntimeError(
-                f"host memory is {pressure * 100:.0f}% committed, at or past the "
-                f"{COMMIT_CEILING * 100:.0f}% ceiling. Close other applications "
-                "or restart Warlock before running this job."
-            )
+        _require_commit_headroom(
+            "",
+            "Close other applications or restart Warlock before running this job.",
+        )
         need = vram.estimate_job(job, exclusive=bool(self.config.vram_exclusive))
         if need <= 0:
             return
@@ -664,13 +908,28 @@ class Worker:
             return
         self.current_job_id = job_id
         self._cancel = _Cancel(job_id)
-        # A cold trellis server loads ~8 GB inside its first stage. Only
-        # exclusive-mode text jobs stop the server outright; coexist-mode
-        # text jobs leave a warm server warm. A rig job never touches trellis,
-        # so it is never cold regardless of the server's state.
+        # A cold trellis server loads ~8 GB inside its first stage. Text jobs
+        # that hand off stop the server outright; the rest leave a warm server
+        # warm. A rig job never touches trellis, so it is never cold regardless
+        # of the server's state.
+        #
+        # The offload term is here as well as in _needs_handoff because an
+        # offloaded text job now *always* leaves trellis cold, whatever the flag
+        # says, and the progress bar's nominal timing should say so rather than
+        # promising a warm-server ETA it cannot meet. Conditioning is
+        # deliberately not a term: it only forces a handoff when trellis is
+        # already running, in which case the first disjunct is False and the
+        # job is cold either way -- and unlike the other two, whether cond
+        # exists is not knowable from the row without preparing it.
         cold = job["kind"] in ("text", "image") and (
             not self.trellis.running
-            or (self.config.vram_exclusive and job["kind"] == "text")
+            or (
+                job["kind"] == "text"
+                and (
+                    self.config.vram_exclusive
+                    or vram.offloaded_base(job.get("params") or {})
+                )
+            )
         )
         self.progress.begin(job_id, job["kind"], cold=cold)
         error: str | None = None
@@ -745,6 +1004,13 @@ class Worker:
                 self.current_job_id = None
                 self._cancel = None
                 self._blender = None
+                # The idle clock the host-side cache eviction runs off, re-armed
+                # here rather than at the top: a job may well have populated one
+                # of those caches (a 2D export mattes, a bench run embeds), so
+                # the latch has to reopen on every finish, not only on the ones
+                # that did.
+                self._last_job_at = time.monotonic()
+                self._caches_evicted = False
                 self.progress.end(job_id)
 
     async def _record_observation(self, job_id: str) -> None:
@@ -799,7 +1065,9 @@ class Worker:
         successful job because the user cancelled a rig.
         """
         params = job["params"]
-        if job["kind"] in ("rig", "sheet", "pixel_sheet", "retexture"):
+        if job["kind"] in (
+            "rig", "sheet", "pixel_sheet", "retexture", "sprite_synthesis"
+        ):
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
             # could have written, so there is nothing to undo.
@@ -827,6 +1095,20 @@ class Worker:
                 paths = [job_dir / rigging.RETEXTURE_GLB_TMP]
                 with contextlib.suppress(OSError):
                     shutil.rmtree(self.config.job_dir(job["id"]) / "views")
+            elif job["kind"] == "sprite_synthesis":
+                # Only *this* job's trio, named by the draft id it minted at
+                # the door. The directory holds every earlier draft of the same
+                # reference, each from a different, successful job -- a cancel
+                # must not take a stranger's work with it. Nothing is normally
+                # here to delete at all: the trio is written in one go at the
+                # very end, after the last cancel check.
+                draft_id = str(params.get("draft_id") or "")
+                if not rigging.is_valid_id(draft_id):
+                    return
+                paths = [rigging.sprite_draft_path(job_dir, draft_id)] + [
+                    rigging.sprite_draft_png_path(job_dir, draft_id, c)
+                    for c in rigging.SPRITE_CANDIDATES
+                ]
             else:
                 sheet_id = str(params.get("sheet_id") or "")
                 if not rigging.is_valid_id(sheet_id):
@@ -941,6 +1223,9 @@ class Worker:
         if job["kind"] == "pixel_sheet":
             await self._pixel_sheet(job)
             return
+        if job["kind"] == "sprite_synthesis":
+            await self._sprite_synthesis(job)
+            return
         if job["kind"] == "retexture":
             await self._retexture(job)
             return
@@ -991,20 +1276,12 @@ class Worker:
                 )
                 style_lora = None
             cond = await self._conditioning(job_dir, params, spec)
-            # A fully conditioned CFG job wants ~6 GB over the unconditioned
-            # budget (a ControlNet plus the CLIP-ViT-H encoder), which does not
-            # fit beside a resident trellis on a 32 GB card. A reference-stage
-            # job -- where the UI actually offers conditioning -- is unaffected,
-            # because trellis is not involved in it at all.
-            # The old form of this test exempted stage == "reference", on the
-            # reasoning that trellis is not involved in a reference job. But
-            # trellis stays *resident* for trellis_idle_timeout (600 s) after
-            # the previous model job, and the reference stage is the only path
-            # the UI offers conditioning from (studio/panes/settings_2d.py) --
-            # so the exemption fired on exactly the jobs it was meant to
-            # protect. Ask whether trellis is actually holding VRAM instead.
-            handoff = self.config.vram_exclusive or (
-                cond is not None and self.trellis.running
+            # Three reasons, one owner -- see _needs_handoff.
+            handoff = _needs_handoff(
+                spec,
+                cond,
+                exclusive=bool(self.config.vram_exclusive),
+                trellis_running=self.trellis.running,
             )
             if handoff:
                 # Sequential handoff: both models can't fit -- free the VRAM
@@ -1147,6 +1424,12 @@ class Worker:
                 await asyncio.to_thread(self.store.set_params, job_id, params)
             finally:
                 if handoff:
+                    # unload(), not trim(): trim() returns the CUDA caching
+                    # allocator's pool, and an offloaded pipe's cost is not in
+                    # the CUDA pool at all -- it is ~16 GiB of host weights that
+                    # only dropping the pipe releases. For the exclusive and
+                    # conditioning reasons it is the original stop-before-load /
+                    # unload-before-next-start choreography.
                     await asyncio.to_thread(t2i.unload)
                 else:
                     # Coexist mode keeps the pipeline resident by design, which
@@ -1186,6 +1469,23 @@ class Worker:
 
         if self._cancel.event.is_set():
             return
+
+        # The stage boundary, and the first thing on this path that can lead to
+        # a spawn. _check_resources asked this once, before the image stage --
+        # which is exactly the stage that moves the number, and on an offloaded
+        # checkpoint moves it by ~16 GiB of host weights. Until now the only
+        # observation point here was _log_mem's log.critical, which records the
+        # wall and then walks into it.
+        #
+        # The wording is the requirement: the image is finished and on disk, and
+        # a user told "out of memory" after a successful two-minute generation
+        # will assume they lost it.
+        _require_commit_headroom(
+            " after the image stage",
+            "The reference image is finished and saved with this job; only the "
+            "3D stage was withheld. Close other applications or restart "
+            "Warlock, then re-run this job to reconstruct the mesh.",
+        )
 
         # The server's launch settings are per-job now, so a job that pins
         # either one needs the resident server restarted before it runs. Two
@@ -1930,10 +2230,17 @@ class Worker:
                 spec.key, spec.family, pixel_style.key, pixel_style.family,
             )
             lora = None
-        if self.config.vram_exclusive or self.trellis.running:
-            # The same handoff a text job makes, and the same reasoning: the
-            # restyle needs SDXL plus a ControlNet, which does not fit beside a
-            # resident trellis.
+        # The same handoff a text job makes, through the same predicate: every
+        # band is an img2img pass with a ControlNet, so `cond` is never absent
+        # here and this reads as "exclusive, or trellis is holding VRAM, or the
+        # checkpoint is offloaded" -- the third term being the one that is new.
+        handoff = _needs_handoff(
+            spec,
+            _ALWAYS_CONDITIONED,
+            exclusive=bool(self.config.vram_exclusive),
+            trellis_running=self.trellis.running,
+        )
+        if handoff:
             await asyncio.to_thread(self.trellis.stop)
             _log_mem("after trellis stop")
         t2i = await self._get_text2image(base_key)
@@ -2005,10 +2312,15 @@ class Worker:
                 source_band = atlas.crop((0, top, band.width, top + band.height))
                 styled.paste(pixelsheet.remask(piece, source_band), (0, top))
         finally:
-            if self.config.vram_exclusive:
+            if self.config.vram_exclusive or spec.residency == models.OFFLOAD:
                 # Unload before anything restarts trellis, exactly as the text
                 # branch does -- and in a finally, so a cancelled restyle does
-                # not leave 7 GB resident.
+                # not leave 7 GB resident. The offload term is the same rule as
+                # the handoff above: trim() would give back the CUDA pool, and
+                # an offloaded pipe's ~16 GiB is host weights that only a full
+                # unload releases. Deliberately narrower than `handoff`:
+                # stopping a running trellis to make room is not a reason to
+                # throw away a resident pipe the next job may want warm.
                 await asyncio.to_thread(t2i.unload)
                 self._text2image = None
                 self._t2i_key = None
@@ -2066,6 +2378,262 @@ class Worker:
         log.info(
             "restyled sheet %s for job %s: %d bands, %d colours at %dpx",
             sheet_id, source_id, len(plan), len(palette), logical,
+        )
+
+    async def _sprite_synthesis(self, job: dict[str, Any]) -> None:
+        """Two candidate sprite atlases from one finished 2D reference.
+
+        A queue job for ``_pixel_sheet``'s reason exactly -- it needs the
+        resident SDXL pipe, and a TaskRunner thread racing the worker for VRAM
+        is the OOM that only reproduces under load -- and it writes into the
+        *source* job's directory for ``_sheet``'s reason: a draft depicts that
+        reference and belongs beside it.
+
+        Two candidates in one job rather than two jobs, because the expensive
+        part (loading the checkpoint, both adapters and the LoRA) is paid once
+        and the pair is the deliverable: a user comparing two guesses at three
+        views they have never seen is the entire point, and two rows that could
+        be dispatched minutes apart behind different work would not be a pair.
+
+        Nothing is written until both candidates are assembled. A draft is a
+        trio -- two PNGs then the sidecar last, which is the completion marker
+        -- and a half-published draft is one the pane would list and the user
+        would open.
+        """
+        from PIL import Image
+
+        from .pipelines import spritesynth
+        from .pipelines.conditioning import Conditioning
+
+        job_id = job["id"]
+        params = job["params"]
+        source_id = str(params.get("source_job") or "")
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
+        draft_id = str(params.get("draft_id") or "")
+        if not rigging.is_valid_id(draft_id):
+            raise ValueError(f"draft_id is not a draft id: {draft_id!r}")
+        sheet_type = str(params.get("sheet_type") or "")
+        # Re-derived rather than trusted: this raises on an unknown type, and
+        # params outlive the door that validated them.
+        geom = spritesynth.geometry(sheet_type)
+
+        source_dir = self.config.job_dir(source_id)
+        src_png = source_dir / "input.png"
+        if not src_png.exists():
+            raise RuntimeError(f"reference {source_id} no longer has an image")
+
+        logical = int(params.get("logical_size", 64))
+        colors = int(params.get("colors", 32))
+        seeds = (("a", int(params.get("seed_a", 42))), ("b", int(params.get("seed_b", 43))))
+
+        base_key = str(params.get("base_model") or "sdxl_cfg")
+        if base_key not in models.BASE_MODELS:
+            base_key = "sdxl_cfg"
+        spec = models.BASE_MODELS[base_key]
+        pixel_style = models.STYLE_LORAS[models.PIXEL_SHEET_LORA]
+        lora: str | None = models.PIXEL_SHEET_LORA
+        if not models.lora_fits(spec, pixel_style):
+            # The same tolerance _pixel_sheet applies, for its reason: params
+            # outlive the service that wrote them, and a draft whose recipe
+            # claimed a LoRA that never ran would be evidence about a style
+            # nobody generated.
+            log.warning(
+                "base model %s (%s) cannot take the pixel-sheet LoRA %s (%s); "
+                "generating without it",
+                spec.key, spec.family, pixel_style.key, pixel_style.family,
+            )
+            lora = None
+
+        with tempfile.TemporaryDirectory(prefix="warlock-sprite-") as tmp:
+            scratch = Path(tmp)
+            self.progress.update(
+                job_id, phase="condition", label="Reading the reference",
+                inner=0.0, inner_next=1.0, nominal=12.0, detail="",
+            )
+            # The heavy matte, once, on the source only -- ~11.5 s an image, so
+            # sixteen of them is a different feature. Every generated cell gets
+            # the cheap corner fill inside spritesynth instead, which is what
+            # the "plain background" clause in the prompt is there to earn.
+            source_rgba, source_report, matte_source = await asyncio.to_thread(
+                _sprite_source, src_png, self.config
+            )
+            ip_path = scratch / "ip.png"
+            ip_image = await asyncio.to_thread(_sprite_ip_image, source_rgba)
+            await asyncio.to_thread(ip_image.save, ip_path, "PNG")
+            template = await asyncio.to_thread(
+                spritesynth.load_guide_template, sheet_type
+            )
+            guide_path = scratch / "guide.png"
+            guide = await asyncio.to_thread(spritesynth.render_guide, geom, template)
+            await asyncio.to_thread(guide.save, guide_path, "PNG")
+            guide_edges = await asyncio.to_thread(control.edge_fraction, guide)
+
+            handoff = _needs_handoff(
+                spec,
+                _ALWAYS_CONDITIONED,
+                exclusive=bool(self.config.vram_exclusive),
+                trellis_running=self.trellis.running,
+            )
+            if handoff:
+                await asyncio.to_thread(self.trellis.stop)
+                _log_mem("after trellis stop")
+            t2i = await self._get_text2image(base_key)
+
+            prompt = guidance.compose_prompt(job["prompt"] or "", params)
+            ip_scale = float(params.get("ip_scale", models.DEFAULT_IP_SCALE))
+            control_scale = float(
+                params.get("control_scale", models.DEFAULT_CONTROL_SCALE)
+            )
+            control_end = float(params.get("control_end", models.DEFAULT_CONTROL_END))
+
+            assembled: list[tuple[str, Any, dict[str, Any]]] = []
+            try:
+                for letter, seed in seeds:
+                    if self._cancel is not None and self._cancel.event.is_set():
+                        # Before B, not only at the end: the first generation is
+                        # ~20 s of GPU that a cancelled job should not spend.
+                        return
+                    phase = f"generate_{letter}"
+                    self.progress.update(
+                        job_id, phase=phase, label="Drawing the sheet",
+                        inner=0.0, inner_next=0.05, nominal=20.0, detail="",
+                    )
+                    out_path = scratch / f"{letter}.png"
+                    cond = Conditioning(
+                        # Both adapters at once: the IP-Adapter carries who the
+                        # character is and the ControlNet carries where the
+                        # limbs go. Deliberately no init image -- an img2img
+                        # start from the reference would fight the pose guides
+                        # in fifteen of the sixteen cells, and there is no
+                        # strength axis on this kind for exactly that reason.
+                        ip_adapter="plus",
+                        ip_image=ip_path,
+                        ip_scale=ip_scale,
+                        control="canny",
+                        control_image=guide_path,
+                        control_scale=control_scale,
+                        control_end=control_end,
+                    )
+                    await asyncio.to_thread(
+                        functools.partial(
+                            t2i.generate,
+                            prompt,
+                            out_path,
+                            seed=seed,
+                            lora=lora,
+                            lora_weight=pixel_style.default_weight,
+                            conditioning=cond,
+                            # Deliberately not self._t2i_state: it emits
+                            # "t2i_load"/"t2i_sample", which are not in
+                            # PHASES_SPRITE, and update() falls back to
+                            # (0.0, 1.0) for an unknown phase -- which would
+                            # drag the bar back to zero twice per job.
+                            on_step=functools.partial(
+                                self._sprite_step, job_id, phase
+                            ),
+                            cancel_event=self._cancel.event if self._cancel else None,
+                            sheet=True,
+                        )
+                    )
+                    self.progress.update(
+                        job_id, phase=f"assemble_{letter}", label="Cutting the sheet up",
+                        inner=0.0, inner_next=1.0, nominal=6.0, detail="",
+                    )
+                    with Image.open(out_path) as generated:
+                        generated.load()
+                        atlas = generated.convert("RGB")
+                    reduced, record = await asyncio.to_thread(
+                        _sprite_assemble,
+                        atlas,
+                        geom,
+                        logical,
+                        colors,
+                        source_rgba,
+                        source_report,
+                    )
+                    record["image"] = f"{draft_id}.{letter}.png"
+                    record["seed"] = seed
+                    assembled.append((letter, reduced, record))
+            finally:
+                if self.config.vram_exclusive or spec.residency == models.OFFLOAD:
+                    # _pixel_sheet's rule verbatim, including the finally: a
+                    # cancelled synthesis must not leave the checkpoint
+                    # resident, and an offloaded one's host weights are only
+                    # released by a full unload.
+                    await asyncio.to_thread(t2i.unload)
+                    self._text2image = None
+                    self._t2i_key = None
+
+            if self._cancel is not None and self._cancel.event.is_set():
+                # Nothing is published for a cancelled synthesis, exactly as
+                # _pixel_sheet says: the run loop is about to call
+                # _discard_artifacts, and writing the trio first would leave it
+                # deleting files it had just been told to make.
+                return
+
+            recipe: dict[str, Any] = {
+                "base_model": base_key,
+                "prompt": t2i.last_prompt or prompt,
+                "ip_adapter": "plus",
+                "ip_scale": ip_scale,
+                "control": "canny",
+                "control_scale": control_scale,
+                "control_end": control_end,
+                "guide_template": sheet_type,
+                "guide_edge_fraction": guide_edges,
+                "matte_source": matte_source,
+                "colors": colors,
+            }
+            if lora is not None:
+                recipe["style_lora"] = lora
+                recipe["lora_weight"] = pixel_style.default_weight
+
+            sprite_dir = rigging.sprite_dir(source_dir)
+            await asyncio.to_thread(
+                functools.partial(sprite_dir.mkdir, parents=True, exist_ok=True)
+            )
+            for letter, reduced, _ in assembled:
+                await asyncio.to_thread(
+                    reduced.save,
+                    rigging.sprite_draft_png_path(source_dir, draft_id, letter),
+                    "PNG",
+                )
+            doc = spritesynth.draft_sidecar(
+                draft_id=draft_id,
+                source_job=source_id,
+                created=time.time(),
+                geom=geom,
+                logical_size=logical,
+                colors=colors,
+                candidates=[record for _, _, record in assembled],
+                recipe=recipe,
+            )
+            # Last, and only after both PNGs: this file is what
+            # rigging.list_sprite_drafts treats as the completion marker.
+            await asyncio.to_thread(
+                rigging.sprite_draft_path(source_dir, draft_id).write_text,
+                json.dumps(doc, indent=2),
+                encoding="utf-8",
+            )
+
+        log.info(
+            "synthesised sprite draft %s for job %s: %s, %d cells at %dpx",
+            draft_id, source_id, sheet_type, len(geom.cells), logical,
+        )
+
+    def _sprite_step(self, job_id: str, phase: str, step: int, total: int) -> None:
+        """``_t2i_step`` for a phase table that has no ``t2i_sample``."""
+        self.progress.update(
+            job_id,
+            phase=phase,
+            label="Drawing the sheet",
+            inner=step / max(total, 1),
+            inner_next=(step + 1) / max(total, 1),
+            nominal=1.0,
+            detail=f"step {step}/{total}",
+            step=step,
+            step_total=total,
         )
 
     async def _retexture(self, job: dict[str, Any]) -> None:
@@ -2157,7 +2725,14 @@ class Worker:
         )
 
         prompt = guidance.compose_prompt(job["prompt"] or "", params)
-        if self.config.vram_exclusive or self.trellis.running:
+        # Same predicate as the text branch and the pixel-sheet restyle: every
+        # view is an img2img pass, so `cond` is never absent here.
+        if _needs_handoff(
+            spec,
+            _ALWAYS_CONDITIONED,
+            exclusive=bool(self.config.vram_exclusive),
+            trellis_running=self.trellis.running,
+        ):
             await asyncio.to_thread(self.trellis.stop)
             _log_mem("after trellis stop")
         t2i = await self._get_text2image(base_key)
@@ -2192,7 +2767,10 @@ class Worker:
                     )
                 )
         finally:
-            if self.config.vram_exclusive:
+            # The offload term for _pixel_sheet's reason: trim() cannot reach
+            # host weights, and this pipe must not still be holding ~16 GiB of
+            # them when trellis restarts.
+            if self.config.vram_exclusive or spec.residency == models.OFFLOAD:
                 await asyncio.to_thread(t2i.unload)
                 self._text2image = None
                 self._t2i_key = None

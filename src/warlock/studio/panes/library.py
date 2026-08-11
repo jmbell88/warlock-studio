@@ -380,6 +380,7 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
             ("model", "meshes"),
             ("rig", "rigs"),
             ("sheet", "sheets"),
+            ("sprite", "sprite sheets"),
         ],
         width=half,
     )
@@ -597,6 +598,7 @@ def thumb_glyph(job: Any) -> str:
         "model": icons.BOX,
         "rig": icons.BONE,
         "sheet": icons.FILM,
+        "sprite": icons.LAYERS,
     }.get(card_kind(job), icons.IMAGE)
 
 

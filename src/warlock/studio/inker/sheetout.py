@@ -28,11 +28,19 @@ from typing import Any
 import numpy as np
 
 from ...pipelines import sheet as sheetlib
+from .animation import DIRECTION_ORDER, DirectionalLayout
 
 __all__ = ["build", "compose", "from_document", "plan_frames", "snapshot"]
 
 
-def plan_frames(count: int, frame_w: int, frame_h: int, *, name: str = "") -> sheetlib.Plan:
+def plan_frames(
+    count: int,
+    frame_w: int,
+    frame_h: int,
+    *,
+    name: str = "",
+    layout: DirectionalLayout | None = None,
+) -> sheetlib.Plan:
     """The grid for ``count`` frames of a ``frame_w`` x ``frame_h`` canvas.
 
     Wrapping into rows is required rather than a nicety: 32 frames of a 320px
@@ -40,6 +48,13 @@ def plan_frames(count: int, frame_w: int, frame_h: int, *, name: str = "") -> sh
     all. So the row length is whatever fits, and ``check_atlas_size`` -- the same
     guard ``plan`` uses, which is why it was worth extracting -- has the last
     word on the result.
+
+    ``layout`` replaces that wrap with the sheet's own fixed grid: a walk cycle
+    is four rows of four *because a row is a direction*, and a wrap that
+    happened to fit five across would produce an atlas whose rows mean nothing.
+    A count that no longer fills the grid is refused rather than padded --
+    silently emitting a sheet with a hole where "back, frame 3" should be is the
+    one outcome a game would not notice until it played the animation.
     """
     if count < 1:
         raise ValueError("a sheet needs at least one frame")
@@ -50,37 +65,70 @@ def plan_frames(count: int, frame_w: int, frame_h: int, *, name: str = "") -> sh
             f"a {frame_w}x{frame_h} frame does not fit in a "
             f"{sheetlib.MAX_ATLAS_PX}px atlas at all"
         )
-    columns = max(1, min(count, sheetlib.MAX_ATLAS_PX // frame_w))
-    rows = -(-count // columns)  # ceil
+    if layout is None:
+        columns = max(1, min(count, sheetlib.MAX_ATLAS_PX // frame_w))
+        rows = -(-count // columns)  # ceil
+    else:
+        if count != layout.frame_count:
+            raise ValueError(
+                f"a {layout.kind} sheet is {layout.frame_count} frames and this "
+                f"document has {count}"
+            )
+        columns, rows = layout.columns, layout.rows
     sheetlib.check_atlas_size(columns * frame_w, rows * frame_h)
 
     pose_name = name or sheetlib.REST_POSE_NAME
-    cells = tuple(
-        sheetlib.Cell(
-            index=i,
-            row=i // columns,
-            column=i % columns,
-            x=(i % columns) * frame_w,
-            y=(i // columns) * frame_h,
-            # A drawn frame has no pose and no camera. ``frame`` is the index,
-            # which is exactly what the field was reserved for.
-            pose=None,
-            pose_name=pose_name,
-            yaw=0.0,
-            frame=i,
+    if layout is None:
+        cells = tuple(
+            sheetlib.Cell(
+                index=i,
+                row=i // columns,
+                column=i % columns,
+                x=(i % columns) * frame_w,
+                y=(i // columns) * frame_h,
+                # A drawn frame has no pose and no camera. ``frame`` is the
+                # index, which is exactly what the field was reserved for.
+                pose=None,
+                pose_name=pose_name,
+                yaw=0.0,
+                frame=i,
+            )
+            for i in range(count)
         )
-        for i in range(count)
-    )
+        poses: tuple[dict[str, Any], ...] = ({"id": None, "name": pose_name},)
+        yaws: tuple[float, ...] = (0.0,)
+    else:
+        # ``pose_name`` carries the direction and ``frame`` restarts per row, so
+        # the sidecar an engine reads says "this cell is left, frame 2" in
+        # exactly the fields a rendered sheet says it in. Nothing new is
+        # invented for the format's sake.
+        placed = [layout.cell(i) for i in range(count)]
+        cells = tuple(
+            sheetlib.Cell(
+                index=i,
+                row=row,
+                column=col,
+                x=col * frame_w,
+                y=row * frame_h,
+                pose=None,
+                pose_name=direction,
+                yaw=float(yaw),
+                frame=frame,
+            )
+            for i, (row, col, direction, yaw, frame) in enumerate(placed)
+        )
+        poses = tuple({"id": None, "name": d} for d in DIRECTION_ORDER)
+        yaws = tuple(float(y) for y in dict.fromkeys(y for _, _, _, y, _ in placed))
     return sheetlib.Plan(
         # Zero, not ``frame_w``: see ``sidecar``. A square-only importer must
         # fail loudly rather than slice this correctly across and wrongly down.
         frame_size=0,
         columns=columns,
         rows=rows,
-        yaws=(0.0,),
+        yaws=yaws,
         elevation=0.0,
         lighting="flat",
-        poses=({"id": None, "name": pose_name},),
+        poses=poses,
         cells=cells,
         frame_w=frame_w,
         frame_h=frame_h,
@@ -88,10 +136,14 @@ def plan_frames(count: int, frame_w: int, frame_h: int, *, name: str = "") -> sh
 
 
 def animation_block(
-    plan: sheetlib.Plan, durations_ms: Sequence[int], tags: Sequence[Any]
+    plan: sheetlib.Plan,
+    durations_ms: Sequence[int],
+    tags: Sequence[Any],
+    *,
+    layout: DirectionalLayout | None = None,
 ) -> dict[str, Any]:
     """The ``animation`` key: which cell is which frame, and for how long."""
-    return {
+    block: dict[str, Any] = {
         "frames": [
             {"cell_index": cell.index, "duration_ms": int(durations_ms[cell.index])}
             for cell in plan.cells
@@ -102,10 +154,23 @@ def animation_block(
                 "start": int(tag.start),
                 "end": int(tag.end),
                 "loop": bool(tag.loop),
+                # Additive, and the sidecar's version is unchanged for the same
+                # reason ``animation.json``'s is: every existing key keeps its
+                # value and its meaning, so a reader that has never heard of
+                # this one is still correct about the file.
+                "direction": str(getattr(tag, "direction", "forward")),
             }
             for tag in tags
         ],
     }
+    if layout is not None:
+        # Inside the ``animation`` mapping rather than beside it: this says how
+        # to *play* the sheet, which is what that key is for. The sidecar's
+        # pinned square path never reaches this branch, and the contents here
+        # are unpinned, so a reader that has never heard of the key is still
+        # correct about the file.
+        block["layout"] = {"kind": layout.kind, "directions": list(DIRECTION_ORDER)}
+    return block
 
 
 def build(
@@ -114,6 +179,7 @@ def build(
     tags: Sequence[Any] = (),
     *,
     name: str = "",
+    layout: DirectionalLayout | None = None,
 ) -> tuple[Any, sheetlib.Plan, dict[int, dict[str, int] | None]]:
     """Composite the frames into one atlas. Returns ``(image, plan, trims)``.
 
@@ -127,7 +193,9 @@ def build(
     if len(frames) != len(durations_ms):
         raise ValueError("every frame needs a duration")
     height, width = frames[0].shape[:2]
-    plan = plan_frames(len(frames), int(width), int(height), name=name)
+    plan = plan_frames(
+        len(frames), int(width), int(height), name=name, layout=layout
+    )
 
     atlas = Image.new("RGBA", (plan.width, plan.height), (0, 0, 0, 0))
     trims: dict[int, dict[str, int] | None] = {}
@@ -142,7 +210,9 @@ def build(
     return atlas, plan, trims
 
 
-def snapshot(doc: Any) -> tuple[list[np.ndarray], list[int], list[Any]]:
+def snapshot(
+    doc: Any,
+) -> tuple[list[np.ndarray], list[int], list[Any], DirectionalLayout | None]:
     """Everything an export needs, read off the document. **Frame thread only.**
 
     This is the whole of the export that touches the document, and it is split
@@ -175,19 +245,37 @@ def snapshot(doc: Any) -> tuple[list[np.ndarray], list[int], list[Any]]:
     frames = [doc.frame_flat(frame.uid) for frame in anim.frames]
     if any(plane is None for plane in frames):
         raise ValueError("a frame could not be flattened")
-    return frames, [frame.duration_ms for frame in anim.frames], list(anim.tags)
+    return (
+        frames,
+        [frame.duration_ms for frame in anim.frames],
+        list(anim.tags),
+        anim.layout,
+    )
 
 
 def compose(
     frames: Sequence[np.ndarray],
     durations_ms: Sequence[int],
     tags: Sequence[Any] = (),
+    layout: DirectionalLayout | None = None,
     *,
     name: str = "",
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
-    """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread."""
-    image, plan, trims = build(frames, durations_ms, tags, name=name)
-    return image, plan, {"trims": trims, "animation": animation_block(plan, durations_ms, tags)}
+    """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread.
+
+    ``layout`` is positional rather than keyword-only so ``compose(*snapshot(
+    doc))`` still holds: the two are a pair, and a keyword-only fourth element
+    would have made that spelling drop the grid silently.
+    """
+    image, plan, trims = build(frames, durations_ms, tags, name=name, layout=layout)
+    return (
+        image,
+        plan,
+        {
+            "trims": trims,
+            "animation": animation_block(plan, durations_ms, tags, layout=layout),
+        },
+    )
 
 
 def from_document(doc: Any, *, name: str = "") -> tuple[Any, sheetlib.Plan, dict[str, Any]]:

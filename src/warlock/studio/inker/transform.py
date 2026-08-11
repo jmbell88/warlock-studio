@@ -53,11 +53,44 @@ def _unpremultiplied(pixels: np.ndarray) -> np.ndarray:
     return np.clip(out + 0.5, 0, 255).astype(np.uint8)
 
 
-def _resample(pixels: np.ndarray, run) -> np.ndarray:
+#: How a resize or a rotate decides what a destination pixel holds. ``smooth``
+#: is the filtered path this module has always taken -- Lanczos for a scale,
+#: bicubic for a turn -- and ``nearest`` is the one that copies a source pixel
+#: whole.
+#:
+#: The second is not a lower-quality option, it is the only correct one for a
+#: drawing whose pixels are the artwork: a filter over a 32x32 sprite scaled to
+#: 128 produces a blurred sprite with a few thousand new colours in it, and a
+#: filter over a pixel-art *rotation* is worse again. Offered as a choice rather
+#: than inferred from the canvas size, because "small" is not what makes a
+#: document pixel art.
+RESAMPLES = ("smooth", "nearest")
+
+
+def _filter(resample: str, smooth: int) -> int:
+    from PIL import Image
+
+    return Image.NEAREST if resample == "nearest" else smooth
+
+
+def _resample(pixels: np.ndarray, run, *, straight: bool = False) -> np.ndarray:
+    """Run a Pillow operation over a plane, premultiplied unless ``straight``.
+
+    ``straight`` is for nearest neighbour and for nothing else. Every filtered
+    path has to premultiply, because it *mixes* pixels and a mix with a fully
+    transparent one drags that pixel's colour into the edge -- but nearest
+    mixes nothing, so the round trip through premultiplied alpha would be pure
+    loss: dividing a rounded product back out moves the colour of every
+    partially transparent pixel, which is the one thing a copy must not do.
+    """
     from PIL import Image
 
     if pixels.ndim == 2:  # a mask: no alpha to bleed, so no premultiply
         return np.asarray(run(Image.fromarray(pixels, "L")), dtype=np.uint8).copy()
+    if straight:
+        return np.asarray(
+            run(Image.fromarray(pixels, "RGBA")), dtype=np.uint8
+        ).copy()
     plane = _premultiplied(pixels)
     channels = [
         np.asarray(run(Image.fromarray(plane[..., i].astype(np.uint8), "L")), dtype=np.uint8)
@@ -66,19 +99,38 @@ def _resample(pixels: np.ndarray, run) -> np.ndarray:
     return _unpremultiplied(np.stack(channels, axis=2).astype(np.float32))
 
 
-def scale(pixels: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+def scale(
+    pixels: np.ndarray, size: tuple[int, int], *, resample: str = "smooth"
+) -> np.ndarray:
     from PIL import Image
 
     width, height = max(1, int(size[0])), max(1, int(size[1]))
-    return _resample(pixels, lambda im: im.resize((width, height), Image.LANCZOS))
-
-
-def rotate(pixels: np.ndarray, degrees: float, *, expand: bool = False) -> np.ndarray:
-    from PIL import Image
-
+    how = _filter(resample, Image.LANCZOS)
     return _resample(
         pixels,
-        lambda im: im.rotate(float(degrees), Image.BICUBIC, expand=expand, fillcolor=0),
+        lambda im: im.resize((width, height), how),
+        straight=resample == "nearest",
+    )
+
+
+def rotate(
+    pixels: np.ndarray, degrees: float, *, expand: bool = False, resample: str = "smooth"
+) -> np.ndarray:
+    from PIL import Image
+
+    how = _filter(resample, Image.BICUBIC)
+    return _resample(
+        pixels,
+        # A single 0 is the fill for the one-band mask; an RGBA plane is only
+        # reached on the straight path and needs the four-tuple spelling of the
+        # same transparent black.
+        lambda im: im.rotate(
+            float(degrees),
+            how,
+            expand=expand,
+            fillcolor=0 if im.mode == "L" else (0, 0, 0, 0),
+        ),
+        straight=resample == "nearest",
     )
 
 

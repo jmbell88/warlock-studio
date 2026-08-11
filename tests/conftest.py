@@ -47,8 +47,8 @@ def svc(tmp_path, monkeypatch):
     # gitignored, so whether a named triangle tier is refused depended on
     # whether whoever ran the suite happened to have vendored the binary --
     # which is exactly the "a test about the fallback must pin the fallback"
-    # rule CLAUDE.md states for warlockc.dll. Vendoring gltfpack on 2026-08-07
-    # duly turned two admission tests red without a line of their subject
+    # rule docs/INVARIANTS.md states for warlockc.dll. Vendoring gltfpack on
+    # 2026-08-07 duly turned two admission tests red without a line of their subject
     # changing. A test that wants the binary *present* writes one.
     monkeypatch.setenv("WARLOCK_GLTFPACK", str(tmp_path / "no-gltfpack.exe"))
     # And the trellis weights directory, for the same reason: the bg_removal

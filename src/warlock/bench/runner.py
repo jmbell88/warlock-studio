@@ -1,6 +1,6 @@
 """Running a suite: submit, wait, copy, render, repeat.
 
-Threading, exactly -- this is the part that has to agree with CLAUDE.md's
+Threading, exactly -- this is the part that has to agree with docs/INVARIANTS.md's
 three-thread invariant rather than route around it:
 
 * ``run`` executes on the process main thread, which here is a may-block

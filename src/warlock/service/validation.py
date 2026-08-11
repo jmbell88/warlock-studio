@@ -340,6 +340,11 @@ def check_sheet_id(sheet_id: str) -> None:
         raise NotFound("no such sheet")
 
 
+def check_sprite_draft_id(draft_id: str) -> None:
+    if not rigging.is_valid_id(draft_id):
+        raise NotFound("no such sprite draft")
+
+
 def valid_template(key: str | None, default: str) -> str:
     """A known skeleton template key. None falls back to the config default."""
     try:

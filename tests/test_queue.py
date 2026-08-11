@@ -433,6 +433,69 @@ async def test_coexist_text_job_keeps_trellis_and_sdxl_resident(worker):
     await worker.shutdown()
 
 
+async def test_an_offloaded_base_hands_off_even_in_coexist_mode(tmp_path, fake_pipelines):
+    """The driving defect, and it is measured rather than theorised.
+
+    "Coexist" was written when every image model was RESIDENT. An offloaded
+    checkpoint is the opposite shape: ``enable_model_cpu_offload()`` keeps the
+    whole ~16 GiB in *host* RAM for the life of the pipe and streams one
+    submodule to the device, so its declared ``vram_gib`` is honest about VRAM
+    and says nothing about commit -- and under WDDM trellis' ~16 GiB device
+    allocation is charged against the same commit limit. Three consecutive
+    FLUX.2 klein jobs took Python private commit from 24.4 to 45.2 GiB and
+    system commit to 99%.
+
+    So the handoff is mandatory for OFFLOAD, whatever WARLOCK_VRAM_EXCLUSIVE
+    says -- and the teardown must be unload(), not trim(): trim() returns the
+    CUDA caching allocator's pool, and none of an offloaded pipe's cost is in
+    it.
+    """
+    worker = _make_worker(tmp_path)  # coexist: vram_exclusive unset
+    assert not worker.config.vram_exclusive
+    try:
+        job_id = worker.store.create(
+            "text",
+            "a barrel",
+            {"seed": 1, "resolution": 512, "base_model": "flux_klein"},
+        )
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        stop_calls = worker.trellis.stop_calls
+        unload_calls = worker._text2image.unload_calls
+        trim_calls = worker._text2image.trim_calls
+        await worker.shutdown()
+
+        assert stop_calls >= 1, "an offloaded base must stop trellis before loading"
+        assert unload_calls == 1
+        assert trim_calls == 0
+    finally:
+        worker.store.close()
+
+
+async def test_a_resident_base_still_coexists(tmp_path, fake_pipelines):
+    """The other half of the same decision: nothing about SDXL changed.
+
+    Stated as its own test rather than trusted to
+    ``test_coexist_text_job_keeps_trellis_and_sdxl_resident``, because that one
+    does not name a base and so would go on passing if the new term were
+    applied to the registry's default by accident.
+    """
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create(
+            "text", "a barrel", {"seed": 1, "resolution": 512, "base_model": "sdxl"}
+        )
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+        assert worker.trellis.stop_calls == 0
+        assert worker._text2image.unload_calls == 0
+        assert worker._text2image.trim_calls == 1
+        assert worker._text2image.loaded is True
+        await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
 async def test_exclusive_text_job_restores_handoff(tmp_path, fake_pipelines):
     worker = _make_worker(tmp_path, vram_exclusive=True)
     try:
@@ -463,6 +526,46 @@ async def test_a_job_is_refused_at_dispatch_when_the_host_is_out_of_commit(
         await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
         assert "97% committed" in worker.store.get(job_id)["error"]
         await worker.shutdown()
+    finally:
+        worker.store.close()
+
+
+async def test_the_3d_stage_is_withheld_when_commit_crosses_after_the_image(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The commit gate ran once, at dispatch -- before the stage that moves it.
+
+    Loading an image model is the single largest thing this process does to
+    host commit, and on an offloaded checkpoint it is ~16 GiB of it. Nothing
+    re-asked the question across stop-trellis / load / generate / unload /
+    start-trellis: the only observation point was ``_log_mem``'s log.critical,
+    which records the wall and then walks into it (the 2026-08-03
+    Resource-Exhaustion crash).
+
+    The wording is half the fix and is asserted here: the image is finished and
+    on disk, and a user told "out of memory" after a successful two-minute
+    generation will assume they lost it.
+    """
+    import warlock.queue as queue_mod
+
+    readings = iter([0.50])
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: next(readings, 0.97))
+    worker = _make_worker(tmp_path)
+    try:
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+        error = worker.store.get(job_id)["error"]
+        await worker.shutdown()
+
+        assert "97% committed after the image stage" in error
+        assert "3D stage was withheld" in error
+        # Not a claim about the picture: it is on disk and the job says so.
+        assert (worker.config.job_dir(job_id) / "input.png").exists()
+        # And nothing reached trellis -- which is the whole point of standing
+        # here rather than one line later.
+        assert worker.trellis.generate_calls == []
+        assert worker.trellis.config_calls == []
     finally:
         worker.store.close()
 

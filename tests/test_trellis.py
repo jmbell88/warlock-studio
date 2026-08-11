@@ -421,6 +421,82 @@ class _CountingProc:
         self.terminates += 1
 
 
+# --- stop() has to confirm the death it reports -----------------------------
+
+
+class _StubbornProc:
+    """A process that ignores terminate() and, optionally, kill() too."""
+
+    def __init__(self, *, dies_on_kill: bool = True) -> None:
+        self.stdout = None
+        self.stdin = None
+        self.returncode: int | None = None
+        self.pid = 4242
+        self.terminates = 0
+        self.kills = 0
+        self.waits: list[float | None] = []
+        self._dies_on_kill = dies_on_kill
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminates += 1
+
+    def kill(self):
+        self.kills += 1
+        if self._dies_on_kill:
+            self.returncode = -9
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(cmd="trellis-server", timeout=timeout or 0)
+        return self.returncode
+
+
+def test_stop_waits_after_kill_before_reporting_success(tmp_path):
+    # kill() only *asks*. Windows reaps asynchronously, so without the wait the
+    # handle was cleared regardless -- `running` went false and the caller (the
+    # VRAM handoff, three call sites) loaded an image model into memory a live
+    # process still held.
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    proc = _StubbornProc()
+    srv._proc = proc
+    srv.stop()
+    assert proc.terminates == 1 and proc.kills == 1
+    # 15 for the polite wait, then KILL_TIMEOUT for the reap.
+    assert proc.waits == [15, trellis_mod.KILL_TIMEOUT]
+    assert srv._proc is None
+
+
+def test_a_stop_that_cannot_confirm_death_raises_and_keeps_the_handle(tmp_path):
+    # The handle must survive: it may still own ~16 GiB, and it is the only
+    # reference to a process nothing else tracks -- clearing it would leave
+    # `running` false and _reap_if_dead with nothing to collect.
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    proc = _StubbornProc(dies_on_kill=False)
+    srv._proc = proc
+    with pytest.raises(trellis_mod.TrellisStopFailed, match="4242"):
+        srv.stop()
+    assert srv._proc is proc
+    assert srv.running is True
+
+
+def test_a_server_that_terminates_politely_is_never_killed(tmp_path):
+    class _Polite(_StubbornProc):
+        def terminate(self):
+            self.terminates += 1
+            self.returncode = 0
+
+    srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
+    proc = _Polite()
+    srv._proc = proc
+    srv.stop()
+    assert proc.terminates == 1 and proc.kills == 0
+    assert srv._proc is None
+
+
 def test_stop_is_idempotent(tmp_path):
     srv = TrellisServer(tmp_path / "exe", tmp_path / "models", 17971)
     srv._proc = _CountingProc()

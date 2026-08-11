@@ -4,7 +4,7 @@
 they *hold* -- because every defect here is invisible in a screenshot and in
 the GL smoke suite alike. A texture released without ``forget_texture`` leaves
 the backend holding a dead object under a GL name the driver will reuse
-(CLAUDE.md's registration rule), a pipeline that outlives its switch is three
+(docs/INVARIANTS.md's registration rule), a pipeline that outlives its switch is three
 framebuffers nobody can see, and a cache keyed on physical pixels strands one
 UI scale's sprites the moment the user picks another. All of it is observable
 from a stub renderer that records the order of register / forget / release,
@@ -132,7 +132,7 @@ def _fresh_vibrancy(monkeypatch, renderer) -> None:
 
 def test_a_window_resize_forgets_the_old_pong_before_releasing_it(monkeypatch):
     """The resize path used to call ``_PIPELINE.release()`` directly, skipping
-    the ``forget_texture`` half of the pair -- CLAUDE.md's rule: a texture
+    the ``forget_texture`` half of the pair -- docs/INVARIANTS.md's rule: a texture
     released while still registered leaves the backend holding a dead object
     under a GL name the driver will reuse."""
     log = _Log()

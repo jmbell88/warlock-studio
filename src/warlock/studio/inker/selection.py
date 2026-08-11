@@ -560,12 +560,24 @@ class FloatingBuffer:
     def transformed(self) -> bool:
         return abs(self.angle) > 1e-6 or self.scale != (1.0, 1.0)
 
-    def transform(self, *, angle: float | None = None, scale: tuple[float, float] | None = None):
+    def transform(
+        self,
+        *,
+        angle: float | None = None,
+        scale: tuple[float, float] | None = None,
+        resample: str = "smooth",
+    ):
         """Re-render from the lifted pixels at a new angle and scale.
 
         The centre is held fixed rather than the top-left: rotating about a
         corner sends the subject off across the canvas, which is not what
         grabbing a rotate handle means.
+
+        ``resample`` reaches the *mask* as well as the pixels, and that is not
+        an oversight to tidy up later: a nearest-neighbour rotation whose mask
+        was filtered would keep a one-pixel band of partial coverage all the way
+        round, so the hard edge the setting exists to preserve would survive in
+        the colours and be thrown away at the composite.
         """
         from . import transform as tf
 
@@ -582,11 +594,11 @@ class FloatingBuffer:
         height, width = pixels.shape[:2]
         target = (max(1, round(width * self.scale[0])), max(1, round(height * self.scale[1])))
         if target != (width, height):
-            pixels = tf.scale(pixels, target)
-            mask = tf.scale(mask, target)
+            pixels = tf.scale(pixels, target, resample=resample)
+            mask = tf.scale(mask, target, resample=resample)
         if abs(self.angle) > 1e-6:
-            pixels = tf.rotate(pixels, self.angle, expand=True)
-            mask = tf.rotate(mask, self.angle, expand=True)
+            pixels = tf.rotate(pixels, self.angle, expand=True, resample=resample)
+            mask = tf.rotate(mask, self.angle, expand=True, resample=resample)
 
         self.pixels, self.mask = pixels, mask
         new_h, new_w = pixels.shape[:2]

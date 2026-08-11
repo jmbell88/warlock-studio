@@ -58,7 +58,14 @@ from xml.etree import ElementTree
 import numpy as np
 
 from . import composite as cp
-from .animation import DEFAULT_DURATION_MS, Animation, Frame, Tag, Track
+from .animation import (
+    DEFAULT_DURATION_MS,
+    Animation,
+    DirectionalLayout,
+    Frame,
+    Tag,
+    Track,
+)
 from .layers import Layer, LayerStack
 
 THUMBNAIL_MAX = 256
@@ -230,11 +237,32 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
         "frames": [{"duration_ms": int(frame.duration_ms)} for frame in anim.frames],
         "tracks": [track.props() for track in anim.tracks],
         "cels": cels,
+        # ``direction`` is additive and the version is unchanged deliberately:
+        # every reader of this section is ``.get``-based, so an older build
+        # opens the file and plays every tag forwards, which is exactly what it
+        # did before the field existed.
         "tags": [
-            {"name": tag.name, "start": int(tag.start), "end": int(tag.end), "loop": bool(tag.loop)}
+            {
+                "name": tag.name,
+                "start": int(tag.start),
+                "end": int(tag.end),
+                "loop": bool(tag.loop),
+                "direction": str(tag.direction),
+            }
             for tag in anim.tags
         ],
     }
+    if anim.layout is not None:
+        # Additive and the version stays 1, for the reason ``direction`` above
+        # gives: an older build reads this section with ``.get`` and simply has
+        # no layout, which is what every document had before sprite sheets
+        # existed. Written only when set, so a layout-less document's
+        # ``animation.json`` is byte-identical to what it was.
+        #
+        # Only the kind, because that is all a ``DirectionalLayout`` is -- the
+        # grid is derived, so there is no second number here to disagree with
+        # the reader's.
+        payload["layout"] = {"kind": anim.layout.kind}
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
@@ -403,13 +431,36 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 start=int(entry.get("start", 0)),
                 end=int(entry.get("end", 0)),
                 loop=bool(entry.get("loop", True)),
+                # A file written before the field, or by something that spells
+                # it differently, gets ``Tag``'s own coercion to forward rather
+                # than failing the whole grid: a direction is how a tag plays,
+                # not what it contains.
+                direction=str(entry.get("direction", "forward")),
             )
             for entry in payload.get("tags", [])
         ]
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
         log.warning("ignoring animation.json in %s: %s", getattr(zf, "filename", "?"), exc)
         return None
-    return Animation(tracks=tracks, frames=frames, cels=cels, tags=tags, current=0)
+
+    # Its own guard, outside the block above, and deliberately: a layout is
+    # metadata *about* a grid whose pixels are all present and correct, so a
+    # malformed or unknown one must cost the document its export shortcut, not
+    # its timeline. ``DirectionalLayout.of`` already answers None for a kind
+    # this build does not carry; this catches a "layout" that is not a mapping
+    # at all.
+    layout = None
+    try:
+        raw_layout = payload.get("layout")
+        if raw_layout is not None:
+            layout = DirectionalLayout.of(raw_layout["kind"])
+    except (KeyError, TypeError) as exc:
+        log.warning("ignoring animation.json layout in %s: %s",
+                    getattr(zf, "filename", "?"), exc)
+
+    return Animation(
+        tracks=tracks, frames=frames, cels=cels, tags=tags, current=0, layout=layout
+    )
 
 
 def read_ora(path: Path, *, budget: int | None = None):

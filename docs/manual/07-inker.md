@@ -69,8 +69,19 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
 
-The painting tools have **Size**, **Hardness**, **Opacity** and **Spacing**; blur and smudge add
-**Strength**. The shape tools have the size slider and, except for the line, a **Filled**
+The painting tools have **Size**, a **Nib**, **Opacity** and **Spacing**; blur and smudge add
+**Strength**.
+
+The nib is soft or one of two pixel nibs. **Soft** is the antialiased disc, and it has a
+**Hardness** slider shaping its falloff — that is what a painted reference wants, and it is what
+every stroke this editor drew before the other two existed. **Pixel (round)** and **pixel
+(square)** lay down whole pixels only: no partial coverage anywhere, so an edge stays an edge and
+a drawing's colour count does not grow along every line. They have no hardness, because coverage
+that is only ever fully on or fully off has no falloff to shape. With a pixel nib you also get
+**Pixel perfect**, which drops the doubled corner pixel a freehand diagonal leaves at every step,
+so the line comes out one pixel wide the whole way.
+
+The shape tools have the size slider and, except for the line, a **Filled**
 checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
 off acts on every similar pixel in the image, not just the ones touching where you clicked. The
 gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer
@@ -104,6 +115,13 @@ reflect about, in image coordinates; **Centre** puts it back, and "centred" mean
 after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels,
 and **Snap to grid** lands shapes, lines and the marquee on its intersections. Freehand strokes
 never snap: quantising a brush to a lattice is a different tool, not a drawing aid.
+
+Two modifiers apply while you drag a line, a rectangle or an ellipse. **Shift** constrains it — a
+square, a circle, or a line at a multiple of 45° — and **Alt** grows it from the point you pressed
+rather than from a corner. Both can be held at once, and both change the preview as you hold them,
+so you can decide halfway through. They belong to the shape tools alone: on the four selection
+tools Shift and Alt already mean add and subtract. **Alt** over a painting tool picks the colour
+under the cursor, which saves a trip to the eyedropper.
 
 ## Colour
 
@@ -174,6 +192,12 @@ depth, alongside canvas operations: **Flip H**, **Flip V**, **Rotate**, **Fit vi
 **Scale image** resamples the picture, **Resize canvas** changes how much room it has around the
 picture.
 
+**Resample** says how a scale decides what each new pixel holds, and it applies to the free
+transform's scale and rotate as well. **Smooth** filters, which is right for a photograph or a
+generated reference. **Nearest** copies each source pixel whole, which is the only correct answer
+for a drawing whose pixels *are* the artwork — a filtered scale of a 32×32 sprite comes back
+blurred and with thousands of colours in it that were never drawn.
+
 The 3×3 **anchor** grid says where the old image sits in the new canvas, and it belongs to Resize
 canvas only: scaling has no slack to put anywhere. Growing a canvas anchored centre adds room on
 all four sides; anchored top-left it adds room right and below, which is what the button did before
@@ -198,7 +222,8 @@ the picture only moves once you move a slider.
 ## Selections and transform
 
 Four tools make selections: the rectangular marquee, the ellipse, the lasso and the wand. Hold
-**Shift** while dragging to add to the current selection and **Alt** to subtract from it.
+**Shift** while dragging to add to the current selection, **Alt** to subtract from it, and both
+together to keep only the overlap.
 
 With a selection live, the **selection** section offers **All**, **None**, **Invert**, a
 **Feather** radius slider up to 32 pixels with a **Feather** button, and **Crop to selection**. The
@@ -262,14 +287,30 @@ frame, playback loops inside that tag rather than over the whole timeline.
 
 **Tags** name a span of frames — "walk", "idle", "hit". Right-click a frame number and choose
 **New tag here** to make a one-frame tag, then right-click the tag's name in the band under the grid
-to rename it, to set either end to wherever the playhead is, to turn its looping off, or to delete
-it. Tags may overlap, and playback follows the innermost one containing the playhead — which is what
-makes a short **hit** inside a long **combat** the useful arrangement rather than an ambiguous one.
-Tags are saved with the document and written into a sprite sheet's sidecar.
+to rename it, to set either end to wherever the playhead is, to turn its looping off, to choose
+which way it plays, or to delete it. Tags may overlap, and playback follows the innermost one
+containing the playhead — which is what makes a short **hit** inside a long **combat** the useful
+arrangement rather than an ambiguous one. Tags are saved with the document and written into a
+sprite sheet's sidecar.
+
+A tag plays **forward**, **reverse** or **ping-pong**, and that is a separate question from
+whether it loops: direction is the path through the span, looping is whether reaching the end of
+that path starts it again. A non-looping ping-pong swings out and back once. Ping-pong is the one
+worth having — a torch flicker or an idle breath drawn as frames costs the whole span again in
+cels, every one of them a duplicate of a drawing already in the file, and every edit to the middle
+of the swing then has to be made twice.
 
 Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.
+
+A document opened from a generated sprite sheet carries a **directional layout** as well: its frames
+are that sheet's cells in order, four directions with one or four frames each, and a walk sheet
+arrives with a tag per direction so playback loops one direction at a time. The layout is saved with
+the document and survives a round trip through `.ora`. You can draw on it, repaint it and retime it
+like any other animation; adding or removing a frame is allowed and simply means the timeline no
+longer fills the grid, which **Export sheet** then says rather than writing a sheet with a hole in
+it. See [From a single drawing](06-sprite-sheets.md#from-a-single-drawing).
 
 Moving the playhead is not an edit. It pushes no undo step and does not make the document unsaved —
 looking at another frame is looking, not drawing.
@@ -301,11 +342,22 @@ saving it, writes the file back flat and loses the animation.
 **Export sheet** packs an animated document into one PNG atlas plus a JSON sidecar, one cell per
 frame, wrapping into rows when a single row would be wider than an engine will accept as a texture.
 The sidecar names each cell, its duration and any tags, in the same format the 3D sprite sheets use.
+A document with a directional layout skips the wrapping entirely and uses that sheet's own fixed
+grid, with each cell's direction and frame number in the fields a rendered sheet puts a pose and a
+frame in.
 Two things about it are worth knowing. A cel linked across three frames becomes three identical
 cells, because the engine playing it back knows nothing about links. And the cells keep their
 transparency rather than being flattened onto the document's matte, which is what a sheet wants
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
 composited over whatever is behind it in the game.
+
+**Export GIF** writes the same clip as an animated GIF, looping. That one is for showing the
+animation to a person rather than to an engine: it plays anywhere, on its own, with nothing needed
+to read a sidecar. The format costs it two things and both are worth knowing before you send one
+out. A GIF pixel is either fully there or fully gone, so soft edges become hard ones at the
+halfway mark — which is no loss at all with a pixel nib and is very visible with a soft brush. And
+a GIF times its frames in hundredths of a second, so each duration is rounded to the nearest 10 ms;
+a 15 ms frame becomes 20, and anything under 10 ms becomes 10.
 
 ## Autosave and recovery
 

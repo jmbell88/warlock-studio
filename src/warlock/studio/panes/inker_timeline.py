@@ -31,6 +31,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import inker_mode, theme, widgets
+from ..inker import animation
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -119,6 +120,15 @@ def _transport(ctx: Any, tab: Any) -> None:
     widgets.help_marker(
         "Writes a packed PNG of every frame plus a JSON sidecar naming the cells,"
         " their durations and any tags."
+    )
+    imgui.same_line()
+    if widgets.disabled_button("Export GIF", not tab.busy):
+        inker_mode.export_gif(ctx, tab)
+    widgets.help_marker(
+        "Writes the whole timeline as an animated GIF, looping. A GIF holds no"
+        " partial transparency and times frames in hundredths of a second, so"
+        " soft edges become hard ones and a duration is rounded to the nearest"
+        " 10 ms."
     )
     imgui.same_line()
     manual_render.help_button(ctx, "inker-timeline")
@@ -354,9 +364,23 @@ def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
         if state.tag_editing == index:
             _tag_rename(ctx, tab, index)
         else:
-            widgets.muted(f"{tag.name}{'' if tag.loop else ' (once)'}")
+            widgets.muted(f"{tag.name}{_tag_note(tag)}")
             _tag_menu(ctx, tab, index, tag)
         imgui.pop_id()
+
+
+#: How each direction is written beside a tag's name. The default one is spelt
+#: as nothing at all: a forward loop is what a tag has always been, so labelling
+#: it would put a word on every tag in the band to distinguish the ordinary case
+#: from itself.
+DIRECTION_NOTES = {"forward": "", "reverse": "reverse", "pingpong": "ping-pong"}
+
+
+def _tag_note(tag: Any) -> str:
+    """The parenthesised aside after a tag's name, or nothing to say."""
+    parts = [DIRECTION_NOTES.get(tag.direction, ""), "" if tag.loop else "once"]
+    said = [part for part in parts if part]
+    return f" ({', '.join(said)})" if said else ""
 
 
 def _tag_rename(ctx: Any, tab: Any, index: int) -> None:
@@ -406,6 +430,13 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
         doc.set_tag(index, end=doc.anim.current)
     if imgui.menu_item_simple("Loop", "", tag.loop):
         doc.set_tag(index, loop=not tag.loop)
+    # Radio items rather than a submenu: three mutually exclusive values that
+    # each fit on a line, and the tick is the answer to "which way does this
+    # one go" without a hover. Straight off ``animation.DIRECTIONS`` -- a
+    # hand-written list here would be a second table of the same three names.
+    for key in animation.DIRECTIONS:
+        if imgui.menu_item_simple(key.capitalize(), "", tag.direction == key):
+            doc.set_tag(index, direction=key)
     imgui.separator()
     if imgui.menu_item_simple("Delete tag"):
         doc.remove_tag(index)

@@ -166,7 +166,9 @@ async def _run(worker, job_id):
 
 
 @pytest.mark.asyncio
-async def test_a_stored_klein_base_restyles_bare_and_the_sidecar_says_so(worker):
+async def test_a_stored_klein_base_restyles_bare_and_the_sidecar_says_so(
+    worker, monkeypatch
+):
     """The known-key path the door cannot reach: the worker drops the adapter
     the base cannot load, and the recipe carries no style_lora -- recording
     what ran, not what was asked for."""
@@ -177,12 +179,25 @@ async def test_a_stored_klein_base_restyles_bare_and_the_sidecar_says_so(worker)
         {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
          "colors": 8, "seed": 3, "base_model": "flux_klein_distilled"},
     )
+    # klein is an OFFLOAD base, so the restyle's finally unloads the pipe and
+    # clears worker._text2image -- reading it afterwards would be reading the
+    # absence of a pipe rather than what it was asked for. Caught on the way in
+    # instead.
+    pipes: list = []
+    real = worker._get_text2image
+
+    async def capture(base_key):
+        pipe = await real(base_key)
+        pipes.append(pipe)
+        return pipe
+
+    monkeypatch.setattr(worker, "_get_text2image", capture)
 
     row = await _run(worker, job_id)
 
     assert row["error"] is None and row["status"] == "done"
-    pipe = worker._text2image
-    assert {lora for lora, _weight in pipe.lora_calls} == {None}
+    assert len(pipes) == 1
+    assert {lora for lora, _weight in pipes[0].lora_calls} == {None}
     doc = rigging.read_sheet_pixel(worker.config.job_dir(source), sheet_id)
     assert doc["restyle"]["base_model"] == "flux_klein_distilled"
     assert "style_lora" not in doc["restyle"]

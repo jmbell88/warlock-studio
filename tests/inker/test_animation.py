@@ -936,9 +936,15 @@ def test_a_still_document_has_no_frame_flatten():
 # --- playback arithmetic -----------------------------------------------------
 
 
-def _advance(durations, index, accum, dt, span=None):
+def _advance(durations, index, accum, dt, span=None, **kw):
+    """``advance`` without its fourth return value.
+
+    Every test below this line is about the timekeeping, which no direction
+    changes; the ping-pong leg is what the fourth value carries and the tests
+    that care about it call ``advance`` directly.
+    """
     span = span or (0, len(durations) - 1, True)
-    return animation.advance(durations, index, accum, dt, span)
+    return animation.advance(durations, index, accum, dt, span, **kw)[:3]
 
 
 def test_time_accumulates_rather_than_being_divided():
@@ -982,12 +988,96 @@ def test_an_index_outside_the_span_is_clamped_to_the_nearest_end():
 
 
 def test_advance_on_an_empty_timeline_stops():
-    assert animation.advance([], 0, 0.0, 100.0, (0, -1, True)) == (0, 0.0, False)
+    assert animation.advance([], 0, 0.0, 100.0, (0, -1, True)) == (0, 0.0, False, True)
 
 
 def test_a_negative_delta_time_does_not_run_the_clip_backwards():
     index, accum, playing = _advance([10, 10], 0, 0.0, -50.0)
     assert (index, accum, playing) == (0, 0.0, True)
+
+
+# --- tag direction -----------------------------------------------------------
+
+
+def _walk(durations, span, direction, steps, index=None, forward=True):
+    """The indices a clip visits over ``steps`` whole frames of time."""
+    start, end, _loop = span
+    index = start if index is None else index
+    out = []
+    for _ in range(steps):
+        nxt, _accum, playing, forward = animation.advance(
+            durations, index, 0.0, durations[index], span,
+            direction=direction, forward=forward,
+        )
+        # A stop that leaves the playhead where it was shows no new frame, so it
+        # ends the walk rather than repeating the last entry.
+        if not playing and nxt == index:
+            break
+        index = nxt
+        out.append(index)
+        if not playing:
+            break
+    return out
+
+
+def test_a_reverse_tag_walks_its_span_backwards_and_wraps_to_the_end():
+    assert _walk([10] * 4, (0, 3, True), "reverse", 5, index=3) == [2, 1, 0, 3, 2]
+
+
+def test_a_reverse_tag_that_does_not_loop_stops_at_its_start():
+    assert _walk([10] * 3, (0, 2, False), "reverse", 5, index=2) == [1, 0]
+
+
+def test_a_ping_pong_swings_without_holding_either_end_twice():
+    """The frame at each extreme is held for its own duration and no longer.
+
+    Resuming *at* the end frame after turning around would show it for two
+    frame-times, which is a visible hitch at both ends of every swing -- and the
+    one thing a hand-drawn ping-pong is drawn to avoid.
+    """
+    assert _walk([10] * 4, (0, 3, True), "pingpong", 8) == [1, 2, 3, 2, 1, 0, 1, 2]
+
+
+def test_a_ping_pong_that_does_not_loop_plays_out_and_back_once():
+    assert _walk([10] * 3, (0, 2, False), "pingpong", 6) == [1, 2, 1, 0]
+
+
+def test_a_ping_pongs_leg_survives_between_ticks():
+    """The returned ``forward`` is the whole of that state, and a caller that
+    dropped it would make every tick an outward one -- so the clip would reach
+    the end and stay there, stepping between the last two frames forever."""
+    index, _accum, _playing, forward = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, True), direction="pingpong"
+    )
+    assert (index, forward) == (1, False)
+    index, _accum, _playing, forward = animation.advance(
+        [10] * 3, index, 0.0, 10.0, (0, 2, True), direction="pingpong", forward=forward
+    )
+    assert (index, forward) == (0, False)
+
+
+def test_a_one_frame_ping_pong_has_nowhere_to_turn_and_holds():
+    assert _walk([10] * 3, (1, 1, True), "pingpong", 3) == [1, 1, 1]
+
+
+def test_a_tag_with_a_direction_this_build_does_not_carry_plays_forward():
+    """Coerced rather than refused: a tag arrives from a file as often as from
+    the menu, and an unknown spelling must not fail the document."""
+    assert animation.Tag(name="x", direction="sideways").direction == "forward"
+
+
+def test_play_direction_and_loop_range_answer_about_the_same_tag():
+    anim = animation.Animation(
+        frames=[animation.Frame() for _ in range(6)],
+        tags=[
+            animation.Tag(name="all", start=0, end=5),
+            animation.Tag(name="swing", start=2, end=4, direction="pingpong"),
+        ],
+    )
+    # The innermost tag wins, and both questions have to say so.
+    assert anim.loop_range(3) == (2, 4, True)
+    assert anim.play_direction(3) == "pingpong"
+    assert anim.play_direction(0) == "forward"
 
 
 # --- loop ranges and tags ----------------------------------------------------
@@ -1246,3 +1336,65 @@ def test_tag_ops_on_a_still_document_do_nothing():
     assert not doc.add_tag("x", 0)
     assert not doc.remove_tag(0)
     assert not doc.set_tag(0, name="x")
+
+
+# --- directional layouts ----------------------------------------------------
+
+
+def test_a_turnaround_layout_maps_four_frames_onto_a_2x2_grid():
+    layout = animation.DirectionalLayout.of("turnaround")
+    assert (layout.columns, layout.rows, layout.frame_count) == (2, 2, 4)
+    assert [layout.cell(i) for i in range(4)] == [
+        (0, 0, "front", 0, 0),
+        (0, 1, "left", 90, 0),
+        (1, 0, "right", 270, 0),
+        (1, 1, "back", 180, 0),
+    ]
+
+
+def test_a_walk_layout_gives_each_direction_a_row_of_four():
+    layout = animation.DirectionalLayout.of("walk")
+    assert (layout.columns, layout.rows, layout.frame_count) == (4, 4, 16)
+    assert layout.frames_per_direction == 4
+    for index in range(16):
+        row, col, direction, yaw, frame = layout.cell(index)
+        assert row == index // 4 and col == index % 4
+        assert direction == animation.DIRECTION_ORDER[index // 4]
+        assert yaw == animation.DIRECTION_YAWS[direction]
+        assert frame == index % 4
+
+
+def test_an_unknown_kind_has_no_layout_rather_than_raising():
+    """A kind a later build introduced must cost the document its grid, not
+    its openability -- the rule ``Tag.__post_init__`` follows for direction."""
+    assert animation.DirectionalLayout.of("isometric") is None
+    assert animation.DirectionalLayout.of(None) is None
+
+
+def test_a_layout_refuses_a_frame_outside_its_grid():
+    layout = animation.DirectionalLayout.of("turnaround")
+    with pytest.raises(IndexError):
+        layout.cell(4)
+    with pytest.raises(IndexError):
+        layout.cell(-1)
+
+
+def test_an_ordinary_animation_has_no_layout():
+    doc = _doc()
+    doc.ensure_animation()
+    assert doc.anim.layout is None
+
+
+def test_a_layout_survives_a_whole_canvas_undo():
+    """Construction-time state, like ``Document.matte``: no V1 op edits it, and
+    a snapshot restore mutates the existing Animation in place -- so this needs
+    no snapshot change, which is exactly what this asserts."""
+    doc = _doc()
+    doc.ensure_animation()
+    doc.anim.layout = animation.DirectionalLayout("turnaround")
+    before = len(doc.anim.frames)
+    doc.add_frame()
+    assert len(doc.anim.frames) == before + 1
+    doc.undo()
+    assert len(doc.anim.frames) == before
+    assert doc.anim.layout == animation.DirectionalLayout("turnaround")

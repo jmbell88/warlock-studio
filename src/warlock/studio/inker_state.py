@@ -16,6 +16,7 @@ the user should have to redo per tab switch.
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,13 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "sample_layer": False,
     "stabilise": 0.0,
     "speed_taper": 0.0,
+    # Per tool for the same reason every other brush setting is: a pixel nib is
+    # a property of the tool in your hand, and an eraser that stayed soft after
+    # the pencil was made hard is exactly the mismatch this table exists to
+    # stop -- a one-pixel line rubbed out with a feathered eraser leaves a
+    # fringe of half-alpha nobody asked for.
+    "nib": "soft",
+    "pixel_perfect": False,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -328,6 +336,10 @@ class InkerDoc:
     playing: bool = False
     play_index: int = 0
     play_accum_ms: float = 0.0
+    # Which leg of a ping-pong the playhead is on. Only a ping-pong tag reads
+    # it, and it lives here rather than in ``advance`` because that function is
+    # pure and the leg has to survive between ticks.
+    play_forward: bool = True
 
     # Crash-safety. ``autosave_name`` is the file this tab owns under the
     # autosave directory and is minted once, on the first autosave: naming it
@@ -437,6 +449,12 @@ class InkerState:
     # the only answer that stays true across a resize.
     symmetry_axis: tuple[float, float] | None = None
     radial_count: int = 6
+    # How a scale, and the free transform's own scale and rotate, decide what a
+    # destination pixel holds; see ``transform.RESAMPLES``. App-level rather
+    # than per tool or per document: it is a statement about the kind of art
+    # being made, which does not change when the eraser is picked up and is the
+    # same answer for every document open in a pixel-art session.
+    resample: str = "smooth"
     grid: bool = False
     grid_size: int = 16
     # Whether a shape, a marquee or a line snaps to the grid. Deliberately not
@@ -511,6 +529,8 @@ class InkerState:
     sample_layer = _tool_option("sample_layer")
     stabilise = _tool_option("stabilise")
     speed_taper = _tool_option("speed_taper")
+    nib = _tool_option("nib")
+    pixel_perfect = _tool_option("pixel_perfect")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.
@@ -613,6 +633,84 @@ class InkerState:
         self.swatches.append(colour)
         del self.swatches[:-MAX_SWATCHES]
 
+
+
+# --- shape drag constraints -------------------------------------------------
+#
+# The two modifiers every drawing program binds, and they are deliberately
+# scoped to the *shape* tools alone. Shift and Alt already mean add and subtract
+# on the four selection tools, sampled at press into ``combine``; giving them a
+# second meaning on the same drag would make one gesture ambiguous, and which
+# reading won would depend on the order the branches happen to be written in.
+# So the marquee keeps its combining modifiers and the line, rectangle and
+# ellipse get these.
+
+
+def constrain_line(
+    anchor: tuple[float, float], point: tuple[float, float]
+) -> tuple[float, float]:
+    """The cursor snapped to the nearest eighth of a turn from the anchor.
+
+    Length is preserved rather than projected, so the far end tracks the cursor
+    at the same distance it is actually at -- a projection makes a line shrink
+    to nothing as the cursor approaches the perpendicular, which reads as the
+    constraint fighting the drag.
+    """
+    dx, dy = point[0] - anchor[0], point[1] - anchor[1]
+    length = math.hypot(dx, dy)
+    if length <= 0.0:
+        return point
+    step = math.pi / 4.0
+    angle = round(math.atan2(dy, dx) / step) * step
+    return (anchor[0] + math.cos(angle) * length, anchor[1] + math.sin(angle) * length)
+
+
+def constrain_square(
+    anchor: tuple[float, float], point: tuple[float, float]
+) -> tuple[float, float]:
+    """The cursor with both sides made equal, keeping the quadrant it is in.
+
+    The larger side wins, so the shape always covers what the cursor has reached
+    on its dominant axis; taking the smaller one makes a drag feel like it is
+    being pulled back.
+    """
+    dx, dy = point[0] - anchor[0], point[1] - anchor[1]
+    size = max(abs(dx), abs(dy))
+    return (
+        anchor[0] + (size if dx >= 0 else -size),
+        anchor[1] + (size if dy >= 0 else -size),
+    )
+
+
+def shape_endpoints(
+    tool: str,
+    anchor: tuple[float, float],
+    point: tuple[float, float],
+    *,
+    constrain: bool = False,
+    from_centre: bool = False,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The two points a shape drag describes, after the modifiers.
+
+    One function for the preview and for the release, which is the whole reason
+    it is here rather than inlined at either: the two used to be the same
+    expression by coincidence, and a constraint applied to one of them would
+    draw a square and commit a rectangle.
+
+    Constraining happens *before* the centre expansion, or the two fight: an
+    equal-sided box mirrored about the anchor is still equal-sided, while
+    mirroring first and squaring afterwards moves the centre off the point the
+    user pressed on -- which is the one thing "from centre" promises.
+    """
+    if constrain:
+        point = constrain_line(anchor, point) if tool == "line" else constrain_square(
+            anchor, point
+        )
+    if from_centre:
+        # A line has a start and an end rather than a box, so "from centre"
+        # means the anchor is the middle of it, which is the same reflection.
+        anchor = (2.0 * anchor[0] - point[0], 2.0 * anchor[1] - point[1])
+    return anchor, point
 
 
 # --- brush size stepping ----------------------------------------------------

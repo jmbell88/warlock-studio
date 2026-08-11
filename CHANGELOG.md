@@ -6,6 +6,39 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.18 — 2026-08-10
+
+- **A sprite sheet from a single drawing.** A finished 2D reference can now be
+  turned into a sprite sheet without ever becoming a mesh. A queued
+  `sprite_synthesis` job draws two candidate 1024px atlases from two seeds —
+  turnaround (2x2: front, left, right, back) or a 4-direction walk cycle (4x4)
+  — in one SDXL pass each, conditioned on the reference through the IP-Adapter
+  and on a per-cell stick-figure pose guide through the canny ControlNet, with
+  the pixel-art LoRA on top. Each candidate is matted per cell, put on a shared
+  baseline, reduced to 32/48/64px cells in one NEAREST pass and quantized to one
+  palette across the whole atlas. Drafts accumulate under the inspector's
+  **Sprite sheet** header with a thumbnail and per-cell notes for each
+  candidate; nothing is overwritten and nothing is chosen for you.
+- **Turnarounds keep your own drawing.** When the reference's proportions match
+  what the model drew, it is pasted back into the front cell *before* the
+  reduction and the palette, so the one view that is definitely right shares the
+  sheet's colours rather than standing out from them. The sidecar records
+  whether it was, and why not when it was not.
+- **Drafts open in Inker as editable animations.** **Edit in Inker** slices a
+  candidate on the sidecar's own rectangles — one frame per cell, never
+  re-detected from pixels — and attaches a *directional layout*: a walk sheet
+  arrives with a looping tag per direction, so Play loops one direction at a
+  time with no change to the animation engine. The layout is saved in the
+  `.ora` (additive; the format version is unchanged) and drives **Export sheet**,
+  which then writes the sheet's own fixed grid instead of wrapping, with each
+  cell's direction and frame in the sidecar. A timeline that no longer fills the
+  grid is refused by name rather than exported with a hole in it.
+- The pose guides ship as data (`src/warlock/templates/sprite_guides/*.json`),
+  so pose quality is iterable without touching code.
+- Manual: a new **From a single drawing** section in
+  [Sprite sheets](docs/manual/06-sprite-sheets.md), and the layout paragraph in
+  [Inker](docs/manual/07-inker.md).
+
 ## 0.0.17 — 2026-08-10
 
 - **The Poser: a workspace for reusable poses.** Author a pose once against any

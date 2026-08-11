@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from warlock import guidance, vectors
 from warlock.service import sweeps as sweeps_mod
 
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
@@ -42,7 +43,14 @@ def _campaign(name: str):
     return importlib.import_module(name)
 
 
-CAMPAIGNS = ("sweep_rogue", "sweep_confirm", "sweep_rebaseline", "sweep_props")
+CAMPAIGNS = (
+    "sweep_rogue",
+    "sweep_confirm",
+    "sweep_rebaseline",
+    "sweep_props",
+    "sweep_zelda_style",
+    "sweep_zelda_klein",
+)
 
 
 @pytest.mark.parametrize("name", CAMPAIGNS)
@@ -56,7 +64,16 @@ def test_every_campaigns_plans_pass_the_admission_they_will_be_submitted_under(n
         sweeps_mod._validate(svc, plan, units)
 
 
-@pytest.mark.parametrize("name", ("sweep_confirm", "sweep_rebaseline", "sweep_props"))
+@pytest.mark.parametrize(
+    "name",
+    (
+        "sweep_confirm",
+        "sweep_rebaseline",
+        "sweep_props",
+        "sweep_zelda_style",
+        "sweep_zelda_klein",
+    ),
+)
 def test_a_campaign_states_the_matte_it_runs_rather_than_inheriting_one(name, svc):
     """A sweep off an unstated baseline is not reproducible: ``bg_removal``'s
     own default is host-gated (``guidance.default_bg_removal`` reads the weights
@@ -90,6 +107,84 @@ def test_the_rogue_sweep_did_not_state_it_and_that_is_the_whole_lesson(svc):
     assert "bg_removal" not in {axis.param for axis in depiction.axes}
     assert "bg_removal" not in render.base
     assert "bg_removal" in {axis.param for axis in render.axes}
+
+
+# --- can an axis arm actually be read? ---------------------------------------
+
+
+# Every (campaign, axis param) whose arms differ from their baseline in more than
+# one vector key, and therefore record no matched pair at all. Each entry is a
+# decision, not a bug -- but it has to be *declared* here, because the failure is
+# silent: the units run, the meshes are graded, and the axis simply never appears
+# in ``findings.json``'s comparisons.
+#
+# All three are the same mechanism. ``guidance.normalize`` emits ``lora_weight``
+# only alongside ``style_lora``, so an arm that adds or removes an adapter moves
+# two keys at once and there is no way to hold the second one still.
+UNPAIRABLE_BY_DESIGN = {
+    ("sweep_rogue", "style_lora"),
+    ("sweep_rebaseline", "style_lora"),
+    ("sweep_zelda_style", "style_lora"),
+}
+
+
+def _unit_vector(svc, plan, unit):
+    """The config vector a finished unit would be judged under.
+
+    Mirrors ``sweeps._check_unit``'s own composition rather than restating it:
+    ``normalize``'s output for everything it is handed, plus the ``KWARG_AXES``
+    it never sees, through the same ``vectors.config_vector`` the worker and
+    ``record_verdict`` use. Reading the params any other way here would be a
+    second spelling of what a verdict is filed against.
+    """
+    kwargs = sweeps_mod.unit_kwargs(plan, unit)
+    params = guidance.normalize(
+        {
+            **kwargs["guidance_fields"],
+            **{k: kwargs.get(k) for k in sweeps_mod.NORMALIZED_KWARGS},
+        },
+        bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir),
+    )
+    params.update(
+        {
+            k: kwargs[k]
+            for k in sweeps_mod.KWARG_AXES
+            if k in kwargs and k not in sweeps_mod.NORMALIZED_KWARGS
+        }
+    )
+    return vectors.config_vector({"params": params, "stage": plan.stage})
+
+
+@pytest.mark.parametrize("name", CAMPAIGNS)
+def test_every_axis_arm_pairs_with_its_baseline_or_says_here_that_it_cannot(name, svc):
+    """``findings._one_key_diff`` is what makes two rows a matched pair, and it
+    returns ``None`` unless the two vectors disagree in exactly one key. An arm
+    that moves two keys records no pair, no ``grade_delta`` and no entry -- and
+    nothing anywhere says so.
+
+    That already cost a reading. ``sweep_rebaseline``'s ``style_lora`` axis has
+    this shape, so the ``style_lora`` row in
+    ``docs/measurements/2026-08-09-rebaseline.md`` was assembled by hand off the
+    grades while every other row in that table came out of ``comparisons``. The
+    document does not distinguish them. An unpairable arm is legitimate -- it is
+    still five meshes a human looks at -- but the run has to know it is buying a
+    hand count rather than a comparison, which is what this list is for.
+    """
+    module = _campaign(name)
+    for plan in module.PLANS:
+        baselines = {u.seed: u for u in sweeps_mod.expand(plan) if not u.overrides}
+        for unit in sweeps_mod.expand(plan):
+            if not unit.overrides:
+                continue
+            (param,) = unit.overrides
+            mine = _unit_vector(svc, plan, unit)
+            theirs = _unit_vector(svc, plan, baselines[unit.seed])
+            moved = {k for k in mine.keys() | theirs.keys() if mine.get(k) != theirs.get(k)}
+            declared = (name, param) in UNPAIRABLE_BY_DESIGN
+            if declared:
+                assert len(moved) > 1, f"{name} {unit.label} pairs after all; drop the exemption"
+            else:
+                assert moved == {param}, f"{name} {unit.label} moves {sorted(moved)}"
 
 
 # --- the blind confirm -------------------------------------------------------
@@ -241,6 +336,172 @@ def test_the_prop_corpus_states_its_framing_rather_than_inheriting_it(svc):
 
     for plan in module.PLANS:
         assert plan.base.get("framing"), plan.label
+
+
+# --- the SNES/Zelda prop style sweep -----------------------------------------
+
+
+def test_the_zelda_sweep_runs_the_same_axes_on_both_subjects(svc):
+    """This is the whole reason it is two plans rather than one.
+
+    ``findings._comparisons`` keys an entry on ``(param, low, high)`` and
+    accumulates across sweeps, so identical axes on two prompts pool 5 + 5 pairs
+    into one entry spanning two subjects -- the first axis reading here to clear
+    ``comparison_lines``' ``min_pairs=5`` with any breadth. Diverging the axis
+    tuples would silently halve every contrast back to a single-subject claim,
+    which is exactly what ``prompt_hash`` scoping means when it is not planned
+    for.
+    """
+    module = _campaign("sweep_zelda_style")
+    assert len(module.PLANS) == 2
+    axes = {tuple((a.param, a.values) for a in plan.axes) for plan in module.PLANS}
+    assert len(axes) == 1
+    # And two distinct prompts, or there is one prompt_hash and no breadth at all.
+    assert len({plan.prompt for plan in module.PLANS}) == 2
+
+
+def test_the_zelda_sweep_varies_depiction_over_a_pinned_render_half(svc):
+    """The re-baseline's gate is what licenses fanning out here (19 accepts of
+    41, against a pre-registered 12), and its Amendment 2 is where the pinned
+    half comes from. ``base_model`` is deliberately not an axis: it is not one
+    variable -- ``models.cfg_bases()`` gates the negative branch on
+    ``guidance_scale > 1.0``, so ``DEFAULT_NEGATIVE_PROMPT``'s "multiple objects"
+    clause is inert on a 4-step arm and a composition refusal there means
+    something different from one on ``playground``."""
+    module = _campaign("sweep_zelda_style")
+    params = {axis.param for axis in module.AXES}
+
+    assert params == {"art_style", "genre", "condition", "style_lora"}
+    assert "base_model" not in params
+    for plan in module.PLANS:
+        assert plan.base["base_model"] == "playground"
+        assert plan.base["style_lora"] == "render3d"
+        # Stated though it is the default: framing is an axis in the run next
+        # door, so its value here is not recoverable from ``DEFAULT_FRAMING``.
+        assert plan.base["framing"] == "three_quarter"
+        assert plan.stage == "model"
+
+
+def test_the_zelda_sweep_asks_the_question_its_taxonomy_cannot_state(svc):
+    """``snes`` gives saturation and ``nes`` gives "clean dark outlines"; ALTTP
+    is both and no key carries both, so the run's job is to find out which
+    fragment lands closer. ``ps2`` is in as the control rather than as a
+    hypothesis: it is the app's own default prop recipe
+    (``guidance.PRESETS["handpainted_prop"]``), so if it wins, none of this was
+    worth doing and that is a result."""
+    module = _campaign("sweep_zelda_style")
+    art_style = next(a for a in module.AXES if a.param == "art_style")
+
+    assert module.BASE["art_style"] == "snes"
+    assert set(art_style.values) == {"nes", "ps2"}
+    preset = next(p for p in guidance.PRESETS if p["key"] == "handpainted_prop")
+    assert preset["fields"]["art_style"] == "ps2"
+    # And that preset's own prompt is a wooden crate bound with iron, which is
+    # this sweep's first subject -- the control is the app's default answer to
+    # very nearly this question.
+    assert "crate" in preset["prompt"]
+
+
+def test_the_zelda_sweeps_subjects_state_their_own_singularity(svc):
+    """``reference.subject_mask`` is a corner flood fill rather than a matte, so
+    anything the background reaches *through* a subject splits into components
+    and ``MIN_SECOND_COMPONENT`` refuses the job -- and a refusal is a
+    measurement, never re-run by ``sweep_refill``, so it permanently costs that
+    subject a seed. ``PROMPT_TEMPLATE``'s own "no other objects" was not enough
+    for the 17 refusals of 2026-08-07; the fix then was to state the constraint
+    positively, and the ``sweep_props`` rock states it again as an appositive.
+    Both subjects here are one closed mass and say so."""
+    module = _campaign("sweep_zelda_style")
+
+    for plan in module.PLANS:
+        assert "a single" in plan.prompt, plan.label
+
+
+def test_the_zelda_sweep_fits_one_submit_per_subject(svc):
+    """Six configurations at five seeds, twice. The seeds are ``sweep_rogue``'s,
+    imported rather than restated: a matched pair is two units at the *same*
+    seed, and two lists that drift halve every contrast."""
+    module = _campaign("sweep_zelda_style")
+    from sweep_rogue import SEEDS
+
+    total = 0
+    for plan in module.PLANS:
+        units = sweeps_mod.expand(plan)
+        assert plan.seeds == SEEDS
+        assert len(units) == 6 * len(SEEDS) <= sweeps_mod.MAX_UNITS
+        total += len(units)
+    assert total == 60
+
+
+# --- the FLUX.2 klein sibling ------------------------------------------------
+
+
+def test_the_klein_sweep_could_not_have_been_an_arm_of_the_other_one(svc):
+    """Not a preference -- an admission refusal. ``models.lora_fits`` is
+    family-gated, so a ``base_model=flux_klein_distilled`` arm against a base
+    carrying ``render3d`` is refused by ``guidance.normalize`` inside
+    ``_check_unit``, and all-or-nothing admission would take the whole 60-unit
+    campaign with it. This pins the mechanism, so that a later reader who
+    wonders why the checkpoint question is split across two sweeps finds the
+    answer rather than assuming it was untidiness."""
+    style = _campaign("sweep_zelda_style")
+
+    with pytest.raises(ValueError) as caught:
+        guidance.normalize(
+            {**style.BASE, "base_model": "flux_klein_distilled"}, bg_default="birefnet"
+        )
+    assert "flux2klein" in str(caught.value)
+    assert getattr(caught.value, "field", None) == "style_lora"
+
+
+def test_the_klein_sweep_shares_its_subjects_bucket_and_differs_only_in_the_render_half(svc):
+    """The whole instrument. ``findings._per_prompt`` scopes on a byte-exact
+    sha1 of the raw prompt, so importing the prompts rather than retyping them
+    is what puts these rows in the *same* two per-subject buckets as the
+    playground run -- which is the only comparison available, since
+    ``_comparisons`` groups on ``sweep_id`` and no matched pair spans two
+    sweeps. Retyping one comma would silently open a third bucket and the two
+    marginals would never meet."""
+    style = _campaign("sweep_zelda_style")
+    klein = _campaign("sweep_zelda_klein")
+
+    assert [p.prompt for p in klein.PLANS] == [p.prompt for p in style.PLANS]
+    assert [p.seeds for p in klein.PLANS] == [p.seeds for p in style.PLANS]
+
+    # Depiction identical, render half deliberately different, and no adapter --
+    # pixelklein is a pixel-art LoRA and flat pixel art is poor trellis input.
+    render_half = {"base_model", "style_lora", "lora_weight"}
+    assert {
+        k: v for k, v in klein.BASE.items() if k not in render_half
+    } == {k: v for k, v in style.BASE.items() if k not in render_half}
+    assert klein.BASE["base_model"] == "flux_klein_distilled"
+    assert "style_lora" not in klein.BASE
+    assert "lora_weight" not in klein.BASE
+
+
+def test_the_klein_sweep_measures_nothing_by_contrast_and_says_so(svc):
+    """No axes, for the ``sweep_props`` reason: a contrast would need matched
+    pairs this design cannot form, so the units go to the marginal and the
+    meshes instead."""
+    klein = _campaign("sweep_zelda_klein")
+
+    total = 0
+    for plan in klein.PLANS:
+        units = sweeps_mod.expand(plan)
+        assert plan.axes == ()
+        assert plan.vectors == ()
+        assert {u.label for u in units} == {"baseline"}
+        assert len(units) == len(plan.seeds)
+        total += len(units)
+    # Ten, and the number is chosen rather than left over: the playground run's
+    # own baseline arm is five units per subject, so this is exactly matched to
+    # the thing it is being read against. More seeds here would be units with no
+    # counterpart on the other side of the only comparison available.
+    style = _campaign("sweep_zelda_style")
+    baseline_units = sum(
+        1 for plan in style.PLANS for u in sweeps_mod.expand(plan) if not u.overrides
+    )
+    assert total == baseline_units == 10
 
 
 # --- refilling a sweep that lost units ---------------------------------------

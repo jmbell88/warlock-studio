@@ -525,7 +525,9 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
     scale0, angle0, dist0, bearing0 = state.transform_ref
     if state.drag_kind == "scale":
         ratio = math.dist(centre, (mouse.x, mouse.y)) / dist0
-        doc.transform_floating(scale=(scale0 * ratio, scale0 * ratio))
+        doc.transform_floating(
+            scale=(scale0 * ratio, scale0 * ratio), resample=state.resample
+        )
     elif state.drag_kind == "rotate":
         bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))
         step = bearing0 - bearing  # screen y grows downward; the engine's does not
@@ -537,7 +539,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
             step = -step
         if imgui.get_io().key_shift:
             step = round(step / 15.0) * 15.0
-        doc.transform_floating(angle=angle0 + step)
+        doc.transform_floating(angle=angle0 + step, resample=state.resample)
     elif state.drag_kind == "move":
         last = state.last_point or point
         doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
@@ -575,8 +577,14 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
 
 
 def _combine_op() -> str:
-    """Shift adds to the selection, Alt subtracts -- the universal convention."""
+    """Shift adds, Alt subtracts, both intersect -- the universal convention.
+
+    The pair is checked *first*, or the Shift branch answers it and the fourth
+    of ``selection.COMBINE_OPS`` stays unreachable, which is what it was.
+    """
     io = imgui.get_io()
+    if io.key_shift and io.key_alt:
+        return "intersect"
     if io.key_shift:
         return "add"
     if io.key_alt:
@@ -592,7 +600,13 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
     state.combine = _combine_op()
     ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
 
-    if tool == "eyedropper":
+    # Alt over a paint tool picks the colour under the cursor, which is the one
+    # convention a user coming from any other paint program reaches for without
+    # thinking. Checked before the tool branches rather than inside the paint
+    # one, so it reads as what it is: a modifier over the whole toolbox that the
+    # paint tools happen to be the only ones with a free Alt for -- Alt already
+    # subtracts on the selection tools and expands from centre on the shapes.
+    if tool == "eyedropper" or (tool in PAINT_TOOLS and imgui.get_io().key_alt):
         picked = doc.eyedrop(ipoint, layer_only=state.sample_layer)
         if picked is not None:
             state.fg = picked
@@ -646,6 +660,8 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
             spacing=state.spacing,
             mode=inker_state.BRUSH_MODES[tool],
             strength=state.strength,
+            nib=state.nib,
+            pixel_perfect=state.pixel_perfect,
             axis=state.symmetry_axis,
             radial=state.radial_count,
             stabilise=state.stabilise,
@@ -669,6 +685,19 @@ def _drag(state: Any, tab: Any, point) -> None:
         # per mouse-move makes a thousand-point one out of a slow drag.
         state.lasso.append(point)
     state.last_point = point
+
+
+def _shape_drag(state: Any, anchor, point):
+    """A shape drag's two endpoints, with the modifiers read *now*.
+
+    Live rather than sampled at press, unlike ``combine``: a user decides a
+    rectangle should have been a square halfway through drawing it, and the
+    preview has to be able to change its mind with them.
+    """
+    io = imgui.get_io()
+    return inker_state.shape_endpoints(
+        state.tool, anchor, point, constrain=io.key_shift, from_centre=io.key_alt
+    )
 
 
 def marquee_rect(anchor, point) -> tuple[int, int, int, int]:
@@ -700,10 +729,11 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
     if kind == "paint":
         doc.end_stroke()
     elif kind == "shape":
+        p0, p1 = _shape_drag(state, anchor, point)
         doc.shape(
             state.tool,
-            (int(anchor[0]), int(anchor[1])),
-            (int(point[0]), int(point[1])),
+            (int(p0[0]), int(p0[1])),
+            (int(p1[0]), int(p1[1])),
             state.fg,
             state.brush_size,
             filled=state.shape_filled,
@@ -1023,24 +1053,39 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     view = tab.view
     mouse = imgui.get_mouse_pos()
     anchor = inker_state.to_screen(view, origin, *state.drag_anchor)
+    tip = (mouse.x, mouse.y)
     colour = _u32(theme.ACCENT)
     kind, tool = state.drag_kind, state.tool
+
+    if kind == "shape":
+        # Through the same function the release goes through, and back to
+        # screen: a preview drawn from the raw cursor while the commit applies a
+        # constraint is a picture of a shape the user is not about to get. The
+        # snap goes through here too, for the same reason -- the release reads a
+        # snapped point and this used to read the cursor.
+        p0, p1 = _shape_drag(
+            state,
+            state.drag_anchor,
+            _snapped(state, inker_state.to_image(view, origin, mouse.x, mouse.y)),
+        )
+        anchor = inker_state.to_screen(view, origin, *p0)
+        tip = inker_state.to_screen(view, origin, *p1)
 
     if kind == "lasso" and len(state.lasso) > 1:
         points = [inker_state.to_screen(view, origin, x, y) for x, y in state.lasso]
         for a, b in zip(points, points[1:], strict=False):
             draw_list.add_line(a, b, colour)
-        draw_list.add_line(points[-1], (mouse.x, mouse.y), colour)
+        draw_list.add_line(points[-1], tip, colour)
     elif kind == "gradient":
-        draw_list.add_line(anchor, (mouse.x, mouse.y), colour, 2.0)
+        draw_list.add_line(anchor, tip, colour, 2.0)
     elif kind == "marquee" and tool == "select_ellipse":
-        _ellipse(draw_list, anchor, (mouse.x, mouse.y), colour)
+        _ellipse(draw_list, anchor, tip, colour)
     elif kind == "marquee" or (kind == "shape" and tool == "rect"):
-        draw_list.add_rect(anchor, (mouse.x, mouse.y), colour)
+        draw_list.add_rect(anchor, tip, colour)
     elif kind == "shape" and tool == "line":
-        draw_list.add_line(anchor, (mouse.x, mouse.y), colour)
+        draw_list.add_line(anchor, tip, colour)
     elif kind == "shape" and tool == "ellipse":
-        _ellipse(draw_list, anchor, (mouse.x, mouse.y), colour)
+        _ellipse(draw_list, anchor, tip, colour)
 
 
 def _ellipse(draw_list: Any, a, b, colour: int) -> None:
@@ -1055,7 +1100,16 @@ def _cursor(state: Any, draw_list: Any, view: Any) -> None:
     variable-size brush usable at all."""
     mouse = imgui.get_mouse_pos()
     radius = max(2.0, state.brush_size * 0.5 * view.zoom)
-    draw_list.add_circle((mouse.x, mouse.y), radius, _u32(theme.TEXT, 0.7))
-    if state.hardness < 0.99:
+    colour = _u32(theme.TEXT, 0.7)
+    if state.nib == "square":
+        draw_list.add_rect(
+            (mouse.x - radius, mouse.y - radius), (mouse.x + radius, mouse.y + radius), colour
+        )
+        return
+    draw_list.add_circle((mouse.x, mouse.y), radius, colour)
+    # A pixel nib has no falloff, so it has no inner ring to draw -- and the
+    # ring is read as "this is where it is solid", which for a hard-edged nib
+    # would be a picture of a softness it does not have.
+    if state.nib == "soft" and state.hardness < 0.99:
         inner = radius * max(state.hardness, 0.05)
         draw_list.add_circle((mouse.x, mouse.y), inner, _u32(theme.TEXT, 0.25))

@@ -904,6 +904,18 @@ class App:
             elif name == "presets" and isinstance(done.result, dict):
                 ctx.state.preview["presets"] = done.result.get("poses") or []
             return
+        if key.startswith("sprite:") and isinstance(done.result, dict):
+            # Seeded from the create result so the panel can show *this* job's
+            # bar. Keyed by the source reference, because the panel is drawn
+            # against that row and not against the synthesis job.
+            ctx.state.preview["sprite_active"] = dict(done.result)
+            return
+        if key.startswith("sprite-del:"):
+            # The listing is stamped on the directory's mtime, so the delete
+            # shows up on its own -- but the cached textures are keyed by draft
+            # id and would otherwise outlive the files they decoded.
+            ctx.cache.invalidate()
+            return
         if key.startswith("download:"):
             # Re-probe wholesale, exactly as the "health" task above replaces
             # runtime.checks: the fetch wrote files doctor has never looked at,
@@ -1339,7 +1351,18 @@ class App:
 
         ctx = self.app_ctx
         job = ctx.job()
-        for key in ("poses", "sheets", "bones", "library_poses"):
+        for key in (
+            "poses",
+            "sheets",
+            "bones",
+            "library_poses",
+            # The sprite panel's three, for the same reason: a form
+            # holds this attempt's seeds, a draft listing holds one
+            # reference's drafts, and the running bar names one job.
+            "sprite_active",
+            "sprite_drafts",
+            "sprite_form",
+        ):
             ctx.state.preview.pop(key, None)
         if job is None:
             return

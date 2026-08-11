@@ -37,6 +37,20 @@ BACKOFF_BASE = 5.0
 BACKOFF_MAX = 300.0
 BACKOFF_GIVE_UP = 5
 RECLAIM_TIMEOUT = 5.0  # how long to wait for a killed orphan to release the port
+KILL_TIMEOUT = 5.0  # how long a killed server gets to actually be reaped
+
+
+class TrellisStopFailed(RuntimeError):
+    """``stop()`` could not confirm the server was dead.
+
+    A stop that reports success is a *precondition* elsewhere: the handoff in
+    ``queue._generate`` loads an image model into the VRAM this call is supposed
+    to have released, and "released" means the OS has reaped the process, not
+    that ``kill()`` returned. Windows reaps asynchronously, so ``kill()``
+    followed by clearing the handle could hand back a green answer while ~16 GiB
+    of device memory was still charged to a live process -- and the next thing
+    to happen was a 16 GiB allocation.
+    """
 
 
 def _port_in_use(port: int) -> bool:
@@ -239,7 +253,13 @@ class TrellisServer:
                     # of dead air to the first job. A refused connection costs
                     # microseconds, so the tighter loop is nearly free.
                     await asyncio.sleep(0.1)
-            self.stop()
+            # Suppressed, and for fetch._move_into's reason: this is the
+            # cleanup on a failure path, so a stop that cannot confirm death
+            # must not mask the error that brought us here -- "did not become
+            # healthy in time" is the diagnosis, and the critical log inside
+            # stop() has already recorded the second problem.
+            with contextlib.suppress(TrellisStopFailed):
+                self.stop()
             self._note_start_failure()
             raise RuntimeError("trellis-server did not become healthy in time")
 
@@ -354,9 +374,14 @@ class TrellisServer:
     def stop(self) -> None:
         """Kill the server and release its handles. Idempotent and thread-safe.
 
-        Blocks for up to ~20 s in the worst case (terminate, wait(15), the
-        reader join(5)), so every caller outside a failure path dispatches it
-        through asyncio.to_thread rather than running it on the event loop.
+        Blocks for up to ~25 s in the worst case (terminate, wait(15),
+        kill, wait(5), the reader join(5)), so every caller outside a failure
+        path dispatches it through asyncio.to_thread rather than running it on
+        the event loop.
+
+        Raises ``TrellisStopFailed`` if the process is still alive after the
+        kill. That is not a formality: three call sites treat a returned stop()
+        as "the VRAM is back" and immediately allocate against it.
         """
         with self._stop_lock:
             # A second caller arriving after the first finished has nothing to
@@ -374,6 +399,25 @@ class TrellisServer:
                     proc.wait(timeout=15)
                 if proc.poll() is None:
                     proc.kill()
+                    # wait() after kill(), because kill() only *asks*. Without
+                    # this the handle was cleared below regardless, so `running`
+                    # went false and the caller loaded an image model into
+                    # memory a live process still held.
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=KILL_TIMEOUT)
+                if proc.poll() is None:
+                    # Leave _proc in place: it may still own its VRAM, and
+                    # keeping the handle is what lets `running` stay true and
+                    # _reap_if_dead collect it later. Clearing it here would
+                    # lose the only reference to a process nothing else tracks.
+                    log.critical(
+                        "trellis-server pid %d survived kill(); VRAM is still held",
+                        proc.pid,
+                    )
+                    raise TrellisStopFailed(
+                        f"trellis-server pid {proc.pid} did not exit after "
+                        f"{KILL_TIMEOUT:.0f}s; its GPU memory is still held"
+                    )
             # Join only after the process is dead, so the pending read hits EOF.
             if self._reader is not None:
                 self._reader.join(timeout=5)

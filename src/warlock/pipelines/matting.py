@@ -19,6 +19,17 @@ this runs beside a resident trellis and a resident SDXL pipe, and a matting
 model holding VRAM would take room from the models that are actually producing
 the asset. A second or two of host compute per export is the cheaper half.
 
+**And it is loaded in a child process** (``matting_worker``), which is what
+finally makes ``unload()`` mean what its name says: loading BiRefNet costs
+1475 MB of RSS and leaves 1053 MB resident after every reference is dropped and
+``gc.collect()`` has run, because the allocator's arenas hold it. That module's
+docstring carries the measurement and the argument; what matters here is the
+shape of the boundary. It is inside ``_model_mask``, not at ``mask()``: the
+three-source preference order, the never-fatal fallback and every caller
+(``service.derive``, ``service.matte``) are untouched, and a spawn failure, a
+timeout or a non-zero exit is an exception ``mask`` already catches and answers
+with the corner flood fill.
+
 Nothing here is imported at module level that a fresh checkout might not have:
 torch, numpy and Pillow all load inside the functions that need them, so
 ``available()`` -- the question every caller asks first -- is answerable on a
@@ -27,11 +38,19 @@ machine with no image extra installed at all.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
+import queue as _queue
+import subprocess
+import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import models
+from .. import models, winjob
 from .reference import has_alpha, subject_mask
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -67,6 +86,16 @@ _STD = (0.229, 0.224, 0.225)
 # world write RGBA unconditionally, and trusting an opaque one would hand every
 # such upload back as a full-frame "cutout" labelled ground truth.
 _OPAQUE = 250
+
+# How long one request to the child may take. Generous on purpose: the *first*
+# request pays the load as well as the inference, and the real checkpoint
+# measured 11.5 s a frame at float32 on this machine on top of a ~12 s load. A
+# timeout kills the child and falls through to the flood fill, so the cost of
+# being wrong here is a worse-looking matte, not a failed export.
+REQUEST_TIMEOUT = 180.0
+
+# How long the child gets to die politely when ``unload`` asks.
+STOP_TIMEOUT = 5.0
 
 
 def model_dir(config: Any = None) -> Path:
@@ -142,15 +171,25 @@ def is_cutout(image: PILImage) -> bool:
 def unload() -> None:
     """Drop the loaded model, and any memory of one that would not load.
 
-    The counterpart to ``_load``: the cache holds one CPU model for as long as
-    the process lives, which is right while exports keep coming and pure waste
-    once the user has moved on, so the release is a call somebody can make
-    rather than a decision baked into the load. It also forgets the failure
-    sentinel, so a user who repairs a half-downloaded checkpoint gets another
-    attempt without restarting the app.
+    The counterpart to ``_load``: a model is held for as long as the process
+    lives, which is right while exports keep coming and pure waste once the
+    user has moved on, so the release is a call somebody can make rather than a
+    decision baked into the load. It also forgets the failure sentinel, so a
+    user who repairs a half-downloaded checkpoint gets another attempt without
+    restarting the app.
+
+    It now keeps that promise. It used to clear a dict, which returned about a
+    third of what the load cost; killing the child returns all 1475 MB. Called
+    from ``queue.Worker._maybe_evict_caches`` past the idle timeout -- through
+    ``asyncio.to_thread``, because it is a process kill now and blocks.
+
+    ``_cache`` is still cleared for the case where this module *is* the child
+    (``matting_worker`` calls ``_load`` in its own process) and because the
+    parent keeps its failure sentinels there.
     """
     global _last_error
 
+    _stop_child()
     _cache.clear()
     _last_error = None
 
@@ -229,14 +268,231 @@ def _load(path: Path, device: str):
     return model
 
 
+# --- the child ---------------------------------------------------------------
+#
+# One process, one lock, and the request/response exchange serialised under it:
+# service/matte.py and service/derive.py both run on TaskRunner's four threads
+# and there is exactly one child.
+
+CHILD_ARGV = [sys.executable, "-m", "warlock.pipelines.matting_worker"]
+"""How the child is launched. A module constant rather than a literal inside
+``_start_child`` so a test can substitute a scripted child and exercise the
+*real* spawn, pipe, marker filtering and PNG round trip -- the parts a
+patched-out ``_request`` would never reach."""
+
+_proc: Any = None
+_proc_key: str | None = None
+_lines: Any = None
+_child_lock = threading.Lock()
+
+
+class _ChildFailed(RuntimeError):
+    """The child could not be reached, or answered with a failure."""
+
+    def __init__(self, message: str, *, stage: str = "run") -> None:
+        super().__init__(message)
+        self.stage = stage
+
+
+def _stop_child() -> None:
+    """Kill the child, if there is one. Idempotent and thread-safe."""
+    with _child_lock:
+        _reset_child_locked()
+
+
+def _reset_child_locked() -> None:
+    """Forget and kill the current child. Caller holds ``_child_lock``.
+
+    Under the lock rather than beside it, because ``_request`` reaches this on
+    four different failures while it is already inside the lock, and a second
+    acquisition there would deadlock on a plain ``Lock``.
+    """
+    global _proc, _proc_key, _lines
+
+    proc, _proc, _proc_key, _lines = _proc, None, None, None
+    if proc is None:
+        return
+    if proc.poll() is None:
+        log.info("stopping the matting worker (pid %s)", proc.pid)
+        proc.kill()
+        try:
+            proc.wait(timeout=STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Nothing useful left to do: it is in the kill-on-close job, so it
+            # cannot outlive the app, and this is an advisory release.
+            log.warning("the matting worker (pid %s) did not exit", proc.pid)
+    for stream in (proc.stdin, proc.stdout):
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
+
+
+def _start_child(key: str) -> None:
+    """Spawn the worker. Caller holds ``_child_lock``."""
+    global _proc, _proc_key, _lines
+
+    # stderr is merged into stdout rather than DEVNULL'd: the reader thread
+    # below drains it either way, so keeping it costs nothing and a failed
+    # `import einops` is otherwise invisible. Merged rather than given a second
+    # pipe, because an undrained one deadlocks the child once it fills.
+    #
+    # winjob.assign follows immediately, as it must: this child holds well over
+    # a gigabyte, and the window between Popen and that call is the only one in
+    # which a parent crash can still orphan it.
+    proc = subprocess.Popen(
+        list(CHILD_ARGV),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    winjob.assign(proc.pid)
+    lines: Any = _queue.Queue()
+
+    def _pump(stream: Any) -> None:
+        try:
+            for raw in stream:
+                lines.put(raw)
+        finally:
+            lines.put(None)
+
+    reader = threading.Thread(
+        target=_pump, args=(proc.stdout,), name="matting-worker", daemon=True
+    )
+    reader.start()
+    _proc, _proc_key, _lines = proc, key, lines
+
+
+def _request(payload: dict[str, Any], key: str) -> None:
+    """Send one request and wait for its answer. Raises ``_ChildFailed``.
+
+    Serialised end to end under ``_child_lock``: the protocol is one response
+    per request with nothing to correlate them by, so two callers interleaving
+    would each read the other's answer.
+    """
+    from .matting_worker import MARKER
+
+    with _child_lock:
+        # No child, one that died under us, or one holding a different
+        # checkpoint: in every case this is not the child the request wants.
+        if _proc is None or _proc.poll() is not None or _proc_key != key:
+            _reset_child_locked()
+            try:
+                _start_child(key)
+            except OSError as exc:
+                raise _ChildFailed(
+                    f"could not start the matting worker: {exc}", stage="load"
+                ) from exc
+        proc, lines = _proc, _lines
+        assert proc is not None and proc.stdin is not None
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+        except (OSError, ValueError) as exc:
+            _reset_child_locked()
+            raise _ChildFailed(f"the matting worker went away: {exc}") from exc
+
+        deadline = time.monotonic() + REQUEST_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _reset_child_locked()
+                raise _ChildFailed(
+                    f"the matting worker did not answer in {REQUEST_TIMEOUT:.0f}s"
+                )
+            try:
+                raw = lines.get(timeout=remaining)
+            except _queue.Empty:
+                continue
+            if raw is None:
+                _reset_child_locked()
+                raise _ChildFailed("the matting worker exited without answering")
+            if not raw.startswith(MARKER):
+                # Library chatter. BiRefNet's own modelling code prints, and so
+                # does transformers; the marker is what tells the two apart.
+                log.debug("matting worker: %s", raw.rstrip())
+                continue
+            try:
+                resp = json.loads(raw[len(MARKER) :])
+            except ValueError as exc:
+                _reset_child_locked()
+                raise _ChildFailed(f"unreadable answer from the worker: {exc}") from exc
+            if resp.get("ok"):
+                return
+            raise _ChildFailed(
+                str(resp.get("error") or "the matting worker failed"),
+                stage=str(resp.get("stage") or "run"),
+            )
+
+
 def _model_mask(image: PILImage, path: Path, device: str):
-    """The model half, isolated so the fallback logic above can be tested
-    without weights by patching exactly this."""
+    """The model half, run in the child. -> a boolean mask.
+
+    Isolated so the fallback logic in ``mask`` can be tested without weights by
+    patching exactly this -- which is unchanged, and is also why the process
+    boundary is here rather than at ``mask``.
+
+    The failure memo (``_FAILED`` / ``_last_error``) is kept in *this* process
+    on purpose. It has to outlive the child's death, or a broken install costs
+    one spawn and one ~12 s load attempt per image in an export loop, which is
+    the exact cost ``_AlreadyFailed`` was introduced to stop. Only a
+    ``stage == "load"`` failure memoizes: a checkpoint that will not load will
+    not load again, while one image that failed to matte says nothing about the
+    next.
+    """
+    global _last_error
+
+    import numpy as np
+    from PIL import Image
+
+    key = f"{path}|{device}"
+    if _cache.get(key) is _FAILED:
+        raise _AlreadyFailed(
+            f"the matting model at {path} failed to load earlier this session"
+        )
+    with tempfile.TemporaryDirectory(prefix="warlock-matte-") as tmp:
+        scratch = Path(tmp)
+        source = scratch / "in.png"
+        dest = scratch / "mask.png"
+        image.convert("RGB").save(source, "PNG")
+        try:
+            _request(
+                {
+                    "model_dir": str(path),
+                    "device": device,
+                    "input": str(source),
+                    "output": str(dest),
+                },
+                key,
+            )
+        except _ChildFailed as exc:
+            if exc.stage == "load":
+                _cache[key] = _FAILED
+                _last_error = str(exc)
+            raise
+        with Image.open(dest) as opened:
+            opened.load()
+            return np.asarray(opened.convert("L")) > 127
+
+
+def _infer(image: PILImage, model: Any):
+    """The arithmetic half: preprocess, run ``model``, threshold. -> bool mask.
+
+    Split out of ``_model_mask`` when that became the IPC half, and it runs
+    **in the child**. Keeping it here rather than in ``matting_worker`` keeps
+    the preprocessing beside the constants it reads and beside the docstring
+    that argues for them -- the worker imports it, exactly as
+    ``blender_worker`` imports ``rigging.fit_template`` so the two halves can
+    never disagree.
+    """
     import numpy as np
     import torch
     from PIL import Image
 
-    model = _load(path, device)
     # Pillow and NumPy do what torchvision's Resize/ToTensor/Normalize do,
     # which is the whole of the published preprocessing: bilinear to the
     # trained size, scale to 0..1, subtract the ImageNet statistics.
@@ -249,11 +505,15 @@ def _model_mask(image: PILImage, path: Path, device: str):
     # bias type (struct c10::Half)", raised inside mask()'s blanket except, so
     # every export on a host that *had* the weights fell back to the corner
     # fill and looked exactly like a host that did not.
-    weights_dtype = next(model.parameters()).dtype
+    #
+    # The *device* comes off the model for the same reason and one more: this
+    # no longer takes a device argument, because it runs in the child where the
+    # only thing that knows where the model was put is the model.
+    parameter = next(model.parameters())
     tensor = (
         torch.from_numpy(array.transpose(2, 0, 1))
         .unsqueeze(0)
-        .to(device=device, dtype=weights_dtype)
+        .to(device=parameter.device, dtype=parameter.dtype)
     )
     with torch.no_grad():
         # The published model returns a list of maps at descending scales; the

@@ -71,11 +71,26 @@ PHASES_SHEET: dict[str, tuple[float, float]] = {
     "pack": (0.95, 1.00),
 }
 
+# A sprite synthesis is two full SDXL generations of one atlas each, with a
+# short CPU assembly (matte, baseline, reduce, quantize) after each. The two
+# generations get equal, dominant slices because they are equal work; the
+# assembly slices are narrow but non-zero, unlike "optimize" above, because a
+# 16-cell flood fill is seconds rather than milliseconds and a bar that sat at
+# exactly 48% twice would read as a hang rather than as a handover.
+PHASES_SPRITE: dict[str, tuple[float, float]] = {
+    "condition": (0.00, 0.08),
+    "generate_a": (0.08, 0.48),
+    "assemble_a": (0.48, 0.52),
+    "generate_b": (0.52, 0.92),
+    "assemble_b": (0.92, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
     "rig": PHASES_RIG,
     "sheet": PHASES_SHEET,
+    "sprite_synthesis": PHASES_SPRITE,
 }
 
 

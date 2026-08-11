@@ -140,20 +140,19 @@ def test_an_opaque_alpha_channel_is_not_a_cutout(tmp_path):
 def test_a_checkpoint_that_will_not_load_is_only_tried_once(tmp_path, monkeypatch, caplog):
     # An export is a loop over images. A broken install must cost one load
     # attempt and one line, not one attempt and one traceback per image.
+    #
+    # The memo lives in the *parent* now that the model loads in a child, and
+    # that is the whole point of it: the child dies with its failure, so
+    # without a parent-side sentinel a broken install would cost a spawn and a
+    # from_pretrained per image rather than once per session.
     _weights(tmp_path)
     calls: list[str] = []
 
-    def boom(*a, **k):
+    def boom(payload, key):
         calls.append("load")
-        raise RuntimeError("half a download")
+        raise matting._ChildFailed("RuntimeError: half a download", stage="load")
 
-    monkeypatch.setitem(
-        sys.modules,
-        "transformers",
-        types.SimpleNamespace(
-            AutoModelForImageSegmentation=SimpleNamespace(from_pretrained=boom)
-        ),
-    )
+    monkeypatch.setattr(matting, "_request", boom)
     with caplog.at_level(logging.WARNING, logger="warlock.pipelines.matting"):
         for _ in range(3):
             _m, source = matting.mask(_subject(), _config(tmp_path))
@@ -168,6 +167,27 @@ def test_a_checkpoint_that_will_not_load_is_only_tried_once(tmp_path, monkeypatc
     assert len(calls) == 2
 
 
+def test_an_image_that_fails_to_matte_is_not_remembered(tmp_path, monkeypatch):
+    # The other side of the memo, and the reason the worker reports a `stage`
+    # at all: a checkpoint that will not load will not load again, but one
+    # image that failed to matte -- a timeout, an unreadable PNG, a child that
+    # died -- says nothing about the next one. Memoizing that would silently
+    # turn one bad frame into a flood-filled batch.
+    _weights(tmp_path)
+    calls: list[str] = []
+
+    def boom(payload, key):
+        calls.append("run")
+        raise matting._ChildFailed("the matting worker did not answer in 1s")
+
+    monkeypatch.setattr(matting, "_request", boom)
+    for _ in range(3):
+        _m, source = matting.mask(_subject(), _config(tmp_path))
+        assert source == "flood"
+    assert len(calls) == 3
+    assert matting.last_error() is None
+
+
 def test_a_failed_load_is_remembered_where_doctor_can_read_it(tmp_path, monkeypatch):
     # The failure sentinel in _cache is enough to stop a second attempt, but it
     # is an anonymous object: doctor could see "matting is broken" from it and
@@ -177,21 +197,19 @@ def test_a_failed_load_is_remembered_where_doctor_can_read_it(tmp_path, monkeypa
     _weights(tmp_path)
     assert matting.last_error() is None
 
-    def boom(*a, **k):
-        raise RuntimeError("No module named 'einops'")
+    def boom(payload, key):
+        raise matting._ChildFailed(
+            "RuntimeError: No module named 'einops'", stage="load"
+        )
 
-    monkeypatch.setitem(
-        sys.modules,
-        "transformers",
-        types.SimpleNamespace(
-            AutoModelForImageSegmentation=SimpleNamespace(from_pretrained=boom)
-        ),
-    )
+    monkeypatch.setattr(matting, "_request", boom)
     matting.mask(_subject(), _config(tmp_path))
     recorded = matting.last_error()
     assert recorded is not None
     assert "einops" in recorded
-    # Named, so the reader can tell an import from a corrupt safetensors.
+    # Named, so the reader can tell an import from a corrupt safetensors. The
+    # child is what produces this string now, but the shape of it is unchanged
+    # -- doctor.py reads last_error() and knows nothing about a process.
     assert "RuntimeError" in recorded
     # And forgotten with the model, or repairing the install leaves doctor
     # reporting a failure that no longer happens.
@@ -228,9 +246,12 @@ def test_the_input_tensor_carries_the_loaded_models_dtype(tmp_path, monkeypatch)
             seen["dtype"] = x.dtype
             return [self.conv(x)]
 
+    # Asserted against _infer, which is where the arithmetic went when
+    # _model_mask became the IPC half: this is the *child's* code path, and it
+    # is testable in-process precisely because it takes a loaded model rather
+    # than a path.
     stub = Stub().half()
-    monkeypatch.setattr(matting, "_load", lambda path, device: stub)
-    out = matting._model_mask(_subject(), tmp_path, "cpu")
+    out = matting._infer(_subject(), stub)
     assert seen["dtype"] is torch.float16
     assert out.shape == (96, 96)
 
@@ -260,6 +281,119 @@ def test_a_model_kept_on_the_cpu_is_cast_to_float32(tmp_path, monkeypatch):
     )
     model = matting._load(tmp_path / "birefnet", "cpu")
     assert next(model.parameters()).dtype is torch.float32
+
+
+# -- the child ----------------------------------------------------------------
+#
+# BiRefNet loads in a subprocess because the 1475 MB it costs does not come back
+# in-process (docs/measurements/2026-08-08-load-probe-memory.md). These drive
+# the real spawn, through matting.CHILD_ARGV, with a scripted child in place of
+# the real worker -- so the pipe, the marker filtering and the PNG round trip
+# are exercised rather than patched out.
+
+_CHILD_PREAMBLE = """
+import sys, types
+sys.modules["transformers"] = types.SimpleNamespace(
+    AutoModelForImageSegmentation=types.SimpleNamespace(from_pretrained=None)
+)
+from warlock.pipelines import matting, matting_worker
+"""
+
+
+def _scripted_child(body: str) -> list[str]:
+    return [sys.executable, "-c", _CHILD_PREAMBLE + body]
+
+
+def test_a_matte_round_trips_through_the_child(tmp_path, monkeypatch):
+    # The whole boundary end to end: the request goes out as one JSON line, the
+    # pixels travel as files (a 4096-square matte is 16 MB and the pipe buffer
+    # is 64 KB), and what comes back is a boolean array the caller cannot tell
+    # from an in-process one.
+    _weights(tmp_path)
+    monkeypatch.setattr(
+        matting,
+        "CHILD_ARGV",
+        _scripted_child(
+            """
+import numpy as np
+# A "model" that is a rectangle, and the arithmetic half stubbed with it: this
+# test is about the transport, not about BiRefNet.
+def fake_infer(image, model):
+    out = np.zeros((image.size[1], image.size[0]), dtype=bool)
+    out[10:20, 10:20] = True
+    return out
+matting._load = lambda path, device: object()
+matting._infer = fake_infer
+# Library chatter on the same stream, which the marker exists to survive.
+print("Loading checkpoint shards: 100%", file=sys.stderr)
+raise SystemExit(matting_worker.main())
+"""
+        ),
+    )
+    mask, source = matting.mask(_subject(), _config(tmp_path))
+    assert source == "birefnet"
+    assert mask.shape == (96, 96)
+    assert mask[15, 15] and not mask[50, 50]
+
+    # And the child is held across requests -- that is the whole reason it is
+    # persistent rather than one-shot like loadprobe: derive.get_file mattes an
+    # icon, a sprite set and a pixel set for one asset.
+    pid = matting._proc.pid
+    matting.mask(_subject(), _config(tmp_path))
+    assert matting._proc.pid == pid  # one load, three mattes
+
+    # unload() means it now: it used to clear a dict, which returned about a
+    # third of what the load cost. The process is gone, and with it every byte
+    # the allocator's arenas were holding.
+    proc = matting._proc
+    matting.unload()
+    assert matting._proc is None
+    # _reset_child_locked kills and *waits*, so a returned unload is the
+    # evidence -- poll() is not None rather than "we asked it to die".
+    assert proc.poll() is not None
+
+
+def test_a_child_that_cannot_be_spawned_falls_back_to_the_fill(tmp_path, monkeypatch):
+    # A spawn failure is an exception mask() already catches, and the corner
+    # fill is always there. It memoizes as a load failure, because a python
+    # that will not start will not start for the next image either.
+    _weights(tmp_path)
+    monkeypatch.setattr(
+        matting, "CHILD_ARGV", [str(tmp_path / "no-such-interpreter"), "-c", ""]
+    )
+    mask, source = matting.mask(_subject(), _config(tmp_path))
+    assert source == "flood"
+    assert mask.any()
+    assert matting.last_error() is not None
+
+
+def test_a_child_that_never_answers_times_out_and_falls_back(tmp_path, monkeypatch):
+    # A worker wedged inside a C inference call checks nothing and closes
+    # nothing, so a bare readline() would wedge the export with it. The deadline
+    # kills it and the fill answers -- and it is *not* memoized, because a
+    # timeout is about one image.
+    _weights(tmp_path)
+    monkeypatch.setattr(matting, "REQUEST_TIMEOUT", 1.0)
+    monkeypatch.setattr(
+        matting,
+        "CHILD_ARGV",
+        _scripted_child("import time\nsys.stdin.readline()\ntime.sleep(60)\n"),
+    )
+    mask, source = matting.mask(_subject(), _config(tmp_path))
+    assert source == "flood"
+    assert mask.any()
+    assert matting.last_error() is None
+    assert matting._proc is None
+
+
+def test_a_child_that_dies_mid_request_falls_back(tmp_path, monkeypatch):
+    _weights(tmp_path)
+    monkeypatch.setattr(
+        matting, "CHILD_ARGV", _scripted_child("sys.stdin.readline()\nraise SystemExit(3)\n")
+    )
+    _mask, source = matting.mask(_subject(), _config(tmp_path))
+    assert source == "flood"
+    assert matting._proc is None
 
 
 def test_the_packages_birefnets_modelling_code_imports_are_declared(tmp_path):

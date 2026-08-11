@@ -1,6 +1,6 @@
 """Pure, torch-free prompt assembly and CLIP-token chunking.
 
-Mirrors the pipelines/sheet.py split CLAUDE.md already establishes:
+Mirrors the pipelines/sheet.py split docs/INVARIANTS.md already establishes:
 decidable, testable logic lives here with no torch import; only the tensor
 work (_encode_long_prompt) stays in pipelines/text2image.py. transformers is
 imported only inside the functions that need it, so this module stays

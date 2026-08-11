@@ -17,6 +17,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "poser-library": ("05-rigging-and-posing", "the-pose-library"),
     "poser-controls": ("05-rigging-and-posing", "the-poser"),
     "sheet": ("06-sprite-sheets", None),
+    "sprites": ("06-sprite-sheets", "from-a-single-drawing"),
     "inker-tools": ("07-inker", "tools"),
     "inker-layers": ("07-inker", "layers"),
     "inker-bridge": ("07-inker", "pipeline-bridges"),

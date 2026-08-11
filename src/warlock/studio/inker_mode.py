@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 ORA_FILTER = ["OpenRaster (*.ora)", "*.ora"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
+GIF_FILTER = ["Animated GIF (*.gif)", "*.gif"]
 
 # The layered format plus every image the app accepts anywhere -- the tuple
 # from ``filetypes``, not a copy of it, so the picker and the suffix check can
@@ -201,6 +202,61 @@ def _load(path: Path) -> dict[str, Any]:
     path = Path(path)
     doc = inker.Document.load(path)
     return {"doc": doc, "path": path, "format": doc.file_format}
+
+
+def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
+    """Open one candidate of a sprite draft as an editable animation.
+
+    Routed through the ``inker-open`` key prefix, so ``on_task_done`` adopts
+    the result with no routing change at all -- the whole of what is new here
+    is what ``_load_sprite_draft`` builds.
+
+    Deliberately *not* a linked document: it carries no ``job_id`` and no
+    ``link_kind``, so it is not on the reference-edit write-back path. Saving
+    it must not overwrite the draft, because a draft is one of a pair the user
+    is choosing between and its sibling is still on disk beside it -- so the
+    first save is a Save As, wherever the user wants the sheet to live.
+
+    Opening the same candidate twice makes two tabs. Accepted for now: they are
+    genuinely two independent copies of the atlas, and neither can clobber the
+    other precisely because neither owns a file.
+    """
+    ensure(ctx)
+    ctx.state.mode = "inker"
+    ctx.submit(
+        f"inker-open:sprite:{draft_id}:{candidate}",
+        _load_sprite_draft,
+        ctx.svc,
+        job_id,
+        draft_id,
+        candidate,
+    )
+
+
+def _load_sprite_draft(
+    svc: Any, job_id: str, draft_id: str, candidate: str
+) -> dict[str, Any]:
+    """Blocking; task thread only."""
+    import numpy as np
+    from PIL import Image
+
+    from ..service import sprites as svc_sprites
+    from .inker import sheetin
+
+    record = svc_sprites.get_sprite_draft(svc, job_id, draft_id)
+    png = svc_sprites.sprite_draft_png(svc, job_id, draft_id, candidate)
+    with Image.open(png) as opened:
+        opened.load()
+        atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+    doc = sheetin.document_from_atlas(
+        atlas, record["cells"], str(record.get("sheet_type") or "")
+    )
+    return {
+        "doc": doc,
+        "path": None,
+        "format": "ora",
+        "title": f"{record.get('sheet_type', 'sprite')} {draft_id[:6]}{candidate}",
+    }
 
 
 # --- the job bridge ---------------------------------------------------------
@@ -396,7 +452,19 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
     suggested = tab.path.stem if tab.path else "untitled"
     from .inker import sheetout
 
-    frames, durations, tags = sheetout.snapshot(doc)
+    frames, durations, tags, layout = sheetout.snapshot(doc)
+    if layout is not None and len(frames) != layout.frame_count:
+        # Refused here, on the frame thread, before the file dialog: the engine
+        # raises the same ValueError as a backstop, but by then the user has
+        # picked a filename and the failure arrives as a task error with no
+        # obvious cause. A frame added to (or removed from) a sprite sheet is an
+        # ordinary edit, so the fix is to say which count is wrong.
+        ctx.toast(
+            f"This is a {layout.kind} sheet of {layout.frame_count} frames and "
+            f"the document has {len(frames)}.",
+            "warn",
+        )
+        return
 
     def run() -> dict[str, Any] | None:
         import json
@@ -406,7 +474,9 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        image, plan, extra = sheetout.compose(frames, durations, tags, name=suggested)
+        image, plan, extra = sheetout.compose(
+            frames, durations, tags, layout, name=suggested
+        )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             image.save(dest, "PNG")
@@ -423,6 +493,45 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
             animation=extra["animation"],
         )
         dest.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return {"exported": dest}
+
+    _start(ctx, tab, f"inker-export:{tab.uid}", run)
+
+
+def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """An animated document as a GIF anyone can open.
+
+    ``export_sheet``'s shape exactly, down to sharing its task key -- the two
+    read the same frames off the same document and must not run at once -- with
+    the same frame-thread snapshot for the same reason: ``frame_flat`` fills and
+    evicts the document's frame cache and ``layers_for`` writes track properties
+    down onto cels, which is what the onion-skin draw is doing to the same dicts
+    sixty times a second.
+
+    A GIF loops forever rather than honouring a tag's loop flag, and that is the
+    honest reading rather than a shortcut: a tag names a *span* of the timeline
+    and the export is the whole timeline, so there is no one tag whose flag this
+    could be. Exporting a single tag is a different feature and would need to say
+    which one.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.busy or tab.doc.anim is None:
+        return
+    doc = tab.doc
+    doc.commit_floating()
+    suggested = tab.path.stem if tab.path else "untitled"
+    from .inker import gifout, sheetout
+
+    frames, durations, _tags, _layout = sheetout.snapshot(doc)
+
+    def run() -> dict[str, Any] | None:
+        dest = dialogs.save_file("Export animated GIF", f"{suggested}.gif", GIF_FILTER)
+        if dest is None:
+            return None
+        if dest.suffix.lower() != ".gif":
+            dest = dest.with_suffix(".gif")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        gifout.write_gif(dest, frames, durations)
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
@@ -962,6 +1071,10 @@ def toggle_play(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab.playing = True
     tab.play_index = tab.doc.anim.current
     tab.play_accum_ms = 0.0
+    # Every play starts on the outward leg. A ping-pong stopped halfway back and
+    # resumed would otherwise carry on inwards from wherever it was, which reads
+    # as the clip playing backwards for no reason anyone watching can see.
+    tab.play_forward = True
 
 
 def stop_play(tab: InkerDoc) -> None:
@@ -986,14 +1099,16 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     if not tab.playing or anim is None:
         return
     durations = [frame.duration_ms for frame in anim.frames]
-    index, accum, playing = animation.advance(
+    index, accum, playing, forward = animation.advance(
         durations,
         tab.play_index,
         tab.play_accum_ms,
         min(float(dt_ms), MAX_TICK_MS),
         anim.loop_range(tab.play_index),
+        direction=anim.play_direction(tab.play_index),
+        forward=tab.play_forward,
     )
-    tab.play_index, tab.play_accum_ms = index, accum
+    tab.play_index, tab.play_accum_ms, tab.play_forward = index, accum, forward
     if not playing:
         stop_play(tab)
 

@@ -52,15 +52,101 @@ MAX_DURATION_MS = 60_000
 
 __all__ = [
     "DEFAULT_DURATION_MS",
+    "DIRECTIONS",
+    "DIRECTION_ORDER",
+    "DIRECTION_YAWS",
     "MAX_DURATION_MS",
     "MIN_DURATION_MS",
+    "SHEET_KINDS",
     "Animation",
+    "DirectionalLayout",
     "Frame",
     "Tag",
     "Track",
     "advance",
     "clamp_duration",
 ]
+
+
+#: The four directions a directional sheet carries, in the order a frame index
+#: means, and the yaw each one stands for.
+#:
+#: Repeated from ``pipelines.spritesynth`` rather than imported, because this
+#: package imports nothing outward -- that is what makes the inker usable
+#: headless and is pinned by a test. The two copies agreeing is therefore not
+#: something either module can enforce, so a cross-check test
+#: (``tests/test_sprite_geometry_agreement.py``) owns it instead, and is the
+#: only place the agreement is asserted.
+DIRECTION_ORDER = ("front", "left", "right", "back")
+DIRECTION_YAWS = {"front": 0, "left": 90, "right": 270, "back": 180}
+
+#: ``kind -> (columns, rows, frames per direction)``. The grid is *derived*
+#: from the kind and never stored, so a document cannot carry a layout that
+#: disagrees with itself.
+SHEET_KINDS: dict[str, tuple[int, int, int]] = {
+    "turnaround": (2, 2, 1),
+    "walk": (4, 4, 4),
+}
+
+
+@dataclass(frozen=True)
+class DirectionalLayout:
+    """What a document's frames *mean* when they came from a sprite sheet.
+
+    Only the kind is state. Everything else -- how many columns the export
+    grid has, which direction frame 9 is, what yaw goes in the sidecar -- is
+    computed from it, so there is no second copy to drift and nothing for an
+    edit to half-update.
+
+    It is construction-time state, like ``Document.matte``: no V1 undo op
+    edits it, and a whole-canvas snapshot restores by mutating the existing
+    ``Animation`` in place, so it survives undo without any snapshot change.
+    Adding or removing frames *can* leave the timeline no longer matching the
+    grid -- that is caught at export, by a refusal naming both counts, rather
+    than by forbidding the edit: a sheet is an ordinary animation and being
+    able to draw a fifth frame in it is not a bug.
+    """
+
+    kind: str
+
+    @classmethod
+    def of(cls, kind: object) -> DirectionalLayout | None:
+        """The layout for ``kind``, or None for anything this build cannot draw.
+
+        None rather than raising, for ``Tag.__post_init__``'s reason: a layout
+        arrives from a file as often as from this process, and a kind a later
+        build introduced must cost the document its grid, not its openability.
+        """
+        return cls(str(kind)) if kind in SHEET_KINDS else None
+
+    @property
+    def columns(self) -> int:
+        return SHEET_KINDS[self.kind][0]
+
+    @property
+    def rows(self) -> int:
+        return SHEET_KINDS[self.kind][1]
+
+    @property
+    def frames_per_direction(self) -> int:
+        return SHEET_KINDS[self.kind][2]
+
+    @property
+    def frame_count(self) -> int:
+        return len(DIRECTION_ORDER) * self.frames_per_direction
+
+    def cell(self, index: int) -> tuple[int, int, str, int, int]:
+        """``(row, col, direction, yaw, frame)`` for timeline frame ``index``."""
+        if not 0 <= index < self.frame_count:
+            raise IndexError(f"frame {index} is outside a {self.kind} sheet")
+        direction = DIRECTION_ORDER[index // self.frames_per_direction]
+        return (
+            index // self.columns,
+            index % self.columns,
+            direction,
+            DIRECTION_YAWS[direction],
+            index % self.frames_per_direction,
+        )
 
 
 @dataclass
@@ -125,6 +211,17 @@ class Frame:
         self.duration_ms = clamp_duration(self.duration_ms)
 
 
+#: Which way playback moves through a tag's span.
+#:
+#: ``pingpong`` is the one that earns the field. Reverse is expressible by
+#: drawing the frames the other way round, and a plain forward loop is the
+#: default -- but a there-and-back swing (a torch flickering, an idle breath, a
+#: pendulum) drawn as frames costs the whole span again in cels, all of them
+#: linked duplicates of frames already in the file, and every edit to the middle
+#: of the swing then has to be made twice.
+DIRECTIONS = ("forward", "reverse", "pingpong")
+
+
 @dataclass
 class Tag:
     """A named, optionally looping range of frames -- "walk", "idle", "hit".
@@ -134,12 +231,25 @@ class Tag:
     are indices rather than uids for the one reason indices are ever the right
     choice here: a tag names a span of the timeline, so inserting a frame inside
     it should widen it, which uids would not do.
+
+    ``direction`` and ``loop`` are separate questions and both are needed:
+    direction is the path through the span, loop is whether reaching the end of
+    that path starts it again. A non-looping ping-pong plays out and back once,
+    which is what a "swing" is; a looping one never stops.
     """
 
     name: str = "tag"
     start: int = 0
     end: int = 0
     loop: bool = True
+    direction: str = "forward"
+
+    def __post_init__(self) -> None:
+        # Coerced rather than refused: a tag arrives from a file as often as
+        # from the menu, and a spelling this build does not carry is a tag that
+        # should still play, forwards, rather than a document that will not open.
+        if self.direction not in DIRECTIONS:
+            self.direction = "forward"
 
 
 def clamp_duration(ms: object) -> int:
@@ -169,6 +279,11 @@ class Animation:
     cels: dict[tuple[int, int], Layer] = field(default_factory=dict)
     tags: list[Tag] = field(default_factory=list)
     current: int = 0
+
+    #: Set when these frames are a directional sprite sheet's cells, in order.
+    #: None for every ordinary animation, which is the default and takes the
+    #: fixed-grid export path out of the picture entirely.
+    layout: DirectionalLayout | None = None
 
     #: Stable uids for the empty slots, so a placeholder materialised twice is
     #: the same identity twice. Not the layers themselves: those share one
@@ -374,15 +489,68 @@ class Animation:
             return 0, last, True
         return max(0, tag.start), min(last, tag.end), tag.loop
 
+    def play_direction(self, index: int) -> str:
+        """Which way the tag containing a frame plays, or forward outside one.
+
+        A second lookup rather than a fourth element of ``loop_range``: that
+        tuple is passed straight into ``advance`` as its span, and widening it
+        would put the answer to "which way" inside a value named for the range.
+        Both go through ``active_tag``, so they cannot disagree about which tag
+        is in force.
+        """
+        tag = self.active_tag(index)
+        return "forward" if tag is None else tag.direction
+
+
+def _step(
+    index: int, forward: bool, start: int, end: int, loop: bool, direction: str
+) -> tuple[int, bool, bool]:
+    """One frame onward. Returns ``(index, forward, playing)``.
+
+    Split out of ``advance`` because it is the whole of what a direction means
+    and the rest of that function is timekeeping: the two were readable together
+    only while there was one direction.
+
+    ``forward`` is state a ping-pong needs and neither other direction reads: an
+    index alone cannot say which leg of the swing it is on, and the frame in the
+    middle of the span is genuinely visited twice per cycle going opposite ways.
+    """
+    if direction == "reverse":
+        if index <= start:
+            return (end, forward, True) if loop else (start, forward, False)
+        return index - 1, forward, True
+    if direction == "pingpong":
+        if start == end:
+            # A one-frame swing has nowhere to turn around; it is a still.
+            return start, forward, loop
+        if forward:
+            # Turning around costs no frame time: the end frame was just held
+            # for its own duration, so resuming *at* it would hold it twice and
+            # put a visible hitch at each extreme of the swing.
+            return (end - 1, False, True) if index >= end else (index + 1, True, True)
+        if index <= start:
+            return (start + 1, True, True) if loop else (start, False, False)
+        return index - 1, False, True
+    if index >= end:
+        return (start, forward, True) if loop else (end, forward, False)
+    return index + 1, forward, True
+
 
 def advance(
-    durations: list[int], index: int, accum_ms: float, dt_ms: float, span: tuple[int, int, bool]
-) -> tuple[int, float, bool]:
+    durations: list[int],
+    index: int,
+    accum_ms: float,
+    dt_ms: float,
+    span: tuple[int, int, bool],
+    *,
+    direction: str = "forward",
+    forward: bool = True,
+) -> tuple[int, float, bool, bool]:
     """Where the playhead is ``dt_ms`` later. Pure, so it is testable at speed.
 
-    Returns ``(index, accumulator, playing)``. Time is *accumulated* rather than
-    the index being derived from a wall clock, because a frame's duration is
-    per-frame: a 40 ms frame followed by a 400 ms one is not a rate.
+    Returns ``(index, accumulator, playing, forward)``. Time is *accumulated*
+    rather than the index being derived from a wall clock, because a frame's
+    duration is per-frame: a 40 ms frame followed by a 400 ms one is not a rate.
 
     The loop is a ``while`` and not an ``if`` for the case that actually bites
     -- a 10 ms frame with a dropped-frame ``dt`` of 200 ms behind it, where
@@ -391,19 +559,18 @@ def advance(
     terminates here because every duration is at least ``MIN_DURATION_MS``.
 
     ``playing`` comes back False only for a non-looping span that has reached
-    its end, which is the one case where the animation stops itself.
+    its end, which is the one case where the animation stops itself. ``forward``
+    is carried in and back out rather than kept here, because this function has
+    no state and a ping-pong's leg has to survive between ticks.
     """
     start, end, loop = span
     if not durations or start > end:
-        return index, 0.0, False
+        return index, 0.0, False, forward
     index = max(start, min(index, end))
     accum_ms += max(0.0, dt_ms)
     while accum_ms >= durations[index]:
         accum_ms -= durations[index]
-        if index >= end:
-            if not loop:
-                return end, 0.0, False
-            index = start
-        else:
-            index += 1
-    return index, accum_ms, True
+        index, forward, playing = _step(index, forward, start, end, loop, direction)
+        if not playing:
+            return index, 0.0, False, forward
+    return index, accum_ms, True, forward

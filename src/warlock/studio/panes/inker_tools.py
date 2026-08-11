@@ -42,7 +42,24 @@ TOOL_ICONS = {
     "eyedropper": icons.PIPETTE,
 }
 
-SYMMETRY_LABELS = (("none", "off"), ("x", "left / right"), ("y", "top / bottom"), ("xy", "both"))
+# One entry per mode ``brush.SYMMETRY`` carries, and that is checked rather
+# than trusted: the table used to stop at ``xy``, so the radial mode the engine
+# implements, the "Ways" slider below and the manual chapter all described a
+# setting the combo could never select.
+# One entry per ``brush.NIBS`` member, checked against it the same way.
+NIB_LABELS = (
+    ("soft", "soft (antialiased)"),
+    ("pixel", "pixel (round)"),
+    ("square", "pixel (square)"),
+)
+
+SYMMETRY_LABELS = (
+    ("none", "off"),
+    ("x", "left / right"),
+    ("y", "top / bottom"),
+    ("xy", "both"),
+    ("radial", "radial"),
+)
 
 
 def draw(ctx: Any) -> None:
@@ -93,9 +110,28 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         if changed:
             state.brush_size = inker.clamp_brush(size)
     if tool in PAINT_TOOLS:
-        changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
-        if changed:
-            state.hardness = value
+        state.nib = widgets.labeled_combo("Nib", state.nib, list(NIB_LABELS))
+        widgets.help_marker(
+            "Soft is the antialiased disc, which is what a painted reference "
+            "wants. The two pixel nibs lay down whole pixels only -- no partial "
+            "coverage anywhere -- which is what pixel art wants and what keeps "
+            "a drawing's colour count from growing along every edge."
+        )
+        if state.nib in inker.PIXEL_NIBS:
+            changed, value = imgui.checkbox("Pixel perfect", state.pixel_perfect)
+            if changed:
+                state.pixel_perfect = value
+            widgets.help_marker(
+                "Drops the doubled corner pixel a freehand diagonal leaves at "
+                "every step, so the line is one pixel wide the whole way."
+            )
+        else:
+            # Hidden rather than disabled: a pixel nib's coverage is 0 or 1 by
+            # definition, so there is no falloff for this to shape and a greyed
+            # slider would suggest there is one somewhere.
+            changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
+            if changed:
+                state.hardness = value
         changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
         if changed:
             state.opacity = value

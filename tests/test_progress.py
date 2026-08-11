@@ -429,3 +429,44 @@ def test_pump_skips_empty_lines():
     seen = []
     pump(io.BytesIO(b"a\r\n\r\n\r\nb\r\n"), None, seen.append)
     assert seen == ["a", "b"]
+
+
+# --- sprite synthesis --------------------------------------------------------
+
+
+def test_the_sprite_phases_cover_the_whole_bar_contiguously():
+    from warlock.progress import PHASES_SPRITE
+
+    spans = sorted(PHASES_SPRITE.values())
+    assert spans[0][0] == 0.0
+    assert spans[-1][1] == 1.0
+    for (_, end), (start, _) in zip(spans, spans[1:], strict=False):
+        assert end == pytest.approx(start), "phases must be contiguous"
+
+
+def test_every_phase_the_sprite_worker_emits_is_declared():
+    """``update()`` falls back to (0.0, 1.0) for an unknown phase, which would
+    drag the bar back to zero twice per job -- which is exactly why
+    ``_sprite_synthesis`` does not reuse ``_t2i_state``."""
+    from warlock.progress import phases_for
+
+    table = phases_for("sprite_synthesis")
+    for phase in ("condition", "generate_a", "assemble_a", "generate_b", "assemble_b"):
+        assert phase in table, phase
+    assert "t2i_load" not in table and "t2i_sample" not in table
+
+
+def test_the_worker_never_hands_the_sprite_bar_a_t2i_phase():
+    """Asserted against the source, because the mistake is an easy one to make
+    by copying ``_pixel_sheet``: passing ``self._t2i_state`` as ``on_state``."""
+    import inspect
+
+    from warlock.queue import Worker
+
+    source = inspect.getsource(Worker._sprite_synthesis)
+    # Comments stripped, because the method *explains* the trap in one -- and a
+    # scan test tripped by its own prose is a scan test nobody keeps.
+    code = "\n".join(
+        line for line in source.split("\n") if not line.lstrip().startswith("#")
+    )
+    assert "_t2i_state" not in code

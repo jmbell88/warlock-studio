@@ -33,6 +33,26 @@ IOU_SIZE = 256
 _model_cache: dict[str, Any] = {}
 
 
+def unload() -> None:
+    """Drop the cached DINOv2 processor/model. Safe to call at any time.
+
+    The counterpart ``matting.unload`` and ``pose2d.unload`` already had, and
+    the one of the three that can hold *VRAM*: the cache key is
+    ``f"{path}|{device}"`` and the benchmark path passes ``device=None``, which
+    resolves to cuda whenever it is available -- so a single scoring run left a
+    DINOv2 on the card for the life of the process, beside the models actually
+    producing assets. ``queue.Worker._maybe_evict_caches`` calls it past the
+    idle timeout.
+
+    A dict clear and nothing more, deliberately: this module must stay
+    importable with no torch installed (``tests/test_bench_metrics.py`` pins
+    that), so it may not reach for ``torch.cuda.empty_cache()`` here. Dropping
+    the last reference is what returns the allocation; the caching allocator
+    gives its pool back on the next pass that needs it.
+    """
+    _model_cache.clear()
+
+
 def silhouette_iou(reference_path: Path, render_path: Path) -> float | None:
     """Intersection over union of the two subject masks, each cropped to its
     own bounding box first.
