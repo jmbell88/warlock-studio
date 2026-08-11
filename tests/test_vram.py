@@ -412,3 +412,120 @@ def test_a_sprite_synthesis_is_priced_from_its_own_checkpoint():
     plain = vram.estimate("sprite_synthesis", "model", {"base_model": "sdxl_cfg"},
                           exclusive=True)
     assert priced != plain
+
+
+# -- does a checkpoint fit ----------------------------------------------------
+
+
+def _base(key: str):
+    return models.BASE_MODELS[key]
+
+
+def test_a_big_card_holds_an_sdxl_pipe_beside_trellis():
+    plan = vram.plan(exclusive=None, total_gib=32.0)
+    assert not plan.exclusive
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_OK
+
+
+def test_a_card_that_auto_selected_exclusive_fits_everything_it_can_hold():
+    """Handing off is what makes a 12 GB card usable at all, so the badge must
+    not call an SDXL pipe tight there: nothing is sitting beside it."""
+    plan = vram.plan(exclusive=None, total_gib=12.0)
+    assert plan.exclusive
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_OK
+
+
+def test_a_checkpoint_larger_than_the_whole_budget_does_not_fit():
+    plan = vram.plan(exclusive=None, total_gib=6.0)
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_NO
+    assert vram.fits(plan, _base("flux_klein")) == vram.FIT_NO
+
+
+def test_coexist_on_a_24_gb_card_is_tight_rather_than_refused():
+    """22.5 GiB of budget against 7 + 16: it loads, and every 3D job pays a
+    trellis restart for it. Explicit, because auto would have chosen exclusive
+    at this size and that is a different answer."""
+    plan = vram.plan(exclusive=False, total_gib=24.0)
+    assert not plan.exclusive
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_TIGHT
+
+
+def test_an_unknown_budget_is_not_a_shortfall():
+    plan = vram.plan(exclusive=None, total_gib=None)
+    assert plan.budget_gib is None
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_OK
+
+
+def test_an_offloaded_checkpoint_is_never_tight():
+    """It hands off whatever the flag says, so nothing is ever resident beside
+    it -- the same rule ``estimate`` prices it by."""
+    plan = vram.plan(exclusive=False, total_gib=32.0)
+    klein = _base("flux_klein")
+    assert klein.residency == models.OFFLOAD
+    assert vram.fits(plan, klein) == vram.FIT_OK
+    # And the ordinary pipe on the same card is not, so the assertion above is
+    # about residency rather than about the card being large.
+    assert vram.fits(plan, _base("sdxl_cfg")) == vram.FIT_OK
+    assert vram.fits(vram.plan(exclusive=False, total_gib=24.0), klein) == vram.FIT_OK
+
+
+def test_the_recommendation_is_the_best_thing_that_actually_fits():
+    big = vram.plan(exclusive=None, total_gib=32.0)
+    assert vram.recommended_base(big) == "sdxl_cfg"
+
+
+def test_the_recommendation_falls_back_rather_than_returning_nothing():
+    """A card that can hold no checkpoint has a problem no picker solves; the
+    caller draws a badge either way and must not be handed None."""
+    tiny = vram.plan(exclusive=None, total_gib=2.0)
+    assert all(
+        vram.fits(tiny, models.BASE_MODELS[k]) == vram.FIT_NO
+        for k in vram.RECOMMENDED_BASES
+    )
+    assert vram.recommended_base(tiny) == models.DEFAULT_BASE_MODEL
+
+
+def test_every_recommended_key_is_a_registry_key():
+    for key in vram.RECOMMENDED_BASES:
+        assert key in models.BASE_MODELS, key
+
+
+# -- the base-model remedy ----------------------------------------------------
+
+
+def test_no_plan_means_no_base_model_remedy():
+    """``dispatch_shortfall_message``'s case: it refuses on free memory, where
+    the budget the fit is computed against is not what ran out."""
+    params = {"base_model": "flux_klein"}
+    assert "smaller base model" not in vram.remedies(params, exclusive=False)
+
+
+def test_a_plan_offers_the_cheaper_checkpoint_before_the_environment_variable():
+    """10 GiB of klein on a card with room for 7 and no more. The order is the
+    point: a click is offered ahead of a restart."""
+    plan = vram.plan(exclusive=False, total_gib=12.0)
+    params = {"base_model": "flux_klein"}
+    text = vram.remedies(params, exclusive=plan.exclusive, plan_=plan)
+    assert "smaller base model" in text
+    assert text.index("smaller base model") < text.index("WARLOCK_VRAM_EXCLUSIVE")
+
+
+def test_the_cheaper_remedy_is_silent_when_the_pick_is_already_the_cheapest():
+    plan = vram.plan(exclusive=False, total_gib=32.0)
+    assert "smaller base model" not in vram.remedies(
+        {"base_model": "sdxl_cfg"}, exclusive=False, plan_=plan
+    )
+
+
+def test_the_cheaper_remedy_is_silent_when_no_model_was_named():
+    plan = vram.plan(exclusive=False, total_gib=12.0)
+    assert "smaller base model" not in vram.remedies({}, exclusive=False, plan_=plan)
+
+
+def test_the_submit_refusal_carries_the_plan_and_the_dispatch_one_does_not():
+    plan = vram.plan(exclusive=False, total_gib=12.0)
+    params = {"base_model": "flux_klein"}
+    assert "smaller base model" in vram.shortfall_message(30.0, plan, params)
+    assert "smaller base model" not in vram.dispatch_shortfall_message(
+        30.0, 4.0, 3.0, params, exclusive=False
+    )

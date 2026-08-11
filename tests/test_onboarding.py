@@ -69,7 +69,7 @@ def test_a_text_job_whose_checkpoint_is_absent_is_refused_with_its_command(svc):
     from warlock import fetch, models
     from warlock.service import jobs as svc_jobs
 
-    spec = models.BASE_MODELS["turbo"]
+    spec = models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
     (fetch.base_model_dir(svc.config, spec) / "model_index.json").unlink()
 
     with pytest.raises(Invalid) as caught:
@@ -77,6 +77,8 @@ def test_a_text_job_whose_checkpoint_is_absent_is_refused_with_its_command(svc):
     message = caught.value.message
     assert caught.value.field == "base_model"
     assert spec.download in message
+    # And it leads with the route that does not need a terminal.
+    assert "Settings" in message
 
 
 def test_a_missing_style_lora_is_refused_rather_than_silently_skipped(svc):
@@ -122,7 +124,7 @@ def test_a_refused_job_leaves_nothing_behind(svc):
     from warlock import fetch, models
     from warlock.service import jobs as svc_jobs
 
-    spec = models.BASE_MODELS["turbo"]
+    spec = models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
     (fetch.base_model_dir(svc.config, spec) / "model_index.json").unlink()
     before = set(svc.config.data_dir.glob("*"))
 

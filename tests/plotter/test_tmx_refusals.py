@@ -245,6 +245,96 @@ def test_an_embedded_tileset_with_wangsets_is_refused():
     _refuses(data, "Wang sets")
 
 
+def _tmj(tileset: dict) -> bytes:
+    return json.dumps(
+        {
+            "type": "map",
+            "orientation": "orthogonal",
+            "width": 2,
+            "height": 2,
+            "tilewidth": 16,
+            "tileheight": 16,
+            "tilesets": [{"firstgid": 1, **tileset}],
+            "layers": [],
+        }
+    ).encode()
+
+
+def _blob_wangset(colours: list[dict]) -> dict:
+    """The set ``tsx.write_wangsets`` emits, in Tiled's JSON spelling."""
+    from warlock.studio.plotter import blob as bloblib
+
+    tiles = []
+    for index in range(len(colours)):
+        for case, mask in enumerate(bloblib.BLOB_MASKS):
+            tiles.append(
+                {
+                    "tileid": index * bloblib.TILE_COUNT + case,
+                    "wangid": [
+                        index + 1 if mask & bit else 0
+                        for bit in (
+                            bloblib.N,
+                            bloblib.NE,
+                            bloblib.E,
+                            bloblib.SE,
+                            bloblib.S,
+                            bloblib.SW,
+                            bloblib.W,
+                            bloblib.NW,
+                        )
+                    ],
+                }
+            )
+    return {"name": "Terrain", "type": "mixed", "colors": colours, "wangtiles": tiles}
+
+
+def test_a_tmj_wangset_this_build_wrote_is_recognised_rather_than_refused():
+    """Recognise-or-refuse, the rule the XML side already followed. The JSON
+    side used to refuse *every* wangset, so a ``.tmj`` carrying a set this build
+    had itself written was turned away."""
+    from warlock.studio.plotter import blob as bloblib
+
+    colours = [{"name": "Grass", "color": "#6a994e"}, {"name": "Sand", "color": "#d6c384"}]
+    doc = tmx.read_tmj(
+        _tmj(
+            {
+                "name": "ground",
+                "image": "a.png",
+                "tilewidth": 16,
+                "tileheight": 16,
+                "wangsets": [_blob_wangset(colours)],
+            }
+        ),
+        # One row per terrain, 47 columns of blob cases: the geometry a terrain
+        # set declares and ``Tileset`` refuses a declaration that denies.
+        image_loader=lambda _s: np.zeros(
+            (16 * 2, 16 * bloblib.TILE_COUNT, 4), dtype=np.uint8
+        ),
+        tsx_loader=_tsx_loader,
+    )
+    assert [entry.name for entry in doc.tilesets[0].tileset.terrains] == ["Grass", "Sand"]
+    assert doc.tilesets[0].tileset.is_terrain_set
+
+
+def test_a_foreign_tmj_wangset_is_refused_and_says_what_is_modelled():
+    """Corner-only sets, 255 colours, tiles that form no blob: adopting one
+    would be the silent half-read the reader exists to prevent."""
+    from warlock.studio.plotter import blob as bloblib
+
+    foreign = {
+        "name": "Corners",
+        "type": "corner",
+        "colors": [{"name": "Grass", "color": "#6a994e"}],
+        "wangtiles": [{"tileid": 0, "wangid": [1, 0, 0, 0, 0, 0, 0, 0]}],
+    }
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(
+            _tmj({"name": "g", "image": "a.png", "wangsets": [foreign]}), **LOADERS
+        )
+    assert "Wang sets" in str(exc.value)
+    assert str(bloblib.TILE_COUNT) in str(exc.value)
+
+
 def test_an_external_tsj_tileset_is_refused_with_the_remedy():
     payload = {
         "type": "map",
@@ -280,6 +370,36 @@ def test_an_embedded_tileset_image_with_no_path_is_refused():
         b"<image/></tileset></map>"
     )
     _refuses(data, "embedded tileset image")
+
+
+# --- the XML door -------------------------------------------------------------
+#
+# Not ``TiledUnsupported``: a DTD is not a Tiled feature this editor declines to
+# model, it is a shape the parser must never be handed. ``ExpatParser`` expands
+# internal entities, so the refusal has to happen before ``fromstring`` rather
+# than under any ceiling downstream.
+
+_LAUGHS = (
+    '<!DOCTYPE map [<!ENTITY a "AAAAAAAAAA">'
+    '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">'
+    '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>'
+)
+
+
+def test_a_tmx_declaring_a_dtd_is_refused_before_it_is_parsed():
+    data = (_LAUGHS + '<map version="1.10" orientation="orthogonal" width="1" '
+            'height="1" tilewidth="16" tileheight="16">&c;</map>').encode()
+    with pytest.raises(ValueError, match="DTD"):
+        tmx.read_tmx(data, **LOADERS)
+
+
+def test_a_tsx_declaring_a_dtd_is_refused_by_the_same_door():
+    """One door for both readers, which is the point of sharing it: a second
+    copy is a copy with no lock on it."""
+    data = (_LAUGHS + '<tileset name="t" tilewidth="16" tileheight="16">'
+            '<image source="a.png"/></tileset>').encode()
+    with pytest.raises(ValueError, match="DTD"):
+        tsx.tsx_source(data)
 
 
 # --- what is *not* refused ----------------------------------------------------

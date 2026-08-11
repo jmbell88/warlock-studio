@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, plotter_mode, widgets
+from .. import icons, plotter_mode, plotter_state, widgets
 from ..manual import render as manual_render
 
 
@@ -36,7 +36,9 @@ def draw(ctx: Any) -> None:
 
     if tab is None:
         imgui.dummy((0, 8))
-        widgets.muted_wrapped("Start a map, open one, or drop a .wmap / .tmx on the window.")
+        widgets.muted_wrapped(
+            f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window."
+        )
         _recent(ctx, state)
         return
 

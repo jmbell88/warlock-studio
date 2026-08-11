@@ -24,6 +24,17 @@ import numpy as np
 from . import gid as gidlib
 from .tilemap import MapDoc, TileLayer
 
+# The flat composite is ``pixel_height * pixel_width * 4`` bytes in one
+# allocation, and both factors are the document's own numbers -- a 4096-square
+# map of 64-pixel tiles is 68 gigapixels and asks for a quarter of a terabyte
+# before anything here gets a turn. 2^28 pixels is a gigabyte of RGBA: far past
+# any map anyone renders on purpose (a 512-square map at 32px is 4 megapixels)
+# and far short of a machine's RAM. **New rather than corpus-keyed** -- nothing
+# stored is measured against it, so it needs no ``docs/measurements/`` document;
+# it is a refusal about arithmetic, not a threshold about quality. Read from
+# module globals at call time so a test can lower it.
+MAX_RENDER_PIXELS = 1 << 28
+
 
 def orient(tile: np.ndarray, flip_h: bool, flip_v: bool, flip_d: bool) -> np.ndarray:
     """One tile's pixels, with its transform flags applied.
@@ -160,7 +171,14 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
     exported: one flag decides what you see and what comes out, and two answers
     to that are how an export starts disagreeing with the screen.
     """
-    out = np.zeros((doc.pixel_height, doc.pixel_width, 4), dtype=np.uint8)
+    width, height = int(doc.pixel_width), int(doc.pixel_height)
+    ceiling = MAX_RENDER_PIXELS
+    if width * height > ceiling:
+        raise ValueError(
+            f"this map renders to {width * height} pixels, past the {ceiling} "
+            "this build will composite in one image"
+        )
+    out = np.zeros((height, width, 4), dtype=np.uint8)
     for layer in doc.layers:
         if not isinstance(layer, TileLayer):
             # Object layers carry no pixels: they are metadata an engine reads,

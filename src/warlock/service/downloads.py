@@ -17,20 +17,24 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import queue
+import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from .. import fetch as fetch_mod
-from .. import winjob
+from .. import vram, winjob
+from . import validation
 from .core import WarlockService
-from .errors import Invalid, NotFound
+from .errors import Conflict, Failed, Invalid, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -59,8 +63,65 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
     nothing was putting the word into their labels.
     """
     config = svc.config
+    plan_ = getattr(svc, "vram_plan", None)
     out: list[dict[str, Any]] = []
     for entry in fetch_mod.entries():
+        jobs = fetch_mod.plan(config, [entry])
+        row: dict[str, Any] = {
+            "row_key": entry.row_key,
+            "kind": entry.kind,
+            "key": entry.key,
+            "label": entry.label,
+            "present": entry.is_present(config),
+            "size_gib": fetch_mod.total_gib(jobs),
+            "downloadable": bool(jobs),
+        }
+        # Only base models have a device footprint, and only when a plan has
+        # been resolved -- a headless caller and every test that builds a
+        # service by hand have ``vram_plan is None``, and a badge invented from
+        # no measurement is worse than no badge. The key is *absent* rather than
+        # None in that case, so the pane's ``.get`` reads one way.
+        if plan_ is not None and entry.kind == "base":
+            row["vram"] = vram.fits(plan_, entry.spec)
+        # What removing *this* row alone would free, and whether it would free
+        # anything at all. Only for rows that are here -- there is nothing to
+        # offer against a model that is not installed -- and computed rather
+        # than guessed, because one of four recipes over one checkpoint frees
+        # 0.8 GB and not 7, and a button that said 7 would be a lie.
+        #
+        # Path arithmetic only (no stat, no walk), ~17 entries, on the
+        # task-done path. Cheap enough; measure again if the pane hitches.
+        if row["present"]:
+            removal = fetch_mod.removal_plan(config, [entry])
+            row["removable"] = bool(removal.paths)
+            row["freed_gib"] = removal.freed_gib
+        out.append(row)
+    return out
+
+
+def needed_rows(svc: WarlockService, row_keys: Sequence[str]) -> list[dict[str, Any]]:
+    """Which of these rows are *not* on this host, in ``rows()``'s shape.
+
+    The question a locked feature asks: "what does this need that I haven't
+    got". Resolution goes through ``fetch_mod.find`` and raises ``NotFound`` on
+    an unknown row exactly as ``plan_for`` does, because a feature naming a row
+    key the registry has never heard of is a bug in the feature and must not
+    quietly return "nothing missing".
+
+    Sizes here are **per row and not deduped** -- each is what that row alone
+    would fetch. A caller quoting one figure to a user composes this with
+    ``plan_for``/``fetch.total_gib`` over the returned keys instead, which is
+    what makes a sprite sheet on a fresh host quote ~13 GB rather than the ~28
+    a naive sum of four rows sharing one 7 GiB checkpoint would produce.
+    """
+    config = svc.config
+    out: list[dict[str, Any]] = []
+    for row_key in row_keys:
+        entry = fetch_mod.find(row_key)
+        if entry is None:
+            raise NotFound(f"No such model: {row_key}")
+        if entry.is_present(config):
+            continue
         jobs = fetch_mod.plan(config, [entry])
         out.append(
             {
@@ -68,12 +129,27 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
                 "kind": entry.kind,
                 "key": entry.key,
                 "label": entry.label,
-                "present": entry.is_present(config),
+                "present": False,
                 "size_gib": fetch_mod.total_gib(jobs),
                 "downloadable": bool(jobs),
             }
         )
     return out
+
+
+def needed_keys(svc: WarlockService, row_keys: Sequence[str]) -> tuple[str, ...]:
+    """``needed_rows`` reduced to the keys, for a refusal's ``rows=``."""
+    return tuple(row["row_key"] for row in needed_rows(svc, row_keys))
+
+
+def needed_gib(svc: WarlockService, row_keys: Sequence[str]) -> float:
+    """What installing exactly the missing ones costs, deduped across them.
+
+    The composition ``needed_rows`` deliberately does not do for you: shared
+    weights are counted once, so this is the number a pane may put on a button.
+    """
+    keys = list(needed_keys(svc, row_keys))
+    return fetch_mod.total_gib(plan_for(svc, keys)) if keys else 0.0
 
 
 def plan_for(svc: WarlockService, row_keys: list[str]) -> list[fetch_mod.Job]:
@@ -128,6 +204,128 @@ def download(
     if on_progress is not None:
         on_progress(100.0, "")
     return {"fetched": [job.repo_id for job in jobs]}
+
+
+# A directory being deleted is renamed to a sibling with this prefix first, so
+# the removal is atomic from a reader's point of view: the model is either fully
+# there or fully gone, never a half-emptied checkpoint that ``present`` calls
+# downloaded. ``rmtree`` of a 7 GiB tree is not atomic and can fail halfway;
+# ``os.rename`` within one volume is.
+TRASH_PREFIX = ".trash-"
+
+# States that mean the queue may still ask for these weights. Conservative and
+# whole-queue rather than per-model: a queued job's ``base_model`` names a
+# checkpoint, but a running one may already have loaded a style LoRA, an
+# adapter and a ControlNet that its row does not mention, and deleting a file
+# out from under a live pipe is not a failure with a good message.
+_LIVE_STATUSES = ("queued", "running")
+
+
+def _sweep_trash(root: Path) -> None:
+    """Remove whatever an interrupted uninstall left behind. Never raises.
+
+    Opportunistic, at the *start* of the next uninstall rather than on a timer:
+    the leak is bounded by "the user removes another model", it costs one
+    directory listing, and a sweep that raised would turn a recoverable mess
+    into a permanent refusal.
+    """
+    try:
+        stale = [p for p in root.iterdir() if p.name.startswith(TRASH_PREFIX)]
+    except OSError:
+        return
+    for path in stale:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink()
+
+
+def uninstall(
+    svc: WarlockService,
+    row_keys: list[str],
+    *,
+    on_progress: Progress | None = None,
+) -> dict[str, Any]:
+    """Delete these models' weights. Blocking; refuses rather than half-deletes.
+
+    The mirror of ``download`` and the same posture at the door: the whole
+    selection is refused, or the whole selection runs. What it may delete is
+    ``fetch.removal_plan``'s answer and nothing else -- reference-counted over
+    the registry, so uninstalling one of four recipes over one checkpoint frees
+    only that recipe's own adapter.
+
+    Removing the *default* base model is deliberately allowed. It degrades to
+    the friendly refusal every other missing checkpoint gets, which names the
+    model and offers Settings → Models; a special case here would be a rule the
+    user cannot see and cannot undo.
+    """
+    chosen: list[fetch_mod.Entry] = []
+    for row_key in row_keys:
+        entry = fetch_mod.find(row_key)
+        if entry is None:
+            raise NotFound(f"No such model: {row_key}")
+        chosen.append(entry)
+
+    live = [
+        job
+        for job in svc.store.list(limit=validation.MAX_LIST_LIMIT)
+        if job.get("status") in _LIVE_STATUSES
+    ]
+    if live:
+        raise Conflict(
+            "Jobs are still queued or running; wait for them to finish before "
+            "removing a model."
+        )
+
+    removal = fetch_mod.removal_plan(svc.config, chosen)
+    if removal.blocked:
+        raise Invalid(" ".join(removal.blocked))
+    if not removal.paths:
+        raise Invalid(
+            "There is nothing to remove: every file those models use is shared "
+            "with another model that would still need it."
+        )
+
+    # Before anything is unlinked, and tolerant of a service with no worker (a
+    # headless tool, a test): on Windows a mapped safetensors file cannot be
+    # deleted, and this process is the one holding the mapping.
+    if svc.worker is not None:
+        svc.call_on_loop(lambda: svc.worker.unload_text2image())
+
+    root = svc.config.t2i_model_root
+    _sweep_trash(root)
+    if on_progress is not None:
+        on_progress(0.0, "removing")
+    removed: list[str] = []
+    for index, path in enumerate(removal.paths, start=1):
+        _remove_one(path, root)
+        removed.append(str(path))
+        if on_progress is not None:
+            on_progress(100.0 * index / len(removal.paths), path.name)
+    if on_progress is not None:
+        on_progress(100.0, "")
+    return {"removed": removed, "freed_gib": removal.freed_gib}
+
+
+def _remove_one(path: Path, root: Path) -> None:
+    """Delete one claim, crash-atomically for a directory. Missing is fine.
+
+    An absent path is not an error: ``removal_plan`` is pure and answers about
+    what a row *stands on*, not about what happens to be there, so a partially
+    downloaded model has claims with nothing behind them.
+    """
+    try:
+        if path.is_dir():
+            trash = root / f"{TRASH_PREFIX}{secrets.token_hex(6)}"
+            os.rename(path, trash)
+            shutil.rmtree(trash)
+        elif path.exists():
+            path.unlink()
+    except PermissionError as exc:
+        raise Failed(
+            f"Could not remove {path.name}: another process holds these files. "
+            "Close any running jobs, or restart Warlock, and try again."
+        ) from exc
+    except OSError as exc:
+        raise Failed(f"Could not remove {path.name}: {exc}") from exc
 
 
 def _kill_and_reap(proc: subprocess.Popen[str]) -> None:

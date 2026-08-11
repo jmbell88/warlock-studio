@@ -44,7 +44,6 @@ a computation that changed nothing is ``None`` rather than an empty write.
 
 from __future__ import annotations
 
-from collections import deque
 from collections.abc import Iterable
 
 import numpy as np
@@ -52,7 +51,7 @@ import numpy as np
 from . import blob
 from . import gid as gidlib
 from .tileset import TerrainSpec, TilesetRef
-from .tools import Region
+from .tools import Region, flood_mask
 
 #: What an empty cell, or one belonging to some other tileset, ranks as. Below
 #: every terrain, so nothing is ever outlined against the terrain it is not.
@@ -170,37 +169,6 @@ def _finish(
     return x0, y0, np.ascontiguousarray(region, dtype=gidlib.DTYPE)
 
 
-def retile(
-    data: np.ndarray,
-    ref: TilesetRef,
-    *,
-    x0: int = 0,
-    y0: int = 0,
-    x1: int | None = None,
-    y1: int | None = None,
-    outside: bool = True,
-) -> Region | None:
-    """Re-fit every terrain cell in a rectangle to its neighbours.
-
-    The repair primitive: after any change to the field -- a paint, an erase, a
-    plain stamp somebody made by hand -- this is what makes the edges agree
-    again. Reads one cell beyond the rectangle on every side and writes only
-    inside it.
-    """
-    height, width = np.asarray(data).shape
-    box = (
-        max(0, int(x0)),
-        max(0, int(y0)),
-        min(width, width if x1 is None else int(x1)),
-        min(height, height if y1 is None else int(y1)),
-    )
-    if box[2] <= box[0] or box[3] <= box[1]:
-        return None
-    work = np.array(data, dtype=gidlib.DTYPE)
-    _retile_into(work, ref, box, outside)
-    return _finish(data, work, box)
-
-
 def paint_terrain_cells(
     data: np.ndarray,
     cells: Iterable[tuple[int, int]],
@@ -312,18 +280,11 @@ def fill_terrain(
     if target == int(terrain):
         return None
 
-    seen = np.zeros((height, width), dtype=bool)
-    seen[y, x] = True
-    queue: deque[tuple[int, int]] = deque([(x, y)])
-    while queue:
-        cx, cy = queue.popleft()
-        for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
-            inside = 0 <= nx < width and 0 <= ny < height
-            if inside and not seen[ny, nx] and ranks[ny, nx] == target:
-                seen[ny, nx] = True
-                queue.append((nx, ny))
-
-    ys, xs = np.nonzero(seen)
+    # The same reachability question :func:`tools.flood_fill` asks, over a
+    # different comparison -- which is exactly why it is one function. The two
+    # were a verbatim copy of each other before, differing in nothing but the
+    # array being matched.
+    ys, xs = np.nonzero(flood_mask(ranks == target, x, y))
     return paint_terrain_cells(
         data, zip(xs.tolist(), ys.tolist(), strict=True), terrain, ref, outside=outside
     )

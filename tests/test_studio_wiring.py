@@ -28,7 +28,9 @@ from warlock.studio import (
     main,
     packwright_mode,
     palette,
+    plotter_io,
     plotter_mode,
+    plotter_tilesets,
     review_mode,
     theme,
     tokens,
@@ -410,7 +412,16 @@ def test_no_module_writes_out_a_list_of_image_suffixes():
     ``".png"`` is a legitimate answer to a different question (which filter a
     PNG export offers), while two on one line is a list being restated.
     """
-    for module in (main, dialogs, inker_mode, packwright_mode, plotter_mode):
+    modules = (
+        main,
+        dialogs,
+        inker_mode,
+        packwright_mode,
+        plotter_mode,
+        plotter_io,
+        plotter_tilesets,
+    )
+    for module in modules:
         for number, line in enumerate(inspect.getsource(module).splitlines(), 1):
             named = [s for s in filetypes.IMAGE_SUFFIXES if f'"{s}"' in line or f"*{s}" in line]
             assert len(named) < 2, f"{module.__name__}:{number} restates {named}"

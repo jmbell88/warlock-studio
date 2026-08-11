@@ -153,7 +153,27 @@ def write_properties(parent: ET.Element, props: dict[str, Prop]) -> None:
 # --- reading ------------------------------------------------------------------
 
 
-def _root(data: bytes, expect: str) -> ET.Element:
+def xml_root(data: bytes, expect: str) -> ET.Element:
+    """The one XML door for both Tiled readers: parse, then check the root tag.
+
+    Public and shared with :mod:`.tmx` rather than copied into it, because the
+    two copies were byte-identical and the *refusal* below is the reason that
+    matters: a second door is a door with no lock on it.
+
+    **A DTD is refused before the parser sees it.** ``ExpatParser`` expands
+    internal entities, so the billion-laughs shape -- ten nested entities each
+    referencing the previous one ten times -- turns a few hundred bytes of file
+    into gigabytes of string inside ``fromstring``, and no ceiling downstream
+    ever gets a turn. Tiled writes no DTD, so nothing legitimate is lost.
+
+    The probe is a substring of the first 4 KiB rather than a parse, because the
+    declaration is part of the *prolog*: XML requires it before the root element,
+    a prolog is a version declaration, optional comments and processing
+    instructions, and 4 KiB is far past any of those and far short of the
+    document body. Uppercased, since ``<!doctype`` is equally legal.
+    """
+    if b"<!DOCTYPE" in data[:4096].upper():
+        raise ValueError("this file declares a DTD, which Plotter does not read")
     try:
         root = ET.fromstring(data)
     except ET.ParseError as exc:
@@ -202,7 +222,7 @@ def tsx_source(data: bytes) -> str:
     Separate from :func:`read_tsx` so this module never opens a file: the
     caller resolves the path, reads and decodes it, and hands the pixels back.
     """
-    root = _root(data, "tileset")
+    root = xml_root(data, "tileset")
     check_tileset_features(root)
     image = root.find("image")
     source = (image.get("source") or "").strip() if image is not None else ""
@@ -243,6 +263,80 @@ def _hex_rgba(value: str) -> tuple[int, int, int, int]:
         return (0, 0, 0, 255)
 
 
+def _expected_wangids(colours: int) -> dict[int, str]:
+    """``{tile id: wangid}`` for the one set this editor models.
+
+    Extracted so the XML and JSON readers ask the *same* question: what is
+    recognised is precisely what :func:`write_wangsets` emits, and two copies of
+    that table is how one spelling comes to adopt a set the other refuses.
+    """
+    want: dict[int, str] = {}
+    for index in range(colours):
+        for case, mask in enumerate(blob.BLOB_MASKS):
+            want[index * blob.TILE_COUNT + case] = ",".join(
+                str(index + 1 if mask & bit else 0) for bit in _WANG_BITS
+            )
+    return want
+
+
+def _terrains_from_colours(colours: list[tuple[str, str]]) -> tuple[TerrainSpec, ...]:
+    """``(name, #rrggbb)`` pairs as terrains, outline derived.
+
+    The outline colour is **not** carried by the format and is derived on the
+    way back in. Lossless where it matters: a terrain's two colours are read by
+    the *generator* and by nothing else, since a tileset that already has pixels
+    renders from them.
+    """
+    out = []
+    for index, (name, colour) in enumerate(colours):
+        fill = _hex_rgba(colour)
+        outline = (*(part * 3 // 5 for part in fill[:3]), fill[3])
+        out.append(
+            TerrainSpec(name=name or f"Terrain {index + 1}", fill=fill, outline=outline)
+        )
+    return tuple(out)
+
+
+def read_wangsets_json(entries: Any) -> tuple[TerrainSpec, ...] | None:
+    """:func:`read_wangsets` over Tiled's JSON spelling of the same block.
+
+    Same contract, same table, same ``None``-rather-than-exception rule -- one
+    model, two syntaxes. The JSON schema names the parts differently (``colors``
+    for ``<wangcolor>``, ``wangtiles`` for ``<wangtile>``, and a ``wangid`` that
+    is a list of eight numbers rather than a comma-joined string), and
+    reconciling those spellings is all this function is.
+    """
+    if not isinstance(entries, list) or len(entries) != 1:
+        return None
+    wangset = entries[0]
+    if not isinstance(wangset, dict) or wangset.get("type") != "mixed":
+        return None
+    colours = wangset.get("colors")
+    if not isinstance(colours, list) or not colours:
+        return None
+    if not all(isinstance(colour, dict) for colour in colours):
+        return None
+    tiles = wangset.get("wangtiles")
+    if not isinstance(tiles, list) or len(tiles) != len(colours) * blob.TILE_COUNT:
+        return None
+
+    want = _expected_wangids(len(colours))
+    for tile in tiles:
+        if not isinstance(tile, dict) or not isinstance(tile.get("wangid"), list):
+            return None
+        try:
+            tileid = int(tile["tileid"])
+            wangid = ",".join(str(int(part)) for part in tile["wangid"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if want.get(tileid) != wangid:
+            return None
+
+    return _terrains_from_colours(
+        [(str(colour.get("name", "")), str(colour.get("color", ""))) for colour in colours]
+    )
+
+
 def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
     """A ``<wangsets>`` block as this editor's terrains, or ``None``.
 
@@ -275,11 +369,7 @@ def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
     if len(tiles) != len(colours) * blob.TILE_COUNT:
         return None
 
-    want = {}
-    for index in range(len(colours)):
-        for case, mask in enumerate(blob.BLOB_MASKS):
-            wangid = ",".join(str(index + 1 if mask & bit else 0) for bit in _WANG_BITS)
-            want[index * blob.TILE_COUNT + case] = wangid
+    want = _expected_wangids(len(colours))
     for tile in tiles:
         try:
             tileid = int(tile.get("tileid", ""))
@@ -288,18 +378,9 @@ def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
         if want.get(tileid) != (tile.get("wangid") or "").replace(" ", ""):
             return None
 
-    out = []
-    for index, colour in enumerate(colours):
-        fill = _hex_rgba(colour.get("color", ""))
-        outline = (*(part * 3 // 5 for part in fill[:3]), fill[3])
-        out.append(
-            TerrainSpec(
-                name=colour.get("name") or f"Terrain {index + 1}",
-                fill=fill,
-                outline=outline,
-            )
-        )
-    return tuple(out)
+    return _terrains_from_colours(
+        [(colour.get("name") or "", colour.get("color", "")) for colour in colours]
+    )
 
 
 def write_wangsets(parent: ET.Element, terrains: tuple[TerrainSpec, ...]) -> None:
@@ -345,7 +426,7 @@ def _terrains_of(root: ET.Element) -> tuple[TerrainSpec, ...]:
 
 def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`."""
-    root = _root(data, "tileset")
+    root = xml_root(data, "tileset")
     check_tileset_features(root)
     return Tileset(
         name=root.get("name") or "tileset",

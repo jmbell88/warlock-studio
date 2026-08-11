@@ -17,6 +17,7 @@ from .. import icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..plotter.tilemap import MapObject, ObjectLayer, TileLayer, new_uid
 from ..plotter.tsx import PROPERTY_TYPES, Prop
+from ..tokens import sp
 
 
 def draw(ctx: Any) -> None:
@@ -55,8 +56,16 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
 
     imgui.push_id(str(layer.uid))
     eye = icons.EYE if layer.visible else icons.EYE_OFF
-    if widgets.small_icon_button(eye, "Show / hide") and editable:
+    # Greyed rather than live-and-discarded. Every one of these drew at full
+    # contrast while the tab was saving and then threw the click away, which is
+    # the "clickable lie" the house pattern names -- ``clay_tools`` and
+    # ``clay_menu`` already wrap theirs. The *selectable* stays live on purpose:
+    # choosing which layer you are looking at changes no document and pushes no
+    # step, which ``test_choosing_a_layer_pushes_no_step`` pins.
+    imgui.begin_disabled(not editable)
+    if widgets.small_icon_button(eye, "Show / hide"):
         doc.set_layer_props(layer.uid, visible=not layer.visible)
+    imgui.end_disabled()
     imgui.same_line()
     kind = icons.GRID if isinstance(layer, TileLayer) else icons.FLAG
     active = doc.active_layer == layer.uid
@@ -64,13 +73,15 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
         doc.set_active_layer(layer.uid)
         state.selected_object = None
     if imgui.begin_popup_context_item(f"layer-menu-{layer.uid}"):
-        if imgui.menu_item_simple("Move up") and editable:
+        imgui.begin_disabled(not editable)
+        if imgui.menu_item_simple("Move up"):
             doc.move_layer(layer.uid, doc.index_of(layer.uid) + 1)
-        if imgui.menu_item_simple("Move down") and editable:
+        if imgui.menu_item_simple("Move down"):
             doc.move_layer(layer.uid, doc.index_of(layer.uid) - 1)
         imgui.separator()
-        if imgui.menu_item_simple("Delete") and editable:
+        if imgui.menu_item_simple("Delete"):
             _delete_layer(ctx, doc, layer)
+        imgui.end_disabled()
         imgui.end_popup()
     if active and editable:
         changed, opacity = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)
@@ -176,9 +187,9 @@ def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
     form = ctx.state.preview.setdefault(form_key, {"name": "", "type": "string"})
     form["name"] = widgets.input_text("##prop-name", form["name"], max_length=48, hint="new key")
     imgui.same_line()
-    imgui.set_next_item_width(90)
+    imgui.set_next_item_width(sp(90))
     form["type"] = widgets.combo(
-        "##prop-type", form["type"], [(t, t) for t in PROPERTY_TYPES], width=90
+        "##prop-type", form["type"], [(t, t) for t in PROPERTY_TYPES], width=sp(90)
     )
     imgui.same_line()
     if widgets.disabled_button(f"{icons.PLUS}##add-prop", bool(form["name"].strip())):
@@ -197,7 +208,7 @@ def _blank_value(kind: str) -> Any:
 def _value_editor(prop: Prop) -> Any:
     from imgui_bundle import imgui
 
-    imgui.set_next_item_width(110)
+    imgui.set_next_item_width(sp(110))
     if prop.type == "bool":
         changed, value = imgui.checkbox("##v", bool(prop.value))
         return value if changed else None

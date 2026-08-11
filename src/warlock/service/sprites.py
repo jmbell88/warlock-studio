@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .. import rigging
+from .. import models, rigging
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound
 from .validation import (
@@ -49,6 +49,28 @@ DEFAULT_SPRITE_COLORS = 32
 # the day this becomes a control the pairing refusal below is already at the
 # door.
 SPRITE_BASE_MODEL = "sdxl_cfg"
+
+# The three non-base weights a synthesis loads: (registry kind, registry key,
+# the form field a refusal about it names). One list rather than three, and the
+# single source for both ``SPRITE_ROWS`` below and ``_check_weights``'s loop --
+# they were about to be two hand-copies of the same fact, which is the drift
+# ``fetch.KINDS`` was written to end everywhere else.
+_SPRITE_REQUIRED: tuple[tuple[str, str, str], ...] = (
+    ("adapter", "plus", "ip_adapter"),
+    ("control", "canny", "control"),
+    ("lora", models.PIXEL_SHEET_LORA, "style_lora"),
+)
+
+# Every registry row a sprite synthesis needs on this host, in
+# ``fetch.Entry.row_key`` spelling and in the order they are checked. Exported
+# so a pane can offer "install what this needs" without knowing what a sprite
+# sheet is made of. Sizes are *not* summed from here: three of these four rows
+# resolve to weights the others may already imply, so a caller wanting a figure
+# composes this with ``downloads.plan_for``, which dedupes.
+SPRITE_ROWS: tuple[str, ...] = (
+    f"base:{SPRITE_BASE_MODEL}",
+    *(f"{kind}:{key}" for kind, key, _field in _SPRITE_REQUIRED),
+)
 
 
 def sprite_options() -> dict[str, Any]:
@@ -95,22 +117,29 @@ def _check_weights(svc: WarlockService) -> None:
     ControlNet and the identity *is* the IP-Adapter, so a missing one is not a
     slightly plainer picture, it is the feature not happening.
     """
-    from .. import fetch, models
-    from .validation import check_base_model_weights
+    from .. import fetch
+    from .downloads import needed_keys
+    from .validation import check_base_model_weights, install_remedy
 
-    check_base_model_weights(svc, models.BASE_MODELS[SPRITE_BASE_MODEL])
-    required = (
-        ("adapter", models.IP_ADAPTERS["plus"], "ip_adapter"),
-        ("control", models.CONTROLNETS["canny"], "control"),
-        ("lora", models.STYLE_LORAS[models.PIXEL_SHEET_LORA], "style_lora"),
+    check_base_model_weights(
+        svc,
+        models.BASE_MODELS[SPRITE_BASE_MODEL],
+        rows=needed_keys(svc, SPRITE_ROWS),
     )
-    for kindname, spec, field in required:
+    for kindname, key, field in _SPRITE_REQUIRED:
+        entry = fetch.find(f"{kindname}:{key}")
+        assert entry is not None, f"{kindname}:{key} is not a registry row"
+        spec = entry.spec
         if fetch.present(svc.config, kindname, spec):
             continue
         raise Invalid(
             f"A sprite sheet needs {spec.label!r}, which is not downloaded. "
-            f"Download it with:\n  {spec.download}",
+            f"{install_remedy(spec.label, spec.download)}",
             field=field,
+            # Every row the feature is short of, not merely the one that
+            # tripped: a user offered "install what this needs" wants one
+            # download, not three refusals in a row.
+            rows=needed_keys(svc, SPRITE_ROWS),
         )
 
 

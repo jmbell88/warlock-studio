@@ -179,7 +179,9 @@ def _resize_form(ctx: Any, tab: Any) -> None:
                 offset_x=int(form["dx"]), offset_y=int(form["dy"]),
             )
         except ValueError as exc:
-            ctx.toast(str(exc), "error")
+            # Framed rather than forwarded: the engine's sentence says what was
+            # wrong with the number and nothing about what was being attempted.
+            ctx.toast(f"The map was not resized: {exc}.", "error")
             return
         ctx.state.preview.pop(key, None)
         tab.view.fitted = False

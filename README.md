@@ -5,7 +5,7 @@ A local, fully offline indie art studio for game assets — one desktop window, 
 The generation pipeline:
 
 - **Image → 3D**: reference image → textured GLB (base colour plus a combined metallic/roughness texture; surface detail rides on vertex normals, not a normal map), powered by Microsoft **TRELLIS.2-4B** running natively via [trellis.cpp](https://github.com/pwilkin/trellis.cpp) (C++/GGML, CUDA).
-- **Text → 3D**: prompt → reference image via a diffusers pipeline, loaded from a local weights dir. **SDXL-Turbo** is the default; ten base models are registered (`src/warlock/models.py`) from 4-step distillations to full-CFG SDXL, Playground, Juggernaut, DreamShaper and FLUX.2 klein, with per-job style LoRAs, IP-Adapter appearance conditioning, ControlNet silhouette lock, and a seamless-tile mode with seam measurement. See [docs/MODELS.md](docs/MODELS.md).
+- **Text → 3D**: prompt → reference image via a diffusers pipeline, loaded from a local weights dir. **SDXL 1.0 at full CFG** is the default and the one base download the setup below asks for — 30 steps at 1024 px, with the negative prompt and ControlNet live; the same 7 GB also powers three faster recipes over the same weights, and **SDXL-Turbo** remains the 4-step fast option one install away. Ten base models are registered (`src/warlock/models.py`) from 4-step distillations to full-CFG SDXL, Playground, Juggernaut, DreamShaper and FLUX.2 klein, with per-job style LoRAs, IP-Adapter appearance conditioning, ControlNet silhouette lock, and a seamless-tile mode with seam measurement. See [docs/MODELS.md](docs/MODELS.md).
 - **Rig → pose → sprite sheet**: fit one of seven template skeletons (humanoid, quadruped, bird, fish, insect, serpent, tailed biped), pose it with 3D gizmos or reusable poses from the Poser's global library, and bake poses into sprite sheets — flat or lit, 4/8/16 directions, optionally restyled into pixel art.
 - **The approval gate**: text jobs stop at the reference by default — the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
 
@@ -40,7 +40,7 @@ Everything but the primary artifacts is derived lazily on first request and cach
 
 - Windows, NVIDIA GPU (tested: RTX 5090 / 32 GB; TRELLIS.2 alone fits in 16 GB)
 - [uv](https://docs.astral.sh/uv/); Python ≥ 3.12, but **rigging needs 3.13** — `bpy` ships CPython 3.13 wheels only. On any other Python the rig extra installs nothing, `warlock doctor` reports rigging unavailable, and the app hides the rig controls; everything else works unchanged.
-- ~16 GB disk for TRELLIS.2 GGUF weights (+ ~7 GB for SDXL-Turbo if using text-to-3D)
+- ~16 GB disk for TRELLIS.2 GGUF weights (+ ~7 GB for SDXL 1.0 if using text-to-3D)
 
 ## Setup
 
@@ -59,16 +59,18 @@ uv sync --extra studio --extra text2image --extra rig
 uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir models/trellis2-gguf
 
-# 4. SDXL-Turbo weights (fp16 variant, ~7 GB) -> models/sdxl-turbo/  (text-to-3D only)
-uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
-  --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
+# 4. SDXL 1.0 weights (fp16 variant, ~7 GB) -> models/sdxl-base-1.0/  (text-to-3D only)
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
 ```
+
+This one download powers four of the registered recipes — full CFG (the default), Hyper-SD, LCM and Lightning are the same weights run four ways, so the three faster ones cost only a small LoRA each. SDXL-Turbo is a separate 7 GB checkpoint and is now optional; its command is in [docs/MODELS.md](docs/MODELS.md).
 
 These downloads are the only network use there is. The generation pipeline is fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is set at import, all model loads are `local_files_only`), and a missing weight produces a clear error and a `doctor` warning naming the exact command rather than a silent fetch.
 
-Everything below the first two steps can also be fetched from inside the app, in **Settings → Models**: tick the rows you want and press Download. That does not make the app online-capable, and the mechanism is the point — the button spawns a separate `python -m warlock.pipelines.fetch_worker` process which sets `HF_HUB_OFFLINE=0` in its own environment, fetches one repository into a staging directory beside the destination, moves the files in only if it succeeded, and exits. The app process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked against the whole plan before anything is spawned, and a failed fetch leaves no half-populated model directory.
+Everything below the first two steps can also be fetched from inside the app, in **Settings → Models**: tick the rows you want and press Download — and removed again from the same place, which tells you what a removal would actually free before you confirm it. That does not make the app online-capable, and the mechanism is the point — the button spawns a separate `python -m warlock.pipelines.fetch_worker` process which sets `HF_HUB_OFFLINE=0` in its own environment, fetches one repository into a staging directory beside the destination, moves the files in only if it succeeded, and exits. The app process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked against the whole plan before anything is spawned, and a failed fetch leaves no half-populated model directory.
 
-**Optional models** — alternative base models (full SDXL, Playground, Juggernaut, DreamShaper, FLUX.2 klein), style LoRAs (3D render, PS1, pixel art), IP-Adapter, ControlNet, BiRefNet matting, DINOv2, ViTPose — live in [docs/MODELS.md](docs/MODELS.md) with the exact commands and the rationale for each recipe.
+**Optional models** — alternative base models (SDXL-Turbo, the Hyper-SD/LCM/Lightning recipes over the base you already have, Playground, Juggernaut, DreamShaper, FLUX.2 klein), style LoRAs (3D render, PS1, pixel art), IP-Adapter, ControlNet, BiRefNet matting, DINOv2, ViTPose — live in [docs/MODELS.md](docs/MODELS.md) with the exact commands and the rationale for each recipe.
 
 ### Optional: rigging
 
@@ -97,7 +99,7 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 
 There is no config file — everything is a `WARLOCK_*` env var; the full table lives in [docs/manual/16-configuration.md](docs/manual/16-configuration.md). The main knobs: `WARLOCK_DATA_DIR` (where assets and the job store live), `WARLOCK_EXPORT_DIR`, `WARLOCK_T2I_ROOT`/`WARLOCK_T2I_MODEL` (image-model home and default), and `WARLOCK_VRAM_EXCLUSIVE`.
 
-On VRAM: the trellis server subprocess starts on the first 3D job and by default stays resident alongside SDXL-Turbo (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle. `WARLOCK_VRAM_EXCLUSIVE=1` restores sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident FLUX.
+On VRAM: the trellis server subprocess starts on the first 3D job and by default stays resident alongside the image model (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle. `WARLOCK_VRAM_EXCLUSIVE=1` restores sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident FLUX.
 
 ## Development
 

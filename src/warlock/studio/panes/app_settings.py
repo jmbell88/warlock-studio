@@ -24,8 +24,8 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from ... import fetch
-from .. import app_ctx, icons, theme, tokens, widgets
+from ... import fetch, vram
+from .. import app_ctx, dialogs, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -311,7 +311,10 @@ def _models(ctx: Any) -> None:
     # legitimately want the same destination -- sdxl and sdxl_cfg are one
     # download -- and the staging-directory rule in the worker protects the
     # *destination*, not two writers of one staging tree.
-    busy = ctx.tasks.any_busy("download:")
+    # ...and a removal counts as one: the two operate on the same directories
+    # (uninstalling ``sdxl`` while the shared checkpoint is being fetched is a
+    # race with no good outcome), so one mutation at a time across the pane.
+    busy = ctx.tasks.any_busy("download:") or ctx.tasks.any_busy("remove:")
     by_kind: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         by_kind.setdefault(str(row.get("kind")), []).append(row)
@@ -330,6 +333,9 @@ def _models(ctx: Any) -> None:
             _row(ctx, row, busy)
 
     imgui.dummy((0, sp(tokens.SP_1)))
+    recommended = str(getattr(ctx, "recommended_base_label", "") or "")
+    if recommended:
+        widgets.muted(f"Recommended for this GPU: {recommended}")
     picks = {r["row_key"] for r in rows if r["row_key"] in ctx.model_picks and not r["present"]}
     if widgets.disabled_button(
         f"Download selected ({len(picks)})",
@@ -358,12 +364,97 @@ def _models(ctx: Any) -> None:
     )
 
 
+def _fit_badge(row: dict[str, Any]) -> None:
+    """The one-line "and can this card hold it" note, under a base row.
+
+    Read with ``.get`` and skipped when absent, never defaulted to a verdict:
+    the key is only present when the service had a resolved VRAM plan, and a
+    pane that turned "unknown" into "won't fit" would refuse a card nobody
+    measured. Drawn for present rows too -- a downloaded model that cannot run
+    here is exactly the thing worth saying.
+    """
+    verdict = row.get("vram")
+    if verdict == vram.FIT_TIGHT:
+        widgets.text_colored(theme.WARN, "    tight fit")
+    elif verdict == vram.FIT_NO:
+        widgets.text_colored(theme.ERR, "    won't fit this GPU")
+
+
+def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
+    """The trash button under a downloaded row, and the figure beside it.
+
+    Drawn only when ``removable`` -- a recipe whose every file is shared with
+    another model that would still need it has nothing to offer, and a button
+    that refused on click would be worse than no button.
+
+    The freed figure is ``removal_plan``'s, not the download size, and that is
+    the whole reason it is shown: uninstalling one of the four SDXL 1.0 recipes
+    frees 0.8 GB, and a row that implied 7 would be lying about a delete.
+    """
+    row_key = str(row["row_key"])
+    if not row.get("removable"):
+        return
+    key = app_ctx.remove_key(row_key)
+    if ctx.tasks.is_busy(key):
+        found = ctx.progress(key)
+        widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
+        return
+    freed = float(row.get("freed_gib") or 0.0)
+    if freed:
+        widgets.muted(f"    frees {freed:.1f} GB")
+    if widgets.disabled_button(f"{icons.TRASH} Remove##{row_key}", not busy):
+        _confirm_removal(ctx, row)
+
+
+def _confirm_removal(ctx: Any, row: dict[str, Any]) -> None:
+    """Ask first. The consequence sentence differs for a base model, because
+    that is the one removal that can stop generation working entirely."""
+    row_key = str(row["row_key"])
+    label = str(row.get("label") or row_key)
+    freed = float(row.get("freed_gib") or 0.0)
+    message = f"{label} will be deleted from disk, freeing about {freed:.1f} GB."
+    if row.get("kind") == "base":
+        message += (
+            "\n\nGeneration will refuse to run until a base model is "
+            "reinstalled. You can download it again from this pane."
+        )
+    dialogs.ask_delete(
+        ctx,
+        title="Remove model",
+        message=message,
+        on_confirm=lambda: _start_removal(ctx, row_key),
+    )
+
+
+def _start_removal(ctx: Any, row_key: str) -> None:
+    """Submit the uninstall, with the same progress binding ``_start`` uses.
+
+    Extracted from the confirm's lambda so it can be called without a frame,
+    and so the closure over ``key`` is written once for both mutations.
+    """
+    from ...service import downloads as svc_downloads
+
+    key = app_ctx.remove_key(row_key)
+
+    def run() -> Any:
+        return svc_downloads.uninstall(
+            ctx.svc,
+            [row_key],
+            on_progress=lambda percent, label: ctx.tasks.set_progress(key, percent, label),
+        )
+
+    if ctx.submit(key, run):
+        ctx.toast("Removing...")
+
+
 def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     row_key = str(row["row_key"])
     present = bool(row.get("present"))
     label = str(row.get("label") or row_key)
     if present:
         widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} {label}")
+        _fit_badge(row)
+        _remove_control(ctx, row, busy)
         return
     if not row.get("downloadable"):
         widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label} - weights missing")
@@ -382,6 +473,7 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     size = float(row.get("size_gib") or 0.0)
     suffix = f" ({size:.1f} GB)" if size else ""
     widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}{suffix}")
+    _fit_badge(row)
 
     key = app_ctx.download_key(row_key)
     running = ctx.tasks.is_busy(key)

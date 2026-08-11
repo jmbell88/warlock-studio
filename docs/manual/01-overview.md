@@ -7,7 +7,7 @@ image; it gives you back a textured GLB — a base colour texture plus a combine
 metallic/roughness texture, with surface detail carried on vertex normals rather than a normal map
 — ready to import into Godot, Blender, Unity or Unreal.
 
-Two models do the work. An image model (SDXL-Turbo by default) draws the reference picture from
+Two models do the work. An image model (SDXL 1.0 by default) draws the reference picture from
 your prompt. A reconstruction engine, Microsoft TRELLIS.2-4B running natively through
 `trellis-server.exe`, turns that picture into a mesh. Both run on your GPU.
 

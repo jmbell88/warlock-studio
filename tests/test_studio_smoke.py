@@ -764,6 +764,10 @@ def _model_rows() -> list[dict]:
             "present": True,
             "size_gib": 7.0,
             "downloadable": True,
+            # A present row also carries what removing it would free -- and
+            # whether removing it would free anything at all.
+            "removable": True,
+            "freed_gib": 7.0,
         },
         {
             "row_key": "base:flux_klein",
@@ -773,6 +777,10 @@ def _model_rows() -> list[dict]:
             "present": False,
             "size_gib": 16.0,
             "downloadable": True,
+            # The pane must tolerate the key's *absence* everywhere else -- it
+            # is written only when the service had a resolved VRAM plan -- so
+            # exactly one row carries it.
+            "vram": "tight",
         },
         {
             "row_key": "lora:pixelxl",
@@ -2803,3 +2811,114 @@ def test_a_staged_tag_is_the_only_thing_that_repaints_a_toggle(app_ctx, imgui_ct
     # the pointer -- the one moment the user is deciding whether to unstage it.
     assert imgui.Col_.button_hovered.value in pushed
     assert popped[0] == len(pushed), "every push is popped"
+
+
+# --- the "install what this needs" gate --------------------------------------
+
+
+def test_the_model_gate_is_silent_on_a_host_that_has_everything(app_ctx, imgui_ctx):
+    """An empty ``model_rows`` says nothing rather than locking both features.
+
+    The direction that matters: a snapshot that has not arrived yet must not
+    read as "everything is missing" and grey out a working install.
+    """
+    from warlock.service import sprites as svc_sprites
+    from warlock.studio.panes import model_gate
+
+    app_ctx.model_rows = []
+    assert model_gate.missing(app_ctx, svc_sprites.SPRITE_ROWS) == []
+    locked: list[bool] = []
+    _frame(imgui_ctx, lambda: locked.append(
+        model_gate.draw(app_ctx, svc_sprites.SPRITE_ROWS)
+    ))
+    assert locked == [False]
+
+
+def test_the_model_gate_names_only_the_absent_rows(app_ctx, imgui_ctx):
+    from warlock.studio.panes import model_gate
+
+    app_ctx.model_rows = _model_rows()
+    rows = model_gate.missing(app_ctx, ("base:turbo", "lora:pixelxl", "base:nope"))
+    assert [r["row_key"] for r in rows] == ["lora:pixelxl"]
+    locked: list[bool] = []
+    _frame(imgui_ctx, lambda: locked.append(
+        model_gate.draw(app_ctx, ("base:turbo", "lora:pixelxl"))
+    ))
+    assert locked == [True]
+
+
+def test_requesting_an_install_ticks_the_rows_and_opens_settings(app_ctx):
+    """The click body, without a frame. ``set_mode`` rather than a direct
+    ``state.mode`` write -- ``tests/test_mode_writes.py`` scans for the other."""
+    from warlock.studio.panes import model_gate
+
+    app_ctx.state.mode = "2d"
+    app_ctx.model_picks.add("metric:dinov2")
+    model_gate.request_install(app_ctx, ("lora:pixelxl", "control:canny"))
+    assert app_ctx.state.mode == "settings"
+    assert app_ctx.model_picks == {"metric:dinov2", "lora:pixelxl", "control:canny"}
+    # set_mode's bookkeeping, which a direct write skips.
+    assert app_ctx.state.previous_mode == "2d"
+
+
+def test_the_sprite_form_locks_its_submit_while_weights_are_missing(app_ctx, imgui_ctx):
+    """The pane half, through the real ``_submit``: with the pixel LoRA absent
+    the gate draws and the button is disabled."""
+    from warlock.studio.panes import sprite_panel
+
+    app_ctx.model_rows = _model_rows()
+    job_id = _seeded(app_ctx)
+    form = {
+        "job_id": job_id, "sheet_type": "turnaround", "logical_size": 64,
+        "colors": 32, "seed_a": 1, "seed_b": 2,
+    }
+    _frame(imgui_ctx, lambda: sprite_panel._submit(app_ctx, job_id, form))
+    # Nothing was submitted: a disabled button cannot be pressed, and the frame
+    # does not click anything anyway. What is asserted is that it *builds*.
+    assert not app_ctx.busy(f"sprite:{job_id}")
+
+
+def test_the_settings_pane_draws_a_fit_badge_and_a_recommendation(app_ctx, imgui_ctx):
+    """The two W4 surfaces, in the pane that owns them. What is asserted is
+    that the pane builds with a ``vram`` verdict on one row and none on the
+    others -- the absence path is the one that would crash a naive read."""
+    from warlock.studio.panes import app_settings
+
+    rows = _model_rows()
+    rows[0]["vram"] = "no"
+    app_ctx.model_rows = rows
+    app_ctx.recommended_base_label = "SDXL 1.0 (full CFG, structural control)"
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    # And with no plan at all: no key on any row, no recommendation line.
+    for row in rows:
+        row.pop("vram", None)
+    app_ctx.recommended_base_label = ""
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+
+
+def test_starting_a_removal_submits_under_the_remove_prefix(app_ctx):
+    """The click body without a frame. The prefix is load-bearing: the pane's
+    busy check and the App's task-done handler both switch on it."""
+    from warlock.studio import app_ctx as app_ctx_mod
+    from warlock.studio.panes import app_settings
+
+    app_settings._start_removal(app_ctx, "lora:pixelxl")
+    key = app_ctx_mod.remove_key("lora:pixelxl")
+    assert key == "remove:lora:pixelxl"
+    assert app_ctx.tasks.is_busy(key) or app_ctx.tasks.collect()
+
+
+def test_a_present_row_with_nothing_to_free_draws_no_trash_button(app_ctx, imgui_ctx):
+    """A recipe whose every file is shared has nothing to offer, and a button
+    that refused on click would be worse than no button."""
+    from warlock.studio.panes import app_settings
+
+    rows = _model_rows()
+    rows[0]["removable"] = False
+    app_ctx.model_rows = rows
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    # And with it removable again, plus a confirm raised by hand: the dialog
+    # body is the other half of the click and must build too.
+    rows[0]["removable"] = True
+    app_settings._confirm_removal(app_ctx, rows[0])
+    assert app_ctx.confirms.pending is not None

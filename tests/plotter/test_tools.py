@@ -151,6 +151,57 @@ def test_a_fill_never_promotes_the_dtype():
     assert result is not None and result[2].dtype == gid.DTYPE
 
 
+# --- the mask under both fills ------------------------------------------------
+#
+# ``flood_mask`` replaced a per-cell ``deque`` that ``terrain.fill_terrain``
+# carried a verbatim copy of. The bar is that it reaches exactly the same cells,
+# so it is checked against a hand-rolled queue rather than against itself.
+
+
+def _bfs(match: np.ndarray, x: int, y: int) -> np.ndarray:
+    """The shape ``flood_mask`` replaced, kept here as the thing it must equal."""
+    from collections import deque
+
+    height, width = match.shape
+    seen = np.zeros((height, width), dtype=bool)
+    if not match[y, x]:
+        return seen
+    seen[y, x] = True
+    queue = deque([(x, y)])
+    while queue:
+        cx, cy = queue.popleft()
+        for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+            if 0 <= nx < width and 0 <= ny < height and not seen[ny, nx] and match[ny, nx]:
+                seen[ny, nx] = True
+                queue.append((nx, ny))
+    return seen
+
+
+def test_the_mask_reaches_what_a_queue_reaches_over_random_fields():
+    rng = np.random.default_rng(20260811)
+    for _ in range(12):
+        match = rng.random((64, 64)) < 0.55
+        x, y = int(rng.integers(64)), int(rng.integers(64))
+        assert np.array_equal(tools.flood_mask(match, x, y), _bfs(match, x, y))
+
+
+def test_the_mask_turns_a_pinch_the_way_a_queue_does():
+    """An L with a one-cell waist: the case a dilation gets wrong if it grows
+    diagonally, and the case a fill escapes through if it is eight-connected."""
+    match = np.zeros((5, 5), dtype=bool)
+    match[0, :] = True
+    match[:, 0] = True
+    match[4, 4] = True  # reachable only diagonally, so not reachable at all
+    seen = tools.flood_mask(match, 0, 0)
+    assert np.array_equal(seen, _bfs(match, 0, 0))
+    assert not seen[4, 4]
+
+
+def test_the_mask_of_a_point_that_does_not_match_is_empty():
+    match = np.zeros((3, 3), dtype=bool)
+    assert not tools.flood_mask(match, 1, 1).any()
+
+
 # --- pick ---------------------------------------------------------------------
 
 

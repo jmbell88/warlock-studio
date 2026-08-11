@@ -46,6 +46,7 @@ import numpy as np
 
 from . import gid as gidlib
 from . import project
+from .pngio import png_bytes
 from .tilemap import (
     OBJECT_KINDS,
     MapDoc,
@@ -65,6 +66,16 @@ TILESET_DIR = "tilesets"
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 
 WMAP_SUFFIX = ".wmap"
+
+# A zip's directory declares what each member unpacks to, and nothing makes that
+# number honest -- a few kilobytes of archive can claim terabytes, and the read
+# that discovers this is the one that has already exhausted memory. One gigabyte
+# is far past any map this editor produces (a 512-square layer is a megabyte and
+# a large atlas tens of them) and far short of a machine's RAM, so the ceiling is
+# only ever hit by a file that was not written by us. The ``clay/serialize.py``
+# constant verbatim, and read from module globals at call time for its reason
+# too: a test lowers it rather than building a gigabyte.
+MAX_DECOMPRESSED_BYTES = 1 << 30
 
 
 # --- properties ---------------------------------------------------------------
@@ -117,14 +128,6 @@ def _props_from(entry: Any) -> dict[str, Prop]:
 def _npy_bytes(array: np.ndarray) -> bytes:
     out = io.BytesIO()
     np.lib.format.write_array(out, np.ascontiguousarray(array, dtype=gidlib.DTYPE))
-    return out.getvalue()
-
-
-def _png_bytes(pixels: np.ndarray) -> bytes:
-    from PIL import Image
-
-    out = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(pixels), "RGBA").save(out, "PNG")
     return out.getvalue()
 
 
@@ -232,7 +235,7 @@ def wmap_bytes(doc: MapDoc) -> bytes:
             # it again spends time to make it marginally bigger.
             zf.writestr(
                 zipfile.ZipInfo(f"{TILESET_DIR}/{index}.png", _EPOCH),
-                _png_bytes(ref.tileset.pixels),
+                png_bytes(ref.tileset.pixels),
                 zipfile.ZIP_STORED,
             )
     return out.getvalue()
@@ -287,6 +290,17 @@ def read_wmap(data: bytes) -> MapDoc:
     # nothing to close it but the collector. Same fix, same reason, as
     # ``clay/serialize.read_wblk``.
     with zf:
+        # Before anything is read: the directory says what every member unpacks
+        # to, and the cheapest place to refuse an archive that claims more than
+        # this build will hold is before the first ``read``.
+        claimed = sum(int(info.file_size) for info in zf.infolist())
+        ceiling = MAX_DECOMPRESSED_BYTES
+        if claimed > ceiling:
+            raise ValueError(
+                f"this map document claims {claimed} bytes unpacked, "
+                f"past the {ceiling} this build will read"
+            )
+
         try:
             manifest = json.loads(zf.read(MANIFEST))
         except (

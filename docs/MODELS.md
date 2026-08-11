@@ -1,10 +1,18 @@
 # Optional models
 
 Everything on this page is optional and independently skippable. The core setup in the
-[README](../README.md) — TRELLIS.2 plus SDXL-Turbo — is enough to generate assets; what follows
-widens the choices. `warlock doctor` lists every entry here with the exact command to fetch it,
+[README](../README.md) — TRELLIS.2 plus SDXL 1.0 — is enough to generate assets; what follows
+widens the choices. SDXL 1.0 is the shipped default because it measured best
+([docs/measurements/2026-08-11-default-base-model.md](measurements/2026-08-11-default-base-model.md))
+and because its 7 GB is the one base download four registered recipes share, so most of this page
+is a small adapter over weights you already have rather than another checkpoint.
+
+`warlock doctor` lists every entry here with the exact command to fetch it,
 and **Settings → Models** inside the app downloads any of them without touching a terminal (via
 the out-of-process fetch worker described in the README — the app process itself stays offline).
+The same pane removes them again: a **Remove** button beside each downloaded row, showing what it
+would actually free, which for a recipe sharing its weights with another is far less than the
+download was.
 
 The reference image is the single biggest lever on final mesh quality — TRELLIS can only be as
 good as the picture it is handed — so the image model and an optional style LoRA are per-job
@@ -16,18 +24,26 @@ for free.
 ## Image models and style LoRAs
 
 ```powershell
-# SDXL 1.0 + Hyper-SD (~7 GB + 787 MB). Style LoRAs are trained against full
-# SDXL at 20-25 steps with CFG, so they land noticeably stronger here than on
-# Turbo's 4 steps at guidance 0. Hyper-SD buys the step count back.
+# SDXL 1.0 full CFG -- the shipped default recipe, and no download at all if
+# you followed the README: it is the same models/sdxl-base-1.0 weights run
+# undistilled at 30 steps and CFG 7.0. Slowest of the SDXL entries and the one
+# with real structural control: it takes ControlNet, and the negative prompt
+# carries full weight. Everything below in this block reuses these weights.
+
+# SDXL-Turbo (~7 GB): the 4-step fast option, at 512 px and guidance 0. Its own
+# checkpoint rather than a recipe -- nothing else in the registry shares it --
+# and no longer part of the core setup. Worth having when iteration speed
+# matters more than fidelity, and the entry WARLOCK_T2I_DIR redirects.
+uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
+  --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
+
+# SDXL 1.0 + Hyper-SD (787 MB on top of the base above). Style LoRAs are
+# trained against full SDXL at 20-25 steps with CFG, so they land noticeably
+# stronger here than on Turbo's 4 steps at guidance 0. Hyper-SD buys the step
+# count back. If you skipped the README's step 4, the base line comes first:
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
 uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir models/loras
-
-# SDXL 1.0 full CFG (no extra download): the same sdxl-base-1.0 weights run
-# undistilled -- 30 steps at CFG 7.0. Slowest of the SDXL entries and the one
-# with real structural control: it takes ControlNet, and the negative prompt
-# carries full weight. Appears in the model picker as soon as the base weights
-# above are present.
 
 # Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
 uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
@@ -155,6 +171,7 @@ Both `dev` and `schnell` are click-through gated on Hugging Face, and 12B parame
 coexist with trellis on one card. To use a local FLUX copy anyway: download it yourself
 (`uvx hf auth login` for the download only), point `WARLOCK_T2I_DIR` at it, and set
 `WARLOCK_VRAM_EXCLUSIVE=1`. Note that `WARLOCK_T2I_DIR` only redirects *where* the built-in
-`turbo` entry loads from — it still runs at that entry's settings (512 px, 4 steps, guidance 0),
+`turbo` entry loads from — the redirect is pinned to that entry *by name*, so the 2026-08-11 move
+of the default onto SDXL 1.0 does not affect it. It still runs at turbo's settings (512 px, 4 steps, guidance 0),
 which suit schnell-like distilled checkpoints and nothing else. A model that needs different
 settings wants a `models.py` entry, not this variable.

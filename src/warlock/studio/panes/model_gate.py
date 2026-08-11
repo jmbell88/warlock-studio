@@ -1,0 +1,79 @@
+"""The "this feature needs models you haven't got" line, and its button.
+
+Two features -- sprite synthesis and the pixel-sheet restyle -- are locked
+behind weights that are not part of the core download. Before this, the only
+way to find that out was to press the button and read the refusal, which named
+one missing thing at a time and offered a terminal command.
+
+The service layer owns *what* each feature needs
+(``sprites.SPRITE_ROWS``/``sheets.PIXEL_SHEET_ROWS``, derived from the same
+constants the refusals check). This module owns only the drawing and the
+navigation, and it answers "is it here" from ``ctx.model_rows`` -- the presence
+snapshot the app already refreshes when a download finishes -- rather than
+touching the disk, because this runs on the frame thread sixty times a second.
+
+The pane stays honest about being a pane: the refusal at the door is still the
+authority. This is a courtesy ahead of it, and a stale ``model_rows`` costs a
+wrong-looking button rather than a wrong outcome.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from imgui_bundle import imgui
+
+from .. import widgets
+from ..state import set_mode
+
+
+def missing(ctx: Any, row_keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Which of these rows ``ctx.model_rows`` says are absent, in its order.
+
+    A row the snapshot has never heard of is skipped rather than reported
+    missing: an empty ``model_rows`` (a headless ctx, or the first frame before
+    the answers land) must read as "nothing to say", not as "everything is
+    missing" -- which would lock both features on a fully-installed host.
+    """
+    by_key = {str(row.get("row_key")): row for row in (ctx.model_rows or [])}
+    return [
+        by_key[key]
+        for key in row_keys
+        if key in by_key and not by_key[key].get("present")
+    ]
+
+
+def request_install(ctx: Any, row_keys: tuple[str, ...]) -> None:
+    """Tick exactly these rows in app-Settings and go there.
+
+    A union rather than a replacement: the user may already have ticked
+    something else, and silently dropping it would be a worse surprise than an
+    extra row. ``set_mode`` rather than a direct ``state.mode`` write -- the
+    mode-switch contract (H14), which ``tests/test_mode_writes.py`` scans this
+    whole tree for.
+    """
+    ctx.model_picks |= set(row_keys)
+    set_mode(ctx.state, "settings")
+
+
+def draw(ctx: Any, row_keys: tuple[str, ...], *, what: str = "This") -> bool:
+    """Draw the gate if anything is missing. True means the feature is locked.
+
+    The size is the *sum of the missing rows' own figures*, which over-counts
+    when two of them share a checkpoint -- deliberately, because the honest
+    deduped figure needs ``downloads.plan_for`` and this may not call the
+    service on the frame thread. The Settings pane, which can, shows the real
+    total beside its Download button before anything is fetched.
+    """
+    rows = missing(ctx, row_keys)
+    if not rows:
+        return False
+    total = sum(float(row.get("size_gib") or 0.0) for row in rows)
+    noun = "model" if len(rows) == 1 else "models"
+    widgets.muted_wrapped(
+        f"{what} needs {len(rows)} {noun} you haven't downloaded "
+        f"(about {total:.1f} GB)."
+    )
+    if imgui.small_button("Install in Settings"):
+        request_install(ctx, row_keys)
+    return True

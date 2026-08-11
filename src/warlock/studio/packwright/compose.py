@@ -16,10 +16,9 @@ which only shows as a one-pixel artefact at the atlas border.
 
 from __future__ import annotations
 
-import io
-
 import numpy as np
 
+from ..plotter.pngio import png_bytes as png_bytes  # noqa: PLC0414
 from .layout import Frame, Layout
 from .sources import Sprite
 
@@ -59,11 +58,9 @@ def compose(sprites: list[Sprite], layout: Layout) -> np.ndarray:
     return atlas
 
 
-def png_bytes(pixels: np.ndarray) -> bytes:
-    """The atlas as a PNG. Pillow imported here rather than at module scope,
-    the rule the whole package follows."""
-    from PIL import Image
-
-    out = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(pixels, dtype=np.uint8), "RGBA").save(out, "PNG")
-    return out.getvalue()
+# ``png_bytes`` is imported at the top of this module rather than defined here.
+# This and ``wpack``, ``plotter.tmx`` and ``plotter.wmap`` held four
+# byte-identical copies, all four on a determinism path, so a compression
+# setting added to one would silently make "two exports are byte-identical" a
+# claim about which writer ran. Re-exported under the same name because callers
+# say ``compose.png_bytes`` and that is where an atlas's encoder belongs.

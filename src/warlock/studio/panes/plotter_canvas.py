@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import inker_state, plotter_mode, theme, widgets
+from .. import inker_state, plotter_mode, plotter_state, theme, widgets
 from ..plotter import gid as gidlib
 from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
@@ -118,20 +118,20 @@ def _tabs(ctx: Any, state: Any) -> None:
 def _empty(ctx: Any) -> None:
     from imgui_bundle import imgui
 
-    imgui.dummy((0, 40))
+    imgui.dummy((0, sp(40)))
     imgui.text("Nothing open")
-    widgets.muted_wrapped("Start a map, open one, or drop a .wmap / .tmx / .tmj on the window.")
-    imgui.dummy((0, 16))
-    if imgui.button("New map", (240, 0)):
+    widgets.muted_wrapped(
+        f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window."
+    )
+    imgui.dummy((0, sp(16)))
+    if imgui.button("New map", (sp(240), 0)):
         plotter_mode.new_document(ctx)
-    imgui.dummy((0, 8))
-    if imgui.button("Open a file...", (240, 0)):
+    imgui.dummy((0, sp(8)))
+    if imgui.button("Open a file...", (sp(240), 0)):
         plotter_mode.ask_open(ctx)
 
 
 def _status(ctx: Any, state: Any, tab: Any) -> None:
-    from imgui_bundle import imgui
-
     doc = tab.doc
     layer = doc.active()
     name = layer.name if layer is not None else "no layer"
@@ -158,7 +158,6 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
     if tab.busy:
         bits.append("saving")
     widgets.muted("  --  ".join(bits))
-    imgui.same_line()
 
 
 # --- drawing ------------------------------------------------------------------
@@ -460,6 +459,23 @@ def _terrain_ref(state: Any, doc: Any):
     return ref if rank < len(ref.tileset.terrains) else None
 
 
+def _terrain_cell_ref(doc: Any, data: Any, cell: tuple[int, int]):
+    """The terrain set the cell under the cursor belongs to, or ``None``.
+
+    Asked of the *cell* rather than of the palette, so Erase self-selects per
+    cell: a plain tile erases as a plain tile even on a map that carries a
+    terrain set, and a terrain cell re-fits its neighbours even when the tool in
+    hand is not Terrain. That is the only rule that makes one eraser correct on
+    a mixed map -- the alternative is a second eraser and a user deciding which.
+    """
+    for ref in doc.tilesets:
+        if not ref.tileset.is_terrain_set:
+            continue
+        if plotter_terrain.terrain_at(data, cell[0], cell[1], ref) is not None:
+            return ref
+    return None
+
+
 def _layer_for_paint(ctx: Any, tab: Any):
     layer = tab.doc.active()
     if isinstance(layer, TileLayer):
@@ -479,7 +495,13 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             state.brush = np.array([[value]], gidlib.DTYPE)
             ref = doc.ref_for(value)
             if ref is not None:
-                state.tileset_index = doc.tilesets.index(ref)
+                # By identity, not ``.index``: a ``TilesetRef`` holds ndarrays,
+                # so ``==`` is an elementwise comparison whose truth value is
+                # ambiguous, and ``list.index`` only survives it by
+                # short-circuiting on the firstgid it happens to compare first.
+                state.tileset_index = next(
+                    i for i, entry in enumerate(doc.tilesets) if entry is ref
+                )
         return
     if state.tool == "stamp":
         if state.brush is None:
@@ -487,12 +509,33 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             return
         result = plotter_tools.stamp(layer.data, cell[0], cell[1], state.brush)
     elif state.tool == "erase":
-        result = plotter_tools.erase(layer.data, cell[0], cell[1])
+        # Erasing a terrain cell is not erasing a tile: the hole has to grow an
+        # outline on everything that now borders it, or the field keeps the edge
+        # art of a neighbour that is no longer there. Self-selecting per cell, so
+        # a plain tile on the same map still erases as a plain tile.
+        ref = _terrain_cell_ref(doc, layer.data, cell)
+        result = (
+            plotter_tools.erase(layer.data, cell[0], cell[1])
+            if ref is None
+            else plotter_terrain.erase_terrain(layer.data, cell[0], cell[1], ref)
+        )
     elif state.tool == "fill":
-        if state.brush is None:
+        ref = _terrain_ref(state, doc) if state.brush is None else None
+        if ref is not None:
+            # A terrain in hand and no tile picked is an unambiguous request:
+            # flood the field. The flood is over the *rank* field, so it crosses
+            # a terrain's own forty-seven cases rather than stopping at the
+            # first edge tile -- see ``terrain.fill_terrain``.
+            result = plotter_terrain.fill_terrain(
+                layer.data, cell[0], cell[1], state.terrain[1], ref
+            )
+        elif state.brush is None:
             ctx.toast("Pick a tile from the tileset first.", "error")
             return
-        result = plotter_tools.flood_fill(layer.data, cell[0], cell[1], int(state.brush[0, 0]))
+        else:
+            result = plotter_tools.flood_fill(
+                layer.data, cell[0], cell[1], int(state.brush[0, 0])
+            )
     elif state.tool == "terrain":
         ref = _terrain_ref(state, doc)
         if ref is None:

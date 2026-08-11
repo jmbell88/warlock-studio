@@ -20,7 +20,7 @@ from ...service import validation
 from .. import dialogs, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
-from . import stamps
+from . import model_gate, stamps
 
 log = logging.getLogger(__name__)
 
@@ -469,10 +469,16 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
 
         key = f"sheet-pixel:{job_id}:{sheet_id}"
         busy = ctx.busy(key)
+        # Ahead of the button, for ``model_gate``'s reason: the restyle is
+        # pinned to one base and one style LoRA, and neither is in the core
+        # download.
+        locked = model_gate.draw(
+            ctx, svc_sheets.PIXEL_SHEET_ROWS, what="A pixel restyle"
+        )
         if busy:
             widgets.spinner()
             imgui.same_line()
-        if widgets.disabled_button("Pixelate", not busy):
+        if widgets.disabled_button("Pixelate", not busy and not locked):
             ctx.submit(
                 key,
                 svc_sheets.create_pixel_sheet,

@@ -25,6 +25,7 @@ case that have to agree about flags, clipping and the no-op rule.
 from __future__ import annotations
 
 import itertools
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,13 @@ WMAP_SUFFIX = ".wmap"
 TMX_SUFFIX = ".tmx"
 TMJ_SUFFIX = ".tmj"
 MAP_SUFFIXES = (WMAP_SUFFIX, TMX_SUFFIX, TMJ_SUFFIX)
+
+#: What the two empty states tell the user they may drop, derived from the list
+#: above rather than written out. Two hand-written copies existed and they
+#: already disagreed -- the bridge's named two suffixes and the canvas's named
+#: three, so the pane holding the Open button was the one claiming ``.tmj`` was
+#: not droppable. ``filetypes.describe`` is the same argument one layer up.
+MAP_SUFFIX_TEXT = " / ".join(MAP_SUFFIXES)
 
 # (key, label, letter). B/E/G/R deliberately match the raster editor's brush,
 # eraser, fill and rectangle, because a user arriving from Inker already has
@@ -222,9 +230,25 @@ class PlotterState:
 
     def find_path(self, path: Path) -> PlotterDoc | None:
         """An already-open tab for this file, so opening twice focuses rather
-        than forking -- two tabs over one path would race on save."""
+        than forking -- two tabs over one path would race on save.
+
+        **Resolved and case-folded, because on Windows one file has many
+        spellings.** ``Level.WMAP`` and ``level.wmap`` are the same file and
+        ``Path.__eq__`` says they are not, so the same document opened from the
+        recents list and from a drop used to fork into two tabs that then raced
+        on save -- exactly what this method exists to prevent. ``resolve`` folds
+        the other spellings (a relative path, a symlink, an 8.3 short name);
+        ``normcase`` is what makes the comparison case-insensitive *where the
+        filesystem is*, and a no-op where it is not.
+
+        Clay and Packwright carry the same shape and the same bug; fixing them
+        is deliberately not this change, because each has its own tab list.
+        """
+        probe = os.path.normcase(str(Path(path).resolve()))
         for doc in self.docs:
-            if doc.path is not None and doc.path == path:
+            if doc.path is None:
+                continue
+            if os.path.normcase(str(Path(doc.path).resolve())) == probe:
                 return doc
         return None
 
@@ -236,6 +260,30 @@ class PlotterState:
         self.drag_object = None
         self.palette_anchor = None
 
+
+
+def ensure(ctx: Any) -> PlotterState:
+    """The mode's state, built on first use.
+
+    Lazy because a session that never opens Plotter should not pay for it, and
+    because ``AppState`` deliberately knows nothing about it.
+
+    Here rather than in ``plotter_mode`` because this and :func:`active` touch
+    exactly one thing -- ``ctx.state.plotter`` -- which is this module's whole
+    charter, and neither knows a job or a task thread exists.
+    """
+    state = ctx.state.plotter
+    if state is None:
+        state = PlotterState()
+        ctx.state.plotter = state
+    return state
+
+
+def active(ctx: Any) -> PlotterDoc | None:
+    """The focused tab, or ``None``. Deliberately *not* through :func:`ensure`:
+    asking which map is open must not create the state that says none is."""
+    state = ctx.state.plotter
+    return state.active if state is not None else None
 
 
 def title_for(path: Path | None) -> str:

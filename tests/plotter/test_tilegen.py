@@ -162,6 +162,18 @@ def test_a_spec_refuses_what_it_cannot_draw():
         tilegen.GenSpec(tile_w=2, tile_h=2)
 
 
+def test_a_tile_edge_past_the_ceiling_is_refused_and_the_ceiling_itself_is_not():
+    """The atlas is 47 tiles wide per terrain, so the edge is multiplied by 376
+    before anything is allocated -- which is why the refusal is on the spec
+    rather than on the array it would have asked for."""
+    with pytest.raises(ValueError, match="at most 512 pixels"):
+        tilegen.GenSpec(tile_w=tilegen.MAX_TILE_EDGE + 1, tile_h=8)
+    with pytest.raises(ValueError, match="at most 512 pixels"):
+        tilegen.GenSpec(tile_w=8, tile_h=tilegen.MAX_TILE_EDGE + 1)
+    spec = tilegen.GenSpec(tile_w=tilegen.MAX_TILE_EDGE, tile_h=tilegen.MAX_TILE_EDGE)
+    assert spec.tile_w == 512
+
+
 def test_a_tileset_refuses_a_terrain_declaration_its_geometry_denies():
     """Validated when the tileset is made, not at the first paint -- the same
     rule the slicing follows and for the same reason."""

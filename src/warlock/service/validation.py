@@ -249,7 +249,27 @@ def check_vram(svc: Any, kind: str, stage: str, params: dict[str, Any]) -> None:
         raise Invalid(vram.shortfall_message(need, plan, params))
 
 
-def check_base_model_weights(svc: Any, base: Any) -> None:
+def install_remedy(label: str, download: str) -> str:
+    """The "here is how to get it" half of every missing-weights refusal.
+
+    One spelling, in one place, because there are four of these refusals and
+    they used to lead with the terminal. The in-app route exists now and is the
+    one most people can act on without leaving the window, so it goes first;
+    the ``hf download`` line stays, because it is the only route on a headless
+    box and because doctor prints the same string.
+
+    Plain ``->`` rather than the arrow the manual's prose uses: this ends up in
+    a toast, and toasts are plain text.
+    """
+    return (
+        f'Install "{label}" in Settings -> Models, '
+        f"or download it with:\n  {download}"
+    )
+
+
+def check_base_model_weights(
+    svc: Any, base: Any, *, rows: tuple[str, ...] | None = None
+) -> None:
     """Refuse a base model that is not on this host, by name and with its
     ``hf download`` line.
 
@@ -263,6 +283,12 @@ def check_base_model_weights(svc: Any, base: Any) -> None:
     ``base`` is a ``models.BaseModel``; ``None`` is accepted and is a no-op, for
     the text door's sake, where an unknown key means the registry never claimed
     to know these weights and there is nothing to say about them.
+
+    ``rows`` overrides what the refusal carries for an "install what this needs"
+    button. Defaulted, it is this checkpoint's own row, which is the whole
+    answer for a text job. A door standing in front of a *feature* -- sprites,
+    pixel sheets -- passes the feature's whole missing set instead, so the user
+    installs once rather than being refused three times running.
     """
     if base is None:
         return
@@ -278,8 +304,9 @@ def check_base_model_weights(svc: Any, base: Any) -> None:
     )
     raise Invalid(
         f"The image model {base.label!r} cannot run: {what}. "
-        f"Download it with:\n  {base.download}",
+        f"{install_remedy(base.label, base.download)}",
         field="base_model",
+        rows=(f"base:{base.key}",) if rows is None else rows,
     )
 
 
@@ -327,8 +354,9 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
             continue
         raise Invalid(
             f"{spec.label!r} is selected but not downloaded. "
-            f"Download it with:\n  {spec.download}",
+            f"{install_remedy(spec.label, spec.download)}",
             field=field,
+            rows=(f"{kindname}:{spec.key}",),
         )
 
 

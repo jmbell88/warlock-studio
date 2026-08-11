@@ -25,7 +25,7 @@ from ...service import validation
 from .. import widgets
 from ..manual import render as manual_render
 from ..tokens import sp
-from . import stamps
+from . import model_gate, stamps
 
 #: How wide a candidate thumbnail is drawn, before the integer pixel scale
 #: below rounds it down to a whole multiple of the atlas's own size.
@@ -126,10 +126,13 @@ def _controls(ctx: Any, form: dict[str, Any]) -> None:
 def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     key = f"sprite:{job_id}"
     busy = ctx.busy(key)
+    # Said before the button rather than after it is pressed: a synthesis needs
+    # four registry rows and the door refuses one at a time.
+    locked = model_gate.draw(ctx, svc_sprites.SPRITE_ROWS, what="A sprite sheet")
     if busy:
         widgets.spinner()
         imgui.same_line()
-    if widgets.disabled_button("Generate two drafts", not busy):
+    if widgets.disabled_button("Generate two drafts", not busy and not locked):
         ctx.submit(
             key,
             svc_sprites.create_sprite_synthesis,

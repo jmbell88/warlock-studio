@@ -16,12 +16,25 @@ class ServiceError(Exception):
 
     status = 400
 
-    def __init__(self, message: str, *, field: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        field: str | None = None,
+        rows: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(message)
         self.message = message
         # Which form control was at fault, when the caller can know. The UI
         # highlights it; HTTP has nowhere to put it and drops it.
         self.field = field
+        # Which registry rows (``fetch.Entry.row_key``) would fix this, when the
+        # refusal is "these weights are not on this host". Structure rather than
+        # a second parse of ``message``: the pane offers an Install button that
+        # has to pre-tick exact rows, and re-deriving them from the sentence is
+        # the brittleness this field exists to avoid. Empty for every refusal
+        # that is not about missing weights, which is most of them.
+        self.rows = tuple(rows)
 
 
 class NotFound(ServiceError):

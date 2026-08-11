@@ -35,6 +35,12 @@ OUTWARD_IMPORTS = {
     # comes to have two dialects.
     ("tsxout.py", "warlock.studio.plotter.tileset"),
     ("tsxout.py", "warlock.studio.plotter.tsx"),
+    # The one RGBA-to-PNG encoder; the ``tsxout`` argument again. Four
+    # byte-identical copies existed and all four sit on a determinism path, so
+    # a compression setting added to one would make "two exports are
+    # byte-identical" a claim about which writer ran.
+    ("compose.py", "warlock.studio.plotter.pngio"),
+    ("wpack.py", "warlock.studio.plotter.pngio"),
     # ``frozen_rgba``, over the edge ``tsxout`` had already established. A
     # sprite and a tileset image obey one immutability rule and used to hold
     # two byte-identical copies of it.

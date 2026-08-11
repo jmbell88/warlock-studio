@@ -162,7 +162,7 @@ def prompt_preview(
             spec,
             svc.config.t2i_model_root,
             svc.config.t2i_turbo_dir
-            if params["base_model"] == models.DEFAULT_BASE_MODEL
+            if params["base_model"] == models.T2I_DIR_MODEL
             else None,
         )
         tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir, spec.family)

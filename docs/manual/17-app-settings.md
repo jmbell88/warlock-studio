@@ -56,6 +56,27 @@ the same information the startup diagnostics report, in a place you can look at 
 log. Tick several rows and *Download selected* fetches them together; four of the image models share
 one set of SDXL 1.0 weights, and picking all four downloads them once.
 
+Beside each image model, once the app has measured your card, sits a fit note: nothing at all when
+the model runs comfortably, **tight fit** when it will load but cannot stay resident beside the
+reconstruction engine — so every 3D job pays a stop and restart for it — and **won't fit this GPU**
+when the checkpoint alone is larger than the VRAM budget. A **Recommended for this GPU** line under
+the list names the best base model your card can actually hold. All of it is skipped on a host with
+no measurable GPU: an unknown budget is not a shortfall.
+
+**Removing a model.** A downloaded row carries a **Remove** button and the amount it would actually
+free. That figure is usually smaller than the download was, and deliberately: the four SDXL 1.0
+recipes share one 7 GB checkpoint, so removing *SDXL 1.0 + Hyper-SD* deletes only its own 0.8 GB
+adapter and leaves the weights the other three are still standing on. The checkpoint goes when the
+last model using it does. A recipe with no files of its own — *SDXL 1.0 (full CFG)* is the plain
+case — has nothing to remove and shows no button at all.
+
+Removal asks first, and refuses in three cases rather than doing something surprising. It will not
+run while any job is queued or running. It will not touch a directory `WARLOCK_T2I_DIR` points at:
+that is a folder you pointed the app at, not one it downloaded. And it never deletes anything
+outside the model root. Removing the *default* base model **is** allowed, and the consequence is
+that generation refuses every job that does not name another model until you reinstall one or pick a
+different base — the refusal says so and links back to this pane.
+
 Downloading does not make the app itself online. The button starts a separate process that fetches
 one repository and exits, into a staging folder beside the destination that is only moved into place
 if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model

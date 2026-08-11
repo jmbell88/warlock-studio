@@ -124,9 +124,17 @@ def test_the_package_imports_with_no_optional_dependency_present():
     """Importing every module is the cheapest possible smoke test that the
     lazy-import rule above is actually being followed."""
     from warlock.studio.plotter import (  # noqa: F401
+        _map_geometry,
+        _map_layers,
+        _map_model,
+        _map_objects,
+        _map_paint,
+        _map_project,
+        _map_tilesets,
         blob,
         edits,
         gid,
+        pngio,
         project,
         render,
         terrain,

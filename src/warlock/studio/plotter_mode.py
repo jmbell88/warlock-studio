@@ -35,47 +35,55 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+from . import dialogs, plotter_state, recents
 
-from . import dialogs, filetypes, plotter_state, recents
-from .plotter_state import PlotterDoc, PlotterState
+# ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
+# but ``ctx.state.plotter`` -- and the file layer lives in :mod:`.plotter_io`.
+# Both are re-exported here, as **plain imports rather than wrappers**, because
+# every pane, every key binding and every test says ``plotter_mode.save(ctx)``:
+# a wrapper would be a second object where the callers reach for one, and
+# ``main.App`` names ``"plotter_mode.persist"`` as a literal besides.
+from .plotter_io import (  # noqa: F401
+    MAP_FILTER,
+    TMJ_FILTER,
+    TMX_FILTER,
+    WMAP_FILTER,
+    _decode,
+    _resolve_source,
+    _start,
+    _within_ceiling,
+    ask_open,
+    export_map,
+    open_path,
+    save,
+    save_as,
+    save_to,
+)
+from .plotter_state import (  # noqa: F401
+    PlotterDoc,
+    PlotterState,
+    active,
+    ensure,
+)
+
+# The second facade block, same argument as the first: ``plotter_tilesets`` owns
+# every way a tileset arrives, and the panes reach all of them through this
+# module. ``TILESET_FILTER`` is re-exported as the *same list object*, which a
+# wiring test parametrizes over by identity.
+from .plotter_tilesets import (  # noqa: F401
+    TILESET_FILTER,
+    add_tileset_path,
+    ask_add_tileset,
+    generate_terrain_set,
+    polish_in_inker,
+    tileset_from_inker,
+    use_as_tileset,
+)
 from .state import set_mode
 
 log = logging.getLogger(__name__)
 
-MAP_FILTER = [
-    "Map documents (*.wmap *.tmx *.tmj)",
-    "*.wmap",
-    "*.tmx",
-    "*.tmj",
-]
-WMAP_FILTER = ["Warlock map (*.wmap)", "*.wmap"]
-TMX_FILTER = ["Tiled map (*.tmx)", "*.tmx"]
-TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
-# A ``.tsx`` carries its own slicing; anything else is an image sliced at the
-# map's tile size. Both halves of the entry are derived, because the label used
-# to read "(*.tsx *.png)" over a pattern list that also accepted .jpg, .jpeg,
-# .webp and .bmp -- a dialog disclaiming four formats it would have opened.
-_TILESET_SUFFIXES = (".tsx", *filetypes.IMAGE_SUFFIXES)
-TILESET_FILTER = [
-    filetypes.describe("Tilesets and images", _TILESET_SUFFIXES),
-    *filetypes.globs(_TILESET_SUFFIXES),
-]
-
 DEFAULT_MAP = (32, 32, 32, 32)  # width, height, tile width, tile height
-
-
-def ensure(ctx: Any) -> PlotterState:
-    """The mode's state, built on first use.
-
-    Lazy because a session that never opens Plotter should not pay for it, and
-    because ``AppState`` deliberately knows nothing about it.
-    """
-    state = ctx.state.plotter
-    if state is None:
-        state = PlotterState()
-        ctx.state.plotter = state
-    return state
 
 
 def remember_path(ctx: Any, path: Any) -> None:
@@ -110,42 +118,6 @@ def persist(ctx: Any) -> None:
 
 
 
-def active(ctx: Any) -> PlotterDoc | None:
-    state = ctx.state.plotter
-    return state.active if state is not None else None
-
-
-# --- image loading ------------------------------------------------------------
-
-
-def _decode(path: Path) -> np.ndarray:
-    """One image file as RGBA. Task thread only."""
-    from PIL import Image
-
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
-
-
-def _loaders(base: Path):
-    """The two callbacks :mod:`~warlock.studio.plotter.tmx` needs.
-
-    Resolving a relative path means touching a filesystem, which the engine
-    deliberately cannot do -- so path resolution lives here, where it can be
-    anchored to the file being read.
-    """
-    from .plotter import tsx as tsxlib
-
-    def image_loader(source: str) -> np.ndarray:
-        return _decode(base / source)
-
-    def tsx_loader(source: str) -> Any:
-        data = (base / source).read_bytes()
-        image = tsxlib.tsx_source(data)
-        # Relative to the .tsx, not to the map: a tileset folder is the normal
-        # Tiled layout and resolving from the map would miss by one directory.
-        return tsxlib.read_tsx(data, _decode((base / source).parent / image))
-
-    return {"image_loader": image_loader, "tsx_loader": tsx_loader}
 
 
 # --- opening ------------------------------------------------------------------
@@ -186,365 +158,6 @@ def new_document(ctx: Any, size: tuple[int, int, int, int] = DEFAULT_MAP) -> Plo
     return adopt(ctx, doc, title="Untitled")
 
 
-def _load(path: Path) -> dict[str, Any]:
-    """Blocking; task thread only. Raises rather than returning a broken tab."""
-    from .plotter import tmx as tmxlib
-    from .plotter import wmap as wmaplib
-
-    path = Path(path)
-    data = path.read_bytes()
-    suffix = path.suffix.lower()
-    if suffix == plotter_state.TMX_SUFFIX:
-        doc = tmxlib.read_tmx(data, **_loaders(path.parent))
-    elif suffix == plotter_state.TMJ_SUFFIX:
-        doc = tmxlib.read_tmj(data, **_loaders(path.parent))
-    else:
-        doc = wmaplib.read_wmap(data)
-    return {
-        "doc": doc,
-        "path": str(path),
-        "title": plotter_state.title_for(path),
-        "format": plotter_state.format_for(path),
-    }
-
-
-def ask_open(ctx: Any) -> None:
-    """The picker, on a task thread, then the decode on the same one."""
-    ensure(ctx)
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.open_file("Open a map", MAP_FILTER)
-        return None if path is None else _load(path)
-
-    ctx.submit("plotter-open", run)
-
-
-def open_path(ctx: Any, path: Path) -> None:
-    state = ensure(ctx)
-    path = Path(path)
-    existing = state.find_path(path)
-    if existing is not None:
-        # Focus rather than fork: two tabs over one path would race on save.
-        state.activate(existing.uid)
-        return
-    ctx.submit(f"plotter-open:{abs(hash(str(path)))}", _load, path)
-
-
-# --- tilesets -----------------------------------------------------------------
-
-
-def add_tileset_path(
-    ctx: Any, path: Path, *, tile_w: int | None = None, tile_h: int | None = None
-) -> None:
-    """Add a ``.tsx`` or a grid-sliced image to the open map.
-
-    An image is sliced at the *map's* tile size by default, which is right far
-    more often than not and is the only default that needs no dialog. A ``.tsx``
-    carries its own slicing and ignores both arguments.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    path = Path(path)
-    width = int(tile_w or tab.doc.tile_w)
-    height = int(tile_h or tab.doc.tile_h)
-
-    def run() -> dict[str, Any]:
-        from .plotter import tsx as tsxlib
-        from .plotter.tileset import Tileset
-
-        if path.suffix.lower() == ".tsx":
-            data = path.read_bytes()
-            image = tsxlib.tsx_source(data)
-            tileset = tsxlib.read_tsx(data, _decode(path.parent / image))
-        else:
-            tileset = Tileset(
-                name=path.stem, pixels=_decode(path), tile_w=width, tile_h=height
-            )
-        return {"tileset": tileset, "source": str(path), "uid": tab.uid}
-
-    ctx.submit(f"plotter-tileset:{tab.uid}", run)
-
-
-def generate_terrain_set(ctx: Any, spec: Any) -> None:
-    """A procedural ground set, built on a task thread and added like any other.
-
-    Deliberately on the existing ``plotter-tileset:`` key rather than one of its
-    own: the result *is* a tileset for this tab, ``on_task_done`` already routes
-    and adopts one, and a second key would be a second copy of that branch. The
-    duplicate-key refusal it inherits is the right rule too -- a generate and an
-    "Add from a file..." both end in "a tileset is arriving on this tab".
-
-    The pane builds the spec, which is plain frozen data, and nothing about a
-    numpy raster happens on the frame thread.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    uid = tab.uid
-
-    def run() -> dict[str, Any]:
-        from .plotter import tilegen
-
-        return {
-            "tileset": tilegen.generate(spec),
-            "source": "",
-            "projection": spec.projection,
-            "uid": uid,
-        }
-
-    ctx.submit(f"plotter-tileset:{uid}", run)
-
-
-def polish_in_inker(ctx: Any, tab: Any, index: int) -> None:
-    """Open a tileset's atlas as an ordinary Inker document.
-
-    Flat and unlinked on purpose. Slicing it into cells -- which is what
-    ``inker.sheetin`` does for a sprite sheet -- would be the wrong model here:
-    a polish pass on a blob set is *about* keeping the outline consistent
-    **across** adjacent cases, and 235 one-cell frames makes exactly that
-    impossible to see.
-
-    The way back is the Plotter side pulling the document in, which is the
-    direction Packwright already takes documents from Inker.
-    """
-    from . import inker_mode
-
-    if index < 0 or index >= len(tab.doc.tilesets):
-        return
-    ref = tab.doc.tilesets[index]
-    # Already a frozen RGBA copy, so there is nothing to decode and nothing the
-    # editor can write through into the tileset the map is drawing from.
-    inker_mode.open_pixels(ctx, ref.tileset.pixels, title=f"{ref.tileset.name} (atlas)")
-    ctx.toast("Atlas opened in Inker.")
-
-
-def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
-    """An Inker document back onto the map, as art for an existing tileset.
-
-    Flattened on the frame thread, for the reason Packwright flattens there:
-    the composite fills and evicts the document's own cache, which the pane
-    drawing it is touching.
-
-    ``index`` names the tileset to repaint. Without one this is an ordinary
-    append, which is what an unrelated drawing should be.
-    """
-    from .plotter import tilegen
-    from .plotter.tileset import Tileset
-
-    tab = active(ctx)
-    if tab is None:
-        return
-    # ``matte=False`` because a tileset's transparency is meaningful -- the
-    # checkerboard the editor draws under a document is not part of the art.
-    pixels = doc.flatten(matte=False)
-    if index is None:
-        tab.doc.add_tileset(
-            Tileset(
-                name=doc.title or "Atlas",
-                pixels=pixels,
-                tile_w=tab.doc.tile_w,
-                tile_h=tab.doc.tile_h,
-            )
-        )
-        ctx.toast("Tileset added.")
-        return
-    ref = tab.doc.tilesets[index]
-    try:
-        tab.doc.replace_tileset(index, tilegen.repolish(ref.tileset, pixels))
-    except ValueError as exc:
-        ctx.toast(str(exc), "error")
-        return
-    ctx.toast(f"{ref.tileset.name} repainted.")
-
-
-def ask_add_tileset(ctx: Any) -> None:
-    """The picker and the decode on one task thread.
-
-    One task rather than a pick task and an add task: the pane would otherwise
-    have to route a bare path back through the frame thread only to submit a
-    second job with it, and the intermediate result has nowhere sensible to
-    live while it waits.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    width, height = int(tab.doc.tile_w), int(tab.doc.tile_h)
-    uid = tab.uid
-
-    def run() -> dict[str, Any] | None:
-        from .plotter import tsx as tsxlib
-        from .plotter.tileset import Tileset
-
-        path = dialogs.open_file("Add a tileset", TILESET_FILTER)
-        if path is None:
-            return None
-        if path.suffix.lower() == ".tsx":
-            data = path.read_bytes()
-            image = tsxlib.tsx_source(data)
-            tileset = tsxlib.read_tsx(data, _decode(path.parent / image))
-        else:
-            tileset = Tileset(
-                name=path.stem, pixels=_decode(path), tile_w=width, tile_h=height
-            )
-        return {"tileset": tileset, "source": str(path), "uid": uid}
-
-    ctx.submit(f"plotter-tileset:{uid}", run)
-
-
-def use_as_tileset(ctx: Any, job: Any) -> None:
-    """A library asset's reference image, sliced as a tileset.
-
-    The bytes are read on the task thread: an ``input.png`` is routinely several
-    megabytes and decoding one between ``new_frame`` and ``render`` is the sort
-    of stall the whole task layer exists to avoid.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    job_id = job["id"] if isinstance(job, dict) else str(job)
-    name = (job.get("name") or job_id) if isinstance(job, dict) else job_id
-    width, height = int(tab.doc.tile_w), int(tab.doc.tile_h)
-
-    def run() -> dict[str, Any]:
-        from ..service import files as svc_files
-        from .plotter.tileset import Tileset
-
-        path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
-        tileset = Tileset(
-            name=str(name), pixels=_decode(Path(path)), tile_w=width, tile_h=height
-        )
-        return {"tileset": tileset, "source": "", "uid": tab.uid}
-
-    ctx.submit(f"plotter-tileset:{tab.uid}", run)
-
-
-# --- saving -------------------------------------------------------------------
-
-
-def _start(ctx: Any, tab: PlotterDoc, key: str, run: Any) -> None:
-    tab.saving = True
-    if not ctx.submit(key, run):
-        # The runner refuses a key already in flight. Leaving the flag set is
-        # what makes a tab read-only forever after a double press.
-        tab.saving = False
-
-
-def _encode(doc: Any, file_format: str) -> dict[str, bytes]:
-    """The document as the file (or files) that format needs.
-
-    Built on the frame thread by every caller, which is the opposite of what it
-    looks like it should be: serialising *reads the live document*, and doing
-    that after an unbounded modal dialog would encode whatever the user did
-    while it was open.
-    """
-    from .plotter import tmx as tmxlib
-    from .plotter import wmap as wmaplib
-
-    if file_format == "tmx":
-        return tmxlib.tmx_export(doc)
-    if file_format == "tmj":
-        return tmxlib.tmj_export(doc)
-    return {"map.wmap": wmaplib.wmap_bytes(doc)}
-
-
-def _write(files: dict[str, bytes], path: Path) -> None:
-    """Write an encoded map beside ``path``.
-
-    The main document takes the user's chosen name; everything else keeps the
-    relative path the exporter chose, because those are exactly the paths
-    written *inside* the ``.tmx``. Each file goes through a temporary and a
-    replace, so a crash mid-write cannot leave a half-written map where a whole
-    one was.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    for name, blob in files.items():
-        target = path if Path(name).name.startswith("map.") else path.parent / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_bytes(blob)
-        tmp.replace(target)
-
-
-def save_to(ctx: Any, tab: PlotterDoc, path: Path, file_format: str) -> None:
-    path = Path(path)
-    head = tab.doc.history.head
-    files = _encode(tab.doc, file_format)
-
-    def run() -> dict[str, Any]:
-        _write(files, path)
-        return {"head": head, "path": str(path), "format": file_format, "retitle": True}
-
-    _start(ctx, tab, f"plotter-save:{tab.uid}", run)
-
-
-def save(ctx: Any, tab: PlotterDoc | None = None) -> None:
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if tab.path is None:
-        save_as(ctx, tab)
-        return
-    save_to(ctx, tab, tab.path, tab.file_format)
-
-
-def save_as(ctx: Any, tab: PlotterDoc | None = None, *, file_format: str | None = None) -> None:
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    fmt = file_format or tab.file_format
-    suffix = {"tmx": plotter_state.TMX_SUFFIX, "tmj": plotter_state.TMJ_SUFFIX}.get(
-        fmt, plotter_state.WMAP_SUFFIX
-    )
-    filters = {"tmx": TMX_FILTER, "tmj": TMJ_FILTER}.get(fmt, WMAP_FILTER)
-    title, head = tab.title, tab.doc.history.head
-    files = _encode(tab.doc, fmt)
-    stem = Path(title).stem or "map"
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.save_file("Save the map", f"{stem}{suffix}", filters)
-        if path is None:
-            return None
-        path = path.with_suffix(suffix)
-        _write(files, path)
-        return {"head": head, "path": str(path), "format": fmt, "retitle": True}
-
-    _start(ctx, tab, f"plotter-saveas:{tab.uid}", run)
-
-
-def export_map(ctx: Any, file_format: str, tab: PlotterDoc | None = None) -> None:
-    """Write a Tiled copy without changing what the tab is.
-
-    Deliberately separate from ``save_as``: exporting to TMX to open a map in
-    Tiled should not silently retarget Ctrl+S, because the ``.wmap`` holds
-    things the ``.tmx`` cannot (an embedded tileset image, for one).
-    """
-    tab = tab or active(ctx)
-    if tab is None or tab.saving:
-        return
-    if not tab.doc.tilesets:
-        ctx.toast("A Tiled map needs at least one tileset.", "error")
-        return
-    suffix = plotter_state.TMX_SUFFIX if file_format == "tmx" else plotter_state.TMJ_SUFFIX
-    filters = TMX_FILTER if file_format == "tmx" else TMJ_FILTER
-    stem = Path(tab.title).stem or "map"
-    files = _encode(tab.doc, file_format)
-
-    def run() -> dict[str, Any] | None:
-        path = dialogs.save_file("Export for Tiled", f"{stem}{suffix}", filters)
-        if path is None:
-            return None
-        path = path.with_suffix(suffix)
-        _write(files, path)
-        return {"exported": str(path)}
-
-    _start(ctx, tab, f"plotter-export:{tab.uid}", run)
-
-
 # --- the library --------------------------------------------------------------
 
 
@@ -557,6 +170,14 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
     exists. The PNG is written first and ``map.wmap`` second, so a crash between
     them leaves the source absent rather than describing a picture that is not
     there.
+
+    **The encode is on the frame thread and the render is not.** Serialising
+    reads the live document, so ``wmap_bytes`` has to run here or a later edit
+    lands in the file; compositing the whole map does not, and a 512-square map
+    at 32 pixels is a 268-megapixel blend between ``new_frame`` and ``render``.
+    So the task reparses the bytes it was handed and renders *those*: the picture
+    is a function of the source beside it by construction rather than by two
+    reads of one document happening to agree.
     """
     from .plotter import wmap as wmaplib
 
@@ -568,16 +189,15 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
         ctx.toast("There is nothing to render -- add a tileset first.", "error")
         return
 
-    from .plotter.render import render_map
-
-    pixels = render_map(doc)
     source = wmaplib.wmap_bytes(doc)
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
         from ..service import jobs as svc_jobs
-        from .packwright.compose import png_bytes
+        from .plotter.pngio import png_bytes
+        from .plotter.render import render_map
 
+        pixels = render_map(wmaplib.read_wmap(source))
         result = svc_jobs.import_reference(
             ctx.svc, png_bytes(pixels), name=title, prompt=title, authored="plotter"
         )
@@ -595,10 +215,14 @@ def edit_asset_in_plotter(ctx: Any, job: Any) -> None:
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
+        from ..service.errors import invalid_from
         from .plotter import wmap as wmaplib
 
         path = svc_files.plotter_source_path(ctx.svc, job_id)
-        doc = wmaplib.read_wmap(Path(path).read_bytes())
+        try:
+            doc = wmaplib.read_wmap(Path(path).read_bytes())
+        except ValueError as exc:
+            raise invalid_from(exc, "This map could not be reopened", field="file") from exc
         return {"doc": doc, "path": "", "title": "Map", "format": "wmap"}
 
     ctx.submit(f"plotter-open:{job_id}", run)
@@ -839,7 +463,10 @@ def _ctrl_key(
         export_map(ctx, "tmx", tab) if shift else export_library(ctx, tab)
         return True
     if name == "z":
-        tab.doc.undo()
+        # Ctrl+Shift+Z redoes as well, which is what Inker and Clay accept and
+        # what a user arriving from either already has in their hand. Ctrl+Y
+        # keeps working: this adds a spelling rather than replacing one.
+        tab.doc.redo() if shift else tab.doc.undo()
         state.selected_object = None
         return True
     if name == "y":

@@ -685,7 +685,7 @@ class GenerateOps:
                 spec,
                 self.config.t2i_model_root,
                 # Honoured for turbo only -- see Config.t2i_turbo_dir.
-                self.config.t2i_turbo_dir if base_key == models.DEFAULT_BASE_MODEL else None,
+                self.config.t2i_turbo_dir if base_key == models.T2I_DIR_MODEL else None,
             )
             self._t2i_key = base_key
         return self._text2image

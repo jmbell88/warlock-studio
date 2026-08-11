@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from warlock.studio import plotter_mode
+from warlock.studio import plotter_io, plotter_mode
 from warlock.studio.plotter import gid, tmx, wmap
 from warlock.studio.plotter.tilemap import MapObject, new_uid
 from warlock.studio.plotter.tileset import Tileset
@@ -156,6 +156,19 @@ def test_opening_an_already_open_path_focuses_rather_than_forking():
     assert plotter_mode.active(ctx) is first
 
 
+def test_one_file_spelled_two_ways_is_one_tab(tmp_path):
+    """On Windows ``Level.WMAP`` and ``level.wmap`` are the same file, and
+    ``Path.__eq__`` says they are not -- so the recents list and a drop used to
+    fork into two tabs that then raced on save."""
+    ctx = FakeCtx()
+    (tmp_path / "Level.WMAP").write_bytes(b"")
+    first = plotter_mode.adopt(ctx, _tab(ctx).doc, path=tmp_path / "Level.WMAP")
+    ctx.submitted.clear()
+    plotter_mode.open_path(ctx, tmp_path / "level.wmap")
+    assert ctx.submitted == []
+    assert plotter_mode.active(ctx) is first
+
+
 def test_closing_a_tab_leaves_you_on_the_neighbour():
     ctx = FakeCtx()
     first, second, third = _tab(ctx), _tab(ctx), _tab(ctx)
@@ -255,6 +268,32 @@ def test_a_cancelled_dialog_leaves_the_document_alone():
     assert not tab.saving and tab.dirty and tab.path is None
 
 
+def test_a_save_leaves_no_staging_file_behind(tmp_path):
+    """The temporary is a dotfile and it is removed in a ``finally``: the old
+    ``level.wmap.tmp`` sat in the folder the user picked, sorted right beside
+    the file it is a fragment of."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, dirty=True)
+    _save(ctx, tab, tmp_path / "level.wmap")
+    assert {p.name for p in tmp_path.iterdir()} == {"level.wmap"}
+
+
+def test_a_failed_write_strands_no_temporary(tmp_path, monkeypatch):
+    """Nothing removed the staging file when the replace never happened, so a
+    full disk or a locked target left a fragment in the user's folder."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, dirty=True)
+
+    def boom(*_args, **_kwargs):
+        raise OSError("no room")
+
+    monkeypatch.setattr(plotter_io.os, "replace", boom)
+    with pytest.raises(OSError):
+        plotter_io._write({"map.wmap": b"x"}, tmp_path / "level.wmap")
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert tab is not None
+
+
 def test_a_map_opened_from_tiled_saves_back_to_tiled(tmp_path):
     """Warlock does not silently convert a file you brought from Tiled into one
     Tiled cannot open."""
@@ -309,6 +348,271 @@ def test_adding_a_tileset_with_nothing_open_says_so():
     plotter_mode.ask_add_tileset(ctx)
     assert ctx.toasts and ctx.toasts[-1][1] == "error"
     assert ctx.submitted == []
+
+
+# --- what a file may point at -------------------------------------------------
+#
+# The paths inside a ``.tmx`` or ``.tsx`` come from a file, not from the user,
+# and this layer is the one that turns them into a read.
+
+
+@pytest.mark.parametrize("source", ["C:\\evil.png", "\\\\host\\share\\x.png", "/etc/passwd"])
+def test_a_tileset_source_that_leaves_the_document_is_refused(source, tmp_path):
+    with pytest.raises(ValueError, match="absolute path"):
+        plotter_io._resolve_source(tmp_path, source)
+
+
+def test_an_engine_refusal_reaches_the_user_inside_a_sentence(tmp_path):
+    """``this file uses group layers, which Plotter does not support`` is
+    precise and has no subject. The frame supplies one and keeps the detail,
+    which is the only part that says which feature."""
+    from warlock.service.errors import Invalid
+
+    path = tmp_path / "hostile.tmx"
+    path.write_bytes(
+        b'<map version="1.10" orientation="hexagonal" width="1" height="1" '
+        b'tilewidth="16" tileheight="16"/>'
+    )
+    with pytest.raises(Invalid) as exc:
+        plotter_io._load(path)
+    assert "This map could not be opened" in str(exc.value)
+    assert "hexagonal" in str(exc.value)
+    assert exc.value.field == "file"
+
+
+def test_a_file_past_the_ceiling_is_refused_before_it_is_read(tmp_path, monkeypatch):
+    """One answer to "how big may a map document be", shared with the service's
+    own upload cap rather than invented a second time here."""
+    from warlock.service import files as svc_files
+    from warlock.service.errors import TooLarge
+
+    path = tmp_path / "level.wmap"
+    path.write_bytes(b"PK\x03\x04" + b"\0" * 64)
+    monkeypatch.setattr(svc_files, "MAX_MAP_SOURCE_BYTES", 8)
+    with pytest.raises(TooLarge) as exc:
+        plotter_io._load(path)
+    assert exc.value.field == "file" and "level.wmap" in str(exc.value)
+
+
+def test_a_relative_source_may_climb_because_tiled_projects_do(tmp_path):
+    """A tileset folder beside a maps folder is the normal Tiled layout, so
+    containment to the map's own directory would refuse ordinary projects."""
+    from PIL import Image
+
+    maps = tmp_path / "maps"
+    tilesets = tmp_path / "tilesets"
+    maps.mkdir()
+    tilesets.mkdir()
+    Image.fromarray(np.zeros((32, 32, 4), np.uint8), "RGBA").save(tilesets / "t.png")
+    (tilesets / "t.tsx").write_text(
+        '<tileset name="t" tilewidth="16" tileheight="16">'
+        '<image source="t.png" width="32" height="32"/></tileset>',
+        encoding="utf-8",
+    )
+    loaded = plotter_io._loaders(maps)["tsx_loader"]("../tilesets/t.tsx")
+    assert loaded.name == "t" and loaded.tile_w == 16
+
+
+# --- the library --------------------------------------------------------------
+
+
+def test_the_exported_render_is_the_source_beside_it_not_a_later_document(svc, monkeypatch):
+    """The encode is on the frame thread because serialising reads the live
+    document; the *render* is not, and it reparses those bytes rather than
+    reading the document a second time -- so an edit made while the task runs
+    cannot appear in the picture without appearing in the source too."""
+    from PIL import Image
+
+    from warlock.studio.plotter.render import render_map
+
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    tab.doc.write_region(layer.uid, 0, 0, np.array([[1]], gid.DTYPE))
+
+    encoded: list[bytes] = []
+    real = wmap.read_wmap
+
+    def spy(data: bytes):
+        encoded.append(bytes(data))
+        # An edit landing *between* the encode and the render is the window the
+        # old shape composited inside.
+        tab.doc.write_region(layer.uid, 3, 3, np.array([[1]], gid.DTYPE))
+        return real(data)
+
+    monkeypatch.setattr(wmap, "read_wmap", spy)
+    plotter_mode.export_library(ctx, tab)
+
+    assert encoded, "the task reparses what the frame thread encoded"
+    job_id = ctx.result["job_id"]
+    with Image.open(svc.job_dir(job_id) / "input.png") as image:
+        rendered = np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    assert np.array_equal(rendered, render_map(real(encoded[0])))
+    # And the picture is genuinely not the later document.
+    assert not np.array_equal(rendered, render_map(tab.doc))
+
+
+# --- the canvas's own arithmetic ----------------------------------------------
+#
+# ``_apply`` and ``_corner_uvs`` are imgui-free and pure, so the pane imports
+# headlessly and the two decisions it owns can be asserted without a window.
+
+
+def test_picking_from_the_second_tileset_selects_the_second_tileset():
+    """``list.index`` on a ``TilesetRef`` compares ndarrays; it only ever
+    returned the right answer by short-circuiting on the firstgid."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.doc.add_tileset(_tileset("second"))
+    state = plotter_mode.ensure(ctx)
+    state.tool = "pick"
+    layer = tab.doc.tile_layers()[0]
+    second = tab.doc.tilesets[1]
+    tab.doc.write_region(
+        layer.uid, 0, 0, np.array([[second.firstgid]], gid.DTYPE)
+    )
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+    assert state.tileset_index == 1
+
+
+def _terrain_tab(ctx: FakeCtx):
+    """A tab with a generated terrain set adopted and that terrain in hand."""
+    tab = _tab(ctx, tileset=False)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    return tab, plotter_mode.ensure(ctx), tab.doc.tilesets[-1]
+
+
+def test_erasing_a_terrain_cell_re_fits_what_surrounded_it():
+    """A terrain hole has to grow an outline on everything that now borders it,
+    or the field keeps the edge art of a neighbour that is no longer there."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.plotter import terrain as terrainlib
+
+    ctx = FakeCtx()
+    tab, state, ref = _terrain_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    cells = [(x, y) for y in range(4) for x in range(4)]
+    tab.doc.write_region(
+        layer.uid, *terrainlib.paint_terrain_cells(layer.data, cells, 0, ref)
+    )
+    neighbour = int(layer.data[1, 1])
+    depth = len(tab.doc.history)
+
+    state.tool = "erase"
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+    assert int(layer.data[2, 2]) == 0
+    assert int(layer.data[1, 1]) != neighbour, "the ring grew an edge against the hole"
+    # One region, so one step: the eight-neighbour fix-up lives inside the same
+    # rectangle as the erase.
+    assert len(tab.doc.history) == depth + 1
+    tab.doc.undo()
+    assert int(layer.data[1, 1]) == neighbour and int(layer.data[2, 2]) != 0
+
+
+def test_erasing_a_plain_cell_on_a_terrain_map_is_still_a_plain_erase():
+    """Self-selecting per cell is the only rule that makes one eraser correct on
+    a mixed map; the alternative is a second eraser and a user deciding which."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, ref = _terrain_tab(ctx)
+    tab.doc.add_tileset(_tileset("plain"))
+    plain = tab.doc.tilesets[-1]
+    layer = tab.doc.tile_layers()[0]
+    tab.doc.write_region(
+        layer.uid, 2, 2, np.array([[plain.firstgid]], gid.DTYPE)
+    )
+    tab.doc.write_region(layer.uid, 0, 0, np.array([[ref.firstgid]], gid.DTYPE))
+    untouched = int(layer.data[0, 0])
+
+    state.tool = "erase"
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+    assert int(layer.data[2, 2]) == 0
+    assert int(layer.data[0, 0]) == untouched, "a plain erase re-fits nothing"
+
+
+def test_fill_with_a_terrain_in_hand_floods_instead_of_refusing():
+    """Fill used to toast "Pick a tile from the tileset first" whenever the
+    brush was empty, including with a terrain unambiguously in hand."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.plotter import terrain as terrainlib
+
+    ctx = FakeCtx()
+    tab, state, ref = _terrain_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    block = [(x, y) for y in range(1, 4) for x in range(1, 4)]
+    tab.doc.write_region(
+        layer.uid, *terrainlib.paint_terrain_cells(layer.data, block, 0, ref)
+    )
+    state.tool = "fill"
+    state.brush = None
+    state.terrain = (len(tab.doc.tilesets) - 1, 2)
+    ctx.toasts.clear()
+
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+    ranks = terrainlib.rank_field(layer.data, ref)
+    assert {int(ranks[y, x]) for x, y in block} == {2}
+    assert not [t for t in ctx.toasts if t[1] == "error"]
+
+
+def test_fill_with_a_tile_in_hand_is_the_plain_flood_it_always_was():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, ref = _terrain_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    state.tool = "fill"
+    state.brush = np.array([[ref.firstgid]], gid.DTYPE)
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+    # A raw flood puts the *picked gid* in every cell, blob case and all --
+    # which is exactly what a terrain fill would not do.
+    assert (layer.data == ref.firstgid).all()
+
+
+def test_fill_with_neither_still_says_so():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.tool = "fill"
+    state.brush = None
+    state.terrain = None
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+    assert ctx.toasts[-1][1] == "error"
+
+
+def test_the_canvas_and_the_flat_renderer_agree_about_every_flag():
+    """Two renderers exist and neither is redundant, so the thing that has to be
+    pinned is that they *agree*. Both apply the flags transpose-then-mirror;
+    ``render.orient`` does it to pixels and ``_corner_uvs`` to four UV corners,
+    which is what makes the diagonal flip drawable at all. This is here rather
+    than in ``tests/plotter/`` because it reaches into a pane -- ``_corner_uvs``
+    is imgui-free and pure, so importing it headlessly is safe.
+    """
+    from warlock.studio.panes.plotter_canvas import _corner_uvs
+    from warlock.studio.plotter.render import orient
+
+    # Four distinct corners, so every permutation is distinguishable.
+    tile = np.zeros((2, 2, 4), dtype=np.uint8)
+    for index, (row, column) in enumerate(((0, 0), (0, 1), (1, 1), (1, 0))):
+        tile[row, column] = (index + 1, 0, 0, 255)
+    # ``_corner_uvs`` returns TL, TR, BR, BL over the unit square; each corner
+    # UV names the source pixel that ends up drawn at that screen corner.
+    screen_corners = ((0, 0), (0, 1), (1, 1), (1, 0))  # TL, TR, BR, BL as (row, column)
+
+    for mask in range(8):
+        flip_h, flip_v, flip_d = bool(mask & 1), bool(mask & 2), bool(mask & 4)
+        drawn = orient(tile, flip_h, flip_v, flip_d)
+        uvs = _corner_uvs((0.0, 0.0, 1.0, 1.0), flip_h, flip_v, flip_d)
+        for (row, column), (u, v) in zip(screen_corners, uvs, strict=True):
+            source = tile[int(v), int(u)]
+            assert np.array_equal(drawn[row, column], source), (
+                f"flags h={flip_h} v={flip_v} d={flip_d} disagree at {(row, column)}"
+            )
 
 
 # --- the guard ----------------------------------------------------------------
@@ -388,6 +692,34 @@ def test_undo_works_when_it_is_not(monkeypatch):
     monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
     plotter_mode.handle_key(ctx, event)
     assert not tab.dirty
+
+
+def test_ctrl_shift_z_redoes_the_way_inker_and_clay_accept(monkeypatch):
+    """Plotter was Ctrl+Y only, so a user arriving from either of the other two
+    editors found their redo silently doing nothing."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, dirty=True)
+    dirty_data = tab.doc.tile_layers()[0].data.copy()
+
+    event, mods = _key("z", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert not tab.dirty
+
+    event, mods = _key("z", ctrl=True, shift=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert tab.dirty
+    assert np.array_equal(tab.doc.tile_layers()[0].data, dirty_data)
+
+
+def test_the_two_empty_states_name_the_same_droppable_suffixes():
+    """Two hand-written copies existed and they already disagreed."""
+    from warlock.studio import plotter_state
+
+    assert plotter_state.MAP_SUFFIX_TEXT == ".wmap / .tmx / .tmj"
 
 
 def test_a_key_release_is_never_consumed():

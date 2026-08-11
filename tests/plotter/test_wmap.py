@@ -180,6 +180,17 @@ def _rewrite(doc: MapDoc, mutate) -> bytes:
     return out.getvalue()
 
 
+def test_an_archive_claiming_more_than_the_ceiling_is_refused(monkeypatch):
+    """A few kilobytes of zip can claim terabytes, and the read that discovers
+    that is the one which has already exhausted memory. The constant is lowered
+    rather than a gigabyte being built, which is why it is read at call time."""
+    data = wmap.wmap_bytes(_doc())
+    monkeypatch.setattr(wmap, "MAX_DECOMPRESSED_BYTES", 16)
+    with pytest.raises(ValueError) as exc:
+        wmap.read_wmap(data)
+    assert "bytes unpacked" in str(exc.value) and "16" in str(exc.value)
+
+
 def test_a_file_from_a_newer_version_is_refused():
     data = _rewrite(_doc(), lambda m: m.update(version=wmap.VERSION + 1))
     with pytest.raises(ValueError, match="newer version"):

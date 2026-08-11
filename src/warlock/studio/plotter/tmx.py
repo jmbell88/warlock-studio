@@ -47,10 +47,11 @@ from typing import Any
 
 import numpy as np
 
+from . import blob, project
 from . import gid as gidlib
-from . import project
+from .pngio import png_bytes
 from .tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
-from .tileset import Tileset, TilesetRef
+from .tileset import TerrainSpec, Tileset, TilesetRef
 from .tsx import (
     TILED_VERSION,
     TSX_VERSION,
@@ -58,9 +59,12 @@ from .tsx import (
     TiledUnsupported,
     check_tileset_features,
     read_properties,
+    read_wangsets,
+    read_wangsets_json,
     to_bytes,
     tsx_bytes,
     write_properties,
+    xml_root,
 )
 
 # Re-exported deliberately: ``TiledUnsupported`` is defined in :mod:`.tsx`
@@ -102,6 +106,56 @@ _HEX_ROTATE = gidlib.DTYPE(0x10000000)
 # --- shared refusals ----------------------------------------------------------
 
 
+def _refuse_infinite(infinite: bool) -> None:
+    """One sentence, both formats -- see :func:`_refuse_object_shape`."""
+    if infinite:
+        raise TiledUnsupported(
+            "an infinite map", "save it with a fixed size in Tiled's map properties"
+        )
+
+
+def _refuse_container_layers(has: Callable[[str], bool]) -> None:
+    """The two layer kinds that hold other layers or a picture instead of tiles.
+
+    ``has`` is the accessor because XML asks the *document* (a ``<group>``
+    anywhere under the root) and JSON asks each *layer* (its ``type``): the
+    predicate differs, the model's limit does not.
+    """
+    if has("group"):
+        raise TiledUnsupported("group layers", "flatten them in Tiled first")
+    if has("imagelayer"):
+        raise TiledUnsupported("image layers")
+
+
+def _refuse_layer_offsets(offset: Callable[[str], float], name: str) -> None:
+    if offset("offsetx") or offset("offsety"):
+        raise TiledUnsupported("layer pixel offsets", f"layer {name!r}")
+
+
+def _refuse_wangsets(recognised: tuple[TerrainSpec, ...] | None) -> tuple[TerrainSpec, ...]:
+    """**Recognise or refuse**, and the asymmetry is the point.
+
+    Tiled's Wang model is strictly larger than this one -- corner-only and
+    edge-only sets, up to 255 colours, tile assignments that need not form a
+    blob at all -- so adopting a foreign one would be the silent half-read the
+    whole reader exists to prevent. What is recognised is exactly what
+    ``tsx.write_wangsets`` emits, which keeps the reader and the writer
+    symmetric: every file this writes, this reads.
+
+    Shared by the XML and JSON tileset readers because the *decision* is one
+    decision. The JSON side used to refuse every wangset outright, so a ``.tmj``
+    carrying a set this build had itself written was turned away by a sentence
+    that did not say what about it was wrong.
+    """
+    if recognised is None:
+        raise TiledUnsupported(
+            "Wang sets / terrain brushes",
+            f"Plotter models one blob set: {blob.TILE_COUNT} tiles per terrain colour, "
+            "in mask order",
+        )
+    return recognised
+
+
 def _refuse_object_shape(has: Callable[[str], bool], where: str) -> None:
     """The four shapes and two references an object may be that this cannot be.
 
@@ -120,16 +174,6 @@ def _refuse_object_shape(has: Callable[[str], bool], where: str) -> None:
 
 
 # --- XML reading --------------------------------------------------------------
-
-
-def _root(data: bytes, expect: str) -> ET.Element:
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        raise ValueError(f"this is not a readable Tiled {expect} file: {exc}") from exc
-    if root.tag != expect:
-        raise ValueError(f"expected a <{expect}> document, found <{root.tag}>")
-    return root
 
 
 def _check_orientation(orientation: str) -> str:
@@ -151,14 +195,63 @@ def _check_orientation(orientation: str) -> str:
 
 def _check_map(root: ET.Element) -> None:
     _check_orientation(root.get("orientation", "orthogonal"))
-    if root.get("infinite", "0") not in ("0", "false"):
-        raise TiledUnsupported(
-            "an infinite map", "save it with a fixed size in Tiled's map properties"
-        )
-    if root.find("group") is not None:
-        raise TiledUnsupported("group layers", "flatten them in Tiled first")
-    if root.find("imagelayer") is not None:
-        raise TiledUnsupported("image layers")
+    _refuse_infinite(root.get("infinite", "0") not in ("0", "false"))
+    _refuse_container_layers(lambda tag: root.find(tag) is not None)
+
+
+def _gid_array(values: Any, width: int, height: int) -> np.ndarray:
+    """A layer's cells from a sequence of plain numbers, checked then cast.
+
+    **``int64`` first, and the range check before the cast.** Building the array
+    as ``uint32`` directly is what numpy does silently and wrongly here: a
+    hand-edited ``-1`` arrives as 4294967295 and an entry past the id space
+    wraps, so a corrupt file used to be refused two steps later under a sentence
+    about a tile no tileset accounts for -- a true statement about the wrong
+    problem, and one that names no way to fix the file.
+
+    Three callers share it (CSV, the ``<tile>``-element form and the TMJ raw
+    list) because the three are one question asked in three syntaxes; two copies
+    of the range test is how one spelling comes to accept what the others refuse.
+    """
+    try:
+        flat = np.fromiter(values, dtype=np.int64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("a layer's data holds something that is not a number") from exc
+    if flat.size != width * height:
+        raise ValueError(f"a layer declares {width}x{height} cells and carries {flat.size}")
+    if bool(((flat < 0) | (flat > 0xFFFFFFFF)).any()):
+        raise ValueError("a layer holds a tile id outside the unsigned 32-bit range")
+    return np.ascontiguousarray(flat.astype(gidlib.DTYPE).reshape(height, width))
+
+
+def _decompress(raw: bytes, compression: str, expected: int) -> bytes:
+    """Unpack one layer's payload, refusing anything past what its size declares.
+
+    **Bounded, and the bound is the layer's own arithmetic.** ``zlib.decompress``
+    on a hostile payload allocates whatever the stream says: a few hundred bytes
+    of archive is enough to ask for gigabytes, and the read that discovers this
+    is the one that has already exhausted memory. A layer of ``w * h`` cells is
+    exactly ``w * h * 4`` bytes, so one more than that is already a file that
+    does not describe the map around it -- which is why the tail is checked
+    rather than the output simply truncated.
+    """
+    if compression == "zlib":
+        engine = zlib.decompressobj()
+        out = engine.decompress(raw, expected + 1)
+        if len(out) > expected or engine.unconsumed_tail:
+            raise ValueError(
+                f"a layer's compressed data unpacks past the {expected} bytes its size declares"
+            )
+        return out
+    if compression == "gzip":
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as fh:
+            out = fh.read(expected + 1)
+        if len(out) > expected:
+            raise ValueError(
+                f"a layer's compressed data unpacks past the {expected} bytes its size declares"
+            )
+        return out
+    return raw
 
 
 def _decode_payload(
@@ -176,18 +269,20 @@ def _decode_payload(
         raise TiledUnsupported(f"{compression}-compressed layer data", detail)
 
     if encoding == "csv":
-        values = [int(piece) for piece in text.replace("\n", "").split(",") if piece.strip()]
-        flat = np.array(values, dtype=gidlib.DTYPE)
-    else:
-        raw = base64.b64decode("".join(text.split()))
-        if compression == "zlib":
-            raw = zlib.decompress(raw)
-        elif compression == "gzip":
-            raw = gzip.decompress(raw)
-        # Little-endian explicitly: the format says so, and a big-endian host
-        # reading native order would silently byte-swap every flag.
-        flat = np.frombuffer(raw, dtype="<u4").astype(gidlib.DTYPE)
+        pieces = [piece for piece in text.replace("\n", "").split(",") if piece.strip()]
+        try:
+            values = [int(piece) for piece in pieces]
+        except ValueError as exc:
+            raise ValueError("a layer's CSV data holds something that is not a number") from exc
+        return _gid_array(values, width, height)
 
+    raw = _decompress(
+        base64.b64decode("".join(text.split())), compression, width * height * 4
+    )
+    # Little-endian explicitly: the format says so, and a big-endian host
+    # reading native order would silently byte-swap every flag. Already unsigned,
+    # so this path needs no range check -- four bytes *are* a uint32.
+    flat = np.frombuffer(raw, dtype="<u4").astype(gidlib.DTYPE)
     if flat.size != width * height:
         raise ValueError(
             f"a layer declares {width}x{height} cells and carries {flat.size}"
@@ -201,17 +296,15 @@ def _xml_tile_elements(node: ET.Element, width: int, height: int) -> np.ndarray:
     Still selectable in Tiled as the "XML" tile-layer format, so refusing it
     would refuse a file a user legitimately exported. Written by nothing here.
     """
-    values = [int(tile.get("gid", 0) or 0) for tile in node.findall("tile")]
-    flat = np.array(values, dtype=gidlib.DTYPE)
-    if flat.size != width * height:
-        raise ValueError(f"a layer declares {width}x{height} cells and carries {flat.size}")
-    return np.ascontiguousarray(flat.reshape(height, width))
+    try:
+        values = [int(tile.get("gid", 0) or 0) for tile in node.findall("tile")]
+    except ValueError as exc:
+        raise ValueError("a layer's data holds something that is not a number") from exc
+    return _gid_array(values, width, height)
 
 
 def _check_offsets(node: ET.Element, name: str) -> None:
-    for attr in ("offsetx", "offsety"):
-        if float(node.get(attr, 0) or 0) != 0.0:
-            raise TiledUnsupported("layer pixel offsets", f"layer {name!r}")
+    _refuse_layer_offsets(lambda attr: float(node.get(attr, 0) or 0), name)
 
 
 def _read_tmx_tilesets(
@@ -234,6 +327,7 @@ def _read_tmx_tilesets(
             raise TiledUnsupported(
                 "an embedded tileset image", "Plotter needs an <image source=...> path"
             )
+        wangsets = node.find("wangsets")
         refs.append(
             TilesetRef(
                 firstgid=firstgid,
@@ -245,6 +339,13 @@ def _read_tmx_tilesets(
                     spacing=int(node.get("spacing", 0) or 0),
                     margin=int(node.get("margin", 0) or 0),
                     properties=read_properties(node),
+                    # ``check_tileset_features`` already refused an unrecognised
+                    # set; an embedded one that *is* recognised is a terrain set
+                    # and used to be accepted and then dropped, which left the
+                    # tool greyed out on a map whose atlas plainly declares it.
+                    terrains=() if wangsets is None else _refuse_wangsets(
+                        read_wangsets(wangsets)
+                    ),
                 ),
             )
         )
@@ -307,7 +408,7 @@ def read_tmx(
     Built by *construction* rather than through the document's own mutators,
     which would push one undo step per layer and open every file already dirty.
     """
-    root = _root(data, "map")
+    root = xml_root(data, "map")
     _check_map(root)
 
     doc = MapDoc(
@@ -413,34 +514,11 @@ def _json_object(entry: dict[str, Any]) -> MapObject:
     )
 
 
-def read_tmj(
-    data: bytes, *, image_loader: ImageLoader, tsx_loader: TilesetLoader
-) -> MapDoc:
-    """The JSON spelling of the same map. Every refusal above applies here."""
-    try:
-        payload = json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError(f"this is not a readable Tiled JSON map: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("a Tiled JSON map is an object")
-
-    orientation = _check_orientation(str(payload.get("orientation", "orthogonal")))
-    if payload.get("infinite"):
-        raise TiledUnsupported(
-            "an infinite map", "save it with a fixed size in Tiled's map properties"
-        )
-
-    doc = MapDoc(
-        width=int(payload.get("width", 1) or 1),
-        height=int(payload.get("height", 1) or 1),
-        tile_w=int(payload.get("tilewidth", 1) or 1),
-        tile_h=int(payload.get("tileheight", 1) or 1),
-        projection=orientation,
-    )
-    doc.renderorder = str(payload.get("renderorder", "right-down"))
-    doc.backgroundcolor = payload.get("backgroundcolor")
-    doc.properties = _json_properties(payload.get("properties"))
-
+def _read_tmj_tilesets(
+    payload: dict[str, Any], *, image_loader: ImageLoader, tsx_loader: TilesetLoader
+) -> list[TilesetRef]:
+    """``_read_tmx_tilesets`` over the JSON spelling, refusal for refusal."""
+    refs: list[TilesetRef] = []
     for entry in payload.get("tilesets", []):
         firstgid = int(entry.get("firstgid", 1) or 1)
         source = entry.get("source")
@@ -449,18 +527,23 @@ def read_tmj(
                 raise TiledUnsupported(
                     "an external .tsj tileset", "re-save the tileset as .tsx in Tiled"
                 )
-            doc.tilesets.append(
+            refs.append(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )
             continue
+        # ``tiles`` or ``grid`` is an image collection: every tile its own file.
+        # Kept ahead of the wangset question because it decides whether there is
+        # one sliced atlas at all, which everything below assumes.
         if entry.get("tiles") or entry.get("grid"):
             raise TiledUnsupported("an image-collection tileset", str(entry.get("name", "")))
-        if entry.get("wangsets"):
-            raise TiledUnsupported("Wang sets / terrain brushes")
+        wangsets = entry.get("wangsets")
+        terrains: tuple[TerrainSpec, ...] = (
+            () if not wangsets else _refuse_wangsets(read_wangsets_json(wangsets))
+        )
         image = str(entry.get("image", ""))
         if not image:
             raise TiledUnsupported("an embedded tileset image", "Plotter needs an image path")
-        doc.tilesets.append(
+        refs.append(
             TilesetRef(
                 firstgid=firstgid,
                 tileset=Tileset(
@@ -471,19 +554,26 @@ def read_tmj(
                     spacing=int(entry.get("spacing", 0) or 0),
                     margin=int(entry.get("margin", 0) or 0),
                     properties=_json_properties(entry.get("properties")),
+                    terrains=terrains,
                 ),
             )
         )
+    return refs
 
+
+def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
+    """Append every layer, in the order the file lists them -- which is stacking
+    order, bottom first, exactly as the XML reader's walk of the root is."""
     for entry in payload.get("layers", []):
         kind = str(entry.get("type", ""))
         name = str(entry.get("name", ""))
-        if kind == "group":
-            raise TiledUnsupported("group layers", "flatten them in Tiled first")
-        if kind == "imagelayer":
-            raise TiledUnsupported("image layers")
-        if float(entry.get("offsetx", 0) or 0) or float(entry.get("offsety", 0) or 0):
-            raise TiledUnsupported("layer pixel offsets", f"layer {name!r}")
+        # Both accessors are bound to *this* iteration's entry rather than
+        # closing over the loop variable: they are called immediately, but a
+        # closure over a name the loop rebinds is the bug that shape invites.
+        _refuse_container_layers(lambda tag, kind=kind: kind == tag)
+        _refuse_layer_offsets(
+            lambda attr, entry=entry: float(entry.get(attr, 0) or 0), name
+        )
         if kind == "tilelayer":
             if entry.get("chunks"):
                 raise TiledUnsupported("chunked (infinite) layer data", f"layer {name!r}")
@@ -497,13 +587,7 @@ def read_tmj(
                     doc.height,
                 )
             else:
-                flat = np.array(list(raw or []), dtype=gidlib.DTYPE)
-                if flat.size != doc.width * doc.height:
-                    raise ValueError(
-                        f"a layer declares {doc.width}x{doc.height} cells "
-                        f"and carries {flat.size}"
-                    )
-                cells = np.ascontiguousarray(flat.reshape(doc.height, doc.width))
+                cells = _gid_array(list(raw or []), doc.width, doc.height)
             doc.layers.append(
                 TileLayer(
                     uid=new_uid(),
@@ -527,6 +611,41 @@ def read_tmj(
             )
         elif kind:
             raise TiledUnsupported(f"{kind} layers", f"layer {name!r}")
+
+
+def read_tmj(
+    data: bytes, *, image_loader: ImageLoader, tsx_loader: TilesetLoader
+) -> MapDoc:
+    """The JSON spelling of the same map. Every refusal above applies here.
+
+    Split into the same two halves the XML reader has -- tilesets, then layers
+    -- so the two formats are one shape read twice rather than two readers that
+    happen to agree today.
+    """
+    try:
+        payload = json.loads(data)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"this is not a readable Tiled JSON map: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("a Tiled JSON map is an object")
+
+    orientation = _check_orientation(str(payload.get("orientation", "orthogonal")))
+    _refuse_infinite(bool(payload.get("infinite")))
+
+    doc = MapDoc(
+        width=int(payload.get("width", 1) or 1),
+        height=int(payload.get("height", 1) or 1),
+        tile_w=int(payload.get("tilewidth", 1) or 1),
+        tile_h=int(payload.get("tileheight", 1) or 1),
+        projection=orientation,
+    )
+    doc.renderorder = str(payload.get("renderorder", "right-down"))
+    doc.backgroundcolor = payload.get("backgroundcolor")
+    doc.properties = _json_properties(payload.get("properties"))
+    doc.tilesets = _read_tmj_tilesets(
+        payload, image_loader=image_loader, tsx_loader=tsx_loader
+    )
+    _read_tmj_layers(payload, doc)
 
     _finish(doc)
     _adopt_object_space(doc)
@@ -573,14 +692,6 @@ def _stem(index: int, name: str) -> str:
     return f"{index:02d}-{safe}"
 
 
-def _png_bytes(pixels: np.ndarray) -> bytes:
-    from PIL import Image
-
-    out = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(pixels), "RGBA").save(out, "PNG")
-    return out.getvalue()
-
-
 def _csv(data: np.ndarray) -> str:
     """Tiled's own CSV spelling: one row per line, commas throughout."""
     rows = [",".join(str(int(value)) for value in row) for row in data]
@@ -596,7 +707,7 @@ def _tileset_files(doc: MapDoc) -> tuple[dict[str, bytes], list[str]]:
     for index, ref in enumerate(doc.tilesets):
         stem = _stem(index, ref.tileset.name)
         tsx_path = f"tilesets/{stem}.tsx"
-        files[f"tilesets/{stem}.png"] = _png_bytes(ref.tileset.pixels)
+        files[f"tilesets/{stem}.png"] = png_bytes(ref.tileset.pixels)
         # The image name inside the .tsx is relative to the .tsx, which sits
         # beside it -- not to the map.
         files[tsx_path] = tsx_bytes(ref.tileset, image_name=f"{stem}.png")

@@ -1,0 +1,332 @@
+"""Plotter's file layer: what a map is read from and written to.
+
+Split out of ``plotter_mode`` because it is the half that touches a disk, and
+the rules that shape it are all about that. **No file dialog and no encode ever
+runs on the frame thread** -- a native picker is modal to the OS and blocks until
+dismissed, and a document of any size is a zip to build -- so both go through
+``ctx.submit``, which is why saving is a *state* (``PlotterDoc.saving``) rather
+than a call that returns. **The head a save records is captured before the
+submit**, at exactly one place: a head read after an unbounded modal dialog
+describes whatever the user did while it was open. And **every write is staged**
+through a dotfile and an ``os.replace``, cleaned up in a ``finally``.
+
+**A ``.tmx`` export is a mapping of paths, not a file.** TMX has no portable way
+to embed an image, so a map is ``map.tmx`` plus one ``.tsx`` and one ``.png`` per
+tileset. ``tmx.tmx_export`` returns the mapping and :func:`_write` decides where
+it lands: beside the file the user picked, which is what makes the relative paths
+inside the ``.tmx`` resolve.
+
+**The engine cannot open a file and this module is why it does not have to.**
+``plotter/`` takes loader *callbacks*; :func:`_loaders` supplies them, anchored
+to the document being read, and :func:`_resolve_source` and
+:func:`_within_ceiling` are the two questions asked of every path before it
+becomes a read: may this be followed at all, and is it small enough to hold.
+
+Every task key carries the ``plotter-`` prefix, because the app claims results
+by prefix: a key without one is a result delivered nowhere.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+from pathlib import Path, PureWindowsPath
+from typing import Any
+
+import numpy as np
+
+from . import dialogs, plotter_state
+from .plotter_state import PlotterDoc, active, ensure
+
+MAP_FILTER = [
+    "Map documents (*.wmap *.tmx *.tmj)",
+    "*.wmap",
+    "*.tmx",
+    "*.tmj",
+]
+WMAP_FILTER = ["Warlock map (*.wmap)", "*.wmap"]
+TMX_FILTER = ["Tiled map (*.tmx)", "*.tmx"]
+TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
+
+
+# --- image loading ------------------------------------------------------------
+
+
+def _decode(path: Path) -> np.ndarray:
+    """One image file as RGBA. Task thread only."""
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
+
+
+def _within_ceiling(path: Path) -> Path:
+    """Refuse a file too big to open, before a byte of it is read.
+
+    The ceiling is ``service.files.MAX_MAP_SOURCE_BYTES`` -- the same number the
+    service already refuses an *uploaded* ``map.wmap`` at -- rather than a second
+    one invented here, because "how big may a map document be" has one answer and
+    two would drift the first time either moved. Imported inside the function so
+    this module keeps paying nothing for the service layer until it opens a file,
+    and read at call time so a test lowers it rather than building 250 MB.
+
+    A ``ServiceError`` rather than a ``ValueError``: this is the *mode's* refusal
+    about a file the user picked, not the engine's about a document's contents,
+    and its text reaches the user verbatim through the task classifier.
+    ``_decode`` needs no companion ceiling -- Pillow's own ``MAX_IMAGE_PIXELS``
+    is the decompression bomb guard for an image, and a second one here would be
+    a second answer to that question too.
+    """
+    from ..service.errors import TooLarge
+    from ..service.files import MAX_MAP_SOURCE_BYTES
+
+    if path.stat().st_size > MAX_MAP_SOURCE_BYTES:
+        raise TooLarge(
+            f"{path.name} is past the {MAX_MAP_SOURCE_BYTES} bytes this build will open",
+            field="file",
+        )
+    return path
+
+
+def _resolve_source(base: Path, source: str) -> Path:
+    """One path named *inside* a map or tileset file, anchored to that file.
+
+    A ``.tmx`` and a ``.tsx`` both name their dependencies by path, and those
+    paths come from a file rather than from the user -- which makes them
+    untrusted input that this layer turns into a filesystem read.
+
+    **Absolute, drive-qualified and UNC sources are refused; ``..`` is allowed.**
+    The asymmetry is deliberate and it is Tiled's own convention that decides it:
+    a tileset folder beside a maps folder is the *normal* layout, so
+    ``../tilesets/grass.tsx`` is what a legitimate file says and containment to
+    the map's own directory would refuse ordinary projects. What relative
+    traversal cannot do is reach somewhere the user did not point this at: every
+    such path is still rooted at the file they opened. An absolute one is not --
+    ``C:\\Windows\\...`` reads whatever it names -- and a UNC path is worse than
+    absolute: ``\\\\host\\share`` is a *network* read from a build whose first
+    invariant is that it never goes online, issued because a file said so.
+    """
+    text = str(source)
+    pure = PureWindowsPath(text)
+    if pure.is_absolute() or pure.drive or pure.root or text.startswith(("\\\\", "//")):
+        raise ValueError(
+            f"this map names an absolute path ({text}), which Plotter does not follow"
+        )
+    return base / text
+
+
+def _loaders(base: Path):
+    """The two callbacks :mod:`~warlock.studio.plotter.tmx` needs.
+
+    Resolving a relative path means touching a filesystem, which the engine
+    deliberately cannot do -- so path resolution lives here, where it can be
+    anchored to the file being read, and where :func:`_resolve_source` can say
+    which paths are followable at all.
+    """
+    from .plotter import tsx as tsxlib
+
+    def image_loader(source: str) -> np.ndarray:
+        return _decode(_resolve_source(base, source))
+
+    def tsx_loader(source: str) -> Any:
+        target = _within_ceiling(_resolve_source(base, source))
+        data = target.read_bytes()
+        image = tsxlib.tsx_source(data)
+        # Relative to the .tsx, not to the map: a tileset folder is the normal
+        # Tiled layout and resolving from the map would miss by one directory.
+        return tsxlib.read_tsx(data, _decode(_resolve_source(target.parent, image)))
+
+    return {"image_loader": image_loader, "tsx_loader": tsx_loader}
+
+
+# --- opening ------------------------------------------------------------------
+
+
+def _load(path: Path) -> dict[str, Any]:
+    """Blocking; task thread only. Raises rather than returning a broken tab.
+
+    **The engine's refusal is framed rather than forwarded.** ``read_tmx`` says
+    *this file uses group layers, which Plotter does not support* -- precise, and
+    a sentence with no subject in front of a user who pressed Open. ``invalid_from``
+    puts one there and keeps the detail, which is the only part that says which
+    file and which feature. ``TiledUnsupported`` is a ``ValueError`` subclass, so
+    every named refusal flows through this one clause.
+    """
+    from ..service.errors import invalid_from
+    from .plotter import tmx as tmxlib
+    from .plotter import wmap as wmaplib
+
+    path = _within_ceiling(Path(path))
+    data = path.read_bytes()
+    suffix = path.suffix.lower()
+    try:
+        if suffix == plotter_state.TMX_SUFFIX:
+            doc = tmxlib.read_tmx(data, **_loaders(path.parent))
+        elif suffix == plotter_state.TMJ_SUFFIX:
+            doc = tmxlib.read_tmj(data, **_loaders(path.parent))
+        else:
+            doc = wmaplib.read_wmap(data)
+    except ValueError as exc:
+        raise invalid_from(exc, "This map could not be opened", field="file") from exc
+    return {
+        "doc": doc,
+        "path": str(path),
+        "title": plotter_state.title_for(path),
+        "format": plotter_state.format_for(path),
+    }
+
+
+def ask_open(ctx: Any) -> None:
+    """The picker, on a task thread, then the decode on the same one."""
+    ensure(ctx)
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.open_file("Open a map", MAP_FILTER)
+        return None if path is None else _load(path)
+
+    ctx.submit("plotter-open", run)
+
+
+def open_path(ctx: Any, path: Path) -> None:
+    state = ensure(ctx)
+    path = Path(path)
+    existing = state.find_path(path)
+    if existing is not None:
+        # Focus rather than fork: two tabs over one path would race on save.
+        state.activate(existing.uid)
+        return
+    ctx.submit(f"plotter-open:{abs(hash(str(path)))}", _load, path)
+
+
+# --- saving -------------------------------------------------------------------
+
+
+def _start(ctx: Any, tab: PlotterDoc, key: str, run: Any) -> None:
+    tab.saving = True
+    if not ctx.submit(key, run):
+        # The runner refuses a key already in flight. Leaving the flag set is
+        # what makes a tab read-only forever after a double press.
+        tab.saving = False
+
+
+def _encode(doc: Any, file_format: str) -> dict[str, bytes]:
+    """The document as the file (or files) that format needs.
+
+    Built on the frame thread by every caller, which is the opposite of what it
+    looks like it should be: serialising *reads the live document*, and doing
+    that after an unbounded modal dialog would encode whatever the user did
+    while it was open.
+    """
+    from .plotter import tmx as tmxlib
+    from .plotter import wmap as wmaplib
+
+    if file_format == "tmx":
+        return tmxlib.tmx_export(doc)
+    if file_format == "tmj":
+        return tmxlib.tmj_export(doc)
+    return {"map.wmap": wmaplib.wmap_bytes(doc)}
+
+
+def _write(files: dict[str, bytes], path: Path) -> None:
+    """Write an encoded map beside ``path``.
+
+    The main document takes the user's chosen name; everything else keeps the
+    relative path the exporter chose, because those are exactly the paths
+    written *inside* the ``.tmx``. Each file goes through a temporary and an
+    ``os.replace``, so a crash mid-write cannot leave a half-written map where a
+    whole one was.
+
+    **The staging name is a dotfile and the cleanup is a ``finally``.** The
+    temporary used to be ``level.wmap.tmp`` -- visible in the folder the user
+    picked, sorted right beside the file it is a fragment of -- and it was
+    abandoned there by any failing write, because nothing removed it when the
+    replace never happened. A leading dot keeps it out of the way while it
+    exists, and ``finally`` means the only file left behind by a failure is the
+    one that was already there.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for name, blob in files.items():
+        target = path if Path(name).name.startswith("map.") else path.parent / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.tmp")
+        try:
+            tmp.write_bytes(blob)
+            os.replace(tmp, target)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+
+
+def save_to(ctx: Any, tab: PlotterDoc, path: Path, file_format: str) -> None:
+    path = Path(path)
+    head = tab.doc.history.head
+    files = _encode(tab.doc, file_format)
+
+    def run() -> dict[str, Any]:
+        _write(files, path)
+        return {"head": head, "path": str(path), "format": file_format, "retitle": True}
+
+    _start(ctx, tab, f"plotter-save:{tab.uid}", run)
+
+
+def save(ctx: Any, tab: PlotterDoc | None = None) -> None:
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        return
+    if tab.path is None:
+        save_as(ctx, tab)
+        return
+    save_to(ctx, tab, tab.path, tab.file_format)
+
+
+def save_as(ctx: Any, tab: PlotterDoc | None = None, *, file_format: str | None = None) -> None:
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        return
+    fmt = file_format or tab.file_format
+    suffix = {"tmx": plotter_state.TMX_SUFFIX, "tmj": plotter_state.TMJ_SUFFIX}.get(
+        fmt, plotter_state.WMAP_SUFFIX
+    )
+    filters = {"tmx": TMX_FILTER, "tmj": TMJ_FILTER}.get(fmt, WMAP_FILTER)
+    title, head = tab.title, tab.doc.history.head
+    files = _encode(tab.doc, fmt)
+    stem = Path(title).stem or "map"
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.save_file("Save the map", f"{stem}{suffix}", filters)
+        if path is None:
+            return None
+        path = path.with_suffix(suffix)
+        _write(files, path)
+        return {"head": head, "path": str(path), "format": fmt, "retitle": True}
+
+    _start(ctx, tab, f"plotter-saveas:{tab.uid}", run)
+
+
+def export_map(ctx: Any, file_format: str, tab: PlotterDoc | None = None) -> None:
+    """Write a Tiled copy without changing what the tab is.
+
+    Deliberately separate from ``save_as``: exporting to TMX to open a map in
+    Tiled should not silently retarget Ctrl+S, because the ``.wmap`` holds
+    things the ``.tmx`` cannot (an embedded tileset image, for one).
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        return
+    if not tab.doc.tilesets:
+        ctx.toast("A Tiled map needs at least one tileset.", "error")
+        return
+    suffix = plotter_state.TMX_SUFFIX if file_format == "tmx" else plotter_state.TMJ_SUFFIX
+    filters = TMX_FILTER if file_format == "tmx" else TMJ_FILTER
+    stem = Path(tab.title).stem or "map"
+    files = _encode(tab.doc, file_format)
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.save_file("Export for Tiled", f"{stem}{suffix}", filters)
+        if path is None:
+            return None
+        path = path.with_suffix(suffix)
+        _write(files, path)
+        return {"exported": str(path)}
+
+    _start(ctx, tab, f"plotter-export:{tab.uid}", run)

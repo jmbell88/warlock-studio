@@ -482,7 +482,7 @@ class App:
         downloaded from the Settings pane has to stop saying "weights missing"
         without a restart.
         """
-        from .. import fetch, models
+        from .. import fetch, models, vram
         from ..service import downloads as svc_downloads
 
         ctx = self.app_ctx
@@ -500,13 +500,37 @@ class App:
             for check in (self.runtime.checks or [])
             if check.name.startswith(prefix) and not check.ok
         }
+        # And a second suffix, for the other reason a listed model cannot run.
+        # Computed from the spec through ``vram.fits`` rather than by matching
+        # more doctor strings: doctor has nothing to say about VRAM per model,
+        # and growing the string-matching above into a second question is how
+        # the prefix bug this block's comment describes happened the first time.
+        # Guarded on the plan, so a host with no resolved budget sees no badge.
+        plan_ = getattr(self.svc, "vram_plan", None)
+
+        def _suffix(spec: Any) -> str:
+            if spec.label in missing:
+                return " - weights missing"
+            if plan_ is not None and vram.fits(plan_, spec) == vram.FIT_NO:
+                return " - won't fit this GPU"
+            return ""
+
+        # The 2-tuple shape is pinned by the smoke tests and read by every
+        # combo: label decoration only, never a third element.
         ctx.base_models = [
-            (k, f"{spec.label} - weights missing" if spec.label in missing else spec.label)
-            for k, spec in models.BASE_MODELS.items()
+            (k, f"{spec.label}{_suffix(spec)}") for k, spec in models.BASE_MODELS.items()
         ]
         ctx.style_loras = [("", "no style LoRA")] + [
             (k, spec.label) for k, spec in models.STYLE_LORAS.items()
         ]
+        # The Settings pane draws this and may not ask the service itself: it
+        # is a pane, and ``recommended_base`` needs a resolved Plan. Empty when
+        # there is no plan, which is the pane's "say nothing" value.
+        ctx.recommended_base_label = (
+            models.BASE_MODELS[vram.recommended_base(plan_)].label
+            if plan_ is not None
+            else ""
+        )
         try:
             ctx.model_rows = svc_downloads.rows(self.svc)
         except Exception:
@@ -844,7 +868,7 @@ class App:
                     # to clear ``packing`` and record why, or the items
                     # pane shows an empty list that reads as success.
                     packwright_mode.on_task_failed(ctx, done)
-                elif done.key.startswith("download:"):
+                elif done.key.startswith(("download:", "remove:")):
                     # A failed fetch has to be *routed* somewhere, not merely
                     # toasted: the rows carry a presence flag, and a fetch that
                     # got partway before failing has changed what is on disk.
@@ -853,6 +877,11 @@ class App:
                     # did not happen. (Only the rows, not doctor's whole
                     # suite -- nothing succeeded, so the diagnostics have
                     # nothing new to say.)
+                    #
+                    # A failed *removal* is the same fact from the other side,
+                    # and more sharply so: ``uninstall`` renames a directory
+                    # out of the way before it deletes it, so a failure part
+                    # way through has already made the model absent.
                     self._refresh_model_answers()
                 elif done.key.startswith("review-"):
                     from . import review_mode
@@ -925,10 +954,12 @@ class App:
             # id and would otherwise outlive the files they decoded.
             ctx.cache.invalidate()
             return
-        if key.startswith("download:"):
+        if key.startswith(("download:", "remove:")):
             # Re-probe wholesale, exactly as the "health" task above replaces
             # runtime.checks: the fetch wrote files doctor has never looked at,
-            # and every model answer in the ctx is derived from that list.
+            # and every model answer in the ctx is derived from that list. A
+            # removal is the same wholesale change with the sign flipped, so it
+            # takes the same body rather than a second one that could drift.
             from ..service import system as svc_system
 
             try:
@@ -942,7 +973,9 @@ class App:
             # download 7 GB that is already there.
             present = {row["row_key"] for row in ctx.model_rows if row.get("present")}
             ctx.model_picks -= present
-            ctx.toast("Download finished.")
+            ctx.toast(
+                "Model removed." if key.startswith("remove:") else "Download finished."
+            )
             return
         if key == "upload" and done.result is not None:
             from .panes import settings_3d

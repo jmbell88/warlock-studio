@@ -146,8 +146,12 @@ def base_model_dir(config: Config, spec: models.BaseModel) -> Path:
     registry and is kept so existing setups keep working. Every other model is
     ``t2i_model_root / dir_name``. This is the canonical rule; doctor and the
     download planner both call it rather than re-deriving it.
+
+    The entry is named by name (``models.T2I_DIR_MODEL``), never the default:
+    the override is about turbo's settings, so it must not follow the default
+    to another checkpoint.
     """
-    if spec.key == models.DEFAULT_BASE_MODEL and config.t2i_turbo_dir is not None:
+    if spec.key == models.T2I_DIR_MODEL and config.t2i_turbo_dir is not None:
         return config.t2i_turbo_dir
     return config.t2i_model_root / spec.dir_name
 
@@ -310,6 +314,122 @@ def disk_refusal(jobs: list[Job]) -> str | None:
         f"(including {DISK_HEADROOM_GIB:.0f} GB headroom) and "
         f"{free:.1f} GB is free."
     )
+
+
+# --- taking one back out ------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Removal:
+    """What uninstalling a selection would actually delete.
+
+    Pure, like ``plan``: nothing here touches the filesystem beyond resolving
+    paths, so every rule below is assertable without a model on disk. The
+    performing half is ``service.downloads.uninstall``.
+    """
+
+    paths: tuple[Path, ...]
+    """Exactly what to delete, in claim order. Empty when ``blocked``."""
+    freed_gib: float
+    """Declared size of the fetches those paths stand for. 0.0 when blocked."""
+    blocked: tuple[str, ...]
+    """Why this must not run at all. Whole-plan, like ``disk_refusal``."""
+
+
+def claims(config: Config, entry: Entry) -> tuple[Path, ...]:
+    """Every path this row's *presence* stands on.
+
+    The inverse of ``present``, and written beside nothing else on purpose:
+    "what would make this row read as absent" and "what may be deleted for it"
+    have to be the same list, or an uninstall leaves a row that still reports
+    present or deletes something a different row was standing on.
+
+    A base model claims its checkpoint directory **and** its step-distillation
+    LoRA file, because ``base_model_state`` refuses without the latter -- but
+    never ``loras/`` itself. Per-file claims only in there: the directory is
+    flat and shared by every family, and the renames in ``models.py`` exist
+    precisely so the filenames are distinct.
+    """
+    root = config.t2i_model_root
+    spec = entry.spec
+    if entry.kind == "base":
+        out = [base_model_dir(config, spec)]
+        if spec.base_lora:
+            out.append(root / "loras" / spec.base_lora)
+        return tuple(out)
+    if entry.kind == "lora":
+        return (root / "loras" / spec.filename,)
+    # Everything else -- adapters, ControlNets, metrics, pose, matting -- is one
+    # directory of its own under the model root.
+    return (root / spec.dir_name,)
+
+
+def removal_plan(config: Config, chosen: list[Entry]) -> Removal:
+    """Which of these rows' paths may actually go, and what that frees.
+
+    The reverse of ``plan``'s dedupe and keyed the same way -- on resolved
+    paths, never on model key. A path is removable **iff no registry entry
+    outside the selection claims it**, counted over every other entry rather
+    than only the present ones: an entry whose weights are half-downloaded, or
+    downloaded later, is still a claim, and deleting out from under it would
+    turn "not installed yet" into "mysteriously broken".
+
+    The practical shape of that: ``sdxl``, ``sdxl_cfg``, ``pixel`` and
+    ``lightning`` are four recipes over one 7 GiB directory, so uninstalling
+    any one of them frees only its own small distillation LoRA. The directory
+    goes when all four are chosen together, and not before.
+
+    Two whole-plan refusals, all-or-nothing in ``disk_refusal``'s style, because
+    a partial delete is the outcome with no good description:
+
+    * a chosen base whose directory is the ``WARLOCK_T2I_DIR`` override. That
+      is a directory the user pointed us at, not one we fetched.
+    * anything that does not resolve inside ``t2i_model_root``. Containment is
+      checked rather than assumed: ``dir_name`` comes from the registry today,
+      and this is the one function in the tree that deletes recursively.
+    """
+    chosen_keys = {entry.row_key for entry in chosen}
+    others: set[Path] = set()
+    for entry in entries():
+        if entry.row_key in chosen_keys:
+            continue
+        others.update(claims(config, entry))
+
+    wanted: list[Path] = []
+    for entry in chosen:
+        for path in claims(config, entry):
+            if path not in wanted:
+                wanted.append(path)
+
+    blocked: list[str] = []
+    override = config.t2i_turbo_dir
+    if override is not None:
+        pinned = [p for p in wanted if p == override]
+        if pinned:
+            blocked.append(
+                "WARLOCK_T2I_DIR points at that model's directory. Warlock did "
+                "not download it and will not delete it; unset the variable "
+                "first if you really want it gone."
+            )
+    try:
+        root = config.t2i_model_root.resolve()
+        outside = [p for p in wanted if not p.resolve().is_relative_to(root)]
+    except OSError:  # pragma: no cover -- a root that cannot be resolved
+        outside = list(wanted)
+    if outside:
+        blocked.append(
+            "that model's files are outside the model root "
+            f"({config.t2i_model_root}), so removing them is refused."
+        )
+    if blocked:
+        return Removal((), 0.0, tuple(blocked))
+
+    removable = tuple(p for p in wanted if p not in others)
+    freed = 0.0
+    for job in plan(config, chosen):
+        if any(p == job.dest or job.dest in p.parents for p in removable):
+            freed += job.size_gib
+    return Removal(removable, freed, ())
 
 
 # --- is it already here ------------------------------------------------------

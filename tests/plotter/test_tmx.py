@@ -237,6 +237,89 @@ def test_writing_is_always_csv_whatever_was_read():
     assert data.get("compression") is None
 
 
+def test_an_embedded_tileset_keeps_the_terrains_its_wangset_declares():
+    """The XML side recognised a wangset and then dropped it, which left the
+    Terrain tool greyed out on a map whose own atlas declares one. Read-side
+    parity with the ``.tmj`` case in ``test_tmx_refusals``."""
+    from warlock.studio.plotter import blob, tilegen
+    from warlock.studio.plotter import terrain as terrainlib
+
+    generated = tilegen.generate(
+        tilegen.GenSpec(terrains=terrainlib.DEFAULT_TERRAINS[:2], tile_w=8, tile_h=8)
+    )
+    node = tsx.tsx_element(generated, image_name="atlas.png")
+    embedded = ET.tostring(node, encoding="unicode").replace(
+        "<tileset ", '<tileset firstgid="1" ', 1
+    )
+    data = (
+        '<map version="1.10" orientation="orthogonal" width="1" height="1" '
+        f'tilewidth="8" tileheight="8">{embedded}</map>'
+    ).encode()
+    doc = tmx.read_tmx(
+        data,
+        image_loader=lambda _s: np.zeros(
+            (8 * 2, 8 * blob.TILE_COUNT, 4), dtype=np.uint8
+        ),
+        tsx_loader=lambda _s: None,
+    )
+    assert [entry.name for entry in doc.tilesets[0].tileset.terrains] == ["Grass", "Dirt"]
+
+
+# --- bounded decompression and the id range -----------------------------------
+#
+# A payload is unpacked against the size the layer *declares*, and every plain
+# list of numbers is range-checked as int64 before it is cast. Both refusals
+# exist because the alternative is not a wrong picture but a wrong sentence: an
+# unbounded ``zlib.decompress`` allocates whatever the stream claims, and a
+# uint32 cast turns a hand-edited ``-1`` into a tile id nothing accounts for.
+
+
+@pytest.mark.parametrize("compression", ["zlib", "gzip"])
+def test_a_payload_that_unpacks_past_its_declared_size_is_refused(compression):
+    doc = _doc()
+    files = tmx.tmx_export(doc)
+    fat = b"\0" * (doc.width * doc.height * 4 * 4)
+    raw = zlib.compress(fat) if compression == "zlib" else gzip.compress(fat)
+    body = (
+        f'<data encoding="base64" compression="{compression}">'
+        f"{base64.b64encode(raw).decode()}</data>"
+    )
+    with pytest.raises(ValueError, match="unpacks past"):
+        tmx.read_tmx(_with_data(files, body), **_loaders(files))
+
+
+@pytest.mark.parametrize("value", ["-1", "4294967296"])
+def test_a_csv_cell_outside_the_unsigned_32_bit_range_is_refused(value):
+    """A ``uint32`` cast wraps both of these silently, and the refusal that
+    eventually followed named a tile id the file never wrote."""
+    doc = _doc()
+    files = tmx.tmx_export(doc)
+    row = ",".join(["0"] * 6)
+    first = ",".join([value] + ["0"] * 5)
+    body = f'<data encoding="csv">\n{first},\n{row},\n{row},\n{row}\n</data>'
+    with pytest.raises(ValueError, match="unsigned 32-bit"):
+        tmx.read_tmx(_with_data(files, body), **_loaders(files))
+
+
+def test_csv_that_is_not_numbers_is_refused_as_such():
+    doc = _doc()
+    files = tmx.tmx_export(doc)
+    body = '<data encoding="csv">\nnope,0,0,0,0,0\n</data>'
+    with pytest.raises(ValueError, match="not a number"):
+        tmx.read_tmx(_with_data(files, body), **_loaders(files))
+
+
+def test_a_negative_entry_in_a_json_layer_is_refused_too():
+    """One model, two spellings -- the TMJ raw list goes through the same
+    range check as the CSV one."""
+    doc = _doc()
+    files = tmx.tmj_export(doc)
+    payload = json.loads(files["map.tmj"])
+    payload["layers"][0]["data"] = [-1] + [0] * (doc.width * doc.height - 1)
+    with pytest.raises(ValueError, match="unsigned 32-bit"):
+        tmx.read_tmj(json.dumps(payload).encode(), **_loaders(files))
+
+
 # --- validation ---------------------------------------------------------------
 
 

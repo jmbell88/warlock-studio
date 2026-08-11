@@ -721,6 +721,11 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         # the process exits immediately after -- but shutdown() is also reached
         # on paths that keep the interpreter alive, and the pipeline's several
         # GB of host-pinned staging memory has no other release point.
+        #
+        # Deliberately ``unload`` rather than ``_evict_t2i``: this is the end of
+        # the worker's life, not a reclaim, and the pipe object is still the
+        # record of what ran. Clearing the reference here breaks every caller
+        # that inspects a shut-down worker.
         if self._text2image is not None and self._text2image.loaded:
             await asyncio.to_thread(self._text2image.unload)
 
@@ -775,8 +780,38 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
             and time.monotonic() - self._text2image.last_used > self.config.trellis_idle_timeout
         ):
             log.info("evicting idle SDXL pipeline")
-            await asyncio.to_thread(self._text2image.unload)
+            await self._evict_t2i()
         await self._maybe_evict_caches()
+
+    async def _evict_t2i(self, *, forget: bool = False) -> None:
+        """Give back the resident image pipe's memory. A no-op when there is none.
+
+        Its own method because two callers now want it for two reasons, and
+        they differ in exactly one thing. The idle sweep keeps the pipe object:
+        it is the record of what ran, and reloading the same key is what it is
+        for. ``forget`` additionally drops both references, which an *uninstall*
+        needs -- the files this pipe was built from are about to stop existing,
+        so a next ``_get_text2image`` that matched the key and handed the object
+        back would hand back a pipe pointing at a deleted checkpoint.
+        """
+        pipe = self._text2image
+        if forget:
+            self._text2image = None
+            self._t2i_key = None
+        if pipe is not None:
+            await asyncio.to_thread(pipe.unload)
+
+    async def unload_text2image(self) -> None:
+        """Drop the resident image model, unconditionally. A no-op when there
+        is none.
+
+        Public and on the loop thread, because the one caller that is not this
+        worker is ``service.downloads.uninstall``: Windows refuses to delete a
+        safetensors file another process has mapped, and this process is that
+        other process. It reaches this through ``svc.call_on_loop`` -- nothing
+        but the loop thread may touch the pipe.
+        """
+        await self._evict_t2i(forget=True)
 
     async def _maybe_evict_caches(self) -> None:
         """Drop the host-side inference caches an idle session is not using.

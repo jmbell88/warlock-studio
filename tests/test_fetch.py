@@ -132,6 +132,13 @@ def test_only_turbo_honours_the_legacy_override(tmp_path):
         fetch.base_model_dir(cfg, models.BASE_MODELS["sdxl"])
         == cfg.t2i_model_root / "sdxl-base-1.0"
     )
+    # Pinned by name rather than to the default, so the redirect stays about
+    # turbo's settings even once another entry is the shipped default.
+    assert models.T2I_DIR_MODEL == "turbo"
+    assert (
+        fetch.base_model_dir(cfg, models.BASE_MODELS["sdxl_cfg"])
+        == cfg.t2i_model_root / "sdxl-base-1.0"
+    )
 
 
 def test_a_plan_resolves_under_the_model_root_not_the_literal_models_dir(tmp_path):
@@ -672,3 +679,89 @@ def test_a_malformed_progress_line_does_not_abandon_the_download(tmp_path, monke
     )
     assert (cfg.t2i_model_root / "loras" / "pixel-art-xl.safetensors").read_bytes() == b"weights"
     assert seen and seen[-1] == (100.0, "")
+
+
+# --- taking one back out -----------------------------------------------------
+
+
+def _entries(*row_keys: str) -> list[fetch.Entry]:
+    chosen = []
+    for row_key in row_keys:
+        entry = fetch.find(row_key)
+        assert entry is not None, row_key
+        chosen.append(entry)
+    return chosen
+
+
+def test_one_shared_recipe_frees_only_its_own_adapter(tmp_path):
+    """Four recipes over one 7 GiB directory. Uninstalling ``sdxl`` alone must
+    not take the checkpoint the other three are standing on -- and the freed
+    figure has to say 0.8, not 7, or the label is a lie."""
+    cfg = _config(tmp_path)
+    removal = fetch.removal_plan(cfg, _entries("base:sdxl"))
+    assert removal.blocked == ()
+    assert [p.name for p in removal.paths] == ["Hyper-SDXL-4steps-lora.safetensors"]
+    assert removal.freed_gib == pytest.approx(0.8)
+
+
+def test_all_four_recipes_together_do_take_the_checkpoint(tmp_path):
+    cfg = _config(tmp_path)
+    removal = fetch.removal_plan(
+        cfg, _entries("base:sdxl", "base:sdxl_cfg", "base:pixel", "base:lightning")
+    )
+    assert cfg.t2i_model_root / "sdxl-base-1.0" in removal.paths
+    assert removal.freed_gib == pytest.approx(7.0 + 0.8 + 0.4 + 0.4)
+
+
+def test_a_style_lora_is_one_file_and_never_the_flat_directory(tmp_path):
+    """``loras/`` is shared by every family; only per-file claims go in it."""
+    cfg = _config(tmp_path)
+    removal = fetch.removal_plan(cfg, _entries("lora:pixelxl"))
+    assert removal.paths == (cfg.t2i_model_root / "loras" / "pixel-art-xl.safetensors",)
+    assert cfg.t2i_model_root / "loras" not in removal.paths
+    assert removal.freed_gib == pytest.approx(0.2)
+
+
+def test_the_ip_adapters_two_records_are_one_destination_counted_once(tmp_path):
+    """Two Fetch records against one repository into one directory -- the same
+    dedupe ``plan`` does, arrived at from the other side."""
+    cfg = _config(tmp_path)
+    removal = fetch.removal_plan(cfg, _entries("adapter:plus"))
+    assert removal.paths == (cfg.t2i_model_root / "ip-adapter",)
+    assert removal.freed_gib == pytest.approx(0.9 + 2.6)
+
+
+def test_a_directory_the_env_var_points_at_is_never_deleted(tmp_path):
+    """It is a directory the user pointed us at, not one we fetched."""
+    elsewhere = tmp_path / "models" / "elsewhere"
+    cfg = _config(tmp_path, turbo=elsewhere)
+    removal = fetch.removal_plan(cfg, _entries("base:turbo"))
+    assert removal.paths == ()
+    assert removal.freed_gib == 0.0
+    assert any("WARLOCK_T2I_DIR" in reason for reason in removal.blocked)
+
+
+def test_nothing_outside_the_model_root_may_be_removed(tmp_path):
+    cfg = _config(tmp_path, turbo=tmp_path / "somewhere-else")
+    removal = fetch.removal_plan(cfg, _entries("base:turbo"))
+    assert removal.paths == ()
+    assert removal.blocked
+    assert any("model root" in reason for reason in removal.blocked)
+
+
+def test_planning_a_removal_writes_nothing(tmp_path):
+    cfg = _config(tmp_path)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    for entry in fetch.entries():
+        fetch.removal_plan(cfg, [entry])
+        fetch.claims(cfg, entry)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_every_claim_is_something_present_would_have_looked_at(tmp_path):
+    """The inverse-of-``present`` contract, checked the only way it can be:
+    make every claim exist, and the row must read present."""
+    cfg = _config(tmp_path)
+    for entry in fetch.entries():
+        for path in fetch.claims(cfg, entry):
+            assert path.is_relative_to(cfg.t2i_model_root), entry.row_key

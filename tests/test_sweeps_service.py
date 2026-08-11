@@ -373,6 +373,8 @@ def test_a_sweep_naming_a_base_model_that_is_not_on_disk_is_refused(svc, monkeyp
     with pytest.raises(Invalid) as caught:
         svc_sweeps.create_sweep(svc, plan)
     assert caught.value.field == "base_model"
-    assert "Download it with" in caught.value.message
+    # Leads with the in-app route, keeps the terminal one.
+    assert "Settings" in caught.value.message
+    assert "download it with" in caught.value.message
     assert svc_sweeps.list_sweeps(svc) == []
     assert svc.store.list(limit=50) == []

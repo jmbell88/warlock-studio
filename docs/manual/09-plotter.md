@@ -101,8 +101,8 @@ you left it.
 | Key | Tool | What it does |
 | --- | --- | --- |
 | `B` | Stamp | Puts the brush down, following the drag |
-| `E` | Erase | Clears cells, following the drag |
-| `G` | Fill | Floods the connected run under the cursor |
+| `E` | Erase | Clears cells, following the drag; a terrain cell re-fits its neighbours |
+| `G` | Fill | Floods the connected run under the cursor, or the terrain field with a terrain in hand |
 | `T` | Terrain | Paints a terrain and re-fits the eight cells around it |
 | `R` | Rect | Fills a rectangle between press and release |
 | `I` | Pick | Takes the tile under the cursor as the brush |
@@ -117,6 +117,13 @@ point.
 The **Terrain** tool needs a terrain set on the map — see *Generating a ground set* above. It sets
 the cell you touch and then re-fits that cell and its eight neighbours, so edges, outer corners and
 inner corners follow as you draw rather than being placed one at a time.
+
+Two other tools know about terrains, and both decide per cell rather than per map. **Erase** clears
+a plain tile as a plain tile, and clears a terrain cell by cutting a hole and re-fitting everything
+that now borders it — otherwise the ring around the hole keeps the edge art of a neighbour that is
+no longer there. **Fill** floods the tile you picked, as it always has; with no tile picked and a
+terrain in hand it floods the *terrain field* instead, which crosses a terrain's own forty-seven
+cases rather than stopping at the first edge tile. With neither, it still says so.
 
 A whole drag is **one** undo step. That is true of Stamp and Erase now too: a stroke is one gesture,
 so it is one thing to take back.

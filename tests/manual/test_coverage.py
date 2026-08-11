@@ -41,6 +41,12 @@ NO_HELP_BUTTON = {
     # number: the numbers move, and this comment already outlived one
     # renumbering saying "chapter 12".
     "palette",
+    # Not a pane either: two lines and a button that the sprite and pixel-sheet
+    # sections draw *inside* their own (?)-bearing headers, so a second help
+    # button would sit under the first and point at the same chapter. What it
+    # does is documented where the button lands -- `17-app-settings.md`, the
+    # Models section.
+    "model_gate",
 }
 
 

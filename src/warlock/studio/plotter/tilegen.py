@@ -49,6 +49,15 @@ OUTLINE = 2
 #: and the precedence chain stops being something a person can hold in mind.
 MAX_TERRAINS = 8
 
+#: The atlas is ``47 * terrains`` tiles wide by one tall, so the edge is
+#: multiplied by 376 before anything is allocated: a 4096-pixel tile at eight
+#: terrains is a 1.5-million-pixel row and a 24-gigabyte image. 512 is past any
+#: tile anyone draws (32 is the house default and 128 already reads as huge) and
+#: keeps the largest legal atlas under a gigabyte. **New rather than
+#: corpus-keyed**: nothing stored is measured against it, so it needs no
+#: ``docs/measurements/`` document. Read at call time so a test can lower it.
+MAX_TILE_EDGE = 512
+
 
 @dataclass(frozen=True)
 class GenSpec:
@@ -72,6 +81,8 @@ class GenSpec:
             raise ValueError(f"a ground set holds at most {MAX_TERRAINS} terrains")
         if self.tile_w < 4 or self.tile_h < 4:
             raise ValueError("a generated tile is at least four pixels across")
+        if self.tile_w > MAX_TILE_EDGE or self.tile_h > MAX_TILE_EDGE:
+            raise ValueError(f"a generated tile is at most {MAX_TILE_EDGE} pixels across")
         names = [entry.name.strip().lower() for entry in self.terrains]
         if "" in names:
             raise ValueError("every terrain needs a name")

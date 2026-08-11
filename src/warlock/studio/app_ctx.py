@@ -83,6 +83,18 @@ def download_key(row_key: str) -> str:
     return f"download:{row_key}"
 
 
+def remove_key(row_key: str) -> str:
+    """The task key for "delete this model's weights".
+
+    Its own namespace beside ``download_key``, and the prefix is load-bearing
+    in exactly the same way: the app-Settings pane disables every row's buttons
+    while ``any_busy("download:")`` *or* ``any_busy("remove:")`` is true, and
+    the App's task-done handler switches on the prefix to decide which toast to
+    show after the same wholesale re-probe.
+    """
+    return f"remove:{row_key}"
+
+
 @dataclass
 class Ctx:
     svc: Any
@@ -150,6 +162,11 @@ class Ctx:
     # deliberately not persisted: it is a selection for one action, and a
     # remembered one would offer to re-download something already on disk.
     model_picks: set[str] = field(default_factory=set)
+    # The label of the best base model this card can actually hold, or "" when
+    # no VRAM plan has been resolved. A label rather than a key, and computed by
+    # the App rather than by the pane: ``vram.recommended_base`` wants a Plan,
+    # and a pane that reached for one would be a pane doing service work.
+    recommended_base_label: str = ""
 
     # -- shorthands --------------------------------------------------------
 

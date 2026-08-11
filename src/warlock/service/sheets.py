@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .. import rigging
+from .. import models, rigging
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound, invalid_from
 from .validation import (
@@ -16,7 +16,23 @@ from .validation import (
     check_seed,
     check_sheet_id,
     check_vram,
+    install_remedy,
     random_seed,
+)
+
+# The base a pixel-sheet restyle is pinned to, hoisted out of
+# ``create_pixel_sheet`` so the row list below cannot name a different one. Not
+# ``models.DEFAULT_BASE_MODEL``: the restyle wants full CFG and a ControlNet
+# specifically, and it has to keep wanting them if the default ever moves again.
+PIXEL_SHEET_BASE_MODEL = "sdxl_cfg"
+
+# Every registry row a pixel sheet needs on this host, in ``fetch.Entry``'s
+# ``row_key`` spelling. Exported so a pane can offer "install what this needs"
+# without knowing what a pixel sheet is made of, and derived from the two
+# constants the refusals below check so the two cannot drift.
+PIXEL_SHEET_ROWS: tuple[str, ...] = (
+    f"base:{PIXEL_SHEET_BASE_MODEL}",
+    f"lora:{models.PIXEL_SHEET_LORA}",
 )
 
 
@@ -206,7 +222,6 @@ PIXEL_COLOR_CHOICES = (8, 16, 32, 64)
 def pixel_sheet_options() -> dict[str, Any]:
     """What a restyle request may ask for, from one source, as with the render
     above -- the pane never hardcodes a size or a strength range."""
-    from .. import models
     from ..pipelines import pixelsheet
 
     return {
@@ -244,8 +259,9 @@ def create_pixel_sheet(
     does not divide its cells, costs the request rather than a place in the
     queue and a minute of GPU.
     """
-    from .. import fetch, models
+    from .. import fetch
     from ..pipelines import pixelsheet
+    from .downloads import needed_keys
 
     check_job_id(job_id)
     check_sheet_id(sheet_id)
@@ -290,7 +306,7 @@ def create_pixel_sheet(
     # and the day base_model becomes a parameter this refusal is already at
     # the door. Worded as guidance.normalize words the same pairing refusal,
     # field naming the control the sentence mentions.
-    base_key = "sdxl_cfg"
+    base_key = PIXEL_SHEET_BASE_MODEL
     base = models.BASE_MODELS[base_key]
     pixel_lora = models.STYLE_LORAS[models.PIXEL_SHEET_LORA]
     if not models.lora_fits(base, pixel_lora):
@@ -332,12 +348,13 @@ def create_pixel_sheet(
     # loaded. The ControlNet is deliberately not checked: ``structure_lock`` is
     # a preference the worker already degrades gracefully, and refusing the
     # whole request over an optional hint would be the wrong trade.
-    check_base_model_weights(svc, base)
+    check_base_model_weights(svc, base, rows=needed_keys(svc, PIXEL_SHEET_ROWS))
     if not fetch.present(svc.config, "lora", pixel_lora):
         raise Invalid(
             f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
-            f"Download it with:\n  {pixel_lora.download}",
+            f"{install_remedy(pixel_lora.label, pixel_lora.download)}",
             field="base_model",
+            rows=needed_keys(svc, PIXEL_SHEET_ROWS),
         )
     check_vram(svc, "pixel_sheet", "model", params)
     new_id = svc.store.create(

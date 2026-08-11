@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from ..plotter.pngio import png_bytes
 from .document import PackDoc, Source, new_uid
 from .layout import PackSettings
 from .sources import Sprite
@@ -38,14 +39,6 @@ SOURCE_DIR = "sources"
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 
 WPACK_SUFFIX = ".wpack"
-
-
-def _png_bytes(pixels: np.ndarray) -> bytes:
-    from PIL import Image
-
-    out = io.BytesIO()
-    Image.fromarray(np.ascontiguousarray(pixels), "RGBA").save(out, "PNG")
-    return out.getvalue()
 
 
 def manifest_json(doc: PackDoc) -> str:
@@ -81,7 +74,7 @@ def wpack_bytes(doc: PackDoc) -> bytes:
             # Stored, not deflated: a PNG is already compressed.
             zf.writestr(
                 zipfile.ZipInfo(f"{SOURCE_DIR}/{index}.png", _EPOCH),
-                _png_bytes(source.sprite.pixels),
+                png_bytes(source.sprite.pixels),
                 zipfile.ZIP_STORED,
             )
     return out.getvalue()

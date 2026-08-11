@@ -20,7 +20,30 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_BASE_MODEL = "turbo"
+# The one blessed base download, and therefore what an unconfigured job runs.
+#
+# Not turbo, and measured rather than preferred: in the 2026-08-09 re-baseline
+# `base_model=turbo` took 1 of 5 -- the weakest checkpoint that produced data --
+# while `base_model=sdxl_cfg` took 3 of 3, the best survival rate of any arm
+# with data. The two rank oppositely on refusals and on quality (both of that
+# run's composition refusals fell on SDXL-family arms at full CFG), and this
+# picks quality: a refusal is a sentence the user can act on, a poor mesh is two
+# minutes of the serial worker spent on something they will discard.
+#
+# It is also the distribution decision. One 7 GiB download of
+# stabilityai/stable-diffusion-xl-base-1.0 is shared by four recipes -- sdxl,
+# sdxl_cfg, pixel, lightning -- so shipping this one entry unlocks the speed
+# recipes for a small LoRA each, and pixel sheets for 0.2 GB more. Recorded in
+# docs/measurements/2026-08-11-default-base-model.md.
+DEFAULT_BASE_MODEL = "sdxl_cfg"
+
+# The one key WARLOCK_T2I_DIR redirects. Pinned by name, not to the default:
+# the variable predates the registry and docs/MODELS.md documents it as the
+# FLUX-proper workaround against the turbo entry's settings specifically. Tying
+# it to DEFAULT_BASE_MODEL made the redirect follow whichever model happened to
+# be the default, which would silently point an existing setup's override at a
+# checkpoint it was never about.
+T2I_DIR_MODEL = "turbo"
 
 # Which architecture a checkpoint is, and therefore which encode/sample path
 # runs. Declared per model rather than sniffed, for the same reason

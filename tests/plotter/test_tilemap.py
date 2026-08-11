@@ -363,6 +363,49 @@ def test_beginning_a_second_stroke_closes_the_first():
     assert len(doc.history) == depth + 1
 
 
+def test_an_undo_during_a_stroke_commits_it_first():
+    """A stroke writes the live array with no history, so undoing through an
+    open session used to reverse the step *before* it and leave the
+    uncommitted paint sitting on the layer."""
+    from warlock.studio.plotter import terrain
+
+    doc, ref, layer = _terrain_doc()
+    doc.write_region(layer.uid, *terrain.paint_terrain(layer.data, 6, 6, 0, ref))
+    settled = layer.data.copy()
+
+    doc.begin_stroke(layer.uid)
+    doc.stroke_write(*terrain.paint_terrain(layer.data, 1, 1, 0, ref))
+    painted = layer.data.copy()
+    assert not np.array_equal(painted, settled)
+
+    assert doc.undo() is True
+    assert np.array_equal(layer.data, settled), "the stroke is the step undone"
+    assert doc.stroking is False
+    doc.undo()
+    assert not layer.data.any(), "and the step before it is the one before"
+    doc.redo()
+    doc.redo()
+    assert np.array_equal(layer.data, painted)
+
+
+def test_a_redo_during_a_stroke_commits_it_too():
+    """Redoing with a session open would replay a step onto pixels the session
+    has already changed underneath it."""
+    from warlock.studio.plotter import terrain
+
+    doc, ref, layer = _terrain_doc()
+    doc.write_region(layer.uid, *terrain.paint_terrain(layer.data, 6, 6, 0, ref))
+    doc.undo()
+    doc.begin_stroke(layer.uid)
+    doc.stroke_write(*terrain.paint_terrain(layer.data, 1, 1, 0, ref))
+    painted = layer.data.copy()
+    # Committing the stroke clears the redo branch, so there is nothing left to
+    # replay -- and the paint survives, which is the whole point.
+    assert doc.redo() is False
+    assert doc.stroking is False
+    assert np.array_equal(layer.data, painted)
+
+
 def test_a_stroke_covers_only_the_cells_that_moved():
     """The step is the union of what was written, not the whole layer -- the
     dirty-rect rule ``TilePatchEdit`` exists for."""

@@ -23,9 +23,10 @@ Warlock Studio — UX/UI Review Report
 
  A. Verified bugs (checked against source)
 
- 1. Plotter space-to-pan latches forever. plotter_mode.py:657 returns for every non-KEYDOWN event, so the space_held = True set at :680-682
- is never cleared (KEYUP never reaches it; clear_drag doesn't reset it; no other writer). After one space press, every left-drag pans for
- the rest of the session and painting is impossible. Fix: mirror inker_mode.py:1034-1037 — handle both edges before the KEYDOWN filter.
+ 1. FIXED. Plotter space-to-pan latched forever: the mode returned for every non-KEYDOWN event, so the space_held = True set on press was
+ never cleared (KEYUP never reached it; clear_drag doesn't reset it; no other writer), and after one space press every left-drag panned for
+ the rest of the session. Fixed by mirroring inker_mode — the Space branch now sees both edges before the KEYDOWN filter, and only the press
+ asks about modifiers. Pinned by tests/test_ux_todo_fixes.py.
  2. Global shortcuts are dead while any text field has focus. main.py:1368 gates all dispatch on not io.want_text_input, so Ctrl+K, F1,
  F10, Ctrl+Enter don't fire from the 2D prompt box, library filter, or any rename field — contradicting `manual/14-shortcuts.md` ("These
  four work in every mode") and settings_2d.py:996 ("Ctrl+Enter still works from anywhere"). Fix: let modifier-held keys and F-keys
@@ -55,17 +56,19 @@ Warlock Studio — UX/UI Review Report
  - Inker sheet export freezes the frame thread: export_sheet:399 snapshots (a flatten per frame) before the busy flag at :428 — a 40-frame
  2048² clip is a multi-second dead-looking hang. Use the incremental step_sheet_strip model or flag-then-draw-one-frame.
  - "Fix matte" can silently do nothing (inker_mode._cut_matte:293-308 logs and swallows on the explicit-button path).
- - Clickable lies while busy: Plotter layer controls (plotter_layers.py:58,67,70,72) and Packwright settings (packwright_settings.py:49-80
- — slider moves then snaps back) draw live and discard the click; the anti-pattern is documented and fixed in clay_tools/clay_menu. Fix:
- begin_disabled(tab.busy).
+ - Clickable lies while busy: Plotter's layer controls are FIXED (the eye button and the three context-menu items are wrapped in
+ begin_disabled while the tab is saving; the selectable stays live because choosing a layer changes no document). Packwright settings
+ (packwright_settings.py:49-80 — slider moves then snaps back) still draw live and discard the click; the anti-pattern is documented and
+ fixed in clay_tools/clay_menu. Fix: begin_disabled(tab.busy).
  - No "Saving..." indication in Packwright/Plotter bridges (packwright_bridge.py:42, plotter_bridge.py:43); clay_bridge._facts:62-65 is the
  model. "Render sheet" lacks the spinner its neighbours have (sheet_panel._submit:255).
  - A filed Review verdict auto-advances with no confirmation of what was filed and no visible undo route (record:696-729; the "Recorded"
  line describes the next unit). Recovery exists (Left + re-grade) but nothing says so.
  - Ctrl+Enter Generate silently no-ops on an invalid form from the palette/shortcut path (palette.py:139-145 → settings_2d.py:1104); the
  button path shows problems, the keyboard path shows nothing.
- - Raw str(exc) toasts at 5 sites (packwright_mode.py:229/274, review_mode.py:1027, candidates_panel.py:94, plotter_tools.py:117) vs the
- house style (plain sentence + action="log"); Invalid without field wrapping raw OS errors at settings_2d.py:1129, settings_3d.py:626.
+ - Raw str(exc) toasts vs the house style (plain sentence + action="log"): the two Plotter sites are FIXED (the resize form and the
+ tileset-from-Inker path now frame the detail — "The map was not resized: ..."), leaving packwright_mode.py:229/274, review_mode.py:1027 and
+ candidates_panel.py:94; Invalid without field wrapping raw OS errors at settings_2d.py:1129, settings_3d.py:626.
  - Autosave failure surfaces as an unexplained generic red toast (inker_mode._write_autosave:1293 → generic collector message).
 
  C. Accessibility
@@ -84,10 +87,10 @@ Warlock Studio — UX/UI Review Report
 
  D. UI-scale 1.5 (new instances of the known class)
 
- Unscaled literals: both primary CTAs (-1, 34) (settings_2d.py:992, settings_3d.py:339); (240, 0) buttons (packwright_preview.py:105,
- plotter_canvas.py:106); unscaled set_next_item_width (inker_tools.py:333, plotter_layers.py:179/200, retarget_panel.py:86); unscaled
- dummies (dialogs.py:219 — in the file that documents this exact mistake; settings_2d.py:977; settings_3d.py:320/527); three of four
- workspace empty states unscaled (_clay_empty:2049, plotter_canvas._empty:102, packwright_preview._empty:101 — only Inker's uses sp()). The
+ Unscaled literals: both primary CTAs (-1, 34) (settings_2d.py:992, settings_3d.py:339); (240, 0) buttons (packwright_preview.py:105;
+ Plotter's are FIXED); unscaled set_next_item_width (inker_tools.py:333, retarget_panel.py:86; plotter_layers' two are FIXED); unscaled
+ dummies (dialogs.py:219 — in the file that documents this exact mistake; settings_2d.py:977; settings_3d.py:320/527); two of four
+ workspace empty states still unscaled (_clay_empty:2049, packwright_preview._empty:101 — Inker's and Plotter's use sp()). The
  viewport toolbar never wraps — panes/overlay.py has 12 same_line(), 0 same_line_or_wrap; tail controls vanish at 1.5 scale
  (inspector/settings_3d/app_settings/landing same shape, lower risk). Verify any fixes with scripts/screenshot_modes.py at 1.5.
 
@@ -120,12 +123,12 @@ Warlock Studio — UX/UI Review Report
 
  F. Consistency
 
- - Redo: Ctrl+Shift+Z accepted in Inker/Clay only, Ctrl+Y-only in Plotter/Packwright. Ctrl+W closes docs in 3 of 4 editors (see A3). Ctrl+E
+ - Redo: Ctrl+Shift+Z accepted in Inker/Clay and now Plotter too, Ctrl+Y-only in Packwright. Ctrl+W closes docs in 3 of 4 editors (see A3). Ctrl+E
  export-to-library in 3 modes, absent in Inker (where Ctrl+Shift+E means Export PNG but Export .tmx/atlas elsewhere). Ctrl+1 = 100% zoom
  in four workspaces, front-view in Clay (defensible; needs a cue).
  - Undo/redo has on-screen controls only in Inker; Clay/Plotter/Packwright have none.
- - Dirty markers: Inker uses TabItemFlags_.unsaved_document (with a rationale comment); Plotter/Packwright prepend "* " to the title — the
- exact thing the comment argues against.
+ - Dirty markers: Inker and Plotter both use TabItemFlags_.unsaved_document (with a rationale comment); Packwright still prepends "* " to
+ the title — the exact thing the comment argues against.
  - 16 widgets.toggle vs 22 raw imgui.checkbox (mixed within single panes); 20 raw sliders vs labeled_slider_* (app_settings.py:64
  hand-rolls the very slider the helper was written for); raw collapsing_header at 2 sites loses persist_key (section forgets open state);
  hand-rolled problem lines in both settings panes (third error register, no glyph); shortcuts button is ASCII "?" while help_marker
@@ -133,8 +136,8 @@ Warlock Studio — UX/UI Review Report
  - Card-vs-palette delete disagree: card trashes with no confirm (deliberate — trash is the confirm), palette's identical command raises a
  Confirm and its label promises a dialog.
  - Silent input truncation: input_text/multiline clamp out[:max_length] with no notice.
- - Shortcuts popup omissions: Inker animation keys entirely absent; Clay axis views absent; Plotter row advertises the broken space-pan;
- Packwright documents no pan.
+ - Shortcuts popup omissions: Inker animation keys entirely absent; Clay axis views absent; Packwright documents no pan. (The Plotter row
+ no longer advertises a broken space-pan: the latch is fixed — see A1.)
  - Stale content: comments at widgets.py:317, inspector.py:942, review_mode.py:1118 still quote the retired AUC 0.115 "inverted" figure
  (LEFTOVERS §2 re-baseline: 0.756, corpus-dependent — behaviour stays, comments should update); widgets.py:324 cites TODO.md §2 which is
  now docs/LEFTOVERS.md.
@@ -151,7 +154,8 @@ Warlock Studio — UX/UI Review Report
  - Clay's parameterised ops (bevel/inset/loop-cut/weld/subdivide) apply blind; inker_bridge._filter_popup is the in-house live-preview
  model.
  - Review grade/tag buttons carry no inline key hints while the label pass next door does ("Good (A)…"); units list has no filter while the
- sweep list beside it has one; Plotter's status bar lacks cursor cell + active tool (the two most useful numbers in a tilemap editor).
+ sweep list beside it has one; Plotter's status bar is half-fixed — it names the hovered cell (and, under the Terrain tool, that cell's
+ terrain) but still not the active tool.
  - Splash: fixed 3 s floor on ~1 s warm starts; single unwrapped message line can run off both edges.
 
  Already-known backlog (not re-filed)
@@ -162,7 +166,7 @@ Warlock Studio — UX/UI Review Report
 
  Recommended priority (if/when fixes are commissioned)
 
- 1. One-line bugs on the primary feedback/input paths: A1 (plotter pan latch), A5 ("warning" typo ×2), A2 (shortcut gate on text input).
+ 1. One-line bugs on the primary feedback/input paths: A5 ("warning" typo ×2), A2 (shortcut gate on text input).
  2. Data-safety: B confirms on pose/sheet delete; pose-editor Reset/Revert guards.
  3. Review loop integrity: A7 (armed sign), verdict-filed feedback, inline key hints, mesh_lines caveat — the findings corpus depends on
  this loop.

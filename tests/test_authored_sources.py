@@ -115,6 +115,22 @@ def test_a_source_is_written_through_a_temporary(svc):
     assert not [n for n in names if n.endswith(".tmp")]
 
 
+def test_a_failed_write_leaves_no_staging_file(svc, monkeypatch):
+    """The replace is what makes the write atomic; the ``finally`` is what keeps
+    a failed one from abandoning a fragment in the job directory, where nothing
+    else would ever remove it."""
+    job_id = _exported(svc, "plotter")
+
+    def boom(*_args, **_kwargs):
+        raise OSError("no room")
+
+    monkeypatch.setattr(svc_files.os, "replace", boom)
+    with pytest.raises(OSError):
+        svc_files.save_plotter_source(svc, job_id, _zip())
+    names = {p.name for p in svc.job_dir(job_id).iterdir()}
+    assert not [n for n in names if n.endswith(".tmp")]
+
+
 def test_a_source_goes_away_with_the_job(svc):
     job_id = _exported(svc, "plotter")
     svc_files.save_plotter_source(svc, job_id, _zip())

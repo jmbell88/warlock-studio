@@ -369,11 +369,119 @@ def plan(
     return Plan(total, budget, auto, f"{total:.1f} GiB card, {mode} auto-selected: {why}")
 
 
+# --- does a checkpoint fit this card -----------------------------------------
+
+FIT_OK = "fits"
+FIT_TIGHT = "tight"
+FIT_NO = "no"
+
+
+def fits(plan_: Plan, spec: Any) -> str:
+    """FIT_OK / FIT_TIGHT / FIT_NO for one checkpoint on this card.
+
+    A three-valued answer rather than a bool, because "it will load but only if
+    nothing else is resident" is the honest description of an SDXL-class pipe on
+    a 24 GB card and is neither of the other two: refusing it would be wrong,
+    and calling it fine would hide the reload that will happen on every 3D job.
+
+    The rules, in order:
+
+    * over the budget outright -- ``no``. Nothing rescues this; the pipe alone
+      does not fit.
+    * handing off anyway -- ``fits``. Under ``exclusive`` trellis is stopped
+      before the checkpoint loads, and an ``OFFLOAD`` spec hands off whatever
+      the flag says (``offloaded_base``), so in both cases the checkpoint is
+      alone on the card and its own figure is the whole story.
+    * would not sit beside trellis -- ``tight``. This is the coexist case, and
+      the cost is a stop/start per job rather than a failure.
+    * otherwise ``fits``.
+
+    An unknown budget is ``fits``, deliberately: the absence of a measurement is
+    not evidence of a shortfall, which is the same rule ``Plan.fits`` and
+    ``disk_refusal`` already follow.
+
+    What this does **not** model is host commit for an offloaded spec. Those
+    weights live in host RAM for the life of the pipe and no figure here
+    describes that; :mod:`~warlock.memlog` owns commit, and inventing a margin
+    for it in a badge would be a number nobody measured.
+    """
+    from . import models
+
+    budget = plan_.budget_gib
+    if budget is None:
+        return FIT_OK
+    if spec.vram_gib > budget:
+        return FIT_NO
+    if plan_.exclusive or spec.residency == models.OFFLOAD:
+        return FIT_OK
+    if spec.vram_gib + TRELLIS_GIB > budget:
+        return FIT_TIGHT
+    return FIT_OK
+
+
+# Which base to suggest, best first. Quality order, from the 2026-08-09
+# re-baseline's marginal accept rates (`sdxl_cfg` 3/3, baseline `sdxl` 2/4,
+# `turbo` 1/5) with `lightning` placed beside `sdxl` as the other distillation
+# arm over the same weights. Only SDXL-family entries, and only ones that share
+# a download with the shipped default or are a plain checkpoint of their own --
+# a recommendation that named a 16 GB model the user has not got would be a
+# worse answer than the one they already picked.
+RECOMMENDED_BASES: tuple[str, ...] = ("sdxl_cfg", "sdxl", "lightning", "turbo")
+
+
+def recommended_base(plan_: Plan) -> str:
+    """The best base this card can actually hold, by key.
+
+    Preference order first, then fit: a ``fits`` entry anywhere in the list
+    beats a ``tight`` one earlier in it, because "tight" means every 3D job
+    pays a trellis restart and that cost outweighs the ranking gap between two
+    recipes over the same weights.
+
+    Falls back to ``models.DEFAULT_BASE_MODEL`` when nothing fits, rather than
+    to nothing: a card that can hold no checkpoint at all has a problem no
+    picker can solve, and the caller's job is to show a badge, not to refuse.
+    """
+    from . import models
+
+    scored = [
+        (key, fits(plan_, models.BASE_MODELS[key]))
+        for key in RECOMMENDED_BASES
+        if key in models.BASE_MODELS
+    ]
+    for wanted in (FIT_OK, FIT_TIGHT):
+        for key, verdict in scored:
+            if verdict == wanted:
+                return key
+    return models.DEFAULT_BASE_MODEL
+
+
+def _smaller_base(plan_: Plan, params: dict[str, Any]) -> Any | None:
+    """A recommendable checkpoint strictly cheaper than the one this job picked.
+
+    Deliberately **not** restricted to the picked model's own family. The two
+    families in the registry are each internally flat in ``vram_gib`` -- every
+    SDXL entry is 7.0 and both FLUX.2 klein entries are 10.0 -- so a
+    same-family rule could never fire, and the case that actually costs a user
+    a refusal is exactly the cross-family one: a 10 GiB offloaded klein picked
+    on a card that has room for an SDXL pipe and nothing larger.
+    """
+    from . import models
+
+    spec = models.BASE_MODELS.get(str(params.get("base_model") or ""))
+    if spec is None:
+        return None
+    other = models.BASE_MODELS[recommended_base(plan_)]
+    if other.key == spec.key or other.vram_gib >= spec.vram_gib:
+        return None
+    return other if fits(plan_, other) != FIT_NO else None
+
+
 def remedies(
     params: dict[str, Any] | None = None,
     *,
     exclusive: bool = False,
     extra: Sequence[str] = (),
+    plan_: Plan | None = None,
 ) -> str:
     """The "to run it, ..." clause: the things about *this job* that cost VRAM.
 
@@ -386,6 +494,15 @@ def remedies(
     noticed.
 
     ``extra`` goes first, for the remedy that belongs to one caller only.
+
+    ``plan_`` unlocks one more remedy: when the job named a checkpoint this card
+    is too small for and a cheaper one is available, say so. It goes *before*
+    the environment-variable clause deliberately -- picking a smaller model is
+    a click, and setting ``WARLOCK_VRAM_EXCLUSIVE`` is a restart, so the last
+    thing offered stays the most drastic one. Optional because
+    ``dispatch_shortfall_message`` has no plan to give: that check fires on
+    *free* memory, where the budget the fit is computed against is not the
+    thing that ran out.
     """
     params = params or {}
     out: list[str] = list(extra)
@@ -395,6 +512,10 @@ def remedies(
         out.append("turn off the IP-Adapter reference")
     if _resolution(params) > 1024:
         out.append("drop the platform preset to a lower resolution")
+    if plan_ is not None:
+        cheaper = _smaller_base(plan_, params)
+        if cheaper is not None:
+            out.append(f"pick a smaller base model such as {cheaper.label!r}")
     if not exclusive:
         out.append("set WARLOCK_VRAM_EXCLUSIVE=1 and restart")
     if not out:
@@ -407,7 +528,7 @@ def remedies(
 def shortfall_message(need_gib: float, plan_: Plan, params: dict[str, Any] | None = None) -> str:
     """Why the job was refused, and what to change. One sentence, then remedies."""
     budget = plan_.budget_gib if plan_.budget_gib is not None else 0.0
-    tail = remedies(params, exclusive=plan_.exclusive)
+    tail = remedies(params, exclusive=plan_.exclusive, plan_=plan_)
     return (
         f"this job needs about {need_gib:.1f} GiB of VRAM; the budget is "
         f"{budget:.1f} GiB. To run it, {tail}."

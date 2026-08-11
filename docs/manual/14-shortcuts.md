@@ -182,7 +182,7 @@ to the current one, and **Alt** subtracts. Both are described in
 | `R` | Rect |
 | `I` | Pick the tile under the cursor |
 | `O` | Objects |
-| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+E | Export to the library |
 | Ctrl+Shift+E | Export a Tiled `.tmx` |

@@ -9,7 +9,7 @@ after it the app never touches the network again.
 - Windows, with an NVIDIA GPU. The tested machine is an RTX 5090 with 32 GB; the reconstruction
   engine alone fits in 16 GB.
 - [uv](https://docs.astral.sh/uv/), which manages the Python environment.
-- Roughly 16 GB of disk for the TRELLIS.2 GGUF weights, plus about 7 GB for SDXL-Turbo if you want
+- Roughly 16 GB of disk for the TRELLIS.2 GGUF weights, plus about 7 GB for SDXL 1.0 if you want
   text-to-3D.
 
 Python 3.12 or newer. Rigging is the one part that wants a specific version — see
@@ -76,11 +76,16 @@ Two downloads are enough to make the app work end to end. Both are one-time.
 uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir models/trellis2-gguf
 
-# SDXL-Turbo weights (fp16 variant, ~7 GB) -> models/sdxl-turbo/  (text-to-3D only,
+# SDXL 1.0 weights (fp16 variant, ~7 GB) -> models/sdxl-base-1.0/  (text-to-3D only,
 # needs `uv sync --extra studio --extra text2image` to pull torch cu128)
-uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
-  --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
 ```
+
+That second download is the default image model, and it is also three others: the Hyper-SD, LCM
+and Lightning recipes are the same weights run differently, so each of them costs only a small
+adapter on top. SDXL-Turbo is a separate checkpoint and is optional now — the models page has its
+command.
 
 The GGUF download also brings `birefnet.gguf`, the background-matting model. It is optional: without
 it the engine falls back to a threshold cutout, which is worse on anything with a soft edge.

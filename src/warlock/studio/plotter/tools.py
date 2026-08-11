@@ -15,13 +15,51 @@ and not an exception. Only a placement *entirely* outside the map returns None.
 
 from __future__ import annotations
 
-from collections import deque
-
 import numpy as np
 
 from . import gid as gidlib
 
 Region = tuple[int, int, np.ndarray]
+
+
+def flood_mask(match: np.ndarray, x: int, y: int) -> np.ndarray:
+    """The four-connected run of ``match`` reachable from ``(x, y)``, as a mask.
+
+    **Frontier dilation, not a per-cell queue.** The old shape was a ``deque``
+    of coordinates popped one at a time, so a 512-square open room was a
+    quarter of a million Python loop iterations with four bounds tests and two
+    array index operations apiece -- inside a click handler. This grows the
+    whole reached set one ring per pass: the OR of four one-cell shifts is
+    "every neighbour of everything reached so far", intersecting that with the
+    unvisited matching cells is the next ring, and the loop ends when a pass
+    adds nothing.
+
+    The number of passes is the *path distance* to the furthest reachable cell
+    rather than the cell count, which is what turns the quarter-million into a
+    few hundred whole-array operations. Semantics are identical to the queue's
+    by construction: four-connected (the four shifts are the four neighbours,
+    and a diagonal is only ever reached through one of them), seeded at the
+    point, and bounded by ``match`` -- shifts fill with ``False`` at the edges,
+    so nothing wraps.
+
+    Shared by :func:`flood_fill` and :func:`terrain.fill_terrain`, which were a
+    verbatim copy of one another differing only in what they compared.
+    """
+    height, width = match.shape
+    seen = np.zeros((height, width), dtype=bool)
+    if not (0 <= x < width and 0 <= y < height) or not match[y, x]:
+        return seen
+    seen[y, x] = True
+    while True:
+        grown = np.zeros_like(seen)
+        grown[:-1, :] |= seen[1:, :]  # from below
+        grown[1:, :] |= seen[:-1, :]  # from above
+        grown[:, :-1] |= seen[:, 1:]  # from the right
+        grown[:, 1:] |= seen[:, :-1]  # from the left
+        grown &= match & ~seen
+        if not grown.any():
+            return seen
+        seen |= grown
 
 
 def stamp(data: np.ndarray, x: int, y: int, brush: np.ndarray) -> Region | None:
@@ -91,18 +129,7 @@ def flood_fill(data: np.ndarray, x: int, y: int, value: int) -> Region | None:
     if target == fill:
         return None
 
-    seen = np.zeros((height, width), dtype=bool)
-    seen[y, x] = True
-    # A deque worked breadth-first: a recursive fill blows the stack on a large
-    # open room, and this is bounded by the number of cells either way.
-    queue: deque[tuple[int, int]] = deque([(x, y)])
-    while queue:
-        cx, cy = queue.popleft()
-        for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
-            inside = 0 <= nx < width and 0 <= ny < height
-            if inside and not seen[ny, nx] and data[ny, nx] == target:
-                seen[ny, nx] = True
-                queue.append((nx, ny))
+    seen = flood_mask(np.asarray(data) == target, x, y)
 
     ys, xs = np.nonzero(seen)
     y0, y1 = int(ys.min()), int(ys.max()) + 1

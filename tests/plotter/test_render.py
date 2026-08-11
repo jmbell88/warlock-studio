@@ -8,6 +8,7 @@ and which way round it is, and both get those from ``gid`` and ``tile_rect``.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from warlock.studio.plotter import gid, render
 from warlock.studio.plotter.tilemap import MapDoc
@@ -27,6 +28,17 @@ def _doc(width: int = 2, height: int = 1) -> MapDoc:
     doc = MapDoc(width, height, 2, 2)
     doc.add_tileset(_tileset())
     return doc
+
+
+def test_a_map_too_big_to_composite_is_refused_before_the_allocation(monkeypatch):
+    """Both factors are the document's own numbers, so a legal map can ask for a
+    quarter of a terabyte in one ``np.zeros``. The constant is lowered rather
+    than such a map being built, which is why it is read at call time."""
+    doc = _doc(4, 4)
+    monkeypatch.setattr(render, "MAX_RENDER_PIXELS", 4)
+    with pytest.raises(ValueError) as exc:
+        render.render_map(doc)
+    assert "past the 4" in str(exc.value)
 
 
 def test_an_empty_map_renders_transparent_at_its_pixel_size():
