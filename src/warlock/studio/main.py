@@ -4239,6 +4239,14 @@ def run() -> int:
         "Warlock Studio %s starting: pid=%d python=%s argv=%s",
         _version(), os.getpid(), sys.version.split()[0], sys.argv[1:],
     )
+    from .. import migrate
+    from ..config import get_config
+
+    if migrate.MOVED:
+        # Said twice on purpose. The move itself printed to stderr because it
+        # happened before this handler existed; the log is where somebody looks
+        # a week later to find out why their library is not where they left it.
+        log.info("moved into %s: %s", get_config().home, ", ".join(migrate.MOVED))
     _note_previous_session()
     _write_session_marker()
     try:

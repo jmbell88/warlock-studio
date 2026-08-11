@@ -1182,6 +1182,13 @@ def _storage(ctx: Any, jobs: list[Any]) -> None:
         imgui.same_line()
     if imgui.small_button("Prune..."):
         _ask_prune(ctx)
+    # Its own row, deliberately not a ``same_line`` after Prune. The comment
+    # above is about exactly this: the storage line is the only thing holding
+    # this row inside the panel, and a second button past it lands off the
+    # right edge and is unclickable -- the failure the 2026-08-07 sweep found
+    # seven times over.
+    if widgets.destructive_button("Clean library...", (0, 0)):
+        _ask_clean(ctx)
 
 
 # The task key the trash measurement runs under, and the ``AppState.preview``
@@ -1323,5 +1330,46 @@ def _ask_prune(ctx: Any) -> None:
             on_confirm=lambda: ctx.submit(
                 "prune", svc_jobs.prune_jobs, ctx.svc, _prune_keep[0]
             ),
+        )
+    )
+
+
+def _ask_clean(ctx: Any) -> None:
+    """The one destructive action that keeps nothing, so it has to say so.
+
+    Prune's wording ends "and so is anything you accepted or labelled", which
+    is true of prune and is the exact promise this breaks. Saying only "this
+    cannot be undone" would be technically honest and practically a trap: the
+    user has been told twice already that their evidence is safe from a bulk
+    delete, and this is the button for which that is false.
+    """
+
+    def body() -> None:
+        storage = ctx.cache.storage
+        if storage:
+            from ..state import format_bytes
+
+            widgets.muted(
+                f"{storage['job_dirs']} jobs - {format_bytes(storage['bytes'])} "
+                f"will be freed."
+            )
+
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Delete every asset?",
+            message="Every asset is removed from disk, trashed or not -- "
+            "including ones you accepted and images you labelled, which is "
+            "what the quality judge and the tier checks are measured against. "
+            "The verdict rows survive; the pixels behind them do not. Your "
+            "pose library, style anchors and settings are kept. This cannot "
+            "be undone.",
+            confirm_label="Delete everything",
+            cancel_label="Cancel",
+            body=body,
+            # The ``delete:`` prefix is load-bearing, not decoration:
+            # ``main._on_task_done`` re-measures storage only for keys starting
+            # delete:/prune/rename:/..., and a clean whose freed space did not
+            # appear until the next idle tick would read as having done nothing.
+            on_confirm=lambda: ctx.submit("delete:clean", svc_jobs.clean_jobs, ctx.svc),
         )
     )

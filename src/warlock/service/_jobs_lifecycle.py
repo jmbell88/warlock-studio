@@ -88,6 +88,101 @@ def prune_jobs(svc: WarlockService, keep: int = 20) -> dict[str, Any]:
     return {"deleted": deleted, "kept": kept}
 
 
+def clean_jobs(svc: WarlockService) -> dict[str, Any]:
+    """Delete every job, trashed or not, and every orphaned job directory.
+
+    **This deliberately ignores :func:`retained_job_ids`, and that is the whole
+    feature.** Prune and empty-trash skip a job carrying evidence -- an accept,
+    or an image label of either class -- for the measured reason set out there,
+    and the result is that there has never been a way to say "remove
+    everything". A user reclaiming a disk, handing a machine on, or starting a
+    corpus over is not asking for a reclaim that quietly keeps the largest
+    meshes on it. So this one keeps nothing, and the confirmation in
+    ``studio/panes/library.py`` says so in as many words: the accepted meshes
+    and the labelled references go, the verdict rows survive with nothing
+    behind them, and ``tiercheck`` and ``judge.fit`` will have less to read
+    afterwards. Do not "fix" this back into a retention check -- that is
+    :func:`prune_jobs`, which is still there and still guards them.
+
+    What survives is everything that is not a job: the global pose library, the
+    style-anchor profiles, Inker's autosaves, the settings, the logs, and
+    ``jobs.sqlite`` itself -- dropping the database would take the verdicts
+    corpus with it, and the corpus is the one thing here that cannot be
+    regenerated at any price.
+
+    Refused outright rather than skipped-per-job while anything is queued or
+    running. Prune skips a busy job because it is a bulk *reclaim* and one rig
+    in flight is no reason to keep two hundred other assets; "delete
+    everything" that left three behind would have failed at the only thing it
+    claims to do, and the honest answer is to make the user stop the queue.
+    """
+    active = svc.store.active_jobs()
+    if active:
+        raise Conflict(
+            f"{len(active)} job(s) are still queued or running -- "
+            f"cancel or wait for them before cleaning the library"
+        )
+    # And the worker's own answer, for ``worker_is_inside``'s reason: a
+    # cancelled row is terminal in the DB while the reconstruction is still
+    # unwinding, so the rows above can all be finished and a directory still be
+    # under a live write.
+    worker = getattr(svc, "worker", None)
+    if worker is not None and worker.current_job_id:
+        raise Conflict("cancel the job before deleting it")
+
+    from . import jobs as _facade
+
+    deleted = 0
+    seen: set[str] = set()
+    cursor: tuple[float, str] | None = None
+    while True:
+        page = svc.store.list(_facade.MAX_LIST_LIMIT, cursor)
+        if not page:
+            break
+        cursor = (page[-1]["created_at"], page[-1]["id"])
+        for job in page:
+            seen.add(job["id"])
+    # ``store.list`` already returns trashed rows, but it is a *page walk* over
+    # a table this call is deleting from, and ``trashed`` is the one read that
+    # is defined to return all of them. Union rather than trust either alone.
+    for job in svc.store.trashed():
+        seen.add(job["id"])
+
+    for job_id in seen:
+        # Conditional in the DB for prune_jobs' reason: the refusal above is a
+        # snapshot, and a submit landing in the gap must not have its directory
+        # removed underneath it.
+        if not svc.store.delete_if_not_running(job_id):
+            continue
+        shutil.rmtree(svc.job_dir(job_id), ignore_errors=True)
+        deleted += 1
+
+    # And then the directories no row names. These are what a hand-deleted row
+    # or an interrupted delete leaves behind, and they are invisible to every
+    # other path in this file -- which is why a library can measure larger than
+    # the sum of the jobs in it. Job-shaped names only (12 hex characters), so
+    # ``poser/``, ``profiles/`` and ``autosave/`` cannot be caught by it.
+    orphans = 0
+    try:
+        entries = list(svc.config.data_dir.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not entry.is_dir() or entry.name in seen:
+            continue
+        try:
+            check_job_id(entry.name)
+        except NotFound:
+            continue
+        if svc.store.get(entry.name) is not None:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        orphans += 1
+
+    log.info("clean_jobs removed %d job(s) and %d orphan director(ies)", deleted, orphans)
+    return {"deleted": deleted, "orphans": orphans}
+
+
 def update_job(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Rename, retag or (un)favourite a job."""
     check_job_id(job_id)

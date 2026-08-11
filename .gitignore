@@ -1,6 +1,12 @@
 .venv/
 __pycache__/
 *.pyc
+# Legacy locations, all four of them. Everything the app generates lives under
+# ~/.warlock now, and a checkout carrying these has them moved there on the next
+# start (warlock/migrate.py) -- but the entries stay, because they are here
+# until that has run and because WARLOCK_HOME can still point back at the
+# checkout deliberately.
+#
 # Root-anchored, as /bench/ and /vendor/ are: unanchored, any future package
 # directory with one of these names (say src/warlock/studio/assets/) would
 # silently vanish from the index.
@@ -10,6 +16,7 @@ __pycache__/
 # define a run live in src/ and are tracked.
 /bench/
 /models/
+/palettes/
 /vendor/
 # Copies of assets/jobs.sqlite taken before a campaign submit. The job database
 # is under /assets/ and therefore untracked; a backup of it is no more tracked

@@ -1423,7 +1423,9 @@ def test_export_to_folder_is_refused_when_unconfigured(svc):
         svc_export.export_to_folder(svc, ["0" * 12], None)
 
 
-def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
+def test_export_to_folder_copies_into_the_configured_dir(
+    tmp_path, monkeypatch, materialize_weights
+):
     # Its own service: export_dir is read once at Config construction.
     from warlock.config import get_config
     from warlock.db import JobStore
@@ -1434,9 +1436,15 @@ def test_export_to_folder_copies_into_the_configured_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
     monkeypatch.setenv("WARLOCK_TRELLIS_EXE", str(tmp_path / "missing.exe"))
     monkeypatch.setenv("WARLOCK_EXPORT_DIR", str(target))
+    # Pinned and then populated, as the ``svc`` fixture does. The model root
+    # used to default inside the checkout, so this test passed on a machine
+    # that happened to have SDXL downloaded and would have refused the job on
+    # one that did not; under ``~/.warlock`` it refuses on both.
+    monkeypatch.setenv("WARLOCK_T2I_ROOT", str(tmp_path / "t2i-models"))
     monkeypatch.setattr(config_mod, "_config", None)
 
     config = get_config()
+    materialize_weights(config)
     config.data_dir.mkdir(parents=True, exist_ok=True)
     store = JobStore(config.db_path)
     try:

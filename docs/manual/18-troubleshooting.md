@@ -219,17 +219,21 @@ and once more when the app closes, so a session that felt slow can be checked af
 
 ## Where everything lives
 
-When something needs investigating, these are the four places to look:
+Everything the app generates lives under `~/.warlock`, the `.warlock` folder inside your user
+profile. When something needs investigating, these are the places to look:
 
-- `assets/warlock.log` — the rotating application log, 5 MB with three backups.
-- `assets/crash.log` — native crash tracebacks, appended, for the failures Python logging cannot
-  catch. Each run writes a `=== session … ===` line on startup, so a traceback can be tied to the
-  run that produced it.
-- `assets/session.marker` — present only while the app is running; left behind by a crash, which is
-  what produces the unclean-shutdown warning above.
-- `assets/jobs.sqlite` — the job store: every job row, its parameters and its status.
-- `assets/` plus the job id — the job's own directory, with its images, meshes, rigs, poses and
-  sheets.
+- `~/.warlock/assets/warlock.log` — the rotating application log, 5 MB with three backups.
+- `~/.warlock/assets/crash.log` — native crash tracebacks, appended, for the failures Python logging
+  cannot catch. Each run writes a `=== session … ===` line on startup, so a traceback can be tied to
+  the run that produced it.
+- `~/.warlock/assets/session.marker` — present only while the app is running; left behind by a
+  crash, which is what produces the unclean-shutdown warning above.
+- `~/.warlock/assets/jobs.sqlite` — the job store: every job row, its parameters and its status.
+- `~/.warlock/assets/` plus the job id — the job's own directory, with its images, meshes, rigs,
+  poses and sheets.
+- `~/.warlock/MIGRATED.txt` — written once, if an older install's data was moved here out of the
+  project folder. It records what came from where.
 
-All four move with `WARLOCK_DATA_DIR` except the store, which has its own `WARLOCK_DB`. The full
-layout is in [Data locations](16-configuration.md#data-locations).
+All of those move with `WARLOCK_DATA_DIR` except the note, which sits at the top of `WARLOCK_HOME`,
+and the store, which has its own `WARLOCK_DB`. The full layout, and the one-time move, are in
+[Data locations](16-configuration.md#data-locations).

@@ -18,6 +18,28 @@ from warlock.models import DEFAULT_LORA_WEIGHT
 from warlock.pipelines.text2image import JobCancelled
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_migration():
+    """Nothing in the suite may move the developer's real library.
+
+    ``config.get_config()`` runs the one-time ``~/.warlock`` migration, and a
+    checkout still carrying a legacy ``models/`` or ``palettes/`` is exactly
+    what it is looking for -- so without this, the first test to build a Config
+    would start copying 95 GB into the user's home directory. Session-scoped and
+    autouse rather than a per-test monkeypatch: a single file that forgets it is
+    the whole accident, and there is no test in this repo that wants the real
+    migration to run (``test_home_migration.py`` clears it explicitly and points
+    every path at ``tmp_path``).
+    """
+    previous = os.environ.get("WARLOCK_NO_MIGRATE")
+    os.environ["WARLOCK_NO_MIGRATE"] = "1"
+    yield
+    if previous is None:
+        os.environ.pop("WARLOCK_NO_MIGRATE", None)
+    else:
+        os.environ["WARLOCK_NO_MIGRATE"] = previous
+
+
 @pytest.fixture
 def store(tmp_path):
     s = JobStore(tmp_path / "jobs.sqlite")
@@ -80,6 +102,11 @@ def svc(tmp_path, monkeypatch):
     # unnoticed: nothing was destroyed that could not be recomputed, and nothing
     # recomputed it.
     monkeypatch.setenv("WARLOCK_BENCH_DIR", str(tmp_path / "bench"))
+    # And the palette directory, for the fifth and last time. Its default is now
+    # under the *user's home* rather than the checkout, so a suite that left it
+    # unset would read whatever palettes the developer happens to own -- and
+    # tests/test_panes_mtime_guard.py works around precisely that today.
+    monkeypatch.setenv("WARLOCK_PALETTE_DIR", str(tmp_path / "palettes"))
     monkeypatch.setattr(config_mod, "_config", None)
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)

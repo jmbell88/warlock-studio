@@ -102,7 +102,8 @@ In pose mode:
 
 - **Click a joint** to select it. A rotation gizmo appears on it; drag the gizmo to rotate.
 - **Reset joint** returns the selected joint to its rest rotation; **Reset all** resets every joint.
-- **Mirror** copies the pose across the body's centre line. It is hidden for skeletons with no
+- **Mirror** copies the pose across the body's centre line. Over unsaved edits it asks first —
+  there is no undo, so a mirror is not otherwise recoverable. It is hidden for skeletons with no
   mirror pairs, such as the serpent and the fish, where it could only do nothing.
 - A **preset** picker offers the shipped pose library for this skeleton, when one exists. Because
   fitting puts a template's joints in the same relative place on every mesh, a pose authored against
@@ -184,6 +185,12 @@ Two limits worth knowing:
 
 Shipped presets appear in the Poser too, read-only: apply one, adjust it, then **Save as** to keep
 your version in the library.
+
+A pose file that has gone wrong on disk — truncated, hand-edited into the wrong shape, or simply
+not JSON any more — costs itself and nothing else. It stays in the list so there is a row to act
+on; applying, renaming or duplicating it says the record could not be read; and **Delete always
+works**, because a pose you cannot read is exactly the one you most need to be able to remove. One
+broken file never takes the library down with it.
 
 ## When rigging is unavailable
 

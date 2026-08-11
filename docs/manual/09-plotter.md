@@ -214,8 +214,8 @@ Hidden layers are not rendered. One flag decides both what you see and what come
 | --- | --- |
 | `<name>.wmap` | The map, with its tileset images embedded. Warlock's own format. |
 | `<name>.tmx` / `.tmj` | A Tiled export, beside its `tilesets/` folder. |
-| `assets/<job>/input.png` | The flat render, for a map exported to the library. |
-| `assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
+| `~/.warlock/assets/<job>/input.png` | The flat render, for a map exported to the library. |
+| `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
 
 See [Keyboard shortcuts](14-shortcuts.md) for every binding, and
 [Packwright](10-packwright.md) for building the tilesets this mode consumes.

@@ -7,16 +7,19 @@ effect until a restart.
 
 ## Environment variables
 
-Relative defaults below are relative to the project root — the directory containing `pyproject.toml`.
+Everything the app generates lives under one home directory, `~/.warlock`, and the defaults below
+are relative to it. The exceptions are the two vendored binaries, whose defaults are relative to the
+project root — the directory containing `pyproject.toml` — because they ship with the checkout.
 Boolean variables accept `1`, `true` or `on`; anything else is off.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `WARLOCK_DATA_DIR` | `assets/` | Where job directories and the log files live. Created at startup if absent. |
-| `WARLOCK_DB` | `assets/jobs.sqlite` | The SQLite job store. Set independently of the data directory, so moving one does not move the other. |
+| `WARLOCK_HOME` | `~/.warlock` | The one directory the app owns on this machine. Moving it moves the library, the benchmark runs, the palettes and the model weights together. Every variable below overrides it individually. |
+| `WARLOCK_DATA_DIR` | `~/.warlock/assets` | Where job directories and the log files live. Created at startup if absent. |
+| `WARLOCK_DB` | `~/.warlock/assets/jobs.sqlite` | The SQLite job store. Set independently of the data directory, so moving one does not move the other. |
 | `WARLOCK_EXPORT_DIR` | unset | A project folder assets can be copied straight into, such as a Godot project's `assets/`. Unset means the feature is off — writing outside the data directory is opt-in, never a default. |
 | `WARLOCK_TRELLIS_EXE` | `vendor/trellis/trellis-server.exe` | The reconstruction engine binary. Missing it is a fatal check. |
-| `WARLOCK_TRELLIS_MODELS` | `models/trellis2-gguf` | Where the TRELLIS.2 GGUF weights and `birefnet.gguf` are looked for. |
+| `WARLOCK_TRELLIS_MODELS` | `~/.warlock/models/trellis2-gguf` | Where the TRELLIS.2 GGUF weights and `birefnet.gguf` are looked for. |
 | `WARLOCK_TRELLIS_PORT` | `17971` | The local port the engine subprocess listens on. |
 | `WARLOCK_TRELLIS_IDLE` | `600` | Seconds of queue inactivity before resident models are evicted to free VRAM. |
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
@@ -24,11 +27,11 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](18-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
 | `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary, vendored and present. Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
-| `WARLOCK_BENCH_DIR` | `bench/` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
-| `WARLOCK_T2I_ROOT` | `models/` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
+| `WARLOCK_BENCH_DIR` | `~/.warlock/bench` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
+| `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
 | `WARLOCK_T2I_DIR` | unset | Redirects the built-in `turbo` entry (by name; not the default model) at an arbitrary local diffusers directory. It changes *where* that entry loads from and nothing else. |
 | `WARLOCK_T2I_MODEL` | `sdxl_cfg` | The base model key used when a job does not name one. |
-| `WARLOCK_PALETTE_DIR` | `palettes/` | Where pixel-art palette files live (`.hex` from Lospec, `.gpl` from GIMP). Ships empty; a missing directory simply means the palette control offers nothing. |
+| `WARLOCK_PALETTE_DIR` | `~/.warlock/palettes` | Where pixel-art palette files live (`.hex` from Lospec, `.gpl` from GIMP). Ships empty; a missing directory simply means the palette control offers nothing. |
 | `WARLOCK_VRAM_EXCLUSIVE` | auto | Restores the sequential VRAM handoff for text jobs. Unset, the mode is chosen from the card's size; set, it is honoured verbatim. See [VRAM modes](#vram-modes). |
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
 | `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |
@@ -54,10 +57,11 @@ environment rather than from a default, which is the only part that diagnoses an
 whose behaviour disagrees with this table almost always disagrees because something in its
 environment says so.
 
-Three variables are deliberately absent from that list, because they are not settings the app holds
+Five variables are deliberately absent from that list, because they are not settings the app holds
 — they are read once, where they are used, and nothing keeps them: `WARLOCK_LOG_LEVEL`,
-`WARLOCK_NATIVE` and `WARLOCK_NATIVE_DLL`. `warlock doctor`'s **warlockc** row reports the last two
-directly.
+`WARLOCK_NATIVE`, `WARLOCK_NATIVE_DLL`, and the two that only mean anything during the one-time
+move described under [Data locations](#data-locations), `WARLOCK_NO_MIGRATE` and
+`WARLOCK_MIGRATE_KEEP`. `warlock doctor`'s **warlockc** row reports the native pair directly.
 
 The three timeouts are ceilings on hangs, not performance targets. Automatic weights on a
 300,000-face mesh are genuinely minutes of CPU, and a hung Blender holds the single-worker queue
@@ -95,7 +99,52 @@ whatever pipeline is already resident and switch for free.
 
 ## Data locations
 
-Everything the app produces lives under the data directory (`assets/` by default):
+Everything the app produces lives under one home directory, `~/.warlock` — the `.warlock` folder
+inside your user profile. It is deliberately outside the source tree: your generated work has to
+survive a reinstall, a second checkout and a `git clean`, and it has to be findable by somebody who
+never cloned the repository.
+
+```text
+~/.warlock/
+  assets/                  the library (WARLOCK_DATA_DIR)
+  bench/                   benchmark runs (WARLOCK_BENCH_DIR)
+  palettes/                pixel-art palettes you supply (WARLOCK_PALETTE_DIR)
+  models/                  every downloaded model weight (WARLOCK_T2I_ROOT)
+  MIGRATED.txt             written once, if anything was moved here
+```
+
+`palettes/` and `models/` are created empty at startup, because both are directories you put files
+into by hand and an empty folder is a clearer instruction than a paragraph in this manual. The
+vendored binaries — `trellis-server.exe`, `gltfpack.exe`, `warlockc.dll` — stay under the checkout's
+`vendor/`, because they ship with the source rather than being produced by it.
+
+### The one-time move
+
+Warlock used to keep all four of those directories inside the project folder. If yours are still
+there, the next start moves them: it copies each root to its new home, recounts both sides, and only
+then deletes the original. Nothing is removed until the copy has been verified, and the copy lands
+in a `.incoming` staging directory so an interrupted move leaves something to delete rather than a
+half-populated library.
+
+It refuses rather than proceeds if another Warlock is running (tested by taking an exclusive lock on
+the old `jobs.sqlite`), or if the destination volume does not have the space — the refusal names both
+paths and the figures. Each root is skipped if you have already pointed its own variable somewhere,
+or if the destination already holds something: two libraries have no sensible merge.
+
+It can be a slow start. The model weights alone are tens of gigabytes, and if the checkout and your
+home directory are on different drives it is a byte copy rather than a rename. Progress is printed
+to the console, one line per root, and afterwards `~/.warlock/MIGRATED.txt` records what came from
+where.
+
+| Variable | Effect |
+| --- | --- |
+| `WARLOCK_NO_MIGRATE` | Set to anything to skip the move entirely. Nothing is examined. |
+| `WARLOCK_MIGRATE_KEEP` | `1` runs the copy and the verification but keeps the originals, so you can delete them yourself once you are satisfied. |
+
+Setting `WARLOCK_HOME` to the project folder is the other way to keep everything exactly where it
+is: source and destination are then the same directory and there is nothing to move.
+
+### Inside the data directory
 
 ```text
 assets/

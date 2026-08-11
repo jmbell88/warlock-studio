@@ -45,6 +45,7 @@ from ._jobs_create import (  # noqa: F401  -- the facade's re-export
 from ._jobs_lifecycle import (  # noqa: F401  -- the facade's re-export
     _refuse_if_busy,
     cancel_job,
+    clean_jobs,
     delete_job,
     dependent_jobs,
     empty_trash,

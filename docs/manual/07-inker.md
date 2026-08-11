@@ -392,7 +392,7 @@ a 15 ms frame becomes 20, and anything under 10 ms becomes 10.
 
 ## Autosave and recovery
 
-Every open document with unsaved changes is copied to `assets/autosave/` every two minutes. This is
+Every open document with unsaved changes is copied to `~/.warlock/assets/autosave/` every two minutes. This is
 crash safety and nothing else: an autosave is **not** a save. It does not mark the document saved,
 it does not choose a location, and it does not touch a linked job — all it promises is that a crash
 costs you minutes rather than an afternoon. Saving or closing a document removes its copy, because

@@ -18,6 +18,17 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(os.environ.get(name, default)).resolve()
 
 
+def _home() -> Path:
+    """The one directory the app owns on this machine.
+
+    A module-level helper rather than a field other factories read, because a
+    ``default_factory`` lambda cannot see its siblings -- every root below
+    resolves this independently, and ``WARLOCK_HOME`` therefore moves all of
+    them at once while each per-root variable still wins over it.
+    """
+    return _env_path("WARLOCK_HOME", Path.home() / ".warlock")
+
+
 def _env_opt_int(name: str, default: int | None) -> int | None:
     """Like int(os.environ[name]) but with an explicit "leave it to the exe" value.
 
@@ -58,11 +69,22 @@ def _env_opt_float(name: str) -> float | None:
 
 @dataclass(slots=True)
 class Config:
+    # Everything the app generates lives under here -- assets, bench runs,
+    # palettes and the model weights. A user's work is not a part of the source
+    # tree: it has to survive a reinstall, a second checkout and a `git clean`,
+    # and it has to be findable by somebody who never cloned the repo. The one
+    # exception is the vendored native binaries (trellis-server.exe,
+    # gltfpack.exe, warlockc.dll), which ship *with* the checkout and so stay
+    # repo-relative below.
+    home: Path = field(default_factory=_home)
     data_dir: Path = field(
-        default_factory=lambda: _env_path("WARLOCK_DATA_DIR", PROJECT_ROOT / "assets")
+        default_factory=lambda: _env_path("WARLOCK_DATA_DIR", _home() / "assets")
     )
+    # Configurable apart from data_dir on purpose, and documented as such in
+    # docs/manual/16-configuration.md: the library and its index are two
+    # separate choices (an SSD index over a spinning-disk library is the case).
     db_path: Path = field(
-        default_factory=lambda: _env_path("WARLOCK_DB", PROJECT_ROOT / "assets" / "jobs.sqlite")
+        default_factory=lambda: _env_path("WARLOCK_DB", _home() / "assets" / "jobs.sqlite")
     )
     trellis_server_exe: Path = field(
         default_factory=lambda: _env_path(
@@ -154,11 +176,13 @@ class Config:
     mesh_hole_max: float = field(
         default_factory=lambda: float(os.environ.get("WARLOCK_MESH_HOLE_MAX", "0.07"))
     )
-    # Where `python -m warlock.bench` writes its runs. Outside data_dir on
-    # purpose: a benchmark run copies its artifacts rather than referencing
-    # them, precisely so it survives prune_jobs.
+    # Where `python -m warlock.bench` writes its runs. A sibling of data_dir
+    # rather than a child, on purpose: a benchmark run copies its artifacts
+    # rather than referencing them, precisely so it survives prune_jobs -- and
+    # a prune (or a Clean) that walked the library would collect them if they
+    # lived inside it.
     bench_dir: Path = field(
-        default_factory=lambda: _env_path("WARLOCK_BENCH_DIR", PROJECT_ROOT / "bench")
+        default_factory=lambda: _env_path("WARLOCK_BENCH_DIR", _home() / "bench")
     )
     # Where pixel-art palette files live (.hex from Lospec, .gpl from GIMP).
     # Ships empty: a palette is the user's own art direction, and a bundled one
@@ -166,13 +190,11 @@ class Config:
     # control offers nothing, never an error -- the same rule every optional
     # model directory follows.
     palette_dir: Path = field(
-        default_factory=lambda: _env_path(
-            "WARLOCK_PALETTE_DIR", PROJECT_ROOT / "palettes"
-        )
+        default_factory=lambda: _env_path("WARLOCK_PALETTE_DIR", _home() / "palettes")
     )
     trellis_models_dir: Path = field(
         default_factory=lambda: _env_path(
-            "WARLOCK_TRELLIS_MODELS", PROJECT_ROOT / "models" / "trellis2-gguf"
+            "WARLOCK_TRELLIS_MODELS", _home() / "models" / "trellis2-gguf"
         )
     )
     trellis_port: int = field(
@@ -187,7 +209,7 @@ class Config:
     # downloaded once by hand (see README) -- the app never downloads, and
     # loads are local_files_only.
     t2i_model_root: Path = field(
-        default_factory=lambda: _env_path("WARLOCK_T2I_ROOT", PROJECT_ROOT / "models")
+        default_factory=lambda: _env_path("WARLOCK_T2I_ROOT", _home() / "models")
     )
     # Pre-registry override, still honoured: points the *turbo* entry at an
     # arbitrary local diffusers dir so existing setups keep working. Other base
@@ -357,6 +379,7 @@ class Config:
 # resolve, and listing it beside real settings would present a computed answer
 # as something the user set.
 SETTINGS: tuple[tuple[str, str], ...] = (
+    ("home", "WARLOCK_HOME"),
     ("data_dir", "WARLOCK_DATA_DIR"),
     ("db_path", "WARLOCK_DB"),
     ("bench_dir", "WARLOCK_BENCH_DIR"),
@@ -438,6 +461,20 @@ _config: Config | None = None
 def get_config() -> Config:
     global _config
     if _config is None:
-        _config = Config()
-        _config.data_dir.mkdir(parents=True, exist_ok=True)
+        cfg = Config()
+        # Before any mkdir: the migration's "destination already exists and is
+        # non-empty, so leave it alone" rule has to see the destination as the
+        # user left it, and creating data_dir first would make every first run
+        # look like a half-finished move.
+        from . import migrate
+
+        migrate.run(cfg)
+        # palette_dir and t2i_model_root are created here and not lazily: on a
+        # fresh install both are directories the user has to put files into by
+        # hand, and an existing empty folder is the only instruction that
+        # survives the README being closed. bench_dir stays lazy -- its two
+        # writers already mkdir, and an empty bench/ says nothing to anyone.
+        for d in (cfg.home, cfg.data_dir, cfg.palette_dir, cfg.t2i_model_root):
+            d.mkdir(parents=True, exist_ok=True)
+        _config = cfg
     return _config

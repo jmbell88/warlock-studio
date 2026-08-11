@@ -16,7 +16,10 @@ from warlock.service.errors import Invalid
 @pytest.fixture
 def paldir(svc, tmp_path):
     directory = tmp_path / "palettes"
-    directory.mkdir()
+    # ``exist_ok`` because this is now the same directory the ``svc`` fixture
+    # pins ``WARLOCK_PALETTE_DIR`` at, and ``get_config`` creates it at startup
+    # -- an empty palette folder is the only instruction a new install gets.
+    directory.mkdir(exist_ok=True)
     svc.config.palette_dir = directory
     return directory
 

@@ -267,7 +267,7 @@ palette to 8, 16, 32 or 64, or leaves it off; **Palette** maps the export onto a
 supplied, and **Dither** (offered only with one) mixes two nearby entries where a flat map would
 pick one.
 
-A palette is a file you drop into the palette directory (`palettes/` by default — see
+A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
 [Configuration](16-configuration.md)), in either of the two formats palette sites publish: Lospec's
 `.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw

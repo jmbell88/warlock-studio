@@ -61,7 +61,7 @@ It is offered only on a profile that has been saved at least once, because the i
 against the profile's name.
 
 - **Attach an anchor** opens a file picker. Any readable image works; it is copied into
-  `assets/profiles/` under a generated name, so it outlives every job it came from and survives a
+  `~/.warlock/assets/profiles/` under a generated name, so it outlives every job it came from and survives a
   [prune](11-library-and-jobs.md#storage-and-pruning).
 - **Strength** is how hard the anchor is applied, from 0 to 1.5. The default is 0.6.
 - **Remove anchor** detaches and deletes it.

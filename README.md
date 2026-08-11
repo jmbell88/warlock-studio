@@ -55,13 +55,13 @@ uv sync --extra studio --extra text2image --extra rig
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
 #    vendored build: v0.5.4 (2026-07-27)
 
-# 3. TRELLIS.2 GGUF weights -> models/trellis2-gguf/
+# 3. TRELLIS.2 GGUF weights -> ~/.warlock/models/trellis2-gguf/
 uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
-  --local-dir models/trellis2-gguf
+  --local-dir $HOME/.warlock/models/trellis2-gguf
 
-# 4. SDXL 1.0 weights (fp16 variant, ~7 GB) -> models/sdxl-base-1.0/  (text-to-3D only)
+# 4. SDXL 1.0 weights (fp16 variant, ~7 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only)
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
 ```
 
 This one download powers four of the registered recipes — full CFG (the default), Hyper-SD, LCM and Lightning are the same weights run four ways, so the three faster ones cost only a small LoRA each. SDXL-Turbo is a separate 7 GB checkpoint and is now optional; its command is in [docs/MODELS.md](docs/MODELS.md).
@@ -91,7 +91,7 @@ uv run warlock          # opens the desktop app
 uv run warlock doctor   # checks dependencies, weights, and configuration
 ```
 
-`warlock sweep --image assets/<job-id>/input.png --bands auto,4,8 --seed 42` regenerates one reference at several trellis `--band` values with a fixed seed and audits each resulting mesh.
+`warlock sweep --image ~/.warlock/assets/<job-id>/input.png --bands auto,4,8 --seed 42` regenerates one reference at several trellis `--band` values with a fixed seed and audits each resulting mesh.
 
 `python -m warlock.bench` is the developer measurement suite behind quality decisions: versioned suites (`core-v1`, `pixel-v1`) run under named recipes, rendered to eight views per mesh and scored on silhouette IoU and DINOv2 identity (always A-against-B, never as an absolute). Subcommands: `suites`, `recipes`, `run`, `score`, `calibrate`, `prune`, `purge`.
 
@@ -110,6 +110,6 @@ uv run ruff check .
 
 The app is a single process: a pygame window, one ModernGL context, and [imgui-bundle](https://github.com/pthom/imgui_bundle) panels drawn through that same context (the 3D viewport is a texture the panels show). Three threads — the frame loop, an asyncio worker for the GPU queue, and a task pool for blocking calls; jobs run one at a time. `warlock.service` is the single business-logic layer the panes and the tests both call. Model loads that would bloat the app process run in subprocesses that end (Blender, BiRefNet matting, the fetch worker), all tied to a kill-on-close job object.
 
-Outputs land in `assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `assets/jobs.sqlite`.
+Outputs land in `~/.warlock/assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `~/.warlock/assets/jobs.sqlite`. Everything the app generates — the library, benchmark runs, palettes and model weights — sits under that one home directory rather than inside the checkout; an install that predates it has its directories moved there on the next start (copy, verify, then delete), and `WARLOCK_HOME` or `WARLOCK_NO_MIGRATE` opts out. See [Data locations](docs/manual/16-configuration.md#data-locations).
 
 Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (21 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.

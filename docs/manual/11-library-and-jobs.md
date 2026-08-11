@@ -165,8 +165,9 @@ optional anchor image every generation under it is conditioned on. It has a chap
 
 ## Storage and pruning
 
-Every job owns a directory under `assets/`, named for its job id, and the SQLite job store lives at
-`assets/jobs.sqlite`. A job directory holds:
+Every job owns a directory under `~/.warlock/assets/`, named for its job id, and the SQLite job
+store lives at `~/.warlock/assets/jobs.sqlite`. That home directory is outside the source tree on
+purpose; see [Data locations](16-configuration.md#data-locations). A job directory holds:
 
 - `input.png` — the reference image the mesh was made from.
 - `source.glb` — the raw reconstruction, kept forever.
@@ -188,6 +189,16 @@ carries the count, so N is yours to choose and it starts at twenty every time it
 jobs are never touched. Pruning removes both the database rows and the directories on disk, and it walks
 the whole history rather than only its first page — a history long enough to need pruning is exactly
 the one a single-page prune would fail on.
+
+Under it, **Clean library...** is the other end of the same scale: it deletes *every* asset, trashed
+or not, plus any job directory left behind with no row pointing at it. It is the one bulk action
+that keeps nothing — prune and **Empty trash...** both spare anything you accepted or labelled,
+because those files are what the quality judge and the triangle-tier checks are measured against,
+and this is the button for which that is not true. The verdict rows survive; the pixels behind them
+do not. Your pose library, style profiles, Inker autosaves and settings are all kept, as is the job
+store itself. It refuses outright while anything is queued or running — "delete everything" that
+quietly left three jobs behind would have failed at the only thing it claims to do — so cancel the
+queue first.
 
 ## The trash
 

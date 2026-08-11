@@ -17,6 +17,13 @@ With nothing open, the middle column offers **New atlas** and **Open a file...**
 had open recently. `Ctrl+N` and `Ctrl+O` do the same from the keyboard. The document's own format is
 `.wpack`.
 
+A document that cannot be opened is refused with the reason, not a generic failure. A file over the
+read ceiling is refused before a byte of it is read, and an archive that claims more than a
+gigabyte unpacked, names more than 4096 sources, or carries a source image past 16 megapixels is
+named as the problem it is — those are the marks of a damaged or hostile file, not a big atlas. A
+recent document that refuses to open also drops off the Resume list, so a moved or corrupted file
+does not sit there failing every time you look at it.
+
 ## Sources
 
 Three ways in.
@@ -37,6 +44,10 @@ renaming a sprite changes what the sidecar calls it and nothing else: two layers
 
 Selecting a source highlights it in the atlas preview and in the placement list, and offers a rename
 box and a **Remove** button. `Delete` removes the selected source.
+
+A rename that lands re-packs automatically, so the next export's sidecar carries the new name. One
+past 64 characters, or containing a path separator or control character, is refused — the name is
+written verbatim into the sidecar, where a consumer may treat it as a filename.
 
 ## The two modes
 
@@ -64,7 +75,8 @@ would renumber everything after it.
 sampling just past an edge finds the sprite's own colour rather than its neighbour's. It is the fix
 for the thin seams that appear between tiles at some zoom levels. Padding must be at least twice
 extrude, because two neighbours extrude into one shared gutter; a combination that would bleed is
-refused with the numbers rather than quietly clamped.
+refused with the numbers rather than quietly clamped. Both are capped at 256 — past that a gutter
+is not padding, and the only thing the arithmetic could compute is a refusal.
 
 **Power-of-two** rounds the atlas up to the next power of two in each direction. Older hardware and
 some engines require it; leaving it off gives a tighter atlas.
@@ -120,8 +132,8 @@ reopen the real document rather than a flat picture. It follows the same precede
 | `<name>.png` | An exported atlas. |
 | `<name>.json` | Its sidecar, in TexturePacker's JSON (Array) schema. |
 | `<name>.tsx` | A Tiled tileset, written only for a grid pack. |
-| `assets/<job>/input.png` | The atlas, for one exported to the library. |
-| `assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Edit in Packwright**. |
+| `~/.warlock/assets/<job>/input.png` | The atlas, for one exported to the library. |
+| `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Edit in Packwright**. |
 
 See [Keyboard shortcuts](14-shortcuts.md) for every binding, and [Plotter](09-plotter.md) for the
 mode that consumes a grid pack as a tileset.
