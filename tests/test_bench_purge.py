@@ -62,15 +62,19 @@ def test_purge_keeps_everything_a_finding_is_built_from(tmp_path):
         assert f"items/{unit}/views/views.json" in left
 
 
-def test_media_bytes_counts_exactly_what_purge_frees(tmp_path):
+def test_a_purge_reports_the_bytes_it_actually_freed(tmp_path):
+    """The receipt is the measurement now that ``media_bytes`` is gone: it was
+    a second way to ask the same question with no caller outside this file, and
+    ``freed_bytes`` is what anything downstream reads."""
     run_dir = _make_run(tmp_path)
-    before = runner_mod.media_bytes(run_dir)
-    assert before > 0
+    on_disk = sum(p.stat().st_size for p in runner_mod._media_files(run_dir))
+    assert on_disk > 0
 
     doc = runner_mod.purge_media(run_dir)
-    assert doc["freed_bytes"] == before
-    # And nothing is left to free: the measurement is of what is on disk now.
-    assert runner_mod.media_bytes(run_dir) == 0
+    assert doc["freed_bytes"] == on_disk
+    # And nothing is left to free.
+    assert runner_mod.purge_media(run_dir)["freed_bytes"] == on_disk
+    assert not runner_mod._media_files(run_dir)
 
 
 def test_purge_writes_its_receipt_and_is_idempotent(tmp_path):
@@ -93,5 +97,4 @@ def test_purge_writes_its_receipt_and_is_idempotent(tmp_path):
 def test_purge_survives_a_run_with_no_items_directory(tmp_path):
     run_dir = tmp_path / "runs" / "empty"
     run_dir.mkdir(parents=True)
-    assert runner_mod.media_bytes(run_dir) == 0
     assert runner_mod.purge_media(run_dir)["freed_bytes"] == 0

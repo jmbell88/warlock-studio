@@ -133,7 +133,12 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
         if finished is not None:
             ctx.state.preview["sheet_strip"] = finished
     strip = ctx.state.preview.get("sheet_strip")
-    if strip is not None and ctx.textures is not None:
+    # No ``ctx.textures`` gate: that is the *thumbnail cache*, and nothing on
+    # this path touches it. ``_strip_texture`` allocates through
+    # ``ctx.viewer.ctx`` and ``widgets.texture_ref`` registers with the imgui
+    # backend, so the cache's absence said nothing about whether this could
+    # draw -- it just silently left the preview blank.
+    if strip is not None:
         texture = _strip_texture(ctx, strip)
         if texture is not None:
             width = imgui.get_content_region_avail().x
@@ -208,12 +213,14 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
             checked = pose["id"] in form["poses"]
             # The pose id, not a fixed "##row": two poses may share a name, and
             # two checkboxes with one imgui id are one checkbox.
-            hit, value = imgui.checkbox(
+            # The returned value is deliberately unread: the set *is* the
+            # state, so the toggle is applied to it rather than copied out of
+            # the widget.
+            hit, _value = imgui.checkbox(
                 f"{pose.get('name') or pose['id']}##row-{pose['id']}", checked
             )
             if hit:
                 form["poses"].symmetric_difference_update({pose["id"]})
-                del value
         changed, clip = imgui.checkbox("Animated clip", form["clip"])
         widgets.help_marker(
             "Interpolates between two saved poses. Each frame becomes more "
@@ -314,22 +321,52 @@ def _saved(ctx: Any, job: Any) -> None:
         widgets.muted(
             f"{len(sheet.get('cells') or [])} cells - {sheet.get('frame_size')} px"
         )
+        # Three buttons in a sidebar, two of them long. Chained with a bare
+        # same_line they ran off the content edge on a narrow panel and Delete
+        # was clipped away -- pose_panel's row, with the same fix.
         if imgui.small_button("Save PNG..."):
             _save(ctx, job_id, sheet_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Save JSON..."))
         if imgui.small_button("Save JSON..."):
             _save_sidecar(ctx, job_id, sheet_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Delete"))
         if imgui.small_button("Delete"):
-            ctx.submit(
-                f"sheet-del:{job_id}:{sheet_id}",
-                svc_sheets.delete_sheet,
-                ctx.svc,
-                job_id,
-                sheet_id,
-            )
+            _ask_delete(ctx, job_id, sheet)
         _pixelate(ctx, job_id, sheet)
         imgui.pop_id()
+
+
+def _ask_delete(ctx: Any, job_id: str, sheet: dict[str, Any]) -> None:
+    """Confirm before a rendered sheet goes.
+
+    The cost is the part that is not obvious from a row that reads like a list
+    entry: a sheet is one Blender render per cell, so re-rendering it is
+    minutes of CPU rather than a click, and any restyled copy derived from it
+    goes with it.
+
+    Takes the sheet alone: the id used to come in beside it as a second
+    argument, which let a caller pass a sheet and *another* sheet's id and
+    delete the wrong one.
+    """
+    sheet_id = sheet["id"]
+    cells = len(sheet.get("cells") or [])
+    name = sheet.get("name") or sheet_id
+    dialogs.ask_delete(
+        ctx,
+        title="Delete this sheet?",
+        message=(
+            f'"{name}" and its {cells} rendered cell(s) are deleted, along with '
+            "anything restyled from it. This cannot be undone.\n\n"
+            "Rendering it again is one Blender render per cell."
+        ),
+        on_confirm=lambda: ctx.submit(
+            f"sheet-del:{job_id}:{sheet_id}",
+            svc_sheets.delete_sheet,
+            ctx.svc,
+            job_id,
+            sheet_id,
+        ),
+    )
 
 
 def _pixel_form(ctx: Any, sheet_id: str) -> dict[str, Any]:

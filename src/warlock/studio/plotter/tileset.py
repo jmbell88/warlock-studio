@@ -26,11 +26,21 @@ from typing import Any
 import numpy as np
 
 
-def _frozen(pixels: Any) -> np.ndarray:
-    """A private RGBA copy nothing can write through."""
+def frozen_rgba(pixels: Any, what: str = "a tileset image") -> np.ndarray:
+    """A private RGBA copy nothing can write through.
+
+    Public, and shared with ``packwright.sources``, which held a byte-identical
+    copy differing only in the noun in its error message. The rule is one rule:
+    the UI keys a texture upload on the array's identity, so an in-place edit
+    would leave the cache holding a live key over stale pixels -- and two
+    spellings of it is how one of them comes to be relaxed alone.
+
+    ``what`` names the thing in the refusal, because "a tileset image must be
+    RGBA" is the wrong sentence to show someone packing a sprite.
+    """
     array = np.ascontiguousarray(pixels, dtype=np.uint8)
     if array.ndim != 3 or array.shape[2] != 4:
-        raise ValueError("a tileset image must be RGBA, shaped (h, w, 4)")
+        raise ValueError(f"{what} must be RGBA, shaped (h, w, 4)")
     array = array.copy()
     array.setflags(write=False)
     return array
@@ -52,7 +62,7 @@ class Tileset:
     properties: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "pixels", _frozen(self.pixels))
+        object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
         for name in ("tile_w", "tile_h", "spacing", "margin"):
             object.__setattr__(self, name, int(getattr(self, name)))
         if self.tile_w < 1 or self.tile_h < 1:

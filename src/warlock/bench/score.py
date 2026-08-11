@@ -77,7 +77,7 @@ def score_run(
             else:
                 say(f"scoring {key}")
                 try:
-                    entry["scores"] = metrics_mod.score_reference(reference, config)
+                    entry["scores"] = metrics_mod.score_reference(reference)
                 except Exception as exc:
                     # The same rule the view path states below: a measurement
                     # that fails costs its unit a score, never the run.

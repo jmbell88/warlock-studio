@@ -126,6 +126,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
     from warlock.studio.plotter import (  # noqa: F401
         edits,
         gid,
+        render,
         tilemap,
         tileset,
         tmx,

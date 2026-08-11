@@ -46,7 +46,11 @@ def _rgb(pixels: np.ndarray) -> np.ndarray:
 def _rejoin(pixels: np.ndarray, rgb: np.ndarray) -> np.ndarray:
     """New RGB, the original alpha, back to uint8 with the house rounding."""
     out = pixels.copy()
-    out[..., :3] = np.clip(rgb + 0.5, 0.0, 255.0).astype(np.uint8)
+    # ``to_uint8_255`` rather than the expression: identical semantics, and it
+    # carries the native kernel and the float32 gate that decides when the
+    # kernel is safe. The enumeration in ``native/warlockc.h`` names the call
+    # sites, and a hand-rolled copy is one this file would not appear in.
+    out[..., :3] = cp.to_uint8_255(rgb)
     return out
 
 

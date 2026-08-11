@@ -18,6 +18,7 @@ what makes this appear on every launch rather than only the first ever.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,8 @@ from .. import fonts, icons, layout, modes, profiles, recents, theme, tokens, wi
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes, set_mode
 from ..tokens import sp
+
+log = logging.getLogger(__name__)
 
 # How many Resume rows are offered. A shortlist rather than a history: past a
 # dozen the eye is scanning rather than recognising, and the Library mode is one
@@ -167,7 +170,7 @@ def open_row(ctx: Any, row: Row) -> None:
         # A recent list that keeps offering a moved file is worse than a short
         # one, and a click that silently does nothing is worse than either.
         recents.forget(ctx.settings, row.kind, row.key)
-        ctx.toast(f"{path.name} is no longer there.", "warning")
+        ctx.toast(f"{path.name} is no longer there.", "warn")
         return
     opener = {
         "inker": lambda: _open_with("inker_mode", ctx, path),
@@ -277,6 +280,13 @@ def _library_status(ctx: Any) -> Status:
     try:
         failed = cache.failures(ctx.state.filters)
     except Exception:
+        # Logged as well as swallowed, the rule every comparable site here
+        # follows (``pose_panel._open_rig``). Silent, a broken filter or a
+        # cache that cannot answer showed up as "0 failed" -- which is not a
+        # missing number but a *wrong* one, and the one it is most reassuring
+        # to be wrong about. The count is cosmetic, so it still must not take
+        # the status line down with it.
+        log.exception("could not count failed jobs for the landing status")
         failed = 0
     if failed:
         parts.append(f"{failed} failed")

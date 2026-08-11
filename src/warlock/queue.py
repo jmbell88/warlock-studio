@@ -1430,6 +1430,20 @@ class Worker:
                     # only dropping the pipe releases. For the exclusive and
                     # conditioning reasons it is the original stop-before-load /
                     # unload-before-next-start choreography.
+                    #
+                    # Deliberately *not* followed by `self._text2image = None`,
+                    # which the three later teardown sites (_pixel_sheet,
+                    # _sprite_synthesis, _retexture) do. That asymmetry looks
+                    # like drift and is not: every reader of the field asks
+                    # `is not None and .loaded`, so `.loaded` is what answers
+                    # "is a pipe resident" -- including the idle-timeout sweep
+                    # and the VRAM credit at dispatch -- and an unloaded
+                    # instance is reusable rather than stale, because load()
+                    # rebuilds from `_pipe is None`. Keeping it means the next
+                    # text job at the same base reuses this object instead of
+                    # constructing a second one, which is what makes the credit
+                    # comment above ("unload before loading the new") true of
+                    # one identity rather than two.
                     await asyncio.to_thread(t2i.unload)
                 else:
                     # Coexist mode keeps the pipeline resident by design, which
@@ -1584,180 +1598,190 @@ class Worker:
         # copies have to be put back. None means "no longer any attempt's" --
         # a retry that raised part-way through writing source.glb.
         on_disk_seed: int | None = mesh_seed
-        while True:
-            await self._optimize(job_id, source_glb, glb_path, params)
-            await self._apply_scale(job_id, glb_path, params)
-            audit = await self._audit_mesh(job_id, glb_path, params)
-            worst = None if audit is None else audit.get("worst")
-            attempts.append({"seed": mesh_seed, "worst": worst})
-            new_best = best is None or (
-                worst is not None
-                and best["worst"] is not None
-                and worst < best["worst"]
-            )
-            if new_best:
-                # params is snapshotted shallowly, which is exact today and
-                # deliberately so: _optimize, _apply_scale and _audit_mesh all
-                # *rebind* their top-level keys rather than mutating a nested
-                # value in place, so a shallow copy of the mapping isolates
-                # every value that can change between here and the restore. A
-                # callee that grew an in-place nested mutation would defeat it,
-                # which is the one thing to check before adding to this loop.
-                best = {"seed": mesh_seed, "worst": worst, "params": dict(params)}
-            if (
-                worst is None
-                or worst <= self.config.mesh_hole_max
-                or len(attempts) > retries
-                or self._cancel.event.is_set()
-            ):
-                # A budget, not a loop, and an unmeasurable mesh is not a bad
-                # one: no verdict means the mesh already on disk is kept.
-                break
-            if new_best:
-                # Below the break, not above it: a copy taken on the attempt
-                # that turns out to be the last one is never read, and this is
-                # two whole GLBs. Reaching here means a retry is definitely
-                # about to overwrite them.
-                #
-                # Kept aside rather than trusted to be last, because a reroll
-                # can be worse and then two minutes of GPU would have made the
-                # asset worse than it already was. Both files, because
-                # source.glb is what a later retarget re-derives model.glb
-                # from -- a source left behind by the losing attempt would
-                # quietly undo the choice made here the first time someone
-                # changed a triangle budget.
-                try:
-                    # Hard links, one executor hop for the pair (C37): see
-                    # _stage_link for why a link cannot be scribbled on.
-                    def _stage_pair() -> None:
-                        _stage_link(glb_path, keep)
-                        _stage_link(source_glb, keep_source)
-
-                    await asyncio.to_thread(_stage_pair)
-                except OSError:
-                    # A full disk is the realistic way a tens-of-megabytes copy
-                    # fails, and this feature is what doubled the footprint. So
-                    # it gives up on retrying rather than failing a job whose
-                    # mesh is already on disk: without a copy of the attempt in
-                    # hand there is nothing to fall back to, and running trellis
-                    # again would risk overwriting the only good result.
-                    log.exception(
-                        "job %s: could not stage the mesh for a remesh; keeping it", job_id
-                    )
+        # The scratch pair is released in a finally, not as a trailing
+        # statement. best.glb and best.source.glb are two whole
+        # reconstructions -- tens of MB -- and every path out of the block
+        # below that is not a clean fall-through used to leak them: an
+        # exception from _optimize, _apply_scale, _audit_mesh or the params
+        # write, and a cancel that propagates. Nothing sweeps them
+        # afterwards; _discard_artifacts runs only on a cancelled job, so on
+        # an error they sat in the job directory for its whole life.
+        try:
+            while True:
+                await self._optimize(job_id, source_glb, glb_path, params)
+                await self._apply_scale(job_id, glb_path, params)
+                audit = await self._audit_mesh(job_id, glb_path, params)
+                worst = None if audit is None else audit.get("worst")
+                attempts.append({"seed": mesh_seed, "worst": worst})
+                new_best = best is None or (
+                    worst is not None
+                    and best["worst"] is not None
+                    and worst < best["worst"]
+                )
+                if new_best:
+                    # params is snapshotted shallowly, which is exact today and
+                    # deliberately so: _optimize, _apply_scale and _audit_mesh all
+                    # *rebind* their top-level keys rather than mutating a nested
+                    # value in place, so a shallow copy of the mapping isolates
+                    # every value that can change between here and the restore. A
+                    # callee that grew an in-place nested mutation would defeat it,
+                    # which is the one thing to check before adding to this loop.
+                    best = {"seed": mesh_seed, "worst": worst, "params": dict(params)}
+                if (
+                    worst is None
+                    or worst <= self.config.mesh_hole_max
+                    or len(attempts) > retries
+                    or self._cancel.event.is_set()
+                ):
+                    # A budget, not a loop, and an unmeasurable mesh is not a bad
+                    # one: no verdict means the mesh already on disk is kept.
                     break
-                staged = True
-            mesh_seed = _fresh_seed()
-            log.info(
-                "job %s: mesh audited %.3f open, past %.3f -- remeshing at seed %d",
-                job_id, worst, self.config.mesh_hole_max, mesh_seed,
-            )
-            # The phase, not just a label. request_cancel decides whether to
-            # kill trellis-server by reading it, and killing the subprocess is
-            # the only abort trellis has -- left at "audit" (what _audit_mesh
-            # set), a cancel would set the event, skip the kill and then block
-            # here for a whole reconstruction. Mirrors the first generate's
-            # update above, for the same reason.
-            self.progress.update(
-                job_id,
-                phase="trellis",
-                label="Remeshing" if self.trellis.running else "Starting 3D engine",
-                inner=0.0,
-                inner_next=0.02,
-                nominal=6.0,
-                detail=f"attempt {len(attempts) + 1}",
-            )
-            on_disk_seed = None
-            try:
-                await self.trellis.generate(
-                    trellis_input,
-                    source_glb,
-                    seed=mesh_seed,
-                    resolution=resolution,
-                    bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
-                )
-            except Exception:
-                # The best reconstruction so far is already on disk and the
-                # retry was this code's own idea, so a retry that blows up must
-                # not retroactively fail a job that had a mesh -- the same rule
-                # the audit, the report and the grounding follow. source.glb is
-                # left disowned rather than trusted (a half-written file is
-                # exactly what a failed run leaves), and the restore below puts
-                # the kept attempt's pair back.
-                if self._cancel.event.is_set():
-                    # Not a failure at all: request_cancel killed the server and
-                    # the in-flight post died with it, exactly as designed. A
-                    # traceback here would be noise on a routine cancel.
-                    log.info("job %s: remesh cancelled", job_id)
-                else:
-                    log.exception(
-                        "remesh failed for job %s; keeping the best mesh so far", job_id
-                    )
-                break
-            on_disk_seed = mesh_seed
-        # Whether what is on disk is what was chosen -- which is not the same
-        # question as "did an earlier attempt win", because a retry that failed
-        # part-way leaves neither attempt's reconstruction there.
-        restored = best is not None and staged and on_disk_seed != best["seed"]
-        if restored and best is not None:
-            # Put the kept attempt's GLBs and its measurements back, so what is
-            # on disk and what params claims about it describe the same mesh.
-            #
-            # source.glb first, and the order is the whole point: these are two
-            # files and no filesystem makes the pair atomic, so the question is
-            # which half-done state is survivable. Source-then-model leaves the
-            # *source* as the kept attempt's, and service.jobs.optimize_job
-            # re-derives model.glb from source.glb -- so the next retarget
-            # converges on the mesh that was chosen. The other order strands the
-            # winner's model.glb over the loser's source, and a retarget
-            # silently swaps the rejected reconstruction back in.
-            #
-            # params is restored wholesale rather than key by key: the snapshot
-            # is a copy of the mapping taken between two trellis runs, and only
-            # _optimize, _apply_scale and _audit_mesh write between then and
-            # here, so replacing it is exact -- and stays exact when one of
-            # those three grows a new key, which a hand-written strip list
-            # would not.
-            try:
-                # source first (the ordering argument above), linked back for
-                # the reason the staging linked out (C37); _stage_link's
-                # os.replace keeps each served name whole for concurrent
-                # readers, which is what staged_copy bought the copy path.
-                def _restore_pair() -> None:
-                    _stage_link(keep_source, source_glb)
-                    _stage_link(keep, glb_path)
+                if new_best:
+                    # Below the break, not above it: a copy taken on the attempt
+                    # that turns out to be the last one is never read, and this is
+                    # two whole GLBs. Reaching here means a retry is definitely
+                    # about to overwrite them.
+                    #
+                    # Kept aside rather than trusted to be last, because a reroll
+                    # can be worse and then two minutes of GPU would have made the
+                    # asset worse than it already was. Both files, because
+                    # source.glb is what a later retarget re-derives model.glb
+                    # from -- a source left behind by the losing attempt would
+                    # quietly undo the choice made here the first time someone
+                    # changed a triangle budget.
+                    try:
+                        # Hard links, one executor hop for the pair (C37): see
+                        # _stage_link for why a link cannot be scribbled on.
+                        def _stage_pair() -> None:
+                            _stage_link(glb_path, keep)
+                            _stage_link(source_glb, keep_source)
 
-                await asyncio.to_thread(_restore_pair)
-            except OSError:
-                # Same rule as everywhere else here: the last attempt's mesh is
-                # on disk and usable, so a failed restore costs the user the
-                # better of two meshes, never the job.
-                log.exception(
-                    "job %s: could not restore the best mesh; keeping the last attempt", job_id
+                        await asyncio.to_thread(_stage_pair)
+                    except OSError:
+                        # A full disk is the realistic way a tens-of-megabytes copy
+                        # fails, and this feature is what doubled the footprint. So
+                        # it gives up on retrying rather than failing a job whose
+                        # mesh is already on disk: without a copy of the attempt in
+                        # hand there is nothing to fall back to, and running trellis
+                        # again would risk overwriting the only good result.
+                        log.exception(
+                            "job %s: could not stage the mesh for a remesh; keeping it", job_id
+                        )
+                        break
+                    staged = True
+                mesh_seed = _fresh_seed()
+                log.info(
+                    "job %s: mesh audited %.3f open, past %.3f -- remeshing at seed %d",
+                    job_id, worst, self.config.mesh_hole_max, mesh_seed,
                 )
-                restored = False
-            else:
-                params.clear()
-                params.update(best["params"])
-        if best is not None and (restored or len(attempts) > 1):
-            if len(attempts) > 1:
-                params["mesh_attempts"] = attempts
-            # The seed that reproduces the mesh that shipped, which is the best
-            # attempt's and not necessarily the last one tried -- and the recipe
-            # carries the same seed, or the provenance and the row would name
-            # different reconstructions. If the restore itself failed then what
-            # shipped is the last *measured* attempt, and saying so beats
-            # claiming a seed whose mesh is not there.
-            kept_seed = best["seed"] if restored else attempts[-1]["seed"]
-            params["mesh_seed"] = kept_seed
-            params.setdefault("recipe", {})["trellis"] = await asyncio.to_thread(
-                functools.partial(
-                    provenance.trellis_recipe, self.config, params, mesh_seed=kept_seed
+                # The phase, not just a label. request_cancel decides whether to
+                # kill trellis-server by reading it, and killing the subprocess is
+                # the only abort trellis has -- left at "audit" (what _audit_mesh
+                # set), a cancel would set the event, skip the kill and then block
+                # here for a whole reconstruction. Mirrors the first generate's
+                # update above, for the same reason.
+                self.progress.update(
+                    job_id,
+                    phase="trellis",
+                    label="Remeshing" if self.trellis.running else "Starting 3D engine",
+                    inner=0.0,
+                    inner_next=0.02,
+                    nominal=6.0,
+                    detail=f"attempt {len(attempts) + 1}",
                 )
-            )
-            await asyncio.to_thread(self.store.set_params, job_id, params)
-        for scratch in (keep, keep_source):
-            with contextlib.suppress(OSError):
-                scratch.unlink()
+                on_disk_seed = None
+                try:
+                    await self.trellis.generate(
+                        trellis_input,
+                        source_glb,
+                        seed=mesh_seed,
+                        resolution=resolution,
+                        bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
+                    )
+                except Exception:
+                    # The best reconstruction so far is already on disk and the
+                    # retry was this code's own idea, so a retry that blows up must
+                    # not retroactively fail a job that had a mesh -- the same rule
+                    # the audit, the report and the grounding follow. source.glb is
+                    # left disowned rather than trusted (a half-written file is
+                    # exactly what a failed run leaves), and the restore below puts
+                    # the kept attempt's pair back.
+                    if self._cancel.event.is_set():
+                        # Not a failure at all: request_cancel killed the server and
+                        # the in-flight post died with it, exactly as designed. A
+                        # traceback here would be noise on a routine cancel.
+                        log.info("job %s: remesh cancelled", job_id)
+                    else:
+                        log.exception(
+                            "remesh failed for job %s; keeping the best mesh so far", job_id
+                        )
+                    break
+                on_disk_seed = mesh_seed
+            # Whether what is on disk is what was chosen -- which is not the same
+            # question as "did an earlier attempt win", because a retry that failed
+            # part-way leaves neither attempt's reconstruction there.
+            restored = best is not None and staged and on_disk_seed != best["seed"]
+            if restored and best is not None:
+                # Put the kept attempt's GLBs and its measurements back, so what is
+                # on disk and what params claims about it describe the same mesh.
+                #
+                # source.glb first, and the order is the whole point: these are two
+                # files and no filesystem makes the pair atomic, so the question is
+                # which half-done state is survivable. Source-then-model leaves the
+                # *source* as the kept attempt's, and service.jobs.optimize_job
+                # re-derives model.glb from source.glb -- so the next retarget
+                # converges on the mesh that was chosen. The other order strands the
+                # winner's model.glb over the loser's source, and a retarget
+                # silently swaps the rejected reconstruction back in.
+                #
+                # params is restored wholesale rather than key by key: the snapshot
+                # is a copy of the mapping taken between two trellis runs, and only
+                # _optimize, _apply_scale and _audit_mesh write between then and
+                # here, so replacing it is exact -- and stays exact when one of
+                # those three grows a new key, which a hand-written strip list
+                # would not.
+                try:
+                    # source first (the ordering argument above), linked back for
+                    # the reason the staging linked out (C37); _stage_link's
+                    # os.replace keeps each served name whole for concurrent
+                    # readers, which is what staged_copy bought the copy path.
+                    def _restore_pair() -> None:
+                        _stage_link(keep_source, source_glb)
+                        _stage_link(keep, glb_path)
+
+                    await asyncio.to_thread(_restore_pair)
+                except OSError:
+                    # Same rule as everywhere else here: the last attempt's mesh is
+                    # on disk and usable, so a failed restore costs the user the
+                    # better of two meshes, never the job.
+                    log.exception(
+                        "job %s: could not restore the best mesh; keeping the last attempt", job_id
+                    )
+                    restored = False
+                else:
+                    params.clear()
+                    params.update(best["params"])
+            if best is not None and (restored or len(attempts) > 1):
+                if len(attempts) > 1:
+                    params["mesh_attempts"] = attempts
+                # The seed that reproduces the mesh that shipped, which is the best
+                # attempt's and not necessarily the last one tried -- and the recipe
+                # carries the same seed, or the provenance and the row would name
+                # different reconstructions. If the restore itself failed then what
+                # shipped is the last *measured* attempt, and saying so beats
+                # claiming a seed whose mesh is not there.
+                kept_seed = best["seed"] if restored else attempts[-1]["seed"]
+                params["mesh_seed"] = kept_seed
+                params.setdefault("recipe", {})["trellis"] = await asyncio.to_thread(
+                    functools.partial(
+                        provenance.trellis_recipe, self.config, params, mesh_seed=kept_seed
+                    )
+                )
+                await asyncio.to_thread(self.store.set_params, job_id, params)
+        finally:
+            for scratch in (keep, keep_source):
+                with contextlib.suppress(OSError):
+                    scratch.unlink()
 
     def _wants_landmarks(
         self, source_dir: Path, template: str, params: dict[str, Any]
@@ -1953,6 +1977,15 @@ class Worker:
             self._blender = proc
 
         png = rigging.rig_qa_png_path(source_dir)
+        # Both halves of the QA sheet are staged and renamed in. The sidecar is
+        # the completion marker (files.ready keys on the .json, not the .png),
+        # so on a *re-rig* the previous run's sidecar already says "ready" while
+        # this run's atlas is being packed over the served PNG -- a reader in
+        # that window gets a torn sheet that nothing marks as suspect. Renaming
+        # both keeps the marker's promise true at every instant.
+        png_tmp = png.with_name(f".{png.name}.tmp")
+        qa_json = rigging.rig_qa_path(source_dir)
+        json_tmp = qa_json.with_name(f".{qa_json.name}.tmp")
         with tempfile.TemporaryDirectory(prefix="warlock-rigqa-") as tmp:
             frames_dir = Path(tmp)
             spec = rigging.sheet_spec(
@@ -1973,7 +2006,12 @@ class Worker:
                 )
             )
             frames = {c.index: frames_dir / f"{c.index:04d}.png" for c in layout.cells}
-            await asyncio.to_thread(sheetlib.pack, layout, frames, png)
+            try:
+                await asyncio.to_thread(sheetlib.pack, layout, frames, png_tmp)
+                await asyncio.to_thread(os.replace, png_tmp, png)
+            finally:
+                with contextlib.suppress(OSError):
+                    png_tmp.unlink(missing_ok=True)
 
         pivot = result.get("pivot") if isinstance(result, dict) else None
         meta = sheetlib.sidecar(
@@ -1987,11 +2025,16 @@ class Worker:
         )
         # Written last, so it is the completion marker the file rules key on --
         # the same ordering rig.json has for rig.glb.
-        await asyncio.to_thread(
-            rigging.rig_qa_path(source_dir).write_text,
-            json.dumps(meta, indent=2),
-            encoding="utf-8",
-        )
+        try:
+            await asyncio.to_thread(
+                json_tmp.write_text,
+                json.dumps(meta, indent=2),
+                encoding="utf-8",
+            )
+            await asyncio.to_thread(os.replace, json_tmp, qa_json)
+        finally:
+            with contextlib.suppress(OSError):
+                json_tmp.unlink(missing_ok=True)
         log.info(
             "rendered deformation QA for job %s: %d pose(s) x %d view(s)",
             source_id, layout.rows, layout.columns,

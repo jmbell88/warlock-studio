@@ -231,6 +231,71 @@ def test_a_screen_ray_at_the_edge_leans_the_right_way():
     assert right[0] > 0
 
 
+def test_an_orthographic_screen_ray_is_parallel_and_offset_not_fanned():
+    """Clay exposes the ortho toggle and then picks through this function.
+
+    Perspective-only, every ray was cast from a single apex the orthographic
+    render does not have, so the further a click landed from screen centre the
+    further what got picked was from what was drawn under the cursor.
+    """
+    camera = Camera()
+    camera.theta, camera.phi, camera.distance = 0.0, math.pi / 2, 5.0
+    camera.set_target(m3.vec3(0, 0, 0))
+    camera.aspect = 1.0
+    camera.orthographic = True
+
+    centre_o, centre_d = screen_ray(camera, 64, 64, 128, 128)
+    edge_o, edge_d = screen_ray(camera, 127, 64, 128, 128)
+
+    # Parallel: the direction is the view direction wherever the click landed.
+    assert edge_d == pytest.approx(centre_d, abs=1e-9)
+    assert centre_d == pytest.approx(m3.vec3(0, 0, -1), abs=1e-9)
+    # It is the origin that moves, and screen-right is world +X from here.
+    assert edge_o[0] > centre_o[0]
+    # Sized like projection(): the half-width at the target plane is
+    # distance * tan(fov/2), and the click one pixel short of the right edge is
+    # just inside it.
+    half = 5.0 * math.tan(math.radians(camera.fov * 0.5))
+    assert 0 < edge_o[0] < half
+
+
+def test_an_orthographic_ray_starts_behind_everything_the_render_draws():
+    """projection() deliberately puts the near plane behind the eye, because an
+    orthographic frustum has no apex to clip against. A ray starting at the eye
+    would miss exactly the geometry that choice exists to keep visible."""
+    camera = Camera()
+    camera.theta, camera.phi, camera.distance = 0.0, math.pi / 2, 5.0
+    camera.set_target(m3.vec3(0, 0, 0))
+    camera.aspect = 1.0
+    camera.orthographic = True
+
+    origin, direction = screen_ray(camera, 64, 64, 128, 128)
+    # A point between the target and the eye is still in front of the ray.
+    between = m3.vec3(0, 0, 2.5)
+    assert float(np.dot(between - origin, direction)) > 0
+
+
+def test_a_perspective_screen_ray_is_unchanged_by_the_orthographic_branch():
+    camera = Camera()
+    camera.theta, camera.phi, camera.distance = 0.0, math.pi / 2, 5.0
+    camera.set_target(m3.vec3(0, 0, 0))
+    camera.aspect = 1.0
+    assert camera.orthographic is False
+
+    origin, direction = screen_ray(camera, 127, 64, 128, 128)
+    assert origin == pytest.approx(camera.position)
+    assert direction[0] > 0
+
+
+def test_a_mirrored_camera_copies_the_projection_too():
+    """"Mirror another camera exactly" -- the compare view's premise is that
+    both halves are the same picture of two meshes."""
+    left, right = Camera(), Camera()
+    left.orthographic = True
+    right.copy_from(left)
+    assert right.orthographic is True
+
+
 def test_the_signed_angle_between_two_spokes_has_a_sign():
     axis = m3.vec3(0, 0, 1)
     a, b = m3.vec3(1, 0, 0), m3.vec3(0, 1, 0)

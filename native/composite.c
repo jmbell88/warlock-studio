@@ -81,7 +81,24 @@ static float blend_channel(int32_t mode, float cb, float cs) {
         if (cs >= 1.0f) {
             return 1.0f;
         }
-        const float ratio = cb / (1.0f - cs);
+        /* The divisor is guarded as the reference guards it --
+         * `np.where(denom > 0.0, denom, 1.0)`. Past the `cs >= 1` return above
+         * the only way here with a non-positive denominator is a NaN source,
+         * where `>` is false, so numpy divides by one and returns Cb while an
+         * unguarded divide returns NaN.
+         *
+         * **This difference is not observable and the guard is written for
+         * shape, not for a bug.** `blend_channel` is reached only through
+         * `warlockc_over_f32`, and a NaN Cs reaches the output there through
+         * `k_src * cs` whatever B() returned -- 0 * NaN is NaN, so even a
+         * fully opaque backdrop does not mask it. A test at the seam therefore
+         * cannot tell the two apart, and 2026-08-11's attempt to write one
+         * passed against both. It is here because every other branch in this
+         * file spells its NaN behaviour out, and a reader comparing this one
+         * against the reference should not have to re-derive that the
+         * omission was harmless. */
+        const float denom = 1.0f - cs;
+        const float ratio = cb / (denom > 0.0f ? denom : 1.0f);
         return ratio > 1.0f ? 1.0f : ratio;
     }
     case WARLOCKC_BLEND_COLOR_BURN: {
@@ -91,7 +108,9 @@ static float blend_channel(int32_t mode, float cb, float cs) {
         if (cs <= 0.0f) {
             return 0.0f;
         }
-        const float ratio = (1.0f - cb) / cs;
+        /* The dodge's guard, on the other operand: `np.where(source > 0.0,
+         * source, 1.0)`. */
+        const float ratio = (1.0f - cb) / (cs > 0.0f ? cs : 1.0f);
         return 1.0f - (ratio > 1.0f ? 1.0f : ratio);
     }
     case WARLOCKC_BLEND_SOFT_LIGHT: {

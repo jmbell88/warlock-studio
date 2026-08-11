@@ -164,18 +164,24 @@ WARLOCKC_API void warlockc_stack_f32(const uint8_t **layers,
 WARLOCKC_API void warlockc_to_uint8_f32(const float *pixels, uint8_t *out,
                                         int64_t count);
 
-/* The same narrowing for floats that are *already* in 0..255 -- the four hand
- * rolled `np.clip(out + 0.5, 0, 255).astype(np.uint8)` expressions in
- * inker.brush._resolve / _filter and inker.document.write_colour / gradient,
- * none of which can use the kernel above because that one multiplies by 255
- * first.
+/* The same narrowing for floats that are *already* in 0..255 -- the hand
+ * rolled `np.clip(out + 0.5, 0, 255).astype(np.uint8)` expressions that
+ * `composite.to_uint8_255` now owns, none of which can use the kernel above
+ * because that one multiplies by 255 first.
+ *
+ * Seven call sites, not four: inker.brush._resolve / _filter,
+ * inker.document.write_colour / gradient / apply_matte, inker.filters._rejoin
+ * and inker.transform._unpremultiplied. The last three were still spelling the
+ * expression out by hand on 2026-08-11 -- which is what this comment is for,
+ * and is also why it is worth keeping accurate: a site that does not go
+ * through the helper is a site the parity tests do not cover.
  *
  * A sibling rather than a scale parameter: the two differ by one multiply, and
  * a per-element branch or a per-element multiply by 1.0f to unify them would
  * cost more than the duplication does. Parity is exact for the same reason the
  * scaled one's is -- add, clamp in numpy's NaN-leaving direction, truncate --
- * and it matters more here, because these four sites write straight into a
- * layer's pixels and a half-level shift is a different file on disk. */
+ * and it matters more here, because these sites write straight into a layer's
+ * pixels and a half-level shift is a different file on disk. */
 WARLOCKC_API void warlockc_to_uint8_255_f32(const float *pixels, uint8_t *out,
                                             int64_t count);
 

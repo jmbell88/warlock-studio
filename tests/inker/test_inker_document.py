@@ -347,6 +347,33 @@ def test_a_feathered_lift_floats_a_feathered_chunk():
     assert np.count_nonzero((edge > 8) & (edge < 240)) > 20
 
 
+def test_a_feathered_lift_partitions_alpha_exactly():
+    """What floats away plus what stays behind is what was there.
+
+    Both halves used to be computed independently -- one from the mask, one
+    from 1 - the mask -- and both truncate toward zero, so wherever a * m / 255
+    is not a whole number the two floors summed to a - 1. Every feathered lift
+    therefore lost one level of alpha along its own edge, and a lift-and-drop
+    that changed nothing else still eroded the outline a step per round trip.
+    """
+    doc = _doc((32, 32), RED)
+    doc.select(inker.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
+    doc.feather_selection(3.0)
+    layer = doc.stack.active
+    before = layer.pixels[..., 3].astype(int).copy()
+
+    doc.lift()
+
+    x0, y0 = doc.floating.offset
+    lifted = doc.floating.pixels[..., 3].astype(int)
+    h, w = lifted.shape
+    cut = layer.pixels[y0 : y0 + h, x0 : x0 + w, 3].astype(int)
+    assert np.array_equal(lifted + cut, before[y0 : y0 + h, x0 : x0 + w])
+    # And the ramp is genuinely partial somewhere, or the assertion above is
+    # only about hard 0/255 pixels and would have passed before the fix.
+    assert np.count_nonzero((lifted > 8) & (lifted < 240)) > 20
+
+
 def test_select_all_and_deselect_are_a_round_trip():
     doc = _doc((8, 8))
     doc.select_all()
@@ -947,3 +974,81 @@ def test_an_unlocked_document_writes_no_lock_attribute(tmp_path):
     with zipfile.ZipFile(path) as zf:
         root = ElementTree.fromstring(zf.read("stack.xml"))
     assert all(ora.LOCK_ATTR not in element.attrib for element in root.iter("layer"))
+
+
+# --- the selection-op wrappers ----------------------------------------------
+#
+# Thin by design -- each is a guard, a call into ``SelectionMask`` and a
+# ``select`` -- and the two decisions that live in the wrapper rather than in
+# the mask are exactly what a thin function hides: whether the step is undoable
+# and whether ``op`` is honoured. The mask's own arithmetic is asserted in
+# ``test_selection.py``; what is asserted here is the plumbing around it.
+
+
+def _selected(doc):
+    return 0 if doc.mask is None else int((doc.mask.mask > 0).sum())
+
+
+def test_grow_and_shrink_move_the_selection_edge_and_are_undoable():
+    doc = _doc((32, 32))
+    doc.select(inker.SelectionMask.from_rect((32, 32), (12, 12, 20, 20)))
+    base = _selected(doc)
+
+    doc.grow_selection(2)
+    assert _selected(doc) > base
+    doc.undo()
+    assert _selected(doc) == base
+
+    doc.shrink_selection(2)
+    assert _selected(doc) < base
+    doc.undo()
+    assert _selected(doc) == base
+
+
+def test_border_selection_keeps_the_rim_and_drops_the_middle():
+    doc = _doc((32, 32))
+    doc.select(inker.SelectionMask.from_rect((32, 32), (8, 8, 24, 24)))
+
+    doc.border_selection(2)
+
+    assert doc.mask is not None
+    # The centre is no longer in it; a pixel on the old edge still is.
+    assert doc.mask.mask[16, 16] == 0
+    assert doc.mask.mask[8, 16] > 0
+
+
+def test_the_three_edge_ops_do_nothing_without_a_selection():
+    """Each is guarded on ``self.mask``, so none of them may invent one -- and
+    none may spend an undo step saying so."""
+    for call in ("grow_selection", "shrink_selection", "border_selection"):
+        doc = _doc((16, 16))
+        head = doc.history.head
+        getattr(doc, call)(2)
+        assert doc.mask is None, call
+        assert doc.history.head == head, call
+
+
+def test_the_wand_honours_its_op_rather_than_always_replacing():
+    """``select_wand`` forwards ``op`` to ``select``. It is the one selection
+    entry point where a caller can hold a modifier, so a wrapper that dropped
+    the argument would silently turn every Shift-click into a fresh
+    selection."""
+    doc = _doc((16, 16), RED)
+    doc.stack.active.pixels[0:8, 0:8] = BLUE
+    doc.invalidate((0, 0, 16, 16))
+
+    doc.select_wand((2, 2), tolerance=8)
+    blue_only = _selected(doc)
+    assert blue_only == 64
+
+    doc.select_wand((12, 12), tolerance=8, op="add")
+    assert _selected(doc) > blue_only
+
+
+def test_the_wand_reads_the_composite_and_a_single_undo_reverses_it():
+    doc = _doc((16, 16), RED)
+    doc.select_wand((8, 8), tolerance=8)
+    assert _selected(doc) == 16 * 16
+
+    doc.undo()
+    assert doc.mask is None

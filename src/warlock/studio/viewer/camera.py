@@ -219,6 +219,11 @@ class Camera:
         self.fov, self.near, self.far = other.fov, other.near, other.far
         self.theta, self.phi, self.distance = other.theta, other.phi, other.distance
         self.target = other.target.copy()
+        # Including the projection. "Exactly" is the docstring's word and the
+        # compare view's whole premise: with this left out, toggling
+        # orthographic put a perspective render beside an orthographic one and
+        # the two halves were no longer the same picture of two meshes.
+        self.orthographic = other.orthographic
 
 
 def screen_ray(
@@ -226,9 +231,18 @@ def screen_ray(
 ) -> tuple[np.ndarray, np.ndarray]:
     """-> (origin, unit direction) for a pixel, in world space.
 
-    Analytic rather than an unproject: the projection is a plain perspective
-    matrix, so building the ray from the field of view directly is both shorter
-    and free of the inverse's conditioning problems at a grazing far plane.
+    Analytic rather than an unproject: both projections here are built from the
+    field of view and the distance, so constructing the ray from those directly
+    is shorter than inverting a matrix and free of the inverse's conditioning
+    problems at a grazing far plane.
+
+    Both branches, because ``Camera.orthographic`` is a control the user can
+    reach: Clay exposes the toggle and then picks, drags gizmos and marquees
+    through this function. Perspective-only, every one of those rays was cast
+    from a point the orthographic render has no apex at -- so the further a
+    click landed from the screen centre, the further what got picked was from
+    what was under the cursor, and a gizmo drag pulled along an axis the
+    geometry was not being drawn on.
     """
     ndc_x = (2.0 * x / max(width, 1)) - 1.0
     ndc_y = 1.0 - (2.0 * y / max(height, 1))
@@ -236,6 +250,24 @@ def screen_ray(
     view = camera.view()
     right, up, back = view[0, :3], view[1, :3], view[2, :3]
     forward = -back
+    if camera.orthographic:
+        # Parallel rays: every one points along -forward, and it is the
+        # *origin* that moves across the view plane. The half-extents are
+        # projection()'s, and have to stay so -- they are what makes the plane
+        # through the target measure the same in both projections, which is
+        # what the picking has to agree with to land on the pixel drawn.
+        half = camera.distance * tan_half
+        wide = half * max(camera.aspect, 1e-6)
+        origin = (
+            camera.position + right * (ndc_x * wide) + up * (ndc_y * half)
+            # Pushed back along the view direction by the same amount
+            # projection() puts the near plane behind the eye, so nothing
+            # between the eye and the target is missed by a ray that starts at
+            # the eye's own plane -- the orthographic frustum contains it and
+            # the render draws it.
+            - forward * camera.far
+        )
+        return origin, forward / np.linalg.norm(forward)
     direction = forward + right * (ndc_x * tan_half * camera.aspect) + up * (ndc_y * tan_half)
     direction = direction / np.linalg.norm(direction)
     return camera.position, direction

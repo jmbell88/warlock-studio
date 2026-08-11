@@ -50,6 +50,15 @@ MIN_SIZE = (1100, 700)
 # proportion the user still drags is the sidebar's internal split,
 # ``Layout.settings_share``, which defaults to 0.55.
 TARGET_FPS = 60
+# The Ctrl chords a focused text field owns, spelled as ``pygame.key.name``
+# gives them. imgui's own input-text widget binds these to editing the text, so
+# they are the one class of modifier chord that must *not* reach the global
+# shortcuts while a field has focus. See ``Studio._passes_text_field``.
+_TEXT_FIELD_CTRL = frozenset({"z", "y", "x", "c", "v", "a"})
+# Named rather than spelled as ``pygame.K_F*`` because this module imports
+# pygame lazily, inside the loop, and a module-level constant table would drag
+# the window library into every import of it.
+_FUNCTION_KEYS = frozenset(f"f{n}" for n in range(1, 13))
 # The redraw rate while nothing on screen can change (B11): no pending input,
 # no job, no toast, no task, cameras settled, nothing playing. Fast enough
 # that the first frame after a wake-up condition is never far away, slow
@@ -1422,8 +1431,14 @@ class App:
                 # the form the dialog is a question about. Releases still pass,
                 # because Inker's space-to-pan is a hold and would otherwise
                 # latch on whenever a dialog opened mid-drag.
-                if not io.want_text_input and not (
-                    event.type == pygame.KEYDOWN and self._modal_open()
+                #
+                # A focused text field takes the *plain* keys only, so letters
+                # still reach it. Modifier chords and the F-keys pass through:
+                # the manual and the settings pane both promise Ctrl+K works
+                # everywhere, and it used to die the moment the 2D prompt box
+                # had focus -- which is exactly where you are when you want it.
+                if not (event.type == pygame.KEYDOWN and self._modal_open()) and (
+                    not io.want_text_input or self._passes_text_field(event)
                 ):
                     self._shortcut(event)
                 continue
@@ -1480,6 +1495,40 @@ class App:
             return
         if self._poser_hovered or viewer._grab is not None:
             viewer.handle_event(event, hovered=self._poser_hovered)
+
+    @staticmethod
+    def _passes_text_field(event: Any) -> bool:
+        """Whether a key still reaches the shortcuts while a field has focus.
+
+        Modifier chords and the F-keys do; plain keys do not, so typing stays
+        typing. The exception list is the one imgui itself owns inside a text
+        field -- Ctrl+Z/Y/X/C/V/A are edit-the-text bindings there, and letting
+        them through would undo the *document* while you renamed a layer.
+
+        Modifiers come off ``event.mod`` rather than ``pygame.key.get_mods()``,
+        which is ``review_mode.handle_key``'s rule and for its reason: ``mod``
+        is the state at the moment this key was *pressed*, and ``get_mods()``
+        is the state now. Events are drained in a batch after the frame, so a
+        modifier released between the press and this call was already read as
+        never held -- the shortcut was silently dropped, and only when the
+        typist was fast.
+
+        The exception list is Ctrl's alone. Alt and Meta chords were being
+        tested against it too, so Alt+C and Alt+V were blocked from the global
+        shortcuts on a rationale -- "imgui binds this inside a text field" --
+        that is true of neither.
+        """
+        import pygame
+
+        name = pygame.key.name(event.key).lower()
+        if name in _FUNCTION_KEYS:
+            return True
+        mods = event.mod
+        if not mods & (pygame.KMOD_CTRL | pygame.KMOD_ALT | pygame.KMOD_META):
+            return False
+        if mods & pygame.KMOD_CTRL:
+            return name not in _TEXT_FIELD_CTRL
+        return True
 
     def _modal_open(self) -> bool:
         """Whether a confirm or a prompt is on screen and owns the keyboard."""
@@ -2191,6 +2240,7 @@ class App:
 
         from .panes import clay_menu
 
+        self._clay_tabs(ctx, clay_mode)
         tab = clay_mode.active(ctx)
         if tab is None:
             self._clay_empty(ctx, clay_mode)
@@ -2222,6 +2272,44 @@ class App:
         self._clay_marquee(imgui, view, rect)
         self._clay_drag_hud(imgui, widgets, view, rect)
         clay_menu.draw(ctx, view)
+
+    def _clay_tabs(self, ctx: Any, clay_mode: Any) -> None:
+        """Clay's open documents, which nothing has ever drawn.
+
+        The document model was all there -- ``docs``, ``active``, ``activate``,
+        ``cycle``, ``close`` -- and the only thing missing was the bar: Ctrl+Tab
+        switched between documents with nothing on screen to say there was more
+        than one, and ``close`` had no caller at all.
+
+        Drawn above ``_clay_empty`` as well as above the viewport, because the
+        last tab closing is exactly when the bar disappears and the empty state
+        has to be what is underneath it.
+
+        ``unsaved_document`` rather than a ``"* "`` prefix, which is Inker's
+        rule and the right one: the title is half of the tab's identity.
+        """
+        from imgui_bundle import imgui
+
+        state = clay_mode.ensure(ctx)
+        if not state.docs:
+            return
+        # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it, a
+        # second opened document lands behind the first and "Open" looks inert.
+        flags = (
+            imgui.TabBarFlags_.reorderable.value
+            | imgui.TabBarFlags_.auto_select_new_tabs.value
+        )
+        if not imgui.begin_tab_bar("clay-tabs", flags):
+            return
+        for tab in list(state.docs):
+            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
+            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
+            if opened:
+                state.activate(tab.uid)
+                imgui.end_tab_item()
+            if not keep:
+                clay_mode.close_tab(ctx, tab.uid)
+        imgui.end_tab_bar()
 
     def _clay_empty(self, ctx: Any, clay_mode: Any) -> None:
         """What Clay shows with nothing open, mirroring the raster editor's.
@@ -2576,7 +2664,10 @@ class App:
                 imgui.same_line()
             imgui.begin_group()
             texture = None
-            if i < labels.uploaded:
+            # ``ctx.textures`` is None until a GL context exists (app_ctx
+            # defaults it), which is the state a headless or pre-init draw is
+            # in -- every pane guards it and these three Review sites did not.
+            if i < labels.uploaded and ctx.textures is not None:
                 texture = ctx.textures.get(
                     review_mode.cache_id_for_label(row), row["image"]
                 )
@@ -2610,7 +2701,11 @@ class App:
                 # The most informative negatives in the corpus, and worth saying
                 # so: this image was refused at the composition gate.
                 widgets.hint_text("This job was refused; the picture is still judgeable.")
-            texture = ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
+            texture = (
+                None
+                if ctx.textures is None
+                else ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
+            )
             if texture is not None:
                 side = min(imgui.get_content_region_avail().x, 220.0)
                 imgui.image(widgets.texture_ref(texture), (side, side))
@@ -2623,7 +2718,7 @@ class App:
         imgui.same_line()
         if widgets.disabled_button("Skip (S)", row is not None):
             review_mode.advance_labels(labels)
-        if widgets.disabled_button("Done", True):
+        if imgui.button("Done"):
             review_mode.close_labels(ctx)
 
         # The snapshot the listing task read, kept current by ``record_label``.
@@ -2730,23 +2825,20 @@ class App:
             danger=True,
             enabled=not state.scanning,
         ):
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Delete this sweep?",
-                    message=(
-                        f"{sweep['label']}: its {len(sweep['units'])} job(s), their meshes "
-                        "and their reference images are deleted.\n\n"
-                        "The verdicts you recorded are kept, and so are the findings "
-                        "they feed -- each one carries its own copy of the settings it "
-                        "was filed against.\n\n"
-                        "Units you accepted, and any image you labelled, are kept with "
-                        "their files: a verdict's copy of the settings cannot stand in "
-                        "for the picture it was filed against."
-                    ),
-                    confirm_label="Delete",
-                    cancel_label="Keep",
-                    on_confirm=lambda: review_mode.delete(ctx, sweep_id),
-                )
+            dialogs.ask_delete(
+                ctx,
+                title="Delete this sweep?",
+                message=(
+                    f"{sweep['label']}: its {len(sweep['units'])} job(s), their meshes "
+                    "and their reference images are deleted.\n\n"
+                    "The verdicts you recorded are kept, and so are the findings "
+                    "they feed -- each one carries its own copy of the settings it "
+                    "was filed against.\n\n"
+                    "Units you accepted, and any image you labelled, are kept with "
+                    "their files: a verdict's copy of the settings cannot stand in "
+                    "for the picture it was filed against."
+                ),
+                on_confirm=lambda: review_mode.delete(ctx, sweep_id),
             )
         imgui.dummy((0, 0))
 
@@ -2915,7 +3007,7 @@ class App:
         widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
 
         reference = review_mode.reference_path(unit)
-        if reference is not None:
+        if reference is not None and ctx.textures is not None:
             texture = ctx.textures.get(review_mode.cache_id(unit), reference)
             if texture is not None:
                 side = min(imgui.get_content_region_avail().x, 220.0)
@@ -2934,10 +3026,25 @@ class App:
         imgui.separator()
         enabled = not state.scanning
 
+        if state.pending_negative:
+            # R is a *sign*, held until the next digit, and nothing on screen
+            # said it was held: the reviewer who pressed R and then walked
+            # away came back and pressed 4 expecting +4. Warn-coloured because
+            # the consequence of not noticing is the opposite verdict, and it
+            # says how to drop it -- Esc, which ``_disarm`` already answers.
+            from . import theme
+
+            widgets.text_colored(
+                theme.WARN, "Negative armed: the next digit files a minus. Esc drops it."
+            )
+
         grade = widgets.grade_buttons("review", enabled)
         if grade is not None:
             review_mode.record(ctx, grade, state.pending_tags)
-        widgets.muted_wrapped("+5 ships as-is, +3 usable, -5 unusable. Tags are optional.")
+        widgets.muted_wrapped(
+            "+5 ships as-is, +3 usable, -5 unusable. Tags are optional. "
+            "Keys: a digit grades, R first makes it negative, S skips."
+        )
 
         tag = widgets.tag_toggles("review", state.pending_tags, enabled)
         if tag is not None:
@@ -3013,11 +3120,11 @@ class App:
             if tagged:
                 widgets.muted(tagged)
             vector = entry["vector"]
-            if widgets.disabled_button(f"Apply to forms##apply-{entry['key']}", True):
+            if imgui.button(f"Apply to forms##apply-{entry['key']}"):
                 vector_presets.apply(ctx.state, vector)
                 ctx.toast("Applied those settings to the 2D and 3D forms.")
-            imgui.same_line()
-            if widgets.disabled_button(f"Save as preset...##save-{entry['key']}", True):
+            widgets.same_line_or_wrap(widgets.button_width("Save as preset..."))
+            if imgui.button(f"Save as preset...##save-{entry['key']}"):
                 ctx.prompts.ask(
                     dialogs.Prompt(
                         title="Save settings preset",
@@ -3714,7 +3821,14 @@ class App:
             self.app_ctx, self.app_ctx.job()
         ):
             repeat = overlay.TILE_REPEAT
-            texture.repeat_x = texture.repeat_y = True
+        # Set on *both* branches, every frame. Turning the toggle on used to be
+        # a one-way door: the sampler was switched to GL_REPEAT and never put
+        # back, so the single-tile view that followed sampled a wrapped texture
+        # at its own edges -- which is the one place a seamless tile is not
+        # seamless, since bilinear filtering there blends the far edge in.
+        # Idempotent and cheap: moderngl skips the GL call when the value is
+        # already what it is being set to.
+        texture.repeat_x = texture.repeat_y = repeat > 1
         scale = min(width / texture.size[0], height / texture.size[1])
         imgui.image(
             widgets.texture_ref(texture),

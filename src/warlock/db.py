@@ -422,13 +422,21 @@ class JobStore:
         # ``list``'s params-JSON memo: raw params string -> parsed dict.
         # Bounded and cleared wholesale; see ``_row_dict``.
         self._params_cache: dict[str, dict[str, Any]] = {}
-        # When True, ``create`` skips its per-row commit and the caller commits
-        # once at the end -- see ``deferred_commits``.
-        self._defer_commits = False
+        # Whose ``create`` calls skip their per-row commit -- see
+        # ``deferred_commits``. Thread-local and a depth rather than a
+        # store-wide flag: the block is entered by one caller doing a batch of
+        # its own inserts, and a plain attribute made that decision on behalf
+        # of every other thread using the store at the time.
+        self._defer = threading.local()
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    @property
+    def _defer_commits(self) -> bool:
+        """Whether *this* thread is inside a ``deferred_commits`` block."""
+        return getattr(self._defer, "depth", 0) > 0
 
     @contextlib.contextmanager
     def deferred_commits(self):
@@ -443,14 +451,25 @@ class JobStore:
         no worse than the per-row commits this replaces. The final commit runs
         in ``finally``, so the rollback path (which reads the rows back to
         delete them) always sees them.
+
+        Scoped to the entering thread. The state used to be a store-wide flag,
+        which made this a statement about the *store* rather than about the
+        caller: a submit running here would silently suppress the per-row
+        commit of any ``create`` another thread made meanwhile -- and that
+        caller returned believing its row was durable, when in fact it landed
+        only when this block happened to finish, or not at all if the process
+        died first. Counted rather than boolean so that a nested use unwinds
+        to the outermost exit instead of committing early and leaving the outer
+        block deferring nothing.
         """
-        self._defer_commits = True
+        self._defer.depth = getattr(self._defer, "depth", 0) + 1
         try:
             yield
         finally:
-            self._defer_commits = False
-            with self._lock:
-                self._conn.commit()
+            self._defer.depth -= 1
+            if self._defer.depth == 0:
+                with self._lock:
+                    self._conn.commit()
 
     def create(
         self,

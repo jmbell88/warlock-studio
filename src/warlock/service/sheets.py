@@ -10,6 +10,7 @@ from .. import rigging
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound, invalid_from
 from .validation import (
+    check_base_model_weights,
     check_job_id,
     check_pose_id,
     check_seed,
@@ -243,7 +244,7 @@ def create_pixel_sheet(
     does not divide its cells, costs the request rather than a place in the
     queue and a minute of GPU.
     """
-    from .. import models
+    from .. import fetch, models
     from ..pipelines import pixelsheet
 
     check_job_id(job_id)
@@ -322,6 +323,22 @@ def create_pixel_sheet(
     # At the door, exactly as create_job does, and before the row exists: an
     # img2img restyle wants SDXL plus a ControlNet, which is the shape of
     # request a smaller card has to refuse.
+    #
+    # Presence as well as fit. The family check above only asks whether these
+    # two weights *belong* together; it says nothing about whether either is on
+    # this host. Missing, the worker's own tolerance takes over -- it logs and
+    # restyles bare -- so the job would finish, look like an ordinary img2img
+    # pass rather than pixel art, and write a sidecar naming a LoRA that never
+    # loaded. The ControlNet is deliberately not checked: ``structure_lock`` is
+    # a preference the worker already degrades gracefully, and refusing the
+    # whole request over an optional hint would be the wrong trade.
+    check_base_model_weights(svc, base)
+    if not fetch.present(svc.config, "lora", pixel_lora):
+        raise Invalid(
+            f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
+            f"Download it with:\n  {pixel_lora.download}",
+            field="base_model",
+        )
     check_vram(svc, "pixel_sheet", "model", params)
     new_id = svc.store.create(
         "pixel_sheet", source["prompt"], params, uuid.uuid4().hex[:12]

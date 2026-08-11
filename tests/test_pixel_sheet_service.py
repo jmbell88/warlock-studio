@@ -162,3 +162,30 @@ def test_a_malformed_sheet_id_never_reaches_the_filesystem(svc):
     for bad in ("../../etc/passwd", "NOTHEX"):
         with pytest.raises((NotFound, Invalid)):
             svc_sheets.create_pixel_sheet(svc, job_id, bad)
+
+
+def test_a_restyle_whose_pixel_lora_is_missing_is_refused(svc, monkeypatch):
+    """The door checked that the LoRA *fits* the base, never that it is here.
+
+    Missing, the worker's own tolerance takes over: it logs, restyles bare, and
+    writes a sidecar naming a LoRA that never loaded -- so the job finishes
+    looking like a plain img2img pass rather than pixel art, which is the
+    feature not happening rather than a plainer version of it.
+    """
+    from warlock import fetch
+
+    job_id, sheet_id = _sheet_on_disk(svc)
+    monkeypatch.setattr(fetch, "present", lambda *a, **k: False)
+    with pytest.raises(Invalid) as exc:
+        svc_sheets.create_pixel_sheet(svc, job_id, sheet_id)
+    assert "hf download" in str(exc.value)
+
+
+def test_a_restyle_whose_checkpoint_is_missing_is_refused(svc, monkeypatch):
+    from warlock import fetch
+
+    job_id, sheet_id = _sheet_on_disk(svc)
+    monkeypatch.setattr(fetch, "base_model_state", lambda *a, **k: (False, None))
+    with pytest.raises(Invalid) as exc:
+        svc_sheets.create_pixel_sheet(svc, job_id, sheet_id)
+    assert exc.value.field == "base_model"

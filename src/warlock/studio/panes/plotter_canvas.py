@@ -84,10 +84,19 @@ def _tabs(ctx: Any, state: Any) -> None:
 
     if not state.docs:
         return
-    if imgui.begin_tab_bar("plotter-tabs", imgui.TabBarFlags_.reorderable.value):
+    # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it,
+    # opening a second document adds its tab and leaves the *first* one
+    # focused, so "Open" appears to do nothing until the user notices the new
+    # tab and clicks it.
+    flags = (
+        imgui.TabBarFlags_.reorderable.value
+        | imgui.TabBarFlags_.auto_select_new_tabs.value
+    )
+    if imgui.begin_tab_bar("plotter-tabs", flags):
         for tab in list(state.docs):
-            label = tab.label if not tab.dirty else f"* {tab.label}"
-            opened, keep = imgui.begin_tab_item(label, True)
+            # imgui's own dot, not a ``"* "`` prefix -- see ``inker_canvas``.
+            item_flags = imgui.TabItemFlags_.unsaved_document.value if tab.dirty else 0
+            opened, keep = imgui.begin_tab_item(tab.label, True, item_flags)
             if opened:
                 state.activate(tab.uid)
                 imgui.end_tab_item()

@@ -11,6 +11,7 @@ import io
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -1243,6 +1244,34 @@ def test_fbx_is_derived_on_demand_through_the_blender_worker(svc, assets):
     path = svc_derive.get_file(svc, job_id, "model.fbx")
     assert path.read_bytes()[:18] == b"Kaydara FBX Binary"
     assert (job_dir / "model.fbx").exists()
+
+
+def test_a_failed_fbx_export_leaves_no_partial_file_to_serve(svc, assets, monkeypatch):
+    """Blender writing part of an FBX and then dying must not poison the name.
+
+    Existence is this artifact's freshness test -- there is no sidecar and no
+    mtime comparison -- so an unstaged export that timed out or was killed at
+    shutdown would leave a truncated FBX that every later request serves,
+    with no way for a retry to get past it.
+    """
+    from warlock import rigging
+
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x")["id"]
+    job_dir = assets / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "model.glb").write_bytes(b"glb")
+    svc.store.set_status(job_id, "done")
+
+    def run_worker(spec, **kwargs):
+        Path(spec["out_fbx"]).write_bytes(b"Kaydara FB")
+        raise rigging.BlenderError("killed")
+
+    monkeypatch.setattr(rigging, "run_worker", run_worker)
+    with pytest.raises(Failed):
+        svc_derive.get_file(svc, job_id, "model.fbx")
+
+    assert not (job_dir / "model.fbx").exists()
+    assert [p.name for p in job_dir.iterdir() if p.name.startswith(".model.fbx")] == []
 
 
 def test_fbx_is_unavailable_without_a_mesh(svc):

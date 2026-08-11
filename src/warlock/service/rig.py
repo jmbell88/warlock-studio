@@ -9,7 +9,9 @@ exactly like the STL and OBJ exports.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -139,9 +141,17 @@ def save_pose(svc: WarlockService, job_id: str, payload: dict[str, Any]) -> dict
         # the stale GLB gets cached under this id.
         with svc.convert_lock(job_id, f"pose:{pose_id}"):
             return rigging.save_pose(job_dir, pose, pose_id)
-    if len(rigging.list_poses(job_dir)) >= rigging.MAX_POSES:
-        raise Conflict(f"a job may hold at most {rigging.MAX_POSES} poses")
-    return rigging.save_pose(job_dir, pose, pose_id)
+    # The cap is a check-then-write, so the count and the write that depends on
+    # it happen under one hold -- exactly the rule the library's own cap in
+    # service/poses.py states. Lock-free, two callers saving at once both read
+    # MAX_POSES - 1 and both save, and the job ends up over its cap with no way
+    # to notice. A job-wide key rather than a per-pose one, because what is
+    # being guarded is the *set* of poses, not any one of them; it is a
+    # different lock from the f"pose:{id}" bake locks and never nests with one.
+    with svc.convert_lock(job_id, "poses"):
+        if len(rigging.list_poses(job_dir)) >= rigging.MAX_POSES:
+            raise Conflict(f"a job may hold at most {rigging.MAX_POSES} poses")
+        return rigging.save_pose(job_dir, pose, pose_id)
 
 
 def delete_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[str, Any]:
@@ -192,11 +202,9 @@ def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
     check_pose_id(pose_id)
     job_dir = svc.job_dir(job_id)
     path = rigging.pose_glb_path(job_dir, pose_id)
-    # Existence is only checked under the lock: the bake writes the served
-    # filename in place over seconds, so a lock-free exists() would let a
-    # second reader open a truncated GLB mid-export. The pose is *read* under
-    # the same lock for the same reason -- a delete landing between the read
-    # and the bake would otherwise recreate the GLB with no .json beside it.
+    # Existence is only checked under the lock, and the pose is *read* under it
+    # too -- a delete landing between the read and the bake would otherwise
+    # recreate the GLB with no .json beside it.
     with svc.convert_lock(job_id, f"pose:{pose_id}"):
         pose = rigging.read_pose(job_dir, pose_id)
         if pose is None:
@@ -204,10 +212,24 @@ def posed_model(svc: WarlockService, job_id: str, pose_id: str) -> Path:
         if not path.exists():
             if not (job_dir / "rig.glb").exists():
                 raise NotFound("job is not rigged")
+            # Baked through a staging file and renamed, like every other
+            # derivation in this codebase. Existence *is* this artifact's
+            # freshness test, so a Blender that dies part way through -- a
+            # pose_timeout, a kill-on-close at shutdown, a rig it cannot
+            # weight -- would otherwise leave a truncated GLB that is served
+            # under this pose id forever. The finally matters as much as the
+            # replace: nothing ever looks at a dotfile in a pose directory
+            # again, so a stranded one lives as long as the job.
             spec = _pose_bake_spec(job_dir, pose_id, pose)
+            tmp = path.with_name(f".{pose_id}.tmp.glb")
+            spec["out_glb"] = str(tmp)
             try:
                 rigging.run_worker(spec, timeout=svc.config.pose_timeout)
+                os.replace(tmp, path)
             except rigging.BlenderError as exc:
                 log.error("posing %s/%s failed: %s", job_id, pose_id, exc)
                 raise Failed("could not bake this pose") from exc
+            finally:
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
     return path

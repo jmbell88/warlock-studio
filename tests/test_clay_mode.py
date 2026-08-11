@@ -952,3 +952,63 @@ def test_the_camera_is_perspective_unless_something_asks_otherwise() -> None:
     from warlock.studio.viewer.camera import Camera
 
     assert Camera().orthographic is False
+
+
+# --- closing a document ------------------------------------------------------
+
+
+def test_a_clean_document_closes_without_a_question(svc) -> None:
+    """``ClayState.close`` had no caller at all: Clay could open documents and
+    never shut one, and Ctrl+Tab cycled between them with nothing on screen
+    saying there was more than one."""
+    ctx = FakeCtx(svc)
+    first = _tab(ctx)
+    second = _tab(ctx)
+    state = clay_mode.ensure(ctx)
+
+    clay_mode.close_tab(ctx, second.uid)
+
+    assert ctx.confirms.pending is None
+    assert [tab.uid for tab in state.docs] == [first.uid]
+    assert state.active_uid == first.uid
+
+
+def test_a_dirty_document_asks_first(svc) -> None:
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx, dirty=True)
+    state = clay_mode.ensure(ctx)
+
+    clay_mode.close_tab(ctx, tab.uid)
+
+    assert ctx.confirms.pending is not None
+    assert state.docs == [tab]
+
+    ctx.confirms.pending.on_confirm()
+    assert state.docs == []
+
+
+def test_a_document_being_saved_cannot_be_closed(svc) -> None:
+    """The serialise task reads the live document on a task thread. Closing it
+    out from under that read loses the file being written, not merely the edits
+    since -- which is a stronger reason than ``_MUTATING_CTRL``'s."""
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    tab.saving = True
+    state = clay_mode.ensure(ctx)
+
+    clay_mode.close_tab(ctx, tab.uid)
+
+    assert state.docs == [tab]
+    assert ctx.confirms.pending is None
+
+
+def test_ctrl_w_closes_the_active_document(svc) -> None:
+    ctx = FakeCtx(svc)
+    _tab(ctx)
+    second = _tab(ctx)
+    state = clay_mode.ensure(ctx)
+    assert state.active_uid == second.uid
+
+    clay_mode._ctrl_key(ctx, state, second, second.doc, "w", shift=False)
+
+    assert second.uid not in [tab.uid for tab in state.docs]

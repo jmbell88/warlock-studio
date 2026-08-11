@@ -397,36 +397,60 @@ def _request(payload: dict[str, Any], key: str) -> None:
             raise _ChildFailed(f"the matting worker went away: {exc}") from exc
 
         deadline = time.monotonic() + REQUEST_TIMEOUT
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _reset_child_locked()
+        # Every *named* failure below resets the child itself, because each one
+        # knows it has left the protocol mid-exchange. This catch is for the
+        # ones with no name: a cancellation or a shutdown arriving while this
+        # thread is parked in ``lines.get``. The request has been written and
+        # its answer has not been read, so the child is not merely idle -- it
+        # is one unread line ahead, and the *next* caller would take that line
+        # as its own answer and matte an image against another image's mask.
+        # Killing it is the only way back to a known state.
+        #
+        # Not a bare ``finally`` -- the analogous guard in
+        # ``rigging.run_worker`` is one because its child is one-shot, and this
+        # child is persistent by design: reaping it on the success path would
+        # pay the model load again on every image.
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _reset_child_locked()
+                    raise _ChildFailed(
+                        f"the matting worker did not answer in {REQUEST_TIMEOUT:.0f}s"
+                    )
+                try:
+                    raw = lines.get(timeout=remaining)
+                except _queue.Empty:
+                    continue
+                if raw is None:
+                    _reset_child_locked()
+                    raise _ChildFailed("the matting worker exited without answering")
+                if not raw.startswith(MARKER):
+                    # Library chatter. BiRefNet's own modelling code prints, and
+                    # so does transformers; the marker tells the two apart.
+                    log.debug("matting worker: %s", raw.rstrip())
+                    continue
+                try:
+                    resp = json.loads(raw[len(MARKER) :])
+                except ValueError as exc:
+                    _reset_child_locked()
+                    raise _ChildFailed(
+                        f"unreadable answer from the worker: {exc}"
+                    ) from exc
+                if resp.get("ok"):
+                    return
                 raise _ChildFailed(
-                    f"the matting worker did not answer in {REQUEST_TIMEOUT:.0f}s"
+                    str(resp.get("error") or "the matting worker failed"),
+                    stage=str(resp.get("stage") or "run"),
                 )
-            try:
-                raw = lines.get(timeout=remaining)
-            except _queue.Empty:
-                continue
-            if raw is None:
-                _reset_child_locked()
-                raise _ChildFailed("the matting worker exited without answering")
-            if not raw.startswith(MARKER):
-                # Library chatter. BiRefNet's own modelling code prints, and so
-                # does transformers; the marker is what tells the two apart.
-                log.debug("matting worker: %s", raw.rstrip())
-                continue
-            try:
-                resp = json.loads(raw[len(MARKER) :])
-            except ValueError as exc:
-                _reset_child_locked()
-                raise _ChildFailed(f"unreadable answer from the worker: {exc}") from exc
-            if resp.get("ok"):
-                return
-            raise _ChildFailed(
-                str(resp.get("error") or "the matting worker failed"),
-                stage=str(resp.get("stage") or "run"),
-            )
+        except _ChildFailed:
+            # Already handled: either the child was reset above, or this is the
+            # worker's own reported failure, which leaves the protocol in step
+            # and the child fit for the next request.
+            raise
+        except BaseException:
+            _reset_child_locked()
+            raise
 
 
 def _model_mask(image: PILImage, path: Path, device: str):

@@ -167,7 +167,9 @@ def test_a_row_whose_file_is_gone_is_dropped_rather_than_failing_silently(tmp_pa
 
     assert recents.paths(settings, "clay") == []
     assert landing.rows(ctx) == []
-    assert ctx.toasts and ctx.toasts[0][1] == "warning"
+    # ``warn``, not "warning": the latter is not in ``state.TOAST_LEVELS`` and
+    # fell back to a grey, non-sticky info toast. This test pinned the typo.
+    assert ctx.toasts and ctx.toasts[0][1] == "warn"
     # And it did not switch mode on the way: there was nothing to open.
     assert ctx.state.mode == "home"
 

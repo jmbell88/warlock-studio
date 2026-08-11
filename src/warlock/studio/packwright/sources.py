@@ -22,20 +22,12 @@ from typing import Any
 
 import numpy as np
 
-
-def _frozen(pixels: Any) -> np.ndarray:
-    """A private RGBA copy nothing can write through.
-
-    The same rule ``plotter.tileset`` follows and for the same reason: the UI
-    keys a texture upload on the array's identity, so an in-place edit would
-    leave the cache holding a live key over stale pixels.
-    """
-    array = np.ascontiguousarray(pixels, dtype=np.uint8)
-    if array.ndim != 3 or array.shape[2] != 4:
-        raise ValueError("a sprite must be RGBA, shaped (h, w, 4)")
-    array = array.copy()
-    array.setflags(write=False)
-    return array
+# Shared rather than copied. This was a byte-identical second spelling of
+# ``plotter.tileset``'s helper, differing only in the noun in its error
+# message, which is now a parameter. The edge is already pinned in both
+# directions -- ``tsxout`` imports the same module for the .tsx writer -- so
+# this adds no dependency the package did not already have.
+from ..plotter.tileset import frozen_rgba
 
 
 @dataclass(frozen=True)
@@ -47,7 +39,7 @@ class Sprite:
     pixels: np.ndarray
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "pixels", _frozen(self.pixels))
+        object.__setattr__(self, "pixels", frozen_rgba(self.pixels, "a sprite"))
         if not self.key:
             raise ValueError("a sprite needs a key")
 

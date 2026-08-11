@@ -238,7 +238,49 @@ def check_vram(svc: Any, kind: str, stage: str, params: dict[str, Any]) -> None:
         return
     need = vram.estimate(kind, stage, params, exclusive=plan.exclusive)
     if not plan.fits(need):
+        # The one refusal in this module with no ``field=``, and deliberately.
+        # A field points the UI at the control to change, and this refusal has
+        # no single one: ``vram.remedies`` offers whichever of the ControlNet
+        # toggle, the IP-Adapter toggle, the resolution preset and an
+        # environment variable actually apply to *this* job, usually more than
+        # one and sometimes only the env var, which is not a control at all.
+        # Naming any one of them would put the error beside a widget that is
+        # not the answer while the sentence beside it lists three that are.
         raise Invalid(vram.shortfall_message(need, plan, params))
+
+
+def check_base_model_weights(svc: Any, base: Any) -> None:
+    """Refuse a base model that is not on this host, by name and with its
+    ``hf download`` line.
+
+    Its own function because three doors need exactly this refusal and they do
+    not agree on how the model was chosen: a text job reads it off ``params``, a
+    sprite synthesis and a pixel sheet pin theirs to a constant. Sharing the
+    check rather than the call site is what keeps the *sentence* one thing --
+    the field is ``base_model`` at every door, which is the name of the control
+    the UI puts the error beside.
+
+    ``base`` is a ``models.BaseModel``; ``None`` is accepted and is a no-op, for
+    the text door's sake, where an unknown key means the registry never claimed
+    to know these weights and there is nothing to say about them.
+    """
+    if base is None:
+        return
+    from .. import fetch
+
+    ok, missing_lora = fetch.base_model_state(svc.config, base)
+    if ok:
+        return
+    what = (
+        f"its step-distillation LoRA is missing at {missing_lora}"
+        if missing_lora is not None
+        else "its weights are not downloaded"
+    )
+    raise Invalid(
+        f"The image model {base.label!r} cannot run: {what}. "
+        f"Download it with:\n  {base.download}",
+        field="base_model",
+    )
 
 
 def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
@@ -264,20 +306,7 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
         return
     from .. import fetch, models
 
-    base = models.BASE_MODELS.get(str(params.get("base_model") or ""))
-    if base is not None:
-        ok, missing_lora = fetch.base_model_state(svc.config, base)
-        if not ok:
-            what = (
-                f"its step-distillation LoRA is missing at {missing_lora}"
-                if missing_lora is not None
-                else "its weights are not downloaded"
-            )
-            raise Invalid(
-                f"The image model {base.label!r} cannot run: {what}. "
-                f"Download it with:\n  {base.download}",
-                field="base_model",
-            )
+    check_base_model_weights(svc, models.BASE_MODELS.get(str(params.get("base_model") or "")))
     # The three optional selections, each refused the same way. A style LoRA is
     # the one that would otherwise fail *silently* rather than loudly --
     # ``_load_loras`` skips a missing style adapter -- so the job would finish,

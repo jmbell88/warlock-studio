@@ -29,7 +29,7 @@ def draw(ctx: Any) -> None:
         return
 
     _banner(state, viewer)
-    _joint(viewer)
+    _joint(ctx, viewer)
     _root(viewer)
     _save(ctx, viewer)
 
@@ -44,14 +44,21 @@ def _banner(state: Any, viewer: Any) -> None:
     widgets.text_colored(theme.ACCENT, label)
 
 
-def _joint(viewer: Any) -> None:
+def _joint(ctx: Any, viewer: Any) -> None:
     selected = viewer.selected_bone
     widgets.muted(selected or "Click a joint to rotate it.")
-    if widgets.disabled_button("Reset joint", selected is not None):
+    if widgets.disabled_button(
+        "Reset joint", selected is not None, reason="Click a joint first."
+    ):
         viewer.reset_bone()
     imgui.same_line()
+    # Behind the guard, exactly as ``poser_mode.new_pose`` is -- and it is the
+    # same act: both put every joint back to rest, so both throw away whatever
+    # was being authored. Bare, this was the one control in the mode that could
+    # discard an unsaved pose with no way back, in the mode whose whole output
+    # is the shared library every asset poses from.
     if imgui.button("Reset all"):
-        viewer.reset_all()
+        poser_mode.guard(ctx, "reset every joint", viewer.reset_all)
     if viewer.editor.mirror_pairs:
         # Hidden for a serpent or a fish, the pose_panel rule: a skeleton with
         # no mirror pairs has nothing to mirror.

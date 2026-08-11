@@ -726,6 +726,16 @@ def record(ctx: Any, grade: int, tags: Any = ()) -> None:
     unit["tags"] = tags
     _recount(state)
     refresh_findings(ctx)
+    # Said *before* the advance, and about the unit that is about to leave the
+    # screen. The sidebar's "Recorded:" line describes whatever is on screen
+    # now, so after the jump it is answering about the next mesh -- which reads
+    # like the verdict landed on the wrong one. It also names the way back,
+    # because there is no undo here and the route (Left, then grade again,
+    # which overwrites) is not guessable.
+    filed = grade_text(grade) or str(grade)
+    if tags:
+        filed += " - " + ", ".join(tags)
+    ctx.toast(f"Filed {filed} for {label(state, unit)}. Left arrow to re-grade it.")
     advance(state, unverdicted_only=True)
 
 
@@ -1120,6 +1130,18 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
         worst = audit.get("worst")
         if isinstance(worst, (int, float)):
             lines.append(f"see-through at worst view: {float(worst) * 100:.1f}%")
+            # The same caveat the inspector carries on the same number, and it
+            # matters more here: Review is where the corpus judgements are
+            # filed, so an unqualified low reading beside a mesh is a figure a
+            # reviewer will read as "no holes -- good" while grading. A high
+            # reading is real evidence and needs no caveat; a low one is what a
+            # solid, featureless slab measures. Imported inside the function
+            # because ``widgets`` pulls in imgui and nothing else in this
+            # module needs it.
+            from .widgets import AUDIT_UNINFORMATIVE
+
+            if float(worst) < AUDIT_UNINFORMATIVE:
+                lines.append("(a solid, featureless mesh scores this too)")
     return lines
 
 

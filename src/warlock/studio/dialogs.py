@@ -111,6 +111,30 @@ class Confirm:
     _focused: bool = field(default=False, repr=False)
 
 
+def ask_delete(ctx: Any, *, title: str, message: str, on_confirm: Any) -> None:
+    """Ask before something permanent goes, in the one wording.
+
+    ``Confirm``'s own defaults are the *unsaved-work* pair -- "Discard" and
+    "Keep editing" -- which is a different question from this one: a delete is
+    not about abandoning an edit, it is about destroying a thing that is
+    already saved. The three panes that ask it (a pose, a rendered sheet, a
+    sweep) each spelled out the same two labels beside their own message, which
+    is exactly the shape a fourth spelling grows out of. What stays per caller
+    is the message, because the only interesting part of a delete confirm is
+    what *else* goes with it -- the baked GLB, the restyled copies, the meshes
+    -- and that is never the same sentence twice.
+    """
+    ctx.confirms.ask(
+        Confirm(
+            title=title,
+            message=message,
+            confirm_label="Delete",
+            cancel_label="Keep",
+            on_confirm=on_confirm,
+        )
+    )
+
+
 def _enter_pressed() -> bool:
     """Enter or numpad Enter, as a *press* rather than a repeat.
 

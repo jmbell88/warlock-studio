@@ -161,8 +161,10 @@ def draw(ctx: Any) -> None:
                 chosen = (kind, item)
     imgui.end_child()
 
-    if chosen is not None:
-        _run(ctx, chosen)
+    if chosen is not None and _run(ctx, chosen):
+        # Only on a command that actually ran. Enter on a greyed row used to
+        # close the palette and do nothing, which is indistinguishable from the
+        # command having run and failed silently.
         imgui.close_current_popup()
         close(ctx)
     imgui.end_popup()
@@ -176,24 +178,40 @@ def _row(ctx: Any, kind: str, item: Any, current: bool) -> bool:
         label = item.get("name") or item.get("prompt") or item["id"]
         hint = item["id"]
         enabled = True
+        why = ""
         row_id = f"asset/{item['id']}"
     else:
         label = item.label
         hint = item.hint
         enabled = item.enabled(ctx)
+        why = item.why
         row_id = f"cmd/{item.key}"
     if current:
         imgui.set_scroll_here_y(0.5)
     imgui.begin_disabled(not enabled)
     clicked = imgui.selectable(f"{label}##{row_id}", current)[0]
     imgui.end_disabled()
+    # The row's own rectangle, read while ``LastItemData`` still describes the
+    # row. It has to be taken before the tooltip below: SetTooltip renders its
+    # text as an item of its own, so after that call these two getters answer
+    # about the *tooltip* and the hint would be painted into it -- which is
+    # every disabled row that carries a shortcut, at the moment it is hovered
+    # and explaining itself.
+    low = imgui.get_item_rect_min()
+    high = imgui.get_item_rect_max()
+    # ``allow_when_disabled`` for ``widgets.disabled_button``'s reason: imgui
+    # swallows hover on a disabled item, which is the one state whose
+    # explanation is worth having. This is the module docstring's promise --
+    # a greyed row that says where to go -- finally drawn.
+    if why and not enabled and imgui.is_item_hovered(
+        imgui.HoveredFlags_.allow_when_disabled.value
+    ):
+        imgui.set_tooltip(why)
     if hint:
         # Painted into the row rather than laid out beside it: a selectable is
         # full-width, so ``same_line`` after one leaves no room to right-align
         # into. The shortcut is a footnote and a column of them down the right
         # edge is what makes them skimmable.
-        low = imgui.get_item_rect_min()
-        high = imgui.get_item_rect_max()
         size = imgui.calc_text_size(hint)
         imgui.get_window_draw_list().add_text(
             (high.x - size.x - sp(6), low.y + (high.y - low.y - size.y) * 0.5),
@@ -203,12 +221,21 @@ def _row(ctx: Any, kind: str, item: Any, current: bool) -> bool:
     return clicked and enabled
 
 
-def _run(ctx: Any, chosen: tuple[str, Any]) -> None:
+def _run(ctx: Any, chosen: tuple[str, Any]) -> bool:
+    """Run what Enter or a click landed on. -> whether anything ran.
+
+    The return value is what keeps the palette open on a refusal: a disabled
+    row used to swallow Enter and close, so the user was left looking at the
+    app with no idea whether the command had run.
+    """
     kind, item = chosen
     if kind == "asset":
         from . import library
 
         library.run_action(ctx, item, "open")
-        return
+        return True
     if item.enabled(ctx):
         item.run(ctx)
+        return True
+    ctx.toast(item.why or f"{item.label} is not available here.", "warn")
+    return False

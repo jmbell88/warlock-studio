@@ -22,6 +22,7 @@ from ..pipelines import sheet as sheetlib
 from . import dialogs, filetypes, inker_state, recents
 from .inker import animation
 from .inker_state import InkerDoc, InkerState
+from .state import set_mode
 
 log = logging.getLogger(__name__)
 
@@ -222,7 +223,7 @@ def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> N
     other precisely because neither owns a file.
     """
     ensure(ctx)
-    ctx.state.mode = "inker"
+    set_mode(ctx.state, "inker")
     ctx.submit(
         f"inker-open:sprite:{draft_id}:{candidate}",
         _load_sprite_draft,
@@ -306,9 +307,9 @@ def open_job_reference(ctx: Any, job: Any, *, matte: bool = False) -> None:
     existing = state.find_job(job_id)
     if existing is not None:
         state.activate(existing.uid)
-        ctx.state.mode = "inker"
+        set_mode(ctx.state, "inker")
         return
-    ctx.state.mode = "inker"
+    set_mode(ctx.state, "inker")
     ctx.submit(f"inker-open:{job_id}", _load_job, ctx.svc, job_id, matte=matte)
 
 
@@ -523,6 +524,7 @@ def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
     from .inker import gifout, sheetout
 
     frames, durations, _tags, _layout = sheetout.snapshot(doc)
+    palette = list(doc.palette) if doc.palette else None
 
     def run() -> dict[str, Any] | None:
         dest = dialogs.save_file("Export animated GIF", f"{suggested}.gif", GIF_FILTER)
@@ -531,7 +533,10 @@ def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        gifout.write_gif(dest, frames, durations)
+        # The document's own table when it has one, so an indexed clip exports
+        # the colours that were authored rather than a per-frame quantise of
+        # them. Read on the frame thread above with the frames, not here.
+        gifout.write_gif(dest, frames, durations, palette=palette)
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
@@ -774,7 +779,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 has_original=bool(result.get("has_original")),
                 saved_head=result.get("saved_head"),
             )
-            ctx.state.mode = "inker"
+            set_mode(ctx.state, "inker")
         return
 
     if name == "inker-recover":
@@ -792,7 +797,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
             # until one of those happens the copy has to stay.
             tab.saved_head = -1
             tab.autosave_name = Path(result["autosave"]).name
-            ctx.state.mode = "inker"
+            set_mode(ctx.state, "inker")
         return
 
     if name == "inker-autosave":
@@ -808,6 +813,16 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 state.add_swatch(colour)
             persist(ctx)
             ctx.toast(f"Added {len(result)} colour(s).", "success")
+        return
+
+    if name == "inker-index":
+        # The picker came back with a table for a *document*. Resolved through
+        # the uid rather than through ``active``: a native picker is unbounded,
+        # and the user may well have switched tabs while it was up -- indexing
+        # whichever document happens to be in front now would rewrite the wrong
+        # file's pixels.
+        if result:
+            index_to(ctx, state.get(key.split(":", 1)[1]), result)
         return
 
     if name in ("inker-send", "inker-promote"):
@@ -1323,6 +1338,81 @@ def export_palette(ctx: Any) -> None:
 
     def run() -> None:
         path = dialogs.save_file("Export the palette", "palette.gpl", GPL_FILTER)
+        if path is not None:
+            path.with_suffix(".gpl").write_text(text, encoding="utf-8")
+
+    ctx.submit("inker-palette-export", run)
+
+
+# --- indexed colour -----------------------------------------------------------
+#
+# The palette belongs to the *document* -- it is saved with the file and it is
+# what every write snaps to -- so everything here takes a tab and goes through
+# ``Document``. The swatch row above is a different thing and stays one: a
+# session's favourite colours, persisted in settings, no bearing on any file.
+#
+# All of these run **inline on the frame thread**, gated on ``tab.busy``, which
+# is exactly what the canvas geometry ops in ``panes/inker_bridge`` do and for
+# the same reason: they rebind whole layer planes, so one landing mid-save
+# writes an archive whose parts disagree. The cost is the same class as a
+# rotate, and ``indexed.snap`` works over the region's *distinct* colours
+# rather than its pixels, which is what keeps a 40-frame clip inside a frame.
+
+
+def index_to(ctx: Any, tab: Any, colours: Any) -> bool:
+    """Make *tab* indexed against *colours*, or plain RGBA with ``None``."""
+    if tab is None or tab.busy:
+        return False
+    state = ensure(ctx)
+    if not tab.doc.set_palette(colours):
+        return False
+    state.palette_slot = 0
+    state.palette_usage = None
+    if colours:
+        ctx.toast(f"Indexed to {len(list(colours))} colour(s).", "success")
+    else:
+        # Worth saying, because nothing on the canvas changes: leaving indexed
+        # mode lifts the constraint and repaints nothing.
+        ctx.toast("Indexed colour off. The pixels are unchanged.")
+    return True
+
+
+def import_document_palette(ctx: Any) -> None:
+    """Open a ``.gpl`` and index the active document to it.
+
+    A second task key from ``import_palette``'s, because they are different
+    acts on different subjects -- one adds to the session's swatch row, the
+    other rewrites every pixel of a file -- and sharing a key would let the
+    landing handler guess wrong about which one came back.
+    """
+    from .inker import gpl
+
+    ensure(ctx)
+    tab = active(ctx)
+    if tab is None or tab.busy:
+        return
+
+    def run() -> list[tuple[int, int, int, int]] | None:
+        path = dialogs.open_file("Index to a palette", GPL_FILTER)
+        if path is None:
+            return None
+        return gpl.parse(path.read_text(encoding="utf-8", errors="replace"))
+
+    ctx.submit(f"inker-index:{tab.uid}", run)
+
+
+def export_document_palette(ctx: Any) -> None:
+    """Write the *document's* table out as a ``.gpl``."""
+    tab = active(ctx)
+    if tab is None or not tab.doc.palette:
+        return
+    from .inker import gpl
+
+    text = gpl.dumps(list(tab.doc.palette))
+    name = f"{tab.path.stem}.gpl" if tab.path else "palette.gpl"
+
+    def run() -> None:
+        path = dialogs.save_file("Export the document palette", name, GPL_FILTER)
         if path is not None:
             path.with_suffix(".gpl").write_text(text, encoding="utf-8")
 

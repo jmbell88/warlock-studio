@@ -485,6 +485,20 @@ class InkerState:
         default_factory=lambda: list(DEFAULT_SWATCHES)
     )
 
+    # -- indexed colour, all of it view state ------------------------------
+    #
+    # The palette itself lives on the *document* (``Document.palette``), which
+    # is the only place it can live: it is saved with the file and it decides
+    # what every write snaps to. What is here is which slot the user has
+    # selected and the last usage count they asked for -- neither is picture
+    # data, and neither may push an undo step.
+    palette_slot: int = 0
+    # ``(document rev the count was taken at, per-slot counts)``. Asked for
+    # rather than recomputed: counting is a walk over every pixel of every cel,
+    # so doing it per frame would cost a 40-frame clip's worth of scanning
+    # sixty times a second to keep a number that changes on one dab.
+    palette_usage: tuple[int, list[int]] | None = None
+
     # Drag state, decided on press because several tools start the same way.
     drag_kind: str = ""  # "" | paint | shape | marquee | lasso | move | gradient | pan
     drag_anchor: tuple[float, float] | None = None

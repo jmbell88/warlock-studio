@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from .. import doctor, guidance, models
+from .. import doctor, fetch, guidance, models
 from .core import WarlockService
 from .errors import Invalid, NotFound, invalid_from
 from .validation import MAX_PROMPT
@@ -145,11 +145,12 @@ def prompt_preview(
     # Presence is the only question left here. Fitness needs no test: normalize
     # ran above in this same function and refuses a cross-family pair, so a
     # style that reaches this line is one the chosen base can take.
-    trigger = (
-        style.trigger
-        if style and (svc.config.t2i_model_root / "loras" / style.filename).exists()
-        else ""
-    )
+    # Through ``fetch.present`` rather than the path expression it wraps. Every
+    # presence probe in the codebase lives in ``fetch``, and this was the one
+    # that had reached for ``loras / filename`` itself -- so a change to where
+    # or how a LoRA is stored would have moved every check but this one, and the
+    # preview would have gone on promising a trigger the run then dropped.
+    trigger = style.trigger if style and fetch.present(svc.config, "lora", style) else ""
     if len(prompt) > MAX_PROMPT:
         raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
     positive = prompt_pipeline.build(prompt, params, trigger=trigger, tile=tile)

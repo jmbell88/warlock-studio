@@ -20,7 +20,7 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, jobs_cache, motion, theme, tokens, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action
+from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action, set_mode
 from ..tokens import sp
 
 log = logging.getLogger(__name__)
@@ -957,7 +957,7 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     # given it, because it is the params allowlist and must stay one.
     form["output"] = "tile" if job.get("stage") == "tile" else "reference"
     ctx.state.form_2d = form
-    ctx.state.mode = "2d"
+    set_mode(ctx.state, "2d")
     ctx.toast("Settings copied to the form.")
 
 
@@ -995,14 +995,18 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         ctx.submit(f"retry:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode=mode)
     elif action == "promote":
         ctx.state.source_job = job_id
-        ctx.state.mode = "3d"
+        set_mode(ctx.state, "3d")
     elif action == "rig":
         ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id, template=_skeleton(ctx))
     elif action == "open":
         select(ctx, job_id)
         # A job that stops at an image opens in the pane that made it. A tile
         # has no mesh at all, so opening it in 3D would show an empty viewport.
-        ctx.state.mode = "2d" if job.get("stage") in ("reference", "tile") else "3d"
+        # Through ``set_mode`` and not a bare assignment, which is what the
+        # landing page's identical "open this asset" already does: the two are
+        # the same act reached from two surfaces, and only one of them used to
+        # leave Esc a way back to where the user came from.
+        set_mode(ctx.state, "2d" if job.get("stage") in ("reference", "tile") else "3d")
 
 
 def compare(ctx: Any, job_id: str) -> None:

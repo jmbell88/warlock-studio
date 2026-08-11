@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from warlock.pipelines import sheet as sheetlib
+from warlock.studio import inker
 from warlock.studio.inker import sheetout
 from warlock.studio.inker.animation import Tag
 from warlock.studio.inker.document import Document
@@ -202,80 +203,15 @@ def test_the_sidecar_carries_the_animation_and_the_real_frame_size():
     assert all(cell["w"] == 4 and cell["h"] == 4 for cell in meta["cells"])
 
 
-# --- the purity rule this module is the first exception to -------------------
+# --- the one pipelines reach, which is genuinely about this module -----------
+#
+# The rest of the package's import pin moved to ``test_inker_imports.py`` on
+# 2026-08-11: it is a fact about ``studio/inker/`` and not about sprite sheets,
+# and living here is how it came to carry three of the seven checks its three
+# sibling package pins carry. What stays is the half whose subject is this file.
 
 
-ENGINE = Path(__file__).resolve().parents[2] / "src/warlock/studio/inker"
-PACKAGE = "warlock.studio.inker"
-
-#: Everything under ``studio/inker/`` that reaches outside the package, resolved
-#: to absolute module names. Pinned as an exact set rather than as a predicate,
-#: so a *new* outward import is a failing test and a deliberate decision rather
-#: than something that turns up in a review three months later.
-OUTWARD_IMPORTS = {
-    ("anim_edits.py", "warlock.studio.undo"),
-    ("composite.py", "warlock.native"),
-    ("selection.py", "warlock.native"),
-    ("sheetout.py", "warlock.pipelines"),
-    ("undo.py", "warlock.studio.undo"),
-}
-
-BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}
-
-
-def _outward(path: Path) -> set[str]:
-    """Absolute module names this file imports from outside its own package."""
-    found: set[str] = set()
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 0:
-                found.add(node.module or "")
-            elif node.level >= 2:
-                # Level 1 is a sibling inside the package. Level 2+ climbs out
-                # of it, which is exactly what this is measuring.
-                base = PACKAGE.rsplit(".", node.level - 1)[0]
-                if node.module:
-                    found.add(f"{base}.{node.module}")
-                else:
-                    # ``from ... import native``: with no module part the names
-                    # are themselves modules, so they are the thing being
-                    # reached for and the package alone would say nothing.
-                    found.update(f"{base}.{alias.name}" for alias in node.names)
-    return found
-
-
-def test_the_engine_never_imports_a_window():
-    """``studio/inker/`` stays headless, which is what makes every rule it has
-    about pixels assertable in a test like this one. The rule has been true
-    since the package was written and was held by a docstring, which is not a
-    test."""
-    for path in sorted(ENGINE.glob("*.py")):
-        roots = {name.split(".")[0] for name in _outward(path)}
-        assert not (roots & BANNED_ROOTS), f"{path.name} imports {roots & BANNED_ROOTS}"
-
-
-def test_the_engine_never_imports_the_service_layer():
-    for path in sorted(ENGINE.glob("*.py")):
-        for name in _outward(path):
-            assert "warlock.service" not in name, f"{path.name} imports {name}"
-
-
-def test_the_only_outward_imports_are_the_ones_written_down():
-    """``sheetout`` is the newest of these and the one with an argument
-    attached: it reaches for the *authority* on the sprite-sheet format, so
-    ``version: 1`` cannot come to mean two subtly different documents. The
-    others predate it -- the shared undo engine and the native kernel loader,
-    both of which are as headless as this package is."""
-    found = {
-        (path.name, name)
-        for path in sorted(ENGINE.glob("*.py"))
-        for name in _outward(path)
-        if name.split(".")[0] == "warlock"
-    }
-    assert found == OUTWARD_IMPORTS
+ENGINE = Path(inker.__file__).parent
 
 
 def test_sheetout_reaches_for_the_format_and_nothing_else_in_pipelines():

@@ -21,6 +21,7 @@ rather than enforced.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -58,10 +59,6 @@ def list_library(svc: WarlockService, template: str | None = None) -> dict[str, 
     return {"poses": poselib.list_records(svc.config, template)}
 
 
-def read_library_pose(svc: WarlockService, pose_id: str) -> dict[str, Any]:
-    return _record_or_not_found(svc, pose_id)
-
-
 def create_library_pose(svc: WarlockService, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         record = poselib.validate_record(payload)
@@ -79,23 +76,29 @@ def update_library_pose(
     """Overwrite a pose in place. The template is immutable: a pose's bones
     are meaningless on any other skeleton, so 'changing' it is authoring a new
     pose, which is what duplicate is for."""
-    existing = _record_or_not_found(svc, pose_id)
-    asked = payload.get("template")
-    if asked is not None and str(asked) != existing["template"]:
-        raise Invalid("a pose's skeleton cannot be changed", field="template")
-    merged = {
-        "template": existing["template"],
-        "name": payload.get("name", existing["name"]),
-        "bones": payload.get("bones", existing["bones"]),
-        "root_translation": payload.get(
-            "root_translation", existing.get("root_translation")
-        ),
-    }
-    try:
-        record = poselib.validate_record(merged)
-    except ValueError as exc:
-        raise invalid_from(exc, "That pose cannot be saved") from exc
+    # The whole read-modify-write is one hold, not just the write. A merge is
+    # only meaningful against the record it merged from: reading outside the
+    # lock lets a concurrent edit land between the read and the save, and
+    # because the save writes the *whole* record, the fields this caller did
+    # not touch are silently rolled back to what they were when it read. That
+    # is the same rule merge_params follows in the job store.
     with svc.convert_lock("poser", "store"):
+        existing = _record_or_not_found(svc, pose_id)
+        asked = payload.get("template")
+        if asked is not None and str(asked) != existing["template"]:
+            raise Invalid("a pose's skeleton cannot be changed", field="template")
+        merged = {
+            "template": existing["template"],
+            "name": payload.get("name", existing["name"]),
+            "bones": payload.get("bones", existing["bones"]),
+            "root_translation": payload.get(
+                "root_translation", existing.get("root_translation")
+            ),
+        }
+        try:
+            record = poselib.validate_record(merged)
+        except ValueError as exc:
+            raise invalid_from(exc, "That pose cannot be saved") from exc
         _check_name_free(svc, record["template"], record["name"], exclude=pose_id)
         return poselib.save_record(svc.config, record, pose_id)
 
@@ -107,8 +110,12 @@ def rename_library_pose(svc: WarlockService, pose_id: str, name: str) -> dict[st
 def duplicate_library_pose(
     svc: WarlockService, pose_id: str, name: str | None = None
 ) -> dict[str, Any]:
-    source = _record_or_not_found(svc, pose_id)
+    # Read inside the hold, for update_library_pose's reason: the copy is a
+    # function of the record it was taken from, and a delete or an edit landing
+    # between the read and the save would duplicate a pose that no longer
+    # exists in that form.
     with svc.convert_lock("poser", "store"):
+        source = _record_or_not_found(svc, pose_id)
         if name is None:
             taken = [
                 str(r.get("name", ""))
@@ -224,9 +231,18 @@ def template_preview(svc: WarlockService, template: str) -> Path:
         spec = rigging.armature_spec(key, tmp, directory)
         try:
             rigging.run_worker(spec, timeout=svc.config.pose_timeout)
+            os.replace(tmp, path)
         except rigging.BlenderError as exc:
             log.error("building the %s pose preview failed: %s", key, exc)
             raise Failed("could not build the pose preview") from exc
-        os.replace(tmp, path)
+        finally:
+            # A Blender that died part way through leaves its staging GLB
+            # behind, and this directory is never swept: previews are keyed by
+            # template, so a failed build for a template that is then fixed
+            # would strand one dotfile per attempt for the life of the install.
+            # Inside the replace's try, not after it, so a failed rename is
+            # cleaned up too.
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         poselib.write_preview_sidecar(svc.config, key, check.detail)
     return path

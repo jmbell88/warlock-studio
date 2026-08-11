@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker_mode, widgets
+from .. import inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -72,6 +72,140 @@ def draw(ctx: Any) -> None:
     _swatches(ctx, state)
     imgui.dummy((0, 4))
     _palette_files(ctx, state)
+    imgui.dummy((0, 6))
+    _indexed(ctx, state)
+
+
+# --- indexed colour ---------------------------------------------------------
+
+
+def _indexed(ctx: Any, state: Any) -> None:
+    """The document's own colour table, and what can be done to it.
+
+    Below the swatch row and deliberately separate from it: a swatch is a
+    colour you keep reaching for this session, and a palette *slot* is a colour
+    this file is made of. The two look alike and behave nothing alike -- adding
+    a swatch changes no pixel, and editing a slot repaints every frame.
+    """
+    tab = inker_mode.active(ctx)
+    if tab is None:
+        return
+    doc = tab.doc
+    widgets.section("palette")
+    widgets.help_marker(
+        "Indexed colour constrains every write to this table: a stroke, a fill "
+        "or a filter lands on the nearest colour in it. Alpha is untouched, so "
+        "a soft brush still fades -- it just bands. Editing a slot repaints "
+        "every pixel painted in it, across every layer and frame, as one undo."
+    )
+    # ``busy`` for ``inker_bridge._canvas_ops``'s reason: everything below
+    # rebinds whole layer planes, and one landing mid-save writes an archive
+    # whose parts disagree about the document.
+    imgui.begin_disabled(tab.busy)
+    if not doc.palette:
+        _not_indexed(ctx, state, tab)
+    else:
+        _slots(ctx, state, tab)
+    imgui.end_disabled()
+
+
+def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
+    widgets.muted("Not indexed - any colour is allowed.")
+    if widgets.disabled_button(
+        "Index to the swatches",
+        bool(state.swatches),
+        reason="The swatch row above is empty.",
+    ):
+        inker_mode.index_to(ctx, tab, list(state.swatches))
+    if imgui.button("Index to a .gpl..."):
+        inker_mode.import_document_palette(ctx)
+
+
+def _slots(ctx: Any, state: Any, tab: Any) -> None:
+    doc = tab.doc
+    palette = list(doc.palette)
+    state.palette_slot = max(0, min(state.palette_slot, len(palette) - 1))
+    counts = _usage(state, doc, len(palette))
+
+    avail = imgui.get_content_region_avail().x
+    gap = imgui.get_style().item_spacing.x
+    side = sp(SWATCH)
+    per_row = max(1, int((avail + gap) // (side + gap)))
+    for index, colour in enumerate(palette):
+        imgui.push_id(f"slot{index}")
+        chosen = index == state.palette_slot
+        if chosen:
+            # The selected slot is outlined rather than merely remembered: two
+            # of these are routinely the same colour at a glance, and every
+            # button below acts on this one.
+            imgui.push_style_color(imgui.Col_.border.value, imgui.ImVec4(*theme.rgba(theme.ACCENT)))
+            imgui.push_style_var(imgui.StyleVar_.frame_border_size.value, sp(2.0))
+        if imgui.color_button("##slot", _vec(colour), 0, (side, side)):
+            state.palette_slot = index
+            # Painting with it as well as selecting it: the reason to click a
+            # palette slot is almost always to use it.
+            state.fg = colour
+        if chosen:
+            imgui.pop_style_var()
+            imgui.pop_style_color()
+        if imgui.is_item_hovered():
+            used = "" if counts is None else f"  -  {counts[index]} px"
+            imgui.set_tooltip(f"{colour}{used}")
+        imgui.pop_id()
+        if index % per_row != per_row - 1:
+            imgui.same_line()
+    imgui.new_line()
+
+    slot = state.palette_slot
+    changed, value = imgui.color_edit4("Slot", _vec(palette[slot]), FLAGS)
+    if changed and doc.recolour_slot(slot, _to_rgba(value)):
+        state.palette_usage = None
+    if imgui.button("+ from colour") and doc.add_slot(state.fg):
+        state.palette_slot = len(doc.palette) - 1
+        state.palette_usage = None
+    imgui.same_line()
+    if widgets.disabled_button(
+        "Remove",
+        len(palette) > 1,
+        reason="An indexed document keeps at least one colour.",
+        tooltip="Pixels painted in it merge into the nearest remaining colour.",
+    ) and doc.remove_slot(slot):
+        state.palette_usage = None
+    if widgets.disabled_button("<", slot > 0, reason="Already first."):
+        doc.move_slot(slot, slot - 1)
+        state.palette_slot = slot - 1
+    imgui.same_line()
+    if widgets.disabled_button(">", slot < len(palette) - 1, reason="Already last."):
+        doc.move_slot(slot, slot + 1)
+        state.palette_slot = slot + 1
+    imgui.same_line()
+    widgets.muted(f"{slot + 1} of {len(palette)}")
+
+    if imgui.small_button("Count usage"):
+        state.palette_usage = (doc.rev, doc.palette_usage())
+    imgui.same_line()
+    if imgui.small_button("Export .gpl"):
+        inker_mode.export_document_palette(ctx)
+    imgui.same_line()
+    if imgui.small_button("Not indexed"):
+        inker_mode.index_to(ctx, tab, None)
+
+
+def _usage(state: Any, doc: Any, slots: int) -> list[int] | None:
+    """The last usage count the user asked for, or None.
+
+    Asked for rather than recomputed, and dropped the moment the document
+    moves: counting walks every pixel of every cel, so a live figure would cost
+    a whole clip's worth of scanning per frame to keep a number that changes on
+    one dab. A stale count is worse than no count -- "0 px, safe to delete" is
+    the one thing it must never say wrongly -- so it is discarded rather than
+    shown greyed.
+    """
+    cached = state.palette_usage
+    if cached is None or cached[0] != doc.rev or len(cached[1]) != slots:
+        state.palette_usage = None
+        return None
+    return cached[1]
 
 
 def _palette_files(ctx: Any, state: Any) -> None:

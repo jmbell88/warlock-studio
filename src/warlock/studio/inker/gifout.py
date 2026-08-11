@@ -30,6 +30,17 @@ would turn a 15 ms frame into 10 ms and a whole clip 33% fast.
 **Frame one's palette is not every frame's palette.** Each frame is quantised
 independently, which is what keeps a colour appearing halfway through a clip
 from being mapped onto the nearest colour of frame one.
+
+That last paragraph is about an *adaptive* quantise, and it is exactly what an
+indexed document does not want: the whole point of authoring against a palette
+is that the file carries the table you chose. So ``write_gif`` takes an
+optional ``palette``, and with one it skips the quantiser entirely -- every
+frame gets that table, in that order, and a colour is written to the slot the
+user put it in rather than to whichever slot a per-frame histogram happened to
+give it. The pixels already sit exactly on those colours (``indexed.snap`` put
+them there as they were painted), so this is a lookup rather than an
+approximation, and the per-frame drift the paragraph above worries about cannot
+arise.
 """
 
 from __future__ import annotations
@@ -39,7 +50,15 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["ALPHA_THRESHOLD", "GIF_TICK_MS", "TRANSPARENT_INDEX", "quantise", "write_gif"]
+__all__ = [
+    "ALPHA_THRESHOLD",
+    "GIF_TICK_MS",
+    "MAX_PALETTE",
+    "TRANSPARENT_INDEX",
+    "map_to_palette",
+    "quantise",
+    "write_gif",
+]
 
 #: The alpha at and above which a pixel is drawn at all. Halfway, because the
 #: format offers no other answer: the choice is which side of the fence a
@@ -54,6 +73,12 @@ TRANSPARENT_INDEX = 255
 
 #: The resolution of a GIF's own clock, in milliseconds.
 GIF_TICK_MS = 10
+
+#: How many document colours a GIF can carry. ``TRANSPARENT_INDEX`` takes the
+#: 256th slot, so a palette longer than this cannot be written verbatim and the
+#: caller falls back to the adaptive quantiser rather than silently truncating
+#: the table -- a dropped swatch is pixels changing colour in the export.
+MAX_PALETTE = TRANSPARENT_INDEX
 
 
 def quantise(frame: np.ndarray) -> Any:
@@ -83,6 +108,47 @@ def quantise(frame: np.ndarray) -> Any:
         rgba.close()
 
 
+def map_to_palette(frame: np.ndarray, palette: Sequence[Any]) -> Any:
+    """One RGBA plane as a palette image using *palette* verbatim.
+
+    The indexed path. Every pixel is looked up in the table rather than
+    quantised against a histogram, so the exported colour table is the authored
+    one and slot *n* means the same colour in every frame of the clip.
+
+    ``nearest`` rather than an exact match even though the document is snapped:
+    a frame handed here has been *flattened*, and flattening composites layer
+    opacities and blend modes, which can land a pixel between two swatches. The
+    nearest one is the only answer that keeps the export a picture of the
+    document.
+    """
+    from PIL import Image
+
+    from . import indexed as ix
+
+    table = [tuple(colour)[:3] for colour in palette]
+    if not table or len(table) > MAX_PALETTE:
+        raise ValueError(f"a gif palette holds 1..{MAX_PALETTE} colours")
+    flat = ix.snap(np.ascontiguousarray(frame), palette)
+    rgb = flat[..., :3].reshape(-1, 3)
+    lookup = {colour: index for index, colour in enumerate(table)}
+    picks = np.zeros(rgb.shape[0], dtype=np.uint8)
+    for colour, index in lookup.items():
+        picks[(rgb == np.asarray(colour, dtype=np.uint8)).all(axis=1)] = index
+    picks = picks.reshape(flat.shape[:2])
+    picks[flat[..., 3] < ALPHA_THRESHOLD] = TRANSPARENT_INDEX
+
+    indexed = Image.fromarray(picks, "P")
+    # 256 entries: the authored table, then padding, then transparency in the
+    # last slot. Pillow wants a flat RGB triple list of exactly that length.
+    raw: list[int] = []
+    for colour in table:
+        raw.extend(colour)
+    raw.extend([0] * (3 * (256 - len(table))))
+    indexed.putpalette(raw)
+    indexed.info["transparency"] = TRANSPARENT_INDEX
+    return indexed
+
+
 def tick_durations(durations_ms: Sequence[int]) -> list[int]:
     """Durations rounded to what a GIF can actually hold, never to zero.
 
@@ -103,8 +169,14 @@ def write_gif(
     durations_ms: Sequence[int],
     *,
     loop: bool = True,
+    palette: Sequence[Any] | None = None,
 ) -> None:
-    """Write one animated GIF. Off-thread: takes arrays, not a document."""
+    """Write one animated GIF. Off-thread: takes arrays, not a document.
+
+    With *palette*, the document's own colour table is written verbatim; see
+    the module docstring. A palette too long for the format falls back to the
+    adaptive quantiser rather than dropping swatches.
+    """
     if not frames:
         raise ValueError("a gif needs at least one frame")
     if len(frames) != len(durations_ms):
@@ -113,7 +185,10 @@ def write_gif(
     if any(plane.shape[:2] != shape for plane in frames):
         raise ValueError("every frame of a gif is the same size")
 
-    images = [quantise(plane) for plane in frames]
+    fixed = bool(palette) and len(palette) <= MAX_PALETTE
+    images = [
+        map_to_palette(plane, palette) if fixed else quantise(plane) for plane in frames
+    ]
     try:
         images[0].save(
             path,

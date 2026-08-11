@@ -14,13 +14,16 @@ from .files import MEDIA
 from .validation import check_job_id
 
 
-def export_names(files: list[str] | None) -> list[str]:
+def export_names(names_wanted: list[str] | None) -> list[str]:
     """The requested artifact names, defaulting to the GLB.
 
     The allowlist *is* files.MEDIA: the point is that a caller-supplied name
-    never becomes a path component without passing through it first.
+    never becomes a path component without passing through it first -- which is
+    also why the parameter is not called ``files``, the name of the module that
+    allowlist comes out of. ``field="files"`` on the refusal is unchanged: that
+    is the name of the *control*, which is what an error has to point at.
     """
-    names = [f for f in (files or []) if f] or ["model.glb"]
+    names = [f for f in (names_wanted or []) if f] or ["model.glb"]
     unknown = [n for n in names if n not in MEDIA]
     if unknown:
         raise Invalid(f"unknown file(s): {sorted(unknown)}", field="files")
@@ -59,15 +62,21 @@ def collect(svc: WarlockService, ids: list[str], names: list[str]) -> list[tuple
 def bulk_export(
     svc: WarlockService,
     ids: list[str],
-    files: list[str] | None,
+    names_wanted: list[str] | None,
     dest_zip: Path,
 ) -> dict[str, Any]:
     """Zip the named artifacts of several jobs into ``dest_zip``.
 
     Derived artifacts are *not* generated on demand here -- a batch export
     should not be able to kick off twenty Blender subprocesses.
+
+    The selection parameter is ``names_wanted`` and not ``files`` because this
+    module imports a module called ``files`` and reads it in ``collect`` a few
+    lines up: the shorter name shadowed it for the length of both functions, so
+    one added line reaching for ``files.ready`` here would have got a list of
+    strings and an AttributeError.
     """
-    names = export_names(files)
+    names = export_names(names_wanted)
     members = collect(svc, ids, names)
     if not members:
         raise NotFound("nothing to export")
@@ -79,12 +88,12 @@ def bulk_export(
 
 
 def export_to_folder(
-    svc: WarlockService, ids: list[str], files: list[str] | None
+    svc: WarlockService, ids: list[str], names_wanted: list[str] | None
 ) -> dict[str, Any]:
     """Copy the same selection into WARLOCK_EXPORT_DIR."""
     if svc.config.export_dir is None:
         raise NotFound("no export folder configured (set WARLOCK_EXPORT_DIR)")
-    names = export_names(files)
+    names = export_names(names_wanted)
     members = collect(svc, ids, names)
     if not members:
         raise NotFound("nothing to export")

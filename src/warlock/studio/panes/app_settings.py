@@ -332,7 +332,13 @@ def _models(ctx: Any) -> None:
     imgui.dummy((0, sp(tokens.SP_1)))
     picks = {r["row_key"] for r in rows if r["row_key"] in ctx.model_picks and not r["present"]}
     if widgets.disabled_button(
-        f"Download selected ({len(picks)})", bool(picks) and not busy
+        f"Download selected ({len(picks)})",
+        bool(picks) and not busy,
+        reason=(
+            "A download is already running."
+            if busy
+            else "Tick a model above that is not on disk yet."
+        ),
     ):
         _start(ctx, sorted(picks), key="download:selection")
     _selection_progress(ctx)

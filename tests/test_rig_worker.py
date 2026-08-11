@@ -8,6 +8,7 @@ artifacts, right cancellation, and no collateral damage to the mesh it reads.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from pathlib import Path
@@ -623,7 +624,7 @@ async def test_a_rig_renders_the_deformation_battery_beside_the_mesh(worker, mon
     # Beside model.glb, for the reason the rig itself is: it describes that
     # mesh, not the request that produced it.
     assert (source_dir / "rig_qa.png").exists()
-    meta = rigging.read_rig_qa(source_dir)
+    meta = json.loads(rigging.rig_qa_path(source_dir).read_text(encoding="utf-8"))
     assert meta["rows"] == len(rigging.deform_battery("humanoid"))
     # Rendered *through* the rig, so the sheet depicts the weights under test.
     assert calls.sheets[0]["spec"]["source_glb"] == str(source_dir / "rig.glb")

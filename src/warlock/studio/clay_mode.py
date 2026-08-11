@@ -534,6 +534,63 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     return False
 
 
+def close_tab(ctx: Any, uid: str) -> None:
+    """Close one document, asking first if it has unsaved work.
+
+    ``ClayState.close`` has been here since the multi-document work and had no
+    caller at all: Clay could open documents and never shut one, which also
+    meant ``guard``'s "3 documents have unsaved changes" named documents the
+    user had no way to reach -- Ctrl+Tab cycled them with nothing on screen
+    saying so.
+
+    Its own question rather than ``guard``, for ``plotter_mode.close_tab``'s
+    reason: ``guard`` asks about every dirty document in the workspace, and the
+    answer being sought here is about *this* one.
+
+    What a Clay document owns in the single GL context is the part worth
+    stating. The per-document camera is plain data on the tab
+    (``clay_state.ClayView``); the GPU buffers live in ``ctx.clay_view``, whose
+    ``_cache`` is keyed on *object* uid and holds whichever document was last
+    synced. Dropping the document those buffers were built from without
+    releasing them leaves the renderer one frame away from drawing a mesh that
+    no longer belongs to anything -- so the cache is cleared, which costs one
+    frame of rebuild and is what ``sync`` does on every tab switch anyway.
+    """
+    state = ensure(ctx)
+    tab = state.get(uid)
+    if tab is None or tab.saving:
+        # Refused mid-save for ``_MUTATING_CTRL``'s reason and then some: the
+        # serialise task reads the live document on a task thread, and closing
+        # it out from under that read is the one way to lose the file being
+        # written rather than merely the edits since.
+        return
+
+    def drop() -> None:
+        view = getattr(ctx, "clay_view", None)
+        if view is not None and tab.uid == state.active_uid:
+            if getattr(view, "dragging", False):
+                # Before the clear, and against the document it was started on:
+                # a drag holds the mesh it is moving.
+                view.cancel_drag(tab.doc)
+            view.clear()
+        # Keyed on object uid, and a fresh document's objects start counting
+        # from one -- so an entry left here is a manifold report about a mesh
+        # from a document that is gone, waiting for a uid to collide with.
+        state.manifold.clear()
+        state.close(uid)
+
+    if not tab.dirty:
+        drop()
+        return
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Close without saving?",
+            message=f"{tab.title} has unsaved changes.",
+            on_confirm=drop,
+        )
+    )
+
+
 # --- keys -------------------------------------------------------------------
 
 # Q/W/E/R, which is where a user coming from Blender or Unity puts their left
@@ -743,6 +800,10 @@ def _ctrl_key(
         ask_open(ctx)
     elif name == "n":
         new_document(ctx)
+    elif name == "w":
+        # Beside its siblings, and the same key Inker, Plotter and Packwright
+        # already close a document with.
+        close_tab(ctx, tab.uid)
     elif name == "e":
         export_asset(ctx, tab)
     elif name == "z":

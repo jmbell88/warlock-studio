@@ -25,13 +25,16 @@ ROOT = Path(__file__).resolve().parents[1] / "src" / "warlock" / "studio"
 # Direct writes still tolerated, per file: named debt for their own work
 # packages, each entry to be struck off as its file is routed through
 # ``set_mode``. Not a rule -- a new file may not join this list.
-ALLOWED = {
-    "inker_mode.py",
-    "plotter_mode.py",
-    "packwright_mode.py",
-    "manual/render.py",
-    "panes/library.py",
-}
+#
+# **Empty, and the debt is paid.** The last five were routed on 2026-08-11:
+# ``inker_mode``, ``plotter_mode``, ``packwright_mode``, ``manual/render`` and
+# ``panes/library``. The manual's two were the ones that mattered to a reader
+# -- Esc out of a chapter opened from a pane's (?) now goes back to that pane
+# rather than to Home -- and library's "open" is the twin of the landing page's,
+# which had already been routed, so the same act reached from two surfaces
+# behaved two ways. Kept as a name rather than deleted with its entries,
+# because the *rule* below is what the emptiness now means.
+ALLOWED: set[str] = set()
 
 # ``\bstate`` keeps ``inker_state.mode`` and friends out (no word boundary
 # after an underscore); ``(?!=)`` keeps comparisons out.

@@ -261,7 +261,7 @@ def _skin(bpy: Any, mesh: Any, arm_obj: Any, *, weld: float = 0.0) -> tuple[str,
             causes.append(f"{method}: {str(exc).strip() or 'raised'}")
         # parent_set already made the mesh a child; clear it so the next bind
         # doesn't stack a second armature modifier on top of the empty one.
-        _unbind(bpy, mesh)
+        _unbind(mesh)
 
     if original is not None:
         # Envelope weights do not care whether the mesh is welded, but what is
@@ -274,7 +274,13 @@ def _skin(bpy: Any, mesh: Any, arm_obj: Any, *, weld: float = 0.0) -> tuple[str,
     return "envelope", reason
 
 
-def _unbind(bpy: Any, mesh: Any) -> None:
+def _unbind(mesh: Any) -> None:
+    """Every armature modifier, its weights and its parenting, off one mesh.
+
+    No ``bpy``: it took one and never used it, which in this module is a
+    misleading signature rather than a harmless one -- ``bpy`` in a parameter
+    list is how every function here says it touches the global Blender state,
+    and this one only walks the mesh it was handed."""
     for mod in list(mesh.modifiers):
         if mod.type == "ARMATURE":
             mesh.modifiers.remove(mod)

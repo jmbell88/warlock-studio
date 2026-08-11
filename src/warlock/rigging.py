@@ -859,18 +859,6 @@ def rig_qa_path(job_dir: Path) -> Path:
     return job_dir / RIG_QA_JSON
 
 
-def read_rig_qa(job_dir: Path) -> dict[str, Any] | None:
-    """The QA sheet's sidecar, or None. Written last, so it is the marker."""
-    path = rig_qa_path(job_dir)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        log.exception("unreadable rig QA sidecar at %s", path)
-        return None
-
-
 def sheet_path(job_dir: Path, sheet_id: str) -> Path:
     if not is_valid_id(sheet_id):
         raise ValueError(f"malformed sheet id {sheet_id!r}")

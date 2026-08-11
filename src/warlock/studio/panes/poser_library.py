@@ -69,16 +69,21 @@ def _library(ctx: Any, state: Any) -> None:
             widgets.text_colored(theme.ACCENT, name)
         else:
             imgui.text(name)
-        imgui.same_line()
+        # Wrapped, not chained: the row starts with a user-typed pose name and
+        # then asks for four buttons after it, in a sidebar. A long name pushed
+        # Duplicate and Delete past the content edge, where imgui clips them --
+        # so the only way to remove a pose from the shared library was to
+        # rename it shorter first.
+        widgets.same_line_or_wrap(widgets.button_width("Apply"))
         if imgui.small_button("Apply"):
             poser_mode.apply_pose(ctx, pose_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Rename"))
         if imgui.small_button("Rename"):
             poser_mode.rename(ctx, pose_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Duplicate"))
         if imgui.small_button("Duplicate"):
             poser_mode.duplicate(ctx, pose_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Delete"))
         if imgui.small_button("Delete"):
             poser_mode.delete(ctx, pose_id)
         imgui.pop_id()

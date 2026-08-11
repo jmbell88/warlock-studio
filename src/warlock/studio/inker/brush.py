@@ -87,7 +87,23 @@ def clamp_brush(size: int) -> int:
 
 @lru_cache(maxsize=256)
 def make_stamp(diameter: int, hardness: float, nib: str = "soft") -> np.ndarray:
-    """A float32 coverage stamp, ``diameter`` square, 0..1.
+    """A float32 coverage stamp, ``diameter`` square, 0..1. **Read-only.**
+
+    Cached, and the cache hands the *same array* to every caller that asks for
+    the same brush -- so it is returned write-locked. This is public API and it
+    is a plain ndarray, which is exactly the combination where one caller
+    scaling a stamp in place would silently change every stroke drawn with that
+    brush for the rest of the session, and only for that brush size. A caller
+    that needs to modify one copies it; the sibling caches in ``clay/mesh.py``
+    and ``plotter/tileset.py`` freeze theirs for the same reason.
+    """
+    stamp = _stamp(diameter, hardness, nib)
+    stamp.setflags(write=False)
+    return stamp
+
+
+def _stamp(diameter: int, hardness: float, nib: str) -> np.ndarray:
+    """``make_stamp``'s body, uncached and writable.
 
     For the ``soft`` nib the rim is antialiased over the last half pixel even at
     hardness 1: a hard brush should have a crisp edge, not a jagged one, and a

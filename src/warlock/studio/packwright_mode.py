@@ -32,6 +32,7 @@ import numpy as np
 
 from . import dialogs, filetypes, packwright_state, recents
 from .packwright_state import PackTab, PackwrightState
+from .state import set_mode
 
 log = logging.getLogger(__name__)
 
@@ -479,7 +480,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 path=Path(result["path"]) if result.get("path") else None,
                 title=result.get("title"),
             )
-            ctx.state.mode = "packwright"
+            set_mode(ctx.state, "packwright")
         return
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None

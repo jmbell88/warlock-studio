@@ -1043,17 +1043,50 @@ def note_hover(key: str, hovered: bool) -> None:
     motion.value(f"hover/{key}", 1.0 if hovered else 0.0, duration=tokens.DUR_FAST)
 
 
-def disabled_button(label: str, enabled: bool, size: tuple[float, float] = (0, 0)) -> bool:
+def disabled_button(
+    label: str,
+    enabled: bool,
+    size: tuple[float, float] = (0, 0),
+    *,
+    reason: str = "",
+    tooltip: str = "",
+) -> bool:
     """A button that is visibly unavailable rather than absent.
 
     Absent controls make a UI feel like it is hiding things; a greyed one with
-    a tooltip says why.
+    a tooltip says why. The tooltip is what this function did *not* draw for
+    most of its life: the docstring promised one, the body had none, and the
+    result was 92 call sites able to grey out and none able to explain it --
+    "Download selected (0)" being the worst of them.
+
+    ``reason`` is shown only while the button is disabled and ``tooltip`` only
+    while it is live, so one call can carry both without either being a lie.
+    Both default to "", which is why the ~90 sites that pass neither are
+    unchanged: this is an addition, not a migration.
+
+    The hover has to be asked for with ``allow_when_disabled`` -- imgui
+    swallows hover on a disabled item, which is exactly the state whose
+    explanation matters, and is why this cannot be a ``set_item_tooltip``
+    one-liner. ``_glyph_button`` has always done it this way.
     """
     if not enabled:
         imgui.begin_disabled()
     clicked = imgui.button(label, size)
     if not enabled:
         imgui.end_disabled()
+    note = reason if not enabled else tooltip
+    # The hover is read *before* set_tooltip can run, and stored. SetTooltip
+    # renders through TextV, which is an item of its own and overwrites
+    # g.LastItemData -- so after the call, `is_item_hovered` and the item-rect
+    # getters answer about the tooltip's text, not about this button. Asking in
+    # that order is the bug palette.py had at its own call site: a caller that
+    # follows this with a rect query would place whatever it draws next at the
+    # tooltip. Cheap and unconditional, so the ~90 call sites that pass no note
+    # cannot start depending on the order by accident. ``_glyph_button`` has
+    # always captured first, for this reason.
+    hovered = bool(imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value))
+    if note and hovered:
+        imgui.set_tooltip(note)
     return clicked and enabled
 
 
@@ -1072,6 +1105,23 @@ def same_line_or_wrap(width: float) -> None:
     imgui.same_line()
     if imgui.get_content_region_avail().x < width:
         imgui.new_line()
+
+
+def button_width(label: str) -> float:
+    """How wide imgui will draw a text button, for ``same_line_or_wrap``.
+
+    Every call site that wrapped before this measured its own button as
+    ``calc_text_size(label).x`` plus a hand-picked ``sp(...)`` fudge for the
+    frame padding. Asking the style is the same rule ``grid_width`` was written
+    for: a guess that is right at UI scale 1.0 is wrong at 1.6, and 1.0 is the
+    scale the smoke suite runs at, so the error is invisible exactly where it
+    is checked. ``##``-suffixed ids are stripped, since imgui does not draw
+    them.
+    """
+    return (
+        imgui.calc_text_size(label.split("##")[0]).x
+        + imgui.get_style().frame_padding.x * 2
+    )
 
 
 def grid_width(columns: int) -> float:
@@ -1138,9 +1188,37 @@ def grade_buttons(id_prefix: str, enabled: bool) -> int | None:
         if index % GRADES_PER_ROW:
             imgui.same_line()
         if disabled_button(f"{grade_text(grade)}##{id_prefix}-grade{grade}", enabled,
-                           (width, 0)):
+                           (width, 0), tooltip=grade_key_hint(grade)):
             clicked = grade
     return clicked
+
+
+def grade_key_hint(grade: int) -> str:
+    """How this grade is typed. "" when the row has no keyboard behind it.
+
+    A hover rather than a suffix in the label: the row is read *positionally*
+    (see :func:`grade_buttons`), the buttons are ``grid_width(6)`` wide, and
+    "+1 (1)" in a 260 px sidebar is how a scale stops looking like a scale.
+
+    The negative arm is the half worth saying at all. A magnitude is its own
+    digit, but a *minus* is R first -- which nothing on screen said, and which
+    is one keypress away from filing the opposite verdict.
+
+    The "" case is unreachable today and is the point of the bound below:
+    ``review_mode.GRADE_KEYS`` binds the digits 1..``GRADE_MAX``, so the scale
+    is fully typeable only while ``GRADE_MIN == -GRADE_MAX``. Widen one end of
+    the scale alone -- and ``docs/measurements`` is where that argument would
+    be made -- and every row past the digits would otherwise keep promising a
+    keystroke that files nothing. Saying nothing is the honest answer for a row
+    that has no key; ``grade_buttons`` already draws a hintless row.
+    """
+    if grade == 0:
+        return "Key: 0"
+    if abs(grade) > GRADE_MAX:
+        return ""
+    if grade > 0:
+        return f"Key: {grade}"
+    return f"Keys: R then {abs(grade)}"
 
 
 def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None:
@@ -1161,13 +1239,17 @@ def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None
     from ..service import verdicts as verdicts_mod
 
     clicked: str | None = None
-    for label, vocabulary in (("Good", verdicts_mod.GOOD_TAGS),
-                              ("Bad", verdicts_mod.BAD_TAGS)):
+    for label, vocabulary, modifier in (("Good", verdicts_mod.GOOD_TAGS, "Ctrl"),
+                                        ("Bad", verdicts_mod.BAD_TAGS, "Shift")):
         field_label(f"{label}:")
         width = grid_width(3)
         for index, tag in enumerate(vocabulary):
             if index:
                 same_line_or_wrap(width)
+            # The chord, on a hover for ``grade_key_hint``'s reason: the row is
+            # already three columns of whole words in a 260 px sidebar, and the
+            # position in it *is* the digit.
+            hint = f"{modifier}+{index + 1}" if index < 9 else ""
             selected = tag in pending
             if selected:
                 # ``button_hovered`` as well as ``button``, or a staged tag
@@ -1180,7 +1262,9 @@ def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None
                 fill = imgui.ImVec4(*theme.rgba(theme.ACCENT))
                 imgui.push_style_color(imgui.Col_.button.value, fill)
                 imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
-            if disabled_button(f"{tag}##{id_prefix}-tag-{tag}", enabled, (width, 0)):
+            if disabled_button(
+                f"{tag}##{id_prefix}-tag-{tag}", enabled, (width, 0), tooltip=hint
+            ):
                 clicked = tag
             if selected:
                 imgui.pop_style_color(2)

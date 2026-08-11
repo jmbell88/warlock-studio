@@ -58,6 +58,7 @@ from xml.etree import ElementTree
 import numpy as np
 
 from . import composite as cp
+from . import gpl
 from .animation import (
     DEFAULT_DURATION_MS,
     Animation,
@@ -75,6 +76,16 @@ THUMBNAIL_MAX = 256
 #: ``.get``-based -- so this has stayed at 1 through the whole of v1.
 ANIMATION_VERSION = 1
 ANIMATION_MEMBER = "animation.json"
+
+#: An indexed document's colour table, written as a plain ``.gpl``. Additive
+#: and versionless: a reader that does not know about it opens the file as an
+#: ordinary RGBA document, which is exactly what the pixels already are -- see
+#: :mod:`.indexed`. ``.gpl`` rather than another JSON key because ``gpl.py``
+#: already reads and writes it, because it is the one interchange format for a
+#: row of swatches, and because a member of that name is a palette anyone can
+#: pull out of the zip. Alpha does not survive it and does not need to: a
+#: palette constrains colour and never opacity.
+PALETTE_MEMBER = "palette.gpl"
 
 # 1980-01-01, the earliest a zip can express, and the same constant the three
 # younger formats in this repo (``.wblk``, ``.wmap``, ``.wpack``) fix their
@@ -309,6 +320,8 @@ def write_ora(doc, path: Path) -> None:
             for layer in anim.unique_cel_layers():
                 zf.writestr(_member(names[id(layer)]), _png(layer.pixels))
             zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
+        if getattr(doc, "palette", None):
+            zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
         zf.writestr(_member("mergedimage.png"), _png(merged))
         zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
     tmp.replace(path)
@@ -463,6 +476,26 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
     )
 
 
+def _read_palette(zf) -> list | None:
+    """The document's colour table, or None when the file carries none.
+
+    Tolerant in the way the rest of this reader is: a palette member that will
+    not parse costs the *indexed constraint*, never the file. The pixels are
+    already snapped -- they were written that way -- so a document that opens
+    without its table is the same picture with the constraint lifted, which is
+    a far better outcome than refusing to open it.
+    """
+    try:
+        raw = zf.read(PALETTE_MEMBER)
+    except KeyError:
+        return None
+    try:
+        return gpl.parse(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        log.warning("ignoring %s in %s: %s", PALETTE_MEMBER, getattr(zf, "filename", "?"), exc)
+        return None
+
+
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
@@ -477,6 +510,7 @@ def read_ora(path: Path, *, budget: int | None = None):
         # JSON first, and only when the XML told us how big the canvas is: the
         # grid's cels are decoded against that size, and guessing it from the
         # first PNG would be guessing for every later one too.
+        palette = _read_palette(zf)
         anim = _read_animation(zf, (width, height)) if width and height else None
         if anim is not None:
             stack = LayerStack(
@@ -491,6 +525,10 @@ def read_ora(path: Path, *, budget: int | None = None):
             doc.matte = matte_for(doc.composite)
             doc.file_format = "ora"
             doc.path = Path(path)
+            # ``snap=False``: the pixels in the file were written snapped, so
+            # re-snapping them would cost a whole-document rewrite on every
+            # open and push an undo step for opening a file.
+            doc.set_palette(palette, snap=False)
             return doc
 
         layers: list[Layer] = []
@@ -531,4 +569,5 @@ def read_ora(path: Path, *, budget: int | None = None):
     doc.matte = matte_for(doc.composite)
     doc.file_format = "ora"
     doc.path = Path(path)
+    doc.set_palette(palette, snap=False)
     return doc

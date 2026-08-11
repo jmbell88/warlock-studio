@@ -96,20 +96,9 @@ def _check_weights(svc: WarlockService) -> None:
     slightly plainer picture, it is the feature not happening.
     """
     from .. import fetch, models
+    from .validation import check_base_model_weights
 
-    base = models.BASE_MODELS[SPRITE_BASE_MODEL]
-    ok, missing_lora = fetch.base_model_state(svc.config, base)
-    if not ok:
-        what = (
-            f"its step-distillation LoRA is missing at {missing_lora}"
-            if missing_lora is not None
-            else "its weights are not downloaded"
-        )
-        raise Invalid(
-            f"The image model {base.label!r} cannot run: {what}. "
-            f"Download it with:\n  {base.download}",
-            field="base_model",
-        )
+    check_base_model_weights(svc, models.BASE_MODELS[SPRITE_BASE_MODEL])
     required = (
         ("adapter", models.IP_ADAPTERS["plus"], "ip_adapter"),
         ("control", models.CONTROLNETS["canny"], "control"),

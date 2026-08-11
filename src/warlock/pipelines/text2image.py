@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -794,7 +795,24 @@ class Text2Image:
             stack.close()
             teardown()
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        image.save(output_path)
+        # Staged and renamed. The reroll loop calls this with the *served*
+        # input.png as its target, once per attempt, so the rejected candidates
+        # of a retrying job are written straight over a name the library grid
+        # and every 2D derivation already read -- and a PNG encode of a 1024²
+        # image is long enough to be caught half-written. Renaming in makes
+        # each attempt land whole or not at all.
+        # The staging name keeps the real suffix (``.a.tmp.png``, not
+        # ``.a.png.tmp``) so Pillow still infers the format from it. Passing the
+        # format explicitly would have been the same thing for every caller
+        # today -- all four hand this a ``.png`` -- and would have made the
+        # encode depend on an argument rather than on the destination.
+        tmp = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
+        try:
+            image.save(tmp)
+            os.replace(tmp, output_path)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
         self.last_used = time.monotonic()
         self.last_recipe = self._recipe(seed, text, negative_prompt, lora, lora_weight,
                                         conditioning, chunks, tile)

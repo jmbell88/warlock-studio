@@ -244,7 +244,7 @@ REFERENCE_METRICS = (
 )
 
 
-def score_reference(reference_path: Path, config: Any = None) -> dict[str, Any]:
+def score_reference(reference_path: Path) -> dict[str, Any]:
     """The pixel-art metrics for one generated reference.
 
     Measured on the raw generation -- ``input.png`` at full resolution -- and
@@ -261,6 +261,15 @@ def score_reference(reference_path: Path, config: Any = None) -> dict[str, Any]:
 
     Pure numpy and Pillow, no torch, so a reference-stage run scores on a
     machine that cannot load a model.
+
+    Takes no ``config``, deliberately, and used to take one it never read. Its
+    sibling ``score_view`` needs one because ``dino_cosine`` is gated on
+    whether a checkpoint is present; every metric in ``REFERENCE_METRICS`` is
+    arithmetic on pixels and there is nothing here to gate. A parameter that is
+    accepted and ignored reads as "configurable, one day", which for this
+    function is the opposite of the promise the paragraph above makes -- and
+    ``test_bench_metrics`` asserts that promise by failing the call if it
+    imports torch at all.
     """
     from PIL import Image
 

@@ -926,6 +926,19 @@ def rerun_job(
     # and promote_to_model are the other two), and the only one that used to
     # skip admission: the reference was admitted against the SDXL cost alone,
     # and the trellis cost was never checked against the plan.
+    #
+    # Both halves of admission, in create_job's order. The weights check is not
+    # redundant with the original job's: the source row was admitted against
+    # whatever was on disk when it was submitted, and a reroll can be days
+    # later, against a models directory the user has since pruned or moved. It
+    # matters most for ``style_lora``, which fails *silently* at load -- the
+    # reroll would finish, look nothing like the run it was rerolling, and
+    # write a row claiming a style that never ran. That row is corpus evidence
+    # (style_lora is in VECTOR_PARAMS), so the cost of skipping this is not one
+    # bad picture but a poisoned neighbourhood of them. Unconditional for every
+    # kind, as at create_job's door -- check_weights makes the text-only
+    # decision itself.
+    check_weights(svc, kind, params)
     check_vram(svc, kind, stage, params)
 
     new_id = uuid.uuid4().hex[:12]

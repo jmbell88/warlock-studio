@@ -412,3 +412,40 @@ def test_a_transposed_view_falls_back(monkeypatch):
     monkeypatch.setattr(native, "available", lambda: True)
     view = np.zeros((4, 6, 8), dtype=np.float32).transpose(2, 1, 0)
     assert cp._row_stride(view, 4) is None
+
+
+@needs_dll
+@pytest.mark.parametrize("mode", cp.BLEND_MODES)
+def test_over_is_bit_identical_on_a_nan_channel(mode, monkeypatch):
+    """Parity holds for inputs that cannot occur, because that is the contract.
+
+    ``composite.c``'s bar is ``np.array_equal`` against the numpy reference for
+    *any* input, not agreement on the ones a uint8 layer can produce -- which
+    is why the NaN substitutions in its min/max branches are written out at
+    all. This pins the whole mode table against that bar in one place.
+
+    It does **not** pin the divisor guards in colour-dodge and colour-burn,
+    and the attempt to make it do so is worth recording: a NaN colour channel
+    reaches the output through ``over``'s own ``k_src * cs`` term whatever
+    ``B()`` returned, since ``0 * NaN`` is NaN and no alpha zeroes it out. The
+    two kernels are therefore indistinguishable at this seam, which is the
+    argument the C comment makes for why those guards are shape rather than
+    fix. Anything that ever makes ``blend`` reachable on its own is what would
+    turn this into a real test of them.
+
+    ``array_equal`` alone would pass on two NaNs, so the assertion goes through
+    ``equal_nan``: what is being pinned is that the two agree *including* on
+    which cells are NaN at all.
+    """
+    rng = np.random.default_rng(20260811)
+    backdrop = _canvas(rng, 8, 8)
+    source = _canvas(rng, 8, 8)
+    # A NaN in each operand's colour channels, and one in both at once.
+    source[1, 1, :3] = np.nan
+    backdrop[2, 2, :3] = np.nan
+    source[3, 3, :3] = np.nan
+    backdrop[3, 3, :3] = np.nan
+
+    fast, slow = _both(lambda: cp.over(backdrop, source, mode=mode), monkeypatch)
+    assert fast.dtype == slow.dtype
+    assert np.array_equal(fast, slow, equal_nan=True), mode

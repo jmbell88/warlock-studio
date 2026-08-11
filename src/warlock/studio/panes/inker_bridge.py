@@ -241,7 +241,7 @@ def _open_filter(ctx: Any, tab: Any) -> None:
     if not state.filter_name:
         state.filter_name = next(iter(filters.FILTERS))
     if tab.doc.begin_filter() is None:
-        ctx.toast("There is nothing to filter.", "warning")
+        ctx.toast("There is nothing to filter.", "warn")
         return
     state.filter_open = True
     imgui.open_popup(FILTER_POPUP)

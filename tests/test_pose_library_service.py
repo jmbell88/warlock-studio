@@ -63,7 +63,7 @@ def _rigged_job(svc, assets, template="humanoid") -> str:
 def test_create_read_list_delete(svc):
     stored = svc_poses.create_library_pose(svc, _payload())
     assert rigging.is_valid_id(stored["id"])
-    assert svc_poses.read_library_pose(svc, stored["id"]) == stored
+    assert svc_poses.list_library(svc)["poses"] == [stored]
     assert svc_poses.list_library(svc)["poses"] == [stored]
     assert svc_poses.list_library(svc, "fish")["poses"] == []
     assert svc_poses.delete_library_pose(svc, stored["id"]) == {"ok": True}
@@ -163,7 +163,7 @@ def test_a_partial_record_is_refused_naming_the_field(svc):
 @pytest.mark.parametrize("bad", ["not-an-id", "ABCDEF012345", ""])
 def test_malformed_ids_are_not_found(svc, bad):
     with pytest.raises(NotFound):
-        svc_poses.read_library_pose(svc, bad)
+        svc_poses.update_library_pose(svc, bad, {"name": "x"})
     with pytest.raises(NotFound):
         svc_poses.delete_library_pose(svc, bad)
 

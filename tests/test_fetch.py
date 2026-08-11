@@ -85,18 +85,25 @@ def test_every_registry_entry_has_a_fetch_and_a_download_line():
             assert one.size_gib > 0, f"{entry.row_key} declares no size"
 
 
-def test_the_readme_names_every_repository_the_registry_does():
+def test_the_docs_name_every_repository_the_registry_does():
     """The drift this package closed, kept closed.
 
     Four repo ids -- the IP-Adapter, the Canny ControlNet, DINOv2 and BiRefNet
     -- existed only in models.py, so the README's list of "the only network use
     there is" was not one. Both halves come off ``Fetch`` now; this is what
     notices when a new entry is added to one and not the other.
+
+    Two files rather than one, because the README was shortened and the
+    per-model recipes moved to ``docs/MODELS.md`` -- which the README links to
+    for exactly this list. What the test is about is that no repository the app
+    can fetch is undocumented, not which of the two documents carries it.
     """
-    readme = (SRC.parents[1] / "README.md").read_text(encoding="utf-8")
+    root = SRC.parents[1]
+    docs = (root / "README.md").read_text(encoding="utf-8")
+    docs += (root / "docs" / "MODELS.md").read_text(encoding="utf-8")
     repos = {one.repo_id for entry in fetch.entries() for one in entry.fetch}
-    missing = sorted(repo for repo in repos if repo not in readme)
-    assert not missing, f"in models.py but not in the README: {missing}"
+    missing = sorted(repo for repo in repos if repo not in docs)
+    assert not missing, f"in models.py but in neither README.md nor docs/MODELS.md: {missing}"
 
 
 def test_a_note_is_not_a_fetch():

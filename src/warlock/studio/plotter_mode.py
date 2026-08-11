@@ -39,6 +39,7 @@ import numpy as np
 
 from . import dialogs, filetypes, plotter_state, recents
 from .plotter_state import PlotterDoc, PlotterState
+from .state import set_mode
 
 log = logging.getLogger(__name__)
 
@@ -528,7 +529,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 title=result.get("title"),
                 file_format=result.get("format"),
             )
-            ctx.state.mode = "plotter"
+            set_mode(ctx.state, "plotter")
         return
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None
@@ -654,13 +655,42 @@ def handle_key(ctx: Any, event: Any) -> bool:
     """
     import pygame
 
-    if event.type != pygame.KEYDOWN:
-        return False
     state = ensure(ctx)
-    tab = state.active
+    # Read before the Space branch, because that branch now has to know whether
+    # a modifier is down -- see below.
     mods = pygame.key.get_mods()
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
+    if event.key == pygame.K_SPACE:
+        # Seen on both edges, the way ``inker_mode.handle_key`` sees it:
+        # space-to-pan is a hold, not a toggle. Filtering KEYUP out above this
+        # meant the flag latched on for the rest of the session and every
+        # left-drag panned instead of drawing.
+        #
+        # The *release* is honoured whatever is held, and only the press asks
+        # about modifiers. Guarding both would reintroduce the latch by another
+        # route: hold Space, then press Ctrl, then let Space go, and the KEYUP
+        # arrives with Ctrl set -- ignored, and the flag never clears.
+        if event.type != pygame.KEYDOWN:
+            state.space_held = False
+            return True
+        if not (ctrl or shift):
+            state.space_held = True
+            return True
+        # Ctrl+Space and Shift+Space are chords, not a pan. They used to arm
+        # pan on their way past, so the next left-drag panned the canvas
+        # instead of drawing on it.
+    if event.type != pygame.KEYDOWN:
+        # Not consumed, and deliberately unlike ``inker_mode.handle_key``,
+        # which returns True here. The Space comment above says the two mirror
+        # each other and it means the *hold*, which they do; the return is
+        # where they part, and ``test_a_key_release_is_never_consumed`` pins
+        # this half. Nothing downstream acts on a bare KEYUP, so there is
+        # nothing for a release to fall through *into* -- the risk the mode's
+        # own docstring names is a KEYDOWN reaching the viewport, and that is
+        # answered by the branches below, not by this one.
+        return False
+    tab = state.active
     name = pygame.key.name(event.key).lower()
 
     if ctrl:
@@ -676,9 +706,6 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return True
     if name in TOOL_KEYS:
         state.tool = TOOL_KEYS[name]
-        return True
-    if event.key == pygame.K_SPACE:
-        state.space_held = True
         return True
     return False
 

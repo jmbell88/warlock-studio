@@ -127,3 +127,54 @@ def test_hand_edited_is_not_in_the_derived_list(svc):
     from warlock.service.validation import DERIVED_PARAMS
 
     assert "hand_edited" not in DERIVED_PARAMS
+
+
+# --- admission, at the back door as well as the front -------------------------
+
+
+def test_a_reroll_whose_style_lora_has_gone_missing_is_refused(svc, monkeypatch):
+    """The rerun door checked VRAM and not weights.
+
+    A style LoRA is the selection that fails *silently* at load -- the loader
+    skips a missing adapter -- so without this the reroll queues, runs, finishes
+    looking nothing like the row it rerolled, and writes params claiming a style
+    that never ran. ``style_lora`` is in VECTOR_PARAMS, so that row is then
+    evidence in the findings corpus about a style it never wore.
+    """
+    from warlock import fetch
+
+    job_id = _reference(svc, guidance_fields={"style_lora": "ps1"})
+
+    # Admitted when it was submitted; the file has gone since.
+    monkeypatch.setattr(fetch, "present", lambda *a, **k: False)
+    with pytest.raises(Invalid) as exc:
+        svc_jobs.rerun_job(svc, job_id, mode="reroll")
+    assert exc.value.field == "style_lora"
+    assert "hf download" in str(exc.value)
+
+
+def test_a_reroll_whose_checkpoint_has_gone_missing_is_refused(svc, monkeypatch):
+    """The loud half of the same door: a missing checkpoint would reach the
+    worker as a diffusers traceback naming a directory, two minutes and a
+    queue place later."""
+    from warlock import fetch
+
+    job_id = _reference(svc)
+    monkeypatch.setattr(fetch, "base_model_state", lambda *a, **k: (False, None))
+    with pytest.raises(Invalid) as exc:
+        svc_jobs.rerun_job(svc, job_id, mode="reroll")
+    assert exc.value.field == "base_model"
+
+
+def test_a_remesh_is_not_refused_for_image_model_weights(svc, monkeypatch):
+    """The check is unconditional, but check_weights is text-only by design: a
+    remesh reruns trellis and loads no image model at all, so a pruned SDXL is
+    none of its business."""
+    from warlock import fetch
+
+    job_id = _reference(svc)
+    monkeypatch.setattr(fetch, "base_model_state", lambda *a, **k: (False, None))
+    monkeypatch.setattr(fetch, "present", lambda *a, **k: False)
+
+    new = svc_jobs.rerun_job(svc, job_id, mode="remesh")
+    assert svc.store.get(new["id"])["kind"] == "image"

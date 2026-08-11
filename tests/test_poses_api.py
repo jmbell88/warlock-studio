@@ -237,6 +237,32 @@ def test_a_failed_bake_raises_rather_than_hanging(svc, assets, monkeypatch):
     assert not rigging.pose_glb_path(assets / job_id, record["id"]).exists()
 
 
+def test_a_bake_that_dies_part_way_leaves_no_partial_glb(svc, assets, monkeypatch):
+    """The sharper half of the failure above: Blender writing *something* and
+    then dying -- a pose_timeout, a kill-on-close at shutdown.
+
+    Existence is this artifact's whole freshness test, so an unstaged bake
+    would leave a truncated GLB that ``posed_model`` then serves under this
+    pose id forever, with no way for a retry to get past it.
+    """
+    job_id = _rigged_job(svc, assets)
+    record = svc_rig.save_pose(svc, job_id, _pose())
+
+    def run_worker(spec, **kwargs):
+        Path(spec["out_glb"]).write_bytes(b"half a gl")
+        raise rigging.BlenderError("killed")
+
+    monkeypatch.setattr(rigging, "run_worker", run_worker)
+    with pytest.raises(Failed):
+        svc_rig.posed_model(svc, job_id, record["id"])
+
+    assert not rigging.pose_glb_path(assets / job_id, record["id"]).exists()
+    # And the staging file went with it: nothing sweeps a pose directory, so a
+    # stranded dotfile would live as long as the job.
+    pose_dir = rigging.pose_glb_path(assets / job_id, record["id"]).parent
+    assert [p.name for p in pose_dir.iterdir() if p.name.startswith(".")] == []
+
+
 def test_re_saving_a_pose_invalidates_its_bake(svc, assets, monkeypatch):
     """The cached GLB depicts the old rotations; serving it after an edit would
     show the user a pose they replaced."""

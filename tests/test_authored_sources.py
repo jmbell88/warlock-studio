@@ -146,12 +146,16 @@ def test_a_bad_job_id_never_reaches_the_filesystem(svc):
         svc_files.save_packwright_source(svc, "0" * 12, _zip())
 
 
-def test_the_status_helpers_answer_before_anything_is_written(svc):
+def test_a_saved_source_lands_where_the_path_helper_says_it_will(svc):
+    """What the ``*_source_status`` pair used to assert. They were the only
+    callers of themselves -- nothing in the app ever asked -- so the question
+    is put to the path helpers that the readers actually use."""
     job_id = _exported(svc, "plotter")
-    assert svc_files.plotter_source_status(svc, job_id) == {"exists": False}
+    assert not svc_files.plotter_source_path(svc, job_id).exists()
     svc_files.save_plotter_source(svc, job_id, _zip())
-    assert svc_files.plotter_source_status(svc, job_id) == {"exists": True}
-    assert svc_files.packwright_source_status(svc, job_id) == {"exists": False}
+    assert svc_files.plotter_source_path(svc, job_id).exists()
+    # And the two documents are separate files, not one flag between them.
+    assert not svc_files.packwright_source_path(svc, job_id).exists()
 
 
 def test_job_dir_file_validates_the_id_it_is_given(svc):

@@ -88,10 +88,19 @@ class PatchEdit(Edit):
         # whole base alive, so a stroke that costs four kilobytes by the
         # budget's reckoning can pin sixteen megabytes -- invisibly, because
         # eviction is driven by exactly that number.
-        if self.before.base is not None:
-            self.before = self.before.copy()
-        if self.after.base is not None:
-            self.after = self.after.copy()
+        #
+        # Copied unconditionally, not only when ``base is not None``. That test
+        # catches a *view* and misses the other way a caller keeps hold of the
+        # pixels: handing over an array it owns and then writing to it, at
+        # which point the recorded "before" quietly becomes the "after" and the
+        # undo restores nothing. Every call site here happens to copy
+        # defensively already, which is what made the weaker test look
+        # sufficient -- and is also why paying for the copy twice costs
+        # nothing that shows up in a profile against a stroke's own work. The
+        # sibling stacks in ``plotter/edits.py`` and ``clay/edits.py`` both
+        # take ownership outright; this is the same rule, spelled the same way.
+        self.before = self.before.copy()
+        self.after = self.after.copy()
         self.cost = int(self.before.nbytes + self.after.nbytes)
 
     def _put(self, doc: Any, pixels: np.ndarray) -> None:

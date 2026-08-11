@@ -398,12 +398,6 @@ def test_the_qa_record_is_derived_and_cannot_be_inherited_by_a_reroll():
     assert "deform_qa" in DERIVED_PARAMS
 
 
-def test_read_rig_qa_survives_a_corrupt_sidecar(tmp_path):
-    assert rigging.read_rig_qa(tmp_path) is None
-    rigging.rig_qa_path(tmp_path).write_text("{not json", encoding="utf-8")
-    assert rigging.read_rig_qa(tmp_path) is None
-
-
 # --- with Blender actually installed ----------------------------------------
 
 

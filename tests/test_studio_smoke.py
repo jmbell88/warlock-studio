@@ -1039,6 +1039,20 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     assert np.array_equal(tab.doc.stack.active.pixels, before)
     assert tab.doc.history.head == head
 
+    # Indexed colour: the palette section has a whole second half that only
+    # exists once a document has a table, and every control in it acts on the
+    # *document* rather than on the session swatch row.
+    assert inker_mode.index_to(app_ctx, tab, [(0, 0, 0, 255), (255, 255, 255, 255)])
+    assert tab.doc.is_indexed
+    _frame(imgui_ctx, build)
+    state.palette_slot = 1
+    _frame(imgui_ctx, build)
+    state.palette_usage = (tab.doc.rev, tab.doc.palette_usage())
+    _frame(imgui_ctx, build)
+    assert inker_mode.index_to(app_ctx, tab, None)
+    assert not tab.doc.is_indexed
+    _frame(imgui_ctx, build)
+
     # A second layer, a selection and a floating buffer: the other textures.
     tab.doc.add_layer()
     tab.doc.select_all()

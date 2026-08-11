@@ -67,7 +67,10 @@ class Unit:
         return f"{self.item.id}--s{self.seed}"
 
 
-def units(suite: Any, items: Iterable[Any], seeds: Iterable[int]) -> list[Unit]:
+def units(items: Iterable[Any], seeds: Iterable[int]) -> list[Unit]:
+    """The cross product. Takes no ``suite``: the items have already been
+    selected out of one by ``select``, and a second, ignored reference to it
+    here reads as though this function still filters."""
     return [Unit(item=i, seed=s) for i in items for s in seeds]
 
 
@@ -103,7 +106,7 @@ def plan_run(
     """
     items = select(suite, categories=categories, ids=ids, limit=limit)
     use_seeds = seeds or suite.seeds
-    todo = units(suite, items, use_seeds)
+    todo = units(items, use_seeds)
     directory = run_dir or (
         Path(config.bench_dir) / "runs" / run_dir_name(started, recipe.key, suite.key)
     )
@@ -400,17 +403,6 @@ def _media_files(run_dir: Path) -> list[Path]:
         if views.is_dir():
             out.extend(sorted(p for p in views.glob("*.png") if p.is_file()))
     return out
-
-
-def media_bytes(run_dir: Path) -> int:
-    """What :func:`purge_media` would free, in bytes."""
-    total = 0
-    for path in _media_files(run_dir):
-        try:
-            total += path.stat().st_size
-        except OSError:
-            continue
-    return total
 
 
 def is_purged(run_dir: Path) -> bool:

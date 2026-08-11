@@ -143,6 +143,37 @@ so exported swatches are written opaque, and an import **adds** to the row rathe
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
+### Indexed colour
+
+Under the swatch row is the **palette** section, and it is a different thing from the swatches above
+it. A swatch is a colour you keep reaching for this session; a palette slot is a colour *this file
+is made of*. **Index to the swatches** or **Index to a .gpl...** turns the mode on, and from then on
+every write — a stroke, a fill, a shape, a gradient, a filter, a paste — lands on the nearest colour
+in the table. Alpha is never snapped, so a soft brush still fades; it just bands, which is what the
+mode is for.
+
+The pixels stay full-colour RGBA underneath. "Indexed" here means the writes are constrained, not
+that the document stores palette indices — so nothing about layers, blending or export changes shape,
+and turning the mode off leaves every pixel exactly where it is.
+
+Select a slot by clicking it, then:
+
+- the **Slot** picker edits it — which repaints every pixel painted in that colour, across every
+  layer and every frame, as **one** undo step;
+- **+ from colour** adds the current foreground as a new slot, repainting nothing;
+- **Remove** drops a slot and merges its pixels into the nearest surviving colour, because the
+  pixels are the picture and a palette edit is a statement about the table;
+- **&lt;** and **&gt;** reorder, which changes no pixel — the order is what an exported `.gpl` and an
+  exported GIF colour table carry;
+- **Count usage** walks the document once and reports how many pixels sit on each slot, so a slot
+  showing zero is one you can delete without losing anything. It is a button rather than a live
+  figure because counting is a pass over every pixel of every frame.
+
+The table is saved inside the `.ora` as a `palette.gpl` member, so it comes back when the file does;
+an editor that does not know about it opens the file as an ordinary image, which is exactly what the
+pixels already are. **Export animated GIF** on an indexed document writes your table verbatim
+instead of quantising each frame, so slot *n* is the same colour in every frame of the clip.
+
 ## Layers
 
 The layers panel shows the stack top-first, the way every editor shows it.

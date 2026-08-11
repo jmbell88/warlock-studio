@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import composite
+
 #: The axes :func:`flip` accepts, and the list a menu is built from. One owner:
 #: the function validates against this tuple rather than against a chain of its
 #: own ``if``s, so a third axis cannot be offered by a pane and refused by the
@@ -50,7 +52,8 @@ def _unpremultiplied(pixels: np.ndarray) -> np.ndarray:
     out = np.empty_like(pixels)
     out[..., :3] = rgb
     out[..., 3:4] = pixels[..., 3:4]
-    return np.clip(out + 0.5, 0, 255).astype(np.uint8)
+    # ``to_uint8_255``: the same expression, in the one place that owns it.
+    return composite.to_uint8_255(out)
 
 
 #: How a resize or a rotate decides what a destination pixel holds. ``smooth``

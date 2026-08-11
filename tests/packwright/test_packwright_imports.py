@@ -35,6 +35,10 @@ OUTWARD_IMPORTS = {
     # comes to have two dialects.
     ("tsxout.py", "warlock.studio.plotter.tileset"),
     ("tsxout.py", "warlock.studio.plotter.tsx"),
+    # ``frozen_rgba``, over the edge ``tsxout`` had already established. A
+    # sprite and a tileset image obey one immutability rule and used to hold
+    # two byte-identical copies of it.
+    ("sources.py", "warlock.studio.plotter.tileset"),
 }
 
 BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}

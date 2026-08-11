@@ -179,11 +179,16 @@ def _banner(ctx: Any, viewer: Any) -> None:
 def _pose(ctx: Any, job: Any, viewer: Any) -> None:
     selected = viewer.selected_bone
     widgets.muted(selected or "Click a joint to rotate it.")
-    if widgets.disabled_button("Reset joint", selected is not None):
+    if widgets.disabled_button(
+        "Reset joint", selected is not None, reason="Click a joint in the viewport first."
+    ):
         viewer.reset_bone()
     imgui.same_line()
     if imgui.button("Reset all"):
-        viewer.reset_all()
+        # Every rotation at once, and there is no undo behind it: the same
+        # discard the preset-apply path already asks about, so it takes the
+        # same guard rather than being the one bare route to the same loss.
+        guard(ctx, "reset every joint", viewer.reset_all)
     if viewer.editor.mirror_pairs:
         # Hidden for a serpent or a fish: a skeleton with no mirror pairs has
         # nothing to mirror, and a button that can only no-op is worse than none.
@@ -246,7 +251,12 @@ def _joints(ctx: Any, job: Any, viewer: Any) -> None:
     widgets.muted(f"{len(moved)} joint(s) moved")
     job_id = job["id"]
     busy = ctx.busy(f"joints:{job_id}")
-    if widgets.disabled_button("Apply joint positions", bool(moved) and not busy, (-1, 0)):
+    if widgets.disabled_button(
+        "Apply joint positions",
+        bool(moved) and not busy,
+        (-1, 0),
+        reason="Re-rigging..." if busy else "Drag a joint marker first.",
+    ):
         # A re-rig, not an edit: skinning is minutes of CPU and must never
         # overlap a trellis run, so it goes through the queue like the first
         # rig did.
@@ -258,8 +268,10 @@ def _joints(ctx: Any, job: Any, viewer: Any) -> None:
             {"bones": viewer.corrected_bones()},
         )
         viewer.exit_joints_mode()
-    if widgets.disabled_button("Revert", bool(moved)):
-        viewer.editor.revert_joints()
+    if widgets.disabled_button("Revert", bool(moved), reason="No joint has been moved."):
+        # Throws away every marker the user dragged, unlabelled and one row
+        # under "Apply joint positions"; guarded for the same reason.
+        guard(ctx, "revert the joints", viewer.editor.revert_joints)
     if imgui.button("Back to posing", (-1, 0)):
         guard(ctx, "return to pose editing", viewer.exit_joints_mode)
 
@@ -339,7 +351,11 @@ def _saved_list(ctx: Any, job: Any) -> None:
             # global library, not a hand-made pose.
             imgui.same_line()
             widgets.muted("(library)")
-        imgui.same_line()
+        # Wrapped rather than chained, poser_library's reason: the row leads
+        # with a user-typed name (and sometimes a "(library)" marker) and then
+        # wants three controls, one of which reads "Save GLB...". A long name
+        # pushed Delete past the content edge where imgui clips it.
+        widgets.same_line_or_wrap(widgets.button_width("Apply"))
         if imgui.small_button("Apply") and ctx.viewer is not None:
             # Overwrites the editor's rotations and clears dirty, so it is an
             # exit route like Done/Escape and takes the same confirm.
@@ -349,16 +365,38 @@ def _saved_list(ctx: Any, job: Any) -> None:
                 ctx.viewer.set_pose(pose.get("bones") or {}, pose_id=pose_id, dirty=False)
 
             guard(ctx, "apply a saved pose", _apply)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Save GLB..."))
         key = f"bake:{job_id}:{pose_id}"
-        if widgets.disabled_button("Save GLB...", not ctx.busy(key)):
+        if widgets.disabled_button(
+            "Save GLB...", not ctx.busy(key), reason="This pose is already baking."
+        ):
             _bake(ctx, job_id, pose_id)
-        imgui.same_line()
+        widgets.same_line_or_wrap(widgets.button_width("Delete"))
         if imgui.small_button("Delete"):
-            ctx.submit(
-                f"pose-del:{job_id}:{pose_id}", svc_rig.delete_pose, ctx.svc, job_id, pose_id
-            )
+            _ask_delete(ctx, job_id, pose_id, pose.get("name") or pose_id)
         imgui.pop_id()
+
+
+def _ask_delete(ctx: Any, job_id: str, pose_id: str, name: str) -> None:
+    """Confirm before a pose goes, the way a sweep delete does.
+
+    It sits one pixel from "Save GLB...", it is permanent, and it takes the
+    baked GLB with it -- ``rigging.delete_pose`` removes the .json and the
+    <pose_id>.glb beside it, so a mis-click costs the bake as well as the
+    rotations. What the message has to say is the part that is not obvious:
+    the mesh itself is untouched.
+    """
+    dialogs.ask_delete(
+        ctx,
+        title="Delete this pose?",
+        message=(
+            f'"{name}" and its saved GLB are deleted. This cannot be undone.\n\n'
+            "The asset's mesh and skeleton are untouched."
+        ),
+        on_confirm=lambda: ctx.submit(
+            f"pose-del:{job_id}:{pose_id}", svc_rig.delete_pose, ctx.svc, job_id, pose_id
+        ),
+    )
 
 
 def _bake(ctx: Any, job_id: str, pose_id: str) -> None:

@@ -142,7 +142,15 @@ def save_thumbnail(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
         raise Invalid("thumbnail must be a PNG")
     job_dir = svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "thumb.png").write_bytes(data)
+    # Staged, like every other write onto a served name here: thumb.png is read
+    # by the library grid on the frame thread while the viewer is saving it, so
+    # a direct write_bytes is a torn PNG in the one place a decode failure is
+    # most visible. The re-save case is the real one -- the file already exists
+    # and is already being shown when the second snapshot lands on it.
+    dest = job_dir / "thumb.png"
+    tmp = dest.with_suffix(".png.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dest)
     return {"ok": True}
 
 
@@ -319,16 +327,6 @@ def plotter_source_path(svc: Any, job_id: str) -> Path:
 def packwright_source_path(svc: Any, job_id: str) -> Path:
     check_job_id(job_id)
     return svc.job_dir(job_id) / PACKWRIGHT_SOURCE
-
-
-def plotter_source_status(svc: Any, job_id: str) -> dict[str, Any]:
-    check_job_id(job_id)
-    return {"exists": (svc.job_dir(job_id) / PLOTTER_SOURCE).exists()}
-
-
-def packwright_source_status(svc: Any, job_id: str) -> dict[str, Any]:
-    check_job_id(job_id)
-    return {"exists": (svc.job_dir(job_id) / PACKWRIGHT_SOURCE).exists()}
 
 
 def _save_source(

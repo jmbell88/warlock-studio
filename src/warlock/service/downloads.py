@@ -14,6 +14,7 @@ the pane dispatches it through ``TaskRunner``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import queue
@@ -129,6 +130,23 @@ def download(
     return {"fetched": [job.repo_id for job in jobs]}
 
 
+def _kill_and_reap(proc: subprocess.Popen[str]) -> None:
+    """Kill the child and collect it, without being able to hang doing so.
+
+    ``rigging.run_worker``'s rule, and it belongs here for the same reason: a
+    kill without a wait leaves the child unreaped and the pump thread blocked
+    on a pipe that never closes -- but an *unbounded* wait means the caller
+    that was already timing out or unwinding now blocks indefinitely on a
+    child refusing to die. The bound is the point; on Windows a killed process
+    that is stuck in an uninterruptible driver call is exactly the case, and
+    this one holds a socket. It cannot outlive the app either way -- it is in
+    the kill-on-close job -- so giving up after ten seconds costs nothing.
+    """
+    proc.kill()
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=10.0)
+
+
 def _run_worker(
     job: fetch_mod.Job, *, on_progress: Progress, timeout: float
 ) -> dict[str, Any]:
@@ -212,12 +230,10 @@ def _run_worker(
                 on_progress(float(payload.get("percent") or 0.0), str(payload.get("label") or ""))
             code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            _kill_and_reap(proc)
             raise Invalid(f"The download of {job.repo_id} timed out.") from None
         except BaseException:
-            proc.kill()
-            proc.wait()
+            _kill_and_reap(proc)
             raise
 
         result: dict[str, Any] = {}

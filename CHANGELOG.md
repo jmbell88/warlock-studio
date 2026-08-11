@@ -6,6 +6,56 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.19 — 2026-08-11
+
+- **Indexed colour in Inker.** A document can now carry a palette, and every
+  write snaps onto it — strokes, fills, shapes, gradients, filters and pastes
+  alike. Index to the swatch row or to a `.gpl`, then edit a slot and every
+  pixel painted in that colour is repainted across every layer and every frame
+  as **one** undo step; delete a slot and its pixels merge into the nearest
+  survivor; reorder freely, because the order is what an exported `.gpl` and an
+  exported GIF colour table carry. **Count usage** reports how many pixels sit
+  on each slot, so a slot showing zero is one you can safely drop. Alpha is
+  never snapped, so a soft brush still fades — it just bands, which is what the
+  mode is for. The pixels stay full-colour RGBA underneath: "indexed" means the
+  writes are constrained, not that the file stores palette indices, so nothing
+  about layers, blending or export changes shape and turning the mode off leaves
+  every pixel exactly where it is. The table is saved inside the `.ora` as a
+  `palette.gpl` member, and an editor that does not know about it opens the file
+  as the ordinary image it already is.
+- **An indexed GIF exports your table verbatim.** Slot *n* is the same colour in
+  every frame of the clip, instead of each frame being quantised on its own.
+- **Clay documents can be closed.** Clay could open documents and never shut
+  one: there was no tab bar, so Ctrl+Tab switched between documents with nothing
+  on screen saying there was more than one, and a dirty-quit prompt asked about
+  documents you had no way to reach. Clay now has the same tab bar as every
+  other workspace, with Ctrl+W and a close button, and a dirty document asks
+  before it goes. Plotter and Packwright mark a dirty tab with imgui's own dot
+  now rather than a `"* "` prefix, matching Inker.
+- **Space-to-pan in Plotter no longer latches.** The key-up was filtered out
+  before it was ever seen, so the first press left panning on for the rest of
+  the session and every left-drag panned instead of drawing.
+- **Global shortcuts work while a text field has focus.** Ctrl+K and the F-keys
+  were dead the moment you clicked into the 2D prompt box — which is exactly
+  where you are when you want to jump somewhere else. Plain keys still belong to
+  the field, and so do imgui's own Ctrl+Z/Y/X/C/V/A inside it.
+- **Two toasts asked for a level that does not exist** ("warning" rather than
+  `warn`) and silently arrived as grey, non-sticky info notices. A test now
+  pins every toast level in the source against the ones that exist.
+- **Deleting a saved pose or a rendered sheet asks first.** Both sat one pixel
+  from a save button and deleted on the click; a sheet costs one Blender render
+  per cell to recreate. **Reset all** and the joint **Revert** in the pose
+  editor now take the same unsaved-changes guard the preset path already did.
+- **Greyed controls can say why.** `disabled_button` promised a tooltip in its
+  docstring and drew none across 92 call sites; it takes a `reason` now, and the
+  command palette's greyed rows explain themselves instead of swallowing Enter
+  in silence.
+- **The Review loop says what it did.** An armed negative grade is now visible
+  on screen, filing a verdict says what was filed and how to get back to it
+  before it advances, the grade and tag buttons carry their keys, and the
+  see-through reading carries the same caveat the inspector gives it — a solid,
+  featureless mesh scores it too.
+
 ## 0.0.18 — 2026-08-10
 
 - **A sprite sheet from a single drawing.** A finished 2D reference can now be

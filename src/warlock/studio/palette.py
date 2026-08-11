@@ -45,7 +45,14 @@ class Command:
 
     ``key`` is stable and is what a test names; ``label`` is what the user
     reads and may be reworded freely. ``group`` is a heading, ``hint`` is the
-    keyboard shortcut or the reason the row is greyed.
+    keyboard shortcut.
+
+    ``why`` is the reason the row is greyed, and it is the half of the module
+    docstring's argument that was never built: "learns where to go from a
+    greyed row that says which mode it belongs to" was the whole case for
+    listing disabled commands, and the row said nothing -- it greyed out and
+    Enter on it returned in silence. A command with ``enabled`` and no ``why``
+    is the gap, not the norm.
     """
 
     key: str
@@ -54,6 +61,7 @@ class Command:
     run: Callable[[Any], None]
     hint: str = ""
     enabled: Callable[[Any], bool] = field(default=lambda _ctx: True)
+    why: str = ""
 
 
 # --- matching ----------------------------------------------------------------
@@ -153,6 +161,11 @@ def _viewport(ctx: Any) -> bool:
     return ctx.state.mode in modes.VIEWPORT_MODES
 
 
+# Shared by the three viewport toggles: one sentence, so they cannot drift into
+# three different accounts of the same gate.
+_VIEWPORT_WHY = "Only in the 2D and 3D panes, which are where the viewport is."
+
+
 def _selected(ctx: Any) -> Any:
     return ctx.cache.get(ctx.state.selected)
 
@@ -249,6 +262,7 @@ def commands(ctx: Any) -> list[Command]:
             run=_generate,
             hint="Ctrl+Enter",
             enabled=_in_generate_mode,
+            why="Open the 2D or 3D generate pane first.",
         ),
         Command(key="new-drawing", label="New drawing", group="Actions", run=new_drawing),
         Command(key="new-clay", label="New Clay document", group="Actions", run=new_clay),
@@ -258,6 +272,7 @@ def commands(ctx: Any) -> list[Command]:
             group="Actions",
             run=reroll,
             enabled=rerollable,
+            why="Select a finished asset in the library first.",
         ),
         Command(
             key="delete",
@@ -265,6 +280,7 @@ def commands(ctx: Any) -> list[Command]:
             group="Actions",
             run=delete,
             enabled=lambda ctx: _selected(ctx) is not None,
+            why="Select an asset in the library first.",
         ),
         Command(
             key="wireframe",
@@ -273,6 +289,7 @@ def commands(ctx: Any) -> list[Command]:
             run=wireframe,
             hint="W",
             enabled=_viewport,
+            why=_VIEWPORT_WHY,
         ),
         Command(
             key="turntable",
@@ -281,6 +298,7 @@ def commands(ctx: Any) -> list[Command]:
             run=turntable,
             hint="S",
             enabled=_viewport,
+            why=_VIEWPORT_WHY,
         ),
         Command(
             key="frame",
@@ -289,6 +307,7 @@ def commands(ctx: Any) -> list[Command]:
             run=frame,
             hint="F",
             enabled=_viewport,
+            why=_VIEWPORT_WHY,
         ),
         Command(
             key="fps",

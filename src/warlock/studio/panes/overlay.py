@@ -64,12 +64,22 @@ def toolbar(ctx: Any) -> None:
     if viewer is None:
         return
     job = ctx.job()
+    # Every continuation below wraps rather than running off the edge. This
+    # toolbar carries up to ten controls and is drawn over the *viewport*, so
+    # its width is whatever the side panes have left -- narrow the window, or
+    # widen the inspector, and a bare same_line() chain puts the last few
+    # buttons past the content edge where imgui clips them away and they cannot
+    # be clicked at all. Zoom and "Exit comparison" went first, which are also
+    # the ones with no keyboard route to fall back on.
+    def _wrap(label: str) -> None:
+        widgets.same_line_or_wrap(widgets.button_width(label))
+
     if offers_inker(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
         if imgui.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
-        imgui.same_line()
+        _wrap(f"Tiled {TILE_REPEAT}x{TILE_REPEAT}")
     if shows_tiled(ctx, job):
         # Only for a tile, and only in 2D: it is the one asset for which
         # "repeated" is a true picture of the thing rather than a duplicate of
@@ -79,31 +89,31 @@ def toolbar(ctx: Any) -> None:
         _changed, ctx.state.tile_preview = widgets.toggle(
             f"Tiled {TILE_REPEAT}x{TILE_REPEAT}", ctx.state.tile_preview, tag="tile_preview"
         )
-        imgui.same_line()
+        _wrap(icons.MAXIMIZE)
     if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):
         viewer.frame()
-    imgui.same_line()
+    _wrap("Wireframe")
     changed, state.wireframe = widgets.toggle("Wireframe", state.wireframe, tag="wireframe")
     if changed:
         viewer.set_wireframe(state.wireframe)
-    imgui.same_line()
+    _wrap("Turntable")
     changed, state.turntable = widgets.toggle("Turntable", state.turntable, tag="turntable")
     if changed:
         viewer.set_turntable(state.turntable)
-    imgui.same_line()
+    _wrap(icons.CAMERA)
     if widgets.icon_button(icons.CAMERA, "Screenshot...", enabled=viewer.has_model):
         _screenshot(ctx)
     if viewer.has_model:
         # The wheel already dollies; these exist so the control is findable at
         # all. "Frame" beside them is the reset.
-        imgui.same_line()
+        _wrap(icons.ZOOM_IN)
         if widgets.icon_button(icons.ZOOM_IN, "Zoom in (wheel also dollies)"):
             viewer.camera.dolly(1)
-        imgui.same_line()
+        _wrap(icons.ZOOM_OUT)
         if widgets.icon_button(icons.ZOOM_OUT, "Zoom out"):
             viewer.camera.dolly(-1)
     if state.comparing:
-        imgui.same_line()
+        _wrap(f"{icons.X} Exit comparison")
         if imgui.button(f"{icons.X} Exit comparison"):
             state.comparing = None
             viewer.exit_compare()
@@ -127,13 +137,17 @@ def _texture_losses(viewer: Any) -> None:
     skipped = getattr(model, "skipped_textures", 0) if model is not None else 0
     if not skipped:
         return
-    imgui.same_line()
-    widgets.text_colored(
-        theme.WARN,
+    message = (
         f"{skipped} texture could not be loaded"
         if skipped == 1
-        else f"{skipped} textures could not be loaded",
+        else f"{skipped} textures could not be loaded"
     )
+    # Wrapped like the rest of the toolbar, and this one is the longest thing
+    # on it: a whole sentence appended after ten controls, so it is the first
+    # to be clipped -- and it is the only item here that exists solely to be
+    # read.
+    widgets.same_line_or_wrap(imgui.calc_text_size(message).x)
+    widgets.text_colored(theme.WARN, message)
     if imgui.is_item_hovered():
         imgui.set_tooltip(
             "This file references images the viewer could not read -- stored in a "

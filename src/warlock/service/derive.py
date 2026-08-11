@@ -69,18 +69,27 @@ def get_file(
         raise NotReady(files.unready_reason(job, job_dir, name))
     # FBX needs a Blender subprocess rather than a trimesh call, so it does not
     # fit the `derived` dict below -- but it takes the same per-artifact lock,
-    # for the same reason. Existence checked only under the lock: Blender
-    # writes the served filename in place, so a lock-free exists() during the
-    # first export would open a truncated FBX. The trimesh conversions below
-    # don't need this -- postprocess stages them and renames atomically.
+    # for the same reason: whoever waits here wants this one file, and two
+    # Blenders exporting it at once is the thing the lock exists to prevent.
+    # The export is staged like every other derivation, and for a sharper
+    # reason than concurrency: a Blender that dies part way through -- timeout,
+    # kill-on-close, a bad mesh -- leaves a partial FBX behind, and because
+    # existence *is* the freshness test for this artifact, that truncated file
+    # would then be served for the life of the job directory.
     if name == "model.fbx" and glb.exists():
         with svc.convert_lock(job_id, name):
             if not path.exists():
-                spec = rigging.fbx_spec(glb, path, job_dir)
                 try:
                     # FBX export is import-plus-export like a pose bake, so it
                     # reuses pose_timeout rather than gaining a knob.
-                    rigging.run_worker(spec, timeout=svc.config.pose_timeout)
+                    _staged(
+                        job_dir,
+                        name,
+                        lambda tmp: rigging.run_worker(
+                            rigging.fbx_spec(glb, tmp, job_dir),
+                            timeout=svc.config.pose_timeout,
+                        ),
+                    )
                 except rigging.BlenderError as exc:
                     log.error("fbx export for %s failed: %s", job_id, exc)
                     raise Failed("could not export FBX") from exc
@@ -378,19 +387,7 @@ def _derive_2d(
             # neither.
             from ..pipelines import seam
 
-            tmp = job_dir / f".{name}.tmp"
-            try:
-                seam.wrap_preview(source, tmp)
-                os.replace(tmp, job_dir / name)
-            finally:
-                # A failed or half-written roll must not leave its staging file
-                # in the job directory: nothing ever looks at a dotfile again,
-                # so it would sit there until the job was pruned. Suppressed
-                # and not merely missing_ok, because a cleanup that raises here
-                # would replace the failure the caller needs to see. Harmless
-                # after a success, where the replace has already consumed it.
-                with contextlib.suppress(OSError):
-                    tmp.unlink(missing_ok=True)
+            _staged(job_dir, name, lambda tmp: seam.wrap_preview(source, tmp))
             return
         if name in files.MATERIAL_2D:
             # No matte here either, and for the wrapped view's reason: every
@@ -430,18 +427,7 @@ def _derive_2d(
                 raise NotReady(str(exc)) from exc
         meta["matte"] = matte
         meta["alpha"] = asset2d.alpha_report(out)
-        # Staged and renamed: a concurrent reader of an artifact this job
-        # derived a moment ago must never see a half-written PNG. The finally
-        # is the same rule the wrapped view above follows -- an encode that
-        # raises half way through would otherwise strand its staging file for
-        # the life of the job directory.
-        tmp = job_dir / f".{name}.tmp"
-        try:
-            out.save(tmp, "PNG")
-            os.replace(tmp, job_dir / name)
-        finally:
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
+        _staged(job_dir, name, lambda tmp: out.save(tmp, "PNG"))
         _write_manifest(svc, job, job_id, job_dir, name, meta)
 
 

@@ -14,6 +14,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import fonts, icons, theme, tokens, widgets
+from ..state import set_mode
 from ..tokens import sp
 from . import loader, parser
 from .targets import HELP_TARGETS, TROUBLESHOOTING
@@ -66,7 +67,12 @@ def help_button(ctx: Any, pane: str) -> None:
     offset = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - sp(26)
     imgui.same_line(max(offset, 0.0))
     if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
-        ctx.state.mode = "manual"
+        # Through ``set_mode``, which is what makes Esc go back to the pane the
+        # (?) was clicked in. A bare assignment leaves ``previous_mode`` at
+        # whatever it was before, and the manual is precisely the mode a reader
+        # expects to escape *out of* -- back to the control they were asking
+        # about, not to Home.
+        set_mode(ctx.state, "manual")
         ctx.state.manual.open_at(*target)
 
 
@@ -74,7 +80,7 @@ def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
     """Switch to the manual at ``target``. What ``help_button`` does, without
     the button -- for the three surfaces that lead to troubleshooting from a
     control of their own (F57)."""
-    ctx.state.mode = "manual"
+    set_mode(ctx.state, "manual")
     ctx.state.manual.open_at(*target)
 
 
@@ -94,6 +100,7 @@ def draw_body(ctx: Any) -> None:
     whether this runs at all, which is the same rule every other pane follows.
     """
     ms = ctx.state.manual
+    _warm_blocks()
     if imgui.begin_child("manual-toc", (sp(240), 0), imgui.ChildFlags_.borders.value):
         _draw_toc(ms)
     imgui.end_child()
@@ -136,6 +143,38 @@ def _draw_toc(ms: Any) -> None:
             "No chapter matches.",
             "Titles and headings are searched, not the body text.",
         )
+
+
+#: How many chapters ``_warm_blocks`` parses per frame. Small enough that the
+#: work is invisible in a frame budget, large enough that the whole manual is
+#: cached within a handful of frames -- long before anyone can switch into the
+#: mode and reach the search box.
+_WARM_PER_FRAME = 3
+
+
+def _warm_blocks() -> None:
+    """Parse a few uncached chapters, spread over the frames the mode is open.
+
+    ``_matches`` searches headings, so the first keystroke in the search box
+    used to parse *every* chapter at once, on the frame thread -- a read and a
+    parse per file, in the one place the app is meant to feel like a document
+    viewer. Doing it while the reader is looking at the contents list costs
+    nothing anyone can see, and by the time the box is focused the cache is
+    hot. Bounded per frame rather than done in one go for the same reason it
+    was moved at all.
+
+    Deliberately not a TaskRunner job: ``_blocks_cache`` is a plain dict read
+    by the frame thread every frame with no lock, and the three entry points
+    into this mode would each have to remember to schedule it. Cheap, ordinary
+    frame work is the smaller thing.
+    """
+    warmed = 0
+    for chapter in _toc():
+        if warmed >= _WARM_PER_FRAME:
+            return
+        if chapter.key not in _blocks_cache:
+            _blocks(chapter.key)
+            warmed += 1
 
 
 def _matches(chapter: loader.Chapter, needle: str) -> bool:

@@ -313,7 +313,8 @@ def test_save_over_the_edited_pose_updates_in_place(svc):
     assert ctx.prompts.asked == [], "an in-place save asks no name"
     result = ctx.results[poser_mode.SAVE_KEY]
     assert result["id"] == stored["id"]
-    assert svc_poses.read_library_pose(svc, stored["id"])["updated"] == result["updated"]
+    on_disk = {p["id"]: p for p in svc_poses.list_library(svc)["poses"]}
+    assert on_disk[stored["id"]]["updated"] == result["updated"]
 
 
 def test_deleting_the_edited_pose_clears_current(svc):
