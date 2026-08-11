@@ -198,7 +198,7 @@ def _unique_name(doc: Any, base: str) -> str:
         return base
     # The same counting-up rule ``ops.duplicate`` uses, so two objects never
     # wear one name whichever way they arrived.
-    return ops._next_name(base, taken)
+    return ops.next_name(base, taken)
 
 
 def _actions(ctx: Any, state: Any, doc: Any) -> None:

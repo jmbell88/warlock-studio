@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .mesh import Mesh, _face_normals, face_count
+from .mesh import Mesh, face_count, face_normals
 
 __all__ = ["box_unwrap", "planar_unwrap"]
 
@@ -83,7 +83,7 @@ def box_unwrap(mesh: Mesh) -> Mesh:
     # Computed once and handed down. ``_projected`` needs the same normals to
     # decide which corners are mirrored, and asking for them again is a second
     # full pass over every loop in the mesh for an answer already in hand.
-    normals = _face_normals(mesh)
+    normals = face_normals(mesh)
     return _projected(mesh, dominant_axis(normals), normals=normals)
 
 
@@ -113,7 +113,7 @@ def _projected(mesh: Mesh, axes: np.ndarray, *, normals: np.ndarray | None = Non
     extent = (positions.max(axis=0) - low) * scale
     uv = np.zeros((len(mesh.loops), 2), dtype="f4")
     if normals is None:
-        normals = _face_normals(mesh)
+        normals = face_normals(mesh)
     for axis in range(3):
         which = np.flatnonzero(corner_axis == axis)
         if not len(which):

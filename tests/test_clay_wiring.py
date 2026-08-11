@@ -229,14 +229,14 @@ def test_every_camera_attribute_the_clay_view_reaches_exists():
 
     from warlock.studio.viewer.camera import Camera
 
-    source = inspect.getsource(clay_state.ClayView.read_from) + inspect.getsource(
-        clay_state.ClayView.write_to
+    source = inspect.getsource(clay_state.CameraView.read_from) + inspect.getsource(
+        clay_state.CameraView.write_to
     )
     names = set(re.findall(r"camera\.(\w+)", source))
     names |= set(re.findall(r'getattr\(camera, "(\w+)"', source))
     camera = Camera()
     missing = sorted(n for n in names if not hasattr(camera, n))
-    assert not missing, f"ClayView names Camera attributes that do not exist: {missing}"
+    assert not missing, f"CameraView names Camera attributes that do not exist: {missing}"
     # The scan found the private half at all -- an empty match set would pass
     # the assert above while checking nothing.
     assert "_goal_theta" in names

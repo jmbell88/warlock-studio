@@ -19,6 +19,13 @@ The modules, bottom up:
 ``ora``        OpenRaster read and write
 ``document``   the one type that knows about all of the above
 
+``Document`` is a dataclass in ``document.py``, which holds the fields, the
+composite and flatten caches, and the cross-cutting write paths every concern
+goes through. Its concern blocks are method-only mixins it inherits, one per
+sibling module: ``_doc_anim``, ``_doc_paint``, ``_doc_history``,
+``_doc_selection``, ``_doc_layers``, ``_doc_geometry``, ``_doc_indexed``. They
+are private to the package and nothing outside it names them.
+
 Everything a caller needs is re-exported here, so ``from .. import inker`` and
 ``inker.Document`` keep working exactly as they did when this was one file.
 """

@@ -169,7 +169,7 @@ def bake_transform(obj: Obj) -> Obj:
     )
 
 
-def _next_name(name: str, taken: Iterable[str] = ()) -> str:
+def next_name(name: str, taken: Iterable[str] = ()) -> str:
     """``Box`` -> ``Box.001`` -> ``Box.002``, skipping any name already in use.
 
     Counting up rather than prefixing ("Copy of Copy of Box") keeps the name
@@ -188,6 +188,12 @@ def _next_name(name: str, taken: Iterable[str] = ()) -> str:
         if candidate not in used and candidate != name:
             return candidate
     return f"{base}.{start + len(used) + 3:03d}"  # pragma: no cover - unreachable
+
+
+# Compat: the tests and the tools pane both name the private form, and the pane
+# calling it was a cross-boundary private call -- which is what the promotion is
+# for. The alias keeps the older spelling working.
+_next_name = next_name
 
 
 def duplicate(obj: Obj, uid: int, *, taken: Iterable[str] = ()) -> Obj:
@@ -213,7 +219,7 @@ def duplicate(obj: Obj, uid: int, *, taken: Iterable[str] = ()) -> Obj:
     return replace(
         obj,
         uid=uid,
-        name=_next_name(obj.name, taken),
+        name=next_name(obj.name, taken),
         params=dict(obj.params),
     )
 

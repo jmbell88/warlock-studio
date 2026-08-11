@@ -9,6 +9,8 @@ that nothing here reaches for a GUI.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -277,6 +279,58 @@ def test_a_parameter_passed_in_overrides_the_default() -> None:
     inner = doc.by_uid(uid).mesh
     corners = inner.positions[inner.loops[inner.starts[0] : inner.starts[1]]]
     assert np.allclose(corners, corners[0]), "collapsed onto the centroid"
+
+
+def test_a_parameter_out_of_range_is_clamped_to_what_it_declared() -> None:
+    """``run`` is the choke point, so the declared range holds on every surface.
+
+    The popup clamps its own live fields, but the key path, the tools pane and
+    a remembered value from a previous session all arrive here instead -- and a
+    subdivision at 99 levels is not something each op should have to refuse for
+    itself. An integer parameter also comes out an ``int``, so an op can index
+    with it.
+    """
+    seen: dict[str, Any] = {}
+
+    def record(ctx: Any, doc: Any, **params: Any) -> None:
+        del ctx, doc
+        seen.update(params)
+
+    # Unregistered: the registry is global, and a probe op that joined it would
+    # be there for every later test in the process.
+    probe = clay_ops.Op(
+        name="probe-clamp",
+        label="Probe",
+        modes=("object",),
+        run=record,
+        params=(
+            clay_ops.Param("t", "position", 0.5, 0.05, low=0.0, high=1.0),
+            clay_ops.Param("levels", "levels", 1.0, 1.0, low=1.0, high=4.0, integer=True),
+        ),
+    )
+
+    assert clay_ops.run(_Ctx(), _doc()[0], probe, t=5.0, levels=99.0) is True
+    assert seen == {"t": 1.0, "levels": 4}
+    assert isinstance(seen["levels"], int)
+
+
+def test_a_parameter_below_its_floor_is_clamped_up() -> None:
+    seen: dict[str, Any] = {}
+
+    def record(ctx: Any, doc: Any, **params: Any) -> None:
+        del ctx, doc
+        seen.update(params)
+
+    probe = clay_ops.Op(
+        name="probe-floor",
+        label="Probe",
+        modes=("object",),
+        run=record,
+        params=(clay_ops.Param("t", "position", 0.5, 0.05, low=0.25, high=1.0),),
+    )
+
+    clay_ops.run(_Ctx(), _doc()[0], probe, t=-3.0)
+    assert seen == {"t": 0.25}
 
 
 def test_dissolve_dispatches_on_the_mode() -> None:

@@ -79,6 +79,15 @@ _EPOCH = (1980, 1, 1, 0, 0, 0)
 # which is what lets a v1 file load without a migration.
 _MESH_FIELDS = ("positions", "loops", "starts", "material", "smooth")
 
+# A zip's directory declares what each member unpacks to, and nothing makes that
+# number honest -- a few kilobytes of archive can claim terabytes, and the read
+# that discovers this is the one that has already exhausted memory. One gigabyte
+# is far past any document this editor produces (a million-face mesh is tens of
+# megabytes) and far short of a machine's RAM, so the ceiling is only ever hit
+# by a file that was not written by us. Read from module globals at call time so
+# a test can lower it.
+MAX_DECOMPRESSED_BYTES = 1 << 30
+
 # The texture slots, in the order ``scene.TEXTURE_SLOTS`` lists them. Mirrored
 # rather than imported because ``clay/`` does not import the GL layer -- and the
 # names are a *file format* here, so pinning them locally is what stops a
@@ -340,7 +349,7 @@ def _read_mesh(zf: zipfile.ZipFile, uid: int) -> bm.Mesh:
     mesh = bm.Mesh(**arrays)
     # Validate rather than trust: the CSR offsets are the one part of the file
     # that a truncated write or a hand edit makes *quietly* wrong -- ``edges``
-    # and ``_face_normals`` do not raise on a bad ``starts``, they produce
+    # and ``face_normals`` do not raise on a bad ``starts``, they produce
     # nonsense. Better to refuse the file than to render it.
     bm.validate(mesh)
     return mesh
@@ -374,22 +383,57 @@ def _read_textures(zf: zipfile.ZipFile, scene: dict[str, Any]) -> list[Any]:
     return out
 
 
+def _vector(entry: dict[str, Any], key: str, default: tuple[float, ...]) -> Any:
+    """One fixed-length numeric field off an object entry, or a refusal.
+
+    ``np.array`` is happy to build a 2x3 array, an array of strings or a ragged
+    object array out of whatever JSON carried, and every one of those reaches
+    the renderer as a transform that produces nothing visible and no error. The
+    length is the part worth checking: a three-element rotation is a quaternion
+    with its w dropped, which is a document that opens and is silently wrong.
+    """
+    raw = entry.get(key, default)
+    try:
+        value = np.asarray(raw, dtype="f8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"an object in this clay document has a {key} that is not numbers"
+        ) from exc
+    if value.shape != (len(default),):
+        raise ValueError(
+            f"an object in this clay document has a {key} of "
+            f"{value.size} numbers, not {len(default)}"
+        )
+    return value
+
+
 def _material_from(entry: dict[str, Any], textures: list[Any]) -> gltf.Material:
-    slots = {}
-    for slot, index in (entry.get("textures") or {}).items():
-        if slot in TEXTURE_FIELDS and 0 <= int(index) < len(textures):
-            slots[slot] = textures[int(index)]
-    return gltf.Material(
-        **slots,
-        name=str(entry.get("name", "")),
-        base_color_factor=tuple(entry.get("base_color_factor", (1.0, 1.0, 1.0, 1.0))),
-        metallic_factor=float(entry.get("metallic_factor", 1.0)),
-        roughness_factor=float(entry.get("roughness_factor", 1.0)),
-        emissive_factor=tuple(entry.get("emissive_factor", (0.0, 0.0, 0.0))),
-        double_sided=bool(entry.get("double_sided", False)),
-        alpha_mode=str(entry.get("alpha_mode", "OPAQUE")),
-        alpha_cutoff=float(entry.get("alpha_cutoff", 0.5)),
-    )
+    """One material off the scene, refusing a malformed one by name.
+
+    Everything here is a cast of a value out of JSON, so ``null`` where a number
+    belongs -- or a texture index that is a string -- arrives as a ``TypeError``
+    from deep inside ``float()`` with no mention of the file. The whole thing is
+    wrapped once rather than field by field: the answer is the same for all of
+    them, and the user can only act on "this document is malformed" anyway.
+    """
+    try:
+        slots = {}
+        for slot, index in (entry.get("textures") or {}).items():
+            if slot in TEXTURE_FIELDS and 0 <= int(index) < len(textures):
+                slots[slot] = textures[int(index)]
+        return gltf.Material(
+            **slots,
+            name=str(entry.get("name", "")),
+            base_color_factor=tuple(entry.get("base_color_factor", (1.0, 1.0, 1.0, 1.0))),
+            metallic_factor=float(entry.get("metallic_factor", 1.0)),
+            roughness_factor=float(entry.get("roughness_factor", 1.0)),
+            emissive_factor=tuple(entry.get("emissive_factor", (0.0, 0.0, 0.0))),
+            double_sided=bool(entry.get("double_sided", False)),
+            alpha_mode=str(entry.get("alpha_mode", "OPAQUE")),
+            alpha_cutoff=float(entry.get("alpha_cutoff", 0.5)),
+        )
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("a material in this clay document is malformed") from exc
 
 
 def read_wblk(data: bytes) -> ClayDoc:
@@ -409,6 +453,17 @@ def read_wblk(data: bytes) -> ClayDoc:
     # where a refusal -- the one thing that block exists to do -- left the
     # archive open with nothing to close it but the collector.
     with zf:
+        # Before anything is read: the directory says what every member unpacks
+        # to, and the cheapest place to refuse an archive that claims more than
+        # this build will hold is before the first ``read``.
+        claimed = sum(int(info.file_size) for info in zf.infolist())
+        ceiling = MAX_DECOMPRESSED_BYTES
+        if claimed > ceiling:
+            raise ValueError(
+                f"this clay document claims {claimed} bytes unpacked, "
+                f"past the {ceiling} this build will read"
+            )
+
         try:
             scene = json.loads(zf.read(SCENE))
         except (
@@ -429,16 +484,25 @@ def read_wblk(data: bytes) -> ClayDoc:
         textures = _read_textures(zf, scene)
         objects = []
         for entry in scene.get("objects", []):
-            uid = int(entry["uid"])
+            # The uid is the one field with no defensible default -- it names the
+            # mesh member and it is what undo addresses -- so a missing or
+            # non-numeric one is a refusal rather than the bare ``KeyError`` or
+            # ``TypeError`` this used to hand the mode layer.
+            try:
+                uid = int(entry["uid"])
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise ValueError(
+                    "an object in this clay document has no usable uid"
+                ) from exc
             reserve_uid(uid)
             objects.append(
                 Obj(
                     uid=uid,
                     name=str(entry.get("name", "")),
                     mesh=_read_mesh(zf, uid),
-                    translation=np.array(entry.get("translation", (0.0, 0.0, 0.0))),
-                    rotation=np.array(entry.get("rotation", (0.0, 0.0, 0.0, 1.0))),
-                    scale=np.array(entry.get("scale", (1.0, 1.0, 1.0))),
+                    translation=_vector(entry, "translation", (0.0, 0.0, 0.0)),
+                    rotation=_vector(entry, "rotation", (0.0, 0.0, 0.0, 1.0)),
+                    scale=_vector(entry, "scale", (1.0, 1.0, 1.0)),
                     generator=entry.get("generator"),
                     params=dict(entry.get("params") or {}),
                     visible=bool(entry.get("visible", True)),

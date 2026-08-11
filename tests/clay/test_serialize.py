@@ -249,6 +249,78 @@ def test_a_zip_without_a_scene_is_refused() -> None:
         ser.read_wblk(out.getvalue())
 
 
+def test_an_archive_claiming_more_than_the_ceiling_is_refused_before_it_is_read(
+    monkeypatch,
+) -> None:
+    """A zip's directory declares what it unpacks to and nothing makes that
+    honest, so the refusal has to come off the directory rather than off the
+    read that has already exhausted memory."""
+    monkeypatch.setattr(ser, "MAX_DECOMPRESSED_BYTES", 16)
+    with pytest.raises(ValueError, match="past the 16 this build will read"):
+        ser.read_wblk(ser.wblk_bytes(_doc()))
+
+
+def test_an_object_with_no_uid_is_refused_as_a_document_problem() -> None:
+    """A bare ``KeyError`` out of here reaches the mode layer as a crash rather
+    than as "this file is broken", which is what the user can act on."""
+
+    def drop(scene: dict) -> None:
+        for entry in scene["objects"]:
+            entry.pop("uid", None)
+
+    with pytest.raises(ValueError, match="uid"):
+        ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), drop))
+
+
+def test_an_object_whose_uid_is_not_a_number_is_refused() -> None:
+    def mangle(scene: dict) -> None:
+        for entry in scene["objects"]:
+            entry["uid"] = "not a number"
+
+    with pytest.raises(ValueError, match="uid"):
+        ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), mangle))
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    [
+        ("translation", [1.0, 2.0]),
+        ("rotation", [0.0, 0.0, 0.0]),
+        ("scale", [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
+    ],
+)
+def test_a_transform_of_the_wrong_shape_is_refused_rather_than_rendered(key, bad):
+    """A three-element rotation is a quaternion with its w dropped: the document
+    opens, nothing looks obviously wrong, and every transform it drives is."""
+
+    def mangle(scene: dict) -> None:
+        for entry in scene["objects"]:
+            entry[key] = bad
+
+    with pytest.raises(ValueError, match=key):
+        ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), mangle))
+
+
+def test_a_transform_that_is_not_numbers_is_refused() -> None:
+    def mangle(scene: dict) -> None:
+        for entry in scene["objects"]:
+            entry["translation"] = ["left", "up", "out"]
+
+    with pytest.raises(ValueError, match="translation"):
+        ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), mangle))
+
+
+def test_a_material_with_a_null_factor_is_refused_by_name() -> None:
+    """``float(None)`` is a ``TypeError`` from deep inside the reader with no
+    mention of the file; what the user needs to hear is which half is broken."""
+
+    def mangle(scene: dict) -> None:
+        scene["materials"][0]["metallic_factor"] = None
+
+    with pytest.raises(ValueError, match="material"):
+        ser.read_wblk(_rewrite(ser.wblk_bytes(_doc()), mangle))
+
+
 # --- the file itself ---------------------------------------------------------
 
 
@@ -400,7 +472,7 @@ def test_a_missing_texture_member_is_refused_rather_than_blanked() -> None:
 
 
 class _Camera:
-    """What ``ClayView`` hands the writer: a duck with four attributes."""
+    """What ``clay_state.CameraView`` hands the writer: a duck with four attributes."""
 
     def __init__(self, yaw=0.4, pitch=1.1, distance=7.5, target=(1.0, 2.0, 3.0)):
         self.yaw, self.pitch, self.distance, self.target = yaw, pitch, distance, target

@@ -287,7 +287,7 @@ def find_name(
     return None
 
 
-# The clay/ops._next_name idiom, copied rather than imported: this module (and
+# The clay/ops.next_name idiom, copied rather than imported: this module (and
 # the service layer above it) may not import studio, and the four lines are one
 # judgement -- count up, never prefix -- that both sides state independently.
 _SUFFIX = re.compile(r"^(?P<base>.*)\.(?P<n>\d{3})$")

@@ -387,7 +387,13 @@ def save_as(ctx: Any, tab: ClayTab | None = None) -> None:
         if path is None:
             return None
         path = path.with_suffix(clay_state.WBLK_SUFFIX)
-        path.write_bytes(data)
+        # Staged, as ``save_to`` is: a picker aimed at an existing document is
+        # the ordinary way to overwrite one, and a write that dies partway
+        # through would leave that file truncated with no copy of it anywhere.
+        # No mkdir -- the picker returns a directory that exists.
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
         return {"rev": rev, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"clay-saveas:{tab.uid}", run)
@@ -549,7 +555,7 @@ def close_tab(ctx: Any, uid: str) -> None:
 
     What a Clay document owns in the single GL context is the part worth
     stating. The per-document camera is plain data on the tab
-    (``clay_state.ClayView``); the GPU buffers live in ``ctx.clay_view``, whose
+    (``clay_state.CameraView``); the GPU buffers live in ``ctx.clay_view``, whose
     ``_cache`` is keyed on *object* uid and holds whichever document was last
     synced. Dropping the document those buffers were built from without
     releasing them leaves the renderer one frame away from drawing a mesh that
@@ -722,33 +728,15 @@ def _fire_op(ctx: Any, doc: Any, op: Any) -> bool:
 
 
 def _delete(ctx: Any, doc: Any) -> None:
-    """Delete what is selected, in whatever sense the current mode means it.
+    """``clay.selection.delete_selected``, with its refusals shown as toasts.
 
-    In an element mode this **never** falls through to removing objects. A user
-    in face mode pressing Delete means "get rid of these faces", and quietly
-    deleting the whole object instead is the most destructive possible
-    misreading of one keystroke -- the more so because the object selection in
-    an element mode is derived from the element selection, so every object with
-    anything selected inside it would go.
+    The rule and the reasoning are that function's; what belongs to this layer
+    is turning a returned sentence into something the user sees.
     """
-    from .clay import elements as el
-    from .clay import ops_topo
+    from .clay import selection
 
-    if doc.element_mode == "object":
-        for uid in list(doc.selection):
-            doc.remove_object(uid)
-        return
-    for uid in list(doc.element_sel):
-        obj = doc.by_uid(uid)
-        faces = el.convert(obj.mesh, doc.element_sel_of(uid), "face")
-        if el.is_empty(faces):
-            continue
-        try:
-            mesh, sel = ops_topo.delete_faces(obj.mesh, faces)
-        except el.OpError as error:
-            _toast(ctx, str(error))
-            continue
-        doc.set_mesh(uid, mesh, select=sel)
+    for message in selection.delete_selected(doc):
+        _toast(ctx, message)
 
 
 def _escape(state: ClayState, tab: ClayTab, doc: Any) -> None:
@@ -832,55 +820,33 @@ def _ctrl_key(
     return True
 
 
+# The three below and ``_delete`` above are thin wrappers on
+# ``clay.selection``, kept at their old names and signatures because the panes
+# and the tests call them by those names. The behaviour and the reasoning are
+# in that module.
+
+
 def _select_all(doc: Any) -> None:
-    """Everything *visible*, in the current mode's sense of everything.
+    """``clay.selection.select_all``: everything visible, in the current mode."""
+    from .clay import selection
 
-    The object branch used to take every object and the element branch below it
-    has always skipped the invisible ones, which is the asymmetry rather than a
-    choice: ``visible=False`` is documented to mean an object does not render,
-    does not export and **cannot be picked**, and Ctrl+A was picking them. It
-    only showed once merge existed -- Ctrl+A then Ctrl+J pulled geometry the
-    user could not see into the survivor -- but Delete and Ctrl+D were reading
-    the same selection all along.
-    """
-    from .clay import elements as el
-
-    if doc.element_mode == "object":
-        doc.select([obj.uid for obj in doc.objects if obj.visible])
-        return
-    for obj in doc.objects:
-        if obj.visible:
-            doc.set_element_sel(obj.uid, el.select_all(obj.mesh, doc.element_mode))
+    selection.select_all(doc)
 
 
 def _invert(doc: Any) -> None:
-    """Ctrl+Shift+I. In object mode it inverts which objects are selected."""
-    from .clay import elements as el
+    """``clay.selection.invert``: Ctrl+Shift+I, in the current mode."""
+    from .clay import selection
 
-    if doc.element_mode == "object":
-        # Visible only, for ``_select_all``'s reason: inverting into a hidden
-        # object selects something the user cannot see or click back off.
-        doc.select([o.uid for o in doc.objects if o.visible and o.uid not in doc.selection])
-        return
-    for obj in doc.objects:
-        if not obj.visible:
-            continue
-        doc.set_element_sel(
-            obj.uid,
-            el.invert(obj.mesh, doc.element_sel_of(obj.uid), doc.element_mode),
-        )
+    selection.invert(doc)
 
 
 def _duplicate_selection(ctx: Any, state: ClayState, doc: Any) -> None:
-    from .clay import document as bd
-    from .clay import ops
+    """``clay.selection.duplicate_selected``.
 
-    taken = [obj.name for obj in doc.objects]
-    fresh = []
-    for uid in list(doc.selection):
-        copy = ops.duplicate(doc.by_uid(uid), bd.new_uid(), taken=taken)
-        taken.append(copy.name)
-        doc.add_object(copy)
-        fresh.append(copy.uid)
-    if fresh:
-        doc.select(fresh)
+    ``ctx`` and ``state`` are taken and dropped: neither was ever read, and the
+    callers pass them, so the parameters stay rather than becoming a rename.
+    """
+    from .clay import selection
+
+    del ctx, state
+    selection.duplicate_selected(doc)

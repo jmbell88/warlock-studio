@@ -81,7 +81,7 @@ def concave_faces(
     """A ``(F,)`` bool mask: faces with at least one reflex corner.
 
     *normals* is one unnormalised Newell normal per face, exactly what
-    :func:`~.mesh._face_normals` returns -- passed in rather than recomputed
+    :func:`~.mesh.face_normals` returns -- passed in rather than recomputed
     because both callers already have it.
     """
     starts = starts.astype("i8")

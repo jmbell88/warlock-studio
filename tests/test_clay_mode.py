@@ -342,6 +342,48 @@ def test_save_as_writes_through_the_picked_path(svc, no_dialogs) -> None:
     assert tab.dirty is False
 
 
+def test_save_as_leaves_a_readable_document_and_no_temporary_behind(
+    svc, no_dialogs
+) -> None:
+    """Staged like ``save_to``: the ``.tmp`` is an implementation detail that
+    must not survive the write, and what lands is a document that reopens."""
+    from warlock.studio.clay import serialize
+
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx, dirty=True)
+
+    clay_mode.save_as(ctx, tab)
+    clay_mode.on_task_done(ctx, _Done(f"clay-saveas:{tab.uid}", ctx.result))
+
+    written = no_dialogs / "picked.wblk"
+    doc = serialize.read_wblk(written.read_bytes())
+    assert [obj.name for obj in doc.objects] == [obj.name for obj in tab.doc.objects]
+    assert list(no_dialogs.glob("*.tmp")) == []
+
+
+def test_a_save_as_that_dies_partway_leaves_the_old_file_intact(
+    svc, no_dialogs, monkeypatch
+) -> None:
+    """The reason for staging: a picker aimed at an existing document is the
+    ordinary way to overwrite one, and an unstaged failure truncates it."""
+    existing = no_dialogs / "picked.wblk"
+    existing.write_bytes(b"the document that was already there")
+
+    def boom(_self: Path, _data: bytes) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx, dirty=True)
+
+    # ``FakeCtx.submit`` runs the task inline, so the failure the real task
+    # thread would report through ``on_task_failed`` surfaces here as a raise.
+    with pytest.raises(OSError):
+        clay_mode.save_as(ctx, tab)
+
+    assert existing.read_bytes() == b"the document that was already there"
+
+
 def test_a_save_key_carries_the_tab_uid_so_the_result_finds_its_tab(svc, tmp_path) -> None:
     ctx = FakeCtx(svc)
     tab = _tab(ctx)

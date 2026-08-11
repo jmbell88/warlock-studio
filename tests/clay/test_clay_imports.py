@@ -178,6 +178,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         ops_topo,
         pick,
         primitives,
+        selection,
         serialize,
         topo,
         uv,

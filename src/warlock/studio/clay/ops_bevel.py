@@ -25,7 +25,7 @@ import numpy as np
 from . import topo
 from .adjacency import Adjacency, adjacency
 from .elements import ElementSel, OpError
-from .mesh import Mesh, _face_normals, face_count
+from .mesh import Mesh, face_count, face_normals
 
 __all__ = ["bevel_edges", "loop_cut"]
 
@@ -371,7 +371,7 @@ def bevel_edges(
             if float(np.linalg.norm(bisector)) < _BISECTOR_EPS:
                 # A straight-through corner: the bisector is degenerate, so take
                 # the in-face perpendicular instead of dividing by zero.
-                normal = _face_normals(mesh)[int(a.corner_face[corner])]
+                normal = face_normals(mesh)[int(a.corner_face[corner])]
                 bisector = np.cross(normal.astype("f8"), d2)
             bisector = bisector / max(float(np.linalg.norm(bisector)), _BISECTOR_EPS)
             half = np.arccos(np.clip(float(d1 @ d2), -1.0, 1.0)) * 0.5

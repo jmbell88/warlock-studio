@@ -1,0 +1,131 @@
+"""Indexed colour: the palette, and the ops that edit it.
+
+A palette here is a *constraint on writes* rather than an index plane -- see
+:mod:`.indexed` for why -- so everything below is either bookkeeping on the
+table or a whole-document rewrite pushed through ``_replay``. The snap itself
+lives in ``_commit_patch``, which is the single place every undoable write
+passes through.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+from . import indexed as ix
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .document import RGBA, Document
+
+
+class IndexedOps:
+    """Palette state and palette edits, mixed into :class:`~.document.Document`."""
+
+    @property
+    def is_indexed(self: Document) -> bool:
+        """Whether writes are constrained to a palette. See :mod:`.indexed`."""
+        return bool(self.palette)
+
+    def set_palette(self: Document, colours: Sequence[RGBA] | None, *, snap: bool = True) -> bool:
+        """Adopt a colour table, snapping the document onto it. -> whether it
+        changed anything.
+
+        ``None`` leaves indexed mode: the pixels stay exactly as they are, which
+        is the only honest answer -- the colours in the document *are* the ones
+        that were painted, and there is nothing to restore them from.
+
+        The snap is a whole-document rewrite, so it goes through ``_replay``
+        like a rotate rather than through a patch per layer. That is not merely
+        cheaper (redo replays instead of storing a second full copy): it is what
+        makes the operation *one* undo step across every layer and every frame,
+        which is what the user did.
+        """
+        wanted = None if not colours else [tuple(c) for c in colours]
+        if wanted == self.palette:
+            return False
+        self.palette = wanted
+        if wanted is None or not snap:
+            self.rev += 1
+            return True
+        self.commit_floating()
+        self._replay(lambda: self._map_planes(lambda plane: ix.snap(plane, wanted)))
+        return True
+
+    def add_slot(self: Document, colour: RGBA) -> bool:
+        """Append a colour to the palette. Nothing is repainted: a new swatch
+        is a colour the user may now paint *with*, not a claim about what is
+        already on the canvas."""
+        if not self.palette:
+            return self.set_palette([colour])
+        if tuple(colour) in self.palette:
+            return False
+        self.palette = [*self.palette, tuple(colour)]
+        self.rev += 1
+        return True
+
+    def recolour_slot(self: Document, index: int, colour: RGBA) -> bool:
+        """Change one swatch, rewriting every pixel painted in it.
+
+        This is the payoff of carrying a palette at all: editing a slot is a
+        recolour of the whole clip, addressed by *colour* rather than by
+        selection, and it is one Ctrl+Z. Exact-match, never nearest -- see
+        ``indexed.remap`` -- so the swatch beside it is not dragged along.
+        """
+        if not self.palette or not 0 <= index < len(self.palette):
+            return False
+        old = self.palette[index]
+        new = tuple(colour)
+        if old == new:
+            return False
+        table = [*self.palette]
+        table[index] = new
+        self.commit_floating()
+        self.palette = table
+        self._replay(lambda: self._map_planes(lambda plane: ix.remap(plane, old, new)))
+        return True
+
+    def remove_slot(self: Document, index: int) -> bool:
+        """Drop a swatch, merging its pixels into the nearest survivor.
+
+        Merging rather than erasing, and rather than refusing: the pixels are
+        the picture, and a palette edit is a statement about the *table*. The
+        last swatch cannot go -- an indexed document with no colours is one
+        every visible pixel would have to snap to nothing.
+        """
+        if not self.palette or not 0 <= index < len(self.palette):
+            return False
+        if len(self.palette) == 1:
+            return False
+        gone = self.palette[index]
+        table = [c for i, c in enumerate(self.palette) if i != index]
+        self.commit_floating()
+        self.palette = table
+        into = table[ix.nearest(gone, table)]
+        self._replay(lambda: self._map_planes(lambda plane: ix.remap(plane, gone, into)))
+        return True
+
+    def move_slot(self: Document, index: int, to: int) -> bool:
+        """Reorder the table. No pixel changes -- order is presentation here,
+        and the exported ``.gpl`` and GIF colour table are what it decides."""
+        if not self.palette or not 0 <= index < len(self.palette):
+            return False
+        to = max(0, min(to, len(self.palette) - 1))
+        if to == index:
+            return False
+        table = [*self.palette]
+        table.insert(to, table.pop(index))
+        self.palette = table
+        self.rev += 1
+        return True
+
+    def palette_usage(self: Document) -> list[int]:
+        """Visible pixels sitting exactly on each swatch, over the whole
+        document. What tells the user which slots are safe to delete."""
+        if not self.palette:
+            return []
+        planes = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        totals = [0] * len(self.palette)
+        for layer in planes:
+            for slot, count in enumerate(ix.histogram(layer.pixels, self.palette)):
+                totals[slot] += count
+        return totals

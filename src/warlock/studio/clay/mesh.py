@@ -17,7 +17,7 @@ reasons that both bite later rather than now:
 The cost is that ``starts`` has to be kept honest -- hence :func:`validate`,
 which every op that builds a mesh by hand should be tested against. Nothing
 else here re-checks it: :func:`edges`, :func:`_next_corner` and
-:func:`_face_normals` all *assume* an already-validated mesh, and on an
+:func:`face_normals` all *assume* an already-validated mesh, and on an
 invalid one they do not raise, they quietly produce wrong answers -- a face
 with fewer than three corners makes ``np.add.reduceat`` hand back a bare row
 instead of a sum, and makes ``_next_corner`` write its wrap index into the
@@ -222,7 +222,7 @@ def _corner_triangles(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
     corner table -- so shading, picking and export can never disagree about
     where a concave face's triangles are.
     """
-    return corner_triangles(mesh.positions, mesh.loops, mesh.starts, _face_normals(mesh))
+    return corner_triangles(mesh.positions, mesh.loops, mesh.starts, face_normals(mesh))
 
 
 def triangulate(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
@@ -249,8 +249,15 @@ def triangulate(mesh: Mesh) -> tuple[np.ndarray, np.ndarray]:
 # --- normals and render arrays ----------------------------------------------
 
 
-def _face_normals(mesh: Mesh) -> np.ndarray:
+def face_normals(mesh: Mesh) -> np.ndarray:
     """Unnormalised Newell normals, one per face, magnitude twice the area.
+
+    **Assumes an already-validated mesh** -- as every function in this module
+    does, and this one most consequentially: a ``starts`` array that does not
+    describe the ``loops`` it indexes produces normals that are numbers rather
+    than an exception, and those numbers go on to decide triangulation, shading
+    and picking. That precondition is why ``serialize.read_wblk`` calls
+    :func:`validate` before it hands a loaded mesh to anything.
 
     Newell rather than the cross product of the first three corners: that
     shortcut degenerates to a zero vector whenever the first three corners are
@@ -275,6 +282,12 @@ def _face_normals(mesh: Mesh) -> np.ndarray:
         axis=1,
     )
     return np.add.reduceat(contrib, mesh.starts[:-1].astype("i8"), axis=0)
+
+
+# Compat: the tests and INVARIANTS.md name the private form, and it was the
+# spelling three other modules in this package imported across the boundary --
+# which is what the promotion above is for. The alias keeps both readable.
+_face_normals = face_normals
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -351,7 +364,7 @@ def render_arrays(
             np.zeros(0, dtype="u4"),
         )
 
-    raw = _face_normals(mesh)
+    raw = face_normals(mesh)
     unit = _normalize(raw)
     counts = np.diff(mesh.starts).astype("i8")
     face_of_corner = np.repeat(np.arange(n_faces, dtype="i8"), counts)

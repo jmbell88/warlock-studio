@@ -42,9 +42,14 @@ _uids = itertools.count(1)
 
 
 @dataclass
-class ClayView:
+class CameraView:
     """Where the camera sits for one document. Per document, so a tab switch
-    does not lose your place."""
+    does not lose your place.
+
+    Named for the camera rather than for Clay because ``ClayView`` is already
+    the GL viewport class in ``studio/clay_view.py``, and two unrelated things
+    under one name in one package is how a reader comes to believe the tab is
+    holding the viewport. This one is plain data: four numbers and a target."""
 
     yaw: float = 0.6
     pitch: float = 0.5
@@ -98,7 +103,7 @@ class ClayTab:
     title: str = "Untitled"
     path: Path | None = None
     uid: str = field(default_factory=lambda: f"bd{next(_uids)}")
-    view: ClayView = field(default_factory=ClayView)
+    view: CameraView = field(default_factory=CameraView)
     # The history position the file on disk was written from. Dirty is a
     # *comparison*, not a flag, so undoing back to the saved state correctly
     # stops being dirty -- which the document's revision cannot express,

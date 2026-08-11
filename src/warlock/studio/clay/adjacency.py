@@ -340,7 +340,7 @@ def check_manifold(mesh: Mesh) -> ManifoldReport:
     show a line that had not changed. The other callers need the answer *about a
     mesh in hand*: the topology ops' own tests, and ``serialize.read_wblk``'s
     validation, which validates rather than trusts because ``edges`` and
-    ``_face_normals`` go quietly wrong on a short face instead of raising.
+    ``face_normals`` go quietly wrong on a short face instead of raising.
     ``diagnose.rows_for`` is what turns the six arrays into something a panel
     can draw and a click can select.
     """

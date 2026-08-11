@@ -38,7 +38,7 @@ bug and swallowing it would leave a half-built mesh on screen with no clue why.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,6 +52,7 @@ __all__ = [
     "register",
     "run",
     "run_mesh_op",
+    "run_object_op",
 ]
 
 # The element modes an op can appear in. "object" is the fourth and is not an
@@ -181,12 +182,23 @@ def run(ctx: Any, doc: Any, op: Op, **params: Any) -> bool:
     Missing parameters fall back to their declared defaults, so a caller that
     has no remembered values -- the key path, a test -- gets the same result the
     popup would have produced with the fields untouched.
+
+    **Declared parameters are clamped here.** The popup clamps its live fields
+    too (``panes/clay_menu.py``), but that is a UX affordance on one surface --
+    the key path, the tools pane and every test call arrive with whatever the
+    caller had remembered, and a subdivision at ``levels=99`` is not a refusal
+    an op should have to write for itself. ``run`` is the choke point all three
+    surfaces funnel through, so the range a ``Param`` declares is enforced once,
+    where it cannot be bypassed.
     """
     from .clay.elements import OpError
 
     if not op.enabled(doc):
         return False
     values = defaults_for(op) | params
+    for param in op.params:
+        value = min(max(float(values[param.name]), param.low), param.high)
+        values[param.name] = int(value) if param.integer else value
     try:
         result = op.run(ctx, doc, **values)
     except OpError as error:
@@ -223,6 +235,39 @@ def run_mesh_op(
             toast(ctx, str(error))
             continue
         doc.set_mesh(uid, mesh, select=sel)
+        ran = True
+    return ran
+
+
+def run_object_op(
+    ctx: Any, doc: Any, func: Callable[[Any, Any], Any], /, *, uids: Iterable[int] | None = None
+) -> bool:
+    """Apply ``func(doc, obj)`` to every selected object. -> whether any ran.
+
+    ``run_mesh_op``'s sibling for the object-level ops, and it exists for the
+    same reason: seven ops here wrote out the same four lines -- snapshot the
+    selection, look each uid up, tolerate one that has gone, toast a refusal and
+    carry on -- and only two of them wrote out all four. The ones that skipped
+    the ``KeyError`` guard crash on an object deleted between the snapshot and
+    the loop; the ones that skipped the ``OpError`` catch abandon the rest of
+    the selection when one object refuses.
+
+    The snapshot is taken before anything runs because ``doc.selection`` is live
+    and several of these ops change it.
+    """
+    from .clay.elements import OpError
+
+    ran = False
+    for uid in list(doc.selection if uids is None else uids):
+        try:
+            obj = doc.by_uid(uid)
+        except KeyError:
+            continue
+        try:
+            func(doc, obj)
+        except OpError as error:
+            toast(ctx, str(error))
+            continue
         ran = True
     return ran
 
@@ -319,25 +364,18 @@ def _smooth(ctx: Any, doc: Any, levels: float = 1.0, **_: Any) -> None:
     from .clay import elements as el
     from .clay import ops_subdiv
 
-    for uid in list(doc.selection):
-        try:
-            obj = doc.by_uid(uid)
-        except KeyError:
-            continue
-        try:
-            mesh, sel = ops_subdiv.catmull_clark(
-                obj.mesh, el.empty(), levels=int(levels)
-            )
-        except el.OpError as error:
-            toast(ctx, str(error))
-            continue
-        doc.set_mesh(uid, mesh, select=sel)
+    def one(doc: Any, obj: Any) -> None:
+        mesh, sel = ops_subdiv.catmull_clark(obj.mesh, el.empty(), levels=int(levels))
+        doc.set_mesh(obj.uid, mesh, select=sel)
+
+    run_object_op(ctx, doc, one)
 
 
 def _duplicate(ctx: Any, doc: Any, **_: Any) -> None:
-    from . import clay_mode
+    from .clay import selection
 
-    clay_mode._duplicate_selection(ctx, clay_mode.ensure(ctx), doc)
+    del ctx
+    selection.duplicate_selected(doc)
 
 
 def _bake(ctx: Any, doc: Any, **_: Any) -> None:
@@ -350,16 +388,17 @@ def _bake(ctx: Any, doc: Any, **_: Any) -> None:
     """
     from .clay import ops as clay_ops_geom
 
-    del ctx
-    for uid in list(doc.selection):
-        baked = clay_ops_geom.bake_transform(doc.by_uid(uid))
-        doc.set_mesh(uid, baked.mesh)
+    def one(doc: Any, obj: Any) -> None:
+        baked = clay_ops_geom.bake_transform(obj)
+        doc.set_mesh(obj.uid, baked.mesh)
         doc.set_transform(
-            uid,
+            obj.uid,
             translation=baked.translation,
             rotation=baked.rotation,
             scale=baked.scale,
         )
+
+    run_object_op(ctx, doc, one)
 
 
 def _join(ctx: Any, doc: Any, weld: float = 1e-4, **_: Any) -> None:
@@ -396,15 +435,17 @@ def _join(ctx: Any, doc: Any, weld: float = 1e-4, **_: Any) -> None:
 def mirror(ctx: Any, doc: Any, axis: int, **_: Any) -> None:
     from .clay import ops as clay_ops_geom
 
-    del ctx
-    for uid in list(doc.selection):
-        doc.set_mesh(uid, clay_ops_geom.mirror(doc.by_uid(uid), axis).mesh)
+    def one(doc: Any, obj: Any) -> None:
+        doc.set_mesh(obj.uid, clay_ops_geom.mirror(obj, axis).mesh)
+
+    run_object_op(ctx, doc, one)
 
 
 def _delete(ctx: Any, doc: Any, **_: Any) -> None:
-    from . import clay_mode
+    from .clay import selection
 
-    clay_mode._delete(ctx, doc)
+    for message in selection.delete_selected(doc):
+        toast(ctx, message)
 
 
 def _unwrap(ctx: Any, doc: Any, **_: Any) -> None:
@@ -423,10 +464,10 @@ def _unwrap(ctx: Any, doc: Any, **_: Any) -> None:
     """
     from .clay import uv as uv_mod
 
-    del ctx
-    for uid in list(doc.selection):
-        obj = doc.by_uid(uid)
-        doc.set_mesh(uid, uv_mod.box_unwrap(obj.mesh), keep_generator=True)
+    def one(doc: Any, obj: Any) -> None:
+        doc.set_mesh(obj.uid, uv_mod.box_unwrap(obj.mesh), keep_generator=True)
+
+    run_object_op(ctx, doc, one)
 
 
 def _shade(smooth: bool) -> Callable[..., None]:
@@ -439,13 +480,12 @@ def _shade(smooth: bool) -> Callable[..., None]:
     """
 
     def run(ctx: Any, doc: Any, **_: Any) -> None:
-        del ctx
         if doc.element_mode == "object":
-            for uid in list(doc.selection):
-                doc.set_shading(uid, None, smooth)
+            run_object_op(ctx, doc, lambda doc, obj: doc.set_shading(obj.uid, None, smooth))
             return
         from .clay import elements as el
 
+        del ctx
         for uid in list(doc.element_sel):
             faces = el.convert(doc.by_uid(uid).mesh, doc.element_sel_of(uid), "face")
             doc.set_shading(uid, faces.faces, smooth)
@@ -476,23 +516,24 @@ def _shade_auto(ctx: Any, doc: Any, angle: float = 30.0, **_: Any) -> None:
     supplied normals -- and a boundary edge has no neighbour to disagree with,
     so it makes nothing sharp.
     """
+    from dataclasses import replace
+
     import numpy as np
 
     from .clay import mesh as bm
     from .clay.adjacency import adjacency
 
-    del ctx
     limit = float(np.cos(np.radians(max(0.0, min(180.0, float(angle))))))
-    for uid in list(doc.selection) or [obj.uid for obj in doc.objects]:
-        obj = doc.by_uid(uid)
+
+    def one(doc: Any, obj: Any) -> None:
         mesh = obj.mesh
         faces = bm.face_count(mesh)
         if faces == 0:
-            continue
-        # Normalised: ``_face_normals`` returns Newell normals, whose length is
+            return
+        # Normalised: ``face_normals`` returns Newell normals, whose length is
         # proportional to face area -- a dot product of two of those is not a
         # cosine, and comparing it against one silently called every pair sharp.
-        normals = np.asarray(bm._face_normals(mesh), dtype="f8")
+        normals = np.asarray(bm.face_normals(mesh), dtype="f8")
         lengths = np.linalg.norm(normals, axis=1, keepdims=True)
         normals = np.divide(normals, lengths, out=np.zeros_like(normals), where=lengths > 1e-12)
         counts = np.diff(np.asarray(mesh.starts, dtype="i8"))
@@ -507,13 +548,15 @@ def _shade_auto(ctx: Any, doc: Any, angle: float = 30.0, **_: Any) -> None:
             smooth[left[sharp]] = False
             smooth[right[sharp]] = False
         if np.array_equal(smooth, mesh.smooth):
-            continue
-        from dataclasses import replace
-
+            return
         # One step per object, and only for an object this changed: going
         # through ``set_shading`` first and then writing the array would push
         # two, and a Ctrl+Z would land halfway.
-        doc.set_mesh(uid, replace(mesh, smooth=smooth), keep_generator=True)
+        doc.set_mesh(obj.uid, replace(mesh, smooth=smooth), keep_generator=True)
+
+    # The whole document when nothing is selected: this is the one op here that
+    # means "tidy the shading", and a user with no selection means all of it.
+    run_object_op(ctx, doc, one, uids=list(doc.selection) or [obj.uid for obj in doc.objects])
 
 
 def _frame(ctx: Any, doc: Any, **_: Any) -> None:
@@ -523,10 +566,10 @@ def _frame(ctx: Any, doc: Any, **_: Any) -> None:
 
 
 def _select_all(ctx: Any, doc: Any, **_: Any) -> None:
-    from . import clay_mode
+    from .clay import selection
 
     del ctx
-    clay_mode._select_all(doc)
+    selection.select_all(doc)
 
 
 def _select_none(ctx: Any, doc: Any, **_: Any) -> None:
@@ -535,10 +578,10 @@ def _select_none(ctx: Any, doc: Any, **_: Any) -> None:
 
 
 def _invert(ctx: Any, doc: Any, **_: Any) -> None:
-    from . import clay_mode
+    from .clay import selection
 
     del ctx
-    clay_mode._invert(doc)
+    selection.invert(doc)
 
 
 def _register_defaults() -> None:

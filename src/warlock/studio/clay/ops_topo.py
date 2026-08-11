@@ -28,7 +28,7 @@ import numpy as np
 from . import topo
 from .adjacency import adjacency, boundary_loops
 from .elements import ElementSel, OpError, empty
-from .mesh import Mesh, _face_normals, face_count, reversed_corner_perm
+from .mesh import Mesh, face_count, face_normals, reversed_corner_perm
 
 __all__ = [
     "bridge_edges",
@@ -164,7 +164,7 @@ def extrude_faces(mesh: Mesh, sel: ElementSel, *, offset: float = 0.0) -> tuple[
     new_index = np.full(n_verts, -1, dtype="i8")
     new_index[used] = n_verts + np.arange(len(used), dtype="i8")
 
-    direction = _unit(_face_normals(mesh)[faces].sum(axis=0))
+    direction = _unit(face_normals(mesh)[faces].sum(axis=0))
     positions = np.concatenate(
         [
             mesh.positions.astype("f8"),
@@ -256,7 +256,7 @@ def inset_faces(
     centroid = np.add.reduceat(pts, offsets[:-1], axis=0) / counts[:, None]
     per_corner = np.repeat(centroid, counts, axis=0)
     t = _shrink_fraction(pts, per_corner, thickness)
-    normals = np.repeat(_unit(_face_normals(mesh)[faces]), counts, axis=0)
+    normals = np.repeat(_unit(face_normals(mesh)[faces]), counts, axis=0)
     inner = pts + (per_corner - pts) * t + normals * float(depth)
 
     n_verts = len(mesh.positions)
@@ -342,7 +342,7 @@ def _inset_region(
     positions = out.positions.astype("f8").copy()
     target = total[touched] / hits[touched][:, None]
     t = _shrink_fraction(positions[touched], target, thickness)
-    direction = _unit(_face_normals(out)[faces].sum(axis=0))
+    direction = _unit(face_normals(out)[faces].sum(axis=0))
     positions[touched] += (target - positions[touched]) * t + direction * float(depth)
 
     return topo.rebuild(positions, out.loops, out.starts, out.material, out.smooth, uv=out.uv), sel
