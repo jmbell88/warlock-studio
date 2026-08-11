@@ -185,8 +185,12 @@ def test_switching_tabs_drops_the_palette_and_the_object_selection():
     state = plotter_mode.ensure(ctx)
     state.brush = np.array([[1]], gid.DTYPE)
     state.selected_object = 99
+    state.terrain = (0, 2)
     state.activate(first.uid)
     assert state.brush is None and state.selected_object is None
+    # The terrain names a *particular* map's tilesets, exactly as the palette
+    # index does, so it goes the same way.
+    assert state.terrain is None
     # And opening a new one is the same arrival, so it resets too.
     state.brush = np.array([[1]], gid.DTYPE)
     _tab(ctx)
@@ -409,3 +413,129 @@ def test_an_object_round_trips_through_a_save(tmp_path):
     _save(ctx, tab, path)
     back = wmap.read_wmap(path.read_bytes())
     assert back.layers[1].objects[0].name == "spawn"
+
+
+# --- terrain sets -------------------------------------------------------------
+
+
+def _spec(**kwargs):
+    from warlock.studio.plotter import tilegen
+
+    return tilegen.GenSpec(**{"tile_w": 8, "tile_h": 8, **kwargs})
+
+
+def test_generating_with_nothing_open_says_so():
+    ctx = FakeCtx()
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert not ctx.submitted
+
+
+def test_generating_a_set_goes_through_the_tileset_key_so_nothing_new_routes_it():
+    """The result *is* a tileset for this tab and ``on_task_done`` already
+    adopts one; a key of its own would be a second copy of that branch."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    assert ctx.submitted[-1] == f"plotter-tileset:{tab.uid}"
+
+
+def test_a_generated_set_arrives_as_one_tileset_and_one_undo_step():
+    from warlock.studio.plotter import blob
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    depth = len(tab.doc.history)
+    before = len(tab.doc.tilesets)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert len(tab.doc.tilesets) == before + 1
+    assert len(tab.doc.history) == depth + 1
+    assert tab.doc.tilesets[-1].tileset.columns == blob.TILE_COUNT
+    tab.doc.undo()
+    assert len(tab.doc.tilesets) == before
+
+
+def test_a_terrain_set_puts_its_first_terrain_in_your_hand():
+    """The thing that just arrived is the thing you are holding, which is what
+    setting the palette index already says for an ordinary tileset."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert plotter_mode.ensure(ctx).terrain == (len(tab.doc.tilesets) - 1, 0)
+
+
+def test_generating_an_isometric_set_makes_the_map_isometric_in_the_same_step():
+    """Two steps would leave a Ctrl+Z on a map whose only tileset is drawn for
+    the lattice it is no longer on."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    depth = len(tab.doc.history)
+    before = len(tab.doc.tilesets)
+    plotter_mode.generate_terrain_set(ctx, _spec(projection="isometric"))
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert tab.doc.projection == "isometric"
+    assert len(tab.doc.history) == depth + 1
+    tab.doc.undo()
+    assert tab.doc.projection == "orthogonal"
+    assert len(tab.doc.tilesets) == before
+
+
+def test_an_arriving_tileset_refits_the_view():
+    """An isometric map's pixel extent is not width times tile width, so a fit
+    computed against the old projection is the wrong frame."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.view.fitted = True
+    plotter_mode.generate_terrain_set(ctx, _spec(projection="isometric"))
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert tab.view.fitted is False
+
+
+def test_sending_an_atlas_back_from_inker_keeps_every_painted_cell():
+    from warlock.studio.plotter import terrain
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    index = len(tab.doc.tilesets) - 1
+    ref = tab.doc.tilesets[index]
+    layer = tab.doc.tile_layers()[0]
+    tab.doc.write_region(layer.uid, *terrain.paint_terrain(layer.data, 2, 2, 1, ref))
+    before = layer.data.copy()
+
+    painted = np.array(ref.tileset.pixels)
+    painted[..., 2] = 111
+    plotter_mode.tileset_from_inker(ctx, _FakeInkerDoc(painted), index=index)
+    assert np.array_equal(layer.data, before)
+    assert int(tab.doc.tilesets[index].tileset.pixels[..., 2].max()) == 111
+    assert [t.name for t in tab.doc.tilesets[index].tileset.terrains] == [
+        t.name for t in ref.tileset.terrains
+    ]
+
+
+def test_an_atlas_of_a_different_size_is_refused_rather_than_renumbering_the_map():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    plotter_mode.generate_terrain_set(ctx, _spec())
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    index = len(tab.doc.tilesets) - 1
+    before = tab.doc.tilesets[index].tileset.pixels
+    plotter_mode.tileset_from_inker(
+        ctx, _FakeInkerDoc(np.zeros((4, 4, 4), dtype=np.uint8)), index=index
+    )
+    assert ctx.toasts[-1][1] == "error"
+    assert tab.doc.tilesets[index].tileset.pixels is before
+
+
+class _FakeInkerDoc:
+    """Only what ``tileset_from_inker`` touches: a title and a flatten."""
+
+    def __init__(self, pixels: np.ndarray) -> None:
+        self._pixels = pixels
+        self.title = "atlas"
+
+    def flatten(self, *, matte: bool = True) -> np.ndarray:
+        return self._pixels

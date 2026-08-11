@@ -19,6 +19,7 @@ _ICONS = {
     "stamp": icons.BRUSH,
     "erase": icons.ERASER,
     "fill": icons.PAINT_BUCKET,
+    "terrain": icons.WAND,
     "rect": icons.SQUARE,
     "pick": icons.PIPETTE,
     "object": icons.FLAG,
@@ -49,6 +50,66 @@ def _tool_grid(state: Any) -> None:
             imgui.set_tooltip(f"{label} ({letter})")
 
 
+def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
+    """``(tileset index, terrain index, spec)`` for every terrain on the map.
+
+    Derived at draw time rather than cached, for the reason the terrain of a
+    *cell* is derived: a cached list would be one more thing that can disagree
+    with the tilesets, and the list is at most a few dozen entries long.
+    """
+    out = []
+    for index, ref in enumerate(doc.tilesets):
+        for rank, spec in enumerate(ref.tileset.terrains):
+            out.append((index, rank, spec))
+    return out
+
+
+def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
+    """Which terrain the Terrain tool lays down.
+
+    Here rather than in the tileset pane because this pane owns what a click
+    *means* and the other owns which tile it means -- and a terrain is not a
+    tile: it is a role that thirty-two cells of the atlas share, chosen by the
+    neighbours rather than by the user.
+    """
+    from imgui_bundle import imgui
+
+    entries = terrains_of(tab.doc)
+    widgets.section("terrain")
+    if not entries:
+        widgets.muted_wrapped(
+            "This map has no terrain sets. Generate one under Tilesets, or add a "
+            "tileset that carries one."
+        )
+        if imgui.button("Open the generator", (-1, 0)):
+            widgets.request_open("plotter/generate")
+        return
+    if state.terrain is None:
+        state.terrain = (entries[0][0], entries[0][1])
+    width = widgets.grid_width(2)
+    for slot, (tileset_index, rank, spec) in enumerate(entries):
+        if slot % 2:
+            imgui.same_line()
+        chosen = state.terrain == (tileset_index, rank)
+        colour = tuple(part / 255.0 for part in spec.fill)
+        imgui.push_style_color(imgui.Col_.button.value, imgui.get_color_u32(colour))
+        imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.get_color_u32(colour))
+        # The swatch *is* the terrain, so the selected one is marked by the text
+        # colour rather than by a second colour fighting the fill.
+        imgui.push_style_color(
+            imgui.Col_.text.value,
+            imgui.get_color_u32((1.0, 1.0, 1.0, 1.0) if chosen else (0.0, 0.0, 0.0, 0.55)),
+        )
+        if imgui.button(f"{spec.name}##terrain-{tileset_index}-{rank}", (width, 0)):
+            state.terrain = (tileset_index, rank)
+        imgui.pop_style_color(3)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                f"{spec.name} - in {tab.doc.tilesets[tileset_index].tileset.name}"
+            )
+    widgets.muted_wrapped("Painting fits the eight cells around what you touch.")
+
+
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
@@ -64,6 +125,9 @@ def draw(ctx: Any) -> None:
         return
 
     doc = tab.doc
+    if state.tool == "terrain":
+        _terrain_picker(ctx, state, tab)
+        imgui.dummy((0, 6))
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
 
@@ -71,6 +135,7 @@ def draw(ctx: Any) -> None:
     widgets.section("map")
     widgets.muted(f"{doc.width} x {doc.height} tiles, {doc.tile_w} x {doc.tile_h} px")
     widgets.muted(f"{doc.pixel_width} x {doc.pixel_height} px overall")
+    widgets.muted(f"{doc.projection} projection")
 
     if tab.busy:
         widgets.muted("Saving...")

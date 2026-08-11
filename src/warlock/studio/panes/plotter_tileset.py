@@ -39,11 +39,14 @@ def draw(ctx: Any) -> None:
     disabled = tab.busy
     if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
         plotter_mode.ask_add_tileset(ctx)
+    imgui.dummy((0, 4))
+    _generator(ctx, state, tab)
     if not doc.tilesets:
         imgui.dummy((0, 8))
         widgets.muted_wrapped(
             "A map needs a tileset before anything can be painted. Add a PNG and it "
-            f"is sliced at {doc.tile_w} x {doc.tile_h}, or add a Tiled .tsx."
+            f"is sliced at {doc.tile_w} x {doc.tile_h}, add a Tiled .tsx, or generate "
+            "a ground set above."
         )
         return
 
@@ -62,6 +65,8 @@ def draw(ctx: Any) -> None:
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
     _picker(ctx, state, ref, index, tab.uid)
+    imgui.dummy((0, 4))
+    _inker_row(ctx, state, tab, index)
 
 
 def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str) -> None:
@@ -172,3 +177,169 @@ def _brush_span(
         (a % tileset.columns, a // tileset.columns),
         (b % tileset.columns, b // tileset.columns),
     )
+
+
+# --- generating ---------------------------------------------------------------
+#
+# A collapsing section here rather than a fifth pane. This pane already answers
+# "how does a tileset get into this map", and generating one is that question by
+# a third route beside a file and a library asset. A new pane would cost an entry
+# in the four-pane skeleton, a ``settings_share`` decision and a help-coverage
+# entry; a header costs none of those and remembers whether it is open.
+
+
+def _generator(ctx: Any, state: Any, tab: Any) -> None:
+    from imgui_bundle import imgui
+
+    from ..plotter import blob, project, tilegen
+
+    if not widgets.header(
+        f"{icons.WAND} Generate a ground set", default_open=False, persist_key="plotter/generate"
+    ):
+        return
+    manual_render.help_button(ctx, "plotter-terrain")
+
+    doc = tab.doc
+    key = f"plotter_gen:{tab.uid}"
+    stamp = (doc.tile_w, doc.tile_h, doc.projection)
+    form = ctx.state.preview.get(key)
+    if not isinstance(form, dict) or form.get("for") != stamp:
+        # Rebuilt when the map's geometry moves under it, the idiom the resize
+        # form uses: a half-typed set for a 16px map means nothing on a 32px one.
+        form = {
+            "for": stamp,
+            "projection": doc.projection,
+            "rows": [
+                {"name": entry.name, "colour": [part / 255.0 for part in entry.fill[:3]]}
+                for entry in tilegen.DEFAULT_TERRAINS
+            ],
+        }
+        ctx.state.preview[key] = form
+
+    widgets.muted_wrapped(
+        f"Blob autotiling: {blob.TILE_COUNT} cells per terrain, so every edge and "
+        "inner corner has its own tile. The whole set arrives as one tileset, and "
+        "Ctrl+Z takes it back."
+    )
+    imgui.dummy((0, 4))
+
+    # The projection is settable only while the map is empty, and this is the
+    # *only* control that sets it. A set drawn for one lattice paints the wrong
+    # shape into every cell already painted for the other, so the moment there
+    # is anything to get wrong the answer stops being the user's to change.
+    empty = not doc.tilesets and not any(
+        bool(layer.data.any()) for layer in doc.tile_layers()
+    )
+    if empty:
+        form["projection"] = widgets.labeled_combo(
+            "Projection",
+            form["projection"],
+            [(name, name.capitalize()) for name in project.PROJECTIONS],
+        )
+    else:
+        widgets.muted(f"Projection: {doc.projection}")
+        widgets.help_marker(
+            "A map's projection is fixed once anything is on it: a set drawn for the "
+            "other lattice would paint the wrong shape into every cell already painted."
+        )
+    if form["projection"] == project.ISOMETRIC and doc.tile_w != doc.tile_h * 2:
+        widgets.hint_text(
+            f"An isometric cell is conventionally 2:1 -- {doc.tile_h * 2} x {doc.tile_h} "
+            f"rather than {doc.tile_w} x {doc.tile_h}. It will still generate."
+        )
+    widgets.muted(f"Tiles are drawn at {doc.tile_w} x {doc.tile_h}")
+
+    imgui.dummy((0, 4))
+    widgets.muted("Terrains, in order. Later ones sit on top where they meet.")
+    remove = None
+    for index, row in enumerate(form["rows"]):
+        imgui.push_id(index)
+        imgui.set_next_item_width(sp(120))
+        row["name"] = widgets.input_text("##name", row["name"], max_length=24)
+        imgui.same_line()
+        changed, colour = imgui.color_edit3(
+            "##fill",
+            row["colour"],
+            imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.no_label.value,
+        )
+        if changed:
+            row["colour"] = list(colour)
+        imgui.same_line()
+        if widgets.disabled_button(icons.TRASH, len(form["rows"]) > 1, (0, 0)):
+            remove = index
+        imgui.pop_id()
+    if remove is not None:
+        form["rows"].pop(remove)
+
+    if widgets.disabled_button(
+        f"{icons.PLUS} Add a terrain", len(form["rows"]) < tilegen.MAX_TERRAINS, (-1, 0)
+    ):
+        form["rows"].append({"name": f"Terrain {len(form['rows']) + 1}", "colour": [0.5, 0.5, 0.5]})
+
+    names = [row["name"].strip() for row in form["rows"]]
+    problem = ""
+    if "" in names:
+        problem = "Every terrain needs a name."
+    elif len({name.lower() for name in names}) != len(names):
+        problem = "Two terrains cannot share a name."
+    if problem:
+        widgets.hint_text(problem)
+
+    imgui.dummy((0, 4))
+    if widgets.disabled_button("Generate", not tab.busy and not problem, (-1, 0)):
+        plotter_mode.generate_terrain_set(
+            ctx,
+            tilegen.GenSpec(
+                terrains=tuple(_spec_of(row) for row in form["rows"]),
+                tile_w=doc.tile_w,
+                tile_h=doc.tile_h,
+                projection=form["projection"],
+                name="Ground",
+            ),
+        )
+
+
+def _spec_of(row: dict) -> Any:
+    """One form row as a :class:`~..plotter.tileset.TerrainSpec`.
+
+    The outline is derived from the fill rather than picked separately: the base
+    style *is* a flat fill with a darker edge, so one colour is the whole of what
+    a terrain is here, and a second control for it is how the two drift apart.
+    """
+    from ..plotter.tileset import TerrainSpec
+
+    fill = tuple(int(round(part * 255)) for part in row["colour"]) + (255,)
+    return TerrainSpec(
+        name=row["name"].strip(),
+        fill=fill,
+        outline=(*(part * 3 // 5 for part in fill[:3]), 255),
+    )
+
+
+def _inker_row(ctx: Any, state: Any, tab: Any, index: int) -> None:
+    """Out to Inker to be painted, and back onto the same tileset.
+
+    The pull direction copies ``packwright_sources._from_inker``: Plotter reaches
+    into Inker's open documents rather than Inker pushing into Plotter, so
+    neither mode has to know when the other is finished.
+    """
+    from imgui_bundle import imgui
+
+    if widgets.disabled_button(f"{icons.BRUSH} Polish in Inker", not tab.busy, (-1, 0)):
+        plotter_mode.polish_in_inker(ctx, tab, index)
+
+    inker = getattr(ctx.state, "inker", None)
+    docs = list(getattr(inker, "docs", []) or [])
+    if not docs:
+        return
+    imgui.dummy((0, 4))
+    widgets.muted("from Inker")
+    name = tab.doc.tilesets[index].tileset.name
+    for entry in docs:
+        label = f"{icons.IMAGE} Back onto {name}##ink-{entry.uid}"
+        if widgets.disabled_button(label, not tab.busy, (-1, 0)):
+            plotter_mode.tileset_from_inker(ctx, entry.doc, index=index)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                f"Repaint {name} with {entry.title}. Every painted cell keeps its tile."
+            )

@@ -48,6 +48,7 @@ from typing import Any
 import numpy as np
 
 from . import gid as gidlib
+from . import project
 from .tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
 from .tileset import Tileset, TilesetRef
 from .tsx import (
@@ -93,6 +94,10 @@ _ENCODINGS = ("", "csv", "base64")
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
+# Tiled's hexagonal 120-degree rotation flag. See the note in :mod:`.gid` for
+# why the constant lives here and not beside the other three.
+_HEX_ROTATE = gidlib.DTYPE(0x10000000)
+
 
 # --- shared refusals ----------------------------------------------------------
 
@@ -127,10 +132,25 @@ def _root(data: bytes, expect: str) -> ET.Element:
     return root
 
 
+def _check_orientation(orientation: str) -> str:
+    """Accept what this draws, refuse the rest by name.
+
+    Isometric left this list when the editor learned to draw one -- the refusal
+    was never about the word, it was about not silently half-reading a map whose
+    cells this could not place. Staggered and hexagonal stay, which is also what
+    keeps ``gid``'s missing hex-rotation bit honest: a file that could set it
+    never gets past here.
+    """
+    if orientation not in project.PROJECTIONS:
+        raise TiledUnsupported(
+            f"a {orientation} map",
+            f"Plotter draws {' and '.join(project.PROJECTIONS)} maps",
+        )
+    return orientation
+
+
 def _check_map(root: ET.Element) -> None:
-    orientation = root.get("orientation", "orthogonal")
-    if orientation != "orthogonal":
-        raise TiledUnsupported(f"a {orientation} map", "Plotter draws orthogonal maps only")
+    _check_orientation(root.get("orientation", "orthogonal"))
     if root.get("infinite", "0") not in ("0", "false"):
         raise TiledUnsupported(
             "an infinite map", "save it with a fixed size in Tiled's map properties"
@@ -256,6 +276,29 @@ def _read_tmx_object(node: ET.Element) -> MapObject:
     )
 
 
+def _adopt_object_space(doc: MapDoc) -> None:
+    """Move every object from Tiled's coordinate space into this map's.
+
+    A no-op for an orthogonal map, where the two spaces are the same. Applied to
+    the whole document at once, after the layers are on it, rather than inside
+    the two object readers -- they are handed one element and know nothing about
+    the map's size, and the conversion needs its height.
+    """
+    if not doc.isometric:
+        return
+    for layer in doc.layers:
+        if isinstance(layer, ObjectLayer):
+            for obj in layer.objects:
+                obj.x, obj.y = project.object_to_pixels(
+                    doc.projection, doc.width, doc.height, doc.tile_w, doc.tile_h, obj.x, obj.y
+                )
+
+
+def _object_xy(doc: MapDoc, obj: MapObject) -> tuple[float, float]:
+    """One object's position in Tiled's space, for the two writers."""
+    return project.object_from_pixels(
+        doc.projection, doc.width, doc.height, doc.tile_w, doc.tile_h, obj.x, obj.y
+    )
 def read_tmx(
     data: bytes, *, image_loader: ImageLoader, tsx_loader: TilesetLoader
 ) -> MapDoc:
@@ -272,6 +315,7 @@ def read_tmx(
         height=int(root.get("height", 1) or 1),
         tile_w=int(root.get("tilewidth", 1) or 1),
         tile_h=int(root.get("tileheight", 1) or 1),
+        projection=root.get("orientation", "orthogonal"),
     )
     doc.renderorder = root.get("renderorder", "right-down")
     doc.backgroundcolor = root.get("backgroundcolor")
@@ -326,6 +370,7 @@ def read_tmx(
             )
 
     _finish(doc)
+    _adopt_object_space(doc)
     return doc
 
 
@@ -379,9 +424,7 @@ def read_tmj(
     if not isinstance(payload, dict):
         raise ValueError("a Tiled JSON map is an object")
 
-    orientation = str(payload.get("orientation", "orthogonal"))
-    if orientation != "orthogonal":
-        raise TiledUnsupported(f"a {orientation} map", "Plotter draws orthogonal maps only")
+    orientation = _check_orientation(str(payload.get("orientation", "orthogonal")))
     if payload.get("infinite"):
         raise TiledUnsupported(
             "an infinite map", "save it with a fixed size in Tiled's map properties"
@@ -392,6 +435,7 @@ def read_tmj(
         height=int(payload.get("height", 1) or 1),
         tile_w=int(payload.get("tilewidth", 1) or 1),
         tile_h=int(payload.get("tileheight", 1) or 1),
+        projection=orientation,
     )
     doc.renderorder = str(payload.get("renderorder", "right-down"))
     doc.backgroundcolor = payload.get("backgroundcolor")
@@ -485,6 +529,7 @@ def read_tmj(
             raise TiledUnsupported(f"{kind} layers", f"layer {name!r}")
 
     _finish(doc)
+    _adopt_object_space(doc)
     return doc
 
 
@@ -495,6 +540,13 @@ def _finish(doc: MapDoc) -> None:
             raise ValueError(
                 f"layer {layer.name!r} is {layer.data.shape[1]}x{layer.data.shape[0]}, "
                 f"but the map is {doc.width}x{doc.height}"
+            )
+        # Refused by name rather than left to fail as an out-of-range id: the
+        # bit is Tiled's hexagonal rotation, and "a tile no tileset accounts
+        # for" is a true sentence about the wrong problem.
+        if bool((np.asarray(layer.data) & _HEX_ROTATE).any()):
+            raise TiledUnsupported(
+                "hexagonal 120-degree tile rotation", f"layer {layer.name!r}"
             )
         ids = np.unique(gidlib.tile_ids(layer.data))
         for tile_id in ids.tolist():
@@ -565,7 +617,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
         {
             "version": MAP_VERSION,
             "tiledversion": TILED_VERSION,
-            "orientation": "orthogonal",
+            "orientation": doc.projection,
             "renderorder": doc.renderorder,
             "width": str(doc.width),
             "height": str(doc.height),
@@ -614,8 +666,9 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
                     attrs["name"] = obj.name
                 if obj.obj_class:
                     attrs["class"] = obj.obj_class
-                attrs["x"] = repr(float(obj.x))
-                attrs["y"] = repr(float(obj.y))
+                obj_x, obj_y = _object_xy(doc, obj)
+                attrs["x"] = repr(obj_x)
+                attrs["y"] = repr(obj_y)
                 if obj.kind == "rect":
                     attrs["width"] = repr(float(obj.w))
                     attrs["height"] = repr(float(obj.h))
@@ -671,8 +724,8 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
                     "id": next(object_ids),
                     "name": obj.name,
                     "type": obj.obj_class,
-                    "x": float(obj.x),
-                    "y": float(obj.y),
+                    "x": _object_xy(doc, obj)[0],
+                    "y": _object_xy(doc, obj)[1],
                     "rotation": 0,
                     "visible": bool(obj.visible),
                 }
@@ -693,7 +746,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
         "type": "map",
         "version": MAP_VERSION,
         "tiledversion": TILED_VERSION,
-        "orientation": "orthogonal",
+        "orientation": doc.projection,
         "renderorder": doc.renderorder,
         "infinite": False,
         "width": doc.width,

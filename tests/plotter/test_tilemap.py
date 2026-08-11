@@ -293,3 +293,152 @@ def test_a_document_built_by_construction_starts_clean():
     doc = MapDoc(4, 4, 16, 16, layers=[layer, other])
     assert not doc.dirty
     assert doc.active_layer == layer.uid
+
+
+# --- strokes and projection ---------------------------------------------------
+#
+# A drag is one gesture, so it is one step. Before the stroke session existed
+# the canvas called ``write_region`` on every frame the button was down, which
+# made a forty-cell stamp forty things to undo and forty entries against the
+# history's byte budget.
+
+
+def _terrain_doc():
+    from warlock.studio.plotter import tilegen
+
+    doc = MapDoc(8, 8, 8, 8)
+    ref = doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    layer = doc.add_tile_layer("Ground")
+    return doc, ref, layer
+
+
+def test_a_stroke_is_one_undo_step_however_many_cells_it_wrote():
+    from warlock.studio.plotter import terrain
+
+    doc, ref, layer = _terrain_doc()
+    # Depth, not ``head``: head is a process-wide *serial*, so comparing it to
+    # ``head + 1`` is only accidentally right when nothing else pushed between.
+    depth = len(doc.history)
+    doc.begin_stroke(layer.uid)
+    for x in range(6):
+        region = terrain.paint_terrain(layer.data, x, 3, 0, ref)
+        if region is not None:
+            doc.stroke_write(*region)
+    assert len(doc.history) == depth, "a stroke in progress pushes nothing"
+    assert doc.end_stroke() is True
+    assert len(doc.history) == depth + 1
+    painted = layer.data.copy()
+    doc.undo()
+    assert not layer.data.any()
+    doc.redo()
+    assert np.array_equal(layer.data, painted)
+
+
+def test_a_stroke_that_changed_nothing_pushes_nothing():
+    doc, _ref, layer = _terrain_doc()
+    depth = len(doc.history)
+    doc.begin_stroke(layer.uid)
+    assert doc.end_stroke() is False
+    assert len(doc.history) == depth
+
+
+def test_ending_a_stroke_that_was_never_begun_is_harmless():
+    """A release can be missed -- focus lost, a tab switched, Esc, a save begun
+    mid-drag -- and every recovery path would otherwise have to know whether a
+    session was open."""
+    doc, _ref, _layer = _terrain_doc()
+    assert doc.stroking is False
+    assert doc.end_stroke() is False
+    assert doc.end_stroke() is False
+
+
+def test_beginning_a_second_stroke_closes_the_first():
+    from warlock.studio.plotter import terrain
+
+    doc, ref, layer = _terrain_doc()
+    depth = len(doc.history)
+    doc.begin_stroke(layer.uid)
+    doc.stroke_write(*terrain.paint_terrain(layer.data, 1, 1, 0, ref))
+    doc.begin_stroke(layer.uid)
+    assert len(doc.history) == depth + 1
+
+
+def test_a_stroke_covers_only_the_cells_that_moved():
+    """The step is the union of what was written, not the whole layer -- the
+    dirty-rect rule ``TilePatchEdit`` exists for."""
+    from warlock.studio.plotter import terrain
+
+    doc, ref, layer = _terrain_doc()
+    doc.begin_stroke(layer.uid)
+    doc.stroke_write(*terrain.paint_terrain(layer.data, 2, 2, 0, ref))
+    doc.end_stroke()
+    assert doc.history.top.after.shape == (3, 3)
+
+
+def test_replacing_a_tileset_keeps_every_painted_cell():
+    from warlock.studio.plotter import terrain, tilegen
+
+    doc, ref, layer = _terrain_doc()
+    region = terrain.paint_terrain(layer.data, 3, 3, 2, ref)
+    doc.write_region(layer.uid, *region)
+    before = layer.data.copy()
+    painted = np.array(ref.tileset.pixels)
+    painted[..., 0] = 200
+    doc.replace_tileset(0, tilegen.repolish(ref.tileset, painted))
+    assert np.array_equal(layer.data, before)
+    assert int(doc.tilesets[0].tileset.pixels[..., 0].max()) == 200
+    assert doc.tilesets[0].firstgid == ref.firstgid
+
+
+def test_replacing_a_tileset_of_a_different_size_is_refused():
+    """The one case that would renumber, and so the one that is named rather
+    than accepted."""
+    from warlock.studio.plotter import tilegen
+
+    doc, _ref, _layer = _terrain_doc()
+    smaller = tilegen.generate(
+        tilegen.GenSpec(terrains=tilegen.DEFAULT_TERRAINS[:2], tile_w=8, tile_h=8)
+    )
+    with pytest.raises(ValueError, match="renumber"):
+        doc.replace_tileset(0, smaller)
+
+
+def test_a_replace_undoes_back_to_the_original_art():
+    from warlock.studio.plotter import tilegen
+
+    doc, ref, _layer = _terrain_doc()
+    original = np.array(ref.tileset.pixels)
+    painted = np.array(ref.tileset.pixels)
+    painted[..., 0] = 200
+    doc.replace_tileset(0, tilegen.repolish(ref.tileset, painted))
+    doc.undo()
+    assert np.array_equal(doc.tilesets[0].tileset.pixels, original)
+
+
+def test_a_projection_and_its_tileset_arrive_as_one_step():
+    """Two steps would leave a Ctrl+Z on a map whose only tileset is drawn for
+    the lattice it is no longer on."""
+    from warlock.studio.plotter import tilegen
+
+    doc = MapDoc(6, 6, 32, 16)
+    depth = len(doc.history)
+    iso = tilegen.generate(
+        tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric")
+    )
+    doc.set_projection("isometric", adding=iso)
+    assert len(doc.history) == depth + 1
+    assert doc.projection == "isometric" and len(doc.tilesets) == 1
+    doc.undo()
+    assert doc.projection == "orthogonal" and not doc.tilesets
+
+
+def test_an_unknown_projection_is_refused_by_name():
+    with pytest.raises(ValueError, match="staggered"):
+        MapDoc(4, 4, 16, 16, projection="staggered")
+
+
+def test_an_isometric_map_is_taller_and_narrower_than_the_grid_suggests():
+    doc = MapDoc(4, 4, 32, 16, projection="isometric")
+    assert (doc.pixel_width, doc.pixel_height) == (128, 64)
+    assert MapDoc(4, 4, 32, 16).pixel_width == 128
+    assert MapDoc(4, 4, 32, 16).pixel_height == 64

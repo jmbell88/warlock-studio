@@ -6,6 +6,39 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.21 — 2026-08-11
+
+- **Ground tile sets in Plotter.** Generate a tileset instead of loading one:
+  name your terrains, pick a colour each, and get a full **blob autotiling**
+  set — 47 cells per terrain, so every edge, outer corner and inner corner has
+  its own tile. The new **Terrain** tool (`T`) paints a terrain and re-fits the
+  eight cells around it, so coastlines and paths follow the brush instead of
+  being placed one tile at a time. Order is precedence: where terrains meet the
+  lower one gets the outline and the one above runs underneath unbroken, which
+  is what makes a grass → sand → water beach resolve to one correct tile per
+  cell even where all three touch. The base set is deliberately plain — flat
+  fill, one-pixel darker outline — and generates identically every time, so a
+  polished set can be diffed against the one it started from.
+- **Polish an atlas in Inker and send it back.** **Polish in Inker** opens a
+  tileset's atlas as an ordinary flat drawing — not sliced into cells, because
+  keeping an outline consistent *across* neighbouring cases is the whole point
+  of the pass. **Back onto...** returns it to the same tileset, and every
+  painted cell keeps its tile and simply redraws. An atlas whose size changed
+  is refused by name rather than quietly renumbering the map.
+- **Isometric maps.** A map is drawn on one of two lattices. Cells are 2:1
+  diamonds, the grid follows the lattice rather than the screen, and the status
+  line shows the cell under the pointer — which is the only thing that reliably
+  answers "am I about to click the diamond I mean". Generating an isometric
+  ground set is what makes a map isometric, and only while it is still empty.
+  Tiled's isometric maps now load and export instead of being refused, and
+  object positions are converted in both directions so a spawn point opens in
+  Tiled where you left it. Staggered and hexagonal maps are still refused.
+- Plotter writes its terrain sets into an exported `.tmx` as Tiled Wang sets, so
+  a generated atlas arrives in Tiled with a working terrain brush. Wang sets
+  that are not one of Plotter's own are still refused by name.
+- The status bar gained the projection, the hovered cell and the terrain under
+  the cursor.
+
 ## 0.0.20 — 2026-08-11
 
 - **Groundwork for Plotter's ground tile sets.** The engine for generated

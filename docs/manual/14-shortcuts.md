@@ -178,6 +178,7 @@ to the current one, and **Alt** subtracts. Both are described in
 | `B` | Stamp |
 | `E` | Erase |
 | `G` | Fill |
+| `T` | Terrain |
 | `R` | Rect |
 | `I` | Pick the tile under the cursor |
 | `O` | Objects |

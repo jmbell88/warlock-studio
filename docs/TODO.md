@@ -144,7 +144,7 @@ Warlock Studio — UX/UI Review Report
 
  G. Engine capabilities with no UI
 
- - Plotter tile flips (H/V/D) round-trip from Tiled, render, and draw correctly — but no UI can ever set one.
+ - Plotter tile flips (H/V/D) round-trip from Tiled, render, and draw correctly — but no UI can ever set one. Still open, deliberately: the terrain generator emits all 47 cases unflipped rather than 15-plus-flips, so the flag path stays import/export-only and the atlas stays readable in Tiled and Inker alike. Closing this by making the generator emit flipped variants would couple a new generator to the one code path with no UI and no user-visible test — the wrong two things to land together.
  - Inker "Animate" is a one-way door: drop_animation exists with no UI caller; merge/flatten permanently unavailable once animated (refusal
  is documented in LEFTOVERS §16; the missing exit is not). Fix: "Flatten to a still drawing" behind a confirm naming the loss.
  - planar_unwrap exists in clay/uv.py; only Box Unwrap is registered.

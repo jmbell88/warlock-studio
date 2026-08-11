@@ -59,10 +59,23 @@ def _refuses(data: bytes, feature: str) -> None:
 # --- the map itself -----------------------------------------------------------
 
 
-@pytest.mark.parametrize("orientation", ["isometric", "staggered", "hexagonal"])
-def test_a_non_orthogonal_map_is_refused(orientation):
+@pytest.mark.parametrize("orientation", ["staggered", "hexagonal"])
+def test_a_staggered_or_hexagonal_map_is_refused(orientation):
+    """The two grids left in the list, and the reason ``gid`` carries no
+    hexagonal rotation bit: a file that could set one never gets past here."""
     data = _map().replace(b'orientation="orthogonal"', f'orientation="{orientation}"'.encode())
     _refuses(data, orientation)
+
+
+def test_an_isometric_map_loads_now_that_plotter_draws_one():
+    """Isometric left the refusal list *because the editor learned to draw it*,
+    which is the only reason a refusal is ever allowed to move. Asserted here,
+    beside the two that stayed, so the removal reads as a decision rather than
+    as a case somebody deleted."""
+    data = _map().replace(b'orientation="orthogonal"', b'orientation="isometric"')
+    doc = tmx.read_tmx(data, **LOADERS)
+    assert doc.projection == "isometric"
+    assert b'orientation="isometric"' in tmx.tmx_export(doc)["map.tmx"]
 
 
 def test_an_infinite_map_is_refused():

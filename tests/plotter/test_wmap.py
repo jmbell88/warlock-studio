@@ -270,3 +270,71 @@ def test_a_wrongly_typed_layer_array_is_refused():
 def test_something_that_is_not_an_archive_at_all_is_refused():
     with pytest.raises(ValueError, match="not a Warlock map"):
         wmap.read_wmap(b"just some bytes")
+
+
+# --- projection and terrains --------------------------------------------------
+#
+# ``.wmap`` is the only format that carries a terrain set as this editor means
+# it, so these two are what stop a generated map from reopening as 235
+# anonymous tiles.
+
+
+def test_a_maps_projection_survives_a_save():
+    doc = MapDoc(5, 4, 32, 16, projection="isometric")
+    doc.add_tile_layer("Ground")
+    assert wmap.read_wmap(wmap.wmap_bytes(doc)).projection == "isometric"
+
+
+def test_a_version_one_file_still_reads_as_orthogonal():
+    """A file written before projections existed is orthogonal by definition,
+    which the default says without a branch."""
+    doc = MapDoc(3, 3, 16, 16)
+    doc.add_tile_layer("Ground")
+    data = wmap.wmap_bytes(doc)
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w") as dst:
+        for item in src.namelist():
+            payload = src.read(item)
+            if item == wmap.MANIFEST:
+                manifest = json.loads(payload)
+                manifest["version"] = 1
+                manifest.pop("projection", None)
+                payload = json.dumps(manifest).encode()
+            dst.writestr(item, payload)
+    assert wmap.read_wmap(out.getvalue()).projection == "orthogonal"
+
+
+def test_a_terrain_set_survives_a_save():
+    from warlock.studio.plotter import tilegen
+
+    doc = MapDoc(4, 4, 8, 8)
+    doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    terrains = back.tilesets[0].tileset.terrains
+    assert [entry.name for entry in terrains] == [
+        entry.name for entry in tilegen.DEFAULT_TERRAINS
+    ]
+    # Order is precedence, so it is a list in the manifest and must not be
+    # reordered by the manifest's own sorted keys.
+    assert terrains == tilegen.DEFAULT_TERRAINS
+
+
+def test_a_map_with_terrains_still_saves_byte_identically_twice():
+    from warlock.studio.plotter import tilegen
+
+    doc = MapDoc(4, 4, 8, 8, projection="isometric")
+    doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    doc.add_tile_layer("Ground")
+    once = wmap.wmap_bytes(doc)
+    assert wmap.wmap_bytes(wmap.read_wmap(once)) == once
+
+
+def test_an_ordinary_tileset_saves_an_empty_terrain_list():
+    """Written even when empty, so the manifest's shape does not depend on its
+    content."""
+    doc = MapDoc(3, 3, 8, 8)
+    doc.add_tileset(
+        Tileset(name="plain", pixels=np.zeros((8, 8, 4), dtype=np.uint8), tile_w=8, tile_h=8)
+    )
+    manifest = json.loads(wmap.manifest_json(doc))
+    assert manifest["tilesets"][0]["terrains"] == []

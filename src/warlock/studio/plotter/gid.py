@@ -29,9 +29,16 @@ FLIP_V = 0x40000000
 FLIP_D = 0x20000000
 
 # Tiled reserves a fourth bit (0x10000000) for hexagonal 120-degree rotation.
-# It is deliberately absent: :mod:`.tmx` refuses a non-orthogonal map at the
-# door, so a file that could set it never gets this far, and carrying a constant
-# for a case that cannot arrive is how it eventually gets half-implemented.
+# It is deliberately absent, and the reason survived this editor learning to
+# draw isometric maps: both projections it draws are *square-symmetry* lattices
+# whose cells are exactly the eight transforms above, and the bit belongs to
+# hexagonal grids, which :mod:`.tmx` still refuses at the door. Carrying a
+# constant for a case that cannot arrive is how it eventually gets
+# half-implemented -- so instead of a constant here, ``tmx._finish`` probes for
+# the bit and refuses it *by name*. It used to be caught only by luck: the mask
+# below spans bit 28, so a hand-edited file carrying the flag read as a tile id
+# 268435456 too large and was rejected as "a tile no tileset accounts for" --
+# the right outcome under the wrong sentence.
 FLAG_MASK = FLIP_H | FLIP_V | FLIP_D
 GID_MASK = 0x1FFFFFFF
 

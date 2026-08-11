@@ -48,6 +48,7 @@ TOOLS = (
     ("stamp", "Stamp", "B"),
     ("erase", "Erase", "E"),
     ("fill", "Fill", "G"),
+    ("terrain", "Terrain", "T"),
     ("rect", "Rect", "R"),
     ("pick", "Pick", "I"),
     ("object", "Objects", "O"),
@@ -128,9 +129,17 @@ class PlotterState:
     brush: np.ndarray | None = None
     # The palette's own drag, in local tile coordinates of the active tileset.
     palette_anchor: tuple[int, int] | None = None
+    # Which terrain the Terrain tool lays down, as ``(tileset index, terrain)``.
+    # ``None`` means none is picked, which is what a map with no terrain set is.
+    # A pair rather than a bare index because a map may carry more than one
+    # terrain set and "terrain 2" alone does not say whose.
+    terrain: tuple[int, int] | None = None
 
     grid: bool = True
     show_objects: bool = True
+    # The cell under the pointer, for the status line. View state, recomputed
+    # every frame and never persisted; ``None`` when the pointer is elsewhere.
+    hover_cell: tuple[int, int] | None = None
     # The object under the cursor's attention, by uid. View state: not
     # undoable and not persisted, exactly as Clay's element selection is.
     selected_object: int | None = None
@@ -201,6 +210,7 @@ class PlotterState:
         """
         self.tileset_index = 0
         self.brush = None
+        self.terrain = None
         self.selected_object = None
 
     def cycle(self, step: int = 1) -> None:

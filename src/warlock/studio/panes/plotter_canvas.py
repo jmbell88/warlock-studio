@@ -24,6 +24,7 @@ import numpy as np
 
 from .. import inker_state, plotter_mode, theme, widgets
 from ..plotter import gid as gidlib
+from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
 from ..plotter.tilemap import ObjectLayer, TileLayer
 from ..tokens import sp
@@ -46,6 +47,14 @@ def draw(ctx: Any) -> None:
 
     doc = tab.doc
     view = tab.view
+    # A release can be missed -- focus lost, a tab switched, Esc, a save begun
+    # mid-drag -- and a session left open is a document whose cells are ahead of
+    # its history. ``end_stroke`` is idempotent, so this is a null check on
+    # every frame the button is not down, over every tab rather than this one:
+    # the tab you switched *away* from is not the tab drawing.
+    if not imgui.is_mouse_down(0):
+        for entry in state.docs:
+            entry.doc.end_stroke()
     avail = imgui.get_content_region_avail()
     region = (max(float(avail.x), 1.0), max(float(avail.y), 1.0))
     size_px = (doc.pixel_width, doc.pixel_height)
@@ -63,15 +72,16 @@ def draw(ctx: Any) -> None:
     draw_list.push_clip_rect(
         (origin.x, origin.y), (origin.x + region[0], origin.y + region[1]), True
     )
-    _backdrop(draw_list, view, (origin.x, origin.y), size_px)
+    _backdrop(draw_list, doc, view, (origin.x, origin.y))
     _layers(ctx, tab, draw_list, (origin.x, origin.y), region)
     if state.grid:
-        _grid(draw_list, doc, view, (origin.x, origin.y), size_px)
+        _grid(draw_list, doc, view, (origin.x, origin.y))
     if state.show_objects:
         _objects(state, doc, draw_list, view, (origin.x, origin.y))
     _cursor(state, tab, draw_list, (origin.x, origin.y), hovered)
     draw_list.pop_clip_rect()
 
+    state.hover_cell = _cell_under(state, tab, (origin.x, origin.y)) if hovered else None
     _events(ctx, state, tab, (origin.x, origin.y), hovered)
     _status(ctx, state, tab)
 
@@ -125,23 +135,55 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
     layer = doc.active()
     name = layer.name if layer is not None else "no layer"
-    widgets.muted(
-        f"{doc.width} x {doc.height}  --  {int(tab.view.zoom * 100)}%  --  {name}"
-        + ("  --  saving" if tab.busy else "")
-    )
+    bits = [
+        f"{doc.width} x {doc.height}",
+        doc.projection,
+        f"{int(tab.view.zoom * 100)}%",
+        name,
+    ]
+    # The hovered cell is the affordance an isometric map actually needs:
+    # nothing on screen says which diamond you are in, so "did I click the one
+    # I meant" is otherwise unanswerable. Suppressed off-map so it cannot
+    # flicker while the pointer is over the chrome.
+    cell = state.hover_cell
+    if cell is not None and 0 <= cell[0] < doc.width and 0 <= cell[1] < doc.height:
+        bits.append(f"cell {cell[0]}, {cell[1]}")
+        if state.tool == "terrain":
+            ref = _terrain_ref(state, doc)
+            layer = doc.active()
+            if ref is not None and isinstance(layer, TileLayer):
+                rank = plotter_terrain.terrain_at(layer.data, cell[0], cell[1], ref)
+                if rank is not None:
+                    bits.append(ref.tileset.terrains[rank].name)
+    if tab.busy:
+        bits.append("saving")
+    widgets.muted("  --  ".join(bits))
     imgui.same_line()
 
 
 # --- drawing ------------------------------------------------------------------
 
 
-def _backdrop(draw_list: Any, view: Any, origin: tuple[float, float], size_px) -> None:
+def _backdrop(draw_list: Any, doc: Any, view: Any, origin: tuple[float, float]) -> None:
+    """The map's own extent, which is a diamond when the map is isometric.
+
+    Drawn from the four lattice corners in both cases: for an orthogonal map
+    those *are* the rectangle's corners, so there is one path and no branch that
+    only one projection is ever tested through.
+    """
     from imgui_bundle import imgui
 
-    lo = inker_state.to_screen(view, origin, 0, 0)
-    hi = inker_state.to_screen(view, origin, size_px[0], size_px[1])
-    draw_list.add_rect_filled(lo, hi, imgui.get_color_u32(theme.rgba(theme.ELEV_1)))
-    draw_list.add_rect(lo, hi, imgui.get_color_u32(theme.rgba(theme.EDGE)))
+    quad = [
+        inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+        for column, row in ((0, 0), (doc.width, 0), (doc.width, doc.height), (0, doc.height))
+    ]
+    draw_list.add_convex_poly_filled(quad, imgui.get_color_u32(theme.rgba(theme.ELEV_1)))
+    # thickness *before* flags: the binding reverses imgui's own
+    # ``AddPolyline(points, num, col, flags, thickness)``, and passing them the
+    # C++ way is a TypeError rather than a wrong-looking line.
+    draw_list.add_polyline(
+        quad, imgui.get_color_u32(theme.rgba(theme.EDGE)), 1.0, imgui.ImDrawFlags_.closed.value
+    )
 
 
 def _visible_range(view: Any, doc: Any, origin, region) -> tuple[int, int, int, int]:
@@ -150,14 +192,15 @@ def _visible_range(view: Any, doc: Any, origin, region) -> tuple[int, int, int, 
     Clamped to the map, so the loop below is bounded by the *window* rather
     than by the document: zooming out on a 512-square map must not become a
     quarter of a million draw calls.
+
+    The arithmetic is ``MapDoc``'s, not this pane's, and it takes all four
+    corners rather than two: under an isometric projection a screen rectangle
+    maps to a *rhombus* in cell space, so the min and max of one diagonal pair
+    culls cells that are on screen.
     """
     x0, y0 = inker_state.to_image(view, origin, origin[0], origin[1])
     x1, y1 = inker_state.to_image(view, origin, origin[0] + region[0], origin[1] + region[1])
-    c0 = max(0, int(x0 // doc.tile_w))
-    r0 = max(0, int(y0 // doc.tile_h))
-    c1 = min(doc.width - 1, int(x1 // doc.tile_w) + 1)
-    r1 = min(doc.height - 1, int(y1 // doc.tile_h) + 1)
-    return c0, r0, c1, r1
+    return doc.cell_bounds(x0, y0, x1, y1)
 
 
 def _corner_uvs(uv, flip_h: bool, flip_v: bool, flip_d: bool):
@@ -208,61 +251,74 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
         block = layer.data[r0 : r1 + 1, c0 : c1 + 1]
         ids = gidlib.tile_ids(block)
         flags = gidlib.flags(block)
-        for row in range(ids.shape[0]):
-            for column in range(ids.shape[1]):
-                tile_id = int(ids[row, column])
-                if not tile_id:
-                    continue
-                entry = None
-                for index, (ref, texture) in refs.items():
-                    if ref.holds(tile_id):
-                        entry = (ref, texture, index)
-                        break
-                if entry is None or entry[1] is None:
-                    continue
-                ref, texture, _index = entry
-                uv = ref.tileset.uv(ref.local(tile_id))
-                mask = int(flags[row, column])
-                corners = _corner_uvs(
-                    uv,
-                    bool(mask & gidlib.FLIP_H),
-                    bool(mask & gidlib.FLIP_V),
-                    bool(mask & gidlib.FLIP_D),
-                )
-                px = (c0 + column) * tile_w
-                py = (r0 + row) * tile_h
-                p0 = inker_state.to_screen(view, origin, px, py)
-                p2 = (p0[0] + tile_w * zoom, p0[1] + tile_h * zoom)
-                draw_list.add_image_quad(
-                    widgets.texture_ref(texture),
-                    p0,
-                    (p2[0], p0[1]),
-                    p2,
-                    (p0[0], p2[1]),
-                    corners[0],
-                    corners[1],
-                    corners[2],
-                    corners[3],
-                    tint,
-                )
+        # Back to front. For an orthogonal map that is row-major and this is
+        # the order the block already has; for an isometric one depth is
+        # ``column + row``, and row-major is not monotone in it.
+        cells = [
+            (row, column) for row in range(ids.shape[0]) for column in range(ids.shape[1])
+        ]
+        if doc.isometric:
+            cells.sort(key=lambda cell: cell[0] + cell[1])
+        for row, column in cells:
+            tile_id = int(ids[row, column])
+            if not tile_id:
+                continue
+            entry = None
+            for index, (ref, texture) in refs.items():
+                if ref.holds(tile_id):
+                    entry = (ref, texture, index)
+                    break
+            if entry is None or entry[1] is None:
+                continue
+            ref, texture, _index = entry
+            uv = ref.tileset.uv(ref.local(tile_id))
+            mask = int(flags[row, column])
+            corners = _corner_uvs(
+                uv,
+                bool(mask & gidlib.FLIP_H),
+                bool(mask & gidlib.FLIP_V),
+                bool(mask & gidlib.FLIP_D),
+            )
+            px, py = doc.cell_origin(c0 + column, r0 + row)
+            p0 = inker_state.to_screen(view, origin, px, py)
+            p2 = (p0[0] + tile_w * zoom, p0[1] + tile_h * zoom)
+            draw_list.add_image_quad(
+                widgets.texture_ref(texture),
+                p0,
+                (p2[0], p0[1]),
+                p2,
+                (p0[0], p2[1]),
+                corners[0],
+                corners[1],
+                corners[2],
+                corners[3],
+                tint,
+            )
 
 
-def _grid(draw_list: Any, doc: Any, view: Any, origin, size_px) -> None:
+def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
     from imgui_bundle import imgui
 
-    step_x = doc.tile_w * view.zoom
-    step_y = doc.tile_h * view.zoom
+    # The *projected* step, not the tile size: an isometric cell advances only
+    # half a tile per lattice step, so the old test kept drawing a solid wash
+    # at half the zoom it should have stopped at.
+    scale = 0.5 if doc.isometric else 1.0
+    step_x = doc.tile_w * view.zoom * scale
+    step_y = doc.tile_h * view.zoom * scale
     if step_x < MIN_GRID_PX or step_y < MIN_GRID_PX:
         return
     colour = imgui.get_color_u32(theme.rgba(theme.EDGE, 0.6))
-    top = inker_state.to_screen(view, origin, 0, 0)
-    bottom = inker_state.to_screen(view, origin, size_px[0], size_px[1])
+
+    def node(column: float, row: float):
+        return inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+
+    # Lines along the two *lattice* directions rather than the screen axes.
+    # For an orthogonal map this reproduces the old lines exactly; for an
+    # isometric one it draws the diamond mesh.
     for column in range(doc.width + 1):
-        x = top[0] + column * step_x
-        draw_list.add_line((x, top[1]), (x, bottom[1]), colour)
+        draw_list.add_line(node(column, 0), node(column, doc.height), colour)
     for row in range(doc.height + 1):
-        y = top[1] + row * step_y
-        draw_list.add_line((top[0], y), (bottom[0], y), colour)
+        draw_list.add_line(node(0, row), node(doc.width, row), colour)
 
 
 def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
@@ -306,14 +362,23 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
     columns, rows = 1, 1
     if state.tool == "stamp" and state.brush is not None:
         rows, columns = state.brush.shape
-    p0 = inker_state.to_screen(view, origin, cell[0] * doc.tile_w, cell[1] * doc.tile_h)
-    p1 = inker_state.to_screen(
-        view,
-        origin,
-        (cell[0] + columns) * doc.tile_w,
-        (cell[1] + rows) * doc.tile_h,
+    # The parallelogram through four lattice nodes, which degenerates to the
+    # rectangle this used to draw when the map is orthogonal.
+    quad = [
+        inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+        for column, row in (
+            (cell[0], cell[1]),
+            (cell[0] + columns, cell[1]),
+            (cell[0] + columns, cell[1] + rows),
+            (cell[0], cell[1] + rows),
+        )
+    ]
+    draw_list.add_polyline(
+        quad,
+        imgui.get_color_u32((1.0, 1.0, 1.0, 0.75)),
+        sp(1.5),
+        imgui.ImDrawFlags_.closed.value,
     )
-    draw_list.add_rect(p0, p1, imgui.get_color_u32((1.0, 1.0, 1.0, 0.75)), 0.0, sp(1.5))
 
 
 # --- input --------------------------------------------------------------------
@@ -324,7 +389,10 @@ def _cell_under(state: Any, tab: Any, origin) -> tuple[int, int] | None:
 
     mouse = imgui.get_mouse_pos()
     x, y = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
-    return int(x // tab.doc.tile_w), int(y // tab.doc.tile_h)
+    # ``MapDoc`` owns the inverse so this pane's hit test and the tools' cannot
+    # drift; it is exact rather than a polygon test, and unclamped because every
+    # tool clips its own placement.
+    return tab.doc.cell_at(x, y)
 
 
 def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
@@ -360,13 +428,36 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
         state.drag_kind = "rect" if state.tool == "rect" else "paint"
         state.drag_anchor = cell
         if state.tool != "rect":
+            # Stamp, erase and terrain are the three tools a *drag* repeats, and
+            # so the three that would otherwise push one step per cell. Fill,
+            # rect and pick fire once and need no session.
+            layer = tab.doc.active()
+            if state.tool in ("stamp", "erase", "terrain") and isinstance(layer, TileLayer):
+                tab.doc.begin_stroke(layer.uid)
             _apply(ctx, state, tab, cell)
     elif state.drag_kind == "paint" and imgui.is_mouse_down(0):
         _apply(ctx, state, tab, cell)
     elif state.drag_kind and imgui.is_mouse_released(0):
         if state.drag_kind == "rect" and state.drag_anchor is not None:
             _apply_rect(ctx, state, tab, state.drag_anchor, cell)
+        tab.doc.end_stroke()
         state.clear_drag()
+
+
+def _terrain_ref(state: Any, doc: Any):
+    """The tileset reference the chosen terrain belongs to, or ``None``.
+
+    Re-resolved per call rather than cached on the state: tilesets are
+    append-only but a *replace* swaps the reference, and a cached one would go
+    on painting from the atlas the polish pass retired.
+    """
+    if state.terrain is None:
+        return None
+    index, rank = state.terrain
+    if index >= len(doc.tilesets):
+        return None
+    ref = doc.tilesets[index]
+    return ref if rank < len(ref.tileset.terrains) else None
 
 
 def _layer_for_paint(ctx: Any, tab: Any):
@@ -402,9 +493,25 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             ctx.toast("Pick a tile from the tileset first.", "error")
             return
         result = plotter_tools.flood_fill(layer.data, cell[0], cell[1], int(state.brush[0, 0]))
+    elif state.tool == "terrain":
+        ref = _terrain_ref(state, doc)
+        if ref is None:
+            ctx.toast("Pick a terrain first.", "error")
+            return
+        result = plotter_terrain.paint_terrain(
+            layer.data, cell[0], cell[1], state.terrain[1], ref
+        )
     else:
         return
-    if result is not None:
+    if result is None:
+        return
+    # Inside a drag the write goes to the open session, which pushes nothing:
+    # the whole stroke becomes one step at release. Outside one -- a single
+    # click, a fill -- ``write_region`` takes the diff and pushes as it always
+    # has, so the two paths differ only in when the step appears.
+    if doc.stroking:
+        doc.stroke_write(*result)
+    else:
         doc.write_region(layer.uid, *result)
 
 

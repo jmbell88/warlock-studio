@@ -205,6 +205,32 @@ def _load(path: Path) -> dict[str, Any]:
     return {"doc": doc, "path": path, "format": doc.file_format}
 
 
+def open_pixels(ctx: Any, pixels: Any, *, title: str = "Untitled") -> None:
+    """Open an in-memory RGBA array as an ordinary, unlinked document.
+
+    Plotter's polish round trip comes through here. Unlinked deliberately, for
+    ``open_sprite_draft``'s reason: it carries no ``job_id`` and no
+    ``link_kind``, so saving it cannot write back over anything -- the way back
+    to the map is Plotter pulling the finished document in, not this pushing.
+
+    Routed on the ``inker-open`` prefix so ``on_task_done`` adopts it with no
+    routing change, and the copy happens on the task thread because the caller's
+    array is routinely a tileset's frozen pixels, which nothing may write into.
+    """
+    import numpy as np
+
+    ensure(ctx)
+    set_mode(ctx.state, "inker")
+    array = np.array(pixels, dtype=np.uint8)
+
+    def run() -> dict[str, Any]:
+        from . import inker
+
+        return {"doc": inker.Document.from_pixels(array, name="Atlas"), "title": title}
+
+    ctx.submit(f"inker-open:pixels:{title}", run)
+
+
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
     """Open one candidate of a sprite draft as an editable animation.
 

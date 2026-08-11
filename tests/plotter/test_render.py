@@ -145,3 +145,35 @@ def test_rendering_twice_gives_the_same_pixels():
     layer = doc.add_tile_layer()
     doc.write_region(layer.uid, 0, 0, np.array([[1, 2]], gid.DTYPE))
     assert np.array_equal(render.render_map(doc), render.render_map(doc))
+
+
+def test_the_flat_render_places_an_isometric_cell_where_the_canvas_does():
+    """The "two renderers agree" rule, asserted rather than intended. Both take
+    placement from ``project`` now, so this is what would catch one of them
+    growing its own arithmetic."""
+    from warlock.studio.plotter import project
+
+    doc = MapDoc(3, 3, 32, 16, projection="isometric")
+    pixels = np.zeros((16, 32, 4), dtype=np.uint8)
+    pixels[:, :] = (255, 0, 0, 255)
+    tileset = Tileset(name="t", pixels=pixels, tile_w=32, tile_h=16)
+    ref = doc.add_tileset(tileset)
+    layer = doc.add_tile_layer("G")
+    layer.data[1, 2] = gid.compose(ref.firstgid)
+
+    out = render.render_map(doc)
+    assert out.shape[:2] == (doc.pixel_height, doc.pixel_width)
+    x0, y0 = project.cell_origin("isometric", 3, 3, 32, 16, 2, 1)
+    # The centre of that cell's diamond is opaque; the map's top-left corner,
+    # which no diamond covers, is not.
+    assert out[int(y0) + 8, int(x0) + 16, 3] == 255
+    assert out[0, 0, 3] == 0
+
+
+def test_an_isometric_render_is_the_size_the_projection_says():
+    doc = MapDoc(4, 6, 32, 16, projection="isometric")
+    doc.add_tile_layer("G")
+    out = render.render_map(doc)
+    # (rows, columns): the height comes from tile_h and the width from tile_w,
+    # so a 2:1 cell makes the map twice as wide as it is tall.
+    assert out.shape[:2] == ((4 + 6) * 16 // 2, (4 + 6) * 32 // 2)

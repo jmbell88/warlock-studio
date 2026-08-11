@@ -49,6 +49,7 @@ from .edits import (
     ObjectAddEdit,
     ObjectPropsEdit,
     ObjectRemoveEdit,
+    ProjectionEdit,
     ResizeEdit,
     TilePatchEdit,
     TilesetAddEdit,
@@ -382,6 +383,33 @@ class MapDoc:
         self.history.push(TilesetReplaceEdit(index=at, before=old, after=ref))
         self._swap_tileset(at, ref)
         return ref
+
+    def set_projection(
+        self, projection: str, *, adding: Tileset | None = None, source: str = ""
+    ) -> None:
+        """Change the lattice, optionally adopting a tileset in the same step.
+
+        ``adding`` exists because the two arrive together: generating an
+        isometric ground set is *how* a map becomes isometric, and two steps
+        would leave a Ctrl+Z on a map whose only tileset is drawn for the
+        lattice it is no longer on.
+        """
+        want = project.check(projection)
+        steps: list[Edit] = []
+        if want != self.projection:
+            steps.append(ProjectionEdit(before=self.projection, after=want))
+            self._set_projection(want)
+        if adding is not None:
+            ref = TilesetRef(firstgid=self.next_firstgid, tileset=adding, source=source)
+            steps.append(TilesetAddEdit(ref=ref))
+            self._attach_tileset(ref)
+        if len(steps) == 1:
+            self.history.push(steps[0])
+        else:
+            self.compound(steps)
+
+    def _set_projection(self, projection: str) -> None:
+        self.projection = project.check(projection)
 
     def _swap_tileset(self, index: int, ref: TilesetRef) -> None:
         self.tilesets[int(index)] = ref

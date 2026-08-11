@@ -50,6 +50,52 @@ The palette under the tileset combo is the atlas itself. Click a tile to pick it
 several and you get a multi-tile brush, which stamps as one block. The white outline shows what is
 selected, and the cursor on the canvas shows the footprint the brush is about to cover.
 
+### Generating a ground set
+
+**Generate a ground set** in the tileset pane builds a tileset instead of loading one: flat terrain
+colours with a one-pixel darker outline, laid out for **blob autotiling**. Each terrain gets 47
+cells — every combination of neighbours that looks different — so grass meeting dirt has a real
+inner corner rather than a staircase.
+
+Name the terrains and pick a colour each. **Order is precedence**: where two terrains meet, the one
+lower in the list is the one that gets the outline, and the one above it runs underneath unbroken.
+That is what makes a three-way meeting work — grass, then sand, then water gives you a beach, with
+sand outlined against the grass and water outlined against both.
+
+This is the *base* set, and it is meant to be painted over: it is deliberately plain so that the
+shapes are unambiguous, and it generates identically every time so you can compare a polished set
+against the one it started from.
+
+The **projection** is chosen here, and only while the map is still empty. Generating an isometric
+set is what makes a map isometric, and it happens in the same undo step as the tileset arriving.
+Once anything is painted the choice is fixed, because a set drawn for one lattice would paint the
+wrong shape into every cell already drawn for the other.
+
+### Polishing an atlas in Inker
+
+**Polish in Inker** opens a tileset's atlas as an ordinary drawing — one flat layer, not sliced into
+cells, because keeping an outline consistent *across* neighbouring cases is exactly what the pass is
+for and 235 separate frames would hide it.
+
+When you are done, **Back onto...** under *from Inker* returns it to the same tileset. Every painted
+cell keeps its tile and simply redraws with the new art, because the numbering is untouched. An
+atlas whose size changed is refused by name rather than accepted — the roles are positional, so a
+cropped atlas is one whose tile 93 is no longer the tile the map thinks it is.
+
+## Isometric maps
+
+A map is drawn on one of two lattices, and which one is a property of the map. On an **isometric**
+map a cell is a 2:1 diamond, the grid follows the two lattice directions rather than the screen
+axes, and the status line under the canvas shows the cell under the pointer — which is the only
+thing that reliably answers "am I about to click the diamond I mean".
+
+Everything else is unchanged. The same tools paint, the same layers stack, and the flat render an
+export produces places a cell exactly where the canvas does.
+
+Tiled measures an isometric object's position differently from the way it measures a cell, and the
+conversion is applied in both directions, so a spawn point exported to `.tmx` opens in Tiled where
+you left it.
+
 ## Tools
 
 | Key | Tool | What it does |
@@ -57,6 +103,7 @@ selected, and the cursor on the canvas shows the footprint the brush is about to
 | `B` | Stamp | Puts the brush down, following the drag |
 | `E` | Erase | Clears cells, following the drag |
 | `G` | Fill | Floods the connected run under the cursor |
+| `T` | Terrain | Paints a terrain and re-fits the eight cells around it |
 | `R` | Rect | Fills a rectangle between press and release |
 | `I` | Pick | Takes the tile under the cursor as the brush |
 | `O` | Objects | Selects and draws objects (see below) |
@@ -66,6 +113,13 @@ unmirrored twin. That is deliberate: two cells that draw differently are two dif
 fill that spilled through the mirrored ones would cross exactly the seam you drew them to make. It
 is four-connected, so it cannot leak diagonally through a corner where two walls only touch at a
 point.
+
+The **Terrain** tool needs a terrain set on the map — see *Generating a ground set* above. It sets
+the cell you touch and then re-fits that cell and its eight neighbours, so edges, outer corners and
+inner corners follow as you draw rather than being placed one at a time.
+
+A whole drag is **one** undo step. That is true of Stamp and Erase now too: a stroke is one gesture,
+so it is one thing to take back.
 
 Painting lands on the *active* layer — the highlighted row in the layers pane. Painting with an
 object layer active says so rather than doing nothing.
@@ -107,6 +161,10 @@ convert a file you brought from Tiled into one Tiled cannot open.
 which is the layout Tiled and every engine importer expects. TMX has no portable way to embed an
 image, which is why an export is several files rather than one.
 
+A `.wmap` carries the map's projection and its terrain sets. A `.tmx` carries the projection and
+describes the terrain sets as Tiled Wang sets, so a generated atlas opens in Tiled with a working
+terrain brush.
+
 Exporting deliberately does *not* retarget `Ctrl+S`. The `.wmap` holds things the `.tmx` cannot, so
 making the export the document's home would lose them on the next save.
 
@@ -120,11 +178,11 @@ Plotter does not model is **refused by name** rather than loaded with half of it
 because the drop is invisible right up to the moment you save, at which point the other half is
 gone. The message says which feature and what to do about it.
 
-Refused: isometric, staggered and hexagonal maps; infinite (chunked) maps; group and image layers;
+Refused: staggered and hexagonal maps; infinite (chunked) maps; group and image layers;
 ellipse, polygon, polyline and text objects; tile objects and object templates; rotated objects;
-image-collection tilesets; Wang sets and terrains; per-tile animation, properties and collision
-shapes; zstd-compressed layer data; layer pixel offsets; and custom properties outside the five
-supported types.
+image-collection tilesets; Wang sets that are not one of Plotter's own terrain sets, and Tiled's
+older terrain types; per-tile animation, properties and collision shapes; zstd-compressed
+layer data; layer pixel offsets; and custom properties outside the five supported types.
 
 A *hidden* object is modelled rather than refused — hiding something changes nothing about where it
 is. A *rotated* one is refused, because an unrotated outline drawn for a rotated object is a wrong

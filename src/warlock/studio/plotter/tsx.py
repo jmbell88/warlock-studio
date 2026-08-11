@@ -34,7 +34,8 @@ from typing import Any
 
 import numpy as np
 
-from .tileset import Tileset
+from . import blob
+from .tileset import TerrainSpec, Tileset
 
 # What this build writes. Tiled accepts anything it recognises; these are the
 # values a current Tiled writes and so the values least likely to surprise it.
@@ -169,8 +170,13 @@ def check_tileset_features(root: ET.Element) -> None:
     element without a file around it -- and a second copy of the list is how the
     embedded and external paths come to accept different files.
     """
-    if root.find("wangsets") is not None:
-        raise TiledUnsupported("Wang sets / terrain brushes")
+    node = root.find("wangsets")
+    if node is not None and read_wangsets(node) is None:
+        raise TiledUnsupported(
+            "Wang sets / terrain brushes",
+            f"Plotter models one blob set: {blob.TILE_COUNT} tiles per terrain colour, "
+            "in mask order",
+        )
     if root.find("terraintypes") is not None:
         raise TiledUnsupported("terrain types")
     if root.find("image") is None:
@@ -207,6 +213,136 @@ def tsx_source(data: bytes) -> str:
     return source
 
 
+#: The eight ``wangid`` slots, in Tiled's own order -- top, top-right, right,
+#: bottom-right, bottom, bottom-left, left, top-left. It happens to be exactly
+#: :data:`blob.NEIGHBOURS`' clockwise-from-north order, which is why translating
+#: between the two is a list comprehension rather than a lookup table.
+_WANG_BITS: tuple[int, ...] = (
+    blob.N,
+    blob.NE,
+    blob.E,
+    blob.SE,
+    blob.S,
+    blob.SW,
+    blob.W,
+    blob.NW,
+)
+
+
+def _hex_rgba(value: str) -> tuple[int, int, int, int]:
+    text = (value or "").strip().lstrip("#")
+    if len(text) == 8:  # Tiled writes #aarrggbb when an alpha is present
+        text = text[2:] + text[:2]
+    elif len(text) == 6:
+        text = text + "ff"
+    else:
+        return (0, 0, 0, 255)
+    try:
+        return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4, 6))  # type: ignore[return-value]
+    except ValueError:
+        return (0, 0, 0, 255)
+
+
+def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
+    """A ``<wangsets>`` block as this editor's terrains, or ``None``.
+
+    ``None`` rather than an exception, so the caller owns the refusal sentence
+    and there is one place that says "Wang sets" to a user.
+
+    **Recognise-or-refuse, and the asymmetry is the point.** Tiled's model is
+    strictly larger than this one -- corner-only and edge-only sets, up to 255
+    colours, arbitrary tile assignments that need not form a blob at all -- so
+    adopting a foreign one would be exactly the silent half-read the reader
+    exists to prevent. What is recognised is precisely what :func:`write_wangsets`
+    emits, which keeps the reader and the writer symmetric: every file this
+    writes, this reads.
+
+    The outline colour is **not** carried by the format and is derived on the
+    way back in. That is lossless where it matters: a terrain's two colours are
+    read by the *generator* and by nothing else, since a tileset that already
+    has pixels renders from them.
+    """
+    sets = node.findall("wangset")
+    if len(sets) != 1:
+        return None
+    wangset = sets[0]
+    if wangset.get("type") != "mixed":
+        return None
+    colours = wangset.findall("wangcolor")
+    if not colours:
+        return None
+    tiles = wangset.findall("wangtile")
+    if len(tiles) != len(colours) * blob.TILE_COUNT:
+        return None
+
+    want = {}
+    for index in range(len(colours)):
+        for case, mask in enumerate(blob.BLOB_MASKS):
+            wangid = ",".join(str(index + 1 if mask & bit else 0) for bit in _WANG_BITS)
+            want[index * blob.TILE_COUNT + case] = wangid
+    for tile in tiles:
+        try:
+            tileid = int(tile.get("tileid", ""))
+        except ValueError:
+            return None
+        if want.get(tileid) != (tile.get("wangid") or "").replace(" ", ""):
+            return None
+
+    out = []
+    for index, colour in enumerate(colours):
+        fill = _hex_rgba(colour.get("color", ""))
+        outline = (*(part * 3 // 5 for part in fill[:3]), fill[3])
+        out.append(
+            TerrainSpec(
+                name=colour.get("name") or f"Terrain {index + 1}",
+                fill=fill,
+                outline=outline,
+            )
+        )
+    return tuple(out)
+
+
+def write_wangsets(parent: ET.Element, terrains: tuple[TerrainSpec, ...]) -> None:
+    """Describe a terrain set as a Tiled Wang set.
+
+    Derived from ``terrains`` on every write rather than stored, so it cannot
+    drift from the atlas it describes -- and a generated set opened in Tiled
+    arrives with a working terrain brush rather than as 235 anonymous tiles.
+    """
+    if not terrains:
+        return
+    node = ET.SubElement(parent, "wangsets")
+    wangset = ET.SubElement(node, "wangset", {"name": "Terrain", "type": "mixed", "tile": "-1"})
+    for entry in terrains:
+        ET.SubElement(
+            wangset,
+            "wangcolor",
+            {
+                "name": entry.name,
+                "color": "#{:02x}{:02x}{:02x}".format(*entry.fill[:3]),
+                "tile": "-1",
+                "probability": "1",
+            },
+        )
+    for index in range(len(terrains)):
+        for case, mask in enumerate(blob.BLOB_MASKS):
+            ET.SubElement(
+                wangset,
+                "wangtile",
+                {
+                    "tileid": str(index * blob.TILE_COUNT + case),
+                    "wangid": ",".join(
+                        str(index + 1 if mask & bit else 0) for bit in _WANG_BITS
+                    ),
+                },
+            )
+
+
+def _terrains_of(root: ET.Element) -> tuple[TerrainSpec, ...]:
+    node = root.find("wangsets")
+    return () if node is None else (read_wangsets(node) or ())
+
+
 def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`."""
     root = _root(data, "tileset")
@@ -219,6 +355,7 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
         spacing=int(root.get("spacing", 0) or 0),
         margin=int(root.get("margin", 0) or 0),
         properties=read_properties(root),
+        terrains=_terrains_of(root),
     )
 
 
@@ -255,6 +392,7 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
         },
     )
     write_properties(root, ts.properties)
+    write_wangsets(root, ts.terrains)
     return root
 
 

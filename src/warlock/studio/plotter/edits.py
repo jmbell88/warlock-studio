@@ -179,6 +179,26 @@ class TilesetAddEdit(Edit):
 
 
 @dataclass
+class ProjectionEdit(Edit):
+    """Changing which lattice the map is drawn on.
+
+    Cheap in bytes and enormous in meaning: every cell keeps its gid and moves
+    to a different place on screen. Undoable like anything else, but the mode
+    only ever offers it on an empty map -- a set drawn for one lattice paints
+    the wrong shape into cells already painted for the other.
+    """
+
+    before: str
+    after: str
+
+    def undo(self, doc: Any) -> None:
+        doc._set_projection(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_projection(self.after)
+
+
+@dataclass
 class TilesetReplaceEdit(Edit):
     """Swapping one tileset's art for another of the same shape.
 

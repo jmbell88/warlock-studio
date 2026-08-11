@@ -32,6 +32,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "clay-bridge": ("08-clay", "the-two-ways-out"),
     "plotter-tools": ("09-plotter", "tools"),
     "plotter-tileset": ("09-plotter", "tilesets"),
+    "plotter-terrain": ("09-plotter", "generating-a-ground-set"),
     "plotter-layers": ("09-plotter", "layers"),
     "plotter-bridge": ("09-plotter", "files"),
     "packwright-sources": ("10-packwright", "sources"),

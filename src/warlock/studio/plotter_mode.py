@@ -267,6 +267,99 @@ def add_tileset_path(
     ctx.submit(f"plotter-tileset:{tab.uid}", run)
 
 
+def generate_terrain_set(ctx: Any, spec: Any) -> None:
+    """A procedural ground set, built on a task thread and added like any other.
+
+    Deliberately on the existing ``plotter-tileset:`` key rather than one of its
+    own: the result *is* a tileset for this tab, ``on_task_done`` already routes
+    and adopts one, and a second key would be a second copy of that branch. The
+    duplicate-key refusal it inherits is the right rule too -- a generate and an
+    "Add from a file..." both end in "a tileset is arriving on this tab".
+
+    The pane builds the spec, which is plain frozen data, and nothing about a
+    numpy raster happens on the frame thread.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Open or start a map first.", "error")
+        return
+    uid = tab.uid
+
+    def run() -> dict[str, Any]:
+        from .plotter import tilegen
+
+        return {
+            "tileset": tilegen.generate(spec),
+            "source": "",
+            "projection": spec.projection,
+            "uid": uid,
+        }
+
+    ctx.submit(f"plotter-tileset:{uid}", run)
+
+
+def polish_in_inker(ctx: Any, tab: Any, index: int) -> None:
+    """Open a tileset's atlas as an ordinary Inker document.
+
+    Flat and unlinked on purpose. Slicing it into cells -- which is what
+    ``inker.sheetin`` does for a sprite sheet -- would be the wrong model here:
+    a polish pass on a blob set is *about* keeping the outline consistent
+    **across** adjacent cases, and 235 one-cell frames makes exactly that
+    impossible to see.
+
+    The way back is the Plotter side pulling the document in, which is the
+    direction Packwright already takes documents from Inker.
+    """
+    from . import inker_mode
+
+    if index < 0 or index >= len(tab.doc.tilesets):
+        return
+    ref = tab.doc.tilesets[index]
+    # Already a frozen RGBA copy, so there is nothing to decode and nothing the
+    # editor can write through into the tileset the map is drawing from.
+    inker_mode.open_pixels(ctx, ref.tileset.pixels, title=f"{ref.tileset.name} (atlas)")
+    ctx.toast("Atlas opened in Inker.")
+
+
+def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
+    """An Inker document back onto the map, as art for an existing tileset.
+
+    Flattened on the frame thread, for the reason Packwright flattens there:
+    the composite fills and evicts the document's own cache, which the pane
+    drawing it is touching.
+
+    ``index`` names the tileset to repaint. Without one this is an ordinary
+    append, which is what an unrelated drawing should be.
+    """
+    from .plotter import tilegen
+    from .plotter.tileset import Tileset
+
+    tab = active(ctx)
+    if tab is None:
+        return
+    # ``matte=False`` because a tileset's transparency is meaningful -- the
+    # checkerboard the editor draws under a document is not part of the art.
+    pixels = doc.flatten(matte=False)
+    if index is None:
+        tab.doc.add_tileset(
+            Tileset(
+                name=doc.title or "Atlas",
+                pixels=pixels,
+                tile_w=tab.doc.tile_w,
+                tile_h=tab.doc.tile_h,
+            )
+        )
+        ctx.toast("Tileset added.")
+        return
+    ref = tab.doc.tilesets[index]
+    try:
+        tab.doc.replace_tileset(index, tilegen.repolish(ref.tileset, pixels))
+    except ValueError as exc:
+        ctx.toast(str(exc), "error")
+        return
+    ctx.toast(f"{ref.tileset.name} repainted.")
+
+
 def ask_add_tileset(ctx: Any) -> None:
     """The picker and the decode on one task thread.
 
@@ -539,9 +632,24 @@ def on_task_done(ctx: Any, done: Any) -> None:
     if name == "plotter-tileset":
         # Not a save, so ``saving`` was never set and must not be cleared here.
         if isinstance(result, dict) and result.get("tileset") is not None:
-            tab.doc.add_tileset(result["tileset"], source=result.get("source", ""))
+            tileset = result["tileset"]
+            want = result.get("projection")
+            if want and want != tab.doc.projection:
+                # One step, not two. A tileset that arrived while the projection
+                # did not would leave a map painting the wrong lattice, one
+                # Ctrl+Z away from a state nobody asked for.
+                tab.doc.set_projection(want, adding=tileset, source=result.get("source", ""))
+            else:
+                tab.doc.add_tileset(tileset, source=result.get("source", ""))
             state.tileset_index = len(tab.doc.tilesets) - 1
             state.brush = None
+            if tileset.terrains:
+                # The thing that just arrived is the thing in your hand, which
+                # is exactly what setting ``tileset_index`` says for a palette.
+                state.terrain = (state.tileset_index, 0)
+            # An isometric map's pixel extent is not width times tile width, so
+            # a fit computed against the old projection is the wrong frame.
+            tab.view.fitted = False
             ctx.toast("Tileset added.")
         return
 

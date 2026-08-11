@@ -114,6 +114,52 @@ def cell_at(
     return (math.floor(float(x) / tile_w), math.floor(float(y) / tile_h))
 
 
+def cell_point(
+    projection: str, width: int, height: int, tile_w: int, tile_h: int, x: float, y: float
+) -> tuple[float, float]:
+    """:func:`cell_at` without the floor -- a *fractional* cell coordinate.
+
+    What an object needs, since an object is routinely placed off the grid on
+    purpose and rounding it to a cell would move every spawn point to a corner.
+    """
+    if projection == ISOMETRIC:
+        half_w, half_h = tile_w / 2.0, tile_h / 2.0
+        u = (float(x) - _origin_x(projection, height, tile_w)) / half_w
+        v = float(y) / half_h
+        return ((u + v) / 2.0, (v - u) / 2.0)
+    return (float(x) / tile_w, float(y) / tile_h)
+
+
+def object_to_pixels(
+    projection: str, width: int, height: int, tile_w: int, tile_h: int, x: float, y: float
+) -> tuple[float, float]:
+    """A Tiled object's stored position, as a point in this map's pixel plane.
+
+    **The identity for an orthogonal map, and not for an isometric one.** Tiled
+    stores an isometric object's ``x``/``y`` in *tile-space units of the map's
+    tile height* -- dividing both by ``tileheight`` gives the fractional cell --
+    rather than in the projected plane the object is drawn in. Warlock draws
+    objects at absolute pixels, which is self-consistent but is not what Tiled
+    means by the same two numbers, so a spawn point that made the trip untouched
+    would reopen somewhere else entirely and say nothing about it.
+    """
+    if projection != ISOMETRIC:
+        return (float(x), float(y))
+    return cell_corner(
+        projection, width, height, tile_w, tile_h, float(x) / tile_h, float(y) / tile_h
+    )
+
+
+def object_from_pixels(
+    projection: str, width: int, height: int, tile_w: int, tile_h: int, x: float, y: float
+) -> tuple[float, float]:
+    """:func:`object_to_pixels` inverted, for the writer."""
+    if projection != ISOMETRIC:
+        return (float(x), float(y))
+    column, row = cell_point(projection, width, height, tile_w, tile_h, x, y)
+    return (column * tile_h, row * tile_h)
+
+
 def cell_bounds(
     projection: str,
     width: int,

@@ -45,6 +45,7 @@ from typing import Any
 import numpy as np
 
 from . import gid as gidlib
+from . import project
 from .tilemap import (
     OBJECT_KINDS,
     MapDoc,
@@ -53,10 +54,10 @@ from .tilemap import (
     TileLayer,
     new_uid,
 )
-from .tileset import Tileset, TilesetRef
+from .tileset import TerrainSpec, Tileset, TilesetRef
 from .tsx import Prop
 
-VERSION = 1
+VERSION = 2
 MANIFEST = "map.json"
 LAYER_DIR = "layers"
 TILESET_DIR = "tilesets"
@@ -74,6 +75,29 @@ def _props_json(props: dict[str, Prop]) -> dict[str, Any]:
         name: {"type": props[name].type, "value": props[name].value}
         for name in sorted(props)
     }
+
+
+def _terrains_from(entry: Any) -> tuple[TerrainSpec, ...]:
+    """The declared terrains of a tileset, in the order they were written.
+
+    Order is precedence, so this reads a *list* and keeps it -- which is why the
+    writer emits one rather than a dict whose keys the manifest's ``sort_keys``
+    would reorder into a different map.
+    """
+    if not isinstance(entry, list):
+        return ()
+    out: list[TerrainSpec] = []
+    for item in entry:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            TerrainSpec(
+                name=str(item.get("name", "")),
+                fill=tuple(int(part) for part in item.get("fill", (0, 0, 0, 255))),
+                outline=tuple(int(part) for part in item.get("outline", (0, 0, 0, 255))),
+            )
+        )
+    return tuple(out)
 
 
 def _props_from(entry: Any) -> dict[str, Prop]:
@@ -125,6 +149,13 @@ def manifest_json(doc: MapDoc) -> str:
                 "margin": ts.margin,
                 "image": f"{TILESET_DIR}/{index}.png",
                 "properties": _props_json(ts.properties),
+                # A *list*, because a terrain's position is its precedence and
+                # ``sort_keys`` below would shuffle the ranks of a dict. Written
+                # even when empty, so the shape does not depend on the content.
+                "terrains": [
+                    {"name": entry.name, "fill": list(entry.fill), "outline": list(entry.outline)}
+                    for entry in ts.terrains
+                ],
             }
         )
 
@@ -170,6 +201,7 @@ def manifest_json(doc: MapDoc) -> str:
         "height": doc.height,
         "tile_w": doc.tile_w,
         "tile_h": doc.tile_h,
+        "projection": doc.projection,
         "renderorder": doc.renderorder,
         "backgroundcolor": doc.backgroundcolor,
         "properties": _props_json(doc.properties),
@@ -279,6 +311,9 @@ def read_wmap(data: bytes) -> MapDoc:
             height=int(manifest.get("height", 1)),
             tile_w=int(manifest.get("tile_w", 1)),
             tile_h=int(manifest.get("tile_h", 1)),
+            # A version 1 file predates projections and is orthogonal by
+            # definition, which is what the default says without a branch.
+            projection=str(manifest.get("projection", project.ORTHOGONAL)),
         )
         doc.renderorder = str(manifest.get("renderorder", "right-down"))
         doc.backgroundcolor = manifest.get("backgroundcolor")
@@ -308,6 +343,7 @@ def read_wmap(data: bytes) -> MapDoc:
                         spacing=int(entry.get("spacing", 0)),
                         margin=int(entry.get("margin", 0)),
                         properties=_props_from(entry.get("properties")),
+                        terrains=_terrains_from(entry.get("terrains")),
                     ),
                     source=str(entry.get("source", "")),
                 )

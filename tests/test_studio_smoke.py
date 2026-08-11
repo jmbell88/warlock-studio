@@ -2483,9 +2483,53 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     state.brush = np.array([[ref.firstgid]], gid.DTYPE)
     _frame(imgui_ctx, build)
 
+    # Every tool, twice over: once with no terrain set on the map (the Terrain
+    # tool's empty branch, which offers the generator) and once with one and a
+    # terrain in hand (the swatch grid). Neither branch executes anywhere else.
     for tool, _label, _letter in plotter_state.TOOLS:
         state.tool = tool
         _frame(imgui_ctx, build)
+
+    from warlock.studio.plotter import terrain as terrainlib
+    from warlock.studio.plotter import tilegen
+
+    ground = tab.doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=16, tile_h=16)))
+    state.terrain = (tab.doc.tilesets.index(ground), 0)
+    tab.doc.set_active_layer(layer.uid)
+    tab.doc.write_region(
+        layer.uid, *terrainlib.paint_terrain(layer.data, 4, 4, 0, ground)
+    )
+    for tool, _label, _letter in plotter_state.TOOLS:
+        state.tool = tool
+        _frame(imgui_ctx, build)
+
+    # The generator form itself: every control in it rasterises only when the
+    # header is open, and a header remembers being shut.
+    from warlock.studio import widgets
+
+    widgets.request_open("plotter/generate")
+    state.tool = "terrain"
+    _frame(imgui_ctx, build)
+    _frame(imgui_ctx, build)
+
+    # And an isometric map, which is the only way ``_backdrop``, ``_layers``,
+    # ``_grid``, ``_cursor`` and ``_visible_range`` take their diamond branch.
+    iso = plotter_mode.new_document(app_ctx, (6, 6, 32, 16))
+    iso_set = tilegen.generate(
+        tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric")
+    )
+    iso.doc.set_projection("isometric", adding=iso_set)
+    iso_layer = iso.doc.tile_layers()[0]
+    iso.doc.write_region(
+        iso_layer.uid,
+        *terrainlib.paint_terrain(iso_layer.data, 2, 2, 0, iso.doc.tilesets[-1]),
+    )
+    state.terrain = (len(iso.doc.tilesets) - 1, 0)
+    for tool, _label, _letter in plotter_state.TOOLS:
+        state.tool = tool
+        _frame(imgui_ctx, build)
+    state.activate(tab.uid)
+    state.tool = "stamp"
 
     # An object layer with something selected: the properties form and the
     # typed-property editor are a whole branch nothing above reaches.
