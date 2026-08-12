@@ -178,6 +178,16 @@ class PlotterState:
     # stored -- a resize can shrink the map under it -- so every use clamps
     # against the map's current size instead.
     select: tuple[int, int, int, int] | None = None
+    # The copied block, and the uid of the document it came from.
+    #
+    # App-level rather than per-tab so the *refusal* can name its source: gids
+    # are numbered against a map's own firstgids, so the same number means a
+    # different tile in another map and pasting across would silently redraw the
+    # block. Kept rather than dropped on a tab switch precisely so the paste can
+    # say which map it came from instead of behaving as though nothing was
+    # copied.
+    clipboard: Any = None
+    clipboard_doc: str = ""
 
     # Canvas drag state, decided on press because several tools start the same
     # way. ``drag_anchor`` is in *tile* coordinates -- the rectangle tool needs

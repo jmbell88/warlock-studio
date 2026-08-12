@@ -714,6 +714,23 @@ def _terrain_cell_ref(doc: Any, data: Any, cell: tuple[int, int]):
     return None
 
 
+def _constrained(state: Any, doc: Any, result):
+    """A tool's region cut down to the marquee, if there is one.
+
+    One place rather than per tool: the tools go on computing what they would
+    do, and this decides what is allowed to land. ``None`` in, ``None`` out --
+    and ``None`` out is also the honest answer for a placement entirely outside
+    the selection, which is the same thing every tool already says about a
+    placement entirely off the map.
+    """
+    if result is None:
+        return None
+    rect = state.selection_in(doc)
+    if rect is None:
+        return result
+    return plotter_tools.clip_region(result, rect)
+
+
 def _layer_for_paint(ctx: Any, tab: Any):
     layer = tab.doc.active()
     if isinstance(layer, TileLayer):
@@ -741,6 +758,12 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
                     i for i, entry in enumerate(doc.tilesets) if entry is ref
                 )
         return
+    # Whether what comes back is a blob *re-fit* rather than a placement. A
+    # re-fit reaches the eight cells around what it touched by design, so
+    # trimming it to a selection would leave that ring showing the edge art of a
+    # neighbour that is no longer what it was -- a visibly broken field, which is
+    # worse than a tool that reaches one cell past a marquee.
+    refits = False
     if state.tool == "stamp":
         if state.brush is None:
             ctx.toast("Pick a tile from the tileset first.", "error")
@@ -752,6 +775,7 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
         # art of a neighbour that is no longer there. Self-selecting per cell, so
         # a plain tile on the same map still erases as a plain tile.
         ref = _terrain_cell_ref(doc, layer.data, cell)
+        refits = ref is not None
         result = (
             plotter_tools.erase(layer.data, cell[0], cell[1])
             if ref is None
@@ -764,6 +788,7 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             # flood the field. The flood is over the *rank* field, so it crosses
             # a terrain's own forty-seven cases rather than stopping at the
             # first edge tile -- see ``terrain.fill_terrain``.
+            refits = True
             result = plotter_terrain.fill_terrain(
                 layer.data, cell[0], cell[1], state.terrain[1], ref
             )
@@ -771,19 +796,29 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             ctx.toast("Pick a tile from the tileset first.", "error")
             return
         else:
+            # Bounded up front, not clipped afterwards: a fill trimmed at the
+            # end would be free to leave the selection, run around the outside
+            # and come back in, and the trim would hide the trip.
             result = plotter_tools.flood_fill(
-                layer.data, cell[0], cell[1], int(state.brush[0, 0])
+                layer.data,
+                cell[0],
+                cell[1],
+                int(state.brush[0, 0]),
+                bounds=state.selection_in(doc),
             )
     elif state.tool == "terrain":
         ref = _terrain_ref(state, doc)
         if ref is None:
             ctx.toast("Pick a terrain first.", "error")
             return
+        refits = True
         result = plotter_terrain.paint_terrain(
             layer.data, cell[0], cell[1], state.terrain[1], ref
         )
     else:
         return
+    if not refits:
+        result = _constrained(state, doc, result)
     if result is None:
         return
     # Inside a drag the write goes to the open session, which pushes nothing:
@@ -809,7 +844,9 @@ def _apply_shape(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[in
         ctx.toast("Pick a tile from the tileset first.", "error")
         return
     fill = plotter_tools.fill_ellipse if state.shape_mode == "ellipse" else plotter_tools.fill_rect
-    result = fill(layer.data, a[0], a[1], b[0], b[1], int(state.brush[0, 0]))
+    result = _constrained(
+        state, tab.doc, fill(layer.data, a[0], a[1], b[0], b[1], int(state.brush[0, 0]))
+    )
     if result is not None:
         tab.doc.write_region(layer.uid, *result)
 

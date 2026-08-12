@@ -191,6 +191,9 @@ to the current one, and **Alt** subtracts. Both are described in
 | `Z` | Turn the brush a quarter clockwise (Shift+Z turns it back) |
 | Shift+click | Stamp a line from the last cell painted |
 | Ctrl+A / Ctrl+D | Select all / deselect (Ctrl+Shift+A also deselects) |
+| Ctrl+C / Ctrl+X | Copy / cut the selected cells |
+| Ctrl+V | Load the copy into the brush and switch to Stamp |
+| Delete | Clear the selected cells, or remove the selected object |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+E | Export to the library |

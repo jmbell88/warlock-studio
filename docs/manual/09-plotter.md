@@ -163,6 +163,33 @@ switch to another map, because it names cells in the one you left.
 Esc clears it, but only once there is nothing else to cancel: a drag first, then the selected
 object, then the selection.
 
+**A selection constrains what the tools may write.** Stamp, Erase, Fill and Shape all land only
+inside it, so you can paint freely against an edge you drew once. The Fill is bounded as it
+spreads rather than trimmed afterwards — otherwise it could leave the selection, travel around the
+outside and come back in, and the trimming would hide the trip.
+
+The exception is a **terrain re-fit**. Painting a terrain, or erasing a terrain cell, re-fits the
+eight cells around what you touched, and that ring is allowed to reach past the marquee. Cutting it
+off would leave those neighbours drawn as though they still bordered something that is no longer
+there, which is a broken field rather than a constrained one.
+
+### The clipboard
+
+Ctrl+C copies the selected cells, Ctrl+X copies and clears them in one undo step, and Delete clears
+them without copying. With the Objects tool in hand, Delete removes the selected object instead —
+which one you get is decided by the tool you are holding, so a marquee left over from earlier
+cannot quietly erase tiles.
+
+**Ctrl+V loads the copy into the brush and switches to Stamp** rather than dropping it somewhere
+straight away. You then place it like any other brush, which is why it clips at the map edges, costs
+one undo step per stroke and obeys the selection — all rules the stamp already had. One difference
+worth knowing: the stamp replaces wholesale, so empty cells in a pasted block *erase* what they land
+on rather than letting it show through.
+
+Pasting into a different map is **refused by name**. Tile numbers are assigned per map, so the same
+number means a different tile elsewhere and the block would come out silently redrawn. The message
+says which map the copy came from.
+
 ## Layers
 
 Two kinds, and they are genuinely different.

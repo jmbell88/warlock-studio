@@ -213,6 +213,92 @@ def test_pick_returns_the_encoded_cell_or_none():
     assert tools.pick(layer, 99, 0) is None
 
 
+# --- clipping a region --------------------------------------------------------
+
+
+def test_a_region_is_cut_down_to_the_bounds():
+    block = np.arange(1, 13, dtype=gid.DTYPE).reshape(3, 4)
+    got = tools.clip_region((2, 1, block), (3, 2, 4, 2))
+    assert got is not None
+    x0, y0, cut = got
+    assert (x0, y0) == (3, 2)
+    assert np.array_equal(cut, [[6, 7]])
+
+
+def test_a_region_wholly_inside_the_bounds_is_unchanged():
+    block = np.ones((2, 2), gid.DTYPE)
+    x0, y0, cut = tools.clip_region((1, 1, block), (0, 0, 9, 9))
+    assert (x0, y0) == (1, 1) and np.array_equal(cut, block)
+
+
+def test_a_region_wholly_outside_the_bounds_is_nothing():
+    block = np.ones((2, 2), gid.DTYPE)
+    assert tools.clip_region((10, 10, block), (0, 0, 3, 3)) is None
+
+
+def test_a_clipped_region_is_its_own_array():
+    """The tools return views of their inputs in places; a clipped region has
+    to be safe to hand to ``write_region``, which keeps it."""
+    block = np.ones((3, 3), gid.DTYPE)
+    _x, _y, cut = tools.clip_region((0, 0, block), (0, 0, 1, 1))
+    cut[0, 0] = 42
+    assert int(block[0, 0]) == 1
+
+
+# --- a bounded flood ----------------------------------------------------------
+
+
+def test_a_bounded_fill_cannot_escape_its_bounds():
+    layer = _layer(6, 6)  # all zeros, so the whole map is one connected run
+    region = tools.flood_fill(layer, 1, 1, 7, bounds=(0, 0, 2, 2))
+    got = _filled(region, 6, 6)
+    assert int(got.sum()) == 9
+    assert got[0:3, 0:3].all()
+
+
+def test_a_bounded_fill_cannot_leave_and_come_back():
+    """The reason bounds are applied to the *match* and not to the result.
+
+    Two rooms on the top row, joined only by a corridor along the bottom one.
+    Bounded to the top two rows, the corridor is unreachable and so is the far
+    room -- where a fill clipped *afterwards* would have travelled through the
+    corridor, lit up both rooms, and had the trip trimmed away invisibly.
+    """
+    layer = _layer(9, 3)
+    layer[0] = [0, 0, 0, 1, 1, 1, 0, 0, 0]  # left room, wall, right room
+    layer[1] = [0, 1, 1, 1, 1, 1, 1, 1, 0]  # a way down at each end
+    layer[2] = 0  # the corridor joining them
+
+    # The rooms really are connected: unbounded, the far one fills. Without this
+    # the test below would pass with the bounds ignored entirely.
+    everywhere = _filled(tools.flood_fill(layer, 0, 0, 7), 9, 3)
+    assert everywhere[0, 6:9].all()
+
+    got = _filled(tools.flood_fill(layer, 0, 0, 7, bounds=(0, 0, 8, 1)), 9, 3)
+    assert got[0, 0:3].all(), "the seeded room fills"
+    assert not got[0, 6:9].any(), "the far room is not reachable inside the bounds"
+    assert not got[2, :].any(), "and the corridor is out of bounds entirely"
+
+
+def test_a_fill_seeded_outside_its_bounds_does_nothing():
+    layer = _layer(6, 6)
+    assert tools.flood_fill(layer, 5, 5, 7, bounds=(0, 0, 1, 1)) is None
+
+
+def test_bounds_are_themselves_clipped_to_the_map():
+    layer = _layer(4, 4)
+    region = tools.flood_fill(layer, 0, 0, 7, bounds=(-5, -5, 99, 99))
+    assert int(_filled(region, 4, 4).sum()) == 16
+
+
+def test_an_unbounded_fill_is_exactly_what_it_always_was():
+    layer = _layer(5, 5)
+    layer[2, :] = 1
+    plain = tools.flood_fill(layer, 0, 0, 7)
+    same = tools.flood_fill(layer, 0, 0, 7, bounds=None)
+    assert np.array_equal(_filled(plain, 5, 5), _filled(same, 5, 5))
+
+
 # --- ellipses -----------------------------------------------------------------
 
 

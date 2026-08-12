@@ -3776,6 +3776,8 @@ class App:
                 ("X / Y / Z", "Flip the brush across, down; turn it (Shift turns back)"),
                 ("Shift+click", "Stamp a line from the last cell painted"),
                 ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
+                ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as the brush"),
+                ("Delete", "Clear the selection, or remove the object"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
                 ("Ctrl+E", "Export to the library"),

@@ -104,6 +104,40 @@ def line(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
     return _bresenham(x0, y0, x1, y1)
 
 
+def clip_region(region: Region, bounds: tuple[int, int, int, int]) -> Region | None:
+    """A region trimmed to an inclusive ``(x0, y0, x1, y1)`` cell rect.
+
+    What makes a selection constrain a tool without every tool learning about
+    selections: the tools go on computing what they would do, and the region
+    they hand back is cut down to what is allowed to land.
+
+    ``None`` when nothing of it survives, which is the same answer every tool
+    already gives for a placement entirely off the map.
+
+    This is post-hoc and that is exactly right for a *placement* -- a stamp, a
+    rectangle, an erase -- because those cover a rectangle and cutting it is
+    still the same shape. It is the wrong tool for a flood, which is why
+    :func:`flood_fill` takes its bounds up front instead: a fill clipped
+    afterwards would be allowed to escape the selection, run around the outside
+    and re-enter, and the cells it reached would then be trimmed to look as
+    though it had never left.
+    """
+    x0, y0, block = region
+    bx0, by0, bx1, by1 = (int(value) for value in bounds)
+    height, width = block.shape
+    lo_x, lo_y = max(int(x0), bx0), max(int(y0), by0)
+    hi_x, hi_y = min(int(x0) + width - 1, bx1), min(int(y0) + height - 1, by1)
+    if hi_x < lo_x or hi_y < lo_y:
+        return None
+    return (
+        lo_x,
+        lo_y,
+        np.ascontiguousarray(
+            block[lo_y - int(y0) : hi_y - int(y0) + 1, lo_x - int(x0) : hi_x - int(x0) + 1]
+        ),
+    )
+
+
 def stamp(data: np.ndarray, x: int, y: int, brush: np.ndarray) -> Region | None:
     """Place a multi-tile brush with its top-left corner at ``(x, y)``.
 
@@ -196,7 +230,14 @@ def erase(data: np.ndarray, x: int, y: int, w: int = 1, h: int = 1) -> Region | 
     return fill_rect(data, x, y, int(x) + int(w) - 1, int(y) + int(h) - 1, gidlib.EMPTY)
 
 
-def flood_fill(data: np.ndarray, x: int, y: int, value: int) -> Region | None:
+def flood_fill(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    value: int,
+    *,
+    bounds: tuple[int, int, int, int] | None = None,
+) -> Region | None:
     """Four-connected fill of the contiguous run under ``(x, y)``.
 
     **The match is on the full encoded value**, flags included, so a
@@ -209,6 +250,14 @@ def flood_fill(data: np.ndarray, x: int, y: int, value: int) -> Region | None:
     Four-connected rather than eight, because a diagonal leak through a
     one-pixel gap is the classic way a fill escapes a room whose corner tiles
     only touch at a point.
+
+    ``bounds`` is an inclusive cell rect the fill may not leave, and it is
+    applied to the *match* rather than to the result. Clipping afterwards would
+    let the flood run out of the selection, around the outside and back in, and
+    then trim the cells it reached so the trip left no trace -- the fill would
+    have crossed a wall the user drew a marquee to stop it at. Masking the match
+    makes the boundary real: there is nothing to spread through. A seed outside
+    the bounds fills nothing, which is what a click outside a selection means.
     """
     height, width = data.shape
     x, y = int(x), int(y)
@@ -219,7 +268,19 @@ def flood_fill(data: np.ndarray, x: int, y: int, value: int) -> Region | None:
     if target == fill:
         return None
 
-    seen = flood_mask(np.asarray(data) == target, x, y)
+    match = np.asarray(data) == target
+    if bounds is not None:
+        allowed = np.zeros_like(match)
+        bx0, by0, bx1, by1 = (int(entry) for entry in bounds)
+        bx0, by0 = max(0, bx0), max(0, by0)
+        bx1, by1 = min(width - 1, bx1), min(height - 1, by1)
+        if bx1 < bx0 or by1 < by0:
+            return None
+        allowed[by0 : by1 + 1, bx0 : bx1 + 1] = True
+        match &= allowed
+    seen = flood_mask(match, x, y)
+    if not seen.any():
+        return None
 
     ys, xs = np.nonzero(seen)
     y0, y1 = int(ys.min()), int(ys.max()) + 1

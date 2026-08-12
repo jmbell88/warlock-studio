@@ -686,6 +686,192 @@ def test_a_selection_does_not_survive_a_tab_switch():
     assert state.select is None
 
 
+def _painted(ctx: FakeCtx):
+    """A stamping tab whose layer is filled with a known tile."""
+    tab, state, layer = _stamping(ctx)
+    value = int(tab.doc.tilesets[0].firstgid)
+    layer.data[:, :] = value
+    tab.doc.mark_saved()
+    return tab, state, layer, value
+
+
+def test_copy_then_paste_puts_the_block_in_the_brush(monkeypatch):
+    """Paste is Tiled's model -- the block becomes the brush and the tool
+    becomes Stamp -- so every rule the stamp already has applies unchanged."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab, state, layer, value = _painted(ctx)
+    state.select = (0, 0, 1, 1)
+
+    event, mods = _key("c", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert state.clipboard.shape == (2, 2)
+    assert state.clipboard_doc == tab.uid
+
+    state.tool = "select"
+    event, mods = _key("v", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert state.tool == "stamp"
+    assert np.array_equal(state.brush, np.full((2, 2), value, gid.DTYPE))
+    assert not tab.dirty, "a copy and a paste write nothing"
+
+
+def test_the_clipboard_is_an_owned_copy():
+    """The layer goes on being painted; a clipboard tracking it would paste
+    whatever the map looks like now."""
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    state.select = (0, 0, 1, 1)
+    plotter_mode._copy(ctx, state, tab, cut=False)
+    layer.data[:, :] = 0
+    assert state.clipboard.any()
+
+
+def test_a_cut_clears_the_cells_in_one_step():
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    state.select = (0, 0, 1, 1)
+    depth = len(tab.doc.history)
+
+    plotter_mode._copy(ctx, state, tab, cut=True)
+    assert len(tab.doc.history) == depth + 1
+    assert not layer.data[0:2, 0:2].any()
+    assert layer.data[2:, 2:].all(), "and nothing outside it"
+    assert state.clipboard.all(), "the copy was taken before the clear"
+
+
+def test_pasting_into_another_map_is_refused_by_name():
+    """Gids are numbered against a map's own firstgids, so the same number is a
+    different tile here -- the paste would land silently wrong."""
+    ctx = FakeCtx()
+    first, state, _layer, _value = _painted(ctx)
+    state.select = (0, 0, 1, 1)
+    plotter_mode._copy(ctx, state, first, cut=False)
+
+    second = plotter_mode.new_document(ctx, (4, 4, 16, 16))
+    plotter_mode._paste(ctx, state, second)
+    assert state.brush is None
+    assert ctx.toasts and "another map" in ctx.toasts[-1][0]
+    assert first.title in ctx.toasts[-1][0], "the refusal names its source"
+
+
+def test_copying_with_no_selection_says_so():
+    ctx = FakeCtx()
+    tab, state, _layer, _value = _painted(ctx)
+    state.select = None
+    plotter_mode._copy(ctx, state, tab, cut=False)
+    assert state.clipboard is None
+    assert ctx.toasts and "Select" in ctx.toasts[-1][0]
+
+
+def test_delete_clears_the_selected_cells_in_one_step():
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    state.select = (1, 1, 2, 2)
+    depth = len(tab.doc.history)
+    plotter_mode._delete(ctx, state, tab)
+    assert len(tab.doc.history) == depth + 1
+    assert not layer.data[1:3, 1:3].any()
+    assert layer.data[0, 0]
+
+
+def test_delete_removes_the_object_when_the_object_tool_is_held():
+    """Decided by the tool in hand, so a marquee left over from earlier does not
+    quietly erase tiles instead."""
+    ctx = FakeCtx()
+    tab, state, _layer, _value = _painted(ctx)
+    obj_layer = tab.doc.add_object_layer("Things")
+    tab.doc.set_active_layer(obj_layer.uid)
+    obj = MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
+    tab.doc.add_object(obj_layer.uid, obj)
+    state.tool = "object"
+    state.selected_object = obj.uid
+    state.select = (0, 0, 3, 3)
+
+    plotter_mode._delete(ctx, state, tab)
+    assert not tab.doc.layers[-1].objects
+    assert state.selected_object is None
+
+
+def test_a_selection_constrains_a_stamp():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    state.select = (0, 0, 0, 0)
+    state.brush = np.full((3, 3), tab.doc.tilesets[0].firstgid, gid.DTYPE)
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+    assert int((layer.data != 0).sum()) == 1, "a 3x3 stamp cut to the one cell"
+
+
+def test_a_selection_does_not_constrain_a_terrain_refit():
+    """A blob re-fit reaches the eight cells around what it touched by design.
+    Trimming it to the marquee would leave that ring showing the edge art of a
+    neighbour that is no longer what it was -- a visibly broken field, which is
+    worse than a tool reaching one cell past a selection."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.plotter import terrain as terrainlib
+
+    ctx = FakeCtx()
+    tab, state, ref = _terrain_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    cells = [(x, y) for y in range(4) for x in range(4)]
+    tab.doc.write_region(
+        layer.uid, *terrainlib.paint_terrain_cells(layer.data, cells, 0, ref)
+    )
+    neighbour = int(layer.data[1, 1])
+
+    # A marquee around the single cell being erased. (1, 1) is outside it.
+    state.select = (2, 2, 2, 2)
+    state.tool = "erase"
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+
+    assert int(layer.data[2, 2]) == 0
+    assert int(layer.data[1, 1]) != neighbour, "the ring re-fit past the marquee"
+
+
+def test_a_selection_does_constrain_a_plain_erase():
+    """The other half of the rule: an erase that is *not* a re-fit is an
+    ordinary placement, and gets cut down like any other."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    state.tool = "erase"
+    state.select = (0, 0, 0, 0)
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+    assert layer.data.all(), "the erase fell outside the marquee and landed nowhere"
+
+
+def test_a_selection_constrains_a_shape_fill():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    state.tool = "shape"
+    state.shape_mode = "rect"
+    state.select = (0, 0, 1, 1)
+    plotter_canvas._apply_shape(ctx, state, tab, (0, 0), (3, 3))
+    assert int((layer.data != 0).sum()) == 4
+
+
+def test_a_cut_is_refused_while_the_tab_is_busy(monkeypatch):
+    import pygame
+
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    state.select = (0, 0, 1, 1)
+    tab.saving = True
+    event, mods = _key("x", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert layer.data.all(), "nothing was cut"
+    assert state.clipboard is None
+
+
 def test_the_shape_tool_fills_whichever_shape_is_chosen():
     """One tool with a mode, not two tools: the gesture, the preview and the
     undo step are the same and only the set of cells differs."""

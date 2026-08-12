@@ -362,7 +362,9 @@ TOOL_KEYS = plotter_state.TOOL_KEYS
 # Ctrl bindings that change the document, and are therefore refused while the
 # tab is busy. The ``inker_mode._MUTATING_CTRL`` idiom: one list, so a control
 # cannot be added to the keyboard and forgotten in the gate.
-_MUTATING_CTRL = frozenset({"z", "y"})
+# Cut is here and copy and paste are not: copy reads, and paste only sets the
+# brush and the tool, both of which are view state. Cut is the one that writes.
+_MUTATING_CTRL = frozenset({"z", "y", "x"})
 
 
 def _flipped_h(brush: Any, _shift: bool) -> Any:
@@ -464,6 +466,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
         else:
             state.select = None
         return True
+    if event.key == pygame.K_DELETE:
+        # Guarded inline rather than through ``_MUTATING_CTRL``, which only
+        # covers the ctrl table; this writes, so it is refused while saving.
+        if tab is not None and not tab.busy:
+            _delete(ctx, state, tab)
+        return True
     if name in _BRUSH_TRANSFORMS and state.brush is not None:
         # Tiled's X / Y / Z. Deliberately outside the busy gate: the brush is
         # view state, so transforming it writes nothing to the document and
@@ -474,6 +482,99 @@ def handle_key(ctx: Any, event: Any) -> bool:
         state.tool = TOOL_KEYS[name]
         return True
     return False
+
+
+def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc):
+    """The active tile layer and the clamped selection, or ``(None, None)``.
+
+    Both refusals are named rather than silent, because "nothing happened" is
+    indistinguishable from a broken key.
+    """
+    from .plotter.tilemap import TileLayer
+
+    rect = state.selection_in(tab.doc)
+    if rect is None:
+        ctx.toast("Select some cells first.", "error")
+        return None, None
+    layer = tab.doc.active()
+    if not isinstance(layer, TileLayer):
+        ctx.toast("Pick a tile layer first.", "error")
+        return None, None
+    return layer, rect
+
+
+def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
+    """Take the selected cells, optionally clearing them in one step."""
+    import numpy as np
+
+    from .plotter import gid as gidlib
+
+    layer, rect = _selected_tiles(ctx, state, tab)
+    if layer is None:
+        return
+    x0, y0, x1, y1 = rect
+    # An owned copy, not a view: the layer goes on being painted, and a
+    # clipboard that tracked it would paste whatever the map looks like now.
+    state.clipboard = np.array(layer.data[y0 : y1 + 1, x0 : x1 + 1], dtype=gidlib.DTYPE)
+    state.clipboard_doc = tab.uid
+    if cut:
+        # One write for the whole rectangle, so a cut is one undo step.
+        tab.doc.write_region(
+            layer.uid, x0, y0, np.zeros_like(state.clipboard, dtype=gidlib.DTYPE)
+        )
+
+
+def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
+    """Paste by loading the clipboard into the brush -- Tiled's model.
+
+    There is no paste *edit*: the block becomes the brush and the tool becomes
+    Stamp, so the user places it where they want it and every rule the stamp
+    already has -- clipping at the edges, one undo step per stroke, the
+    selection constraining it -- applies with nothing new to keep honest.
+
+    A consequence worth stating: our stamp replaces wholesale, so pasted empty
+    cells erase what they land on rather than letting it show through.
+    """
+    if state.clipboard is None:
+        ctx.toast("Nothing has been copied.", "error")
+        return
+    if state.clipboard_doc != tab.uid:
+        # Named rather than attempted. Gids are numbered against a map's own
+        # firstgids, so the same number is a different tile here -- the paste
+        # would land silently wrong rather than fail.
+        source = state.get(state.clipboard_doc)
+        where = f" from {source.title}" if source is not None else ""
+        ctx.toast(f"That copy{where} belongs to another map.", "error")
+        return
+    state.brush = state.clipboard.copy()
+    state.tool = "stamp"
+
+
+def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
+    """Delete clears the selection's cells, or removes the selected object.
+
+    Which one is decided by the tool in hand rather than by what happens to be
+    set: with Objects held, Delete is about the object, and a marquee left over
+    from earlier must not quietly erase tiles instead.
+    """
+    import numpy as np
+
+    from .plotter import gid as gidlib
+
+    if state.tool == "object" and state.selected_object is not None:
+        layer = tab.doc.active()
+        if layer is not None:
+            tab.doc.remove_object(layer.uid, state.selected_object)
+            state.selected_object = None
+        return
+    layer, rect = _selected_tiles(ctx, state, tab)
+    if layer is None:
+        return
+    x0, y0, x1, y1 = rect
+    # One write, so a delete is one undo step whatever it covers.
+    tab.doc.write_region(
+        layer.uid, x0, y0, np.zeros((y1 - y0 + 1, x1 - x0 + 1), dtype=gidlib.DTYPE)
+    )
 
 
 def _ctrl_key(
@@ -518,6 +619,12 @@ def _ctrl_key(
         return True
     if name == "d":
         state.select = None
+        return True
+    if name in ("c", "x"):
+        _copy(ctx, state, tab, cut=name == "x")
+        return True
+    if name == "v":
+        _paste(ctx, state, tab)
         return True
     if name == "tab":
         state.cycle(-1 if shift else 1)
