@@ -141,22 +141,23 @@ def test_a_spring_crossing_its_target_at_speed_is_still_animating(clock):
     assert not motion.animating()
 
 
-def test_springs_toggled_off_and_on_again_start_from_zero_velocity(clock, monkeypatch):
-    """The SPRINGS-off fallback is the one path that dropped a key without
-    clearing its velocity (H12): seed, forget and reset all do, so re-enabling
-    the effect resumed a move at a speed nothing asked for."""
-    from warlock.studio import effects
-
-    monkeypatch.setattr(effects, "SPRINGS", True)
-    motion.seed("k", 0.0)
-    for _ in range(10):
-        clock["tick"]()
-        motion.spring("k", 1.0)
-    assert motion._VELOCITY["k"] != 0.0
-    monkeypatch.setattr(effects, "SPRINGS", False)
-    clock["tick"]()
-    motion.spring("k", 1.0)
-    assert motion._VELOCITY.get("k", 0.0) == 0.0
+def test_every_way_of_dropping_a_key_drops_its_velocity_too(clock):
+    """H12's rule, which used to be tested through the ``SPRINGS``-off
+    fallback: that path was the one that dropped a key without clearing its
+    velocity, so a re-enabled spring resumed a move at a speed nothing asked
+    for. The flag was folded away on 2026-08-12 and the fallback with it, but
+    the rule it caught is a property of the state pair -- ``_STATE`` and
+    ``_VELOCITY`` are cleared together or a stale speed outlives its value.
+    ``seed`` is covered in ``test_ux_phase45``; these are the other two."""
+    for drop in (lambda: motion.forget("k"), motion.reset):
+        motion.seed("k", 0.0)
+        for _ in range(10):
+            clock["tick"]()
+            motion.spring("k", 1.0)
+        assert motion._VELOCITY["k"] != 0.0
+        drop()
+        assert motion._VELOCITY.get("k", 0.0) == 0.0
+        assert "k" not in motion._STATE
 
 
 # --- reduce motion -----------------------------------------------------------

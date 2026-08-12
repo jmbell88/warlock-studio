@@ -409,7 +409,7 @@ class App:
 
     def setup_context(self) -> None:
         """The Ctx and the state it carries. Frame thread only, after both."""
-        from . import effects, motion, textures
+        from . import motion, textures
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
         from .settings import restore_form
@@ -434,10 +434,6 @@ class App:
         # animates its own startup at somebody who asked it not to.
         state.reduce_motion = bool(settings.get("reduce_motion"))
         motion.set_reduced(state.reduce_motion)
-        # The four Phase 5 switches, for the same reason and at the same
-        # moment: they are read on the first frame, and a flag applied after it
-        # would show one frame of an effect somebody turned off.
-        effects.load(settings)
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
         state.history = list(settings.get("history") or [])

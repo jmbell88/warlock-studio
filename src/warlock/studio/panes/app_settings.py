@@ -113,30 +113,14 @@ def _interface(ctx: Any) -> None:
     )
     if changed:
         _apply_reduce_motion(ctx, reduced)
-
-    _effects(ctx)
-
-
-def _effects(ctx: Any) -> None:
-    """The four GPU-tier switches (UX.md Phase 5).
-
-    The phase asks for one flag per item "while it stabilizes", and this is
-    where they live: they are appearance, so a settings pane is the honest
-    place for them, and each degrades to the pre-Phase-5 drawing on its own
-    when the GL side is missing -- so turning one off is a preference rather
-    than a repair. Derived from ``effects.KEYS`` rather than four hand-written
-    checkboxes, for the reason the palette's mode commands are derived: a
-    second list of what the app can do drifts.
-    """
-    from .. import effects
-
-    widgets.section("Effects")
-    for key, label, help_text in effects.KEYS:
-        changed, value = imgui.checkbox(label, effects.get(key))
-        widgets.help_marker(help_text)
-        if changed:
-            effects.set(key, value)
-            effects.store(ctx.settings, key)
+    # There was an "Effects" section here: the four Phase 5 GPU-tier switches
+    # (soft shadows, translucent panels, spring motion, continuous corners).
+    # The phase shipped them behind "a config flag per item while it
+    # stabilizes, folded away once trusted", and on 2026-08-12 they were folded
+    # away. Each effect already degrades to the pre-Phase-5 drawing on its own
+    # when the GL side is missing, which is what the flags were insuring
+    # against; "Reduce motion" above remains the accessibility switch, and it
+    # is a different question from a rendering tier.
 
 
 def _apply_reduce_motion(ctx: Any, reduced: bool) -> None:

@@ -3,7 +3,8 @@
 **Audit date:** 2026-08-11  
 **Repository revision reviewed:** `de87838` (`Warlock v0.0.21`)  
 **Review posture:** read-only. This audit changed only this report; it did not change application code, tests, configuration, or existing documentation. Unrelated concurrent edits appeared in the shared workspace during the review and were left untouched.  
-**Review team:** primary review plus three read-only sub-agents covering runtime/model safety, UX/UI, and documentation/test/repository quality.
+**Review team:** primary review plus three read-only sub-agents covering runtime/model safety, UX/UI, and documentation/test/repository quality.  
+**Status (2026-08-12):** superseded by `MASTER_AUDIT.md`, which merges this report with `AUDIT.md` and records what was actually fixed. Read the findings here as evidence about `de87838`, not as a description of the current tree.
 
 ## Executive summary
 
@@ -474,7 +475,9 @@ The base package exposes `warlock`; no subcommand opens Studio and imports optio
 
 ## 5. Conflicting claims and implementation gaps at a glance
 
-| Claim or expectation | Actual state | Relevant finding |
+> **Correction (2026-08-12).** Every "actual state" cell below describes `de87838` on the audit date, not the tree today. Most of these were fixed while working through `AUDIT_PLAN.md`; `MASTER_AUDIT.md` → "Outcomes (2026-08-12)" is the authority on which. Two entries changed meaning rather than being fixed: `docs/TODO.md` is now *deliberately* absent (gate D2 — `§N` citations resolve through git history), and the `0.0.22` mismatch was resolved by reverting to `0.0.21`.
+
+| Claim or expectation | Actual state (at `de87838`) | Relevant finding |
 |---|---|---|
 | Project is a coherent `0.0.22` release | Runtime and changelog are `0.0.21`; tests fail | REL-01 |
 | Another instance is merely an informative warning | Both instances share state; second can kill the first server | RUN-01 |

@@ -106,7 +106,8 @@ positive control available and says the projection, the weight masking and the a
 
 ## What this changes
 
-Tier 3 as written in `NEXT_ROADMAP.md` — "a UV-space diffusion or material-decomposition model" — is
+Tier 3 as written in `NEXT_ROADMAP.md` (deleted; git history) — "a UV-space diffusion or
+material-decomposition model" — is
 **not** indicated by this measurement. It would produce a better restyle for the third of the atlas
 that is already being painted and would do nothing about the two thirds that are not. Three things
 are indicated instead, in this order:

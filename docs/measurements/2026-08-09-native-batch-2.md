@@ -107,7 +107,8 @@ against `build.ps1`'s global `/fp:precise`. Neither was in scope.
 
 ## §2 — The fused brush dab: rejected, and the standing deferral is now closed
 
-`docs/PLAN_NEXT.md` deferred `warlockc_dab_u8` pending a profile. Here it is —
+`docs/PLAN_NEXT.md` (deleted; git history) deferred `warlockc_dab_u8` pending a
+profile. Here it is —
 300 dabs, ⌀64, 2048², `symmetry="none"`, total 582 ms:
 
 | | cumulative ms | % of stroke |

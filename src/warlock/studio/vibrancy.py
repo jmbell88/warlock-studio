@@ -151,10 +151,12 @@ _LAST_CAPTURE = 0.0
 
 
 def available() -> bool:
-    """Whether the effect is switched on and has not failed."""
-    from . import effects
+    """Whether the effect is usable -- i.e. has not failed once.
 
-    return bool(effects.VIBRANCY) and not _BROKEN
+    The ``effects.VIBRANCY`` switch in front of this was folded away on
+    2026-08-12, per Phase 5's own "folded away once trusted".
+    """
+    return not _BROKEN
 
 
 def _target_size(window: tuple[float, float]) -> tuple[int, int]:

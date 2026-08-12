@@ -508,6 +508,27 @@ SETTINGS: tuple[tuple[str, str], ...] = (
     ("sheet_timeout", "WARLOCK_SHEET_TIMEOUT"),
 )
 
+# The other half of the environment, and the reason the readout was incomplete.
+#
+# ``SETTINGS`` can only name ``Config`` fields -- the test above it asserts that
+# in both directions -- so four variables that change what the process does were
+# invisible to ``warlock doctor`` and to the Settings pane simply because no
+# field carries them. They are read at their point of use, from ``os.environ``
+# directly: ``migrate.py`` for the two home-migration switches, ``native.py``
+# for the two kernel ones. A host that silently ran the numpy fallbacks, or that
+# skipped a migration, gave the same readout as one that did not, which is
+# exactly the failure ``from_env`` exists to prevent.
+#
+# They are a separate table rather than entries in ``SETTINGS`` because their
+# value is the raw string in the environment, not a resolved field: there is no
+# default to report, only set or unset. ``effective`` appends them last.
+SWITCHES: tuple[tuple[str, str], ...] = (
+    ("no_migrate", "WARLOCK_NO_MIGRATE"),
+    ("migrate_keep", "WARLOCK_MIGRATE_KEEP"),
+    ("native", "WARLOCK_NATIVE"),
+    ("native_dll", "WARLOCK_NATIVE_DLL"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Setting:
@@ -533,6 +554,11 @@ def effective(config: Config | None = None) -> list[Setting]:
     set to the default value, which is exactly the case where a user is asking
     whether their setting took.
 
+    Both tables, ``SETTINGS`` first and then ``SWITCHES``: a field-backed
+    setting reports its resolved value, an env-only switch reports the raw
+    string or ``(unset)``, and the ``from_env`` column means the same thing in
+    either case.
+
     Pure, in the ``vram.py`` sense -- stdlib only, no imports from ``service``,
     ``queue`` or ``studio`` -- because both the CLI and a pane read it.
     """
@@ -546,6 +572,16 @@ def effective(config: Config | None = None) -> list[Setting]:
                 env=env,
                 value="(unset)" if value is None else str(value),
                 from_env=env in os.environ,
+            )
+        )
+    for name, env in SWITCHES:
+        raw = os.environ.get(env)
+        out.append(
+            Setting(
+                name=name,
+                env=env,
+                value="(unset)" if raw is None else raw,
+                from_env=raw is not None,
             )
         )
     return out

@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from warlock.studio import effects, motion, ninepatch, shadows, surfaces, vibrancy
+from warlock.studio import motion, ninepatch, shadows, surfaces, vibrancy
 from warlock.studio.main import filter_shortcuts
 from warlock.studio.panes import landing, library, overlay
 
@@ -217,48 +217,20 @@ def test_an_empty_state_has_three_registers_rather_than_one():
     assert "theme.TEXT" in source
 
 
-# --- Phase 5: the switches --------------------------------------------------
-
-
-def test_every_effect_has_a_key_a_label_and_a_sentence():
-    """The pane, the loader and this test are three readers of one table."""
-    assert {key for key, _label, _help in effects.KEYS} == {
-        "soft_shadows",
-        "vibrancy",
-        "springs",
-        "squircles",
-    }
-    for key, label, help_text in effects.KEYS:
-        assert label and help_text
-        assert effects.get(key) in (True, False)
-        # Every string in the pane goes through imgui's default Basic-Latin +
-        # Latin-1 atlas range.
-        assert all(ord(c) < 0x100 for c in label + help_text)
-
-
-def test_a_settings_file_that_predates_the_phase_leaves_the_effects_on():
-    """A missing key is the default rather than False, or a build that ships
-    the phase turns it off for everybody who already had a settings file."""
-    before = [effects.get(key) for key, _l, _h in effects.KEYS]
-    try:
-        effects.load(_Settings())
-        assert [effects.get(key) for key, _l, _h in effects.KEYS] == before
-        effects.load(_Settings(fx_vibrancy=False))
-        assert effects.get("vibrancy") is False
-    finally:
-        for (key, _l, _h), value in zip(effects.KEYS, before, strict=True):
-            effects.set(key, value)
-
-
-def test_an_unknown_effect_name_is_off_rather_than_an_error():
-    assert effects.get("nonesuch") is False
-    assert effects.set("nonesuch", True) is False
+# --- Phase 5: the effects, which no longer have switches ---------------------
+#
+# There were three tests here over ``effects.KEYS`` -- the table, the
+# settings-file default, and the unknown-name guard. Phase 5 shipped the four
+# items behind "a config flag per item while it stabilizes, folded away once
+# trusted"; they were folded away on 2026-08-12 and the module is gone. What
+# survives is the part the flags were standing in for: each effect answers
+# "did it work" itself, which is the test below.
 
 
 def test_every_effect_degrades_on_its_own_rather_than_raising(monkeypatch):
-    """A flag being on is never a promise the GL side is there. Each module
-    answers "switched on **and** did it work" itself, which is what lets a
-    host with no renderer draw the pre-Phase-5 app.
+    """There is no flag in front of these any more, and there never was a
+    promise the GL side is there. Each module answers "did it work" itself,
+    which is what lets a host with no renderer draw the pre-Phase-5 app.
 
     The renderer is stood down explicitly rather than assumed absent: the GL
     smoke suite's own renderer is session-scoped, so "there is no renderer in
@@ -447,11 +419,14 @@ def test_reduce_motion_snaps_a_spring_like_everything_else(monkeypatch):
     assert motion.spring("test/reduced", 1.0) == 1.0
 
 
-def test_turning_springs_off_restores_the_exponential_exactly(monkeypatch):
-    """Off is the pre-Phase-5 motion rather than no motion -- same key, same
-    primitive, so a value mid-flight is not stranded by the switch."""
+def test_a_spring_is_not_the_exponential_now_that_the_switch_is_gone(monkeypatch):
+    """``effects.SPRINGS`` used to route :func:`motion.spring` back through
+    :func:`motion.value`, and the old test here pinned that the fallback was
+    *exact*. The flag was folded away on 2026-08-12, so what needs pinning is
+    the opposite: the two primitives are genuinely different curves, and a
+    careless fold-away that left ``spring`` delegating would pass unnoticed.
+    Reduce-motion (tested above) is the only remaining way to stop the move."""
     monkeypatch.setattr(motion, "_clock", _Clock())
-    monkeypatch.setattr(effects, "SPRINGS", False)
     motion.forget("test/off")
     motion.seed("test/off", 0.0)
     sprung = [motion.spring("test/off", 1.0) for _ in range(10)]
@@ -459,8 +434,11 @@ def test_turning_springs_off_restores_the_exponential_exactly(monkeypatch):
     motion.forget("test/off2")
     motion.seed("test/off2", 0.0)
     eased = [motion.value("test/off2", 1.0) for _ in range(10)]
-    assert sprung == eased
-    assert max(sprung) <= 1.0
+    assert sprung != eased
+    # And different in the way that matters: the spring carries velocity, so it
+    # goes past its target and comes back. The exponential cannot.
+    assert max(sprung) > 1.0
+    assert max(eased) <= 1.0
 
 
 def test_a_key_seeded_afresh_leaves_at_rest(monkeypatch):

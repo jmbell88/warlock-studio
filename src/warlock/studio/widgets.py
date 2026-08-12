@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ..vectors import GRADE_MAX, GRADE_MIN
-from . import effects, fonts, icons, motion, theme, tokens
+from . import fonts, icons, motion, theme, tokens
 from . import state as app_state
 from .tokens import sp
 
@@ -1068,11 +1068,6 @@ def popover_enter(key: str, appearing: bool) -> tuple[float, float]:
     too late for the alpha the same ``begin`` paints with.
     """
     motion_key = f"popover/{key}"
-    if not effects.SPRINGS:
-        if appearing:
-            motion.restart(motion_key)
-        t = motion.ease(motion_key, tokens.DUR_FAST)
-        return t, sp(POPOVER_RISE) * (1.0 - t)
     # The sprung version (UX.md Phase 5): stated at 0 on the appearing frame and
     # sprung to 1, so the surface comes to rest by settling rather than by
     # running out of ramp. The alpha is *clamped* and the rise is not -- a

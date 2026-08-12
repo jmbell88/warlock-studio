@@ -1,7 +1,8 @@
 # Warlock Studio — Full Audit Report
 
 **Date:** 2026-08-11 · **Tree audited:** HEAD `de87838` (subject "Warlock v0.0.21", working tree clean)
-**Method:** six parallel read-only auditors with disjoint scopes — (1) model/LoRA/VRAM lifecycle, (2) concurrency/DB/job lifecycle, (3) service layer & pipelines, (4) studio UI/UX, (5) stubs/dead code/hygiene, (6) documentation consistency. ~102k lines of `src/warlock` Python, 255 test files, all of `docs/`. Nothing was executed except `uv run ruff check .` (clean); pytest was not run — the two test-failure claims below are from static reading of the assertions. Overlapping findings were cross-checked and merged; each finding carries the confidence the evidence supports.
+**Method:** six parallel read-only auditors with disjoint scopes — (1) model/LoRA/VRAM lifecycle, (2) concurrency/DB/job lifecycle, (3) service layer & pipelines, (4) studio UI/UX, (5) stubs/dead code/hygiene, (6) documentation consistency. ~102k lines of `src/warlock` Python, 255 test files, all of `docs/`. Nothing was executed except `uv run ruff check .` (clean); pytest was not run — the two test-failure claims below are from static reading of the assertions. Overlapping findings were cross-checked and merged; each finding carries the confidence the evidence supports.  
+**Status (2026-08-12):** superseded by `MASTER_AUDIT.md`, which merges this report with `AUDIT2.md` and records what was actually fixed. Read the findings here as evidence about `de87838`, not as a description of the current tree.
 
 ---
 
@@ -11,7 +12,7 @@ The codebase is in unusually good shape. The hygiene sweep found **zero dead cod
 
 The problems cluster in three places:
 
-1. **The HEAD commit `de87838` shipped a broken release state.** It bumped `pyproject.toml` to 0.0.22 but left `CHANGELOG.md` and `warlock.__version__` at 0.0.21 (the repo's own lockstep tests fail on this tree, statically), and it deleted `docs/TODO.md` while CLAUDE.md, INVARIANTS.md, and a link-checker source list still name that file as "the only roadmap."
+1. **The HEAD commit `de87838` shipped a broken release state.** It bumped `pyproject.toml` to 0.0.22 but left `CHANGELOG.md` and `warlock.__version__` at 0.0.21 (the repo's own lockstep tests failed on that tree, statically), and it deleted `docs/TODO.md` while CLAUDE.md, INVARIANTS.md, and a link-checker source list still named that file as "the only roadmap." *(Fixed 2026-08-12: pyproject reverted to 0.0.21 with `scripts/preflight.py` gating the lockstep; the roadmap deletion is now stated in CLAUDE.md and INVARIANTS.md.)*
 2. **The 2026-08-11 base-model default change didn't propagate to the authoritative docs.** INVARIANTS.md, CLAUDE.md's pipeline one-liner, and `queue.py`'s module docstring all still say SDXL-Turbo is the default; code moved it to `sdxl_cfg`.
 3. **Model/LoRA lifecycle: safe, with two real defects.** Nothing corrupts state, leaks unboundedly, or crashes the app — but a warm pipe causes spurious VRAM refusals for three job kinds, and a LoRA installed while the pipe is resident is silently dropped while the job's records claim it ran.
 

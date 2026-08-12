@@ -26,14 +26,13 @@ arrive in place instead of travelling there, and the few effects that are a *fad
 move (a toast's opacity, the acknowledgement flash when a file is dropped) keep their timing and
 lose their ramp.
 
-**Effects.** Four switches over the app's rendering, all on by default and all safe to turn off:
-*Soft shadows* (real blurred shadows under cards, popups and modals, from a texture built once at
-startup — off falls back to concentric outlines), *Translucent panels* (the command palette, the
-modals and the two header popups blur what is behind them instead of covering it), *Spring motion*
-(the mode switch's pill and a popover settle rather than easing to a stop; *Reduce motion* turns
-this off too), and *Continuous corners* (a card's corners are a superellipse rather than a circular
-arc). Each falls back on its own if the graphics side cannot provide it, so turning one off is a
-preference rather than a repair — the usual reason to is a machine where frames are tight.
+There is no **Effects** section any more. Four switches used to sit here — soft shadows, translucent
+panels, spring motion and continuous corners — while those rendering features were new. Each of them
+already falls back on its own when the graphics side cannot provide it (concentric outlines, solid
+fills, an eased stop, a circular arc), which is what the switches were really insuring against, so
+they were removed rather than left as four settings that only ever meant "pretend the graphics card
+failed". *Reduce motion* above is unaffected: it is an accessibility setting, not a rendering tier,
+and it still turns off spring motion along with everything else that moves.
 
 **Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
 rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make

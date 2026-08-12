@@ -1,8 +1,11 @@
 # The framing axis: `front_ortho` against `three_quarter`, 2026-08-09
 
-**Status: procedure written, run not yet taken.** A pre-registration in the
-style of [`2026-08-06-pixel-art-xl.md`](2026-08-06-pixel-art-xl.md): the decision
-rules below were written before any unit was queued.
+**Status: run taken 2026-08-09; "Results" below is the outcome — the verdict was
+null and directionally against `front_ortho`, so no `PROMPT_VERSION` bump was
+made.** Everything between "The question" and the Results heading is a
+pre-registration in the style of
+[`2026-08-06-pixel-art-xl.md`](2026-08-06-pixel-art-xl.md): the decision rules
+below were written before any unit was queued.
 
 This is the most valuable pre-registration of the campaign and the reason is
 arithmetic. The axis is **5 matched pairs on one prompt** -- exactly the size
@@ -39,7 +42,8 @@ from `findings.json`'s `comparisons["framing"]`, via
 
 ## What a win would actually cost, decided in advance
 
-`../LEFTOVERS.md` §2 says to "flip the per-category default" if `front_ortho` wins.
+`../LEFTOVERS.md` §2 *(deleted; git history)* says to "flip the per-category
+default" if `front_ortho` wins.
 **There is no per-category framing machinery.** `guidance.DEFAULT_FRAMING` is a
 single global; the precedent for making one per-category is `default_size_m`,
 which `CATEGORIES` options already carry. So a win is two decisions, not one, and

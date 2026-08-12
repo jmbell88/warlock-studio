@@ -58,7 +58,8 @@ KEY_INTENSITY = 1.5
 # read as one surface; kept literal here (not imported) because the viewer
 # package stays free of studio-UI imports. It is unconditional, so under the
 # light palette the viewport stays dark and that agreement is lost -- an open
-# design call rather than an oversight (LEFTOVERS.md section 15), because the
+# design call rather than an oversight (LEFTOVERS.md section 15 -- deleted; git
+# history), because the
 # background doubles as the render-skip key.
 BACKGROUND_HEX = 0x0F1014
 

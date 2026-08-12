@@ -228,20 +228,12 @@ _VELOCITY: dict[str, float] = {}
 def spring(key: str, target: float, *, duration: float = tokens.DUR_BASE) -> float:
     """Like :func:`value`, but carrying velocity: it settles rather than eases.
 
-    Falls back to :func:`value` -- exactly, including its state key -- when the
-    effect is switched off, so turning springs off restores the pre-Phase-5
-    motion rather than removing it. Under reduce-motion it snaps, like
-    everything else in this module.
+    Under reduce-motion it snaps, like everything else in this module. It used
+    to fall back to :func:`value` when ``effects.SPRINGS`` was off; that switch
+    was folded away on 2026-08-12 (Phase 5's "folded away once trusted"), and
+    reduce-motion -- which was always the accessibility answer here -- is the
+    remaining way to turn the movement off.
     """
-    from . import effects
-
-    if not effects.SPRINGS:
-        # The exponential carries no velocity, so the key's must not survive
-        # the switch: springs turned back on would otherwise resume with the
-        # speed of a move the fallback already finished -- ``seed``, ``forget``
-        # and ``reset`` all clear it, and this path has to as well.
-        _VELOCITY.pop(key, None)
-        return value(key, target, duration=duration)
     clock = _clock()
     if REDUCED or clock is None or duration <= 0.0:
         _STATE[key] = target

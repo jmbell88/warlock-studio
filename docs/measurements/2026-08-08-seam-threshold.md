@@ -13,7 +13,7 @@ while flat plaster differs by almost nothing.
 
 `SEAM_MAX` is the line under that ratio, and it was a guess. Its comment said
 "twice the picture's own grain… comfortably past the noise on a real SDXL tile
-and comfortably short of an unpatched generation", and `TODO.md` carried it in
+and comfortably short of an unpatched generation", and `TODO.md` (deleted; git history) carried it in
 the deferred table as *uncalibrated*, owing a measurement document. It is
 corpus-keyed — every `seam_report` on disk stores the threshold it was judged
 against — so it does not move on an opinion.

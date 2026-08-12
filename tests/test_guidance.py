@@ -559,6 +559,39 @@ def test_the_framing_clause_falls_back_rather_than_raising():
     assert guidance.framing_clause("front_ortho") == guidance.FRAMINGS["front_ortho"].prompt
 
 
+def test_front_ortho_is_withdrawn_from_the_ui_and_kept_everywhere_else():
+    """It lost its bake-off (``docs/measurements/2026-08-09-framing-axis.md``:
+    null and directionally against), so on 2026-08-12 it stopped being offered.
+
+    Withdrawn is not deleted, and the difference is the whole point of the
+    ``hidden`` flag. A user cannot pick it; the bench can still name it as an
+    axis, every job row already carrying it still normalizes rather than 400ing,
+    and ``framing_clause`` still knows its fragment. Deleting the option would
+    have deleted the ability to re-run the measurement that retired it."""
+    offered = {e["key"] for e in guidance.catalog()["fields"]["framing"]}
+    assert offered == {"three_quarter"}
+    assert "front_ortho" in guidance.FRAMINGS
+    assert guidance.FRAMINGS["front_ortho"].hidden is True
+    assert guidance.normalize({"framing": "front_ortho"})["framing"] == "front_ortho"
+    # And the withdrawal is one option, not a habit: nothing else is hidden.
+    hidden = {
+        (field, opt.key)
+        for field, table in guidance._OPTION_TABLES.items()
+        for opt in table.values()
+        if opt.hidden
+    }
+    assert hidden == {("framing", "front_ortho")}
+
+
+def test_a_hidden_option_is_never_the_default():
+    """A default the catalogue does not offer is a form that opens on a value
+    the user cannot choose again after changing it."""
+    for field, table in guidance._OPTION_TABLES.items():
+        default = guidance.catalog()["defaults"].get(field)
+        if default:
+            assert not table[default].hidden, f"{field} defaults to a hidden option"
+
+
 def test_framing_is_a_recorded_config_axis():
     """It changes the image, so a verdict has to be filed against it -- and
     VECTOR_PARAMS is an allowlist, so it only counts if it is named."""

@@ -94,10 +94,12 @@ _SCALE = tokens.SCALE
 
 
 def available() -> bool:
-    """Whether the effect is switched on and has not failed."""
-    from . import effects
+    """Whether the effect is usable -- i.e. has not failed once.
 
-    return bool(effects.SQUIRCLES) and not _BROKEN
+    The ``effects.SQUIRCLES`` switch in front of this was folded away on
+    2026-08-12, per Phase 5's own "folded away once trusted".
+    """
+    return not _BROKEN
 
 
 def enabled_for(radius: float) -> bool:

@@ -88,6 +88,44 @@ def test_an_unset_optional_reads_as_unset_rather_than_none(monkeypatch):
     assert row.from_env is False
 
 
+# --- the env-only switches, which no ``Config`` field can carry --------------
+
+
+def test_every_switch_is_actually_read_somewhere():
+    """The counterpart of the both-directions test above. ``SWITCHES`` has no
+    dataclass to check itself against, so the check is that each variable is
+    read by the module that owns it -- an entry naming a variable nothing reads
+    is a row in the readout that means nothing."""
+    import inspect
+
+    from warlock import migrate, native
+    from warlock.config import SWITCHES
+
+    sources = inspect.getsource(migrate) + inspect.getsource(native)
+    for _, env in SWITCHES:
+        assert env in sources, f"{env} is listed in SWITCHES but nothing reads it"
+
+
+def test_a_switch_is_not_also_a_config_field():
+    """The two tables partition the environment; an overlap would print the
+    same variable twice with two different answers."""
+    from warlock.config import SWITCHES
+
+    fields = {f.name for f in dataclasses.fields(Config)}
+    assert {name for name, _ in SWITCHES} & fields == set()
+    assert {env for _, env in SWITCHES} & {env for _, env in SETTINGS} == set()
+
+
+def test_an_unset_switch_reads_as_unset_and_a_set_one_carries_its_value(monkeypatch):
+    monkeypatch.delenv("WARLOCK_NATIVE_DLL", raising=False)
+    monkeypatch.setenv("WARLOCK_NATIVE", "0")
+    rows = {s.name: s for s in effective(Config())}
+    assert rows["native_dll"].value == "(unset)"
+    assert rows["native_dll"].from_env is False
+    assert rows["native"].value == "0"
+    assert rows["native"].from_env is True
+
+
 def test_effective_is_pure():
     """The ``vram.py`` rule: both the CLI and a pane read this, and the CLI runs
     on a machine with no display."""

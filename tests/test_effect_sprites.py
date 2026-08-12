@@ -26,7 +26,6 @@ from types import SimpleNamespace
 import numpy as np
 
 from warlock.studio import (
-    effects,
     imgui_backend,
     ninepatch,
     shadows,
@@ -119,7 +118,6 @@ class _Renderer:
 
 def _fresh_vibrancy(monkeypatch, renderer) -> None:
     monkeypatch.setattr(imgui_backend, "current", lambda: renderer)
-    monkeypatch.setattr(effects, "VIBRANCY", True)
     monkeypatch.setattr(vibrancy, "_PIPELINE", None)
     monkeypatch.setattr(vibrancy, "_BROKEN", False)
     monkeypatch.setattr(vibrancy, "_STALE", True)
@@ -148,24 +146,29 @@ def test_a_window_resize_forgets_the_old_pong_before_releasing_it(monkeypatch):
     assert log.index("forget", old.pong) < log.index("release", old.pong)
 
 
-def test_switching_the_effect_off_takes_the_pipeline_with_it(monkeypatch):
+def test_the_effect_going_unavailable_takes_the_pipeline_with_it(monkeypatch):
     """Three textures and three framebuffers serving an effect nothing draws
-    must not sit resident for the session on the strength of having once been
-    on. The flag going off releases them from ``capture``'s own early-out --
-    the one call the frame loop already makes every frame -- and does so
-    exactly once."""
+    must not sit resident for the session on the strength of having once
+    worked. ``available()`` going false releases them from ``capture``'s own
+    early-out -- the one call the frame loop already makes every frame -- and
+    does so exactly once.
+
+    It used to be the ``effects.VIBRANCY`` switch that went false here. That
+    flag was folded away on 2026-08-12, so the remaining way in is the one it
+    was always standing in front of: the GL side failing once and latching
+    ``_BROKEN``."""
     log = _Log()
     _fresh_vibrancy(monkeypatch, _Renderer(log))
     gl = _Gl(log)
     vibrancy.capture(gl, (800.0, 600.0))
     old = vibrancy._PIPELINE
     assert old is not None
-    monkeypatch.setattr(effects, "VIBRANCY", False)
+    monkeypatch.setattr(vibrancy, "_BROKEN", True)
     vibrancy._LAST_CAPTURE = 0.0
     vibrancy.capture(gl, (800.0, 600.0))
     assert vibrancy._PIPELINE is None
     assert log.index("forget", old.pong) < log.index("release", old.pong)
-    # Idempotent: the next frame with the flag still off releases nothing more.
+    # Idempotent: the next frame, still unavailable, releases nothing more.
     seen = len(log.events)
     vibrancy.capture(gl, (800.0, 600.0))
     assert len(log.events) == seen
@@ -193,7 +196,6 @@ def test_a_ui_scale_change_sweeps_the_shadow_sprites_it_re_keyed(monkeypatch):
     request and the old scale's entries would sit resident until shutdown with
     nothing ever asking for them again."""
     released = _fake_ninepatch(monkeypatch)
-    monkeypatch.setattr(effects, "SOFT_SHADOWS", True)
     monkeypatch.setattr(shadows, "_BROKEN", False)
     monkeypatch.setattr(shadows, "_SPRITES", {})
     monkeypatch.setattr(tokens, "SCALE", 1.0)
@@ -209,7 +211,6 @@ def test_a_ui_scale_change_sweeps_the_shadow_sprites_it_re_keyed(monkeypatch):
 
 def test_a_ui_scale_change_sweeps_the_squircle_sprites_too(monkeypatch):
     released = _fake_ninepatch(monkeypatch)
-    monkeypatch.setattr(effects, "SQUIRCLES", True)
     monkeypatch.setattr(surfaces, "_BROKEN", False)
     monkeypatch.setattr(surfaces, "_SPRITES", {})
     monkeypatch.setattr(tokens, "SCALE", 1.0)
@@ -237,7 +238,6 @@ def test_an_oversize_shadow_is_declined_before_it_rasterises(monkeypatch):
         "pixels",
         lambda radius, spread: calls.append((radius, spread)) or np.zeros((3, 3), np.uint8),
     )
-    monkeypatch.setattr(effects, "SOFT_SHADOWS", True)
     monkeypatch.setattr(shadows, "_BROKEN", False)
     monkeypatch.setattr(shadows, "_SPRITES", {})
     monkeypatch.setattr(shadows, "_SCALE", tokens.SCALE, raising=False)
@@ -258,7 +258,6 @@ def test_an_oversize_squircle_is_declined_before_it_rasterises(monkeypatch):
         lambda radius, exponent=surfaces.EXPONENT: calls.append(radius)
         or np.zeros((3, 3), np.uint8),
     )
-    monkeypatch.setattr(effects, "SQUIRCLES", True)
     monkeypatch.setattr(surfaces, "_BROKEN", False)
     monkeypatch.setattr(surfaces, "_SPRITES", {})
     monkeypatch.setattr(surfaces, "_SCALE", tokens.SCALE, raising=False)
@@ -312,14 +311,17 @@ def test_surface_fill_paints_neither_half_when_the_inset_fill_is_refused(monkeyp
 
 # --- the import pins ---------------------------------------------------------
 
-STUDIO = Path(effects.__file__).parent
+STUDIO = Path(ninepatch.__file__).parent
 
 #: ``(absolute top-level roots, sibling modules imported at module scope)``.
 #: The GL side -- moderngl, imgui_bundle, the backend -- is allowed only
 #: behind lazy in-function imports, which the exact sets below refuse at the
 #: top of the file without having to name them.
+# ``effects.py`` sat at the head of this table until 2026-08-12, when Phase 5's
+# four "a config flag per item while it stabilizes" switches were folded away
+# and the module was deleted. The GL-purity pin it carried is unaffected: the
+# four modules below are the ones that actually touch the renderer.
 ALLOWED_TOP_LEVEL: dict[str, tuple[set[str], set[str]]] = {
-    "effects.py": ({"__future__", "typing"}, set()),
     "ninepatch.py": ({"__future__", "logging", "dataclasses", "typing"}, set()),
     "shadows.py": ({"__future__", "logging", "math", "numpy"}, {"ninepatch", "tokens"}),
     "surfaces.py": ({"__future__", "logging", "math", "numpy"}, {"ninepatch", "tokens"}),

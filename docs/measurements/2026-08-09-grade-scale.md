@@ -15,7 +15,8 @@ a rationalisation with a table in it.
 
 The mesh-verdict corpus is binary accept/reject, and it has failed at its own
 purpose. The 2026-08-07 review produced **3 accepts against 81 rejects**, which
-`../LEFTOVERS.md` §8 calls "not a thin corpus, an unusable one" — and the corpus
+`../LEFTOVERS.md` §8 *(deleted; git history)* calls "not a thin corpus, an
+unusable one" — and the corpus
 has since grown to **151 latest-wins mesh verdicts, 26 accept / 125 reject**, a
 better ratio and exactly the same shape of problem: a probe fitted to
 it learns the word *reject* and scores 96% doing so, and `judge.fit` correctly

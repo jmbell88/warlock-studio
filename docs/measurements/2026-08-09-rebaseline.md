@@ -1,10 +1,14 @@
 # The re-baselined render sweep, 2026-08-09
 
-**Status: procedure written, run not yet taken.** Everything below "What will be
-run" is a pre-registration -- the decision rules were written *before* a single
-unit was queued, which is the only thing that makes the answer worth anything.
-When the run happens the numbers go under "Results" and whichever rule fired is
-applied verbatim, including if it is the boring one. This follows
+**Status: run taken 2026-08-09; both "Results" sections below are the outcome.**
+Everything between "What will be run" and the first Results heading is the
+pre-registration -- the decision rules were written *before* a single unit was
+queued, which is the only thing that makes the answer worth anything. The numbers
+went under "Results" and the rule that fired was applied verbatim, including
+where it was the boring one: the confirm **FAILED** against the rule as written
+(Amendment 1 records why the campaign proceeded anyway), the re-baseline gate
+**PASSED**, every axis came back null, and `hole_worst` is no longer inverted.
+This follows
 [`2026-08-06-pixel-art-xl.md`](2026-08-06-pixel-art-xl.md), which is the
 pre-registration exemplar in this directory.
 

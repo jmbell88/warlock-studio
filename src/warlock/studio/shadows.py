@@ -123,10 +123,14 @@ _BROKEN = False
 
 
 def available() -> bool:
-    """Whether the textured path is switched on and has not failed."""
-    from . import effects
+    """Whether the textured path is usable -- i.e. has not failed once.
 
-    return bool(effects.SOFT_SHADOWS) and not _BROKEN
+    There used to be a switch in front of this (``effects.SOFT_SHADOWS``, one
+    of Phase 5's four "a config flag per item while it stabilizes, folded away
+    once trusted"). It was folded away on 2026-08-12; the self-degradation
+    below is what the flag was really insuring against, and it is unconditional.
+    """
+    return not _BROKEN
 
 
 def sprite(radius: float, spread: float) -> ninepatch.Sprite | None:

@@ -118,6 +118,13 @@ class Option:
     default_size_m: float | None = None
     # Platforms only: the geometry resolution passed to trellis-server.
     resolution: int | None = None
+    # Kept in the table but not offered in the UI. ``normalize`` still accepts
+    # the key, ``config_vector`` still records it and a sweep can still name it
+    # as an axis -- the option is only withdrawn from the selects ``catalog``
+    # builds. This is for a choice that lost its measurement: the code path has
+    # to survive so the bench can re-run the comparison, and offering it to a
+    # user is offering a worse result. See ``FRAMINGS`` for the one instance.
+    hidden: bool = False
 
 
 def _table(*options: Option) -> dict[str, Option]:
@@ -203,8 +210,18 @@ PLATFORMS = _table(
 #
 # ``front_ortho`` is a measurement axis rather than a new default: whether a
 # straight-on plate reconstructs better than a 3/4 view is a question for a
-# sweep, and TODO's answer is "make it expressible, then measure". Two things
-# about its wording are deliberate. It names a *camera* and never a pose, so it
+# sweep, and the answer was "make it expressible, then measure".
+#
+# **It was measured, and it lost.** ``docs/measurements/2026-08-09-framing-axis.md``
+# ran 5 matched pairs under blind review: the verdict was null and directionally
+# *against* ``front_ortho``, so no ``PROMPT_VERSION`` bump was made. On
+# 2026-08-12 the option was marked ``hidden`` -- withdrawn from the selects the
+# UI builds, kept in this table so the bench can re-run the comparison and so
+# every stored ``framing: front_ortho`` still normalizes rather than 400ing.
+# Offering a user a choice that measured worse is offering them a worse result;
+# deleting the option would delete the ability to check that finding again.
+#
+# Two things about its wording are deliberate. It names a *camera* and never a pose, so it
 # cannot contradict the T-pose fragment CATEGORIES["character"] already
 # carries; and it says "one view only", because front-on plus T-pose is
 # exactly the character-sheet/turnaround layout that caused all 17 refusals of
@@ -214,6 +231,7 @@ FRAMINGS = _table(
     Option(
         "front_ortho", "Front orthographic",
         "front orthographic view, facing the camera, one view only",
+        hidden=True,
     ),
 )
 
@@ -827,6 +845,7 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
                     **({"resolution": opt.resolution} if opt.resolution else {}),
                 }
                 for opt in table.values()
+                if not opt.hidden
             ]
             for field, table in _OPTION_TABLES.items()
         }

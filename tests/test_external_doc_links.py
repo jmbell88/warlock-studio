@@ -83,6 +83,73 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 MENTION = re.compile(r"`((?:\.\./|docs/)?manual/[0-9A-Za-z._/-]+\.md(?:#[\w-]+)?)`")
 
 
+# The outward half again, one level up: a citation of a *non-manual* document.
+#
+# The manual checks above only ever look at ``manual/...`` targets, so a source
+# could cite `docs/CAMERA.md` -- a file that never existed in any of this repo's
+# commits -- and three documents did, for months. The same shape produced live
+# citations of `../LEFTOVERS.md`, which did exist and was deleted.
+#
+# Those two cases want opposite treatment, so the rule is: a cited document must
+# either exist, or the citing line must *say* it is gone. Anything containing
+# "deleted" on the same line is taken as that admission -- which is what the
+# annotated LEFTOVERS cites and INVARIANTS' roll-call of executed plans already
+# say in prose. A dead citation with no such word is a reader sent to nowhere.
+#
+# ``memory`` is the second exemption and a different kind: CLAUDE.md and
+# INVARIANTS.md both point at `warlock-stack.md`, which is a note in the agent's
+# own memory store rather than a file in this repo. A line that says "memory" is
+# citing that store, and there is nothing here to resolve it against.
+DEAD_CITE_MARKER = "deleted"
+EXTERNAL_STORE_MARKER = "memory"
+DOC_MENTION = re.compile(r"`((?:\.\./|\./|docs/)?[0-9A-Za-z._/-]+\.md)`")
+
+
+def _doc_citations() -> list[tuple[Path, int, str]]:
+    """(source, 1-based line, target) for every backticked or linked ``.md``
+    citation that is not a manual chapter and not marked as deleted."""
+    found: list[tuple[Path, int, str]] = []
+    for source in SOURCES:
+        if not source.exists():
+            continue
+        for number, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
+            lowered = line.lower()
+            if DEAD_CITE_MARKER in lowered or EXTERNAL_STORE_MARKER in lowered:
+                continue
+            targets = list(DOC_MENTION.findall(line))
+            targets += [t for t in LINK.findall(line) if t.endswith(".md")]
+            for target in dict.fromkeys(targets):
+                if "manual/" in target:
+                    continue  # the tests above own these
+                found.append((source, number, target))
+    return found
+
+
+def test_the_document_citation_sweep_finds_something():
+    """The same guard-on-the-guard the manual sweep gets, for the same reason:
+    if ``DOC_MENTION`` or either exemption ever widens far enough to match
+    nothing, every case below passes vacuously and the sweep says nothing."""
+    cites = _doc_citations()
+    assert len(cites) >= 10, f"expected many .md citations across SOURCES, found {cites}"
+
+
+@pytest.mark.parametrize(
+    "source,line,target",
+    _doc_citations(),
+    ids=lambda v: v.name if isinstance(v, Path) else str(v),
+)
+def test_a_cited_document_exists_or_says_it_is_gone(source: Path, line: int, target: str):
+    path, _anchor = _resolve(source, target)
+    if not path.exists():
+        path = (ROOT / target.lstrip("./")).resolve()
+    assert path.exists(), (
+        f"{source.name}:{line} cites `{target}`, which does not exist. Either fix "
+        f"the path, or -- if the document was deleted -- say so on the same line "
+        f"(the word '{DEAD_CITE_MARKER}' is the marker) so a reader knows to look "
+        f"in git history instead of hunting for a file that is not there."
+    )
+
+
 def _slug(heading: str) -> str:
     """GitHub's anchor slug, which is also what the in-app manual generates."""
     text = heading.strip().lower()

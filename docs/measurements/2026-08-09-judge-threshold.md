@@ -2,7 +2,8 @@
 
 **Status: procedure written, no labelling session taken.** A pre-registration in
 the style of [`2026-08-06-pixel-art-xl.md`](2026-08-06-pixel-art-xl.md), and the
-strictest of the campaign's four: every number `../LEFTOVERS.md` §10 asks for is one
+strictest of the campaign's four: every number `../LEFTOVERS.md` §10 (deleted;
+git history) asks for is one
 a motivated reader would tune after seeing the ROC curve. Written before the
 labels exist, this document is worth something; written after, it is a
 rationalisation with a table in it.

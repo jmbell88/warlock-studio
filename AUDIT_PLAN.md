@@ -1,7 +1,9 @@
 # Warlock Studio — Audit Remediation Plan
 
 **Date:** 2026-08-11 · **Addresses:** every finding in `MASTER_AUDIT.md` (87 findings: 1 Blocker, 18 High, 37 Medium, 31 Low). Finding IDs below refer to that document.
-**Status:** plan only — nothing here has been executed. This was produced in a planning session; no code was changed.
+**Status:** *(historical — see the correction below)* plan only, nothing executed. This was produced in a planning session; no code was changed.
+
+> **Correction (2026-08-12).** The sentence above describes this document on the day it was written and is no longer true of the tree. Phases 0–5 were worked through; what landed, what changed shape, and what was deferred is recorded in **`MASTER_AUDIT.md` → "Outcomes (2026-08-12)"**, which is the authority — this plan is kept only as the reasoning behind that work. All six decision gates were answered by the user (marked inline below). The items still genuinely open are MDL-03/MDL-08/MDL-10's remainders, the Phase 4D crash-recovery service (UX-05/06, plus UX-20), and the D5 accessibility set.
 
 ## Ground rules (apply to every phase)
 
@@ -12,14 +14,16 @@
 5. **Commit convention.** Subjects stay `Warlock v0.0.21` (or whatever D1 resolves to); no version bumps unless explicitly requested.
 6. **Every fix ships with its regression test** where the finding names one (they mostly do). Findings that are pure doc edits are covered by the extended docs tests in Phase 0.
 
-## Decision gates (need a human call before the affected work starts)
+## Decision gates (all answered 2026-08-12)
 
-- **D1 — Version direction (blocks Phase 0, REL-01).** Revert `pyproject.toml` to 0.0.21, or complete the bump (write the `## 0.0.22` CHANGELOG entry + `__version__`). *Recommendation: revert to 0.0.21* — every other surface (commit subjects, changelog, `__version__`) says 0.0.21, and the house convention is that versions bump only on explicit request; if the pyproject bump was intentional, complete it instead.
-- **D2 — Roadmap fate (blocks Phase 0, DOC-01).** Recreate a tracked `docs/TODO.md`, or update CLAUDE.md/INVARIANTS.md to state the roadmap file was deleted 2026-08-11 and `§N` citations resolve via git history. *Recommendation: update the docs* — the deletion in `de87838` looks intentional; recreating the file re-legitimises stale `§N` citations.
-- **D3 — Supply-chain program scope (blocks the Phase 4 supply-chain track).** Pinned revisions + hash manifests + Verify/Repair (MDL-03, MDL-08, MDL-10) is a sizeable program touching the registry schema, fetch worker, doctor, and Settings. Go/no-go and depth (pin-only vs pin+manifest vs pin+manifest+vendored BiRefNet code to drop `trust_remote_code`).
-- **D4 — Distribution model (blocks the Phase 4 distribution track, DST-01).** Officially declare source-checkout-only (cheap: a guard + docs), or support wheels (installer/resource resolution + wheel smoke test). *Recommendation: declare source-checkout-only now*; wheels later if ever wanted.
-- **D5 — Accessibility/responsive program (blocks the Phase 4 accessibility track).** UX-01 + UX-02 (+ UX-18/19/22) is multi-week UI work. Go/no-go and ordering.
-- **D6 — CI (blocks the Phase 4 CI track, TST-03).** Tracked GitHub Actions vs a mandatory local release-preflight script. Even the minimal script would have caught REL-01.
+*Every gate below was put to the user and answered; the answer is recorded as **Answered:** on each. Kept for the reasoning that produced the recommendation.*
+
+- **D1 — Version direction (blocks Phase 0, REL-01).** Revert `pyproject.toml` to 0.0.21, or complete the bump (write the `## 0.0.22` CHANGELOG entry + `__version__`). *Recommendation: revert to 0.0.21* — every other surface (commit subjects, changelog, `__version__`) says 0.0.21, and the house convention is that versions bump only on explicit request; if the pyproject bump was intentional, complete it instead. **Answered:** revert to 0.0.21 (done — `scripts/preflight.py` now gates the lockstep).
+- **D2 — Roadmap fate (blocks Phase 0, DOC-01).** Recreate a tracked `docs/TODO.md`, or update CLAUDE.md/INVARIANTS.md to state the roadmap file was deleted 2026-08-11 and `§N` citations resolve via git history. *Recommendation: update the docs* — the deletion in `de87838` looks intentional; recreating the file re-legitimises stale `§N` citations. **Answered:** keep it deleted and correct the docs (done — CLAUDE.md and INVARIANTS.md now state it).
+- **D3 — Supply-chain program scope (blocks the Phase 4 supply-chain track).** Pinned revisions + hash manifests + Verify/Repair (MDL-03, MDL-08, MDL-10) is a sizeable program touching the registry schema, fetch worker, doctor, and Settings. Go/no-go and depth (pin-only vs pin+manifest vs pin+manifest+vendored BiRefNet code to drop `trust_remote_code`). **Answered:** go, at full depth. The carrier landed in the audit pass; the values, the hash verification, the selection transaction and the vendoring are the work this round.
+- **D4 — Distribution model (blocks the Phase 4 distribution track, DST-01).** Officially declare source-checkout-only (cheap: a guard + docs), or support wheels (installer/resource resolution + wheel smoke test). *Recommendation: declare source-checkout-only now*; wheels later if ever wanted. **Answered:** source-checkout-only (done — `config.source_checkout()` plus the startup refusal).
+- **D5 — Accessibility/responsive program (blocks the Phase 4 accessibility track).** UX-01 + UX-02 (+ UX-18/19/22) is multi-week UI work. Go/no-go and ordering. **Answered:** skipped at the time; a later accessibility batch has since landed separately. Treat the finding list as the live record, not this gate.
+- **D6 — CI (blocks the Phase 4 CI track, TST-03).** Tracked GitHub Actions vs a mandatory local release-preflight script. Even the minimal script would have caught REL-01. **Answered:** the local release-preflight script (done — `scripts/preflight.py`).
 
 ---
 
@@ -114,7 +118,7 @@
 | 5.2 | SVC-05 | Pipe fetch-child stderr into the fallback detail (as `rigging.run_worker` does); move the stdin parse inside the error-reporting path. |
 | 5.3 | SVC-04, SVC-06, SVC-07 | `errors.Invalid(field="stage")` in judge; temp + `os.replace` in `export_to_folder`; widen `prompt_preview`'s tolerance. |
 | 5.4 | RUN-04 | Complete `argtypes`/`restype` on the winjob Win32 calls; capture `GetLastError` promptly. |
-| 5.5 | MDL-18, TST-01 | Product-boundary decisions: document registry-only LoRA support (or scope an importer); build the model-stage judge per the existing CAMERA.md plan once its corpus gate is met, or hide the declaration and label the judge image-only. |
+| 5.5 | MDL-18, TST-01 | Product-boundary decisions: document registry-only LoRA support (or scope an importer); build the model-stage judge per the graded eight-view design in the deleted `docs/JUDGE.md` (`git show e9616e7^:docs/JUDGE.md`) once its corpus gate is met, or hide the declaration and label the judge image-only. |
 | 5.6 | HYG-01 | Link `examples/` PNGs from the sprite-synthesis/Plotter manual chapters, or delete them. |
 | 5.7 | TST-04 | Standing guideline, not a task: when Phases 1–4 touch `main.py`/`state.py`/`queue.py` seams (modal ownership, selection sync, recovery, model maintenance, shutdown), extract the seam rather than growing the file. No big-bang refactor. |
 | 5.8 | Closure | Final full suite + ruff; update MASTER_AUDIT.md with an outcome column (fixed / rejected-with-reason / deferred) per finding; record rejected findings and any new invariants in `docs/INVARIANTS.md`; update session memory. |
