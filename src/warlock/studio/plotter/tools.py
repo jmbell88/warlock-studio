@@ -142,6 +142,54 @@ def fill_rect(
     return lo_x, lo_y, region
 
 
+def fill_ellipse(
+    data: np.ndarray, x0: int, y0: int, x1: int, y1: int, value: int
+) -> Region | None:
+    """One gid across the ellipse inscribed in the box those corners give.
+
+    A cell is in when its *centre* is, which is the test that makes a circle
+    look like one at small radii -- an any-overlap test grows every diameter by
+    a cell and squares off the poles.
+
+    **The ellipse is measured from the drawn box and clipped afterwards**, never
+    the other way round: clipping the box first and inscribing into what
+    survived would reshape the ellipse as it crossed the edge of the map, so
+    dragging one half off-screen would change the half still on it.
+
+    Degenerate drags need no special case. A one-cell-wide box puts every cell
+    centre exactly on the vertical axis, so the x term vanishes and the test
+    reduces to the column of cells -- a line, which is what a user dragging a
+    one-wide ellipse means. The same holds transposed, and a 1x1 box is the one
+    cell.
+
+    Like :func:`flood_fill`, the returned region keeps the cells inside its
+    bounding box that the shape does not cover: an ellipse must not rectangle
+    over its own corners.
+    """
+    height, width = data.shape
+    lo_x, hi_x = sorted((int(x0), int(x1)))
+    lo_y, hi_y = sorted((int(y0), int(y1)))
+    centre_x, centre_y = (lo_x + hi_x + 1) / 2.0, (lo_y + hi_y + 1) / 2.0
+    semi_x, semi_y = (hi_x - lo_x + 1) / 2.0, (hi_y - lo_y + 1) / 2.0
+
+    clip_x0, clip_y0 = max(0, lo_x), max(0, lo_y)
+    clip_x1, clip_y1 = min(width - 1, hi_x), min(height - 1, hi_y)
+    if clip_x1 < clip_x0 or clip_y1 < clip_y0:
+        return None
+
+    ys, xs = np.ogrid[clip_y0 : clip_y1 + 1, clip_x0 : clip_x1 + 1]
+    inside = ((xs + 0.5 - centre_x) / semi_x) ** 2 + (
+        (ys + 0.5 - centre_y) / semi_y
+    ) ** 2 <= 1.0
+    if not inside.any():
+        return None
+    region = np.array(
+        data[clip_y0 : clip_y1 + 1, clip_x0 : clip_x1 + 1], dtype=gidlib.DTYPE
+    )
+    region[inside] = gidlib.DTYPE(value)
+    return clip_x0, clip_y0, region
+
+
 def erase(data: np.ndarray, x: int, y: int, w: int = 1, h: int = 1) -> Region | None:
     """Clear a rectangle. Erasing *is* filling with gid 0, and saying so once
     here is what keeps the two from drifting apart."""

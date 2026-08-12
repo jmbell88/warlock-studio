@@ -58,7 +58,7 @@ TOOLS = (
     ("erase", "Erase", "E"),
     ("fill", "Fill", "G"),
     ("terrain", "Terrain", "T"),
-    ("rect", "Rect", "R"),
+    ("shape", "Shape", "R"),
     ("pick", "Pick", "I"),
     ("object", "Objects", "O"),
 )
@@ -128,6 +128,11 @@ class PlotterState:
 
     # Tool settings: app-level, shared across documents on purpose.
     tool: str = "stamp"
+    # What the Shape tool fills: "rect" or "ellipse". App-level for the same
+    # reason ``tool`` is -- it is a preference about how you work, not a fact
+    # about a map. Deliberately *not* a pair of tools: they are one gesture with
+    # one preview and one undo step, and Tiled's Shape Fill is one button too.
+    shape_mode: str = "rect"
     # Which tileset the palette is showing, by index into ``doc.tilesets``.
     # An index rather than a firstgid because tilesets are append-only and the
     # palette is a view of a list -- and because index 0 is a meaningful

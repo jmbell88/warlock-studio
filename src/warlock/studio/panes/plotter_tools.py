@@ -20,7 +20,7 @@ _ICONS = {
     "erase": icons.ERASER,
     "fill": icons.PAINT_BUCKET,
     "terrain": icons.WAND,
-    "rect": icons.SQUARE,
+    "shape": icons.SQUARE,
     "pick": icons.PIPETTE,
     "object": icons.FLAG,
 }
@@ -48,6 +48,37 @@ def _tool_grid(state: Any) -> None:
             imgui.pop_style_color()
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"{label} ({letter})")
+
+
+#: What the Shape tool can fill, in the order the buttons sit. A tuple rather
+#: than two literals so the pane and any future keyboard route read one list.
+SHAPES = (("rect", "Rectangle", icons.SQUARE), ("ellipse", "Ellipse", icons.CIRCLE))
+
+
+def _shape_picker(state: Any) -> None:
+    """Rectangle or ellipse -- Tiled's Shape Fill, as one tool with a mode.
+
+    Drawn only while Shape is the tool in hand, the way the terrain swatches
+    are: a control for a tool you are not holding is a control that has to
+    explain itself.
+    """
+    from imgui_bundle import imgui
+
+    width = widgets.grid_width(len(SHAPES))
+    for index, (key, label, glyph) in enumerate(SHAPES):
+        if index:
+            imgui.same_line()
+        active = state.shape_mode == key
+        if active:
+            imgui.push_style_color(
+                imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
+            )
+        if imgui.button(f"{glyph}##shape-{key}", (width, 0)):
+            state.shape_mode = key
+        if active:
+            imgui.pop_style_color()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(label)
 
 
 def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
@@ -127,6 +158,9 @@ def draw(ctx: Any) -> None:
     doc = tab.doc
     if state.tool == "terrain":
         _terrain_picker(ctx, state, tab)
+        imgui.dummy((0, 6))
+    if state.tool == "shape":
+        _shape_picker(state)
         imgui.dummy((0, 6))
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)

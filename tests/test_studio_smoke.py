@@ -2508,6 +2508,14 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         state.tool = tool
         _frame(imgui_ctx, build)
 
+    # Both Shape modes: the picker only draws while Shape is the tool in hand,
+    # so neither button rasterises anywhere else.
+    state.tool = "shape"
+    for mode, _label, _glyph in plotter_tools.SHAPES:
+        state.shape_mode = mode
+        _frame(imgui_ctx, build)
+    state.tool = "stamp"
+
     from warlock.studio.plotter import terrain as terrainlib
     from warlock.studio.plotter import tilegen
 

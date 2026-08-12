@@ -570,6 +570,78 @@ def test_the_line_origin_does_not_survive_a_tab_switch():
     assert second is not None
 
 
+def test_the_shape_tool_fills_whichever_shape_is_chosen():
+    """One tool with a mode, not two tools: the gesture, the preview and the
+    undo step are the same and only the set of cells differs."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    state.tool = "shape"
+
+    state.shape_mode = "rect"
+    plotter_canvas._apply_shape(ctx, state, tab, (0, 0), (3, 3))
+    assert int((layer.data != 0).sum()) == 16, "a rect fills its corners"
+
+    tab.doc.undo()
+    state.shape_mode = "ellipse"
+    plotter_canvas._apply_shape(ctx, state, tab, (0, 0), (3, 3))
+    assert int((layer.data != 0).sum()) == 12, "an ellipse does not"
+    assert layer.data[0, 0] == 0
+
+
+def test_the_shape_preview_outlines_the_box_it_would_fill():
+    """Pure lattice arithmetic, like ``_corner_uvs``: the outline is measured to
+    the *far* edge of the last cell, not its near edge, or the preview sits one
+    cell short of what lands."""
+    from warlock.studio.panes import plotter_canvas
+
+    corners = plotter_canvas._shape_points("rect", (1, 2), (4, 5))
+    assert corners == [(1.0, 2.0), (5.0, 2.0), (5.0, 6.0), (1.0, 6.0)]
+
+    # Dragged the other way round, the same outline.
+    assert plotter_canvas._shape_points("rect", (4, 5), (1, 2)) == corners
+
+
+def test_the_ellipse_preview_is_sampled_inside_the_same_box():
+    from warlock.studio.panes import plotter_canvas
+
+    points = plotter_canvas._shape_points("ellipse", (0, 0), (7, 7))
+    assert len(points) == plotter_canvas._ELLIPSE_SAMPLES
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    assert min(xs) == pytest.approx(0.0) and max(xs) == pytest.approx(8.0)
+    assert min(ys) == pytest.approx(0.0) and max(ys) == pytest.approx(8.0)
+    # Every sample is on the ellipse, which is what makes it a preview of the
+    # fill rather than a shape that merely fits the same box.
+    for x, y in points:
+        assert ((x - 4.0) / 4.0) ** 2 + ((y - 4.0) / 4.0) ** 2 == pytest.approx(1.0)
+
+
+def test_a_shape_fill_is_one_undo_step():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, _layer = _stamping(ctx)
+    state.tool = "shape"
+    state.shape_mode = "ellipse"
+    depth = len(tab.doc.history)
+    plotter_canvas._apply_shape(ctx, state, tab, (0, 0), (3, 3))
+    assert len(tab.doc.history) == depth + 1
+
+
+def test_the_shape_tool_still_needs_something_in_hand():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    state.tool = "shape"
+    state.brush = None
+    plotter_canvas._apply_shape(ctx, state, tab, (0, 0), (2, 2))
+    assert len(ctx.toasts) == 1
+    assert not layer.data.any()
+
+
 def test_a_line_needs_shift_a_stamp_and_somewhere_to_start_from():
     """All three, because each rules out a different wrong line: no shift is an
     ordinary click, another tool has no "from" to draw from, and no last cell

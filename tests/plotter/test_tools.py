@@ -213,6 +213,79 @@ def test_pick_returns_the_encoded_cell_or_none():
     assert tools.pick(layer, 99, 0) is None
 
 
+# --- ellipses -----------------------------------------------------------------
+
+
+def _filled(region, width: int, height: int) -> np.ndarray:
+    """A whole-layer boolean of what a region would write."""
+    out = np.zeros((height, width), dtype=bool)
+    x0, y0, block = region
+    out[y0 : y0 + block.shape[0], x0 : x0 + block.shape[1]] = block != 0
+    return out
+
+
+def test_an_ellipse_fills_its_bounding_box_but_not_its_corners():
+    layer = _layer(8, 8)
+    region = tools.fill_ellipse(layer, 0, 0, 7, 7, 5)
+    assert region is not None
+    got = _filled(region, 8, 8)
+    # The four corners of the box are outside the inscribed circle; the middle
+    # of every edge is inside it.
+    assert not got[0, 0] and not got[0, 7] and not got[7, 0] and not got[7, 7]
+    assert got[0, 3] and got[7, 4] and got[3, 0] and got[4, 7]
+    assert got[4, 4]
+
+
+def test_an_ellipse_leaves_the_cells_it_does_not_cover_alone():
+    """It must not rectangle over its own corners -- ``flood_fill``'s rule."""
+    layer = _layer(6, 6)
+    layer[0, 0] = 99
+    region = tools.fill_ellipse(layer, 0, 0, 5, 5, 5)
+    x0, y0, block = region
+    assert (x0, y0) == (0, 0)
+    assert int(block[0, 0]) == 99
+
+
+def test_a_one_wide_ellipse_is_the_line_of_cells():
+    """No special case: a one-cell-wide box puts every centre on the axis, so
+    the x term vanishes and the test reduces to the column."""
+    layer = _layer(6, 6)
+    got = _filled(tools.fill_ellipse(layer, 2, 1, 2, 4, 5), 6, 6)
+    assert [bool(got[y, 2]) for y in range(6)] == [False, True, True, True, True, False]
+    assert not got[:, 3].any() and not got[:, 1].any()
+
+
+def test_a_one_cell_ellipse_is_that_cell():
+    layer = _layer(6, 6)
+    got = _filled(tools.fill_ellipse(layer, 3, 3, 3, 3, 5), 6, 6)
+    assert int(got.sum()) == 1 and got[3, 3]
+
+
+def test_an_ellipse_keeps_its_shape_when_dragged_off_the_map():
+    """Measured from the drawn box and clipped afterwards. Inscribing into what
+    survived clipping would reshape the half still on screen."""
+    layer = _layer(8, 8)
+    whole = _filled(tools.fill_ellipse(layer, 0, 0, 7, 7, 5), 8, 8)
+    # The same circle, with its left half dragged off the left edge.
+    shifted = tools.fill_ellipse(layer, -4, 0, 3, 7, 5)
+    assert shifted is not None
+    got = _filled(shifted, 8, 8)
+    # Column 0 of the shifted ellipse is column 4 of the whole one.
+    assert list(got[:, 0]) == list(whole[:, 4])
+
+
+def test_an_ellipse_entirely_off_the_map_is_nothing():
+    layer = _layer(6, 6)
+    assert tools.fill_ellipse(layer, -20, -20, -10, -10, 5) is None
+
+
+def test_an_ellipse_takes_its_corners_in_any_order():
+    layer = _layer(8, 8)
+    forward = tools.fill_ellipse(layer, 1, 1, 6, 5, 5)
+    backward = tools.fill_ellipse(layer, 6, 5, 1, 1, 5)
+    assert np.array_equal(_filled(forward, 8, 8), _filled(backward, 8, 8))
+
+
 # --- lines --------------------------------------------------------------------
 
 

@@ -18,6 +18,7 @@ one of the three panes around this, and this one turns a click into a call.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -426,6 +427,13 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
             imgui.ImDrawFlags_.closed.value,
         )
 
+    # A shape drag in progress: outline what would land at release. The rect
+    # tool this replaced had no preview at all, so the only way to place one was
+    # to draw it and undo.
+    if state.drag_kind == "rect" and state.drag_anchor is not None:
+        _shape_preview(state, tab, draw_list, origin, state.drag_anchor, cell)
+        return
+
     # Shift with a "from" cell in hand: show the run that is about to land, not
     # just where the pointer is. Drawn from the same lattice corners as the
     # footprint, so an isometric map previews as a diagonal of diamonds for
@@ -434,6 +442,59 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
         for step in plotter_tools.line(*state.last_paint, cell[0], cell[1])[:-1]:
             outline(step, 0.3)
     outline(cell, 0.75)
+
+
+# How many segments an ellipse preview is drawn with. Past about this the
+# polyline costs more than the curve gains, and a shape drag lasts a handful of
+# frames.
+_ELLIPSE_SAMPLES = 32
+
+
+def _shape_points(
+    mode: str, a: tuple[int, int], b: tuple[int, int]
+) -> list[tuple[float, float]]:
+    """The outline of a shape drag, in *lattice* coordinates.
+
+    Pure, and separate from the drawing for the reason ``_corner_uvs`` is: the
+    arithmetic is the part worth pinning, and it is imgui-free.
+
+    Lattice rather than screen coordinates because the projection is what turns
+    a circle into the right ellipse on an isometric map -- sampling here and
+    projecting afterwards means there is no second path for the second lattice.
+    """
+    lo_x, hi_x = sorted((a[0], b[0]))
+    lo_y, hi_y = sorted((a[1], b[1]))
+    # Node coordinates: the far edge of the last cell, not its near edge.
+    x0, y0, x1, y1 = float(lo_x), float(lo_y), float(hi_x + 1), float(hi_y + 1)
+    if mode != "ellipse":
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    centre_x, centre_y = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    semi_x, semi_y = (x1 - x0) / 2.0, (y1 - y0) / 2.0
+    return [
+        (
+            centre_x + semi_x * math.cos(math.tau * step / _ELLIPSE_SAMPLES),
+            centre_y + semi_y * math.sin(math.tau * step / _ELLIPSE_SAMPLES),
+        )
+        for step in range(_ELLIPSE_SAMPLES)
+    ]
+
+
+def _shape_preview(
+    state: Any, tab: Any, draw_list: Any, origin, a: tuple[int, int], b: tuple[int, int]
+) -> None:
+    """The outline of what a shape drag would fill, rect or ellipse."""
+    from imgui_bundle import imgui
+
+    doc, view = tab.doc, tab.view
+    draw_list.add_polyline(
+        [
+            inker_state.to_screen(view, origin, *doc.cell_corner(px, py))
+            for px, py in _shape_points(state.shape_mode, a, b)
+        ],
+        imgui.get_color_u32(theme.rgba(theme.ACCENT)),
+        sp(1.5),
+        imgui.ImDrawFlags_.closed.value,
+    )
 
 
 # --- input --------------------------------------------------------------------
@@ -480,9 +541,13 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
         return
 
     if hovered and imgui.is_mouse_clicked(0):
-        state.drag_kind = "rect" if state.tool == "rect" else "paint"
+        # The drag *kind* stays "rect" whatever the shape tool is filling: the
+        # gesture is a corner-to-corner drag either way, and only what lands at
+        # release differs. Renaming it would also collide with the object tool's
+        # own "rect", which is a third, unrelated use of the word.
+        state.drag_kind = "rect" if state.tool == "shape" else "paint"
         state.drag_anchor = cell
-        if state.tool != "rect":
+        if state.tool != "shape":
             # Stamp, erase and terrain are the three tools a *drag* repeats, and
             # so the three that would otherwise push one step per cell. Fill,
             # rect and pick fire once and need no session.
@@ -502,7 +567,7 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
         _apply_drag(ctx, state, tab, cell)
     elif state.drag_kind and imgui.is_mouse_released(0):
         if state.drag_kind == "rect" and state.drag_anchor is not None:
-            _apply_rect(ctx, state, tab, state.drag_anchor, cell)
+            _apply_shape(ctx, state, tab, state.drag_anchor, cell)
         tab.doc.end_stroke()
         state.clear_drag()
 
@@ -663,14 +728,20 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
         doc.write_region(layer.uid, *result)
 
 
-def _apply_rect(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int, int]) -> None:
+def _apply_shape(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int, int]) -> None:
+    """What a shape drag lands at release, rect or ellipse.
+
+    One dispatch rather than two tools: the gesture, the preview and the undo
+    step are the same either way, and only the set of cells differs.
+    """
     layer = _layer_for_paint(ctx, tab)
     if layer is None:
         return
     if state.brush is None:
         ctx.toast("Pick a tile from the tileset first.", "error")
         return
-    result = plotter_tools.fill_rect(layer.data, a[0], a[1], b[0], b[1], int(state.brush[0, 0]))
+    fill = plotter_tools.fill_ellipse if state.shape_mode == "ellipse" else plotter_tools.fill_rect
+    result = fill(layer.data, a[0], a[1], b[0], b[1], int(state.brush[0, 0]))
     if result is not None:
         tab.doc.write_region(layer.uid, *result)
 
