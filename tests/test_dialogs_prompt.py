@@ -84,9 +84,15 @@ class _FakeImgui:
         # dispatching shortcuts while a modal is up. Nothing here presses one.
         return False
 
-    def text_disabled(self, text: str) -> None:
+    @staticmethod
+    def ImVec4(*values: float) -> tuple[float, ...]:  # noqa: N802 - imgui's own name
+        return values
+
+    def text_colored(self, _colour: Any, text: str) -> None:
         # UX-24's "Name required." note. Recorded rather than ignored: the
-        # point of the change is that a blank submit *says* something.
+        # point of the change is that a blank submit *says* something. Drawn
+        # coloured rather than disabled since UX-18 -- the fake follows the
+        # real call shape so a future change to it fails here first.
         self.notes.append(text)
 
     def same_line(self) -> None: ...

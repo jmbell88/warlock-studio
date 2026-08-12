@@ -226,7 +226,7 @@ def _widget(key: str, value: Any, default: Any) -> tuple[Any, bool]:
         return tuple(float(v) for v in out), changed
     # A parameter type nobody has added yet: shown, not editable, rather than
     # silently dropped from the panel.
-    imgui.text_disabled(f"{key}: {value!r}")
+    widgets.secondary(f"{key}: {value!r}")
     return value, False
 
 

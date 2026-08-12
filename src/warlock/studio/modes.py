@@ -73,6 +73,17 @@ VIEWPORT_MODES = frozenset({"2d", "3d"})
 # fail.
 WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "packwright"})
 
+# The modes that bind the arrow keys or Space themselves, and so keep them from
+# imgui's keyboard navigation (UX-02). Home and the Library move a selection
+# with Up/Down, Review steps units with Left/Right, and Inker and Plotter hold
+# Space to pan -- for all five, one press must not also step a focus ring.
+#
+# The rule is stated in ``imgui_backend._NAV_KEYS``: Tab traverses everywhere,
+# the arrows belong to the surface. This is the "which surface" half, listed
+# here beside the other mode groupings rather than inside the backend, because
+# it is a fact about the modes and not about the input door.
+NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter"})
+
 KEYS = tuple(key for key, _label, _icon in MODES)
 
 # After which segment indices the switch leaves a wider gap (UX.md Phase 2).

@@ -876,7 +876,7 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     hint = _findings_hint(ctx, "base_model", form["base_model"])
     if hint is not None:
         imgui.same_line()
-        imgui.text_disabled(hint)
+        widgets.secondary(hint)
     no_lora = lora_note(ctx, form)
     if no_lora is not None:
         # Disabled rather than hidden, this pane's stated rule: the form holds
@@ -894,7 +894,7 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
         imgui.same_line()
-        imgui.text_disabled(hint)
+        widgets.secondary(hint)
     if form["style_lora"]:
         # Hidden without a LoRA rather than disabled: a weight slider with
         # nothing to weight is a control that cannot do anything.
@@ -908,7 +908,7 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         hint = _findings_hint(ctx, "lora_weight", form["lora_weight"])
         if hint is not None:
             imgui.same_line()
-            imgui.text_disabled(hint)
+            widgets.secondary(hint)
     if no_lora is not None:
         imgui.end_disabled()
         widgets.muted(no_lora)

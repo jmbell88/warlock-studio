@@ -262,12 +262,45 @@ _KEY_MAP = {
     pygame.K_ESCAPE: imgui.Key.escape,
     pygame.K_KP_ENTER: imgui.Key.keypad_enter,
     pygame.K_TAB: imgui.Key.tab,
-    pygame.K_a: imgui.Key.a,
-    pygame.K_c: imgui.Key.c,
-    pygame.K_v: imgui.Key.v,
-    pygame.K_x: imgui.Key.x,
-    pygame.K_y: imgui.Key.y,
-    pygame.K_z: imgui.Key.z,
+    pygame.K_CAPSLOCK: imgui.Key.caps_lock,
+    pygame.K_MENU: imgui.Key.menu,
+    pygame.K_PRINTSCREEN: imgui.Key.print_screen,
+    pygame.K_PAUSE: imgui.Key.pause,
+    pygame.K_SCROLLLOCK: imgui.Key.scroll_lock,
+    pygame.K_NUMLOCKCLEAR: imgui.Key.num_lock,
+    # The whole alphabet, the digit row, the function row, the keypad and the
+    # punctuation, rather than the six letters the clipboard and undo chords
+    # happened to need (UX-02). A key imgui is never told about is one no
+    # shortcut inside a text field can use, no nav step can read, and no
+    # ``is_key_pressed`` in a pane can answer for -- and which of the 104 keys
+    # were mapped was, before this, a record of which features were built
+    # first rather than of anything about the keyboard.
+    **{
+        getattr(pygame, f"K_{c}"): getattr(imgui.Key, c)
+        for c in "abcdefghijklmnopqrstuvwxyz"
+    },
+    **{getattr(pygame, f"K_{d}"): getattr(imgui.Key, f"_{d}") for d in "0123456789"},
+    **{getattr(pygame, f"K_F{n}"): getattr(imgui.Key, f"f{n}") for n in range(1, 13)},
+    **{
+        getattr(pygame, f"K_KP{d}"): getattr(imgui.Key, f"keypad{d}")
+        for d in "0123456789"
+    },
+    pygame.K_KP_PLUS: imgui.Key.keypad_add,
+    pygame.K_KP_MINUS: imgui.Key.keypad_subtract,
+    pygame.K_KP_MULTIPLY: imgui.Key.keypad_multiply,
+    pygame.K_KP_DIVIDE: imgui.Key.keypad_divide,
+    pygame.K_KP_PERIOD: imgui.Key.keypad_decimal,
+    pygame.K_MINUS: imgui.Key.minus,
+    pygame.K_EQUALS: imgui.Key.equal,
+    pygame.K_LEFTBRACKET: imgui.Key.left_bracket,
+    pygame.K_RIGHTBRACKET: imgui.Key.right_bracket,
+    pygame.K_BACKSLASH: imgui.Key.backslash,
+    pygame.K_SEMICOLON: imgui.Key.semicolon,
+    pygame.K_QUOTE: imgui.Key.apostrophe,
+    pygame.K_BACKQUOTE: imgui.Key.grave_accent,
+    pygame.K_COMMA: imgui.Key.comma,
+    pygame.K_PERIOD: imgui.Key.period,
+    pygame.K_SLASH: imgui.Key.slash,
     pygame.K_LCTRL: imgui.Key.left_ctrl,
     pygame.K_RCTRL: imgui.Key.right_ctrl,
     pygame.K_LALT: imgui.Key.left_alt,
@@ -286,6 +319,52 @@ _MODIFIER_MAP = {
 }
 
 _MOUSE_MAP = {2: imgui.MouseButton_.middle, 3: imgui.MouseButton_.right}
+
+# The keys imgui's navigation moves and activates on.
+#
+# **Tab is deliberately not in the set.** That is the whole rule keyboard
+# access settles on here (UX-02): *Tab traverses, and the arrows belong to
+# whatever surface binds them.* Home's tiles, the library list and Review all
+# bind Up/Down or Left/Right, and Inker and Plotter hold Space to pan -- so
+# with imgui nav simply switched on, one press both moved the app's own
+# selection and stepped a focus ring nobody asked for. Suppressing those keys
+# at the one door they come through is what lets nav be on everywhere without
+# a second owner for any key, and it beats flagging ``no_nav_inputs`` on each
+# window because the surfaces that bind arrows are not all child windows.
+_NAV_KEYS = frozenset(
+    {
+        pygame.K_LEFT,
+        pygame.K_RIGHT,
+        pygame.K_UP,
+        pygame.K_DOWN,
+        pygame.K_SPACE,
+        pygame.K_PAGEUP,
+        pygame.K_PAGEDOWN,
+        pygame.K_HOME,
+        pygame.K_END,
+    }
+)
+
+# Set once a frame by the app, from whether the surface on screen binds them.
+_nav_keys_reserved = False
+
+
+def reserve_nav_keys(reserved: bool) -> None:
+    """Declare that the surface on screen owns the arrows and Space."""
+    global _nav_keys_reserved
+    _nav_keys_reserved = bool(reserved)
+
+
+def _forwards(event: Any, io: Any) -> bool:
+    """Whether one key event should reach imgui at all.
+
+    A reservation never applies while a text field has the keyboard: Home, End
+    and the arrows are caret movement there, and a mode that binds Up/Down for
+    its list has no claim on them while somebody is typing into a prompt.
+    """
+    if not _nav_keys_reserved or event.key not in _NAV_KEYS:
+        return True
+    return bool(io.want_text_input)
 
 
 def process_event(event: Any) -> bool:
@@ -307,21 +386,79 @@ def process_event(event: Any) -> bool:
     if event.type == pygame.MOUSEWHEEL:
         io.add_mouse_wheel_event(event.x * 0.5, event.y * 0.5)
         return True
+    if event.type == pygame.TEXTINPUT:
+        # SDL's *committed* text, and since UX-19 the only source of characters
+        # in the app. It was ``KEYDOWN.unicode`` before, which is a different
+        # and worse fact: a keypress carries the character that key produces on
+        # its own, so an IME's composed result never arrived (the keys that
+        # composed it did, one raw letter at a time, into the field the user
+        # was composing *for*), a dead-key accent double-typed, and anything
+        # needing more than one keystroke to name one character could not be
+        # written at all.
+        io.add_input_characters_utf8(event.text)
+        return True
+    if event.type == pygame.TEXTEDITING:
+        # The IME's pre-edit buffer -- what is being composed but not yet
+        # committed. Swallowed rather than inserted: imgui has no pre-edit
+        # rendering, so adding these characters would put the half-finished
+        # composition into the field and then leave it there when the real
+        # TEXTINPUT arrived. Consumed rather than ignored so the shortcut layer
+        # does not see a composition in progress as a chord.
+        return True
     if event.type in (pygame.KEYDOWN, pygame.KEYUP):
         down = event.type == pygame.KEYDOWN
-        if event.key in _KEY_MAP:
-            io.add_key_event(_KEY_MAP[event.key], down)
+        # Modifiers are forwarded even when the nav keys are not: a mode owning
+        # Up/Down has no claim on Shift, and imgui reading a chord as unmodified
+        # is how Shift+Tab stops going backwards.
         if event.key in _MODIFIER_MAP:
             io.add_key_event(_MODIFIER_MAP[event.key], down)
-        if down:
-            # The key event and the character are two separate facts, and a
-            # letter is both: Ctrl+V needs Key.v, and typing "v" needs the
-            # character. Filtering on isprintable() rather than on "was this
-            # key mapped" is what lets both be true -- Return and Backspace
-            # carry a control character in event.unicode and must not reach
-            # the text field as one.
-            for char in getattr(event, "unicode", ""):
-                if char.isprintable() and 0 < ord(char) < 0x10000:
-                    io.add_input_character(ord(char))
+        if event.key in _KEY_MAP and _forwards(event, io):
+            io.add_key_event(_KEY_MAP[event.key], down)
         return False
     return False
+
+
+# Whether SDL is currently generating TEXTINPUT events. Tracked rather than
+# queried because pygame exposes no getter, and calling start/stop every frame
+# restarts the IME composition on some backends.
+_text_input_on: bool | None = None
+
+
+def sync_text_input(pygame_module: Any = pygame) -> bool:
+    """Turn SDL's text input on exactly while imgui wants it. -> the new state.
+
+    Called once a frame, after ``imgui.render()``. Two things follow from it,
+    and the second is the reason it exists rather than the app simply leaving
+    text input on forever: SDL only emits ``TEXTINPUT`` while it is started, so
+    this is what makes typing work at all; and an IME's candidate window pops up
+    whenever text input is active, so leaving it on would put a Japanese
+    composition bar over the viewport every time somebody pressed a key to
+    orbit the camera.
+    """
+    global _text_input_on
+    want = bool(imgui.get_io().want_text_input)
+    if want != _text_input_on:
+        if want:
+            pygame_module.key.start_text_input()
+        else:
+            pygame_module.key.stop_text_input()
+        _text_input_on = want
+    return want
+
+
+def set_ime_rect(
+    pos: tuple[float, float], size: tuple[float, float], pygame_module: Any = pygame
+) -> None:
+    """Tell SDL where the text being composed is, so the IME can sit beside it.
+
+    Opt-in, per call site, and that is a limitation rather than a design: Dear
+    ImGui knows exactly where its caret is and hands the position to a backend
+    through ``Platform_SetImeDataFn``, but imgui_bundle exposes neither that
+    callback nor the context's ``PlatformImeData``, so the caret is unreachable
+    from Python. What *is* reachable is the rect of the item just drawn, which
+    is the field rather than the caret inside it -- close enough that the
+    candidate window lands on the right control, and the best available until
+    the binding grows the hook.
+    """
+    rect = pygame_module.Rect(int(pos[0]), int(pos[1]), int(size[0]), int(size[1]))
+    pygame_module.key.set_text_input_rect(rect)

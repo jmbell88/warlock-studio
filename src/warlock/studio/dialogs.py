@@ -22,7 +22,7 @@ from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
 from ..service.errors import Failed
-from . import filetypes, widgets
+from . import filetypes, theme, widgets
 from .tokens import sp
 
 log = logging.getLogger(__name__)
@@ -374,7 +374,11 @@ class PromptQueue:
             # no imgui context in a headless test, is an access violation
             # rather than an error. The existing ``waiting`` note gets away
             # with it only because that branch is never taken in those tests.
-            imgui.text_disabled("Name required.")
+            #
+            # Opaque rather than ``text_disabled`` (UX-18): this is the one
+            # sentence in the modal that says why Save will not work, so it is
+            # the last copy in the app that should be drawn at 3.20:1.
+            imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), "Name required.")
         saved = imgui.button("Save", (sp(BUTTON_W), 0))
         accepted = (entered or saved) and not blank
         imgui.same_line()

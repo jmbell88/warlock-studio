@@ -375,6 +375,16 @@ class App:
         self.ctx = moderngl.create_context()
         imgui.create_context()
         imgui.get_io().set_ini_filename("")  # imgui's own layout file is not ours to keep
+        # Keyboard navigation, app-wide (UX-02). It was off, and the shortcut
+        # sheet made support look broader than it was: Settings, Profiles, the
+        # library, the inspector and the mode switch had no focus traversal at
+        # all, so a keyboard-only user could reach the two forms ``focus.py``
+        # hand-rolls an order for and nothing else.
+        #
+        # Safe to switch on now only because ``imgui_backend`` arbitrates the
+        # arrows and Space, which five surfaces already bind -- see
+        # ``_NAV_KEYS`` there for the rule and why it lives at that door.
+        imgui.get_io().config_flags |= imgui.ConfigFlags_.nav_enable_keyboard.value
         fonts.load(imgui)
         theme.apply(imgui)
         self.layout = Layout(settings)
@@ -806,9 +816,16 @@ class App:
     def frame(self, dt: float) -> None:
         from imgui_bundle import imgui
 
+        from . import imgui_backend, modes
+
         self.app_ctx.textures.begin_frame()
         self._collect_tasks()
         self._refresh()
+        # Before ``_events``, which is where the keys are read: whether the
+        # arrows reach imgui at all is a property of the surface they arrive
+        # at, so it has to be settled for this frame before any of them is
+        # dispatched (UX-02).
+        imgui_backend.reserve_nav_keys(self.app_ctx.state.mode in modes.NAV_KEY_MODES)
         self._events()
 
         import pygame
@@ -832,6 +849,12 @@ class App:
         imgui.new_frame()
         self._build_ui()
         imgui.render()
+        # After the frame, because ``want_text_input`` is only true once the
+        # field that wants it has been drawn (UX-19). SDL emits no TEXTINPUT
+        # while text input is stopped, so this is what makes typing work --
+        # and stopping it again is what keeps an IME's candidate window off
+        # the viewport while nobody is typing.
+        imgui_backend.sync_text_input()
 
         self.ctx.screen.use()
         self.ctx.clear(*_background())

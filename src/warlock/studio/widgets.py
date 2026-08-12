@@ -125,6 +125,23 @@ def muted(text: str) -> None:
     text_colored(theme.MUTED, text)
 
 
+def secondary(text: str) -> None:
+    """Meaningful copy that is not the primary line (UX-18).
+
+    The role imgui's own ``text_disabled`` was being used for, and the reason
+    it could not stay: that style is MUTED at 0.6 alpha, which reaches the eye
+    at 3.20:1 on a dark panel and 2.55:1 on a light one -- under the 4.5:1 body
+    copy needs, in both themes. It is the right styling for a control that
+    cannot be operated and the wrong styling for a sentence somebody has to
+    read, and the two had collapsed into one call.
+
+    So this is deliberately not a new colour: MUTED at full opacity already
+    clears the bar on every surface in the ramp (6.67:1 dark, 5.84:1 light on
+    PANEL). What was failing was the alpha, and nothing else.
+    """
+    text_colored(theme.MUTED, text)
+
+
 def muted_wrapped(text: str) -> None:
     """A muted note that wraps to the pane rather than running off it.
 
@@ -435,6 +452,26 @@ def combo(label: str, value: str, options: list[tuple[str, str]], width: float =
     return keys[index] if changed else value
 
 
+def note_ime_rect() -> None:
+    """Put the IME's candidate window on the field just drawn (UX-19).
+
+    Called right after a text widget, and does nothing unless that widget has
+    focus -- so the rect follows the caret between fields without any of them
+    having to know the others exist. It sits in the two wrappers below rather
+    than at ~20 call sites for the same reason.
+
+    Guarded on ``is_item_active`` rather than on ``want_text_input``: the
+    latter is true for the whole frame an unrelated field owns, and pointing
+    SDL at the wrong control is worse than not pointing it anywhere.
+    """
+    if not imgui.is_item_active():
+        return
+    from . import imgui_backend
+
+    lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    imgui_backend.set_ime_rect((lo.x, lo.y), (hi.x - lo.x, hi.y - lo.y))
+
+
 def input_text(label: str, value: str, *, max_length: int = 1000, hint: str = "") -> str:
     """A single-line field, clamped after the fact.
 
@@ -446,6 +483,7 @@ def input_text(label: str, value: str, *, max_length: int = 1000, hint: str = ""
         changed, out = imgui.input_text_with_hint(label, hint, value)
     else:
         changed, out = imgui.input_text(label, value)
+    note_ime_rect()
     return out[:max_length] if changed else value
 
 
@@ -459,6 +497,7 @@ def multiline(label: str, value: str, height: float, max_length: int) -> str:
     changed, out = imgui.input_text_multiline(
         label, value, (-1, height), imgui.InputTextFlags_.word_wrap.value
     )
+    note_ime_rect()
     return out[:max_length] if changed else value
 
 
@@ -1338,7 +1377,7 @@ def hint_text(text: str) -> None:
     """
     same_line_or_wrap(imgui.calc_text_size(text).x)
     imgui.push_text_wrap_pos(0.0)
-    imgui.text_disabled(text)
+    secondary(text)
     imgui.pop_text_wrap_pos()
 
 
@@ -1556,21 +1595,35 @@ def _glyph_button(
     hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value)
     imgui.pop_style_color(pushed)
     note_hover(key, hovered and enabled)
-    if tooltip and hovered:
+    # Focus as well as hover (UX-02). The tooltip is the *only* place a glyph
+    # button says what it does, so showing it on hover alone meant the name
+    # existed for pointer users and did not exist for keyboard users -- who
+    # reach the same button and are told nothing but a shape. Keyboard focus
+    # rather than any focus, so a click does not also pop the tooltip it was
+    # already showing.
+    named = hovered or imgui.is_item_focused()
+    if tooltip and named:
         imgui.set_tooltip(tooltip)
     return clicked and enabled
 
 
 def icon_button(
-    icon: str, tooltip: str = "", *, danger: bool = False, enabled: bool = True
+    icon: str, tooltip: str, *, danger: bool = False, enabled: bool = True
 ) -> bool:
-    """A square glyph button with its meaning in the tooltip."""
+    """A square glyph button with its meaning in the tooltip.
+
+    ``tooltip`` is required, and that is the accessible-name rule rather than a
+    tidiness one (UX-02): a glyph button carries no visible label, so the
+    tooltip is the only thing that ever says what it does. Every call site
+    already passed one -- making it mandatory is what stops the twenty-fourth
+    from being the exception.
+    """
     return _glyph_button(
         icon, imgui.get_frame_height(), tooltip, danger=danger, enabled=enabled
     )
 
 
-def small_icon_button(icon: str, tooltip: str = "") -> bool:
+def small_icon_button(icon: str, tooltip: str) -> bool:
     """The same button at ``small_button`` height, for a card's action row.
 
     Its own entry point rather than a flag, but *not* its own drawing code: the

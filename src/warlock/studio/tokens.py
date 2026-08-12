@@ -188,6 +188,64 @@ def colour(name: str) -> int:
 # other attribute error normally.
 COLOUR_NAMES = frozenset(PALETTES["dark"])
 
+# -- contrast ----------------------------------------------------------------
+#
+# WCAG 2.1's two bars, because the app has two kinds of thing to qualify: body
+# copy at 4.5:1 (SC 1.4.3 AA) and a control's own boundary -- a focus ring, a
+# checkbox outline -- at 3:1 (SC 1.4.11). Naming both is what stops the accent
+# being judged against the stricter bar it does not need to meet and the
+# secondary copy against the looser one it does.
+CONTRAST_TEXT = 4.5
+CONTRAST_UI = 3.0
+
+# The surfaces copy is actually drawn on, darkest-to-lightest step of the
+# elevation ramp. A role is qualified against *all* of them rather than against
+# BG alone: MUTED clears 4.5:1 on the window floor and the same label on a
+# hovered card is the one that fails, so the floor is the least informative
+# place to measure.
+COPY_SURFACES = ("BG", "PANEL", "ELEV_1", "ELEV_2")
+
+
+def _linear(channel: float) -> float:
+    """One 0..1 sRGB channel, linearised."""
+    return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+
+def luminance(value: int) -> float:
+    """Relative luminance of a packed sRGB colour, per WCAG 2.1."""
+    r, g, b = (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF
+    return (
+        0.2126 * _linear(r / 255.0)
+        + 0.7152 * _linear(g / 255.0)
+        + 0.0722 * _linear(b / 255.0)
+    )
+
+
+def contrast(fg: int, bg: int) -> float:
+    """The contrast ratio between two packed colours, 1.0 (same) to 21.0."""
+    a, b = luminance(fg), luminance(bg)
+    hi, lo = (a, b) if a >= b else (b, a)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def composite(fg: int, bg: int, alpha: float) -> int:
+    """``fg`` drawn over ``bg`` at ``alpha``, as a packed colour.
+
+    Contrast is a property of what reaches the eye, so a translucent label has
+    to be measured on the blend and never on the token it came from. This is
+    the whole of UX-18: MUTED is *stored* at 6.67:1 on PANEL and, at the 0.6
+    alpha ``text_disabled`` carries, *drawn* at 3.20:1. Compositing in sRGB
+    rather than linear light because that is what the blend in the renderer
+    does -- the number this returns is the one on the glass, not the one a
+    correctly gamma-aware compositor would have produced.
+    """
+    alpha = min(max(alpha, 0.0), 1.0)
+    out = 0
+    for shift in (16, 8, 0):
+        f, b = (fg >> shift) & 0xFF, (bg >> shift) & 0xFF
+        out |= round(f * alpha + b * (1.0 - alpha)) << shift
+    return out
+
 # -- depth -------------------------------------------------------------------
 #
 # **One shadow, told everywhere** (UX.md Phase 2). There is no blur in the

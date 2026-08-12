@@ -158,6 +158,15 @@ def apply(imgui: Any) -> None:
     set_color(c.header_hovered.value, rgba(tokens.colour("ACCENT"), 0.5))
     set_color(c.header_active.value, rgba(tokens.colour("ACCENT"), 0.75))
 
+    # The focus ring imgui's own navigation draws (UX-02). ACCENT rather than
+    # the near-white default, so it reads as the same "this is the live thing"
+    # the rest of the app says in that colour -- and it is qualified against
+    # WCAG 2.1 SC 1.4.11's 3:1 for a control boundary on every step of the
+    # elevation ramp, in both palettes, by ``test_accessibility``. Full alpha:
+    # a focus indicator faded for looks is the one piece of chrome whose whole
+    # job is to be unmissable.
+    set_color(c.nav_cursor.value, rgba(tokens.colour("ACCENT")))
+
     set_color(c.separator.value, rgba(tokens.colour("EDGE")))
     set_color(c.separator_hovered.value, rgba(tokens.colour("ACCENT"), 0.6))
     set_color(c.separator_active.value, rgba(tokens.colour("ACCENT")))

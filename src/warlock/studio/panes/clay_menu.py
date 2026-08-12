@@ -46,7 +46,7 @@ def draw(ctx: Any, view: Any) -> None:
 
 
 def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
-    imgui.text_disabled(f"{doc.element_mode} mode")
+    widgets.secondary(f"{doc.element_mode} mode")
     imgui.separator()
     if tab.saving:
         # The gate every other control in the app has, and the one this menu
@@ -55,7 +55,7 @@ def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
         # ``or tab.saving`` below -- a live-looking menu that did nothing and
         # said nothing. Told once, at the top, rather than as fifteen greyed
         # rows with no reason attached.
-        imgui.text_disabled("Saving...")
+        widgets.secondary("Saving...")
         imgui.separator()
     for op in clay_ops.menu(doc.element_mode):
         if op.separator_before:
@@ -125,7 +125,7 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
             clamped = min(max(float(value), param.low), param.high)
             values[param.name] = int(clamped) if param.integer else clamped
         if param.warn:
-            imgui.text_disabled(param.warn)
+            widgets.secondary(param.warn)
     # Greyed rather than drawn live and ignored, which is what "and not
     # tab.saving" after the click amounted to.
     if widgets.disabled_button(f"Apply##{op.name}", not tab.saving):
