@@ -634,7 +634,11 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
             return
         imgui.same_line()
     busy = ctx.busy("ref-upload")
-    if widgets.disabled_button("Choose an image..." if not path else "Replace...", not busy):
+    if widgets.disabled_button(
+        "Choose an image..." if not path else "Replace...",
+        not busy,
+        reason="A file picker is already open.",
+    ):
         ctx.submit(
             "ref-upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER
         )
@@ -995,7 +999,7 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(8)))
     imgui.separator()
     problems = validate(form)
     for problem in problems:
@@ -1010,7 +1014,7 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
-        pressed = widgets.primary_button("Generate", (-1, 34), enabled=enabled)
+        pressed = widgets.primary_button("Generate", (-1, sp(34)), enabled=enabled)
         # Enter on the last stop of the ring, which is what makes the whole
         # form keyboard-only: everything above it is a stock imgui control that
         # answers the keyboard once it has focus, and this is the one that
@@ -1027,37 +1031,60 @@ def _enter_pressed() -> bool:
     return imgui.is_key_pressed(imgui.Key.enter) or imgui.is_key_pressed(imgui.Key.keypad_enter)
 
 
-def validate(form: dict[str, Any]) -> list[str]:
+def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     """What would be refused, said before the button is pressed.
 
     A summary rather than a refusal on submit: the API checks all of this too,
     but a disabled button with a reason beats a toast after a round trip.
+
+    Each entry carries the control it is about (:class:`widgets.Problem`, a
+    ``str`` subclass, so the aggregate block and every existing comparison are
+    unchanged). The field is what lets the *keyboard* doors -- Ctrl+Enter and
+    the palette, which call :func:`generate` directly and never draw that block
+    -- put the ring on the control the button path would have pointed at.
     """
-    problems: list[str] = []
+    problems: list[widgets.Problem] = []
     if not form["prompt"].strip():
-        problems.append("A prompt is required.")
+        problems.append(widgets.Problem("A prompt is required.", "prompt"))
     if len(form["prompt"]) > MAX_PROMPT:
-        problems.append(f"The prompt is over {MAX_PROMPT} characters.")
+        problems.append(
+            widgets.Problem(f"The prompt is over {MAX_PROMPT} characters.", "prompt")
+        )
     if not 1 <= int(form["count"]) <= MAX_REFERENCE_COUNT:
-        problems.append(f"References must be between 1 and {MAX_REFERENCE_COUNT}.")
+        problems.append(
+            widgets.Problem(
+                f"References must be between 1 and {MAX_REFERENCE_COUNT}.", "count"
+            )
+        )
     # Both reachable from a restored form rather than from this frame's
     # controls, which is why they are checked here and not only where the
     # widgets are drawn: a persisted selection outlives the ref_path that
     # justified it (ref_path is VOLATILE), and the base model can be changed
     # under Advanced after a control was picked.
     if not form.get("ref_path") and (form.get("ip_adapter") or form.get("control")):
-        problems.append("Conditioning needs a reference image.")
+        problems.append(
+            widgets.Problem("Conditioning needs a reference image.", "ref_path")
+        )
     if form.get("control") and form["base_model"] not in modelslib.controlnet_bases():
-        problems.append("Structure control needs a full-CFG model.")
+        problems.append(
+            widgets.Problem("Structure control needs a full-CFG model.", "base_model")
+        )
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
     if form.get("style_lora") and form["style_lora"] not in (
         modelslib.loras_by_base().get(form["base_model"]) or []
     ):
-        problems.append("The style LoRA is not fitted to this model's architecture.")
+        problems.append(
+            widgets.Problem(
+                "The style LoRA is not fitted to this model's architecture.",
+                "style_lora",
+            )
+        )
     if form.get("output") == "tile" and form["base_model"] not in modelslib.tile_bases():
-        problems.append("Seamless tiles need an SDXL model.")
+        problems.append(
+            widgets.Problem("Seamless tiles need an SDXL model.", "base_model")
+        )
     return problems
 
 
@@ -1122,8 +1149,92 @@ def anchor_kwargs(ctx: Any, form: dict[str, Any], kwargs: dict[str, Any]) -> str
     return str(path)
 
 
+# Which registry row each model-shaped form field would need, and the name the
+# refusal puts the ring on. The service layer is the authority (``check_weights``
+# raises the real refusal at the door); this is the courtesy in front of it, and
+# it answers from ``ctx.model_rows`` rather than the disk for ``model_gate``'s
+# reason -- this runs on the frame thread sixty times a second.
+_WEIGHT_FIELDS = (
+    ("base_model", "base", "The image model"),
+    ("style_lora", "lora", "The style LoRA"),
+    ("ip_adapter", "adapter", "The reference adapter"),
+    ("control", "control", "The structure control"),
+)
+
+
+def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
+    """The first selected model this host has not downloaded, or None.
+
+    Beside :func:`validate` rather than inside it, and the split is deliberate.
+    ``validate`` is about the *form* -- a prompt that is empty, a count out of
+    range -- and is true on any machine; this is about this **install**, and
+    two forms identical in every field can disagree about it. Keeping them
+    apart is also what stops the aggregate block above Generate from listing a
+    download as a mistake the user made.
+
+    ``model_gate``'s doctrine throughout: an empty ``model_rows`` says nothing
+    rather than everything-is-missing (a headless ctx, or the first frame
+    before the answers land, must not lock a fully-installed host), and a row
+    the snapshot has never heard of is skipped. A stale snapshot costs a
+    missing warning, never a wrong outcome -- ``service.validation.check_weights``
+    is still the authority and still refuses at the door.
+    """
+    by_key = {str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])}
+    if not by_key:
+        return None
+    for field, kind, noun in _WEIGHT_FIELDS:
+        chosen = str(form.get(field) or "")
+        if not chosen:
+            continue
+        row = by_key.get(f"{kind}:{chosen}")
+        if row is None or row.get("present"):
+            continue
+        label = row.get("label") or chosen
+        return widgets.Problem(
+            f"{noun} {label!r} is selected but not downloaded. "
+            f"Install it in Settings, or pick another.",
+            field,
+        )
+    return None
+
+
+def refuse(ctx: Any, problems: list[widgets.Problem]) -> None:
+    """Say no where the user can see it, whichever door they came through.
+
+    Shared with ``settings_3d.promote`` because the two refusals are the same
+    refusal: a form that would not submit, reached from a button that is
+    disabled *and* from two keyboard doors where nothing is disabled at all.
+    The button path shows the whole list as red text above itself and needs
+    nothing from here; the keyboard paths get the first problem as a toast --
+    first rather than all of them, because a stack of four toasts is a wall,
+    and the ring below marks the rest.
+    """
+    ctx.state.clear_field_errors()
+    for problem in problems:
+        ctx.state.note_field_error(getattr(problem, "field", ""), str(problem))
+    if problems:
+        ctx.toast(str(problems[0]), "warn")
+
+
 def generate(ctx: Any, form: dict[str, Any]) -> None:
-    if validate(form):
+    problems = validate(form)
+    # The install-shaped refusal, folded in behind the form-shaped ones: it is
+    # the same "this will not submit" from the user's side, and putting it here
+    # rather than at the service door turns a two-minute queue-and-fail into an
+    # immediate sentence naming the control. The service still refuses at the
+    # door; this only means the user rarely reaches it.
+    weights = weights_problem(ctx, form)
+    if weights is not None and not problems:
+        problems = [weights]
+    if problems:
+        # Said out loud, because this is not only the button's path. Ctrl+Enter
+        # and the palette's Generate call straight in here, and the only
+        # feedback a refusal had was the red block above the button -- which
+        # the keyboard user is by definition not looking at, and which the
+        # palette covers. So the first problem becomes a toast and every
+        # problem that names a control gets its ring, which is exactly what the
+        # button path shows without being asked.
+        refuse(ctx, problems)
         return
     # A new submit is judged on its own: the rings from the last one describe a
     # request that no longer exists, and leaving them up would have the app
@@ -1147,7 +1258,13 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
                 with Path(ref_path).open("rb") as fh:
                     kwargs["reference"] = fh.read(MAX_UPLOAD_BYTES + 1)
             except OSError as exc:
-                raise Invalid(f"could not read {Path(ref_path).name}: {exc}") from exc
+                # ``field=`` so the ring lands on the file control rather
+                # than the refusal arriving as a toast with no subject: the
+                # caller cannot know which of the form's inputs was at fault,
+                # and this one does.
+                raise Invalid(
+                    f"could not read {Path(ref_path).name}: {exc}", field="ref_path"
+                ) from exc
         return svc_jobs.create_job(ctx.svc, **kwargs)
 
     ctx.submit("submit", run)

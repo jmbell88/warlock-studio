@@ -71,7 +71,17 @@ def _member(ctx: Any, group: Any, member: dict[str, Any], current: bool) -> None
     # queued would quietly become an asset nobody chose.
     if current:
         ready = group.finished and member.get("status") == "done"
-        if widgets.disabled_button(f"Keep this one##keep-{job_id}", ready, (-1, 0)):
+        if widgets.disabled_button(
+            f"Keep this one##keep-{job_id}",
+            ready,
+            (-1, 0),
+            # Keeping one dissolves the group, so a member still queued would
+            # quietly become an asset nobody chose -- which is why the gate is
+            # about the *group* even though the button is on one candidate.
+            reason="The other attempts have not finished yet."
+            if not group.finished
+            else "This one did not finish, so there is nothing to keep.",
+        ):
             keep(ctx, group, job_id)
         if not ready and member.get("status") != "done":
             widgets.hint_text("This one did not finish; keep another.")
@@ -91,7 +101,7 @@ def keep(ctx: Any, group: Any, job_id: str) -> None:
         # Inline rather than on a task thread: it is one UPDATE against the
         # store the frame loop already reads directly, and the answer decides
         # what the confirm below says.
-        ctx.toast(str(exc), "error")
+        ctx.toast(f"That candidate could not be kept: {exc}", "error", action="log")
         return
     ctx.cache.invalidate()
     ctx.toast("Kept. The other attempts are in the library now.")

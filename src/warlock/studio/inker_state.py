@@ -423,6 +423,12 @@ def _tool_option(name: str) -> property:
 class InkerState:
     docs: list[InkerDoc] = field(default_factory=list)
     active_uid: str = ""
+    # The in-flight sheet/GIF export's frame-by-frame read of a document, or
+    # None. ``inker_mode._Export``, typed loosely here because this module is
+    # the state and that one is the behaviour. One at a time by construction:
+    # both exports share a task key and the tab is locked for the duration, so
+    # a second click while one is stepping is refused rather than queued.
+    export: Any = None
 
     # Tool settings: shared across documents on purpose.
     tool: str = "brush"

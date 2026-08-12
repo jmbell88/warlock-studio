@@ -77,6 +77,12 @@ class Viewer(PoseOps):
         # Set every frame by the pane so input can be mapped into the image.
         self._rect = (0.0, 0.0, 1.0, 1.0)
         self._grab: str | None = None  # "orbit" | "pan" | "gizmo" | "marker"
+        # The open ``editor.record()`` for a live gizmo gesture, or None. One
+        # undo step per *gesture*, not per frame: ``rotate_selected`` and
+        # ``move_handle`` are called on every motion event, so recording each
+        # would fill the stack with a single drag and leave Ctrl+Z walking a
+        # rotation back a degree at a time.
+        self._pose_step: Any = None
         self._last_mouse = (0.0, 0.0)
         # A reference image is shown as a plain texture rather than as geometry.
         self.reference: Any = None
@@ -479,6 +485,8 @@ class Viewer(PoseOps):
             axis = gizmo.hit(origin, direction) if self.editor.selected else None
             if axis is not None and gizmo.begin(axis, origin, direction):
                 self._grab = "gizmo"
+                self._pose_step = self.editor.record()
+                self._pose_step.__enter__()
                 return True
             centres = {
                 name: picking.to_world(self.placement, point)
@@ -503,9 +511,30 @@ class Viewer(PoseOps):
             gizmo = self._active_gizmo()
             if gizmo is not None:
                 gizmo.end_drag()
+            # Closed before the dirty notification, so anything that inspects
+            # the history in response sees the finished step rather than an
+            # open one. A gesture that ended where it started pushes nothing.
+            self._close_pose_step()
             self._notify_pose_dirty()
         del button
         return True
+
+    def _close_pose_step(self) -> None:
+        """End the open gesture's undo step, if there is one.
+
+        Idempotent and safe to call from a teardown path as well as from
+        ``_release``: a gizmo drag that is still live when pose mode ends (the
+        model is adopted, the mode is left) has to be closed rather than
+        leaked, and ``record`` itself declines to push across a rebind.
+        """
+        # ``getattr`` rather than the attribute: ``exit_pose_mode`` is called
+        # on partially-built viewers (the wiring tests drive the unbound method
+        # over a shell), and a teardown path that raises on a missing field is
+        # a teardown path that leaks whatever came after it.
+        step = getattr(self, "_pose_step", None)
+        self._pose_step = None
+        if step is not None:
+            step.__exit__(None, None, None)
 
     def _motion(self, local: tuple[float, float]) -> bool:
         dx = local[0] - self._last_mouse[0]

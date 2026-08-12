@@ -265,7 +265,9 @@ def _source(ctx: Any) -> None:
     else:
         widgets.muted("Pick a finished reference in the library, or:")
     busy = ctx.busy("upload")
-    if widgets.disabled_button("Open an image...", not busy):
+    if widgets.disabled_button(
+        "Open an image...", not busy, reason="A file picker is already open."
+    ):
         ctx.submit("upload", dialogs.open_file, "Choose a reference image", dialogs.IMAGE_FILTER)
     widgets.muted("...or drop an image on the window.")
     imgui.end_group()
@@ -317,7 +319,7 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:
-    imgui.dummy((0, 8))
+    imgui.dummy((0, sp(8)))
     imgui.separator()
     state = ctx.state
     source = ctx.cache.get(state.source_job)
@@ -336,7 +338,7 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "make3d") as focused:
-        pressed = widgets.primary_button("Make 3D", (-1, 34), enabled=enabled)
+        pressed = widgets.primary_button("Make 3D", (-1, sp(34)), enabled=enabled)
         # Enter on the ring's last stop; see ``settings_2d._submit``.
         if focused and enabled and (
             imgui.is_key_pressed(imgui.Key.enter)
@@ -390,13 +392,21 @@ def _candidates(form: dict[str, Any]) -> None:
     )
 
 
-def validate(source: dict[str, Any] | None) -> list[str]:
+def validate(source: dict[str, Any] | None) -> list[widgets.Problem]:
+    """``settings_2d.validate``'s counterpart, and its field rule.
+
+    All three of these are about the *reference*, not about a control in this
+    form, so none carries a field: they are refusals the library answers, and
+    ringing a widget in the promotion form would point at the wrong thing.
+    ``note_field_error`` already treats an empty field as "keep going to the
+    toast", which is the behaviour that leaves.
+    """
     if source is None:
-        return ["Choose a reference first."]
+        return [widgets.Problem("Choose a reference first.")]
     if source.get("status") != "done":
-        return [f"That reference is {source.get('status')}."]
+        return [widgets.Problem(f"That reference is {source.get('status')}.")]
     if "input.png" not in (source.get("files") or []):
-        return ["That reference has no image."]
+        return [widgets.Problem("That reference has no image.")]
     return []
 
 
@@ -447,7 +457,15 @@ def promote(ctx: Any, source: dict[str, Any] | None, form: dict[str, Any]) -> No
     the same reason -- one place, before the spend, rather than a confirm here
     and a surprise there.
     """
-    if validate(source):
+    problems = validate(source)
+    if problems:
+        # ``settings_2d.generate``'s reason exactly: Ctrl+Enter in 3D mode and
+        # the palette's promote both land here, and this used to return in
+        # silence -- so pressing Ctrl+Enter with nothing selected did nothing
+        # at all, which reads as a broken shortcut rather than as a refusal.
+        from . import settings_2d
+
+        settings_2d.refuse(ctx, problems)
         return
     # ``count`` rides with the overrides because the preview captures the form
     # as it stood when the button was pressed -- the whole point of that
@@ -534,11 +552,15 @@ def _matte_body(ctx: Any, state: Any) -> None:
             imgui.pop_style_color()
         for warning in preview.warnings:
             imgui.text_wrapped(warning)
-    imgui.dummy((0, 6))
+    imgui.dummy((0, sp(6)))
     ready = preview is not None
     refused = bool(preview is not None and preview.reasons)
     label = "Build anyway" if refused else "Accept"
-    if widgets.disabled_button(label, ready, (sp(150), 0)):
+    # Both buttons in this popup wait on the same thing, and it is a state the
+    # user can see happening -- so the sentence says what is being waited for
+    # rather than restating that the button is off.
+    preview_why = "The cutout is still being prepared."
+    if widgets.disabled_button(label, ready, (sp(150), 0), reason=preview_why):
         imgui.close_current_popup()
         state._open = False
         # Read *before* ``accept``, which closes the state before it calls
@@ -550,7 +572,7 @@ def _matte_body(ctx: Any, state: Any) -> None:
         )
         return
     imgui.same_line()
-    if widgets.disabled_button("Fix matte", ready, (sp(150), 0)):
+    if widgets.disabled_button("Fix matte", ready, (sp(150), 0), reason=preview_why):
         imgui.close_current_popup()
         state._open = False
         matte_preview.fix(ctx)
@@ -633,7 +655,9 @@ def upload(ctx: Any, path: Path) -> None:
             with path.open("rb") as fh:
                 data = fh.read(MAX_UPLOAD_BYTES + 1)
         except OSError as exc:
-            raise Invalid(f"could not read {path.name}: {exc}") from exc
+            # ``field=`` for ``settings_2d``'s reason: the upload control is
+            # what is wrong, and a bare refusal points at nothing.
+            raise Invalid(f"could not read {path.name}: {exc}", field="image") from exc
         return svc_jobs.create_job(ctx.svc, image=data, **kwargs)
 
     ctx.submit("submit", run)

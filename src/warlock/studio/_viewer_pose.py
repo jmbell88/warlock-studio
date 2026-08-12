@@ -83,6 +83,11 @@ class PoseOps:
         self.pose_job_id = None
         self.rotate_gizmo.end_drag()
         self.translate_gizmo.end_drag()
+        # Before ``clear``, not after: a gesture still live when the mode ends
+        # holds an open ``editor.record()``, and closing it against the cleared
+        # editor is what ``record``'s generation guard is for -- but leaking it
+        # would leave the next session's first drag nested inside a dead step.
+        self._close_pose_step()
         self.editor.clear()
         self._bone_pairs = []
         # Both ends of the editor's life report, or an indicator raised on the

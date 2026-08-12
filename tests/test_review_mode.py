@@ -50,7 +50,10 @@ class FakeCtx:
         self.result = run(*args)
         return True
 
-    def toast(self, message: str, kind: str = "info") -> None:
+    def toast(self, message: str, kind: str = "info", **extra: Any) -> None:
+        # ``**extra`` for ``action``/``action_arg``: the real Ctx has taken them
+        # since toasts grew an "Open the log" button, and a fake that refuses
+        # them fails on the call site rather than on the behaviour.
         self.toasts.append((message, kind))
 
 

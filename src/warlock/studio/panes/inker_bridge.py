@@ -22,6 +22,20 @@ from ..manual import render as manual_render
 from ..tokens import sp
 
 
+def _busy_why(tab: Any) -> str:
+    """Why every button on this panel is out, when one of them is.
+
+    ``tab.busy`` is deliberately one question with two answers behind it -- a
+    save is encoding off-thread, or playback is running -- and a user reading
+    "Saving..." while the clip is looping would go and look for a save. So the
+    sentence separates them here, once, and the panel's six buttons share it:
+    the ``_VIEWPORT_WHY`` pattern.
+    """
+    if getattr(tab, "playing", False):
+        return "Playback is running. Stop it to edit the document."
+    return "This document is being written; the buttons come back when it lands."
+
+
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
@@ -61,7 +75,9 @@ def _animation(ctx: Any, tab: Any) -> None:
     """
     widgets.section("animation")
     if tab.doc.anim is None:
-        if widgets.disabled_button("Animate", not tab.busy, (-1, 0)):
+        if widgets.disabled_button(
+            "Animate", not tab.busy, (-1, 0), reason=_busy_why(tab)
+        ):
             inker_mode.animate(ctx, tab)
         widgets.help_marker(
             "Turns this drawing into frame one of an animation and adds a second"
@@ -76,18 +92,24 @@ def _animation(ctx: Any, tab: Any) -> None:
 def _pipeline(ctx: Any, tab: Any) -> None:
     widgets.section("pipeline")
     busy = tab.busy
+    why = _busy_why(tab)
     if not tab.linked:
-        if widgets.disabled_button("Save as reference", not busy, (-1, 0)):
+        if widgets.disabled_button("Save as reference", not busy, (-1, 0), reason=why):
             inker_mode.save_as_reference(ctx, tab)
         widgets.help_marker(
             "Adds this image to the library as a finished reference, so it can be"
             " meshed, promoted and rerun like a generated one."
         )
-    if widgets.disabled_button("Send to 3D", not busy, (-1, 0)):
+    if widgets.disabled_button("Send to 3D", not busy, (-1, 0), reason=why):
         inker_mode.send_to_3d(ctx, tab)
     widgets.help_marker("Queues the mesh stage from the flattened image.")
     if tab.linked and widgets.disabled_button(
-        "Revert to original", tab.has_original and not busy, (-1, 0)
+        "Revert to original",
+        tab.has_original and not busy,
+        (-1, 0),
+        reason=why
+        if busy
+        else "There is no original kept for this reference: it has never been edited.",
     ):
         inker_mode.revert(ctx, tab)
 
@@ -120,10 +142,14 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
         _open_filter(ctx, tab)
 
     imgui.dummy((0, 6))
-    if widgets.disabled_button("Undo", doc.history.can_undo):
+    if widgets.disabled_button(
+        "Undo", doc.history.can_undo, reason="Nothing to undo yet."
+    ):
         doc.undo()
     imgui.same_line()
-    if widgets.disabled_button("Redo", doc.history.can_redo):
+    if widgets.disabled_button(
+        "Redo", doc.history.can_redo, reason="Nothing to redo: this is the newest step."
+    ):
         doc.redo()
     imgui.same_line()
     widgets.muted(f"{len(doc.history)} step(s)")

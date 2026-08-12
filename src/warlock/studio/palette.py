@@ -170,6 +170,109 @@ def _selected(ctx: Any) -> Any:
     return ctx.cache.get(ctx.state.selected)
 
 
+# --- the document modes, as one table ----------------------------------------
+#
+# Save, Save as, Export and Undo/Redo are four commands whose whole content is
+# "whichever document mode is in front". Written out per mode they would be
+# sixteen commands, four of which would be forgotten the next time a mode is
+# added; written as a dispatch they are four, and the dispatch is one line per
+# mode.
+#
+# The entry points are the modes' *own*: ``inker_mode.save`` and the rest are
+# what the bridge buttons and the Ctrl+S handlers already call, so the palette
+# cannot drift into a second way of saving. Undo goes to the document's own
+# ``undo()``, which is uid-addressed inside -- the palette never touches a
+# history directly.
+_DOC_MODES: dict[str, tuple[str, str]] = {
+    # mode -> (module name, export command label)
+    "inker": ("inker_mode", "Export PNG"),
+    "clay": ("clay_mode", "Export to the library"),
+    "plotter": ("plotter_mode", "Export .tmx"),
+    "packwright": ("packwright_mode", "Export atlas + JSON"),
+}
+
+_DOC_WHY = "Open a drawing, model, map or atlas first."
+
+
+def _doc_mode(ctx: Any):
+    """``(module, tab)`` for the document mode in front, or ``(None, None)``."""
+    from importlib import import_module
+
+    entry = _DOC_MODES.get(ctx.state.mode)
+    if entry is None:
+        return None, None
+    module = import_module(f".{entry[0]}", __package__)
+    return module, module.active(ctx)
+
+
+def _has_doc(ctx: Any) -> bool:
+    _module, tab = _doc_mode(ctx)
+    return tab is not None
+
+
+def _doc_save(ctx: Any) -> None:
+    module, tab = _doc_mode(ctx)
+    if tab is not None:
+        module.save(ctx, tab)
+
+
+def _doc_save_as(ctx: Any) -> None:
+    module, tab = _doc_mode(ctx)
+    if tab is not None:
+        module.save_as(ctx, tab)
+
+
+def _doc_export(ctx: Any) -> None:
+    module, tab = _doc_mode(ctx)
+    if tab is None:
+        return
+    # Each mode's *primary* export, which is the one its bridge puts first and
+    # the one Ctrl+E is bound to. The others stay panel-only: a palette listing
+    # four exports per mode is a list nobody reads.
+    if ctx.state.mode == "inker":
+        module.export_png(ctx, tab)
+    elif ctx.state.mode == "clay":
+        module.export_asset(ctx, tab)
+    elif ctx.state.mode == "plotter":
+        module.export_map(ctx, "tmx", tab)
+    else:
+        module.export_files(ctx, tab)
+
+
+def _doc_export_label(ctx: Any) -> str:
+    entry = _DOC_MODES.get(ctx.state.mode)
+    return entry[1] if entry else "Export"
+
+
+def _doc_history(ctx: Any):
+    """The active document's undo stack, or None."""
+    _module, tab = _doc_mode(ctx)
+    doc = getattr(tab, "doc", None)
+    return getattr(doc, "history", None)
+
+
+def _can_undo(ctx: Any) -> bool:
+    history = _doc_history(ctx)
+    return bool(history is not None and history.can_undo)
+
+
+def _can_redo(ctx: Any) -> bool:
+    history = _doc_history(ctx)
+    return bool(history is not None and history.can_redo)
+
+
+def _doc_undo(ctx: Any) -> None:
+    _module, tab = _doc_mode(ctx)
+    if tab is not None and getattr(tab, "doc", None) is not None:
+        tab.doc.undo()
+
+
+def _doc_redo(ctx: Any) -> None:
+    _module, tab = _doc_mode(ctx)
+    if tab is not None and getattr(tab, "doc", None) is not None:
+        tab.doc.redo()
+
+
 def _mode_commands() -> list[Command]:
     """One per switch segment, in the switch's order.
 
@@ -258,6 +361,50 @@ def commands(ctx: Any) -> list[Command]:
     def fps(ctx: Any) -> None:
         ctx.state.show_fps = not ctx.state.show_fps
 
+    def new_map(ctx: Any) -> None:
+        from . import plotter_mode
+
+        plotter_mode.new_document(ctx)
+
+    def quit_app(ctx: Any) -> None:
+        # Through the app's own guard, never straight to the exit: it is the
+        # chain that asks about unsaved pixels, geometry and a pose in turn,
+        # and a palette entry that bypassed it would be the one way out of the
+        # app that loses work.
+        ask = getattr(ctx, "ask_quit", None)
+        if ask is not None:
+            ask()
+
+    def open_log(ctx: Any) -> None:
+        ctx.open_log()
+
+    def show_trash(ctx: Any) -> None:
+        ctx.state.filters.trash = not ctx.state.filters.trash
+        state.set_mode(ctx.state, "library")
+
+    def empty_trash(ctx: Any) -> None:
+        from ..service import jobs as svc_jobs
+        from . import dialogs
+
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Empty the trash?",
+                message="Every trashed asset and everything derived from it is "
+                "removed from disk. This cannot be undone.",
+                confirm_label="Empty",
+                cancel_label="Cancel",
+                on_confirm=lambda: ctx.submit("empty-trash", svc_jobs.empty_trash, ctx.svc),
+            )
+        )
+
+    def shortcuts(ctx: Any) -> None:
+        # A flag rather than a call, because a palette command cannot open an
+        # imgui popup: the palette's own window is closing on this frame, and
+        # ``open_popup`` names a popup registered inside whatever window is
+        # current. The draw site consumes it, which is also what lets Ctrl+/
+        # and this command be the same door.
+        ctx.state.shortcuts_requested = True
+
     return [
         *_mode_commands(),
         Command(
@@ -272,6 +419,10 @@ def commands(ctx: Any) -> list[Command]:
         Command(key="new-drawing", label="New drawing", group="Actions", run=new_drawing),
         Command(key="new-clay", label="New Clay document", group="Actions", run=new_clay),
         Command(key="new-atlas", label="New atlas", group="Actions", run=new_atlas),
+        # The fourth of the four, missing since Plotter shipped: three of the
+        # document modes could be started from here and the map editor could
+        # not, which reads as Plotter not having a New at all.
+        Command(key="new-map", label="New map", group="Actions", run=new_map),
         Command(
             key="reroll",
             label="Reroll the selected asset",
@@ -322,6 +473,78 @@ def commands(ctx: Any) -> list[Command]:
             run=fps,
             hint="F10",
         ),
+        # --- the document commands, whichever document mode is in front -----
+        Command(
+            key="save",
+            label="Save",
+            group="Document",
+            run=_doc_save,
+            hint="Ctrl+S",
+            enabled=_has_doc,
+            why=_DOC_WHY,
+        ),
+        Command(
+            key="save-as",
+            label="Save as...",
+            group="Document",
+            run=_doc_save_as,
+            hint="Ctrl+Shift+S",
+            enabled=_has_doc,
+            why=_DOC_WHY,
+        ),
+        Command(
+            key="export",
+            # Labelled for the mode it will act on, because "Export" alone in a
+            # searchable list is a command whose result the user cannot predict.
+            label=_doc_export_label(ctx),
+            group="Document",
+            run=_doc_export,
+            hint="Ctrl+E",
+            enabled=_has_doc,
+            why=_DOC_WHY,
+        ),
+        Command(
+            key="undo",
+            label="Undo",
+            group="Document",
+            run=_doc_undo,
+            hint="Ctrl+Z",
+            enabled=_can_undo,
+            why="Nothing to undo in the document in front.",
+        ),
+        Command(
+            key="redo",
+            label="Redo",
+            group="Document",
+            run=_doc_redo,
+            hint="Ctrl+Shift+Z",
+            enabled=_can_redo,
+            why="Nothing to redo: this is the newest step.",
+        ),
+        # --- the application commands ---------------------------------------
+        Command(
+            key="shortcuts",
+            label="Keyboard shortcuts",
+            group="Application",
+            run=shortcuts,
+            hint="Ctrl+/",
+        ),
+        Command(
+            key="show-trash",
+            label="Show the trash",
+            group="Application",
+            run=show_trash,
+        ),
+        Command(
+            key="empty-trash",
+            label="Empty the trash...",
+            group="Application",
+            run=empty_trash,
+            enabled=lambda ctx: any(job.get("deleted_at") for job in ctx.cache.jobs),
+            why="The trash is empty.",
+        ),
+        Command(key="open-log", label="Open the log", group="Application", run=open_log),
+        Command(key="quit", label="Quit", group="Application", run=quit_app),
     ]
 
 

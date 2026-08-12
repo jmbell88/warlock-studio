@@ -363,7 +363,9 @@ def quality_badge(job: dict[str, Any], *, inline: bool = False) -> None:
         # A high reading is still real evidence of a hole, so the escalation
         # stays. What is gone is the claim in the other direction: below the
         # threshold the badge is muted, which says "nothing seen through" and
-        # not "good". See TODO.md §2 and judge.py's module docstring.
+        # not "good". ``hole_worst`` is corpus-dependent and is never a quality
+        # scale -- see ``docs/measurements/2026-08-09-rebaseline.md`` and
+        # ``judge.py``'s module docstring.
         colour = (
             theme.MUTED
             if ratio < AUDIT_UNINFORMATIVE
@@ -951,6 +953,31 @@ def ring(low: Any, high: Any, colour: int, alpha: float, thick: float = 2.0) -> 
         sp(4),
         thickness=sp(thick),
     )
+
+
+class Problem(str):
+    """A validation message that knows which control it is about.
+
+    A ``str`` subclass, deliberately: the aggregate block above Generate does
+    ``imgui.text_wrapped(problem)`` and the tests compare against plain
+    strings, and both keep working unchanged. What it adds is the half that was
+    missing when the *keyboard* door refused a submit -- Ctrl+Enter and the
+    command palette both call ``generate``/``promote`` directly, where the only
+    feedback was the block of red text in a pane the user may not be looking
+    at, so a refused Ctrl+Enter did nothing observable at all.
+
+    ``field`` is empty for a problem that names no single control ("Choose a
+    reference first" is about the library, not about a widget in the form), and
+    :meth:`state.note_field_error` already treats that as "keep going to the
+    toast".
+    """
+
+    __slots__ = ("field",)
+
+    def __new__(cls, text: str, field: str = "") -> Problem:
+        self = super().__new__(cls, text)
+        self.field = field
+        return self
 
 
 def field_error(state: Any, field: str) -> bool:

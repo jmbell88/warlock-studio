@@ -950,9 +950,17 @@ def _quality(ctx: Any, job: Any) -> None:
         widgets.muted(f"visible openings: {ratio * 100:.1f}%")
         # P120, and only where the number actually misleads. A *high* reading
         # is real evidence of a hole and needs no caveat; a low one is what a
-        # solid slab measures, which is the dominant failure mode -- over the
-        # reviewed corpus AUC(worst -> reject) is 0.115, backwards rather than
-        # merely weak, and 48 of 81 rejected meshes measured exactly 0.0.
+        # solid slab measures, which is the dominant failure mode.
+        #
+        # ``hole_worst`` is **corpus-dependent and is not a quality scale** --
+        # the invariant, not a fact about one number. It read AUC 0.115 against
+        # reject over the 2026-08-07 rogue corpus (backwards rather than merely
+        # weak; 48 of 81 rejected meshes measured exactly 0.0), and it
+        # re-baselined to 0.756 once the matte was fixed -- see
+        # ``docs/measurements/2026-08-09-rebaseline.md``, whose "`hole_worst`
+        # is no longer inverted, and the matte is why" section is the authority.
+        # The caveat below stays through both readings, because what it warns
+        # about is reading *any* single figure as a grade.
         #
         # A second muted line rather than a tooltip on the first: this function
         # is called with ``widgets.muted`` stubbed and no imgui frame at all

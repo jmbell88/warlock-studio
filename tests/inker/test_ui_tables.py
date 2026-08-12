@@ -15,12 +15,88 @@ from types import SimpleNamespace
 
 import pytest
 
+from warlock.studio import inker_state
 from warlock.studio.inker import animation, brush, selection, transform
 from warlock.studio.panes import inker_canvas, inker_timeline, inker_tools
 
 
 def test_the_symmetry_combo_offers_every_mode_the_brush_implements():
     assert tuple(key for key, _label in inker_tools.SYMMETRY_LABELS) == brush.SYMMETRY
+
+
+class _Lines:
+    """A draw list that only takes notes. ``to_screen`` at identity view and
+    zero origin makes a screen coordinate the image coordinate, so the numbers
+    recorded here are the ones ``_mirror`` reflects about."""
+
+    def __init__(self) -> None:
+        self.lines: list[tuple] = []
+        self.circles: list[tuple] = []
+
+    def add_line(self, a, b, colour) -> None:
+        self.lines.append((a, b))
+
+    def add_circle(self, centre, radius, colour) -> None:
+        self.circles.append((centre, radius))
+
+
+@pytest.fixture
+def guide(monkeypatch):
+    """``_symmetry`` with its one imgui call stubbed. ``_u32`` reaches into a
+    live context and takes the process down without one, which is the whole
+    reason this pane's drawing was untested."""
+    monkeypatch.setattr(inker_canvas, "_u32", lambda colour, alpha=1.0: 0)
+
+    def draw_guide(symmetry, size, axis=None, ways=6):
+        state = SimpleNamespace(symmetry=symmetry, symmetry_axis=axis, radial_count=ways)
+        draw = _Lines()
+        # Identity view at a zero origin, so a screen coordinate *is* the image
+        # coordinate and the recorded numbers can be compared with ``_mirror``.
+        view = inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0))
+        inker_canvas._symmetry(state, draw, view, (0.0, 0.0), size)
+        return draw
+
+    return draw_guide
+
+
+@pytest.mark.parametrize("size", [(16, 9), (33, 33), (64, 48)])
+def test_the_symmetry_guide_is_drawn_where_the_engine_reflects(guide, size):
+    """The guide used to draw at ``width / 2`` while ``brush._mirror``
+    reflected about ``(width - 1) / 2`` -- half a pixel out on every canvas, and
+    a whole one on an odd-sized canvas. Both now read
+    ``brush.axis_or_default``, so this compares the line the user sees against
+    the reflection the brush actually performs rather than against a formula.
+    """
+    ax, ay = brush.axis_or_default(size, None)
+    vertical, horizontal = guide("xy", size).lines
+    assert vertical[0][0] == vertical[1][0] == ax
+    assert horizontal[0][1] == horizontal[1][1] == ay
+    # And it is the *reflection* line, not merely a number that matches: a dab
+    # at x = 0 comes back at the far column, and the guide sits between them.
+    _origin, reflected = brush._mirror((0.0, 0.0), size, "x")
+    assert (0.0 + reflected[0]) / 2.0 == ax
+
+
+def test_a_moved_symmetry_axis_moves_its_guide(guide):
+    """The bug this pair exists for: ``_mirror`` honoured ``symmetry_axis`` and
+    the guide ignored it, so a moved axis left the line pointing at the middle
+    of the page while the strokes came out somewhere else."""
+    size = (64, 64)
+    vertical, horizontal = guide("xy", size, axis=(10.0, 48.0)).lines
+    assert vertical[0][0] == vertical[1][0] == 10.0
+    assert horizontal[0][1] == horizontal[1][1] == 48.0
+    assert brush._mirror((2.0, 5.0), size, "xy", axis=(10.0, 48.0))[1][0] == 18.0
+
+
+def test_radial_symmetry_shows_its_pivot_rather_than_nothing(guide):
+    """A rotation has no mirror line to draw, so the guide is the point it turns
+    about. Before this, selecting radial drew no guide at all -- the one mode
+    where the axis matters most and the only one that showed nothing."""
+    draw = guide("radial", (64, 64), axis=(20.0, 30.0))
+    assert draw.circles and draw.circles[0][0] == (20.0, 30.0)
+    # A crosshair through the ring, so the pivot reads as a point and not as a
+    # small selection.
+    assert len(draw.lines) == 2
 
 
 def test_the_nib_combo_offers_every_nib_the_brush_implements():

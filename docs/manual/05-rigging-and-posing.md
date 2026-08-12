@@ -148,7 +148,17 @@ bare skeleton, built by the same Blender code path as a real rig and exactly one
 tall, so what you pose is precisely what every bake will see.
 
 Posing works the way the inspector's pose editor does: click a joint, drag the gizmo, **Reset
-joint** / **Reset all** / **Mirror** as usual. Two things are Poser-only:
+joint** / **Reset all** / **Mirror** as usual.
+
+`Ctrl+Z` undoes and `Ctrl+Y` (or `Ctrl+Shift+Z`) redoes, in both places, because both are the same
+editor. The unit is the *gesture*: one whole gizmo drag is one step however many frames it took,
+and so is a preset, a mirror, a reset and a joint move. A drag that ends where it started records
+nothing, and undoing back to the point you last saved from leaves the session clean rather than
+still asking about unsaved changes. The history belongs to the editing session and is dropped when
+you leave it or load a different skeleton — a step holds rotations by bone name, and replaying one
+onto a different armature would find whichever bones happened to share a name.
+
+Two things are Poser-only:
 
 - **Move root.** Select the root joint and tick **Move root** to swap its gizmo for translation
   arrows. Dragging them offsets the whole pose — a crouch that actually lowers, a leap that leaves

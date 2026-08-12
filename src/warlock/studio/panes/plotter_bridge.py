@@ -43,11 +43,18 @@ def draw(ctx: Any) -> None:
         return
 
     ready = not tab.busy
+    # ``packwright_bridge``'s two hoisted sentences, for the same reason: the
+    # five buttons below share two gates, and five spellings of one state is
+    # five problems for the user to look for.
+    busy_why = "This map is being written; the buttons come back when it lands."
+    tileset_why = "This map has no tileset yet, so there is nothing to write."
     imgui.dummy((0, 4))
-    if widgets.disabled_button(f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0)):
+    if widgets.disabled_button(
+        f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why
+    ):
         plotter_mode.save(ctx, tab)
     imgui.same_line()
-    if widgets.disabled_button("Save as...", ready, (width, 0)):
+    if widgets.disabled_button("Save as...", ready, (width, 0), reason=busy_why):
         plotter_mode.save_as(ctx, tab)
     if tab.path is not None:
         widgets.muted(str(tab.path))
@@ -57,9 +64,19 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     widgets.section("tiled")
     has_tilesets = bool(tab.doc.tilesets)
-    if widgets.disabled_button("Export .tmx (Ctrl+Shift+E)", ready and has_tilesets, (-1, 0)):
+    if widgets.disabled_button(
+        "Export .tmx (Ctrl+Shift+E)",
+        ready and has_tilesets,
+        (-1, 0),
+        reason=busy_why if not ready else tileset_why,
+    ):
         plotter_mode.export_map(ctx, "tmx", tab)
-    if widgets.disabled_button("Export .tmj", ready and has_tilesets, (-1, 0)):
+    if widgets.disabled_button(
+        "Export .tmj",
+        ready and has_tilesets,
+        (-1, 0),
+        reason=busy_why if not ready else tileset_why,
+    ):
         plotter_mode.export_map(ctx, "tmj", tab)
     if not has_tilesets:
         widgets.muted_wrapped("A Tiled map needs at least one tileset.")
@@ -72,7 +89,10 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     widgets.section("library")
     if widgets.disabled_button(
-        f"{icons.UPLOAD} Export to the library (Ctrl+E)", ready and has_tilesets, (-1, 0)
+        f"{icons.UPLOAD} Export to the library (Ctrl+E)",
+        ready and has_tilesets,
+        (-1, 0),
+        reason=busy_why if not ready else tileset_why,
     ):
         plotter_mode.export_library(ctx, tab)
     widgets.muted_wrapped(

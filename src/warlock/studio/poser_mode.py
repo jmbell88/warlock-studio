@@ -471,17 +471,24 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
 def handle_key(ctx: Any, event: Any) -> bool:
     """Poser's shortcuts. -> whether the key was consumed.
 
-    Esc deselects the joint, nothing else is bound -- the mode is
-    mouse-shaped, and the shortcuts popup deliberately has no Poser section.
-    The caller returns unconditionally either way, the workspace-mode rule.
+    Esc deselects the joint and Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y walk the pose
+    history; nothing else is bound -- the mode is otherwise mouse-shaped. The
+    caller returns unconditionally either way, the workspace-mode rule.
+
+    The undo binding is shared with the inspector's asset pose mode through
+    ``docmodes.pose_undo_key``, because it is one editor with two doors.
     """
     import pygame
+
+    from . import docmodes
 
     if event.type != pygame.KEYDOWN:
         return False
     viewer = viewer_of(ctx)
     if viewer is None or not viewer.pose_mode:
         return False
+    if docmodes.pose_undo_key(viewer, event):
+        return True
     if event.key == pygame.K_ESCAPE and viewer.editor.selected is not None:
         viewer.editor.selected = None
         return True

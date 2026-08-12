@@ -314,7 +314,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
         "painted at -- a soft edge becomes a soft selection."
     )
 
-    imgui.set_next_item_width(-80)
+    imgui.set_next_item_width(-sp(80))
     changed, value = imgui.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
     if changed:
         state.feather_radius = value
@@ -325,7 +325,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
     # Whole pixels, and its own control: feather softens an edge where these
     # *move* it, and one slider serving both would have to pick a unit that is
     # wrong for one of them.
-    imgui.set_next_item_width(-80)
+    imgui.set_next_item_width(-sp(80))
     changed, steps = imgui.slider_int("##selgrow", int(state.select_steps), 1, 32, "%d px")
     if changed:
         state.select_steps = int(steps)
@@ -366,7 +366,7 @@ def _canvas_options(state: Any) -> None:
         state.grid = value
     if state.grid:
         imgui.same_line()
-        imgui.set_next_item_width(80)
+        imgui.set_next_item_width(sp(80))
         changed, size = imgui.input_int("##gridsize", state.grid_size, 0)
         if changed:
             state.grid_size = max(2, min(512, size))

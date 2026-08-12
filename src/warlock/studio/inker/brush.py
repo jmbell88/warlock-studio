@@ -149,6 +149,23 @@ def default_axis(size: tuple[int, int]) -> tuple[float, float]:
     return ((size[0] - 1) / 2.0, (size[1] - 1) / 2.0)
 
 
+def axis_or_default(
+    size: tuple[int, int], axis: tuple[float, float] | None
+) -> tuple[float, float]:
+    """Where the mirrors reflect and a radial symmetry turns, resolved.
+
+    One spelling of ``axis if axis is not None else default_axis(size)``,
+    exported because the *guide* has to agree with the engine and there was a
+    stretch where it did not: :func:`_mirror` honoured a moved axis and used
+    ``(width - 1) / 2`` for the default, while the canvas drew its line at
+    ``width / 2`` unconditionally. Half a pixel of that is invisible; ignoring a
+    moved axis is a guide pointing at the wrong place, and radial had no guide
+    at all. Two readers of one answer, in the imgui-free half of the tree so the
+    pane can import it.
+    """
+    return default_axis(size) if axis is None else axis
+
+
 def _mirror(
     point: tuple[float, float],
     size: tuple[int, int],
@@ -165,7 +182,7 @@ def _mirror(
     two agree exactly at the centre, and only the first generalises.
     """
     x, y = point
-    ax, ay = default_axis(size) if axis is None else axis
+    ax, ay = axis_or_default(size, axis)
     points = [(x, y)]
     if symmetry == "radial":
         # Whole turns of 2pi/n about the axis. The point itself is the n = 0

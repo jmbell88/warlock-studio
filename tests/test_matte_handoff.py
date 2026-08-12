@@ -29,6 +29,7 @@ class _Ctx:
         self.submitted: list = []
         self.cache = SimpleNamespace(get=lambda _id: None, invalidate=lambda: None)
         self.textures = None
+        self.toasts: list = []
 
     def submit(self, key, fn, *args, **kwargs):
         self.submitted.append((key, fn, args, kwargs))
@@ -36,6 +37,11 @@ class _Ctx:
 
     def busy(self, key):
         return any(k == key for k, *_ in self.submitted)
+
+    def toast(self, message, level="info", **extra):
+        # ``promote`` says why it refused now, rather than returning in
+        # silence, so the frame-thread half needs somewhere to say it.
+        self.toasts.append((message, level))
 
 
 class _MissingDir:

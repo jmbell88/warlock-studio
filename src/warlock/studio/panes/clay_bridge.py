@@ -98,6 +98,15 @@ def _outputs(ctx: Any, tab: Any) -> None:
     widgets.field_label("send")
     doc = tab.doc
     ready = any(obj.visible for obj in doc.objects) and not tab.saving
+    # One sentence for both buttons below, because they are refused for the
+    # same two reasons and a user reading two different explanations of one
+    # state would look for two different problems. The ``_VIEWPORT_WHY``
+    # pattern: a shared gate gets a shared sentence, hoisted to a local.
+    why = (
+        "Saving..."
+        if tab.saving
+        else "Nothing visible to send -- every object is hidden."
+    )
 
     if widgets.primary_button(f"{icons.DOWNLOAD} Export to library", enabled=ready):
         clay_mode.export_asset(ctx, tab)
@@ -108,7 +117,7 @@ def _outputs(ctx: Any, tab: Any) -> None:
             "of those are functions of model.glb."
         )
 
-    if widgets.disabled_button(f"{icons.SEND} Send to 3D", ready):
+    if widgets.disabled_button(f"{icons.SEND} Send to 3D", ready, reason=why):
         # The App owns the offscreen render: the picture has to be drawn on
         # the frame thread because it needs the GL context, and the bridge is
         # not where that belongs.

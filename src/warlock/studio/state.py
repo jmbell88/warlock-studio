@@ -732,6 +732,13 @@ class AppState:
     focus_key: dict[str, str] = field(default_factory=dict)
     focus_order: dict[str, list[str]] = field(default_factory=dict)
     focus_moved: bool = False
+    # One-shot: "somebody asked for the shortcuts list this frame". A flag
+    # rather than a call because ``imgui.open_popup`` names a popup registered
+    # inside the *current* window, so neither the Ctrl+/ handler nor the
+    # palette's command can open it directly -- the header consumes this where
+    # the popup actually lives. Cleared on read, so a request that arrives
+    # while the header is not drawn is dropped rather than firing later.
+    shortcuts_requested: bool = False
     # Whether the crash-recovery offer has been made this session. One-shot:
     # the autosave directory is *also* where this session's own copies land, so
     # asking again later would offer the user their own open documents back.

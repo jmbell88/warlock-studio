@@ -141,7 +141,7 @@ def _draw_toc(ms: Any) -> None:
         widgets.empty_state(
             icons.SEARCH,
             "No chapter matches.",
-            "Titles and headings are searched, not the body text.",
+            "Titles, headings, body text, tables and commands are all searched.",
         )
 
 
@@ -177,14 +177,36 @@ def _warm_blocks() -> None:
             warmed += 1
 
 
+def _block_text(block: parser.Block) -> str:
+    """Everything readable in one block, as a flat string.
+
+    Every block type, because the search used to see only headings and a
+    manual searched by heading is a manual searched by its table of contents:
+    "gltfpack", "prompt_hash" and "WARLOCK_VRAM_BUDGET" are each named in one
+    paragraph and in no heading anywhere, so the three things a reader is most
+    likely to arrive with found nothing.
+
+    Code blocks are included deliberately. A command line is exactly the kind
+    of string somebody pastes into a search box, and it is the one kind that
+    never appears in prose.
+    """
+    if isinstance(block, parser.Heading | parser.CodeBlock):
+        return block.text
+    if isinstance(block, parser.Paragraph | parser.ListItem):
+        return " ".join(span.text for span in block.spans)
+    if isinstance(block, parser.Table):
+        cells = [*block.header, *(cell for row in block.rows for cell in row)]
+        return " ".join(span.text for cell in cells for span in cell)
+    return ""
+
+
 def _matches(chapter: loader.Chapter, needle: str) -> bool:
     if needle in chapter.title.lower():
         return True
-    return any(
-        needle in b.text.lower()
-        for b in _blocks(chapter.key)
-        if isinstance(b, parser.Heading)
-    )
+    # The blocks are already cached and warmed a few chapters per frame, so
+    # widening this from headings to every block costs one more pass over
+    # structures that are in memory either way.
+    return any(needle in _block_text(b).lower() for b in _blocks(chapter.key))
 
 
 def _draw_chapter(ctx: Any, ms: Any) -> None:

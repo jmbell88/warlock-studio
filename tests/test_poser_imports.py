@@ -51,6 +51,13 @@ OUTWARD_IMPORTS = {
     "studio/viewer/pose.py": {
         "warlock.poselib",
         "warlock.rigging",
+        # The shared undo engine, which is stdlib-only and has no opinion about
+        # what an edit edits -- Clay borrows it for the same reason. Adding it
+        # keeps the pose stack in the editor, where both entry points into pose
+        # editing can reach one history, rather than in a pane that owns it
+        # twice. It brings nothing imgui-shaped with it, which the headless
+        # import assertion below is what actually guarantees.
+        "warlock.studio.undo",
         "warlock.studio.viewer.gltf",
         "warlock.studio.viewer.math3d",
     },

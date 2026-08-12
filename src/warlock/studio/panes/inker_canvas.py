@@ -454,6 +454,10 @@ def _snapped(state: Any, point: tuple[float, float]) -> tuple[float, float]:
 HANDLE = 5.0
 # How far above the box the rotate handle floats.
 ROTATE_ARM = 28.0
+# The radial symmetry pivot's crosshair, in screen pixels before ``sp``. A
+# mirror shows as a line across the page; a rotation has no line to draw, only
+# the point it turns about, so the guide is a small ring rather than nothing.
+SYMMETRY_PIVOT_RADIUS = 7.0
 
 
 def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
@@ -957,19 +961,43 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
 
 
 def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
+    """The guide, drawn where the engine actually reflects.
+
+    It used to draw at ``width / 2`` and ``height / 2`` unconditionally, which
+    was wrong twice over: ``brush._mirror`` reflects about ``(width - 1) / 2``
+    by default, and it honours ``state.symmetry_axis`` when the user has moved
+    it -- so a moved axis left the line pointing at the middle of the page while
+    the strokes came out somewhere else. ``brush.axis_or_default`` is now the
+    one answer both read. Radial had no guide at all and now gets the pivot,
+    which is the only thing there is to show for it: its reflections are turns
+    rather than lines.
+    """
+    from ..inker import brush
+
     width, height = size
     colour = _u32(theme.ACCENT, 0.6)
+    ax, ay = brush.axis_or_default((int(width), int(height)), state.symmetry_axis)
     # Both endpoints through ``to_screen``, for ``_grid``'s reason: the axis a
     # mirror line lands on swaps with the page, so borrowing one coordinate
     # from a corner would draw it across the canvas the wrong way.
     if state.symmetry in ("x", "xy"):
-        a = inker_state.to_screen(view, origin, width / 2, 0)
-        b = inker_state.to_screen(view, origin, width / 2, height)
+        a = inker_state.to_screen(view, origin, ax, 0)
+        b = inker_state.to_screen(view, origin, ax, height)
         draw_list.add_line(a, b, colour)
     if state.symmetry in ("y", "xy"):
-        a = inker_state.to_screen(view, origin, 0, height / 2)
-        b = inker_state.to_screen(view, origin, width, height / 2)
+        a = inker_state.to_screen(view, origin, 0, ay)
+        b = inker_state.to_screen(view, origin, width, ay)
         draw_list.add_line(a, b, colour)
+    if state.symmetry == "radial":
+        centre = inker_state.to_screen(view, origin, ax, ay)
+        radius = sp(SYMMETRY_PIVOT_RADIUS)
+        draw_list.add_circle(centre, radius, colour)
+        draw_list.add_line(
+            (centre[0] - radius, centre[1]), (centre[0] + radius, centre[1]), colour
+        )
+        draw_list.add_line(
+            (centre[0], centre[1] - radius), (centre[0], centre[1] + radius), colour
+        )
 
 
 def _contours(ctx: Any, tab: Any):

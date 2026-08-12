@@ -15,16 +15,100 @@ looks plausible in a still.
 
 from __future__ import annotations
 
+import contextlib
+import functools
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from ... import poselib, rigging
+from ..undo import Edit, UndoStack
 from . import math3d as m3
 from .gltf import Model
 
 # Re-exported so nothing downstream is tempted to write the sign flip out again.
 mirror_quaternion = rigging.mirror_quaternion
+
+
+@dataclass
+class PoseSnapshotEdit(Edit):
+    """One reversible pose step, as a pair of whole-editor snapshots.
+
+    Whole snapshots rather than a diff, which is the opposite of what the
+    raster editor does and is right for the same reason: a ``PatchEdit`` stores
+    a rectangle because a canvas is megabytes, and a pose is a few dozen
+    quaternions -- under a kilobyte for the canonical armature. A diff would buy
+    nothing and would have to describe six different kinds of change (a
+    rotation, the root translation, a joint drag, the mode, the identity of the
+    pose being edited, the dirty flag) in six ways, any one of which could be
+    forgotten when a seventh is added.
+
+    ``cost`` is measured rather than assumed, so the stack's byte budget is
+    honest about a two-hundred-bone rig.
+    """
+
+    before: dict[str, Any] = field(default_factory=dict)
+    after: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.cost = _snapshot_cost(self.before) + _snapshot_cost(self.after)
+
+    def undo(self, doc: Any) -> None:
+        doc.restore(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc.restore(self.after)
+
+
+def _undoable(method):
+    """Mark a discrete operation as one undo step.
+
+    The decorator rather than a ``with`` inside each body, because the thing
+    being asserted is uniform -- "this whole call is one step" -- and writing
+    it out seven times is seven chances to indent one of them wrong. The
+    gesture-level mutators (``rotate_selected``, ``move_root``,
+    ``move_handle``) are deliberately *not* decorated: each is called once per
+    frame of a drag, and a step per frame is a stack full of one gesture. The
+    pane brackets those with ``record()`` across the whole grab instead.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.record():
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Whether two snapshots describe the same editor state.
+
+    Written out rather than ``a == b`` because the handle maps hold numpy
+    arrays, whose ``==`` is an array and whose truth value raises. Selection is
+    deliberately *not* compared: clicking a different marker changes what the
+    gizmo points at and nothing about the pose, and a stack that recorded it
+    would spend a user's undo presses putting the highlight back.
+    """
+    for key in ("rotations", "moved", "root_translation", "mode", "current", "dirty"):
+        if a.get(key) != b.get(key):
+            return False
+    for key in ("handles", "home"):
+        left, right = a.get(key) or {}, b.get(key) or {}
+        if left.keys() != right.keys():
+            return False
+        if any(not np.array_equal(left[name], right[name]) for name in left):
+            return False
+    return True
+
+
+def _snapshot_cost(snap: dict[str, Any]) -> int:
+    """Bytes, roughly: eight per float, which is what the arrays hold."""
+    rotations = len(snap.get("rotations") or ()) * 4 * 8
+    handles = len(snap.get("handles") or ()) * 3 * 8
+    home = len(snap.get("home") or ()) * 3 * 8
+    moved = len(snap.get("moved") or ()) * 3 * 8
+    return rotations + handles + home + moved + 128
 
 
 class PoseEditor:
@@ -51,6 +135,18 @@ class PoseEditor:
         # ``root_translate`` is whether the gizmo currently translates it.
         self.root: str | None = None
         self.root_translate = False
+        # Undo, per pose *session*. Dropped by ``bind`` and ``clear`` rather
+        # than carried, because adopting a different model rebuilds ``bones``
+        # and ``rest`` -- a surviving step would restore rotations onto a
+        # skeleton that never had them, by name, silently.
+        self.history = UndoStack()
+        # Re-entrancy depth for ``record``; nonzero means a step is open.
+        self._depth = 0
+        # Bumped by every ``_reset_history``. An open ``record`` that spans a
+        # rebind -- a drag live when the model is adopted -- compares this and
+        # declines to push, because its 'before' describes a skeleton that is
+        # no longer here.
+        self._generation = 0
 
     # -- binding -----------------------------------------------------------
 
@@ -69,6 +165,7 @@ class PoseEditor:
         self.root = None
         self.root_translate = False
         self.handles = {b: model.nodes[model.by_name[b]].world[:3, 3].copy() for b in self.bones}
+        self._reset_history()
 
     def clear(self) -> None:
         self.model = None
@@ -83,6 +180,12 @@ class PoseEditor:
         self.mode = "pose"
         self.root = None
         self.root_translate = False
+        self._reset_history()
+
+    def _reset_history(self) -> None:
+        self.history.clear()
+        self._depth = 0
+        self._generation += 1
 
     @property
     def bound(self) -> bool:
@@ -90,6 +193,113 @@ class PoseEditor:
 
     def has_unsaved_edits(self) -> bool:
         return bool(self.dirty or self.moved)
+
+    # -- undo ---------------------------------------------------------------
+    #
+    # The stack lives here rather than in the pane because both entry points
+    # into pose editing -- Poser's authoring session and the inspector's asset
+    # pose mode -- want the same history over the same object, and a pane that
+    # owned it would own it twice. ``studio/undo`` is the shared engine Clay
+    # already borrows; nothing in it is about pixels.
+    #
+    # A *snapshot* is the unit, not a diff. See ``PoseSnapshotEdit``.
+
+    def snapshot(self) -> dict[str, Any]:
+        """Everything an edit can change, as plain data owned by the caller.
+
+        Copies throughout, for ``undo``'s rule that an edit owns its data: the
+        handle arrays are live numpy state, and storing views of them would
+        make an undo restore whatever the value happened to become.
+        """
+        model = self.model
+        return {
+            "rotations": {} if model is None else {
+                bone: [float(v) for v in (m3.quat_identity() if q is None else q)]
+                for bone, q in ((b, model.get_rotation(b)) for b in self.bones)
+            },
+            "root_translation": self.root_translation(),
+            "moved": {name: list(delta) for name, delta in self.moved.items()},
+            "handles": {name: point.copy() for name, point in self.handles.items()},
+            "home": {name: point.copy() for name, point in self.home.items()},
+            "mode": self.mode,
+            "selected": self.selected,
+            "current": self.current,
+            "dirty": self.dirty,
+        }
+
+    def restore(self, snap: dict[str, Any]) -> None:
+        """Put the editor back to a snapshot. The other half of an edit.
+
+        ``dirty`` is restored rather than set, which is the whole reason it is
+        in the snapshot: undoing back to the state a save was taken at has to
+        leave the session clean, or the quit guard asks about work the user
+        already stored.
+        """
+        if self.model is None:
+            return
+        for bone, quat in (snap.get("rotations") or {}).items():
+            if bone in self.model.by_name:
+                self.model.set_rotation(bone, quat)
+        # After the rotations and before ``update_world``: the root's offset is
+        # a node translation, and both feed the same matrix.
+        if self.root is not None:
+            self.set_root_translation(snap.get("root_translation") or [0.0, 0.0, 0.0])
+        self.model.update_world()
+        self.mode = snap.get("mode", "pose")
+        self.moved = {name: list(delta) for name, delta in (snap.get("moved") or {}).items()}
+        self.home = {name: point.copy() for name, point in (snap.get("home") or {}).items()}
+        # Handles last and verbatim, because ``_resync_handles`` deliberately
+        # refuses to touch them in joints mode -- where the marker *is* the edit.
+        self._resync_handles()
+        self.handles = {
+            name: point.copy() for name, point in (snap.get("handles") or {}).items()
+        }
+        self.selected = snap.get("selected")
+        self.current = snap.get("current")
+        self.dirty = bool(snap.get("dirty"))
+
+    @contextlib.contextmanager
+    def record(self):
+        """Bracket one undoable step. Re-entrant; only the outermost pushes.
+
+        Re-entrant because the discrete operations compose -- ``apply_preset``
+        is a ``reset_all`` and an ``apply``, and a user pressing a preset made
+        one edit, not two. A gizmo drag brackets differently: the pane opens
+        this on grab and closes it on release, so the hundreds of intermediate
+        ``rotate_selected`` calls collapse into the single step the gesture was.
+
+        Nothing is pushed when nothing changed, so a click that selects a bone
+        and a drag that ends where it started both leave the stack alone.
+        """
+        if self._depth:
+            self._depth += 1
+            try:
+                yield
+            finally:
+                self._depth -= 1
+            return
+        before = self.snapshot()
+        generation = self._generation
+        self._depth = 1
+        try:
+            yield
+        finally:
+            self._depth = 0
+        if generation != self._generation:
+            # The session was rebound or torn down inside the step. Pushing now
+            # would file a rotation map keyed on the *previous* skeleton's bone
+            # names, which restores silently and wrongly onto whatever shares a
+            # name with it.
+            return
+        after = self.snapshot()
+        if not _same(before, after):
+            self.history.push(PoseSnapshotEdit(before, after))
+
+    def undo(self) -> bool:
+        return self.history.undo(self)
+
+    def redo(self) -> bool:
+        return self.history.redo(self)
 
     # -- rotations ---------------------------------------------------------
 
@@ -113,12 +323,14 @@ class PoseEditor:
         self.current = pose_id
         self.dirty = dirty
 
+    @_undoable
     def apply_preset(self, preset: dict[str, Any]) -> None:
         """A preset lists only the bones it moves, so the rest is reset first
         -- otherwise applying "idle" after "wave" leaves the arm up."""
         self.reset_all(dirty=True)
         self.apply(preset.get("bones", {}), pose_id=None, dirty=True)
 
+    @_undoable
     def reset_bone(self, bone: str | None = None) -> None:
         bone = bone or self.selected
         if self.model is None or bone is None:
@@ -130,6 +342,7 @@ class PoseEditor:
         self._resync_handles()
         self.dirty = True
 
+    @_undoable
     def reset_all(self, *, dirty: bool = True) -> None:
         if self.model is None:
             return
@@ -160,6 +373,7 @@ class PoseEditor:
         self._resync_handles()
         self.dirty = True
 
+    @_undoable
     def mirror(self) -> None:
         """Copy every posed bone onto its mirror partner, reflected."""
         if not self.mirror_pairs:
@@ -261,6 +475,7 @@ class PoseEditor:
 
     # -- joint placement ---------------------------------------------------
 
+    @_undoable
     def enter_joints_mode(self) -> None:
         # A rotation left over from posing would put the markers where the
         # *posed* bones are, and a joint correction is against the rest skeleton.
@@ -270,12 +485,14 @@ class PoseEditor:
         self.selected = None
         self.home = {name: point.copy() for name, point in self.handles.items()}
 
+    @_undoable
     def exit_joints_mode(self) -> None:
         self.mode = "pose"
         self.moved.clear()
         self.selected = None
         self.revert_joints()
 
+    @_undoable
     def revert_joints(self) -> None:
         self.moved.clear()
         for name, point in self.home.items():

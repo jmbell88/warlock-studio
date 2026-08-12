@@ -240,9 +240,9 @@ class ConfirmQueue:
         if self.waiting:
             widgets.muted(f"{self.waiting} more to answer")
         if confirm.body is not None:
-            imgui.dummy((0, 6))
+            imgui.dummy((0, sp(6)))
             confirm.body()
-        imgui.dummy((0, 6))
+        imgui.dummy((0, sp(6)))
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.
         confirmed = widgets.destructive_button(confirm.confirm_label, (sp(BUTTON_W), 0))

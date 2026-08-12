@@ -418,3 +418,110 @@ def test_a_marker_sphere_is_made_of_whole_triangles():
     assert len(verts) % 3 == 0
     radii = np.linalg.norm(verts, axis=1)
     assert radii.max() == pytest.approx(1.0, abs=1e-6)
+
+
+# --- undo (A-2) --------------------------------------------------------------
+#
+# The pose editor was the one authoring surface in the app with no history at
+# all: Inker, Clay, Plotter and Packwright all have an UndoStack, and a pose --
+# the thing most easily destroyed by one careless drag of a gizmo -- had none.
+# What is pinned below is not that undo "works" but the four decisions it
+# turned on, each of which is silently wrong in a plausible-looking way.
+
+
+def _turn(editor, bone, radians=0.3):
+    editor.selected = bone
+    editor.rotate_selected(m3.quat_from_axis_angle(m3.vec3(0, 0, 1), radians))
+
+
+def test_a_gesture_is_one_step_however_many_frames_it_took(editor):
+    """A drag calls ``rotate_selected`` once per motion event. Recording each
+    would make Ctrl+Z walk a rotation back a degree at a time, which is not
+    undo -- it is a slow-motion replay."""
+    with editor.record():
+        for _ in range(20):
+            _turn(editor, "hip", 0.05)
+    assert len(editor.history) == 1
+    assert editor.undo() is True
+    assert editor.pose()["hip"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
+
+
+def test_a_gesture_that_changed_nothing_pushes_nothing(editor):
+    """Grabbing a gizmo and letting go without moving is not an edit, and a
+    stack that recorded it would make the next Ctrl+Z appear to do nothing."""
+    with editor.record():
+        editor.selected = "hip"
+    assert len(editor.history) == 0
+    assert editor.history.can_undo is False
+
+
+def test_undo_restores_dirty_rather_than_setting_it(editor):
+    """The reason ``dirty`` is in the snapshot. Undoing back to the state a
+    save was taken at has to leave the session clean, or the quit guard asks
+    about work the user already stored."""
+    assert editor.dirty is False
+    with editor.record():
+        _turn(editor, "hip")
+    assert editor.dirty is True
+    editor.undo()
+    assert editor.dirty is False
+    assert editor.has_unsaved_edits() is False
+    editor.redo()
+    assert editor.dirty is True
+
+
+def test_a_discrete_operation_is_one_step_even_when_it_is_two(editor):
+    """``apply_preset`` is a ``reset_all`` and an ``apply``. A user who pressed
+    one preset made one edit, which is what ``record``'s re-entrancy is for."""
+    _turn(editor, "hip")
+    before = len(editor.history)
+    editor.apply_preset({"bones": {"upper_arm.L": [0.0, 0.0, 0.3826834, 0.9238795]}})
+    assert len(editor.history) == before + 1
+    editor.undo()
+    assert editor.pose()["upper_arm.L"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
+    assert editor.pose()["hip"] != pytest.approx([0.0, 0.0, 0.0, 1.0])
+
+
+def test_the_history_does_not_survive_a_rebind(editor):
+    """A step holds rotations keyed by bone *name*. Restoring one onto a
+    different skeleton would find the names that happen to match and set them,
+    silently -- which is worse than having no undo."""
+    with editor.record():
+        _turn(editor, "hip")
+    assert editor.history.can_undo is True
+    editor.bind(FakeModel(["hip", "tail"]), ["hip", "tail"])
+    assert editor.history.can_undo is False
+    assert editor.history.can_redo is False
+
+
+def test_a_gesture_spanning_a_rebind_files_nothing(editor):
+    """The generation guard. A drag live when the model is adopted closes
+    against an editor whose ``before`` describes a skeleton that has gone."""
+    with editor.record():
+        _turn(editor, "hip")
+        editor.bind(FakeModel(["hip", "tail"]), ["hip", "tail"])
+    assert len(editor.history) == 0
+
+
+def test_a_joint_drag_undoes_its_marker_and_its_recorded_delta(editor):
+    """Joints mode edits ``moved`` and ``handles`` rather than rotations, and
+    those are what the re-skin is built from -- so an undo that put the
+    rotations back and left the deltas would ship the drag anyway."""
+    editor.enter_joints_mode()
+    with editor.record():
+        editor.move_handle("hip", np.array([1.0, 2.0, 3.0]))
+    assert editor.moved.get("hip")
+    editor.undo()
+    assert editor.moved == {}
+    assert editor.handles["hip"] == pytest.approx(editor.home["hip"])
+
+
+def test_selection_alone_is_not_a_step(editor):
+    """Clicking a different marker changes what the gizmo points at and
+    nothing about the pose. A stack that recorded it would spend the user's
+    undo presses putting the highlight back."""
+    with editor.record():
+        editor.selected = "upper_arm.L"
+    with editor.record():
+        editor.selected = "upper_arm.R"
+    assert len(editor.history) == 0

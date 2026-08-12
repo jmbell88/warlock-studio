@@ -353,6 +353,9 @@ and write. That is the format that keeps your layers, their blend modes and thei
 
 - `Ctrl+S` saves. A document that has never been written anywhere asks where to put it first.
 - `Ctrl+Shift+S` is Save As.
+- `Ctrl+E` adds the drawing to the library as a finished reference, which is what plain `Ctrl+E`
+  does in Clay, Plotter and Packwright too. It does nothing for a document you opened *from* the
+  library — that one is already there, and `Ctrl+S` is the write it wants.
 - `Ctrl+Shift+E` exports a **flattened PNG**. This is an export, not a save: it does not change what
   the tab points at, so the document stays unsaved against its own file.
 

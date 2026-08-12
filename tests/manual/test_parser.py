@@ -94,3 +94,52 @@ def test_error_carries_line_number():
     with pytest.raises(ManualSyntaxError) as err:
         parser.parse("fine\n\n> bad\n")
     assert err.value.line_no == 3
+
+
+# --- the search reads the manual, not its table of contents -------------------
+
+
+def _chapter(key: str = "07-inker", title: str = "Inker"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(key=key, title=title, part="Editors")
+
+
+def test_a_phrase_that_appears_only_in_prose_finds_its_chapter(monkeypatch):
+    """The search used to walk headings only, which makes a manual searchable
+    by its table of contents and no more: "gltfpack", "prompt_hash" and
+    "WARLOCK_VRAM_BUDGET" are each named in a paragraph and in no heading
+    anywhere, so the three strings a reader is most likely to arrive with found
+    nothing at all."""
+    from warlock.studio.manual import render
+
+    blocks = render._blocks("07-inker")
+    monkeypatch.setattr(render, "_blocks", lambda key: blocks)
+    prose = " ".join(render._block_text(b) for b in blocks if not _is_heading(b))
+    word = next(w for w in prose.split() if len(w) > 9 and w.isalpha())
+    headings = " ".join(render._block_text(b) for b in blocks if _is_heading(b))
+    assert word.lower() not in headings.lower(), "pick a word the headings do not carry"
+    assert render._matches(_chapter(), word.lower()) is True
+
+
+def _is_heading(block) -> bool:
+    from warlock.studio.manual import parser
+
+    return isinstance(block, parser.Heading)
+
+
+def test_every_block_type_contributes_its_text():
+    """One function over all five, so a block type added later is searchable by
+    having been added rather than by somebody remembering this file."""
+    from warlock.studio.manual import parser, render
+
+    span = parser.Span(kind="text", text="findable")
+    cases = [
+        parser.Heading(level=2, text="findable", anchor="findable"),
+        parser.CodeBlock(text="findable --flag", lang="text"),
+        parser.Paragraph(spans=(span,)),
+        parser.ListItem(depth=0, ordered=False, marker="-", spans=(span,)),
+        parser.Table(header=((span,),), rows=(((span,),),)),
+    ]
+    for block in cases:
+        assert "findable" in render._block_text(block), type(block).__name__

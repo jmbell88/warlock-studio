@@ -112,6 +112,50 @@ def guard(ctx: Any, attr: str, singular: str, plural: str, verb: str, proceed: A
     return False
 
 
+def pose_undo_key(viewer: Any, event: Any) -> bool:
+    """Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y over a pose editor. -> consumed?
+
+    Here for ``viewer_guard``'s reason: the two entry points into pose editing
+    -- Poser's authoring session and the inspector's asset pose mode -- are
+    different viewers and different keyboard doors, and the binding is the same
+    one over the same ``PoseEditor``. Written twice it would drift, and the
+    half that drifted would be the inspector's, which is the one nobody opens
+    on purpose.
+
+    Both spellings of redo, because both are in the app already: Inker binds
+    Ctrl+Shift+Z and Clay binds Ctrl+Y, and a user who learned either in one
+    mode should not discover the other is the one that works here.
+
+    Returns False for everything else, so the caller falls through to the
+    bindings that were there before -- this is added *in front of* the 2D/3D
+    keyboard, not in place of it.
+    """
+    import pygame
+
+    if event.type != pygame.KEYDOWN or not event.mod & pygame.KMOD_CTRL:
+        return False
+    if viewer is None or not viewer.pose_mode or not viewer.editor.bound:
+        return False
+    editor = viewer.editor
+    if event.key == pygame.K_z and not event.mod & pygame.KMOD_SHIFT:
+        moved = editor.undo()
+    elif event.key == pygame.K_y or (event.key == pygame.K_z and event.mod & pygame.KMOD_SHIFT):
+        moved = editor.redo()
+    else:
+        return False
+    if moved:
+        # Everything a pose change owes the rest of the app: the skinning
+        # palettes hold the old matrices, the dirty indicator is derived, and
+        # the frame is stale. ``_after_pose_change`` is the one call that does
+        # all three, and the gizmo drag already goes through it.
+        after = getattr(viewer, "_after_pose_change", None)
+        if after is not None:
+            after()
+    # Consumed either way. A Ctrl+Z with an empty stack must not fall through
+    # to whatever Z means in the mode underneath.
+    return True
+
+
 def viewer_guard(ctx: Any, viewer: Any, noun: str, verb: str, proceed: Any) -> bool:
     """:func:`guard`'s rule over a pose viewer. -> whether it went ahead now.
 

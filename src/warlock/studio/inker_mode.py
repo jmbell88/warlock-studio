@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -369,7 +370,14 @@ def _load_job(svc: Any, job_id: str, *, matte: bool = False) -> dict[str, Any]:
         # Captured before the cut, and handed back as the tab's saved head: the
         # cutout is an unsaved edit, because nothing has written it to disk.
         out["saved_head"] = doc.history.head
-        _cut_matte(svc, job_id, doc)
+        # Recorded, not merely done. ``_cut_matte`` log-and-swallows, which is
+        # right -- a failed matte must not cost the user the reference they
+        # asked for -- but "Fix matte" is a command whose *whole content* is
+        # the matte, and swallowing it there meant the menu item opened a tab
+        # that looked exactly like the one Edit opens and said nothing. The
+        # completion branch turns the pair into a toast; see ``on_task_done``.
+        out["matte_requested"] = True
+        out["matte_applied"] = _cut_matte(svc, job_id, doc)
     return out
 
 
@@ -463,29 +471,139 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
     unchanged. What differs is only what gets written.
 
     With one addition the other exports do not need: the frames are read off the
-    document **here**, on the frame thread, and only the encode goes to the
-    task. ``_write`` gets away with encoding the live document because the
-    encoders only read; flattening a clip does not, since it fills and evicts
-    the document's frame cache and copies track properties down onto cels --
-    the same structures the onion-skin draw is walking sixty times a second.
-    The cost is a flatten per frame at click time, most of which the playback
-    cache has already paid for.
+    document on the **frame thread**, because ``_write`` gets away with encoding
+    the live document (the encoders only read) and flattening a clip does not --
+    it fills and evicts the document's frame cache and copies track properties
+    down onto cels, the same structures the onion-skin draw is walking sixty
+    times a second.
+
+    That read used to happen inline, in this call. A sixty-frame clip is sixty
+    flattens on the frame the user clicked the button, which is a freeze; and it
+    cannot move to a task thread for the reason above. So it is spread instead:
+    the tab is locked (``saving``, which already refuses every mutation), a
+    stepper is parked on the mode state, and :func:`pump_export` flattens one
+    frame per app frame until the work list is done. Then, and only then, the
+    encode is submitted. This is ``viewer/sheet.StripRender``'s answer to
+    exactly the same problem -- sixteen GPU readbacks in one frame versus
+    sixteen frames of one -- at a different layer.
     """
-    tab = tab or active(ctx)
-    if tab is None or tab.busy or tab.doc.anim is None:
-        return
-    doc = tab.doc
-    doc.commit_floating()
-    suggested = tab.path.stem if tab.path else "untitled"
+    _begin_export(ctx, tab, "sheet")
+
+
+def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """An animated document as a GIF anyone can open.
+
+    ``export_sheet``'s shape exactly, down to sharing its task key -- the two
+    read the same frames off the same document and must not run at once -- and
+    the same frame-spread read, through the same stepper.
+
+    A GIF loops forever rather than honouring a tag's loop flag, and that is the
+    honest reading rather than a shortcut: a tag names a *span* of the timeline
+    and the export is the whole timeline, so there is no one tag whose flag this
+    could be. Exporting a single tag is a different feature and would need to say
+    which one.
+    """
+    _begin_export(ctx, tab, "gif")
+
+
+@dataclass
+class _Export:
+    """One export's frame-by-frame read of the document.
+
+    Lives on ``InkerState`` rather than on the tab because it is not a property
+    of the document -- it is one in-flight operation, and there is one at a time
+    by construction (both exports share a task key, and the tab is locked while
+    it runs).
+    """
+
+    tab: InkerDoc
+    kind: str  # "sheet" | "gif"
+    suggested: str
+    uids: list[str]
+    frames: list[Any] = field(default_factory=list)
+
+    @property
+    def done(self) -> bool:
+        return len(self.frames) >= len(self.uids)
+
+    @property
+    def total(self) -> int:
+        return len(self.uids)
+
+
+def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
+    """Lock the tab and park the stepper. The click-frame half of an export."""
     from .inker import sheetout
 
-    frames, durations, tags, layout = sheetout.snapshot(doc)
-    if layout is not None and len(frames) != layout.frame_count:
-        # Refused here, on the frame thread, before the file dialog: the engine
-        # raises the same ValueError as a backstop, but by then the user has
-        # picked a filename and the failure arrives as a task error with no
-        # obvious cause. A frame added to (or removed from) a sprite sheet is an
+    tab = tab or active(ctx)
+    state = ctx.state.inker
+    if tab is None or tab.busy or tab.doc.anim is None or state is None:
+        return
+    if state.export is not None:
+        return
+    tab.doc.commit_floating()
+    try:
+        uids = sheetout.frame_uids(tab.doc)
+    except ValueError as exc:
+        ctx.toast(f"Cannot export: {exc}.", "warn")
+        return
+    # Locked before the first flatten, not at submit time: the whole point of
+    # spreading the read is that frames go by between here and the encode, and
+    # an edit landing in one of them would put half of two documents in the
+    # sheet. ``saving`` is the flag ``busy`` already refuses mutation on.
+    tab.saving = True
+    state.export = _Export(
+        tab=tab, kind=kind, suggested=tab.path.stem if tab.path else "untitled", uids=uids
+    )
+
+
+def pump_export(ctx: Any) -> None:
+    """One frame of an in-flight export's read. Called once a frame by the app.
+
+    Beside ``pump_autosave`` and in every mode for the same reason: a user who
+    started an export and switched to the library must still get their file.
+    """
+    state = getattr(ctx.state, "inker", None)
+    export = None if state is None else state.export
+    if export is None:
+        return
+    from .inker import sheetout
+
+    tab = export.tab
+    if tab not in state.docs or tab.doc.anim is None:
+        # The tab was closed under the export. Nothing has been written and the
+        # lock goes with the tab, so there is nothing to undo.
+        state.export = None
+        return
+    try:
+        export.frames.append(
+            sheetout.flatten_one(tab.doc, export.uids[len(export.frames)])
+        )
+    except (ValueError, IndexError, KeyError):
+        state.export = None
+        tab.saving = False
+        ctx.toast("Export failed: a frame could not be flattened.", "warn")
+        return
+    if not export.done:
+        return
+    state.export = None
+    _submit_export(ctx, export)
+
+
+def _submit_export(ctx: Any, export: _Export) -> None:
+    """The work list is read; hand it to a task. Frame thread."""
+    from .inker import gifout, sheetout
+
+    tab, frames, suggested = export.tab, export.frames, export.suggested
+    doc = tab.doc
+    durations, tags, layout = sheetout.timing(doc)
+    if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
+        # Refused on the frame thread, before the file dialog: the engine raises
+        # the same ValueError as a backstop, but by then the user has picked a
+        # filename and the failure arrives as a task error with no obvious
+        # cause. A frame added to (or removed from) a sprite sheet is an
         # ordinary edit, so the fix is to say which count is wrong.
+        tab.saving = False
         ctx.toast(
             f"This is a {layout.kind} sheet of {layout.frame_count} frames and "
             f"the document has {len(frames)}.",
@@ -493,7 +611,7 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
         )
         return
 
-    def run() -> dict[str, Any] | None:
+    def run_sheet() -> dict[str, Any] | None:
         import json
 
         dest = dialogs.save_file("Export sprite sheet", f"{suggested}.png", PNG_FILTER)
@@ -522,50 +640,29 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
         dest.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return {"exported": dest}
 
-    _start(ctx, tab, f"inker-export:{tab.uid}", run)
-
-
-def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
-    """An animated document as a GIF anyone can open.
-
-    ``export_sheet``'s shape exactly, down to sharing its task key -- the two
-    read the same frames off the same document and must not run at once -- with
-    the same frame-thread snapshot for the same reason: ``frame_flat`` fills and
-    evicts the document's frame cache and ``layers_for`` writes track properties
-    down onto cels, which is what the onion-skin draw is doing to the same dicts
-    sixty times a second.
-
-    A GIF loops forever rather than honouring a tag's loop flag, and that is the
-    honest reading rather than a shortcut: a tag names a *span* of the timeline
-    and the export is the whole timeline, so there is no one tag whose flag this
-    could be. Exporting a single tag is a different feature and would need to say
-    which one.
-    """
-    tab = tab or active(ctx)
-    if tab is None or tab.busy or tab.doc.anim is None:
-        return
-    doc = tab.doc
-    doc.commit_floating()
-    suggested = tab.path.stem if tab.path else "untitled"
-    from .inker import gifout, sheetout
-
-    frames, durations, _tags, _layout = sheetout.snapshot(doc)
+    # The document's own table when it has one, so an indexed clip exports the
+    # colours that were authored rather than a per-frame quantise of them. Read
+    # on the frame thread here, with the frames, not inside the task.
     palette = list(doc.palette) if doc.palette else None
 
-    def run() -> dict[str, Any] | None:
+    def run_gif() -> dict[str, Any] | None:
         dest = dialogs.save_file("Export animated GIF", f"{suggested}.gif", GIF_FILTER)
         if dest is None:
             return None
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # The document's own table when it has one, so an indexed clip exports
-        # the colours that were authored rather than a per-frame quantise of
-        # them. Read on the frame thread above with the frames, not here.
         gifout.write_gif(dest, frames, durations, palette=palette)
         return {"exported": dest}
 
-    _start(ctx, tab, f"inker-export:{tab.uid}", run)
+    # ``start_save`` rather than a bare submit, so a refused key clears the lock
+    # this function did not set -- the tab has been locked since the click.
+    _start(
+        ctx,
+        tab,
+        f"inker-export:{tab.uid}",
+        run_sheet if export.kind == "sheet" else run_gif,
+    )
 
 
 def _submit_write(ctx: Any, tab: InkerDoc, key: str, path: Path, file_format: str) -> None:
@@ -805,6 +902,18 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 saved_head=result.get("saved_head"),
             )
             set_mode(ctx.state, "inker")
+            if result.get("matte_requested") and not result.get("matte_applied"):
+                # "Fix matte" is the one command whose entire content is the
+                # cutout, so the swallow in ``_cut_matte`` -- correct for Edit,
+                # where the matte is a bonus -- left this menu item opening a
+                # tab indistinguishable from the ordinary one and saying
+                # nothing. ``action="log"`` because the exception is already
+                # there and the log is the only place the reason lives.
+                ctx.toast(
+                    "Could not apply the cutout; the reference is open as it was.",
+                    "warn",
+                    action="log",
+                )
         return
 
     if name == "inker-recover":
@@ -1245,7 +1354,10 @@ def handle_key(ctx: Any, event: Any) -> bool:
 # pixels are written in place. Everything here restructures the layer stack or
 # moves the history head the save captured, so it waits for the save the same
 # way a brush stroke on the canvas already does.
-_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t"})
+# ``e`` joins them because plain Ctrl+E now writes the document into the
+# library: it flattens the layer stack, which is the same read a save makes and
+# is just as wrong to take while one is in flight.
+_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e"})
 
 
 def _ctrl_key(
@@ -1264,8 +1376,20 @@ def _ctrl_key(
         doc.redo()
     elif name == "s":
         save_as(ctx, tab) if shift else save(ctx, tab)
-    elif name == "e" and shift:
-        export_png(ctx, tab)
+    elif name == "e":
+        # Plain Ctrl+E is "put this in the library" in every other document
+        # mode -- Clay's ``export_asset``, Plotter's and Packwright's
+        # ``export_library`` -- and Shift is the file-on-disk export. Inker had
+        # only the Shift half, so the one chord a user carries between the four
+        # editors did nothing here.
+        #
+        # A linked document is already *in* the library (it is somebody's
+        # reference, opened for editing), so there is nothing to add and Ctrl+S
+        # is the write it wants. Silence rather than a second copy of the asset.
+        if shift:
+            export_png(ctx, tab)
+        elif not tab.linked:
+            save_as_reference(ctx, tab)
     elif name == "n":
         new_document(ctx, 1024, 1024)
     elif name == "o":

@@ -41,11 +41,18 @@ def draw(ctx: Any) -> None:
 
     ready = not tab.busy
     packed = tab.layout is not None and tab.atlas is not None
+    # Two gates, and every button below is behind one or both of them. Hoisted
+    # so the four of them explain the same state in the same words -- the
+    # ``_VIEWPORT_WHY`` pattern.
+    busy_why = "This atlas is being written; the buttons come back when it lands."
+    packed_why = "Nothing is packed yet. Add images and press Pack."
     imgui.dummy((0, 4))
-    if widgets.disabled_button(f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0)):
+    if widgets.disabled_button(
+        f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why
+    ):
         packwright_mode.save(ctx, tab)
     imgui.same_line()
-    if widgets.disabled_button("Save as...", ready, (width, 0)):
+    if widgets.disabled_button("Save as...", ready, (width, 0), reason=busy_why):
         packwright_mode.save_as(ctx, tab)
     if tab.busy:
         # What the two greyed buttons above mean. ``clay_bridge._facts`` is the
@@ -59,7 +66,10 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     widgets.section("export")
     if widgets.disabled_button(
-        f"{icons.DOWNLOAD} Atlas + JSON (Ctrl+Shift+E)", ready and packed, (-1, 0)
+        f"{icons.DOWNLOAD} Atlas + JSON (Ctrl+Shift+E)",
+        ready and packed,
+        (-1, 0),
+        reason=busy_why if not ready else packed_why,
     ):
         packwright_mode.export_files(ctx, tab)
     if packed and tab.layout.is_grid:
@@ -70,7 +80,10 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     widgets.section("library")
     if widgets.disabled_button(
-        f"{icons.UPLOAD} Export to the library (Ctrl+E)", ready and packed, (-1, 0)
+        f"{icons.UPLOAD} Export to the library (Ctrl+E)",
+        ready and packed,
+        (-1, 0),
+        reason=busy_why if not ready else packed_why,
     ):
         packwright_mode.export_library(ctx, tab)
     widgets.muted_wrapped(

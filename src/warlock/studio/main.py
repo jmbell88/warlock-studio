@@ -476,6 +476,7 @@ class App:
         # the App's business and not a pane's. Attached here so the button has a
         # handler from the first frame rather than toasting "not wired up yet".
         ctx.clay_send_to_3d = self._clay_send_to_3d
+        ctx.ask_quit = self._ask_quit
         ctx.guidance = svc_system.guidance_catalog(self.svc)
         ctx.sheet_options = svc_sheets.sheet_options()
         self._refresh_model_answers()
@@ -1274,6 +1275,11 @@ class App:
         from . import inker_mode
 
         inker_mode.pump_autosave(self.app_ctx)
+        # Beside it, and in every mode for the same reason: an export flattens
+        # one frame per app frame rather than a whole clip on the frame the
+        # button was clicked, and a user who started one and switched to the
+        # library must still get their file.
+        inker_mode.pump_export(self.app_ctx)
         if not ctx.state.recovery_offered:
             # Once, on the first frame that has a Ctx: the autosave directory
             # is also where *this* session's copies land, so a second offer
@@ -1750,7 +1756,7 @@ class App:
     def _shortcut(self, event: Any) -> None:
         import pygame
 
-        from . import modes
+        from . import docmodes, modes
 
         ctx = self.app_ctx
         self._note_mode(ctx.state)
@@ -1777,6 +1783,20 @@ class App:
             from .panes import palette
 
             palette.toggle(ctx)
+            return
+        # Beside Ctrl+K and for its reason: this is the second binding that
+        # has to work in every mode, and the workspace modes below each consume
+        # whatever reaches them. Slash rather than a letter because every
+        # letter worth having is a tool in Inker or Clay, and Ctrl+/ is what
+        # the rest of the world binds this to. It sets a flag; the header
+        # consumes it (see ``_mode_switch``), because a key handler is not
+        # inside the window the popup is registered in.
+        if (
+            event.type == pygame.KEYDOWN
+            and event.key == pygame.K_SLASH
+            and event.mod & pygame.KMOD_CTRL
+        ):
+            ctx.state.shortcuts_requested = True
             return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
             self._set_mode("manual")
@@ -1881,6 +1901,13 @@ class App:
         # the key was pressed, not the state after the batch drained. A fast
         # Ctrl+Enter used to submit nothing at all, silently (UX-12).
         mods = event.mod
+        # Before the 2D/3D bindings, because pose mode is drawn *over* them:
+        # the inspector's pose editor is the same PoseEditor Poser authors
+        # with, and it had no keyboard undo at all while Poser's got one. It
+        # consumes only its own three chords and only while the editor is
+        # bound, so nothing below moves when pose mode is off.
+        if docmodes.pose_undo_key(self.viewer, event):
+            return
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
             from .panes import settings_2d, settings_3d
 
@@ -2633,19 +2660,26 @@ class App:
         from imgui_bundle import imgui
 
         from . import widgets
+        from .tokens import sp
 
-        imgui.dummy((0, 40))
+        # Every measurement through ``sp`` (UX-01), which is what makes this
+        # the same panel at 150% that it is at 100%. It was written as a copy
+        # of ``inker_canvas._empty`` and the copy dropped the scaling: at 1.5
+        # the raster editor's empty state grew with the text while Clay's kept
+        # 240-pixel buttons under 1.5x labels, which is where a label stops
+        # fitting its button.
+        imgui.dummy((0, sp(40)))
         imgui.text("Nothing open")
         widgets.muted("Start a model, open a document, or drop a .wblk on the window.")
-        imgui.dummy((0, 16))
-        if imgui.button("New model", (240, 0)):
+        imgui.dummy((0, sp(16)))
+        if imgui.button("New model", (sp(240), 0)):
             clay_mode.new_document(ctx)
-        imgui.dummy((0, 8))
-        if imgui.button("Open a file...", (240, 0)):
+        imgui.dummy((0, sp(8)))
+        if imgui.button("Open a file...", (sp(240), 0)):
             clay_mode.ask_open(ctx)
         found = clay_mode.recent_paths(ctx)
         if found:
-            imgui.dummy((0, 16))
+            imgui.dummy((0, sp(16)))
             widgets.section("recent")
             for path in found[:6]:
                 # The path is in the id, not just the label: two documents can
@@ -3017,13 +3051,17 @@ class App:
                 side = min(imgui.get_content_region_avail().x, 220.0)
                 imgui.image(widgets.texture_ref(texture), (side, side))
         imgui.separator()
+        # One sentence for the three of them: they share a gate, and three
+        # spellings of "there is nothing on screen to judge" would read as
+        # three different problems. The ``_VIEWPORT_WHY`` pattern.
+        no_row = "There is nothing left to label in this pass."
         if widgets.primary_button("Good (A)", enabled=row is not None):
             review_mode.record_label(ctx, "accept")
         imgui.same_line()
-        if widgets.disabled_button("Bad (R)", row is not None):
+        if widgets.disabled_button("Bad (R)", row is not None, reason=no_row):
             review_mode.record_label(ctx, "reject")
         imgui.same_line()
-        if widgets.disabled_button("Skip (S)", row is not None):
+        if widgets.disabled_button("Skip (S)", row is not None, reason=no_row):
             review_mode.advance_labels(labels)
         if imgui.button("Done"):
             review_mode.close_labels(ctx)
@@ -3059,7 +3097,11 @@ class App:
 
         widgets.section("Sweeps")
         manual_render.help_button(ctx, "review")
-        if widgets.disabled_button(f"{icons.REFRESH} Rescan", not state.scanning):
+        if widgets.disabled_button(
+            f"{icons.REFRESH} Rescan",
+            not state.scanning,
+            reason="A scan is already running.",
+        ):
             review_mode.scan(ctx)
         if state.scanning:
             imgui.same_line()
@@ -3360,7 +3402,9 @@ class App:
         if tag is not None:
             review_mode.toggle_tag(state, tag)
 
-        if widgets.disabled_button("Skip (S)", enabled):
+        if widgets.disabled_button(
+            "Skip (S)", enabled, reason="A scan is running; the queue is being rebuilt."
+        ):
             review_mode.advance(state)
 
         if unit["verdict"]:
@@ -3646,7 +3690,18 @@ class App:
         # the thing you have to already know about. A "?" that says only
         # "Keyboard shortcuts" leaves the one binding that opens the
         # documentation reachable exclusively from the documentation.
-        if widgets.icon_button("?", "Keyboard shortcuts - F1 opens the Manual"):
+        # The button, Ctrl+/ and the palette's "Keyboard shortcuts" are three
+        # doors onto one popup, and only this one could open it: ``open_popup``
+        # names a popup registered inside the *current* window, so neither a
+        # key handler nor a palette command can call it. Both of those set a
+        # flag instead and this is where it is consumed -- which is also why
+        # the flag is one-shot rather than a boolean the popup owns.
+        requested = ctx.state.shortcuts_requested
+        ctx.state.shortcuts_requested = False
+        asked = widgets.icon_button(
+            "?", "Keyboard shortcuts (Ctrl+/) - F1 opens the Manual"
+        )
+        if asked or requested:
             # Cleared on the way in rather than on the way out: a popup can be
             # dismissed by clicking anywhere, which is not a moment this has a
             # hook in, and reopening onto last time's query would look like a
@@ -3748,6 +3803,7 @@ class App:
                 # two modes with no key or a table saying which two, and the
                 # palette is the keyboard route to all of them.
                 ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
+                ("Ctrl+/", "This list"),
                 ("F1", "Switch to the Manual"),
                 ("Esc", "Leave Home, the Manual or Settings"),
                 ("F10", "Toggle the frame-rate readout"),
@@ -3985,7 +4041,13 @@ class App:
 
             ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
         imgui.same_line()
-        if widgets.disabled_button("Open the log", _log_exists(ctx.runtime.config.data_dir)):
+        if widgets.disabled_button(
+            "Open the log",
+            _log_exists(ctx.runtime.config.data_dir),
+            # The log is written on the first line logged, so its absence is
+            # "nothing has gone wrong yet" rather than a fault to report.
+            reason="There is no log file yet: nothing has been logged this install.",
+        ):
             ctx.open_log()
         imgui.same_line()
         # Chapter 12 (F57). The popup names the failing rows and their remedies;

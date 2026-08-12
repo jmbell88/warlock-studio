@@ -100,7 +100,11 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
     viewer = ctx.viewer
     if viewer is None or not viewer.has_model:
         return
-    if widgets.disabled_button("Refresh preview", not viewer.stripping):
+    if widgets.disabled_button(
+        "Refresh preview",
+        not viewer.stripping,
+        reason="A preview is rendering. It draws one cell per frame; give it a moment.",
+    ):
         yaws = [i * 360.0 / form["yaws"] for i in range(form["yaws"])]
         try:
             viewer.begin_sheet_strip(
@@ -265,7 +269,17 @@ def _submit(ctx: Any, job: Any, form: dict[str, Any]) -> None:
     problems = validate(job, form)
     for problem in problems:
         widgets.muted(problem)
-    if widgets.disabled_button("Render sheet", not problems and not busy, (-1, 0)):
+    if widgets.disabled_button(
+        "Render sheet",
+        not problems and not busy,
+        (-1, 0),
+        # The problems are already listed above the button, so repeating them
+        # here would be the same sentence twice; the reason says which of the
+        # two gates is shut and lets the list say why.
+        reason="A sheet is already rendering for this asset."
+        if busy
+        else "; ".join(problems),
+    ):
         ctx.submit(
             f"sheet:{job_id}",
             svc_sheets.create_sheet,
@@ -478,7 +492,13 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
         if busy:
             widgets.spinner()
             imgui.same_line()
-        if widgets.disabled_button("Pixelate", not busy and not locked):
+        if widgets.disabled_button(
+            "Pixelate",
+            not busy and not locked,
+            reason="A restyle is already running for this sheet."
+            if busy
+            else "The weights this needs are not installed; see the note above.",
+        ):
             ctx.submit(
                 key,
                 svc_sheets.create_pixel_sheet,

@@ -132,7 +132,13 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     if busy:
         widgets.spinner()
         imgui.same_line()
-    if widgets.disabled_button("Generate two drafts", not busy and not locked):
+    if widgets.disabled_button(
+        "Generate two drafts",
+        not busy and not locked,
+        reason="A synthesis is already running for this drawing."
+        if busy
+        else "The weights this needs are not installed; see the note above.",
+    ):
         ctx.submit(
             key,
             svc_sprites.create_sprite_synthesis,

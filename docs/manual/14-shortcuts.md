@@ -13,12 +13,13 @@ otherwise act on a viewport that is not on screen.
 
 ## Everywhere
 
-These four work in every mode, including Inker, Clay and Review — they are checked before any mode
+These five work in every mode, including Inker, Clay and Review — they are checked before any mode
 sees the key, which is the one exception to the rule above.
 
 | Keys | Action |
 | --- | --- |
 | Ctrl+K | Open the command palette — switch mode, or open an asset |
+| Ctrl+/ | Open this list, as a searchable popup |
 | F1 | Switch to the Manual |
 | Esc | Leave Home, the Manual or app Settings, back to the mode you came from |
 | F10 | Toggle the frame-rate readout |
@@ -92,6 +93,13 @@ same filtered, sorted list the cards are drawn from, clamped at the ends rather 
 | W | Toggle wireframe |
 | S | Toggle turntable |
 | Esc | Exit comparison / pose edit |
+| Ctrl+Z / Ctrl+Y | Undo / redo a pose edit (Ctrl+Shift+Z also redoes) |
+
+The undo row applies **while pose edit is open**, and only there. It is the pose editor's own
+history — one step per gizmo drag, per preset, per mirror and per reset — and it is the same
+history Poser uses, because it is the same editor. It is dropped when you leave pose mode: a step
+holds rotations by bone name, and replaying one onto a different skeleton would find whichever
+bones happened to share a name.
 
 ## Review
 
@@ -176,6 +184,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `[` / `]` | Brush size (with Shift, hardness) |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+E | Save the drawing into the library as a reference |
 | Ctrl+Shift+E | Export a flattened PNG |
 | Ctrl+N | New document |
 | Ctrl+O | Open a file |

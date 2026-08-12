@@ -26,6 +26,7 @@ from ...pipelines import optimize
 from ...service import jobs as svc_jobs
 from .. import theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 
 
 def tier_label(key: str, budget: int | None) -> str:
@@ -83,7 +84,7 @@ def draw(ctx: Any, job: Any) -> None:
     )
 
     if form["profile"] == "custom":
-        imgui.set_next_item_width(140)
+        imgui.set_next_item_width(sp(140))
         changed, value = imgui.input_int("Triangles", int(form["custom_triangles"]), 0, 0)
         if changed:
             form["custom_triangles"] = value
@@ -157,7 +158,16 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     if busy:
         widgets.spinner()
         imgui.same_line()
-    if widgets.disabled_button("Rebuild mesh", not problems and not busy, (-1, 0)):
+    if widgets.disabled_button(
+        "Rebuild mesh",
+        not problems and not busy,
+        (-1, 0),
+        # ``sheet_panel``'s rule: the problems are listed above the button, so
+        # the reason names the other gate and defers to the list otherwise.
+        reason="A rebuild is already running for this asset."
+        if busy
+        else "; ".join(problems),
+    ):
         ctx.submit(
             key,
             svc_jobs.optimize_job,

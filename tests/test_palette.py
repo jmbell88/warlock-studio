@@ -227,3 +227,109 @@ def test_the_palette_module_imports_nothing_that_needs_a_window():
             assert not banned & {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             assert (node.module or "").split(".")[0] not in banned
+
+
+# --- parity with what the app can actually do (A-7) ---------------------------
+#
+# The palette's whole case is discoverability: a searchable list of what the
+# app does, reachable from one chord. That case only holds for what is *in* it,
+# and four of the most-used actions in the application -- Save, Save as, Export
+# and Undo -- were not, along with Quit, the log, the trash and this popup's
+# own sibling, the shortcuts list.
+
+
+def test_every_command_with_a_gate_says_why_it_is_shut():
+    """``Command.why`` was built for exactly this and then not filled in: a
+    greyed row that says which mode it belongs to was the whole argument for
+    listing disabled commands at all, and a row that greys out in silence is
+    the palette refusing to teach the thing it exists to teach."""
+    silent = [
+        command.key
+        for command in palette.commands(_ctx())
+        # A default ``enabled`` is the always-on lambda from the dataclass, and
+        # a ``why`` on one of those would be text that can never be shown.
+        if command.enabled is not type(command).__dataclass_fields__["enabled"].default
+        and not command.why
+    ]
+    assert silent == []
+
+
+@pytest.mark.parametrize(
+    "key", ["save", "save-as", "export", "undo", "redo", "new-map", "quit", "open-log"]
+)
+def test_the_command_exists(key: str):
+    """Named one at a time rather than as a set, so a removal says which."""
+    assert key in {command.key for command in palette.commands(_ctx())}
+
+
+@pytest.mark.parametrize("key", ["save", "save-as", "export", "undo", "redo"])
+def test_the_document_commands_are_shut_outside_a_document_mode(key: str):
+    """They act on "whichever document mode is in front", so in 3D there is no
+    document and the answer is a greyed row with a sentence -- not a command
+    that runs against a tab from a mode the user left."""
+    command = next(c for c in palette.commands(_ctx(mode="3d")) if c.key == key)
+    assert command.enabled(_ctx(mode="3d")) is False
+    assert command.why
+
+
+def test_the_export_command_names_the_mode_it_will_act_on():
+    """"Export" alone in a searchable list is a command whose result cannot be
+    predicted from its label, and this list is read by searching."""
+    labels = {
+        mode: next(
+            c.label for c in palette.commands(_ctx(mode=mode)) if c.key == "export"
+        )
+        for mode in ("inker", "clay", "plotter", "packwright")
+    }
+    assert len(set(labels.values())) == 4
+    assert "PNG" in labels["inker"]
+    assert ".tmx" in labels["plotter"]
+
+
+def test_the_document_dispatch_covers_every_document_mode():
+    """A mode added to the app and not to the table is four commands that
+    quietly stop working in it -- which is how Plotter came to have no New."""
+    from warlock.studio import modes as modes_mod
+
+    assert set(palette._DOC_MODES) <= {key for key, _label, _icon in modes_mod.MODES}
+    assert set(palette._DOC_MODES) == {"inker", "clay", "plotter", "packwright"}
+
+
+def test_the_shortcuts_command_sets_a_flag_rather_than_opening_a_popup():
+    """It cannot open one: ``imgui.open_popup`` names a popup registered in the
+    *current* window, and the palette's window is closing on this frame. The
+    header consumes the flag where the popup actually lives, which is also what
+    makes Ctrl+/ and this command the same door."""
+    ctx = _ctx()
+    ctx.state.shortcuts_requested = False
+    command = next(c for c in palette.commands(ctx) if c.key == "shortcuts")
+    command.run(ctx)
+    assert ctx.state.shortcuts_requested is True
+
+
+def test_quit_goes_through_the_apps_guard_and_never_straight_out():
+    """The guard is the chain that asks about unsaved pixels, geometry and a
+    pose in turn. A palette entry that bypassed it would be the one way out of
+    the app that loses work."""
+    asked: list[bool] = []
+    ctx = _ctx()
+    ctx.ask_quit = lambda: asked.append(True)
+    command = next(c for c in palette.commands(ctx) if c.key == "quit")
+    command.run(ctx)
+    assert asked == [True]
+
+
+def test_quit_does_nothing_at_all_with_no_guard_attached():
+    """``Ctx.ask_quit`` is None until the App attaches it, so a headless caller
+    does nothing rather than killing a process it does not own."""
+    ctx = _ctx()
+    command = next(c for c in palette.commands(ctx) if c.key == "quit")
+    command.run(ctx)  # no attribute, no exception, no exit
+
+
+def test_empty_trash_is_shut_when_the_trash_is_empty():
+    ctx = _ctx(jobs=[_job("a")])
+    command = next(c for c in palette.commands(ctx) if c.key == "empty-trash")
+    assert command.enabled(ctx) is False
+    full = _ctx(jobs=[_job("a", deleted_at=1.0)])
+    assert command.enabled(full) is True

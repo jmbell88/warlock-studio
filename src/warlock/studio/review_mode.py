@@ -48,7 +48,9 @@ first unverdicted unit and recording steps past everything already answered.
 
 **Blinding hides the arm, and that means the order too.** The review that
 produced the ``bg_removal`` signal was unblinded and single-reviewer, which is
-why `TODO.md` §2 asks for a small blind confirm before anything is leaned on.
+why the campaign's rule is a small blind confirm before anything is leaned
+on -- the pre-registration in ``docs/measurements/2026-08-09-rebaseline.md``,
+whose confirm is the one that ran and failed against its own rule.
 ``blind`` is therefore a property of the *session*, not of a sweep: it renames
 every unit to a neutral id prefix and presents them in an order derived from a
 stable digest of the job id. Hiding the label alone would not be blinding at
@@ -88,8 +90,10 @@ SOURCE = verdicts_mod.SOURCE_HUMAN
 # is decided once. **Nothing writes it yet, and that is a decision rather than
 # an omission**: filing a verdict needs a probability-to-accept threshold, and
 # a threshold is a constant the stored corpus is then keyed on, which owes a
-# ``docs/measurements/`` document first (`TODO.md` §10 says what it must
-# contain). The ``(job_id, source, stage)`` seam is already built and tested, so
+# ``docs/measurements/`` document first --
+# ``docs/measurements/2026-08-09-judge-threshold.md`` is that document, and it
+# says exactly what the run must produce before a cut may be adopted.
+# The ``(job_id, source, stage)`` seam is already built and tested, so
 # the day that measurement exists this is one call.
 SOURCE_AI = "ai:dino-probe"
 
@@ -1034,7 +1038,12 @@ def launch(ctx: Any) -> bool:
     try:
         plan = build_plan(state)
     except ValueError as exc:
-        ctx.toast(str(exc), "error")
+        # Framed rather than forwarded, the ``packwright_mode`` house rule: a
+        # bare ``str(exc)`` toast is library text with no subject in front of
+        # it, so the user reads "axis 'seed' has no values" and has to guess
+        # what was being attempted. ``action="log"`` because the traceback is
+        # the only place the rest of the story is.
+        ctx.toast(f"That sweep could not be planned: {exc}", "error", action="log")
         return False
     state.form.submitting = True
     try:
@@ -1124,9 +1133,14 @@ def mesh_lines(unit: dict[str, Any]) -> list[str]:
         # worker stores worst/mean/faces/resolution, so this branch was dead
         # from the day it was typed, the same way ``report["verdict"]`` was in
         # ``widgets.quality_badge``. Replaced with the reading that exists,
-        # worded so it cannot be read as a quality score (P120): a low figure
-        # is what a solid slab measures, and AUC(worst -> reject) over the
-        # reviewed corpus is 0.115, which is backwards rather than weak.
+        # worded so it cannot be read as a quality score (P120).
+        #
+        # ``hole_worst`` is corpus-dependent and is never presented as a quality
+        # scale: it measured AUC 0.115 against reject on the 2026-08-07 corpus
+        # and 0.756 after the matte fix
+        # (``docs/measurements/2026-08-09-rebaseline.md``). A low figure is
+        # still what a solid slab measures, which is why the caveat below is
+        # about the *direction of inference* rather than about either number.
         worst = audit.get("worst")
         if isinstance(worst, (int, float)):
             lines.append(f"see-through at worst view: {float(worst) * 100:.1f}%")

@@ -66,6 +66,149 @@ def test_every_toast_level_literal_is_a_level_that_exists():
     assert offenders == []
 
 
+# --- no new citations of the deleted roadmap ---------------------------------
+
+
+def test_no_studio_module_cites_the_deleted_roadmap():
+    """``docs/INVARIANTS.md``'s rule, made a ratchet over the UI half of the
+    tree.
+
+    A ``TODO.md §N`` citation resolves against ``docs/LEFTOVERS.md`` -- deleted
+    2026-08-10 -- and never against the ``docs/TODO.md`` that replaced it,
+    which had no sections and is itself deleted (`de87838`). Three of them
+    survived in ``studio/`` pointing at reasoning that has since been written
+    down properly in ``docs/measurements/``, so they now cite the measurement
+    documents instead. The invariant says not to mint new ones at all; this is
+    what makes that enforceable in the tree most likely to grow them.
+
+    Scoped to ``studio/`` deliberately. Fourteen citations remain elsewhere in
+    ``src`` and they are grandfathered: each names reasoning that has no other
+    home yet, and rewriting them blind would replace a findable pointer with a
+    vaguer one. Narrowing the scope is what makes this a ratchet rather than a
+    migration.
+    """
+    offenders = [
+        f"{path.relative_to(SRC).as_posix()}:{n}"
+        for path in sorted(STUDIO.rglob("*.py"))
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "TODO.md" in line
+    ]
+    assert offenders == []
+
+
+# --- a greyed button says why, in the places that were swept -----------------
+
+#: The files the ``reason=`` sweep covered. A named list rather than "all of
+#: ``studio/``", and the difference is the point: ``disabled_button`` grew the
+#: parameter with ~90 call sites already written, so a repo-wide assertion
+#: would be a migration disguised as a test and would fail on the first commit.
+#: These are the surfaces where a greyed button is the *whole* interaction --
+#: the four document bridges, the panels whose one job is a submit, and the two
+#: settings panes -- and a new one added here has to explain itself.
+REASON_SWEPT = (
+    "panes/clay_bridge.py",
+    "panes/inker_bridge.py",
+    "panes/packwright_bridge.py",
+    "panes/plotter_bridge.py",
+    "panes/candidates_panel.py",
+    "panes/retarget_panel.py",
+    "panes/sheet_panel.py",
+    "panes/sprite_panel.py",
+    "panes/settings_2d.py",
+    "panes/settings_3d.py",
+)
+
+
+def _unexplained_disabled_buttons(path: Path):
+    """``disabled_button`` calls that can grey out and cannot say why.
+
+    A literal ``True`` for ``enabled`` is exempt: the button is never disabled,
+    so a reason would be text that can never appear. Everything else is a
+    button the user can meet greyed out.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name != "disabled_button":
+            continue
+        enabled = node.args[1] if len(node.args) > 1 else None
+        always_on = isinstance(enabled, ast.Constant) and enabled.value is True
+        if always_on:
+            continue
+        if not any(kw.arg == "reason" for kw in node.keywords):
+            yield node.lineno
+
+
+def test_a_greyed_button_on_a_swept_surface_says_why():
+    """Absent controls make a UI feel like it is hiding things and a greyed one
+    with no tooltip is worse -- it says "no" and refuses to say what would make
+    it yes. ``disabled_button`` has taken a ``reason`` since the parameter was
+    added; what it did not have was call sites passing one."""
+    offenders = [
+        f"{rel}:{n}"
+        for rel in REASON_SWEPT
+        for n in _unexplained_disabled_buttons(STUDIO / rel)
+    ]
+    assert offenders == []
+
+
+def test_the_sweep_list_names_files_that_exist():
+    """A guard on the guard: a renamed pane would otherwise drop out of the
+    sweep silently, which is the shrink ``test_external_doc_links`` warns
+    about in its own domain."""
+    missing = [rel for rel in REASON_SWEPT if not (STUDIO / rel).exists()]
+    assert missing == []
+
+
+# --- a toast never forwards a bare exception ---------------------------------
+
+
+def _bare_exception_toasts(path: Path):
+    """Every ``x.toast(str(exc))`` in one file, as line numbers.
+
+    The shape, not the variable name: ``str(<Name>)`` as the whole of a toast's
+    message. Nothing else is looked for, because nothing else is the bug --
+    ``f"could not read {path.name}: {exc}"`` is the same exception with a
+    subject in front of it, which is exactly what this is asking for.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        message = node.args[0]
+        if (
+            name == "toast"
+            and isinstance(message, ast.Call)
+            and getattr(message.func, "id", "") == "str"
+            and len(message.args) == 1
+            and isinstance(message.args[0], ast.Name)
+        ):
+            yield node.lineno
+
+
+def test_no_toast_forwards_a_bare_exception():
+    """``packwright_mode``'s house rule, made a ratchet.
+
+    A ``ctx.toast(str(exc))`` is library text with no subject in front of it:
+    the user reads "axis 'seed' has no values" and has to work out what was
+    being attempted, and the two call sites that did this -- planning a sweep
+    and keeping a candidate -- were the two where the attempt was least
+    guessable. A frame costs one f-string and turns the message into a
+    sentence about their action.
+    """
+    offenders = [
+        f"{path.relative_to(SRC).as_posix()}:{n}"
+        for path in sorted(STUDIO.rglob("*.py"))
+        for n in _bare_exception_toasts(path)
+    ]
+    assert offenders == []
+
+
 # --- space-to-pan is a hold --------------------------------------------------
 
 

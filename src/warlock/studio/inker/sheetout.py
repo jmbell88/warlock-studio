@@ -30,7 +30,16 @@ import numpy as np
 from ...pipelines import sheet as sheetlib
 from .animation import DIRECTION_ORDER, DirectionalLayout
 
-__all__ = ["build", "compose", "from_document", "plan_frames", "snapshot"]
+__all__ = [
+    "build",
+    "compose",
+    "flatten_one",
+    "frame_uids",
+    "from_document",
+    "plan_frames",
+    "snapshot",
+    "timing",
+]
 
 
 def plan_frames(
@@ -239,14 +248,57 @@ def snapshot(
     behind it in the game, so baking white in would put a white square around
     every cell of a sprite opened from a photo.
     """
+    uids = frame_uids(doc)
+    frames = [flatten_one(doc, uid) for uid in uids]
+    return (frames, *timing(doc))
+
+
+# The same read, one frame at a time. **Frame thread only**, for exactly the
+# reasons :func:`snapshot` gives -- these are its three halves, split out rather
+# than reimplemented, so a caller that spreads the work across frames and a
+# caller that wants it all at once cannot produce different sheets.
+#
+# The split exists because ``snapshot`` is the whole cost of an export and it
+# was paid in one frame, at click time: a sixty-frame clip is sixty flattens
+# and a visible freeze on the frame the user pressed the button. It cannot move
+# to a task thread -- ``frame_flat`` fills and evicts the very cache the
+# onion-skin draw is walking -- so the only place left to spend it is *later
+# frames*, which is ``viewer/sheet.StripRender``'s answer to the same problem.
+
+
+def frame_uids(doc: Any) -> list[str]:
+    """The frames an export will read, in order. Raises for a still document.
+
+    Read up front so the stepper has a fixed work list: the document is locked
+    against edits for the duration (``tab.saving``), but reading the list once
+    is what makes "frame 3 of 60" a true statement rather than a guess.
+    """
     anim = getattr(doc, "anim", None)
     if anim is None or not anim.frames:
         raise ValueError("this document is not animated")
-    frames = [doc.frame_flat(frame.uid) for frame in anim.frames]
-    if any(plane is None for plane in frames):
+    return [frame.uid for frame in anim.frames]
+
+
+def flatten_one(doc: Any, uid: str) -> np.ndarray:
+    """One frame, composited. The unit of work a stepper spends per frame."""
+    plane = doc.frame_flat(uid)
+    if plane is None:
         raise ValueError("a frame could not be flattened")
+    return plane
+
+
+def timing(doc: Any) -> tuple[list[int], list[Any], DirectionalLayout | None]:
+    """Durations, tags and layout: the cheap half, read once at the end.
+
+    Pure reads of small structures, unlike ``flatten_one`` -- so there is no
+    reason to spread them, and taking them at the end means they describe the
+    document as it was when the last frame was flattened rather than as it was
+    sixty frames earlier.
+    """
+    anim = getattr(doc, "anim", None)
+    if anim is None or not anim.frames:
+        raise ValueError("this document is not animated")
     return (
-        frames,
         [frame.duration_ms for frame in anim.frames],
         list(anim.tags),
         anim.layout,
