@@ -2516,6 +2516,17 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         _frame(imgui_ctx, build)
     state.tool = "stamp"
 
+    # A locked layer: the padlock swaps glyph and the object form draws its
+    # read-only branch, neither of which rasterises anywhere else.
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    _frame(imgui_ctx, build)
+    tab.doc.set_layer_props(layer.uid, locked=False)
+
+    # And a marquee, which is an overlay with no other route to a frame.
+    state.select = (1, 1, 4, 4)
+    _frame(imgui_ctx, build)
+    state.select = None
+
     from warlock.studio.plotter import terrain as terrainlib
     from warlock.studio.plotter import tilegen
 

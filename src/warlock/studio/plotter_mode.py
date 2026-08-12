@@ -484,11 +484,16 @@ def handle_key(ctx: Any, event: Any) -> bool:
     return False
 
 
-def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc):
+def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc, *, writing: bool):
     """The active tile layer and the clamped selection, or ``(None, None)``.
 
-    Both refusals are named rather than silent, because "nothing happened" is
+    Every refusal is named rather than silent, because "nothing happened" is
     indistinguishable from a broken key.
+
+    ``writing`` is what separates copy from cut: a lock blocks *content* edits,
+    and reading a locked layer changes nothing. Refusing a copy would make the
+    lock a reason you cannot get at your own tiles, which is not what anybody
+    locks a layer for.
     """
     from .plotter.tilemap import TileLayer
 
@@ -500,6 +505,9 @@ def _selected_tiles(ctx: Any, state: PlotterState, tab: PlotterDoc):
     if not isinstance(layer, TileLayer):
         ctx.toast("Pick a tile layer first.", "error")
         return None, None
+    if writing and layer.locked:
+        ctx.toast(f"{layer.name} is locked.", "error")
+        return None, None
     return layer, rect
 
 
@@ -509,7 +517,7 @@ def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
 
     from .plotter import gid as gidlib
 
-    layer, rect = _selected_tiles(ctx, state, tab)
+    layer, rect = _selected_tiles(ctx, state, tab, writing=cut)
     if layer is None:
         return
     x0, y0, x1, y1 = rect
@@ -563,11 +571,15 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
 
     if state.tool == "object" and state.selected_object is not None:
         layer = tab.doc.active()
-        if layer is not None:
-            tab.doc.remove_object(layer.uid, state.selected_object)
-            state.selected_object = None
+        if layer is None:
+            return
+        if getattr(layer, "locked", False):
+            ctx.toast(f"{layer.name} is locked.", "error")
+            return
+        tab.doc.remove_object(layer.uid, state.selected_object)
+        state.selected_object = None
         return
-    layer, rect = _selected_tiles(ctx, state, tab)
+    layer, rect = _selected_tiles(ctx, state, tab, writing=True)
     if layer is None:
         return
     x0, y0, x1, y1 = rect

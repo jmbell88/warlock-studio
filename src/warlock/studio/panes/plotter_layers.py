@@ -65,6 +65,13 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
     imgui.begin_disabled(not editable)
     if widgets.small_icon_button(eye, "Show / hide"):
         doc.set_layer_props(layer.uid, visible=not layer.visible)
+    imgui.same_line()
+    # Beside the eye because they are the same kind of switch: both say what
+    # this layer will let you do, neither is about its contents. Greyed with the
+    # eye while saving, for the clickable-lie reason above.
+    padlock = icons.LOCK if layer.locked else icons.LOCK_OPEN
+    if widgets.small_icon_button(padlock, "Lock / unlock painting"):
+        doc.set_layer_props(layer.uid, locked=not layer.locked)
     imgui.end_disabled()
     imgui.same_line()
     kind = icons.GRID if isinstance(layer, TileLayer) else icons.FLAG
@@ -130,6 +137,21 @@ def _object_form(
     if not editable:
         widgets.muted("Saving...")
         return
+    if layer.locked:
+        # Read-only rather than hidden: the form is how you *look* at an
+        # object's properties, and a lock is not a reason to stop seeing them.
+        # Said in words as well as greyed, because a pane full of dead controls
+        # with no explanation reads as broken.
+        widgets.muted(f"{layer.name} is locked.")
+        imgui.begin_disabled(True)
+        _object_fields(ctx, doc, state, layer, obj)
+        imgui.end_disabled()
+        return
+    _object_fields(ctx, doc, state, layer, obj)
+
+
+def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -> None:
+    from imgui_bundle import imgui
 
     name = widgets.input_text("##obj-name", obj.name, max_length=64, hint="name")
     if name != obj.name:

@@ -136,7 +136,12 @@ class LayerOps:
         layer = self.layer(uid)
         if layer is None:
             raise KeyError(f"no layer {uid}")
+        # Every key ``snapshot`` reports has to be assigned here. ``set_layer_props``
+        # filters its kwargs through the snapshot, so a new field is *recorded*
+        # in the edit for free -- but undo and redo replay through this hook, so
+        # a field missing from it is one the user can set and never take back.
         layer.name = str(values["name"])
         layer.visible = bool(values["visible"])
         layer.opacity = float(values["opacity"])
+        layer.locked = bool(values["locked"])
         layer.properties = dict(values["properties"])

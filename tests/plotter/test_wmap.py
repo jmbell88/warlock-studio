@@ -349,3 +349,35 @@ def test_an_ordinary_tileset_saves_an_empty_terrain_list():
     )
     manifest = json.loads(wmap.manifest_json(doc))
     assert manifest["tilesets"][0]["terrains"] == []
+
+
+def test_a_lock_survives_a_round_trip():
+    doc = _doc()
+    doc.set_layer_props(doc.layers[0].uid, locked=True)
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.layers[0].locked is True
+    assert back.layers[1].locked is False
+
+
+def test_a_file_written_before_locks_existed_opens_unlocked():
+    """Tolerant read of a key that is simply absent -- which is what every
+    version 2 file written before this says by saying nothing."""
+    data = wmap.wmap_bytes(_doc())
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        manifest = json.loads(zf.read(wmap.MANIFEST))
+    assert all("locked" in entry for entry in manifest["layers"]), "we write it"
+
+    # Strip the key back out and rebuild the archive, which is what an older
+    # writer would have produced.
+    for entry in manifest["layers"]:
+        del entry["locked"]
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as src, zipfile.ZipFile(out, "w") as dst:
+        for info in src.infolist():
+            payload = (
+                json.dumps(manifest).encode() if info.filename == wmap.MANIFEST
+                else src.read(info.filename)
+            )
+            dst.writestr(info, payload)
+    back = wmap.read_wmap(out.getvalue())
+    assert all(layer.locked is False for layer in back.layers)

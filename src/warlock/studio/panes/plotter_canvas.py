@@ -733,10 +733,17 @@ def _constrained(state: Any, doc: Any, result):
 
 def _layer_for_paint(ctx: Any, tab: Any):
     layer = tab.doc.active()
-    if isinstance(layer, TileLayer):
-        return layer
-    ctx.toast("Pick a tile layer to paint on.", "error")
-    return None
+    if not isinstance(layer, TileLayer):
+        ctx.toast("Pick a tile layer to paint on.", "error")
+        return None
+    if layer.locked:
+        # Enforced here rather than in the engine, deliberately: ``write_region``
+        # must go on working on a locked layer or an undo could not put back
+        # what was there before the lock. The lock stops *the user* painting,
+        # not the document from being written to.
+        ctx.toast(f"{layer.name} is locked.", "error")
+        return None
+    return layer
 
 
 def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
@@ -871,8 +878,13 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
     if hovered and imgui.is_mouse_clicked(0):
         hit = _object_at(layer, point)
         if hit is not None:
+            # Selecting on a locked layer stays allowed -- it is how you read an
+            # object's properties, and it changes nothing.
             state.selected_object = hit.uid
             state.drag_kind = ""
+            return
+        if layer.locked:
+            ctx.toast(f"{layer.name} is locked.", "error")
             return
         state.drag_kind = "object"
         state.drag_object = point

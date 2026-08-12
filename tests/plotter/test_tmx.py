@@ -358,3 +358,48 @@ def test_a_file_that_is_not_a_map_is_refused_plainly():
         tmx.read_tmx(b"<tileset/>", image_loader=lambda s: None, tsx_loader=lambda s: None)
     with pytest.raises(ValueError, match="not a readable"):
         tmx.read_tmj(b"{ not json", image_loader=lambda s: None, tsx_loader=lambda s: None)
+
+
+# --- locks --------------------------------------------------------------------
+
+
+def test_an_unlocked_export_carries_no_locked_attribute_at_all():
+    """The byte-identity guarantee, and the reason the attribute is written only
+    when set: every .tmx and .tmj this editor has ever produced must still come
+    out exactly as it did."""
+    doc = _doc()
+    assert b"locked" not in tmx.tmx_export(doc)["map.tmx"]
+    assert b"locked" not in tmx.tmj_export(doc)["map.tmj"]
+
+
+def test_a_lock_survives_both_formats():
+    doc = _doc()
+    for layer in doc.layers:
+        doc.set_layer_props(layer.uid, locked=True)
+
+    xml_files = tmx.tmx_export(doc)
+    assert b'locked="1"' in xml_files["map.tmx"]
+    back = tmx.read_tmx(xml_files["map.tmx"], **_loaders(xml_files))
+    assert all(layer.locked for layer in back.layers)
+
+    json_files = tmx.tmj_export(doc)
+    assert b'"locked": true' in json_files["map.tmj"]
+    back = tmx.read_tmj(json_files["map.tmj"], **_loaders(json_files))
+    assert all(layer.locked for layer in back.layers)
+
+
+def test_a_foreign_file_with_no_locked_attribute_opens_unlocked():
+    doc = _doc()
+    files = tmx.tmx_export(doc)
+    back = tmx.read_tmx(files["map.tmx"], **_loaders(files))
+    assert all(layer.locked is False for layer in back.layers)
+
+
+def test_only_the_locked_layer_carries_the_attribute():
+    """One locked layer must not stamp the key onto its neighbours."""
+    doc = _doc()
+    doc.set_layer_props(doc.layers[0].uid, locked=True)
+    files = tmx.tmx_export(doc)
+    assert files["map.tmx"].count(b'locked="1"') == 1
+    back = tmx.read_tmx(files["map.tmx"], **_loaders(files))
+    assert [layer.locked for layer in back.layers] == [True, False]

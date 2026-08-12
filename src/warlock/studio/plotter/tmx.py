@@ -453,6 +453,9 @@ def read_tmx(
                     data=cells,
                     visible=node.get("visible", "1") not in ("0", "false"),
                     opacity=float(node.get("opacity", 1) or 1),
+                    # Absent means unlocked, which is what every file written
+                    # before this existed says by saying nothing.
+                    locked=node.get("locked", "0") not in ("0", "false"),
                     properties=read_properties(node),
                 )
             )
@@ -466,6 +469,9 @@ def read_tmx(
                     objects=[_read_tmx_object(o) for o in node.findall("object")],
                     visible=node.get("visible", "1") not in ("0", "false"),
                     opacity=float(node.get("opacity", 1) or 1),
+                    # Absent means unlocked, which is what every file written
+                    # before this existed says by saying nothing.
+                    locked=node.get("locked", "0") not in ("0", "false"),
                     properties=read_properties(node),
                 )
             )
@@ -595,6 +601,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
                     data=cells,
                     visible=bool(entry.get("visible", True)),
                     opacity=float(entry.get("opacity", 1) or 1),
+                    locked=bool(entry.get("locked", False)),
                     properties=_json_properties(entry.get("properties")),
                 )
             )
@@ -606,6 +613,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
                     objects=[_json_object(o) for o in entry.get("objects", [])],
                     visible=bool(entry.get("visible", True)),
                     opacity=float(entry.get("opacity", 1) or 1),
+                    locked=bool(entry.get("locked", False)),
                     properties=_json_properties(entry.get("properties")),
                 )
             )
@@ -766,6 +774,12 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
             node.set("opacity", repr(float(layer.opacity)))
         if not layer.visible:
             node.set("visible", "0")
+        if layer.locked:
+            # Written only when set, the ``visible="0"`` idiom, and here that is
+            # a requirement rather than tidiness: every export of an unlocked
+            # map has to stay byte-for-byte what it was, and the round-trip
+            # tests pin those bytes.
+            node.set("locked", "1")
         write_properties(node, layer.properties)
         if isinstance(layer, TileLayer):
             data = ET.SubElement(node, "data", {"encoding": "csv"})
@@ -817,6 +831,10 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
             "x": 0,
             "y": 0,
         }
+        if layer.locked:
+            # Only when set, so an unlocked map's .tmj is byte-identical to what
+            # it was before locks existed. Tiled omits the key too.
+            entry["locked"] = True
         if layer.properties:
             entry["properties"] = _json_props(layer.properties)
         if isinstance(layer, TileLayer):

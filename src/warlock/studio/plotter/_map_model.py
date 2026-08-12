@@ -112,6 +112,11 @@ class TileLayer:
     data: np.ndarray
     visible: bool = True
     opacity: float = 1.0
+    # Blocks *content* edits only. Renaming, reordering, hiding, changing the
+    # opacity and deleting all stay available on a locked layer -- Tiled's
+    # semantics, and the useful ones: a lock is there to stop you painting on
+    # the wrong layer, not to stop you managing the stack.
+    locked: bool = False
     properties: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -127,6 +132,7 @@ class TileLayer:
             "name": self.name,
             "visible": bool(self.visible),
             "opacity": float(self.opacity),
+            "locked": bool(self.locked),
             "properties": dict(self.properties),
         }
 
@@ -138,6 +144,11 @@ class ObjectLayer:
     objects: list[MapObject] = field(default_factory=list)
     visible: bool = True
     opacity: float = 1.0
+    # Blocks *content* edits only. Renaming, reordering, hiding, changing the
+    # opacity and deleting all stay available on a locked layer -- Tiled's
+    # semantics, and the useful ones: a lock is there to stop you painting on
+    # the wrong layer, not to stop you managing the stack.
+    locked: bool = False
     properties: dict[str, Any] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
@@ -145,6 +156,7 @@ class ObjectLayer:
             "name": self.name,
             "visible": bool(self.visible),
             "opacity": float(self.opacity),
+            "locked": bool(self.locked),
             "properties": dict(self.properties),
         }
 

@@ -872,6 +872,90 @@ def test_a_cut_is_refused_while_the_tab_is_busy(monkeypatch):
     assert state.clipboard is None
 
 
+def test_painting_a_locked_layer_toasts_and_pushes_nothing():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    depth = len(tab.doc.history)
+
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+    assert not layer.data.any()
+    assert len(tab.doc.history) == depth
+    assert ctx.toasts and "locked" in ctx.toasts[-1][0]
+
+
+def test_the_engine_still_writes_to_a_locked_layer():
+    """The lock is enforced at the studio layer on purpose. ``write_region`` has
+    to go on working, or an undo could not put back what was there before the
+    lock -- and neither could the reader that opens a file with one set."""
+    ctx = FakeCtx()
+    tab, _state, layer = _stamping(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    assert tab.doc.write_region(layer.uid, 0, 0, np.array([[9]], gid.DTYPE)) is True
+    assert int(layer.data[0, 0]) == 9
+
+
+def test_a_lock_stops_a_cut_but_not_a_copy():
+    """A lock blocks content edits; reading one changes nothing. Refusing the
+    copy would make a lock a reason you cannot get at your own tiles."""
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    state.select = (0, 0, 1, 1)
+
+    plotter_mode._copy(ctx, state, tab, cut=False)
+    assert state.clipboard is not None, "copying is allowed"
+
+    state.clipboard = None
+    plotter_mode._copy(ctx, state, tab, cut=True)
+    assert state.clipboard is None
+    assert layer.data.all(), "nothing was cut"
+    assert "locked" in ctx.toasts[-1][0]
+
+
+def test_a_lock_stops_delete():
+    ctx = FakeCtx()
+    tab, state, layer, _value = _painted(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+    state.select = (0, 0, 1, 1)
+    plotter_mode._delete(ctx, state, tab)
+    assert layer.data.all()
+    assert "locked" in ctx.toasts[-1][0]
+
+
+def test_a_lock_stops_removing_an_object_but_not_selecting_it():
+    ctx = FakeCtx()
+    tab, state, _layer, _value = _painted(ctx)
+    obj_layer = tab.doc.add_object_layer("Things")
+    tab.doc.set_active_layer(obj_layer.uid)
+    obj = MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
+    tab.doc.add_object(obj_layer.uid, obj)
+    tab.doc.set_layer_props(obj_layer.uid, locked=True)
+
+    state.tool = "object"
+    state.selected_object = obj.uid
+    plotter_mode._delete(ctx, state, tab)
+    assert tab.doc.layers[-1].objects, "the object is still there"
+    assert state.selected_object == obj.uid, "and still selected, so it can be read"
+    assert "locked" in ctx.toasts[-1][0]
+
+
+def test_locking_leaves_the_rest_of_the_stack_alone():
+    """Tiled's semantics: a lock is there to stop you painting on the wrong
+    layer, not to stop you managing the stack."""
+    ctx = FakeCtx()
+    tab, _state, layer = _stamping(ctx)
+    tab.doc.set_layer_props(layer.uid, locked=True)
+
+    tab.doc.set_layer_props(layer.uid, name="Renamed", visible=False, opacity=0.5)
+    assert (layer.name, layer.visible, layer.opacity) == ("Renamed", False, 0.5)
+
+    tab.doc.set_layer_props(layer.uid, locked=False)
+    assert layer.locked is False, "and unlocking is always available"
+
+
 def test_the_shape_tool_fills_whichever_shape_is_chosen():
     """One tool with a mode, not two tools: the gesture, the preview and the
     undo step are the same and only the set of cells differs."""

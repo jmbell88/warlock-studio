@@ -204,6 +204,20 @@ are metadata an engine reads. With the **Objects** tool active, click empty spac
 rectangle, or click without dragging to drop a point. Click an existing object to select it, and its
 form appears under the layer list.
 
+### Locking a layer
+
+The padlock beside the eye locks a layer. A locked layer cannot be painted on, erased, cut from,
+deleted out of, or have objects added to or removed from it — the usual reason being that you are
+working above a finished floor and keep catching it by accident.
+
+A lock stops **content** changes and nothing else. You can still rename the layer, hide it, change
+its opacity, move it up and down the stack, delete the whole layer, and of course unlock it. You can
+also still *select* an object on a locked layer and read its properties, and still copy cells from
+one — a lock is not a reason to lose sight of your own work.
+
+Locks are saved in `.wmap`, and in `.tmx`/`.tmj` exports where Tiled understands them. A map written
+before this existed opens with everything unlocked.
+
 ### Object properties
 
 An object carries a name, a class, and any number of typed custom properties: string, int, float,

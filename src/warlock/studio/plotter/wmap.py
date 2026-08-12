@@ -169,6 +169,13 @@ def manifest_json(doc: MapDoc) -> str:
             "name": layer.name,
             "visible": bool(layer.visible),
             "opacity": float(layer.opacity),
+            # Written unconditionally, unlike the TMX side. This is our own
+            # format with one reader, and a key that is sometimes absent is a
+            # key every future reader has to have an opinion about. The version
+            # does not move: an older build reads the file, does not recognise
+            # the key, and drops the lock on resave -- the worst outcome is a
+            # layer that stops being protected, which is visible in the pane.
+            "locked": bool(layer.locked),
             "properties": _props_json(layer.properties),
         }
         if isinstance(layer, TileLayer):
@@ -371,6 +378,9 @@ def read_wmap(data: bytes) -> MapDoc:
                 "name": name,
                 "visible": bool(entry.get("visible", True)),
                 "opacity": float(entry.get("opacity", 1.0)),
+                # Tolerant, so a version 2 file written before locks existed
+                # opens unlocked rather than being refused.
+                "locked": bool(entry.get("locked", False)),
                 "properties": _props_from(entry.get("properties")),
             }
             if kind == "tile":

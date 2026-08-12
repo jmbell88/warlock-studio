@@ -458,6 +458,36 @@ def test_a_replace_undoes_back_to_the_original_art():
     assert np.array_equal(doc.tilesets[0].tileset.pixels, original)
 
 
+def test_locking_a_layer_is_undoable_and_a_no_op_pushes_nothing():
+    """``set_layer_props`` filters through ``snapshot``, so the edit records the
+    new field for free -- but undo replays through ``_apply_layer_props``, and a
+    field missing from *that* is one the user can set and never take back."""
+    doc = _doc()
+    layer = doc.add_tile_layer()
+    depth = len(doc.history)
+
+    doc.set_layer_props(layer.uid, locked=True)
+    assert layer.locked is True
+    assert len(doc.history) == depth + 1
+
+    doc.set_layer_props(layer.uid, locked=True)
+    assert len(doc.history) == depth + 1, "a no-op pushes nothing"
+
+    doc.undo()
+    assert layer.locked is False, "the hook has to assign it, not just record it"
+    doc.redo()
+    assert layer.locked is True
+
+
+def test_an_object_layer_locks_the_same_way():
+    doc = _doc()
+    layer = doc.add_object_layer("Things")
+    doc.set_layer_props(layer.uid, locked=True)
+    assert layer.locked is True
+    doc.undo()
+    assert layer.locked is False
+
+
 def test_the_tileset_epoch_moves_for_every_way_the_list_changes():
     """The three hooks are the tileset list's only mutators, which is the whole
     licence for a cache keyed on this number."""
