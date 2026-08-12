@@ -19,6 +19,8 @@ here, and the blit clips rather than refusing.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from . import gid as gidlib
@@ -190,4 +192,71 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
         if layer.opacity <= 0.0:
             continue
         render_layer(doc, layer, out)
+    return out
+
+
+# One mean colour per tile, memoised on the identity of the tileset's pixel
+# array. Safe because ``Tileset.__post_init__`` freezes that array: the object
+# is immutable, so an id that matches is the same art, and a *replaced* tileset
+# is a new array with a new id.
+_LUT_CACHE: dict[int, np.ndarray] = {}
+
+
+def tile_colours(tileset: Any) -> np.ndarray:
+    """``(tile_count, 4)`` of each tile's alpha-weighted mean colour.
+
+    Weighted, because an unweighted mean over a tile that is mostly transparent
+    is dominated by whatever colour happens to be stored under the zero alpha --
+    which is routinely black, and would draw a sparse map as a dark smear.
+    """
+    key = id(tileset.pixels)
+    cached = _LUT_CACHE.get(key)
+    if cached is not None and len(cached) == tileset.tile_count:
+        return cached
+    out = np.zeros((tileset.tile_count, 4), dtype=np.uint8)
+    for local in range(tileset.tile_count):
+        tile = tileset.tile_pixels(local).astype(np.float32)
+        alpha = tile[..., 3]
+        total = float(alpha.sum())
+        if total <= 0.0:
+            continue
+        out[local, :3] = np.clip(
+            np.rint((tile[..., :3] * alpha[..., None]).sum(axis=(0, 1)) / total), 0, 255
+        )
+        out[local, 3] = int(round(float(alpha.mean())))
+    _LUT_CACHE[key] = out
+    return out
+
+
+def minimap(doc: MapDoc) -> np.ndarray:
+    """The whole map as one pixel per cell, ``(height, width, 4)``.
+
+    **Not a downscale of ``render_map``.** That composites at full size and is
+    guarded by ``MAX_RENDER_PIXELS`` precisely because the full size is enormous
+    -- a 512-square map of 32px tiles is a 268-megapixel blend, and asking for
+    one every time the head moves is not something a frame can afford. One mean
+    colour per tile makes it a handful of array operations over the *cell* grid
+    instead, which is four orders of magnitude smaller.
+
+    Composited bottom-first through the same ``_over`` the flat renderer uses,
+    honouring ``visible`` and ``opacity`` so the picture agrees with the canvas
+    about what is showing. Flip flags are ignored on purpose: every one of the
+    eight transforms is a permutation of a tile's pixels, and a mean is
+    invariant under all of them.
+    """
+    out = np.zeros((int(doc.height), int(doc.width), 4), dtype=np.uint8)
+    luts = [(ref, tile_colours(ref.tileset)) for ref in doc.tilesets]
+    for layer in doc.layers:
+        if not isinstance(layer, TileLayer) or not layer.visible or layer.opacity <= 0.0:
+            continue
+        cells = np.zeros_like(out)
+        ids = np.asarray(layer.data) & np.uint32(gidlib.GID_MASK)
+        for ref, lut in luts:
+            if not len(lut):
+                continue
+            picked = (ids >= ref.firstgid) & (ids <= ref.last_gid)
+            if not picked.any():
+                continue
+            cells[picked] = lut[ids[picked] - np.uint32(ref.firstgid)]
+        _over(out, cells, float(layer.opacity))
     return out

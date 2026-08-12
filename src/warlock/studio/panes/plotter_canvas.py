@@ -25,6 +25,7 @@ import numpy as np
 
 from .. import inker_state, plotter_mode, plotter_state, theme, widgets
 from ..plotter import gid as gidlib
+from ..plotter import render as plotter_render
 from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
 from ..plotter.tilemap import ObjectLayer, TileLayer
@@ -122,10 +123,11 @@ def draw(ctx: Any) -> None:
     # footprint stays the thing under the pointer.
     _marquee(state, tab, draw_list, (origin.x, origin.y))
     _cursor(state, tab, draw_list, (origin.x, origin.y), hovered)
+    _minimap(ctx, state, tab, draw_list, (origin.x, origin.y), region)
     draw_list.pop_clip_rect()
 
     state.hover_cell = _cell_under(state, tab, (origin.x, origin.y)) if hovered else None
-    _events(ctx, state, tab, (origin.x, origin.y), hovered)
+    _events(ctx, state, tab, (origin.x, origin.y), hovered, region)
     _status(ctx, state, tab)
 
 
@@ -403,6 +405,64 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
 
 
+# The minimap's longest edge, in design pixels.
+_MINIMAP_MAX = 160
+
+
+def _minimap_rect(tab: Any, region) -> tuple[float, float, float, float]:
+    """Where the minimap sits, bottom-right of the pane, in screen space."""
+    doc = tab.doc
+    longest = max(int(doc.width), int(doc.height)) or 1
+    scale = sp(_MINIMAP_MAX) / longest
+    w, h = doc.width * scale, doc.height * scale
+    pad = sp(8)
+    return region[0] - w - pad, region[1] - h - pad, w, h
+
+
+def _minimap(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> None:
+    """The whole map in the corner, one pixel per cell.
+
+    Cached on ``(history.head, len(layers))`` rather than recomputed per frame:
+    the head moves for every edit, which is exactly when the picture changes,
+    and the layer count catches a visibility toggle that pushed a step of its
+    own. Both are cheap integers, so the comparison costs nothing on the frame
+    that does not need it.
+    """
+    from imgui_bundle import imgui
+
+    if not state.minimap:
+        return
+    doc = tab.doc
+    x, y, w, h = _minimap_rect(tab, region)
+    x, y = origin[0] + x, origin[1] + y
+    stamp = (doc.history.head, len(doc.layers))
+    key = f"plotter_minimap:{tab.uid}"
+    entry = ctx.state.preview.get(key)
+    if entry is None or entry[0] != stamp:
+        entry = (stamp, plotter_render.minimap(doc))
+        ctx.state.preview[key] = entry
+    texture = plotter_textures.image_texture(ctx, tab.uid, "minimap", entry[1], stamp)
+
+    draw_list.add_rect_filled((x, y), (x + w, y + h), imgui.get_color_u32(theme.rgba(theme.ELEV_1)))
+    if texture is not None:
+        draw_list.add_image(widgets.texture_ref(texture), (x, y), (x + w, y + h))
+    # rounding is the 4th positional and thickness the *5th*; a flags value in
+    # that slot silently draws a hairline and is how this was caught.
+    draw_list.add_rect(
+        (x, y), (x + w, y + h), imgui.get_color_u32(theme.rgba(theme.EDGE)), 0.0, sp(1)
+    )
+    # Where the pane is looking, so the minimap says *where you are* and not
+    # only what the map holds.
+    c0, r0, c1, r1 = _visible_range(tab.view, doc, origin, region)
+    vx0 = x + (max(0, c0) / max(1, doc.width)) * w
+    vy0 = y + (max(0, r0) / max(1, doc.height)) * h
+    vx1 = x + (min(doc.width, c1 + 1) / max(1, doc.width)) * w
+    vy1 = y + (min(doc.height, r1 + 1) / max(1, doc.height)) * h
+    draw_list.add_rect(
+        (vx0, vy0), (vx1, vy1), imgui.get_color_u32(theme.rgba(theme.ACCENT)), 0.0, sp(1.5)
+    )
+
+
 def _marquee(state: Any, tab: Any, draw_list: Any, origin) -> None:
     """The selection, as a low-alpha fill with an outline on it.
 
@@ -553,7 +613,7 @@ def _cell_under(state: Any, tab: Any, origin) -> tuple[int, int] | None:
     return tab.doc.cell_at(x, y)
 
 
-def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
+def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> None:
     from imgui_bundle import imgui
 
     if tab.busy:
@@ -564,6 +624,12 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
     if hovered and io.mouse_wheel:
         mouse = imgui.get_mouse_pos()
         inker_state.zoom_about(view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+
+    # Claimed before any tool sees the mouse, and before panning: the minimap
+    # sits *over* the map, so a press inside it that fell through would paint a
+    # cell on whatever is underneath.
+    if _minimap_input(state, tab, origin, region, hovered):
+        return
 
     panning = state.space_held or imgui.is_mouse_down(2)
     if hovered and panning and imgui.is_mouse_dragging(2 if not state.space_held else 0):
@@ -626,6 +692,39 @@ def _line_pending(state: Any, io: Any) -> bool:
     a stroke, which the drag already is.
     """
     return bool(io.key_shift) and state.tool == "stamp" and state.last_paint is not None
+
+
+def _minimap_input(state: Any, tab: Any, origin, region, hovered: bool) -> bool:
+    """Click or drag the minimap to recentre the view. ``True`` if it took the
+    mouse, which is what keeps the tool underneath from also acting."""
+    from imgui_bundle import imgui
+
+    if not state.minimap:
+        return False
+    if state.drag_kind and state.drag_kind != "minimap":
+        return False
+    x, y, w, h = _minimap_rect(tab, region)
+    x, y = origin[0] + x, origin[1] + y
+    mouse = imgui.get_mouse_pos()
+    inside = x <= mouse.x <= x + w and y <= mouse.y <= y + h
+
+    if hovered and inside and imgui.is_mouse_clicked(0):
+        state.drag_kind = "minimap"
+    elif state.drag_kind == "minimap" and not imgui.is_mouse_down(0):
+        state.clear_drag()
+        return True
+    if state.drag_kind != "minimap":
+        # Still swallow a hover so the cursor footprint does not draw under it.
+        return bool(inside and hovered)
+
+    doc = tab.doc
+    # Where in the map the pointer is, as a fraction, then centre the pane there.
+    fx = min(max((mouse.x - x) / w, 0.0), 1.0)
+    fy = min(max((mouse.y - y) / h, 0.0), 1.0)
+    px, py = fx * doc.pixel_width, fy * doc.pixel_height
+    zoom = tab.view.zoom
+    tab.view.pan = (region[0] / 2.0 - px * zoom, region[1] / 2.0 - py * zoom)
+    return True
 
 
 def _normalized(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int, int, int]:

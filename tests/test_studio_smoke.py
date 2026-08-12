@@ -2599,6 +2599,12 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     state.activate(tab.uid)
     state.tool = "stamp"
 
+    # The minimap toggled off, which is its own branch -- every frame above drew
+    # it, in both projections.
+    state.minimap = False
+    _frame(imgui_ctx, build)
+    state.minimap = True
+
     # An object layer with something selected: the properties form and the
     # typed-property editor are a whole branch nothing above reaches.
     objects = tab.doc.add_object_layer("Things")

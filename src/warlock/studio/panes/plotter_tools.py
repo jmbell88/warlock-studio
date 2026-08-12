@@ -166,6 +166,7 @@ def draw(ctx: Any) -> None:
         imgui.dummy((0, 6))
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
+    _, state.minimap = widgets.toggle("Minimap", state.minimap)
 
     imgui.dummy((0, 6))
     widgets.section("map")

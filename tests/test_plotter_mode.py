@@ -872,6 +872,55 @@ def test_a_cut_is_refused_while_the_tab_is_busy(monkeypatch):
     assert state.clipboard is None
 
 
+def test_the_minimap_is_sized_to_its_longest_edge():
+    """A wide map and a tall one both fit the same box, and neither is
+    stretched -- the scale comes from whichever edge is longer."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.tokens import sp
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.doc.resize(40, 10)
+    _x, _y, w, h = plotter_canvas._minimap_rect(tab, (800.0, 600.0))
+    assert w == pytest.approx(sp(plotter_canvas._MINIMAP_MAX))
+    assert h == pytest.approx(w / 4), "aspect kept"
+
+    tab.doc.resize(10, 40)
+    _x, _y, w2, h2 = plotter_canvas._minimap_rect(tab, (800.0, 600.0))
+    assert h2 == pytest.approx(sp(plotter_canvas._MINIMAP_MAX))
+    assert w2 == pytest.approx(h2 / 4)
+
+
+def test_the_minimap_sits_inside_the_bottom_right_of_the_pane():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    x, y, w, h = plotter_canvas._minimap_rect(tab, (800.0, 600.0))
+    assert x > 0 and x + w < 800.0
+    assert y > 0 and y + h < 600.0
+
+
+def test_the_minimap_cache_is_keyed_on_the_head_and_the_layer_count():
+    """The head moves for every edit, which is exactly when the picture
+    changes; the layer count catches an add whose step the head also moved."""
+    from warlock.studio.plotter import render as plotter_render
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    first = (tab.doc.history.head, len(tab.doc.layers))
+
+    tab.doc.write_region(layer.uid, 0, 0, np.array([[1]], gid.DTYPE))
+    assert (tab.doc.history.head, len(tab.doc.layers)) != first
+
+    # And the picture really does change with it.
+    tab.doc.undo()
+    blank = plotter_render.minimap(tab.doc)
+    tab.doc.redo()
+    assert not np.array_equal(plotter_render.minimap(tab.doc), blank)
+
+
 def test_a_resize_pins_the_opposite_corner():
     """Named by the corner that moves; the other stays still."""
     from warlock.studio.panes import plotter_canvas

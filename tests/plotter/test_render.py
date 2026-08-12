@@ -222,3 +222,82 @@ def test_a_transformed_brush_stamps_what_the_flat_renderer_then_draws():
     assert np.array_equal(painted(tools.flip_brush_h(brush)), flat[:, ::-1])
     assert np.array_equal(painted(tools.flip_brush_v(brush)), flat[::-1, :])
     assert np.array_equal(painted(tools.rotate_brush_cw(brush)), np.rot90(flat, k=-1))
+
+
+# --- the minimap --------------------------------------------------------------
+
+
+def test_a_minimap_is_one_pixel_per_cell():
+    """Not a downscale of ``render_map``: that composites at full size, which
+    for a large map is a nine-figure blend guarded by MAX_RENDER_PIXELS."""
+    doc = MapDoc(6, 4, 32, 32)
+    ref = doc.add_tileset(_tileset())
+    layer = doc.add_tile_layer("G")
+    layer.data[1, 2] = gid.compose(ref.firstgid + 1)  # the solid blue tile
+
+    out = render.minimap(doc)
+    assert out.shape == (4, 6, 4)
+    assert tuple(out[1, 2][:3]) == (0, 0, 255)
+    assert out[0, 0, 3] == 0, "an empty cell stays empty"
+
+
+def test_a_minimap_ignores_the_flip_flags():
+    """Every transform is a permutation of a tile's pixels, and a mean is
+    invariant under all eight."""
+    doc = MapDoc(2, 1, 32, 32)
+    ref = doc.add_tileset(_tileset())
+    layer = doc.add_tile_layer("G")
+    layer.data[0, 0] = gid.compose(ref.firstgid)
+    layer.data[0, 1] = gid.compose(ref.firstgid, flip_h=True, flip_v=True, flip_d=True)
+    out = render.minimap(doc)
+    assert np.array_equal(out[0, 0], out[0, 1])
+
+
+def test_a_minimap_skips_hidden_and_transparent_layers():
+    doc = MapDoc(2, 1, 32, 32)
+    ref = doc.add_tileset(_tileset())
+    hidden = doc.add_tile_layer("H")
+    hidden.data[0, 0] = gid.compose(ref.firstgid + 1)
+    doc.set_layer_props(hidden.uid, visible=False)
+    assert not render.minimap(doc).any()
+
+    doc.set_layer_props(hidden.uid, visible=True, opacity=0.0)
+    assert not render.minimap(doc).any()
+
+
+def test_a_minimap_composites_bottom_first():
+    doc = MapDoc(1, 1, 32, 32)
+    ref = doc.add_tileset(_tileset())
+    bottom = doc.add_tile_layer("bottom")
+    top = doc.add_tile_layer("top")
+    bottom.data[0, 0] = gid.compose(ref.firstgid)  # red-cornered tile
+    top.data[0, 0] = gid.compose(ref.firstgid + 1)  # solid blue
+    assert tuple(render.minimap(doc)[0, 0][:3]) == (0, 0, 255), "the top layer wins"
+
+
+def test_the_colour_table_is_memoised_on_the_pixel_array():
+    """Safe because ``Tileset`` freezes its pixels: a matching id is the same
+    art, and a replaced tileset is a new array with a new id."""
+    tileset = _tileset()
+    first = render.tile_colours(tileset)
+    assert render.tile_colours(tileset) is first
+    assert render.tile_colours(_tileset()) is not first
+
+
+def test_a_tile_colour_is_weighted_by_alpha():
+    """An unweighted mean over a mostly-transparent tile is dominated by
+    whatever is stored under the zero alpha -- routinely black, which would draw
+    a sparse map as a dark smear."""
+    pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    pixels[0, 0] = (255, 0, 0, 255)  # one opaque red pixel, three clear
+    tileset = Tileset(name="sparse", pixels=pixels, tile_w=2, tile_h=2)
+    colour = render.tile_colours(tileset)[0]
+    assert tuple(colour[:3]) == (255, 0, 0), "the visible pixel decides the hue"
+    assert 0 < int(colour[3]) < 255, "and coverage lives in the alpha"
+
+
+def test_a_minimap_of_a_map_with_no_tilesets_is_empty():
+    doc = MapDoc(3, 3, 16, 16)
+    doc.add_tile_layer("G")
+    assert render.minimap(doc).shape == (3, 3, 4)
+    assert not render.minimap(doc).any()

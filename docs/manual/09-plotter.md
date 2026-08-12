@@ -150,6 +150,16 @@ so it is one thing to take back.
 Painting lands on the *active* layer — the highlighted row in the layers pane. Painting with an
 object layer active says so rather than doing nothing.
 
+## The minimap
+
+A small view of the whole map sits in the bottom-right corner of the canvas, one pixel per cell,
+with a box showing where the pane is currently looking. Click or drag inside it to jump the view
+there. The **Minimap** toggle beside *Grid* turns it off.
+
+It is drawn from one average colour per tile rather than by shrinking a full render — a 512-square
+map of 32-pixel tiles composites to over 250 million pixels, which is not something that can happen
+while you drag. It shows layers as you have them set, so hiding a layer hides it here too.
+
 ## Selection
 
 `R` is the rectangular select tool. Drag a marquee; a plain click with no drag clears it. Ctrl+A

@@ -65,6 +65,36 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
     return texture
 
 
+def image_texture(ctx: Any, uid: str, name: str, pixels: Any, stamp: Any) -> Any:
+    """A texture for an array this mode *generates*, re-uploaded when it moves.
+
+    ``tileset_texture``'s twin for the one image here that is not frozen: the
+    minimap is recomputed whenever the document changes, so its texture needs a
+    staleness stamp that is a value rather than an identity: a freshly computed
+    array gets a new ``id`` every time, and keying on that would re-upload the
+    texture on every frame that asked for it.
+
+    Shares ``PREFIX`` so ``release_doc`` frees it with the rest of the tab's.
+    """
+    if ctx.viewer is None:
+        return None
+    key = _slot(uid, name)
+    stamp_key = f"{key}:stamp"
+    texture = ctx.state.preview.get(key)
+    if texture is not None and ctx.state.preview.get(stamp_key) != stamp:
+        docmodes.forget_texture(texture)
+        texture = None
+    if texture is None:
+        texture = ctx.viewer.ctx.texture(
+            (int(pixels.shape[1]), int(pixels.shape[0])), 4, pixels.tobytes()
+        )
+        nearest = ctx.viewer.ctx.NEAREST
+        texture.filter = (nearest, nearest)
+        ctx.state.preview[key] = texture
+        ctx.state.preview[stamp_key] = stamp
+    return texture
+
+
 def release_doc(ctx: Any, uid: str) -> None:
     """Drop every texture belonging to one closed tab."""
     docmodes.release_prefix(ctx, f"{PREFIX}{uid}:")

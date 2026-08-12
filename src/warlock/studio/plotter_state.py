@@ -163,6 +163,7 @@ class PlotterState:
 
     grid: bool = True
     show_objects: bool = True
+    minimap: bool = True
     # The cell under the pointer, for the status line. View state, recomputed
     # every frame and never persisted; ``None`` when the pointer is elsewhere.
     hover_cell: tuple[int, int] | None = None
