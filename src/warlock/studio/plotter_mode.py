@@ -365,6 +365,38 @@ TOOL_KEYS = plotter_state.TOOL_KEYS
 _MUTATING_CTRL = frozenset({"z", "y"})
 
 
+def _flipped_h(brush: Any, _shift: bool) -> Any:
+    from .plotter import tools as plotter_tools
+
+    return plotter_tools.flip_brush_h(brush)
+
+
+def _flipped_v(brush: Any, _shift: bool) -> Any:
+    from .plotter import tools as plotter_tools
+
+    return plotter_tools.flip_brush_v(brush)
+
+
+def _turned(brush: Any, shift: bool) -> Any:
+    """Z is a quarter turn clockwise; Shift+Z is the same turn three times.
+
+    Three clockwise turns rather than a counter-clockwise routine of its own,
+    because a second implementation of the flag algebra is a second thing to
+    keep in agreement with ``render.orient`` -- and four turns being the
+    identity is already pinned.
+    """
+    from .plotter import tools as plotter_tools
+
+    for _ in range(3 if shift else 1):
+        brush = plotter_tools.rotate_brush_cw(brush)
+    return brush
+
+
+# Tiled's brush transforms, as a table rather than three branches: the letters
+# taken are then one thing to read rather than three to keep in agreement.
+_BRUSH_TRANSFORMS: dict[str, Any] = {"x": _flipped_h, "y": _flipped_v, "z": _turned}
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """Plotter's keyboard. Returns whether the key was consumed.
 
@@ -423,6 +455,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # leaves the mode, which is what every work mode does.
         state.clear_drag()
         state.selected_object = None
+        return True
+    if name in _BRUSH_TRANSFORMS and state.brush is not None:
+        # Tiled's X / Y / Z. Deliberately outside the busy gate: the brush is
+        # view state, so transforming it writes nothing to the document and
+        # pushes no step -- the same reason ``tool`` is unguarded.
+        state.brush = _BRUSH_TRANSFORMS[name](state.brush, shift)
         return True
     if name in TOOL_KEYS:
         state.tool = TOOL_KEYS[name]

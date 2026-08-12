@@ -792,6 +792,80 @@ def test_a_key_release_is_never_consumed():
     assert plotter_mode.handle_key(ctx, up) is False
 
 
+def test_x_y_and_z_transform_the_brush_in_hand(monkeypatch):
+    import pygame
+
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.brush = np.array([[1, 2], [3, 4]], gid.DTYPE)
+
+    event, mods = _key("x")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert np.array_equal(gid.tile_ids(state.brush), [[2, 1], [4, 3]])
+
+    event, mods = _key("y")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert np.array_equal(gid.tile_ids(state.brush), [[4, 3], [2, 1]])
+
+
+def test_shift_z_turns_the_brush_the_other_way(monkeypatch):
+    """Three clockwise turns rather than a counter-clockwise routine of its
+    own: Z then Shift+Z must be the identity."""
+    import pygame
+
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    original = np.array([[1, 2], [3, 4]], gid.DTYPE)
+    state.brush = original.copy()
+
+    event, mods = _key("z")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert not np.array_equal(state.brush, original)
+
+    event, mods = _key("z", shift=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert np.array_equal(state.brush, original)
+
+
+def test_a_brush_transform_is_not_refused_while_the_tab_is_busy(monkeypatch):
+    """The brush is view state: transforming it writes nothing and pushes no
+    step, so it stays outside the gate that ``Ctrl+Z`` sits behind."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    state = plotter_mode.ensure(ctx)
+    state.brush = np.array([[1, 2]], gid.DTYPE)
+    head = tab.doc.history.head
+
+    event, mods = _key("x")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert np.array_equal(gid.tile_ids(state.brush), [[2, 1]])
+    assert tab.doc.history.head == head
+    assert not tab.dirty
+
+
+def test_a_brush_transform_with_nothing_in_hand_does_nothing(monkeypatch):
+    import pygame
+
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.brush = None
+    event, mods = _key("x")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is False
+    assert state.brush is None
+
+
 # --- objects ------------------------------------------------------------------
 
 

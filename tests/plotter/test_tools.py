@@ -213,6 +213,103 @@ def test_pick_returns_the_encoded_cell_or_none():
     assert tools.pick(layer, 99, 0) is None
 
 
+# --- transforming a brush -----------------------------------------------------
+
+
+def _corner_tile() -> np.ndarray:
+    """A 2x2 tile with four distinct pixels, so every one of the eight square
+    symmetries produces a different picture."""
+    tile = np.zeros((2, 2, 4), dtype=np.uint8)
+    for index, (row, column) in enumerate(((0, 0), (0, 1), (1, 0), (1, 1))):
+        tile[row, column] = (index + 1, 0, 0, 255)
+    return tile
+
+
+def _drawn(cell: int, tile: np.ndarray) -> np.ndarray:
+    """What one encoded cell actually renders as."""
+    from warlock.studio.plotter.render import orient
+
+    _id, flip_h, flip_v, flip_d = gid.decompose(int(cell))
+    return orient(tile, flip_h, flip_v, flip_d)
+
+
+def test_flipping_a_brush_agrees_with_the_renderer_for_every_flag():
+    """The oracle, and the reason there is no hand-written permutation table:
+    for all eight starting flag masks, the transformed cell must *draw* as the
+    numpy transform of what the original drew."""
+    tile = _corner_tile()
+    for mask in range(8):
+        cell = gid.compose(
+            5,
+            flip_h=bool(mask & 1),
+            flip_v=bool(mask & 2),
+            flip_d=bool(mask & 4),
+        )
+        brush = np.array([[cell]], gid.DTYPE)
+        before = _drawn(cell, tile)
+
+        got_h = _drawn(int(tools.flip_brush_h(brush)[0, 0]), tile)
+        assert np.array_equal(got_h, before[:, ::-1]), f"flip_h wrong for mask {mask}"
+
+        got_v = _drawn(int(tools.flip_brush_v(brush)[0, 0]), tile)
+        assert np.array_equal(got_v, before[::-1, :]), f"flip_v wrong for mask {mask}"
+
+        got_r = _drawn(int(tools.rotate_brush_cw(brush)[0, 0]), tile)
+        assert np.array_equal(got_r, np.rot90(before, k=-1)), f"rotate wrong for mask {mask}"
+
+
+def test_a_quarter_turn_of_an_unflagged_tile_is_flip_d_and_flip_h():
+    """What ``gid``'s own docstring says a clockwise turn is."""
+    brush = np.array([[gid.compose(3)]], gid.DTYPE)
+    assert int(tools.rotate_brush_cw(brush)[0, 0]) == gid.compose(3, flip_d=True, flip_h=True)
+
+
+def test_four_quarter_turns_and_double_mirrors_are_the_identity():
+    cells = [
+        gid.compose(9, flip_h=bool(m & 1), flip_v=bool(m & 2), flip_d=bool(m & 4))
+        for m in range(8)
+    ]
+    brush = np.array(cells, gid.DTYPE).reshape(2, 4)
+    assert np.array_equal(tools.flip_brush_h(tools.flip_brush_h(brush)), brush)
+    assert np.array_equal(tools.flip_brush_v(tools.flip_brush_v(brush)), brush)
+    turned = brush
+    for _ in range(4):
+        turned = tools.rotate_brush_cw(turned)
+    assert np.array_equal(turned, brush)
+
+
+def test_a_brush_transform_moves_the_arrangement_as_well_as_the_tiles():
+    brush = np.array([[1, 2], [3, 4]], gid.DTYPE)
+    assert np.array_equal(gid.tile_ids(tools.flip_brush_h(brush)), [[2, 1], [4, 3]])
+    assert np.array_equal(gid.tile_ids(tools.flip_brush_v(brush)), [[3, 4], [1, 2]])
+    assert np.array_equal(gid.tile_ids(tools.rotate_brush_cw(brush)), [[3, 1], [4, 2]])
+
+
+def test_a_non_square_brush_comes_back_transposed():
+    brush = np.array([[1, 2, 3]], gid.DTYPE)
+    turned = tools.rotate_brush_cw(brush)
+    assert turned.shape == (3, 1)
+    assert np.array_equal(gid.tile_ids(turned), [[1], [2], [3]])
+
+
+def test_an_empty_cell_never_gains_a_flag():
+    """gid 0 with a flag set is not an empty cell -- it is a tile id nothing
+    accounts for, and it would survive every round trip."""
+    brush = np.array([[0, gid.compose(4)], [0, 0]], gid.DTYPE)
+    for transform in (tools.flip_brush_h, tools.flip_brush_v, tools.rotate_brush_cw):
+        out = transform(brush)
+        assert int((out[gid.tile_ids(out) == 0]).max(initial=0)) == 0
+
+
+def test_a_brush_transform_leaves_its_input_alone():
+    brush = np.array([[gid.compose(1, flip_d=True), 2]], gid.DTYPE)
+    original = brush.copy()
+    tools.flip_brush_h(brush)
+    tools.flip_brush_v(brush)
+    tools.rotate_brush_cw(brush)
+    assert np.array_equal(brush, original)
+
+
 # --- nothing mutates ----------------------------------------------------------
 
 

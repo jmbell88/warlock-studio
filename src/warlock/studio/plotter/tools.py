@@ -149,3 +149,75 @@ def pick(data: np.ndarray, x: int, y: int) -> int | None:
     if not (0 <= x < width and 0 <= y < height):
         return None
     return int(data[y, x])
+
+
+# --- transforming a brush -----------------------------------------------------
+#
+# These take a *brush* and return a brush, which is what makes them the odd ones
+# out here: everything above answers with a Region to write into a layer. A
+# brush transform moves two things at once -- where each tile sits in the block,
+# and how that tile is drawn -- and both halves have to agree or a flipped brush
+# stamps a mirrored arrangement of unmirrored tiles.
+#
+# The flag half is group algebra rather than a lookup. ``render.orient`` applies
+# the flags as ``V^v . H^h . D^d`` (transpose, then mirror columns, then mirror
+# rows), so transforming the *drawn result* by T means composing T on the left
+# and pushing it back into that normal form. H and V commute with each other but
+# not with D -- ``D.V = H.D`` and ``D.H = V.D`` -- which is the whole content of
+# the three rules below:
+#
+#   * A horizontal mirror commutes all the way through and lands on H, so it
+#     toggles FLIP_H and nothing else. Likewise V. This is worth stating because
+#     the intuition that a mirror should "swap axes when FLIP_D is set" is
+#     wrong: that describes mirroring the tile *before* its own transform, and
+#     what a user flipping a brush means is the mirror of what they can see.
+#   * A 90-degree clockwise rotation is ``H.D`` (transpose, then mirror
+#     columns), so composing it gives ``h' = not v``, ``v' = h``, ``d' = not d``.
+#     That sends an unflagged tile to FLIP_D | FLIP_H, which is exactly what
+#     ``gid``'s own docstring says a clockwise quarter turn is.
+#
+# All three are pinned pixel-for-pixel against ``render.orient`` rather than
+# against a hand-derived table, because a table is the thing being derived.
+
+
+def _reflagged(brush: np.ndarray, h: np.ndarray, v: np.ndarray, d: np.ndarray) -> np.ndarray:
+    """Rebuild a block of cells from its ids and three boolean flag planes.
+
+    Empty cells stay empty: gid 0 with a flag set is not an empty cell, it is a
+    tile id nothing accounts for, and it would survive every round trip.
+    """
+    ids = np.asarray(brush, dtype=gidlib.DTYPE) & gidlib.DTYPE(gidlib.GID_MASK)
+    out = ids.copy()
+    for plane, bit in ((h, gidlib.FLIP_H), (v, gidlib.FLIP_V), (d, gidlib.FLIP_D)):
+        out |= np.where(plane, gidlib.DTYPE(bit), gidlib.DTYPE(0))
+    return np.where(ids != 0, out, gidlib.DTYPE(0)).astype(gidlib.DTYPE)
+
+
+def _planes(brush: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    arr = np.asarray(brush, dtype=gidlib.DTYPE)
+    return (
+        (arr & gidlib.DTYPE(gidlib.FLIP_H)) != 0,
+        (arr & gidlib.DTYPE(gidlib.FLIP_V)) != 0,
+        (arr & gidlib.DTYPE(gidlib.FLIP_D)) != 0,
+    )
+
+
+def flip_brush_h(brush: np.ndarray) -> np.ndarray:
+    """Mirror a brush left-to-right, tiles and arrangement together."""
+    arr = np.ascontiguousarray(np.fliplr(np.asarray(brush, dtype=gidlib.DTYPE)))
+    h, v, d = _planes(arr)
+    return _reflagged(arr, ~h, v, d)
+
+
+def flip_brush_v(brush: np.ndarray) -> np.ndarray:
+    """Mirror a brush top-to-bottom, tiles and arrangement together."""
+    arr = np.ascontiguousarray(np.flipud(np.asarray(brush, dtype=gidlib.DTYPE)))
+    h, v, d = _planes(arr)
+    return _reflagged(arr, h, ~v, d)
+
+
+def rotate_brush_cw(brush: np.ndarray) -> np.ndarray:
+    """A quarter turn clockwise. Non-square brushes come back transposed."""
+    arr = np.ascontiguousarray(np.rot90(np.asarray(brush, dtype=gidlib.DTYPE), k=-1))
+    h, v, d = _planes(arr)
+    return _reflagged(arr, ~v, h, ~d)

@@ -189,3 +189,36 @@ def test_an_isometric_render_is_the_size_the_projection_says():
     # (rows, columns): the height comes from tile_h and the width from tile_w,
     # so a 2:1 cell makes the map twice as wide as it is tall.
     assert out.shape[:2] == ((4 + 6) * 16 // 2, (4 + 6) * 32 // 2)
+
+
+def test_a_transformed_brush_stamps_what_the_flat_renderer_then_draws():
+    """The two-renderer family, reached the other way round: the brush
+    transforms in ``tools`` and the flag decoding in ``render`` have to agree,
+    or a rotated brush stamps an arrangement whose tiles face the wrong way.
+
+    Whole-pipeline rather than unit: transform a brush, stamp it, composite the
+    map, and compare against the same rotation applied to the pixels of the map
+    the untransformed brush produced.
+    """
+    from warlock.studio.plotter import tools
+
+    # A 2x2 map of 2x2 tiles, so the composite is a 4x4 image a numpy rotation
+    # can be compared against directly.
+    def painted(brush: np.ndarray) -> np.ndarray:
+        doc = MapDoc(2, 2, 2, 2)
+        doc.add_tileset(_tileset())
+        layer = doc.add_tile_layer("G")
+        doc.write_region(layer.uid, 0, 0, np.asarray(brush, gid.DTYPE))
+        return render.render_map(doc)
+
+    # Built in the tileset's own id space, and with every cell filled. Offsetting
+    # ids *after* a transform would not work: an empty cell deliberately never
+    # gains a flag, so adding a firstgid afterwards turns "nothing here" into a
+    # real unflipped tile and only in one of the two renders being compared.
+    tile_a, tile_b = gid.compose(1), gid.compose(2)
+    brush = np.array([[tile_a, tile_b], [tile_b, tile_a]], gid.DTYPE)
+    flat = painted(brush)
+
+    assert np.array_equal(painted(tools.flip_brush_h(brush)), flat[:, ::-1])
+    assert np.array_equal(painted(tools.flip_brush_v(brush)), flat[::-1, :])
+    assert np.array_equal(painted(tools.rotate_brush_cw(brush)), np.rot90(flat, k=-1))

@@ -2496,8 +2496,6 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     # only place the real ``_layers`` runs: both painted ids must have landed on
     # the one tileset, and the flipped cell must resolve like the plain one --
     # the memo is keyed on the *masked* id, so it would collide otherwise.
-    from warlock.studio.panes import plotter_canvas
-
     epoch, resolved = plotter_canvas._TILESET_MEMO[tab.uid]
     assert epoch == tab.doc.tileset_epoch
     assert resolved[ref.firstgid] == 0
