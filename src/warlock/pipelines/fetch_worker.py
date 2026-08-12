@@ -105,60 +105,53 @@ class _Sampler(threading.Thread):
 
 
 def _move_into(staging: Path, dest: Path) -> list[str]:
-    """Move the staged tree into ``dest``: all of it, or none of it.
+    """``publish.move_into``, plus the backup sweep a self-publishing fetch owes.
 
-    Per file rather than one directory rename, because a destination
-    legitimately already exists and is shared: ``loras/`` holds every adapter,
-    and a second fetch into it must add files rather than replace the folder.
-
-    Which is exactly what makes the rollback load-bearing rather than tidy. A
-    per-file move that fails partway -- a full disk, a file another process has
-    open -- leaves the half-populated directory the staging tree exists to
-    prevent, and every presence probe in ``warlock.fetch`` answers "is this
-    here" from a handful of filenames, so such a directory reads as a finished
-    download forever. So each move is undone in reverse: the file back into
-    staging, where the caller's rmtree removes it with the rest of the failed
-    download, and anything it overwrote back out of the backup tree.
+    The move itself lives in :mod:`warlock.publish` now, because the *parent*
+    performs it when a selection is published as one transaction (MDL-10) and
+    two copies of a rollback are two rollbacks. What stays here is the
+    single-repository path's own cleanup: it has no journal, so a completed
+    publish has nothing to keep the backup tree for.
     """
-    backup = dest.parent / f".{dest.name}.fetch.bak"
-    moved: list[tuple[Path, Path]] = []
-    saved: list[tuple[Path, Path]] = []
-    names: list[str] = []
-    try:
-        for src in sorted(staging.rglob("*")):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(staging)
-            target = dest / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                # os.replace destroys what is already there, and "left as it
-                # was" has to include that: a second fetch into loras/ writes
-                # names an earlier, different download put there.
-                kept = backup / rel
-                kept.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(target, kept)
-                saved.append((kept, target))
-            # replace(), not move(): an interrupted earlier attempt can leave a
-            # file of the same name, and shutil.move onto an existing file raises
-            # on some platforms and silently differs on others.
-            os.replace(src, target)
-            moved.append((src, target))
-            names.append(str(rel).replace("\\", "/"))
-    except BaseException:
-        # Suppressed, every one of them: a rollback that raises would replace
-        # the real failure with a second one and tell the user nothing about
-        # either. Moved files first -- a restore needs its target free.
-        for src, target in reversed(moved):
-            with contextlib.suppress(OSError):
-                os.replace(target, src)
-        for kept, target in reversed(saved):
-            with contextlib.suppress(OSError):
-                os.replace(kept, target)
-        shutil.rmtree(backup, ignore_errors=True)
-        raise
-    shutil.rmtree(backup, ignore_errors=True)
+    from .. import publish
+
+    names = publish.move_into(staging, dest)
+    shutil.rmtree(publish.backup_dir(dest), ignore_errors=True)
     return names
+
+
+def _verify_staged(staging: Path, spec: dict[str, Any]) -> None:
+    """Re-hash the staged tree against the hub's own digests. Raises on a mismatch.
+
+    The expected values are ``snapshot_download``'s ``.metadata`` sidecars,
+    which is what makes this a check rather than a tautology: they are the
+    ETags the *server* sent, recorded per file as it landed, so re-reading the
+    bytes off disk and re-hashing them catches a truncated write, a full disk
+    that silently short-wrote, and a file another process replaced between the
+    download and the publish.
+
+    A file with no sidecar is skipped rather than failed. Sidecars are written
+    per download, so a resumed fetch that found a file already complete has no
+    new one -- and "nothing to compare against" is not evidence of corruption.
+    The failure this exists to catch is a file that *has* a recorded digest and
+    does not match it.
+    """
+    from .. import hashes
+
+    expected = hashes.expected_digests(staging)
+    if not expected:
+        return
+    bad: list[str] = []
+    for rel, digest in sorted(expected.items()):
+        if not hashes.matches(staging / rel, digest):
+            bad.append(rel)
+    if bad:
+        listed = ", ".join(bad[:4]) + ("..." if len(bad) > 4 else "")
+        raise ValueError(
+            f"{spec.get('repo_id')} downloaded {len(bad)} file(s) that do not "
+            f"match the digests the hub recorded for them ({listed}). Nothing "
+            f"was installed; try the download again."
+        )
 
 
 def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
@@ -196,6 +189,18 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
             allow_patterns=patterns or None,
             ignore_patterns=ignore or None,
         )
+        # Verified here: after the download, before the rename, before the
+        # .cache subtree that carries the expected digests is deleted, and
+        # before anything is published (MDL-08).
+        #
+        # Mandatory rather than opt-in, and this is the one place it can be:
+        # a truncated or corrupt file that reaches ``dest`` reads as a
+        # finished model forever, because every presence probe is a handful of
+        # ``Path.exists()`` calls. Raising here goes through the same unwind
+        # every other failure does -- the staging tree is removed and nothing
+        # is installed -- so a failed verify costs the download and nothing
+        # else.
+        _verify_staged(staging, spec)
         rename = spec.get("rename")
         if rename:
             src, dst = rename
@@ -210,6 +215,18 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
         # local_dir. Moving it into a model directory would leave a stray
         # directory every presence probe has to learn to ignore.
         shutil.rmtree(staging / ".cache", ignore_errors=True)
+        if not spec.get("publish", True):
+            # No-publish mode (MDL-10). The parent is staging a whole selection
+            # and will publish all of them together under one journal, so this
+            # child stops with its tree complete, verified and marked. The
+            # marker is what distinguishes "finished, waiting" from "was
+            # interrupted", which the directory's existence cannot say.
+            #
+            # Deliberately outside the ``except`` unwind below: the staging
+            # tree is the *product* here, not a temporary, so the usual
+            # "remove it on any failure" rule would delete the answer.
+            sampler.stop()
+            return _stage_only(staging, dest, spec)
         moved = _move_into(staging, dest)
     except BaseException:
         # Every failure, including a KeyboardInterrupt or a kill that unwinds:
@@ -222,6 +239,34 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
     shutil.rmtree(staging, ignore_errors=True)
     _write_manifest(dest, spec, moved)
     return {"ok": True, "dest": str(dest), "files": moved}
+
+
+def _stage_only(staging: Path, dest: Path, spec: dict[str, Any]) -> dict[str, Any]:
+    """Finish a no-publish fetch: mark the staging tree and report it.
+
+    The file list is computed here rather than by the parent so the child --
+    which is the only process that knows what it downloaded -- is the one that
+    says. The parent's publish walks the tree anyway; this is what its journal
+    records *before* the walk, so a crash mid-publish has something to undo
+    against.
+    """
+    from .. import publish
+
+    names = sorted(
+        str(p.relative_to(staging)).replace("\\", "/")
+        for p in staging.rglob("*")
+        if p.is_file()
+    )
+    publish.write_json(
+        staging / publish.PUBLISH_NAME,
+        {
+            "repo_id": str(spec.get("repo_id") or ""),
+            "revision": str(spec.get("revision") or ""),
+            "dest": str(dest),
+            "files": names,
+        },
+    )
+    return {"ok": True, "staged": str(staging), "dest": str(dest), "files": names}
 
 
 def _write_manifest(dest: Path, spec: dict[str, Any], moved: list[str]) -> None:
@@ -242,10 +287,18 @@ def _write_manifest(dest: Path, spec: dict[str, Any], moved: list[str]) -> None:
     would be true.
     """
     path = dest / ".warlock-fetch.json"
+    from .. import hashes
+
     record = {
         "repo_id": str(spec.get("repo_id") or ""),
         "revision": str(spec.get("revision") or ""),
         "files": sorted(moved),
+        # The digests a later ``fetch.verify_manifest`` compares against. Taken
+        # from the *published* files rather than carried over from the staged
+        # ones, so what is recorded is what is actually on disk at the path the
+        # record names -- a move that silently truncated would otherwise be
+        # certified by a hash of the file before it moved.
+        "digests": hashes.digest_files(dest, moved),
     }
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))

@@ -228,7 +228,7 @@ def _maintenance(what: str) -> Any:
 _STAGING_SUFFIXES = (".fetch.part", ".fetch.bak")
 
 
-def _sweep_staging(jobs: list[fetch_mod.Job]) -> None:
+def _sweep_staging(jobs: list[fetch_mod.Job], *, spare: set[str] | None = None) -> None:
     """Remove staging trees an interrupted fetch left behind. Never raises.
 
     Opportunistic and at the *start* of the next download, exactly as
@@ -236,9 +236,13 @@ def _sweep_staging(jobs: list[fetch_mod.Job]) -> None:
     again", it costs one directory listing per destination, and a sweep that
     raised would turn recoverable clutter into a permanent refusal.
 
-    Unwinding inside Python already rolls a publish back (``_move_into``); this
-    is for the case that cannot -- the process being killed mid-publish (MDL-10).
+    ``spare`` is the set of staging trees an *open journal* is protecting, and
+    it is load-bearing rather than tidy. Without it the sweep and the recovery
+    race in exactly the wrong direction: the sweep sees ``.thing.fetch.part``,
+    correctly identifies it as the litter of an interrupted fetch, and deletes
+    the only copy of the files the rollback was about to put back.
     """
+    spared = spare or set()
     for parent in {job.dest.parent for job in jobs}:
         try:
             entries = list(parent.iterdir())
@@ -247,57 +251,172 @@ def _sweep_staging(jobs: list[fetch_mod.Job]) -> None:
         for path in entries:
             if not path.name.endswith(_STAGING_SUFFIXES):
                 continue
+            if str(path) in spared:
+                log.info("keeping staging an open transaction still needs: %s", path)
+                continue
             log.warning("removing staging left by an interrupted fetch: %s", path)
             with contextlib.suppress(OSError):
                 shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink()
 
 
+def recover(config: Any) -> list[str]:
+    """Roll back a publish the process did not live to finish. -> what it undid.
+
+    Called once on the startup path, after ``reconcile_startup`` and before the
+    staging sweep -- that order is the whole of it. The sweep would otherwise
+    delete the staging trees this needs, and reconcile is about *jobs* rather
+    than about the model store, so the two do not interact.
+
+    Never raises. An interrupted download must not make the app unlaunchable,
+    which would be the one failure worse than the interrupted download.
+    """
+    from .. import publish
+
+    root = Path(config.t2i_model_root)
+    try:
+        undone = publish.recover(root)
+    except Exception:  # pragma: no cover - publish.recover suppresses its own
+        log.exception("could not roll back an interrupted download")
+        return []
+    if undone:
+        log.warning(
+            "rolled back an interrupted download; these are as they were before "
+            "it started: %s",
+            ", ".join(undone),
+        )
+        fetch_mod.bump_store_generation()
+    return undone
+
+
 def _download(
     jobs: list[fetch_mod.Job], on_progress: Progress | None, timeout: float
 ) -> dict[str, Any]:
-    _sweep_staging(jobs)
+    """Stage the whole selection, then publish all of it. MDL-10.
+
+    "Install these four" is one decision, and it used to be four. Each child
+    downloaded *and* published its own repository, so a failure on the third
+    left two installed that nobody had asked for individually -- and the
+    refusal said so, because saying otherwise would have been a lie.
+
+    Now the children stage only (``publish: False``), and nothing is installed
+    until every one of them has landed and verified its bytes. A failure during
+    the staging phase is the cheap case: the staging trees are removed and the
+    disk is exactly as it was, because nothing ever moved.
+
+    The publishing phase is the one that needs the journal. Unwinding inside
+    Python already rolls a publish back, but a process *killed* mid-publish
+    cannot unwind at all -- so what it is about to do is written down first,
+    and ``recover`` reads that back on the next launch. See
+    :mod:`warlock.publish`.
+
+    The disk door already charges for this: ``disk_refusal`` is computed over
+    the whole plan plus headroom, and every staging tree is a sibling of its
+    destination, so staging all of them at once needs the space the door
+    already required.
+    """
+    from .. import publish
+
+    root = Path(jobs[0].dest).parent
+    _sweep_staging(jobs, spare=publish.staged_dirs(root))
     total = fetch_mod.total_gib(jobs) or float(len(jobs))
     done_gib = 0.0
+    staged: list[tuple[fetch_mod.Job, dict[str, Any]]] = []
+
+    # --- phase one: stage everything, install nothing -----------------------
+    try:
+        for index, job in enumerate(jobs, start=1):
+            share = job.size_gib or (total / len(jobs))
+
+            def report(percent: float, label: str, _done=done_gib, _share=share) -> None:
+                if on_progress is None:
+                    return
+                # Capped below 100 and below the publish's own share: the move
+                # is fast but it is not instant, and a bar that reached the end
+                # before the files existed is what made "downloaded" and
+                # "installed" look like one moment.
+                overall = 98.0 * (_done + _share * percent / 100.0) / total
+                on_progress(min(overall, 98.0), label)
+
+            report(0.0, f"{job.repo_id} ({index} of {len(jobs)})")
+            result = _run_worker(job, on_progress=report, timeout=timeout, publish=False)
+            staged.append((job, result))
+            done_gib += share
+    except ServiceError as exc:
+        # Nothing has moved, so there is nothing to undo -- only staging trees
+        # to drop. This is the whole benefit of the two phases: the message can
+        # now say "nothing was installed" and be true.
+        for _job, result in staged:
+            shutil.rmtree(result.get("staged") or "", ignore_errors=True)
+        _sweep_staging(jobs)
+        raise Invalid(
+            f"{exc.message} Nothing was installed: the whole selection is "
+            f"downloaded before any of it is put in place, so your models are "
+            f"exactly as they were. Try again."
+        ) from exc
+
+    # --- phase two: publish, under a journal --------------------------------
+    if on_progress is not None:
+        on_progress(98.0, "Installing")
+    entries = [
+        {"repo_id": job.repo_id, "staging": result.get("staged"), "dest": str(job.dest)}
+        for job, result in staged
+    ]
+    publish.begin(root, entries)
     fetched: list[str] = []
-    for index, job in enumerate(jobs, start=1):
-        share = job.size_gib or (total / len(jobs))
-
-        def report(percent: float, label: str, _done=done_gib, _share=share) -> None:
-            if on_progress is None:
-                return
-            overall = 100.0 * (_done + _share * percent / 100.0) / total
-            on_progress(min(overall, 99.0), label)
-
-        report(0.0, f"{job.repo_id} ({index} of {len(jobs)})")
-        try:
-            _run_worker(job, on_progress=report, timeout=timeout)
-        except ServiceError as exc:
-            # Repositories publish one at a time, so a failure here leaves the
-            # earlier ones *installed* -- the docstring's "the whole selection
-            # is refused, or the whole selection runs" is true of the disk check
-            # at the door and not of this loop (MDL-10). Making it true would
-            # mean staging the entire selection and publishing through a
-            # journal, which is the Phase 4A transaction; what is fixed here is
-            # the *lying*: the refusal now says exactly what did land, so a user
-            # can see that a checkpoint arrived and its required adapter did
-            # not, rather than being told the whole thing failed and left alone
-            # to guess at gigabytes.
-            landed = ", ".join(fetched) if fetched else "nothing"
-            raise Invalid(
-                f"{exc.message} Already installed before this failed: {landed}. "
-                f"Try the remaining ones again -- what downloaded is kept."
-            ) from exc
-        fetched.append(job.repo_id)
-        done_gib += share
-        # Per repo, not once at the end: publication is per repo (see MDL-10 on
-        # why that is not yet a transaction), so after this line those weights
-        # really are on disk and a resident pipe really is out of date. A raise
-        # from a later repo must not leave the counter behind what the store
-        # already holds.
+    try:
+        for job, result in staged:
+            staging = Path(result["staged"])
+            names = publish.move_into(staging, job.dest)
+            # Recorded *as it happens*, because the crash this survives happens
+            # during the loop: the journal has to be true at every moment of it
+            # rather than only at the ends.
+            publish.note_published(root, str(job.dest), names)
+            _write_manifest_for(job, staging, names)
+            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(publish.backup_dir(job.dest), ignore_errors=True)
+            fetched.append(job.repo_id)
+    except BaseException:
+        # In-process failure: undo what this loop did, in reverse, and leave
+        # the journal for a recovery only if we cannot finish the undo here.
+        publish.recover(root)
+        _sweep_staging(jobs)
         fetch_mod.bump_store_generation()
+        raise
+    publish.finish(root)
+    # Once, at the end, and now that is the honest place for it: before the
+    # transaction, publication was per repo and the counter had to keep up with
+    # it. Everything in this selection became visible at the same moment.
+    fetch_mod.bump_store_generation()
     if on_progress is not None:
         on_progress(100.0, "")
     return {"fetched": fetched}
+
+
+def _write_manifest_for(job: fetch_mod.Job, staging: Path, names: list[str]) -> None:
+    """The completion marker, written by the parent now that it publishes.
+
+    Same record the child used to write and for the same reason -- a manifest
+    is what makes "this directory was finished by a Warlock download" a
+    question with an answer -- and written last, after the publish, so it
+    remains a completion marker rather than an intention.
+
+    Never raises: a manifest that could not be written must not fail a download
+    that succeeded. Its absence already means "unknown", which would be true.
+    """
+    from .. import hashes, publish
+
+    path = job.dest / fetch_mod.MANIFEST_NAME
+    record = {
+        "repo_id": job.repo_id,
+        "revision": job.revision,
+        "files": sorted(names),
+        "digests": hashes.digest_files(job.dest, names),
+    }
+    existing = publish.read_json(path) or {}
+    repos = existing.get("repos")
+    repos = dict(repos) if isinstance(repos, dict) else {}
+    repos[job.repo_id] = record
+    publish.write_json(path, {"repos": repos})
 
 
 # A directory being deleted is renamed to a sibling with this prefix first, so
@@ -508,18 +627,24 @@ def _kill_and_reap(proc: subprocess.Popen[str]) -> None:
 
 
 def _run_worker(
-    job: fetch_mod.Job, *, on_progress: Progress, timeout: float
+    job: fetch_mod.Job, *, on_progress: Progress, timeout: float, publish: bool = True
 ) -> dict[str, Any]:
     """One child, one repository. Raises ``Invalid`` with the child's own words.
 
     The spec goes over stdin and the answer comes back through a file, matching
     ``rigging.run_worker`` -- stdout carries progress lines and a stray print
     from ``huggingface_hub`` must not be able to corrupt the result.
+
+    ``publish=False`` stops the child with its staging tree complete and
+    verified, for the parent to install as part of a transaction (MDL-10). The
+    default stays True so a caller that wants one repository installed on its
+    own -- and the tests that exercise that path -- is unchanged.
     """
     with tempfile.TemporaryDirectory(prefix="warlock-fetch-") as scratch:
         result_path = Path(scratch) / "result.json"
         spec = job.spec()
         spec["result_path"] = str(result_path)
+        spec["publish"] = publish
         # ``stderr=PIPE``, not DEVNULL. A child that dies *before* ``main()`` --
         # a broken venv, an import error, the ``json.loads(sys.stdin.read())``
         # that sits outside its own try -- writes no result file, so the only

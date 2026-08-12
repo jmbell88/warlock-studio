@@ -253,7 +253,14 @@ TRELLIS_EXE_HINT = (
     "(vendored build: v0.5.4), or point WARLOCK_TRELLIS_EXE at your own copy"
 )
 TRELLIS_GGUF_HINT = (
-    'uvx hf download ilintar/trellis2-gguf --include "*.gguf" '
+    # Pinned like every registry ``Fetch`` (MDL-03), and this one is not a
+    # Fetch: the GGUF weights are one of the two *fatal* doctor rows, declared
+    # as text here because nothing downloads them through the registry. That
+    # makes the pin matter more rather than less -- an unpinned fatal
+    # dependency is the one a fresh install has no choice but to take.
+    "uvx hf download ilintar/trellis2-gguf "
+    "--revision a57397bd3d351599d9729fc144b3f87c3f87d65b "
+    '--include "*.gguf" '
     '--exclude "q4/*" --exclude "q8/*" --local-dir models/trellis2-gguf'
 )
 
@@ -695,15 +702,19 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
     difference the user should be able to see the cause of, which is what this
     row is for.
 
-    The weights alone were not enough to see it by. BiRefNet is loaded with
-    trust_remote_code, so what builds it is the checkpoint's own modelling code
-    and its imports are invisible to any resolver -- which is exactly how this
-    row came to be green on a host where ``_load`` raised
-    ModuleNotFoundError on every export. So the three packages that code
-    reaches for are probed by name, and ``matting.last_error`` -- the words of
-    a load that already failed this session -- is reported beside them. A row
-    that agrees with the filesystem and disagrees with the program is the worst
-    of both answers.
+    The weights alone were not enough to see it by. BiRefNet's modelling code
+    reaches for packages no resolver can see from the registry -- which is
+    exactly how this row came to be green on a host where ``_load`` raised
+    ModuleNotFoundError on every export. So the packages that code needs are
+    probed by name, and ``matting.last_error`` -- the words of a load that
+    already failed this session -- is reported beside them. A row that agrees
+    with the filesystem and disagrees with the program is the worst of both
+    answers.
+
+    That code used to be the *checkpoint's own*, run under
+    ``trust_remote_code``; it is vendored at ``pipelines/birefnet/`` now, so
+    the import scan is checking this repo's dependencies rather than a
+    downloaded file's. The scan is unchanged because the imports are.
 
     And since N112 it *does* claim that the checkpoint loads, because it tries:
     ``_load_probe`` runs a real CPU ``from_pretrained`` once per process, off

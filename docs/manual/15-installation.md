@@ -95,12 +95,12 @@ Two downloads are enough to make the app work end to end. Both are one-time.
 
 ```powershell
 # TRELLIS.2 GGUF weights -> ~/.warlock/models/trellis2-gguf/
-uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
+uvx hf download ilintar/trellis2-gguf --revision a57397bd3d351599d9729fc144b3f87c3f87d65b --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir $HOME/.warlock/models/trellis2-gguf
 
 # SDXL 1.0 weights (fp16 variant, ~7 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only,
 # needs `uv sync --extra studio --extra text2image` to pull torch cu128)
-uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 --revision 462165984030d82259a11f4367a4eed129e94a7b `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
 ```
 
@@ -136,34 +136,34 @@ opposite — adapters on the resident pipeline, switched for free.
 # SDXL 1.0 + Hyper-SD (~7 GB + 787 MB). Style LoRAs are trained against full
 # SDXL at 20-25 steps with CFG, so they land noticeably stronger here than on
 # Turbo's 4 steps at guidance 0. Hyper-SD buys the step count back.
-uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 --revision 462165984030d82259a11f4367a4eed129e94a7b `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
-uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir $HOME/.warlock/models/loras
+uvx hf download ByteDance/Hyper-SD --revision bc08d970a87c74c71209491d64e3525845698863 Hyper-SDXL-4steps-lora.safetensors --local-dir $HOME/.warlock/models/loras
 
 # Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
-uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
+uvx hf download playgroundai/playground-v2.5-1024px-aesthetic --revision 1e032f13f2fe6db2dc49947dbdbd196e753de573 `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/playground-v2.5
 
 # SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
 # guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
 # LCM LoRA has to be renamed: loras/ is flat, and the upstream filename is
 # generic enough that any other repo's default-named adapter would overwrite it.
-uvx hf download latent-consistency/lcm-lora-sdxl `
+uvx hf download latent-consistency/lcm-lora-sdxl --revision a18548dd4956b174ec5b0d78d340c8dae0a129cd `
   pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
 Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
 
 # Style LoRAs -> ~/.warlock/models/loras/
-uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir $HOME/.warlock/models/loras
-uvx hf download artificialguybr/3DRedmond-V1 `
+uvx hf download goofyai/3d_render_style_xl --revision 5ec74a57db5e244a2157173781a7b29045f88237 3d_render_style_xl.safetensors --local-dir $HOME/.warlock/models/loras
+uvx hf download artificialguybr/3DRedmond-V1 --revision f4b4b980972566aea7c71af9d4e170d7fcb6c404 `
   3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir $HOME/.warlock/models/loras
-uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
+uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl --revision 74bb3a6e2efd47ead698ff3ac2695ab63bbd2d5c `
   PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
-uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir $HOME/.warlock/models/loras
+uvx hf download nerijs/pixel-art-xl --revision 8bf4a4d9ea283e00a51fafda8e0539f8248ea037 pixel-art-xl.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art for FLUX.2 klein. Renamed for the same reason the LCM LoRA above is:
 # loras/ is flat and shared across architectures, and this repo ships the same
 # generic filename. It is offered only on the two klein entries.
-uvx hf download Limbicnation/pixel-art-lora `
+uvx hf download Limbicnation/pixel-art-lora --revision 0ac8e5c3400af68228811edc324721e25fc26777 `
   pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
 Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
 ```
@@ -180,12 +180,12 @@ makes its control unavailable until it is present.
 ```powershell
 # IP-Adapter Plus: condition on an image's appearance. Both halves are needed --
 # the weights alone load fine and then fail at the first call.
-uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
+uvx hf download h94/IP-Adapter --revision 018e402774aeeddd60609b4ecdb7e298259dc729 sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
   --local-dir $HOME/.warlock/models/ip-adapter
-uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir $HOME/.warlock/models/ip-adapter
+uvx hf download h94/IP-Adapter --revision 018e402774aeeddd60609b4ecdb7e298259dc729 --include "models/image_encoder/*" --local-dir $HOME/.warlock/models/ip-adapter
 
 # ControlNet (Canny): lock the silhouette to an image's edges.
-uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
+uvx hf download diffusers/controlnet-canny-sdxl-1.0 --revision eb115a19a10d14909256db740ed109532ab1483c `
   --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
 ```
 

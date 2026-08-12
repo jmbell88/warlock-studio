@@ -12,8 +12,6 @@ from __future__ import annotations
 import io
 import json
 import sys
-import types
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -78,13 +76,14 @@ def test_a_checkpoint_that_will_not_load_is_reported_as_a_load_failure(tmp_path,
     def boom(*a, **k):
         raise RuntimeError("No module named 'einops'")
 
-    monkeypatch.setitem(
-        sys.modules,
-        "transformers",
-        types.SimpleNamespace(
-            AutoModelForImageSegmentation=SimpleNamespace(from_pretrained=boom)
-        ),
-    )
+    # ``birefnet.load``, not ``transformers``: the modelling code is vendored
+    # and the loader is stricter, so the failure this reports is now "the
+    # checkpoint does not map onto the vendored architecture" as well as a
+    # missing package. Both are permanent for the session, which is what the
+    # memo below is about.
+    from warlock.pipelines import birefnet
+
+    monkeypatch.setattr(birefnet, "load", boom)
     resp = matting_worker.handle(_request(tmp_path))
     assert resp["ok"] is False
     assert resp["stage"] == "load"

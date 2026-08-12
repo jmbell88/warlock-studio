@@ -105,6 +105,16 @@ class Runtime:
         # unclean shutdown -- surface it instead of silently re-running a
         # 2-minute GPU job on every launch.
         self.store.reconcile_startup()
+        # And the model store's own interrupted work, before anything can sweep
+        # the staging trees it needs (MDL-10). A download publishes under a
+        # journal; a process killed mid-publish leaves the disk holding some of
+        # the new files, some of the old ones in a backup tree, and the rest in
+        # staging. This puts it back. Never raises -- an interrupted download
+        # must not make the app unlaunchable, which is the one failure worse
+        # than the interrupted download.
+        from ..service import downloads as _downloads
+
+        _downloads.recover(self.config)
         # The loop thread starts *before* doctor runs (C34): the two are
         # independent, so the doctor's path probes and the loop's own spin-up
         # overlap instead of queueing.

@@ -223,9 +223,24 @@ _last_error: str | None = None
 
 
 def _load(path: Path, device: str):
+    """The BiRefNet at ``path``, built from *vendored* code (MDL-03).
+
+    This used to be ``AutoModelForImageSegmentation.from_pretrained(...,
+    trust_remote_code=True)``, which executes whatever ``birefnet.py`` the
+    snapshot on disk happens to hold -- in this process, with the user's
+    filesystem and network permissions. Pinning the revision narrowed that to
+    "whatever that commit shipped"; the modelling code lives in
+    ``pipelines/birefnet/`` now, so what runs is what is in this checkout and a
+    reviewer can read it.
+
+    The failure memo and its ``_last_error`` string are unchanged, and matter
+    slightly more: the loader is stricter now (see ``birefnet.load``), so the
+    new way to fail is a state dict that does not map onto the vendored
+    architecture -- which is exactly the drift worth reporting loudly.
+    """
     global _last_error
 
-    from transformers import AutoModelForImageSegmentation
+    from . import birefnet
 
     key = f"{path}|{device}"
     hit = _cache.get(key)
@@ -237,15 +252,12 @@ def _load(path: Path, device: str):
     if hit is not None:
         return hit
     try:
-        model = AutoModelForImageSegmentation.from_pretrained(
-            str(path),
-            # The repo's own modelling code, from the snapshot on disk. Nothing
-            # is fetched: local_files_only is what makes that true, and
-            # doctor's row states the trade rather than hiding it.
-            trust_remote_code=models.MATTING_MODELS[models.DEFAULT_MATTING].remote_code,
-            local_files_only=True,
-        )
-        model.eval()
+        # ``strict=True`` inside, which is a parity assertion rather than a
+        # setting: a checkpoint that does not map exactly onto the vendored
+        # architecture would otherwise load with a layer left randomly
+        # initialised, and a BiRefNet with a random decoder block does not
+        # fail -- it returns a plausible, wrong mask.
+        model = birefnet.load(path)
         model = model.to(device)
         if device == "cpu":
             # The published checkpoint stores fp16 weights, and half precision

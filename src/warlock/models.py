@@ -442,6 +442,7 @@ _SDXL_FILES = ("*.json", "*.txt", "*fp16.safetensors")
 _SDXL_BASE_1_0 = Fetch(
     "stabilityai/stable-diffusion-xl-base-1.0",
     "sdxl-base-1.0",
+    revision="462165984030d82259a11f4367a4eed129e94a7b",
     allow_patterns=_SDXL_FILES,
     size_gib=7.0,
 )
@@ -459,6 +460,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "stabilityai/sdxl-turbo",
                 "sdxl-turbo",
+                revision="71153311d3dbb46851df1931d3ca6e939de83304",
                 allow_patterns=_SDXL_FILES,
                 ignore_patterns=("sd_xl_turbo_1.0*",),
                 size_gib=7.0,
@@ -483,6 +485,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "ByteDance/Hyper-SD",
                 "loras",
+                revision="bc08d970a87c74c71209491d64e3525845698863",
                 filenames=("Hyper-SDXL-4steps-lora.safetensors",),
                 size_gib=0.8,
             ),
@@ -504,6 +507,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "playgroundai/playground-v2.5-1024px-aesthetic",
                 "playground-v2.5",
+                revision="1e032f13f2fe6db2dc49947dbdbd196e753de573",
                 allow_patterns=_SDXL_FILES,
                 size_gib=7.0,
             ),
@@ -552,6 +556,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "latent-consistency/lcm-lora-sdxl",
                 "loras",
+                revision="a18548dd4956b174ec5b0d78d340c8dae0a129cd",
                 filenames=("pytorch_lora_weights.safetensors",),
                 # Renamed because the upstream filename is generic: any other
                 # repo's default-named LoRA downloaded into the flat loras/
@@ -585,6 +590,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "ByteDance/SDXL-Lightning",
                 "loras",
+                revision="c9a24f48e1c025556787b0c58dd67a091ece2e44",
                 filenames=("sdxl_lightning_4step_lora.safetensors",),
                 size_gib=0.4,
             ),
@@ -607,6 +613,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "RunDiffusion/Juggernaut-XL-v9",
                 "juggernaut-xl-v9",
+                revision="cf419233522daa0b9ea36c3aff98fa2cab1fb0fb",
                 allow_patterns=_SDXL_FILES,
                 size_gib=6.9,
             ),
@@ -628,6 +635,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "Lykon/dreamshaper-xl-1-0",
                 "dreamshaper-xl",
+                revision="41e6644752a8c9aa63930e6043c4fd83c7708420",
                 allow_patterns=_SDXL_FILES,
                 size_gib=6.9,
             ),
@@ -682,6 +690,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "black-forest-labs/FLUX.2-klein-base-4B",
                 "flux2-klein-base-4b",
+                revision="a3b4f4849157f664bdbc776fd7453c2783562f4d",
                 allow_patterns=("*.json", "*.txt", "*.jinja", "*.safetensors"),
                 # The repo carries a redundant 7.75 GB single-file checkpoint
                 # beside the diffusers layout; nothing here reads it.
@@ -728,6 +737,7 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             Fetch(
                 "black-forest-labs/FLUX.2-klein-4B",
                 "flux2-klein-4b",
+                revision="e7b7dc27f91deacad38e78976d1f2b499d76a294",
                 allow_patterns=("*.json", "*.txt", "*.jinja", "*.safetensors"),
                 ignore_patterns=("flux-2-klein-4b.safetensors",),
                 size_gib=16.0,
@@ -746,6 +756,7 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
             Fetch(
                 "goofyai/3d_render_style_xl",
                 "loras",
+                revision="5ec74a57db5e244a2157173781a7b29045f88237",
                 filenames=("3d_render_style_xl.safetensors",),
                 size_gib=0.2,
             ),
@@ -760,6 +771,7 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
             Fetch(
                 "artificialguybr/3DRedmond-V1",
                 "loras",
+                revision="f4b4b980972566aea7c71af9d4e170d7fcb6c404",
                 filenames=("3DRedmond-3DRenderStyle-3DRenderAF.safetensors",),
                 size_gib=0.2,
             ),
@@ -776,6 +788,7 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
             Fetch(
                 "artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl",
                 "loras",
+                revision="74bb3a6e2efd47ead698ff3ac2695ab63bbd2d5c",
                 filenames=("PS1Redmond-PS1Game-Playstation1Graphics.safetensors",),
                 size_gib=0.2,
             ),
@@ -800,6 +813,7 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
             Fetch(
                 "nerijs/pixel-art-xl",
                 "loras",
+                revision="8bf4a4d9ea283e00a51fafda8e0539f8248ea037",
                 filenames=("pixel-art-xl.safetensors",),
                 size_gib=0.2,
             ),
@@ -856,6 +870,13 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
             Fetch(
                 "Limbicnation/pixel-art-lora",
                 "loras",
+                # Unconfirmed against local bytes: this adapter is in the
+                # registry but has never been downloaded on the host the
+                # pins were recovered from, so the SHA comes from the hub's
+                # refs/main rather than from a .metadata beside real files.
+                # Re-check it against the HF API the next time this box is
+                # online; every other pin here was read off downloaded data.
+                revision="0ac8e5c3400af68228811edc324721e25fc26777",
                 filenames=("pytorch_lora_weights.safetensors",),
                 rename=("pytorch_lora_weights.safetensors", "pixel-art-klein.safetensors"),
                 size_gib=0.3,
@@ -884,12 +905,14 @@ IP_ADAPTERS: dict[str, IPAdapter] = _table(
             Fetch(
                 "h94/IP-Adapter",
                 "ip-adapter",
+                revision="018e402774aeeddd60609b4ecdb7e298259dc729",
                 filenames=("sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",),
                 size_gib=0.9,
             ),
             Fetch(
                 "h94/IP-Adapter",
                 "ip-adapter",
+                revision="018e402774aeeddd60609b4ecdb7e298259dc729",
                 allow_patterns=("models/image_encoder/*",),
                 size_gib=2.6,
             ),
@@ -907,6 +930,7 @@ CONTROLNETS: dict[str, ControlNet] = _table(
             Fetch(
                 "diffusers/controlnet-canny-sdxl-1.0",
                 "controlnet-canny-sdxl",
+                revision="eb115a19a10d14909256db740ed109532ab1483c",
                 allow_patterns=("*.json", "*fp16.safetensors"),
                 size_gib=2.5,
             ),
@@ -943,6 +967,7 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
             Fetch(
                 "facebook/dinov2-base",
                 "dinov2-base",
+                revision="f9e44c814b77203eaa57a6bdbbd535f21ede1415",
                 allow_patterns=("*.json", "*.safetensors"),
                 size_gib=0.4,
             ),
@@ -988,6 +1013,7 @@ POSE_MODELS: dict[str, PoseModel] = _table(
             Fetch(
                 "usyd-community/vitpose-base-simple",
                 "vitpose-base",
+                revision="a93ac0c67e0b7e2c55287d21d4c460c8f3c54d45",
                 allow_patterns=("*.json", "*.safetensors"),
                 size_gib=0.4,
             ),
@@ -1009,11 +1035,19 @@ class MattingModel:
     optional and neither is ever downloaded at runtime, which is all they have
     in common.
 
-    ``remote_code`` is stated rather than implied. The published repo ships its
-    own modelling code and transformers executes it on load. It comes from the
-    snapshot the user downloaded once -- nothing is fetched, and the offline
-    invariant holds -- but it is third-party Python running in this process,
-    and doctor says so out loud rather than leaving it in a docstring.
+    ``remote_code`` is stated rather than implied, and it is **False for every
+    entry now**. The published BiRefNet repo ships its own modelling code and
+    transformers used to execute it on load: from the snapshot the user
+    downloaded once, so nothing was fetched and the offline invariant held, but
+    it was still third-party Python running in this process with no lockfile
+    over it (MDL-03). That code is vendored at
+    ``pipelines/birefnet/`` now, so nothing is executed out of a model
+    directory at all.
+
+    The field stays rather than being deleted, and so does doctor's sentence
+    keyed off it: it is the thing that would have to be set again if a future
+    entry wanted the old behaviour, and a registry with nowhere to say
+    "this one runs downloaded code" is a registry that cannot warn about it.
     """
 
     key: str
@@ -1036,22 +1070,32 @@ MATTING_MODELS: dict[str, MattingModel] = _table(
         "birefnet",
         "BiRefNet",
         "birefnet",
-        remote_code=True,
+        # False since the modelling code was vendored. Nothing is executed out
+        # of the downloaded directory any more; see ``pipelines/birefnet``.
+        remote_code=False,
         fetch=(
             Fetch(
                 "ZhengPeng7/BiRefNet",
                 "birefnet",
-                allow_patterns=("*.json", "*.py", "*.safetensors"),
+                revision="e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
+                # ``*.py`` is gone from the download. Not merely unused -- left
+                # in place it would be Python sitting in a model directory that
+                # nothing runs, which is worse than either extreme: a reader
+                # finding it would reasonably assume it *is* what runs.
+                allow_patterns=("*.json", "*.safetensors"),
                 size_gib=1.0,
                 # The weights are not the whole download. The repo's own
                 # modelling code -- which trust_remote_code runs out of the
-                # checkpoint directory -- builds its backbone through packages
-                # no resolver can see, so a directory doctor is happy with used
-                # to hold a model that could not import. They are declared in
-                # the text2image extra now (einops/kornia/timm/torchvision),
-                # which is why this names the sync rather than a bare pip
-                # install: the old "you may also need" line was both
-                # optional-sounding and incomplete.
+                # checkpoint directory and is vendored here now -- builds its
+                # backbone through packages no resolver can see, so a directory
+                # doctor is happy with used to hold a model that could not
+                # import. They are declared in the text2image extra
+                # (einops/kornia/timm/torchvision), which is why this names the
+                # sync rather than a bare pip install: the old "you may also
+                # need" line was both optional-sounding and incomplete. The
+                # dependency did not go away with the vendoring -- the same
+                # imports are at the top of ``pipelines/birefnet/modeling.py``
+                # -- so the note stays exactly as it was.
                 #
                 # A ``note`` rather than a second Fetch precisely because the
                 # download button cannot do it: it is not a repository fetch,

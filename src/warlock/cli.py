@@ -39,11 +39,17 @@ def main() -> None:
     parser.add_argument(
         "--out", type=Path, default=Path("sweep"), help="sweep: output directory for GLBs and logs"
     )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="doctor: re-hash every installed model against what its download "
+             "recorded. Reads gigabytes and takes minutes, which is why it is a "
+             "flag and never runs on startup",
+    )
     args = parser.parse_args()
 
     if args.command == "doctor":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-        _run_doctor()
+        _run_doctor(verify=args.verify)
         return
     if args.command == "sweep":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -105,7 +111,7 @@ def _run_sweep(args: argparse.Namespace) -> None:
     sweep_mod.print_table(rows, args.audit_resolution)
 
 
-def _run_doctor() -> None:
+def _run_doctor(*, verify: bool = False) -> None:
     from .config import effective, get_config
     from .doctor import run_checks
 
@@ -123,5 +129,37 @@ def _run_doctor() -> None:
     for setting in effective(config):
         where = f"  <- {setting.env}" if setting.from_env else ""
         print(f"  {setting.name} = {setting.value}{where}")
-    if any(not c.ok and c.fatal for c in checks):
+    corrupt = _run_verify(config) if verify else False
+    if corrupt or any(not c.ok and c.fatal for c in checks):
         raise SystemExit(1)
+
+
+def _run_verify(config: object) -> bool:
+    """The integrity pass. -> whether anything is actually corrupt.
+
+    Behind a flag and never at startup (the C29/C30 lesson): it re-reads every
+    installed weight file, which is gigabytes and minutes, and nothing about
+    opening the app is a request for that. ``suspect_files`` is the cheap probe
+    that runs where a probe belongs.
+
+    "unknown" is printed and is not a failure. A directory downloaded before
+    manifests carried digests, or by hand with the pasted ``uvx hf download``
+    line, has nothing to compare against -- and reporting that as a problem
+    would light up every install that predates this and teach the reader that
+    the check is noise.
+    """
+    from . import fetch
+
+    print("\nIntegrity (re-hashed against each download's own manifest):")
+    results = fetch.verify_all(config)  # type: ignore[arg-type]
+    if not results:
+        print("  nothing to check: no model directory carries a manifest")
+        return False
+    label = {
+        fetch.VERIFY_OK: "OK",
+        fetch.VERIFY_UNKNOWN: "UNKNOWN",
+        fetch.VERIFY_BAD: "CORRUPT",
+    }
+    for result in results:
+        print(f"  [{label[result.status]}] {result.dest.name}: {result.detail}")
+    return any(r.status == fetch.VERIFY_BAD for r in results)

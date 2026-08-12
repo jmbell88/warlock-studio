@@ -307,7 +307,27 @@ def _merge(into: Job, one: models.Fetch) -> Job:
     precisely so doctor prints two lines, and a fetch of only the second would
     produce the half-downloaded directory doctor's two-part probe exists to
     catch.
+
+    ``revision`` is carried through, and it used to be dropped: ``Job``
+    defaults it to ``""``, this function rebuilt the job from scratch without
+    it, and so the IP-Adapter -- the one repository in the registry with two
+    records against one destination -- came out of ``plan`` *unpinned*. The
+    pin was in ``models.py``, the command in the docs showed it, and the fetch
+    that actually ran followed the branch tip. Silently, because an unpinned
+    fetch succeeds.
+
+    Two records for one repository must agree about which commit they are, and
+    a disagreement is a registry bug rather than something to resolve here: it
+    would mean one directory holding files from two different snapshots, which
+    is exactly the mixed state a pin exists to prevent. So it is asserted
+    rather than merged.
     """
+    if one.revision and into.revision and one.revision != into.revision:
+        raise ValueError(
+            f"{into.repo_id} is pinned to two different commits for one "
+            f"destination ({into.revision} and {one.revision}); a directory "
+            f"cannot hold both snapshots"
+        )
 
     def _union(a: tuple[str, ...], b: tuple[str, ...]) -> tuple[str, ...]:
         out = list(a)
@@ -317,6 +337,7 @@ def _merge(into: Job, one: models.Fetch) -> Job:
     return Job(
         repo_id=into.repo_id,
         dest=into.dest,
+        revision=into.revision or one.revision,
         filenames=_union(into.filenames, one.filenames),
         allow_patterns=_union(into.allow_patterns, one.allow_patterns),
         ignore_patterns=_union(into.ignore_patterns, one.ignore_patterns),
@@ -598,6 +619,109 @@ def read_manifest(dest: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+#: What ``verify_manifest`` can conclude about one directory.
+#:
+#: ``"unknown"`` is a first-class answer, not a soft failure. A directory
+#: downloaded before manifests carried digests -- or by hand, with ``uvx hf
+#: download`` -- has nothing to compare against, and reporting that as a
+#: problem would light up every install that predates this and teach the user
+#: that the check is noise. It is never red.
+VERIFY_OK = "ok"
+VERIFY_UNKNOWN = "unknown"
+VERIFY_BAD = "bad"
+
+
+@dataclass(frozen=True)
+class Verification:
+    """One directory's answer, and which files are wrong if any are."""
+
+    dest: Path
+    status: str
+    checked: int = 0
+    bad: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+
+    @property
+    def detail(self) -> str:
+        if self.status == VERIFY_UNKNOWN:
+            return "no digests recorded (downloaded before this, or by hand)"
+        if self.status == VERIFY_OK:
+            return f"{self.checked} file(s) match"
+        parts = []
+        if self.bad:
+            parts.append(f"{len(self.bad)} corrupt: " + ", ".join(self.bad[:4]))
+        if self.missing:
+            parts.append(f"{len(self.missing)} missing: " + ", ".join(self.missing[:4]))
+        return "; ".join(parts)
+
+
+def verify_manifest(config: Config, dest: Path) -> Verification:
+    """Re-hash an installed directory against what its download recorded.
+
+    **On demand only, and never at startup.** The C29/C30 lesson: a check that
+    runs on every launch is a check that has to be fast, and hashing 16 GB of
+    weights is neither fast nor something a user asked for at the moment they
+    opened the app. ``suspect_files`` is the cheap probe that runs where a
+    probe belongs; this is the expensive one, behind ``warlock doctor --verify``
+    and a button in Settings, and it exists for the question "is this install
+    actually intact" asked deliberately.
+
+    Deliberately **not** consulted by :func:`present`. That function answers
+    "are the files here", is called from the frame loop and from the admission
+    doors, and making it hash anything would turn a form's every frame into a
+    disk read of a checkpoint. It is also what keeps the test fixtures working:
+    ``conftest`` writes one-byte placeholders, which are present and would
+    never verify.
+    """
+    dest = Path(dest)
+    manifest = read_manifest(dest)
+    repos = (manifest or {}).get("repos")
+    repos = repos if isinstance(repos, dict) else {}
+    wanted: dict[str, str] = {}
+    for record in repos.values():
+        digests = record.get("digests") if isinstance(record, dict) else None
+        if not isinstance(digests, dict):
+            continue
+        for name, entry in digests.items():
+            if isinstance(entry, dict) and isinstance(entry.get("sha256"), str):
+                wanted[str(name)] = entry["sha256"]
+    if not wanted:
+        return Verification(dest=dest, status=VERIFY_UNKNOWN)
+
+    from . import hashes
+
+    bad: list[str] = []
+    missing: list[str] = []
+    for name, digest in sorted(wanted.items()):
+        path = dest / name
+        if not path.is_file():
+            missing.append(name)
+        elif hashes.sha256(path) != digest:
+            bad.append(name)
+    status = VERIFY_BAD if (bad or missing) else VERIFY_OK
+    return Verification(
+        dest=dest,
+        status=status,
+        checked=len(wanted),
+        bad=tuple(bad),
+        missing=tuple(missing),
+    )
+
+
+def verify_all(config: Config) -> list[Verification]:
+    """Every model directory that carries a manifest, verified. Blocking.
+
+    Walks the manifests rather than the registry, deliberately: the question is
+    "is what is installed intact", and a directory installed by a registry row
+    that has since been renamed is still a directory on this disk.
+    """
+    root = Path(config.t2i_model_root)
+    if not root.is_dir():
+        return []
+    dests = sorted({p.parent for p in root.glob(f"*/{MANIFEST_NAME}")})
+    return [verify_manifest(config, dest) for dest in dests]
 
 
 def suspect_files(config: Config, kind: str, spec: Any) -> list[str]:

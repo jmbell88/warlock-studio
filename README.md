@@ -56,11 +56,11 @@ uv sync --extra studio --extra text2image --extra rig
 #    vendored build: v0.5.4 (2026-07-27)
 
 # 3. TRELLIS.2 GGUF weights -> ~/.warlock/models/trellis2-gguf/
-uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
+uvx hf download ilintar/trellis2-gguf --revision a57397bd3d351599d9729fc144b3f87c3f87d65b --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir $HOME/.warlock/models/trellis2-gguf
 
 # 4. SDXL 1.0 weights (fp16 variant, ~7 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only)
-uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
+uvx hf download stabilityai/stable-diffusion-xl-base-1.0 --revision 462165984030d82259a11f4367a4eed129e94a7b `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
 ```
 

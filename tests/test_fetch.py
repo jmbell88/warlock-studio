@@ -55,6 +55,7 @@ def test_the_download_text_is_what_doctor_prints():
     """
     assert models.BASE_MODELS["turbo"].download == (
         "uvx hf download stabilityai/sdxl-turbo "
+        "--revision 71153311d3dbb46851df1931d3ca6e939de83304 "
         '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
         '--exclude "sd_xl_turbo_1.0*" --local-dir $HOME/.warlock/models/sdxl-turbo'
     )
@@ -62,9 +63,12 @@ def test_the_download_text_is_what_doctor_prints():
     # "download with:\n  " prefix lines up with.
     assert models.BASE_MODELS["sdxl"].download == (
         "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
+        "--revision 462165984030d82259a11f4367a4eed129e94a7b "
         '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
         "--local-dir $HOME/.warlock/models/sdxl-base-1.0\n"
-        "  uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors "
+        "  uvx hf download ByteDance/Hyper-SD "
+        "--revision bc08d970a87c74c71209491d64e3525845698863 "
+        "Hyper-SDXL-4steps-lora.safetensors "
         "--local-dir $HOME/.warlock/models/loras"
     )
     # The rename, which is why the string could never simply be executed.
@@ -87,6 +91,131 @@ def test_every_registry_entry_has_a_fetch_and_a_download_line():
         for one in entry.fetch:
             assert one.repo_id and one.local_dir, entry.row_key
             assert one.size_gib > 0, f"{entry.row_key} declares no size"
+
+
+# --- the pins (MDL-03) --------------------------------------------------------
+
+SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def test_every_fetch_pins_an_immutable_commit():
+    """``Fetch.revision``'s own docstring has promised this test since the
+    field was added, and the field was empty everywhere.
+
+    Unpinned, ``snapshot_download`` follows whatever ``main`` points at today,
+    so a Download click a year from now retrieves different weights -- and the
+    findings corpus, which is keyed on model *names*, silently starts mixing
+    two checkpoints under one label. The pins were recovered from the
+    ``.metadata`` sidecars beside the already-downloaded files, so each one is
+    the commit this host is actually running.
+    """
+    unpinned = [
+        f"{entry.row_key} -> {one.repo_id}"
+        for entry in fetch.entries()
+        for one in entry.fetch
+        if not SHA.match(one.revision or "")
+    ]
+    assert unpinned == []
+
+
+def test_two_records_for_one_repository_agree_about_the_commit():
+    """The IP-Adapter is the only repository in the registry with two records
+    against one destination -- its weights and its CLIP vision encoder. Two
+    commits for one directory would mean files from two snapshots side by
+    side, which is the mixed state a pin exists to prevent."""
+    by_repo: dict[str, set[str]] = {}
+    for entry in fetch.entries():
+        for one in entry.fetch:
+            by_repo.setdefault(one.repo_id, set()).add(one.revision)
+    disagreeing = {repo: shas for repo, shas in by_repo.items() if len(shas) > 1}
+    assert disagreeing == {}
+
+
+def test_merging_two_records_keeps_the_pin():
+    """The bug the pins uncovered. ``Job`` defaults ``revision`` to "" and
+    ``_merge`` rebuilt the job from scratch without it, so the IP-Adapter --
+    the one entry that merges -- came out of ``plan`` unpinned while
+    ``models.py`` and the printed command both showed the pin. Silently,
+    because an unpinned fetch succeeds."""
+    entry = next(e for e in fetch.entries() if len(e.fetch) > 1)
+    jobs = fetch.plan(Config(), [entry])
+    assert jobs, entry.row_key
+    for job in jobs:
+        assert SHA.match(job.revision), f"{job.repo_id} lost its pin in the merge"
+
+
+def test_a_merge_refuses_two_different_commits():
+    """Asserted rather than resolved: picking one would install a directory
+    the registry did not describe."""
+    first = models.Fetch("r", "d", revision="a" * 40, size_gib=1.0)
+    second = models.Fetch("r", "d", revision="b" * 40, size_gib=1.0)
+    job = fetch.Job(repo_id="r", dest=Path("d"), revision=first.revision)
+    with pytest.raises(ValueError, match="two different commits"):
+        fetch._merge(job, second)
+
+
+def test_every_rendered_command_carries_its_revision():
+    """A hand-run download that silently took the branch tip would defeat the
+    pin for exactly the user most likely to be reproducing something."""
+    for entry in fetch.entries():
+        for one in entry.fetch:
+            assert f"--revision {one.revision}" in one.command(), one.repo_id
+
+
+#: The documents carrying hand-written ``uvx hf download`` lines. They are not
+#: the registry's rendered one-liners -- they are PowerShell, with backtick
+#: continuations and comments between them -- so they cannot be generated, and
+#: the drift they can have is exactly the one this catches: a command that
+#: names the right repository and the wrong commit, or no commit at all.
+PINNED_DOCS = (
+    "docs/MODELS.md",
+    "docs/manual/15-installation.md",
+    "README.md",
+    # Not a document: ``doctor``'s hint for the GGUF weights, which are one of
+    # the two fatal rows and are declared as text because nothing downloads
+    # them through the registry.
+    "src/warlock/doctor.py",
+)
+
+
+@pytest.mark.parametrize("rel", PINNED_DOCS)
+def test_every_documented_download_command_is_pinned(rel: str):
+    """A pasted command that silently took the branch tip defeats the pin for
+    exactly the user most likely to be reproducing something -- and the four
+    registry pins that were already in ``models.py`` were invisible here for
+    months, because nothing compared the two."""
+    root = SRC.parents[1]
+    text = (root / rel).read_text(encoding="utf-8")
+    # A short window after the repository rather than the very next token: one
+    # of these files is Python rather than markdown, and ``doctor``'s hint is a
+    # concatenation of string literals, so what follows the repository there is
+    # a closing quote and a line break before ``--revision``. The window is
+    # small enough that it cannot reach the *next* command.
+    unpinned = [
+        match.group(1)
+        for match in re.finditer(
+            r"uvx hf download ([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)", text
+        )
+        if "--revision" not in text[match.end() : match.end() + 24]
+    ]
+    assert unpinned == [], f"{rel} downloads these without a --revision"
+
+
+@pytest.mark.parametrize("rel", PINNED_DOCS)
+def test_a_documented_command_names_the_commit_the_registry_pins(rel: str):
+    """Pinned to *something* is not enough: a stale SHA in a document is worse
+    than none, because it looks deliberate."""
+    root = SRC.parents[1]
+    text = (root / rel).read_text(encoding="utf-8")
+    pins = {one.repo_id: one.revision for e in fetch.entries() for one in e.fetch}
+    wrong = [
+        f"{repo}: doc says {found}, registry says {pins[repo]}"
+        for repo, found in re.findall(
+            r"uvx hf download ([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+) --revision (\S+)", text
+        )
+        if repo in pins and found != pins[repo]
+    ]
+    assert wrong == []
 
 
 def test_the_docs_name_every_repository_the_registry_does():
@@ -673,10 +802,15 @@ def test_a_download_reports_overall_progress_across_its_fetches(tmp_path, monkey
     monkeypatch.setattr(fetch, "free_gib", lambda _path: 5000.0)
     seen: list[float] = []
 
-    def fake(job, *, on_progress, timeout):
+    def fake(job, *, on_progress, timeout, publish=True):
         on_progress(50.0, job.repo_id)
         on_progress(100.0, job.repo_id)
-        return {"ok": True}
+        # A no-publish child hands back the staging tree it finished, which is
+        # what the parent's publishing phase installs (MDL-10).
+        staging = Path(job.dest).parent / f".{Path(job.dest).name}.fetch.part"
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / "w.safetensors").write_bytes(b"weights")
+        return {"ok": True, "staged": str(staging), "dest": str(job.dest)}
 
     monkeypatch.setattr(downloads, "_run_worker", fake)
     downloads.download(
@@ -725,6 +859,92 @@ def test_a_download_runs_end_to_end_through_a_real_child(tmp_path, monkeypatch):
     assert seen and seen[-1] == (100.0, "")
     entry = fetch.find("lora:pixelxl")
     assert entry.is_present(cfg)
+
+
+def test_a_real_child_in_no_publish_mode_stages_and_installs_nothing(tmp_path, monkeypatch):
+    """The child half of the transaction, against a real subprocess (MDL-10).
+
+    ``publish: False`` is what makes "install these four" one decision instead
+    of four: the child stops with its tree downloaded, verified and marked, and
+    the parent installs every tree together afterwards. The thing to pin is
+    that it really does stop -- a child that published anyway would restore the
+    old behaviour with the new code around it, and every parent-level test
+    would still pass.
+    """
+    from warlock import publish
+
+    # Imported here *and* the flag put back: importing ``fetch_worker`` sets
+    # ``HF_HUB_OFFLINE=0``, which is the whole point of the module and correct
+    # in the child process it is spawned as. In the pytest process it is the
+    # one thing the offline invariant forbids -- huggingface_hub reads that
+    # variable at import time -- and the guard two tests below catches it.
+    _before = os.environ.get("HF_HUB_OFFLINE")
+    from warlock.pipelines import fetch_worker
+
+    if _before is None:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+    else:
+        os.environ["HF_HUB_OFFLINE"] = _before
+
+    cfg = _config(tmp_path)
+    dest = cfg.t2i_model_root / "loras"
+    spec = {
+        "repo_id": "nerijs/pixel-art-xl",
+        "dest": str(dest),
+        "publish": False,
+        "filenames": ["pixel-art-xl.safetensors"],
+        "size_gib": 0.1,
+    }
+    monkeypatch.setattr(
+        fetch_worker,
+        "fetch_one",
+        fetch_worker.fetch_one,  # named so the patch below is the only stub
+    )
+
+    import types
+
+    stub = types.ModuleType("huggingface_hub")
+
+    def snapshot_download(**kw):
+        root = Path(kw["local_dir"])
+        (root / "pixel-art-xl.safetensors").write_bytes(b"weights")
+
+    stub.snapshot_download = snapshot_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", stub)
+
+    result = fetch_worker.fetch_one(spec)
+
+    staging = Path(result["staged"])
+    assert staging.is_dir(), "the staging tree is the product, not a temporary"
+    assert (staging / "pixel-art-xl.safetensors").read_bytes() == b"weights"
+    # Nothing published, and the completion marker says the tree is finished --
+    # which the directory's mere existence could not.
+    assert not (dest / "pixel-art-xl.safetensors").exists()
+    marker = publish.read_json(staging / publish.PUBLISH_NAME)
+    assert marker and marker["repo_id"] == "nerijs/pixel-art-xl"
+    assert "pixel-art-xl.safetensors" in marker["files"]
+    # And no manifest: that is written by whoever publishes, after the publish,
+    # so it stays a completion marker rather than an intention.
+    assert not (dest / fetch.MANIFEST_NAME).exists()
+
+
+def test_the_publish_marker_is_not_itself_published(tmp_path):
+    """It belongs to the staging tree. Published into a model directory it
+    would be a stray file every presence probe has to learn to ignore -- the
+    same reason ``.cache`` is removed before the move."""
+    from warlock import publish
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "w.bin").write_bytes(b"w")
+    (staging / publish.PUBLISH_NAME).write_text("{}", encoding="utf-8")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+
+    names = publish.move_into(staging, dest)
+
+    assert names == ["w.bin"]
+    assert not (dest / publish.PUBLISH_NAME).exists()
 
 
 def test_a_child_that_fails_is_reported_in_its_own_words(tmp_path, monkeypatch):

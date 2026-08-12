@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -270,15 +269,13 @@ def test_a_model_kept_on_the_cpu_is_cast_to_float32(tmp_path, monkeypatch):
             super().__init__()
             self.conv = torch.nn.Conv2d(3, 1, 1)
 
-    monkeypatch.setitem(
-        sys.modules,
-        "transformers",
-        types.SimpleNamespace(
-            AutoModelForImageSegmentation=SimpleNamespace(
-                from_pretrained=lambda *a, **k: Stub().half()
-            )
-        ),
-    )
+    # ``birefnet.load``, not ``transformers``: the modelling code is vendored
+    # now and nothing is built out of the checkpoint directory. What is being
+    # tested is unchanged -- the cast is ``matting``'s, and it is the reason
+    # the CPU path is usable at all.
+    from warlock.pipelines import birefnet
+
+    monkeypatch.setattr(birefnet, "load", lambda _path: Stub().half())
     model = matting._load(tmp_path / "birefnet", "cpu")
     assert next(model.parameters()).dtype is torch.float32
 

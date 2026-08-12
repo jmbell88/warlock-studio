@@ -121,6 +121,14 @@ explicit = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Vendored third-party source, kept byte-for-byte apart from four marked
+# modifications (see src/warlock/pipelines/birefnet/ATTRIBUTION.md). Linting it
+# would mean reformatting it, and a reformatted vendor copy is one nobody can
+# diff against upstream -- which is the entire reason it is in the tree.
+extend-exclude = [
+    "src/warlock/pipelines/birefnet/modeling.py",
+    "src/warlock/pipelines/birefnet/configuration.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM"]
