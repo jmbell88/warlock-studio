@@ -1598,10 +1598,15 @@ def _glyph_button(
     # Focus as well as hover (UX-02). The tooltip is the *only* place a glyph
     # button says what it does, so showing it on hover alone meant the name
     # existed for pointer users and did not exist for keyboard users -- who
-    # reach the same button and are told nothing but a shape. Keyboard focus
-    # rather than any focus, so a click does not also pop the tooltip it was
-    # already showing.
-    named = hovered or imgui.is_item_focused()
+    # reach the same button and are told nothing but a shape.
+    #
+    # Gated on ``nav_visible`` and not on focus alone. Focus is held by some
+    # control from the first frame, so the looser test popped a tooltip beside
+    # the header on startup, before anybody had pressed anything -- caught in a
+    # screenshot rather than by a test, since nothing headless has a nav
+    # cursor. ``nav_visible`` is imgui's own "the user is navigating by
+    # keyboard right now", which is exactly the audience this is for.
+    named = hovered or (imgui.is_item_focused() and imgui.get_io().nav_visible)
     if tooltip and named:
         imgui.set_tooltip(tooltip)
     return clicked and enabled

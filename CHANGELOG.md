@@ -8,6 +8,37 @@ file behind.
 
 ## 0.0.21 — 2026-08-11
 
+- **The app can be driven from the keyboard.** Tab and Shift+Tab move between
+  controls in every pane — Settings, Profiles, the library, the inspector, the
+  mode switch — and Space or Enter operates the one you land on, with an
+  accent-coloured ring showing where you are. Before, focus traversal existed
+  in the 2D and 3D forms and nowhere else, while the shortcut sheet implied
+  otherwise. The arrow keys stay with whatever binds them: Home and the library
+  move their selection, Review steps units, Inker and Plotter pan on Space —
+  those never also step the ring. Icon-only buttons now say their name when you
+  arrive by keyboard, not just on hover.
+- **Muted copy is readable.** Second-rank text was drawn with imgui's
+  *disabled* styling — 3.20:1 against a dark panel and 2.55:1 on a light one,
+  where body text needs 4.5:1. It is now drawn opaque, which clears the bar in
+  both themes on every surface; disabled styling is reserved for controls that
+  really cannot be operated. The contrast of every text and status colour is
+  now checked by the test suite rather than by eye.
+- **Typing works for everyone.** Text now comes from the operating system
+  instead of being reconstructed from raw keypresses, so input methods,
+  compose keys and dead keys produce what they should, and characters outside
+  the Basic Multilingual Plane are no longer dropped. An input method's
+  candidate window is placed against the field being typed into.
+- **The window survives a move to another monitor.** Display scaling is
+  re-read when the window changes display, and the interface — fonts included —
+  is rebuilt at the new size without a restart. Your UI scale is re-applied
+  against the new monitor, so a zoom that had to be capped on one display is
+  offered in full again on a display with room for it.
+- **Nothing is pushed off the edge at a high UI scale.** Three-column
+  workspaces reserved two full-width sidebars and a 300px centre whatever the
+  window size, which at 1.5x or 2x wanted more room than the window could be
+  shrunk to — and the pane that fell off was always the inspector, for exactly
+  the people who had enlarged the UI in order to read it. The sidebars now
+  narrow first, then the centre, and every pane stays reachable.
 - **Plotter edits the way Tiled does.** The tool letters are now Tiled's rather
   than the raster editor's — this is a tile-map editor, and Tiled is the one you
   are most likely arriving from. Fill moves to `F`, the old Rect tool becomes

@@ -34,6 +34,28 @@ the digits go back to the workspace modes that were already reaching for them.
 drops that and stays put. It only leaves a mode that has nothing of its own to cancel. Home is
 where it stops: the app opens there, so there is usually nothing behind it.
 
+## Moving around without the mouse
+
+**Tab moves to the next control, Shift+Tab to the previous, Space or Enter operates the one you
+land on.** That works in every pane — forms, the app's Settings, Profiles, the library, the
+inspector, the mode switch. The control you are on is drawn with an accent-coloured ring around it,
+and a button that shows only an icon puts its name in a tooltip as you arrive, so you never have to
+recognise a glyph to know what pressing it would do.
+
+**The arrow keys belong to whatever is on screen.** Home and the library move their selection with
+Up and Down, Review steps between units with Left and Right, and Inker and Plotter pan while Space
+is held. In those five the arrows do that and nothing else — they do not also step the ring, which
+would be two things answering one key. Tab is never taken over in this way, which is what keeps
+traversal available everywhere.
+
+Inside a text field the arrows go back to being cursor movement, whichever mode you are in, and Tab
+leaves the field rather than typing into it.
+
+Typed text comes from the operating system rather than from the raw key, so a compose key, an accent
+and an input method all produce what they should — including characters outside the Basic
+Multilingual Plane, which are no longer dropped on the way in. An input method's candidate window is
+placed against the field you are typing into.
+
 ## The command palette
 
 `Ctrl+K` opens a search box over whatever is on screen. Type a few letters — initials work, so

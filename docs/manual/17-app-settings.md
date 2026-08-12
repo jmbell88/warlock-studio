@@ -42,6 +42,17 @@ sizes* puts the split between the inspector and the library — both on the righ
 default, undoing any dragging of that divider. *Reset collapsed sections* re-opens every section that
 has been collapsed anywhere in the app.
 
+The sidebars narrow on their own when there is not room for the width you picked — at a high UI scale
+in a small window, three columns at their full size want more pixels than the window can be shrunk
+to. They give way in that order: both sidebars narrow first, down to a width a form is still usable
+at, and only then does the centre pane start to shrink. Nothing is pushed off the edge, so the
+inspector stays reachable at any scale the slider offers.
+
+Moving the window to a monitor with different scaling re-reads the new display and rebuilds the
+interface at its size, fonts included — you do not have to restart. Your *UI scale* is applied fresh
+against the new monitor rather than carried across as a number of pixels, so a zoom that had to be
+capped on one display is offered in full again on a display with room for it.
+
 **Configuration.** *Effective configuration* lists every environment variable the app reads and what
 this process resolved it to, with the ones actually set by the environment first and named by their
 variable. It is the same table `warlock doctor` prints and the same one behind the health dot's
