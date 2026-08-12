@@ -8,6 +8,44 @@ file behind.
 
 ## 0.0.21 — 2026-08-11
 
+- **Plotter edits the way Tiled does.** The tool letters are now Tiled's rather
+  than the raster editor's — this is a tile-map editor, and Tiled is the one you
+  are most likely arriving from. Fill moves to `F`, the old Rect tool becomes
+  **Shape** on `P` and gains an ellipse mode, and `R` becomes **rectangular
+  select**. `Ctrl+G` still toggles the grid and `Ctrl+S` still saves; a chord
+  does not claim the bare letter.
+- **A selection, and a clipboard.** Drag a marquee with `R`, `Ctrl+A` to take
+  the whole map, `Ctrl+D` to drop it. Stamp, Erase, Fill and Shape all land only
+  inside it. `Ctrl+C`/`Ctrl+X` copy and cut, `Delete` clears, and `Ctrl+V` loads
+  the block into the brush and switches to Stamp — so pasting clips at the map
+  edge, costs one undo step and obeys the selection, all rules the stamp already
+  had. Pasting into a different map is refused by name, because tile numbers are
+  per map and the block would come out silently redrawn.
+- **The brush can be transformed before it lands.** `X` and `Y` mirror it, `Z`
+  turns it a quarter clockwise (`Shift+Z` back). The arrangement *and* each tile
+  in it move, so a flipped brush stamps a mirrored picture rather than a
+  mirrored arrangement of unmirrored tiles.
+- **Lines, and drags that no longer skip cells.** `Shift`+click stamps a line
+  from the last cell painted, as one undo step. A fast drag now fills in the run
+  between one frame's cell and the next instead of coming out dotted.
+- **Layers can be locked.** The padlock beside the eye stops painting, erasing,
+  cutting and object edits on that layer. It blocks *content* only: renaming,
+  hiding, reordering, deleting the layer, copying from it and reading an
+  object's properties all stay available. Locks are saved, and carried through
+  `.tmx`/`.tmj`.
+- **Custom properties have an editor.** Layers and the map itself have carried
+  typed properties through every Tiled round trip since Plotter shipped; there
+  was simply no way to set one without a text editor. Both are undoable.
+- **Objects can be moved and resized on the canvas.** Drag the body to move,
+  corner handles to resize — the opposite corner pins, and dragging past it
+  flips the rectangle rather than going negative. `Ctrl` snaps to the grid, and
+  a whole drag is one undo step.
+- **A minimap** sits in the corner with a box showing where you are looking;
+  click or drag it to jump. Built from one average colour per tile rather than a
+  shrunk render, because a 512-square map composites to over 250 million pixels.
+- Painting a large map got faster: which tileset owns a tile id is now memoised
+  per document instead of being re-derived once per visible cell per layer.
+
 - **Ground tile sets in Plotter.** Generate a tileset instead of loading one:
   name your terrains, pick a colour each, and get a full **blob autotiling**
   set — 47 cells per terrain, so every edge, outer corner and inner corner has
