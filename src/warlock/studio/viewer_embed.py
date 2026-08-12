@@ -244,8 +244,27 @@ class Viewer(PoseOps):
     # -- compare -----------------------------------------------------------
 
     def compare(self, path: Path) -> None:
+        """Load and show a comparison mesh, synchronously.
+
+        Kept for the callers that already hold a parsed model or genuinely want
+        the blocking form. The *library* no longer uses it: it parses through
+        ``TaskRunner`` and calls ``adopt_compare``, because doing both halves on
+        the frame thread froze the frame on a large model and had no error
+        boundary at all (UX-04).
+        """
+        self.adopt_compare(gltf.load(path))
+
+    def adopt_compare(self, model: Any) -> None:
+        """The frame-thread half: upload an already-parsed comparison model.
+
+        Must stay on the frame thread -- ``GpuModel`` creates buffers and
+        textures on the one GL context, and ``exit_compare`` releases them.
+
+        The GPU resources are built *before* the old ones are released, so a
+        failed upload leaves the previous comparison intact rather than an
+        empty pane: adopting is only allowed to succeed or change nothing.
+        """
         self._render_dirty = True
-        model = gltf.load(path)
         gpu = scenelib.GpuModel(self.ctx, model)
         self.exit_compare()
         self.compare_model, self.compare_gpu = model, gpu

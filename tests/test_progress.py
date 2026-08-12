@@ -470,3 +470,64 @@ def test_the_worker_never_hands_the_sprite_bar_a_t2i_phase():
         line for line in source.split("\n") if not line.lstrip().startswith("#")
     )
     assert "_t2i_state" not in code
+
+
+# --- pixel sheets and re-textures --------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture"])
+def test_the_two_img2img_kinds_have_their_own_contiguous_tables(kind):
+    """CON-02: neither kind had a table, and ``phases_for`` falls back to
+    ``PHASES_IMAGE`` -- whose only real phase is ``trellis``.
+
+    An unknown phase maps onto the *whole* bar, so the last sampling step of the
+    **first** band (or view) emitted 100%, and the never-regress creep then
+    pinned it there for the rest of a multi-minute job. The bar said finished
+    while five more views were still to render.
+    """
+    from warlock.progress import PHASES_IMAGE, phases_for
+
+    table = phases_for(kind)
+    assert table is not PHASES_IMAGE, f"{kind} still falls back to the image table"
+    spans = sorted(table.values())
+    assert spans[0][0] == 0.0
+    assert spans[-1][1] == 1.0
+    for (_, end), (start, _) in zip(spans, spans[1:], strict=False):
+        assert end == pytest.approx(start), "phases must be contiguous"
+
+
+@pytest.mark.parametrize(
+    "kind,emitted",
+    [
+        ("pixel_sheet", ("restyle", "t2i_load", "t2i_sample", "quantize")),
+        (
+            "retexture",
+            ("views", "restyle", "t2i_load", "t2i_sample", "project", "assemble"),
+        ),
+    ],
+)
+def test_every_phase_these_kinds_emit_is_declared(kind, emitted):
+    """The names are the ones ``_q_sprite`` actually passes to
+    ``progress.update`` -- including the two the shared ``_t2i_state`` callback
+    emits, which is how these kinds acquired the fallback in the first place."""
+    from warlock.progress import phases_for
+
+    table = phases_for(kind)
+    for phase in emitted:
+        assert phase in table, phase
+
+
+@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture"])
+def test_the_first_sampling_pass_does_not_reach_the_end_of_the_bar(kind):
+    """The failure in its own terms: finishing the first pass's last step must
+    leave room for the passes after it."""
+    from warlock.progress import ProgressBus
+
+    bus = ProgressBus()
+    bus.begin("job", kind)
+    # The last step of the first pass: ``inner`` is 1.0 *within* the phase, so
+    # this is as far as one sampling pass can possibly push the bar.
+    bus.update("job", phase="t2i_sample", label="Drawing", inner=1.0)
+    snap = bus.snapshot("job")
+    assert snap is not None
+    assert snap["percent"] < 100.0, "the bar finished during the first pass"

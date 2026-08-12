@@ -502,6 +502,7 @@ def run_worker(
     # Same kill-on-close job as trellis-server: a bpy solve holds multiple GB,
     # and a parent that dies mid-rig used to leave it running indefinitely.
     winjob.assign(proc.pid)
+    winjob.track(proc.pid, "blender worker")
     tail: list[str] = []
     if on_start is not None:
         on_start(proc)

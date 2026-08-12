@@ -24,9 +24,18 @@ from pathlib import Path
 # Review moved with them, out of Architecture and into the user chapters, where
 # it always belonged: it is a mode with a keyboard loop, not a note about how
 # the app is built.
+#
+# Chapter 14 (Keyboard shortcuts) is a *user* chapter and belongs to Part I,
+# which is where ``docs/manual/00-index.md`` has always listed it; the ranges
+# here said 14 was where "Setup & operations" began, so the in-app contents and
+# the index disagreed about one chapter's part for as long as both existed.
+# Nothing failed, because ``tests/manual/test_docs.py`` asserted only that the
+# index *links* every chapter -- so grouping is now asserted too, in
+# ``test_index_sections_match_the_loaders_parts``, and the two cannot drift
+# apart again without a failure.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 14)),
-    ("Setup & operations", range(14, 19)),
+    ("Using Warlock Studio", range(1, 15)),
+    ("Setup & operations", range(15, 19)),
     ("Architecture", range(19, 22)),
 )
 

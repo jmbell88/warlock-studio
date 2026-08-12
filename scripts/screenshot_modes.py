@@ -4,7 +4,7 @@ The GL smoke suite asserts that every pane *builds*; it asserts nothing about
 what anything looks like, and says so in its own docstring. That left Phase 3's
 light palette and Phase 4's new Inker and Clay controls shipped without a human
 having seen them. This is the harness that closes that gap without asking
-somebody to click through eight modes twice.
+somebody to click through thirteen modes twice.
 
 It is the **real** App: `setup_window`, `setup_runtime`, `setup_context`, and
 `App.frame` -- so the dispatch under test is `_build_ui`'s own, the fonts are

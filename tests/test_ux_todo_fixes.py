@@ -1,4 +1,9 @@
-"""Regressions for the UX review's verified bugs (``docs/TODO.md``).
+"""Regressions for the UX review's verified bugs.
+
+The review they come from was ``docs/TODO.md``, deleted on 2026-08-11
+(`de87838`) along with the roadmap it doubled as; ``git log --diff-filter=D``
+finds it. The bugs below are the record now, which is the point of writing a
+regression rather than a checkbox.
 
 Five promises that were stated in one place and not kept in another: a
 space-to-pan hold that only ever latched on, two toasts asking for a level that

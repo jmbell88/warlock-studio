@@ -731,6 +731,100 @@ def test_a_retexture_refuses_its_out_of_range_inputs_at_the_door(svc, kwargs):
         svc_jobs.retexture_job(svc, job_id, "rusted iron", **kwargs)
 
 
+@pytest.mark.parametrize("door", ["retexture", "optimize"])
+def test_reworking_a_mesh_refuses_while_a_job_writes_into_its_directory(svc, door):
+    """CON-01: both doors ask about the *target row's* status, which is the
+    wrong question on its own.
+
+    A re-texture, a rig or a sheet is a separate row whose artifacts land in the
+    done job's directory -- so the target reads ``done`` the whole time one is in
+    flight, which is exactly why it could be queued for it. Queue a re-texture
+    for mesh J and retarget J: the re-texture's ``os.replace`` publishes a skin
+    baked from the pre-retarget geometry over the retargeted mesh, silently
+    reverting the triangle budget while ``params["profile"]`` claims the tier
+    ran.
+    """
+    job_id, job_dir = _retexturable(svc)
+    (job_dir / "source.glb").write_bytes(b"x")
+    # A dependent row, exactly as a queued rig or re-texture is: another job
+    # whose params name this one as its source.
+    svc.store.create("retexture", "rusted iron", {"source_job": job_id}, "dep123")
+
+    with pytest.raises(Conflict) as caught:
+        if door == "retexture":
+            svc_jobs.retexture_job(svc, job_id, "verdigris")
+        else:
+            svc_jobs.optimize_job(svc, job_id)
+    assert "still queued or running" in caught.value.message
+
+    # Once it finishes, the door opens again.
+    svc.store.set_status("dep123", "done")
+    if door == "retexture":
+        svc_jobs.retexture_job(svc, job_id, "verdigris")
+
+
+def test_a_retexture_refuses_a_non_sdxl_base_at_the_door(svc):
+    """MDL-15: ``_conditioned`` refuses a non-SDXL family, but only at runtime.
+
+    By then the job has queued, rendered all six Blender views, stopped trellis
+    and pulled ~16 GiB of checkpoint into host commit -- minutes of the serial
+    worker and a trellis restart, to reach an answer the registry already had.
+    """
+    from warlock import models
+
+    klein = next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.family != models.FAMILY_SDXL
+    )
+    job_id, _ = _retexturable(svc)
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", base_model=klein)
+    assert caught.value.field == "base_model"
+    # Names what would work, like create_pixel_sheet's refusal does.
+    assert models.DEFAULT_BASE_MODEL in caught.value.message
+    assert not [
+        row for row in svc.store.list(limit=50) if row["kind"] == "retexture"
+    ], "the refusal must precede the row"
+
+
+def test_a_retexture_refuses_a_non_sdxl_default_from_the_config(svc, monkeypatch):
+    """The reachable half: ``base_model`` is optional and falls back to
+    ``config.t2i_model``, so a host whose ``WARLOCK_T2I_MODEL`` names a klein
+    entry qualified by leaving the field alone."""
+    from warlock import models
+
+    klein = next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.family != models.FAMILY_SDXL
+    )
+    monkeypatch.setattr(svc.config, "t2i_model", klein)
+    job_id, _ = _retexturable(svc)
+    with pytest.raises(Invalid):
+        svc_jobs.retexture_job(svc, job_id, "rusted iron")
+
+
+def test_a_reroll_of_a_stored_retexture_refuses_the_same_family(svc, monkeypatch):
+    """``rerun_job --reroll`` is the other door onto the same six passes, and it
+    reads ``base_model`` off a row that outlives the door that admitted it."""
+    from warlock import models
+
+    klein = next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.family != models.FAMILY_SDXL
+    )
+    job_id, _ = _retexturable(svc)
+    new_id = svc_jobs.retexture_job(svc, job_id, "rusted iron")["id"]
+    # A row written before the check existed, spelled as one written now.
+    svc.store.merge_params(new_id, {"base_model": klein})
+    svc.store.finish(new_id, "done")
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.rerun_job(svc, new_id, mode="reroll")
+    assert caught.value.field == "base_model"
+
+
 def test_a_retexture_reports_the_exports_that_carry_the_old_skin(svc):
     from warlock.pipelines import retexture
 

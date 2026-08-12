@@ -498,6 +498,21 @@ def _selection_progress(ctx: Any) -> None:
     widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
     if found and found.get("label"):
         widgets.muted(str(found["label"]))
+    # Cancel, beside the bar. Every mechanism this needs already existed and
+    # only the button was missing: the fetch child is tracked (``winjob``) so it
+    # can be terminated, the kill-on-close job reaps it, and publication is
+    # staged -- so a cancelled download leaves no half-installed model, just the
+    # staging tree that the next download sweeps. Without it a mistaken 16 GB
+    # fetch on a slow line could be stopped only by quitting the app, because
+    # the timeout is four hours (MDL-14).
+    imgui.same_line()
+    from ... import winjob
+
+    if imgui.small_button(f"Cancel##cancel-{key}"):
+        stopped = winjob.terminate_tracked()
+        ctx.toast(
+            "Stopping the download..." if stopped else "Nothing left to stop."
+        )
 
 
 def _start(ctx: Any, row_keys: list[str], *, key: str) -> None:

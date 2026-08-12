@@ -100,9 +100,74 @@ def volatile_checks(config: Config, trellis_running: bool = False) -> list[Check
     return [
         _vram_check(config),
         _job_object_check(),
+        _instance_check(config),
+        _environment_check(),
         _disk_check(config),
         _port_check(config, trellis_running),
     ]
+
+
+def _environment_check() -> Check:
+    """Every ``WARLOCK_*`` value this process could not parse, in one row.
+
+    One row and not one per variable: a machine with three typos in its
+    environment has one problem, and three amber lines describing it would bury
+    the rest of the diagnostics. Non-fatal because each of them fell back to its
+    documented default, so the app is running -- just not with the settings the
+    user believes they chose, which is precisely the thing worth saying out loud
+    (RUN-03).
+    """
+    from .config import INVALID_ENV
+
+    if not INVALID_ENV:
+        return Check("environment", True, "every WARLOCK_* value parsed", fatal=False)
+    parts = [f"{name}={raw!r} (expected {expected})" for name, raw, expected in INVALID_ENV]
+    return Check(
+        "environment",
+        False,
+        "ignored and left at the default: " + "; ".join(parts),
+        fatal=False,
+    )
+
+
+def _instance_check(config: Config) -> Check:
+    """Is this the only Warlock on this home?
+
+    A row rather than only a startup refusal, because the refusal fires once and
+    the condition it guards -- two processes over one job database and one engine
+    port -- is exactly the sort of thing somebody goes looking for in
+    diagnostics after the fact (RUN-01, A1-L9).
+
+    Inside the app the answer is simply "we hold it" -- ``run()`` took the lock
+    before anything else and keeps it for the process's life. Re-taking it here
+    would answer nothing: re-locking one file from one process is allowed on
+    some platforms (proving nothing) and refused on others (reading as though
+    somebody else had it). So the live lock is asked first, and only a caller
+    that holds none -- ``warlock doctor`` from a terminal -- probes.
+    """
+    from . import instance
+
+    if instance.held_by_us():
+        return Check(
+            "single instance", True, f"this Warlock owns {config.home}", fatal=False
+        )
+    path = config.home / instance.LOCK_NAME
+    probe = instance.InstanceLock(path)
+    if probe.acquire():
+        probe.release()
+        return Check(
+            "single instance",
+            True,
+            f"no other Warlock is using {config.home}",
+            fatal=False,
+        )
+    return Check(
+        "single instance",
+        False,
+        f"another Warlock is using {config.home} -- they share the job database "
+        f"and the engine port; close one, or give it its own WARLOCK_HOME",
+        fatal=False,
+    )
 
 
 BPY_PROBE_TIMEOUT = 120.0
@@ -361,14 +426,40 @@ def _t2i_checks(config: Config) -> list[Check]:
         ok, missing_lora = fetch.base_model_state(config, spec)
         if ok:
             detail = str(path)
+            # "Files found" and "the files are usable" are two questions, and
+            # the presence probe only ever answered the first: a zero-length
+            # weight file passes every ``Path.exists()`` in it and fails
+            # minutes later with the checkpoint already resident (MDL-08). The
+            # row stays green -- the download *is* there -- and says what is
+            # wrong with it, plus which revision produced it when a fetch
+            # recorded one.
+            bad = fetch.suspect_files(config, "base", spec)
+            if bad:
+                ok = False
+                detail = (
+                    f"{path} -- but {len(bad)} file(s) are empty and will not "
+                    f"load; remove and reinstall this model. First: {bad[0]}"
+                )
+            else:
+                recorded = fetch.read_manifest(path) or {}
+                pins = {
+                    r.get("revision")
+                    for r in (recorded.get("repos") or {}).values()
+                    if r.get("revision")
+                }
+                if pins:
+                    detail += f" (revision {', '.join(sorted(pins))})"
         elif missing_lora is not None:
             detail = (
                 f"weights present, but {spec.base_lora} is missing at "
                 f"{missing_lora} -- this model cannot run without it; "
-                f"download with:\n  {spec.download}"
+                f"download with:\n  {fetch.download_text(config, 'base', spec)}"
             )
         else:
-            detail = f"not found at {path} -- unavailable; download with:\n  {spec.download}"
+            detail = (
+                f"not found at {path} -- unavailable; download with:\n"
+                f"  {fetch.download_text(config, 'base', spec)}"
+            )
         checks.append(Check(fetch.check_name("base", spec.label), ok, detail, fatal=False))
     for lora in models.STYLE_LORAS.values():
         path = config.t2i_model_root / "loras" / lora.filename
@@ -376,7 +467,10 @@ def _t2i_checks(config: Config) -> list[Check]:
         detail = (
             str(path)
             if ok
-            else f"not found at {path} -- style unavailable; download with:\n  {lora.download}"
+            else (
+                f"not found at {path} -- style unavailable; download with:\n"
+                f"  {fetch.download_text(config, 'lora', lora)}"
+            )
         )
         checks.append(Check(fetch.check_name("lora", lora.label), ok, detail, fatal=False))
     for adapter in models.IP_ADAPTERS.values():
@@ -392,7 +486,7 @@ def _t2i_checks(config: Config) -> list[Check]:
             missing = "weights" if not weights.exists() else "CLIP vision encoder"
             detail = (
                 f"{missing} not found under {root} -- conditioning unavailable; "
-                f"download with:\n  {adapter.download}"
+                f"download with:\n  {fetch.download_text(config, 'adapter', adapter)}"
             )
         checks.append(Check(fetch.check_name("adapter", adapter.label), ok, detail, fatal=False))
     for cn in models.CONTROLNETS.values():
@@ -401,7 +495,10 @@ def _t2i_checks(config: Config) -> list[Check]:
         detail = (
             str(path)
             if ok
-            else f"not found at {path} -- control unavailable; download with:\n  {cn.download}"
+            else (
+                f"not found at {path} -- control unavailable; download with:\n"
+                f"  {fetch.download_text(config, 'control', cn)}"
+            )
         )
         checks.append(Check(fetch.check_name("control", cn.label), ok, detail, fatal=False))
     checks.extend(_metric_checks(config))
@@ -437,7 +534,7 @@ def _metric_checks(config: Config) -> list[Check]:
             "(transformers and torchvision must import)"
             if ok
             else f"not found at {path} -- benchmark metric unavailable; download with:\n"
-            f"  {spec.download}"
+            f"  {fetch.download_text(config, 'metric', spec)}"
         )
         checks.append(Check(fetch.check_name("metric", spec.label), ok, detail, fatal=False))
     return checks
@@ -474,7 +571,8 @@ def _pose_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         else:
             detail = (
                 f"not found at {path} -- joint placement falls back to the "
-                f"bbox-proportional fit; download with:\n  {spec.download}"
+                f"bbox-proportional fit; download with:\n"
+                f"  {fetch.download_text(config, 'pose', spec)}"
             )
         checks.append(Check(fetch.check_name("pose", spec.label), ok, detail, fatal=False))
     return checks
@@ -644,7 +742,7 @@ def _matting_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
         else:
             detail = (
                 f"not found at {path} -- 2D exports fall back to the corner fill; "
-                f"download with:\n  {spec.download}"
+                f"download with:\n  {fetch.download_text(config, 'matting', spec)}"
             )
         # "host matting", against _birefnet_check's "trellis": two rows, two
         # different BiRefNets -- one GGUF inside trellis-server, this one on

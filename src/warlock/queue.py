@@ -1,6 +1,8 @@
 """Single-worker GPU job queue.
 
-One job runs at a time. By default SDXL-Turbo (~7 GB) and the trellis server
+One job runs at a time. By default an SDXL-class image pipe (~7 GB; the
+default checkpoint is ``sdxl_cfg``, SDXL 1.0 at full CFG, with Turbo as the
+fast option) and the trellis server
 (~16 GB) coexist in VRAM — neither is stopped for the other, and both are
 evicted after the idle timeout. With Config.vram_exclusive set
 (WARLOCK_VRAM_EXCLUSIVE=1, for small cards or a resident Flux), text jobs
@@ -30,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, memlog, models, rigging, vectors, vram
+from . import errors, leases, memlog, models, rigging, vectors, vram
 from ._q_generate import GenerateOps
 from ._q_jobs import JobOps
 from ._q_mesh import MeshPostOps
@@ -105,7 +107,20 @@ def _stage_link(source: Path, dest: Path) -> None:
     except OSError:
         with contextlib.suppress(OSError):
             tmp.unlink()
-        shutil.copyfile(source, dest)
+        # Staged, not written in place. ``copyfile`` truncates the destination
+        # first, so the fallback -- which exists precisely for the filesystems
+        # where ``os.link`` fails wholesale, an exFAT or network
+        # ``WARLOCK_DATA_DIR`` -- was scribbling on a served ``model.glb`` for
+        # the length of a copy, and a crash mid-copy left a torn file on a job
+        # about to be marked ``done``. The docstring above promised
+        # ``os.replace`` semantics that only the link branch had (CON-04).
+        copy_tmp = dest.with_name(dest.name + f".copy.{secrets.token_hex(4)}.tmp")
+        try:
+            shutil.copyfile(source, copy_tmp)
+            os.replace(copy_tmp, dest)
+        finally:
+            with contextlib.suppress(OSError):
+                copy_tmp.unlink()
 
 
 def _publish_text(path: Path, text: str) -> None:
@@ -212,6 +227,29 @@ def _log_mem(when: str) -> None:
             when,
         )
 
+
+def _host_peak_gib(spec: Any) -> float:
+    """What loading this checkpoint charges host commit, in GiB.
+
+    The spec's declared ``host_peak_gib`` when it has one -- which is the
+    offloaded entries, where the host figure is the large one and ``vram_gib``
+    is small precisely because of it. Otherwise ``vram_gib``: a resident load
+    reads the checkpoint into host memory and hands it to the device, so the
+    host charge peaks at roughly the same size even though it does not stay.
+    """
+    declared = float(getattr(spec, "host_peak_gib", 0.0) or 0.0)
+    return declared if declared > 0 else float(getattr(spec, "vram_gib", 0.0) or 0.0)
+
+
+COMMIT_MARGIN_GIB = 2.0
+"""Commit left over after the load this check is standing in front of.
+
+Not a safety factor on the model's own figure -- that is what ``host_peak_gib``
+being a peak is for -- but room for everything else the process does while the
+weights are being read: the reader's buffers, the allocator's slack, and the
+rest of the app carrying on. Crossing the commit limit is not an exception a
+job can fail on; it is Windows ending the process.
+"""
 
 COMMIT_CEILING = 0.90
 """System commit fraction past which the worker stops taking jobs.
@@ -388,13 +426,26 @@ def _sprite_assemble(
     )
 
 
-def _require_commit_headroom(when: str, remedy: str) -> None:
-    """Refuse to go on if host commit is at the ceiling. Raises RuntimeError.
+def _require_commit_headroom(when: str, remedy: str, need_gib: float = 0.0) -> None:
+    """Refuse to go on if host commit cannot take what comes next.
 
-    The enforcing half of what ``_log_mem`` only records. It was one check, at
-    dispatch, before ``_generate`` -- and nothing re-asked it across the whole
-    stop-trellis / load-image-model / generate / unload / start-trellis
-    sequence, which is precisely where the charge moves.
+    Raises RuntimeError. The enforcing half of what ``_log_mem`` only records.
+    It was one check, at dispatch, before ``_generate`` -- and nothing re-asked
+    it across the whole stop-trellis / load-image-model / generate / unload /
+    start-trellis sequence, which is precisely where the charge moves.
+
+    Two questions, not one. The percentage ceiling is the standing "is this
+    machine already in trouble" reading. ``need_gib`` is the other half and the
+    one MDL-04 is about: FLUX.2 klein is ~16 GiB of *host* weights under CPU
+    offload, and a machine sitting at 80-89% commit passes the ceiling while
+    having far less than 16 GiB of commit left. It is then admitted and crosses
+    the limit during checkpoint allocation -- on Windows, plausibly the OS
+    terminating the process, which is the exact failure this check exists to
+    prevent. A percentage is not a quantity, so the bytes the next operation
+    needs have to be asked for by name.
+
+    ``need_gib`` of 0 keeps the old behaviour exactly, for the call sites that
+    are not about to allocate anything in particular.
 
     ``when`` is a clause appended to "committed" (with its own leading space,
     or empty), and ``remedy`` is the rest of the sentence, because the two call
@@ -407,6 +458,19 @@ def _require_commit_headroom(when: str, remedy: str) -> None:
         raise RuntimeError(
             f"host memory is {pressure * 100:.0f}% committed{when}, at or past the "
             f"{COMMIT_CEILING * 100:.0f}% ceiling. {remedy}"
+        )
+    if need_gib <= 0:
+        return
+    sysmem = memlog.system_memory()
+    if sysmem is None:
+        return
+    free = sysmem.commit_limit - sysmem.commit_total
+    want = need_gib + COMMIT_MARGIN_GIB
+    if free < want:
+        raise RuntimeError(
+            f"loading this model needs about {need_gib:.1f} GiB of host memory "
+            f"(plus a {COMMIT_MARGIN_GIB:.1f} GiB margin){when}, and only "
+            f"{free:.1f} GiB of the commit limit is free. {remedy}"
         )
 
 
@@ -572,6 +636,10 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         # Which base model the resident pipe is, so _get_text2image can tell a
         # cache hit from a swap.
         self._t2i_key: str | None = None
+        # The model store's generation when that pipe was built. A pipe freezes
+        # its adapter set at load() time, so weights installed or removed since
+        # make it stale even though the key still matches (MDL-05).
+        self._t2i_generation: int = -1
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         # Set by wake() when something enqueues a job, so an idle dispatch loop
@@ -586,11 +654,12 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         self._blender: Any = None
         # When the last job finished, and whether the host-side inference caches
         # have already been dropped since. Unlike trellis and the image pipe,
-        # BiRefNet/pose/DINO carry no last_used of their own -- and unload() on
-        # an empty cache is a cheap no-op, so without the latch _maybe_evict_idle
-        # would hop to a thread three times every idle poll, forever.
+        # BiRefNet/pose/DINO carry no last_used of their own, so eviction is
+        # driven off the last finished job and throttled to one pass per idle
+        # timeout -- see ``_maybe_evict_caches`` for why this is a timestamp and
+        # not the boolean latch it used to be (MDL-12).
         self._last_job_at: float = time.monotonic()
-        self._caches_evicted = False
+        self._caches_evicted_at: float = 0.0
         # How to take the lock guarding one derived artifact of one job, as
         # (job_id, name) -> a context manager. The worker holds no service and
         # may not import one, so ``studio.runtime`` injects
@@ -703,6 +772,13 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
 
     async def shutdown(self) -> None:
         self._stop.set()
+        # Before the cancel and before the grace period, so a load already in
+        # flight on a worker thread learns not to publish. Cancelling the task
+        # below only cancels the coroutine awaiting it (MDL-02).
+        pipe = self._text2image
+        if pipe is not None:
+            with contextlib.suppress(AttributeError):
+                pipe.close()
         if self.current_job_id is not None:
             await self.request_cancel(self.current_job_id)
         if self._task is not None:
@@ -726,8 +802,37 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         # the worker's life, not a reclaim, and the pipe object is still the
         # record of what ran. Clearing the reference here breaks every caller
         # that inspects a shut-down worker.
-        if self._text2image is not None and self._text2image.loaded:
-            await asyncio.to_thread(self._text2image.unload)
+        #
+        # Behind the lease, and the ordering is the whole point (MDL-02).
+        # Cancelling the task above cancels a *coroutine*; it does not stop the
+        # thread that coroutine was awaiting, so after the grace period expires
+        # a ``from_pretrained`` may still be running. Reading ``.loaded`` then
+        # sees False, the unload is skipped, and the load publishes a fully
+        # resident pipe *afterwards* -- up to ~16 GiB of host commit held for
+        # the life of an interpreter that shutdown was supposed to leave clean.
+        # Waiting for the lease is waiting for that thread, so by the time the
+        # check below runs, the answer is final.
+        await asyncio.to_thread(self._unload_under_lease)
+
+    def _unload_under_lease(self) -> None:
+        """Wait out any in-flight model operation, then drop the pipe. Blocking.
+
+        ``maintain`` rather than ``use``: this must be the only model operation
+        running, and its whole purpose is to observe a state nothing else can
+        still be changing. A timeout here is not fatal -- the process is going
+        away -- but it is worth a line, because it means a model thread outlived
+        the shutdown that was meant to join it.
+        """
+        try:
+            with leases.MODELS.maintain(timeout=SHUTDOWN_TIMEOUT):
+                pipe = self._text2image
+                if pipe is not None and pipe.loaded:
+                    pipe.unload()
+        except TimeoutError:
+            log.warning(
+                "a model operation was still running at shutdown; the image "
+                "pipeline was left loaded rather than torn down under it"
+            )
 
     async def _run(self) -> None:
         # Widened after an unwoken timeout, reset by anything happening (C38).
@@ -822,16 +927,27 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         which is the one of the three that can hold *VRAM*, because its cache
         key carries the device and the benchmark path resolves ``None`` to cuda.
 
-        Latched on ``_caches_evicted`` and stamped off the last finished job
-        rather than off each cache, because none of the three records a
-        last-used of its own and an unload of an empty cache is a no-op worth
-        no thread at all.
+        Stamped off the last finished job rather than off each cache, because
+        none of the three records a last-used of its own and an unload of an
+        empty cache is a no-op worth no thread at all.
+
+        Throttled by *time*, not latched by a bool. The latch it replaces was
+        set on the first idle pass and cleared only when a GPU job completed --
+        so a cache populated after that pass by a path that is not a GPU job
+        stayed resident indefinitely. Matting is exactly such a path: an export
+        or a matte preview loads it through ``TaskRunner``
+        (``service/derive.py``, ``service/matte.py``), never through the queue,
+        and its ~1.5 GB child then sat there until the app closed (MDL-12).
+
+        A repeat pass over three empty caches is one thread hop per idle
+        timeout -- ten minutes apart, three no-op function calls -- which is the
+        cost the latch was avoiding and is not worth a correctness hole.
         """
-        if self._caches_evicted:
+        now = time.monotonic()
+        idle = self.config.trellis_idle_timeout
+        if now - self._last_job_at <= idle or now - self._caches_evicted_at <= idle:
             return
-        if time.monotonic() - self._last_job_at <= self.config.trellis_idle_timeout:
-            return
-        self._caches_evicted = True
+        self._caches_evicted_at = now
         log.info("evicting idle host inference caches")
 
         def _drop() -> None:
@@ -938,6 +1054,17 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         if handoff:
             await asyncio.to_thread(self.trellis.stop)
             _log_mem("after trellis stop")
+        # Immediately before the load, and after the handoff has given back
+        # whatever it was going to: this is the last moment the answer is still
+        # about the allocation that is about to happen. Skipped when the pipe is
+        # already resident -- the weights are in commit either way, and refusing
+        # here would fail a job for memory it is not about to ask for.
+        if self._text2image is None or self._t2i_key != base_key:
+            _require_commit_headroom(
+                f" before loading {spec.label}",
+                "Close other applications, or use a smaller image model.",
+                need_gib=_host_peak_gib(spec),
+            )
         return await self._get_text2image(base_key), handoff
 
     async def _release_t2i(self, t2i: Any, spec: Any) -> None:
@@ -975,7 +1102,9 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
             "",
             "Close other applications or restart Warlock before running this job.",
         )
-        need = vram.estimate_job(job, exclusive=bool(self.config.vram_exclusive))
+        need, image_term = vram.estimate_job_parts(
+            job, exclusive=bool(self.config.vram_exclusive)
+        )
         if need <= 0:
             return
         device = vram.device_memory()
@@ -995,18 +1124,23 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
             # by the handoff's stop() before anything loads under exclusive.
             # No kind gate needed: need <= 0 already returned for rig jobs.
             headroom += vram.TRELLIS_GIB
-        if (
-            job["kind"] == "text"
-            and self._text2image is not None
-            and self._text2image.loaded
-        ):
+        if image_term > 0 and self._text2image is not None and self._text2image.loaded:
+            # Gated on "did the estimate charge for a checkpoint", not on the
+            # job's kind. The kind list this replaced said `text` alone, while
+            # `vram.estimate` prices pixel_sheet, sprite_synthesis and
+            # retexture with a full image-model term too -- so the natural
+            # 2D-then-3D flow on a 32 GiB coexist card refused a sprite
+            # synthesis by ~3 GiB for reusing the pipe it was being charged
+            # for, and waiting out the 600 s idle eviction "fixed" it, which
+            # reads as a phantom VRAM leak (MDL-06). An image-kind job still
+            # gets nothing, because its estimate carries no checkpoint term and
+            # `image_term` is therefore 0.
+            #
             # Measured reserved, not SDXL_GIB: reserved is what free was
             # actually debited by (7.52 GiB for sdxl-base-1.0 against the
             # flat 7.0 estimate). A base switch unloads the old pipe before
             # loading the new (_get_text2image), so the credit holds even
             # when the resident base is not the one this job wants.
-            # Image-kind jobs get no credit: their `need` carries no SDXL
-            # term, and coexist keeps the pipe resident beside trellis.
             # The unmeasurable case reads the registry: a flat SDXL_GIB is
             # 3 GiB short of the offloaded klein entry's declared peak.
             mem = vram_gib()
@@ -1074,11 +1208,37 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
                 error = errors.friendly(exc)
                 with contextlib.suppress(OSError):
                     errors.write_error_log(self.config.job_dir(job_id), exc)
+                # Both strings are extracted by now, so the traceback has no
+                # readers left -- and it is holding every frame between here and
+                # the raise, which on a failed conditioned job means the
+                # ControlNet (~2.5 GB) and the CLIP-ViT-H encoder (~1.2 GB)
+                # still have a live reference while the reclaim passes below
+                # run. The drop-every-reference doctrine had this one gap on the
+                # error path; ``_on_task_done`` already does exactly this to the
+                # task-side equivalent (MDL-16).
+                exc.__traceback__ = None
+                # And one pool pass now that nothing references those frames.
+                # The teardown inside ``_conditioned`` already ran a collect,
+                # but it ran *while the exception was propagating through it*,
+                # so the conditioning tensors were still reachable and it freed
+                # nothing. This is a trim and never an unload: a failed job is
+                # not a reason to throw away a checkpoint the next job wants
+                # warm, which is the same line ``_release_t2i`` draws.
+                t2i = self._text2image
+                if t2i is not None and t2i.loaded:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(t2i.trim)
         finally:
             try:
                 if self._cancel.event.is_set():
                     await asyncio.to_thread(self.store.set_status, job_id, "cancelled")
-                    self._discard_artifacts(job)
+                    # Through a thread, like every DB write in this same
+                    # ``finally``. For a cancelled re-texture this ``rmtree``s
+                    # ~24 rendered and baked images, and it was running on the
+                    # ``warlock-loop`` thread that hosts dispatch and
+                    # cancellation -- so the unlinks blocked the very loop that
+                    # answers the next cancel (CON-07).
+                    await asyncio.to_thread(self._discard_artifacts, job)
                 else:
                     status = "error" if error is not None else "done"
                     finished = await asyncio.to_thread(
@@ -1090,7 +1250,7 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
                         # the API route's atomic cancel() won the DB race) --
                         # the DB already says cancelled; don't overwrite it and
                         # don't leave a viewable artifact behind.
-                        self._discard_artifacts(job)
+                        await asyncio.to_thread(self._discard_artifacts, job)
                     elif status == "done":
                         # The rig first: it is work the user asked for, and
                         # recording the observation introduced the only await
@@ -1133,8 +1293,8 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
                 # The idle clock the host-side cache eviction runs off, re-armed
                 # here rather than at the top: a job may well have populated one
                 # of those caches (a 2D export mattes, a bench run embeds), so
-                # the latch has to reopen on every finish, not only on the ones
-                # that did.
+                # the throttle has to reopen on every finish, not only on the
+                # ones that did.
                 self._last_job_at = time.monotonic()
-                self._caches_evicted = False
+                self._caches_evicted_at = 0.0
                 self.progress.end(job_id)

@@ -53,8 +53,11 @@ def test_style_lora_is_downloadable(key):
     assert lora.filename.endswith(".safetensors")
     assert lora.filename in lora.download
     # Everything resolves against <t2i_model_root>/loras, so the command must
-    # put the file there and not in a per-repo subdirectory.
-    assert "--local-dir models/loras" in lora.download
+    # put the file there and not in a per-repo subdirectory. The root is spelled
+    # as the default home rather than the old relative ``models/`` -- a relative
+    # --local-dir wrote into whatever directory the command was pasted from
+    # (DST-02); ``fetch.download_text`` renders the configured root instead.
+    assert f"--local-dir {models.DEFAULT_MODEL_ROOT_TEXT}/loras" in lora.download
     assert lora.trigger, "the trained trigger words are what make the LoRA fire"
     assert models.LORA_WEIGHT_MIN <= lora.default_weight <= models.LORA_WEIGHT_MAX
 

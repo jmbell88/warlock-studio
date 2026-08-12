@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import socket
@@ -36,6 +37,14 @@ GENERATE_TIMEOUT = 1800.0
 # whole body into RAM before looking at it. Read from module globals at call
 # time so a test can lower it.
 MAX_GLB_BYTES = 512 * 1024 * 1024
+# The largest *error* body. Two orders of magnitude smaller than the GLB
+# ceiling, because this one is a message rather than an artifact: only ~500
+# characters are ever shown, and the rest of the allowance is so a multi-byte
+# character at the boundary still decodes and so a stack trace in the body is
+# not truncated mid-word before its first line. The error path used to call
+# ``await r.aread()`` -- unbounded -- so a wedged server could answer a failing
+# request with gigabytes and take the host's memory with it (MDL-13).
+MAX_ERROR_BYTES = 64 * 1024
 LOG_MAX_BYTES = 5 * 1024 * 1024  # the log used to grow forever; roll it instead
 # Respawn backoff: 5 s doubling to a 5-minute ceiling, and one give-up line
 # after five consecutive failures. Jobs still fail fast with the reason -- the
@@ -58,6 +67,18 @@ class TrellisStopFailed(RuntimeError):
     of device memory was still charged to a live process -- and the next thing
     to happen was a 16 GiB allocation.
     """
+
+
+def _pid_alive(pid: int) -> bool:
+    """Is that pid still around? Best-effort, and False on any doubt.
+
+    Used only to decide whether a *recorded* port owner is still running, so a
+    false negative costs a refusal a retry clears, and a false positive costs a
+    refusal too -- both far cheaper than terminating somebody's live server.
+    """
+    if pid <= 0:
+        return False
+    return winjob.image_path(pid) is not None
 
 
 def _port_in_use(port: int) -> bool:
@@ -231,6 +252,10 @@ class TrellisServer:
             # window between Popen and this call is the only one in which a
             # parent crash can still orphan the child.
             winjob.assign(self._proc.pid)
+            # Recorded before the health poll, not after: a server that dies
+            # during startup still held the port for a moment, and the claim is
+            # what tells the *next* start that the corpse on that port is ours.
+            self._claim_port(self._proc.pid)
             self._spawned_at = time.monotonic()
             log.info("trellis-server spawned as pid %d", self._proc.pid)
             self._reader = threading.Thread(
@@ -309,13 +334,66 @@ class TrellisServer:
                 self._start_failures, delay,
             )
 
+    @property
+    def _owner_path(self) -> Path | None:
+        """Where this instance records that it owns the port. None when there is
+        nowhere to write (a test constructing a server with no log path)."""
+        if self._log_path is None:
+            return None
+        return self._log_path.parent / f"trellis-{self._port}.owner"
+
+    def _claim_port(self, pid: int) -> None:
+        """Record that *this* Warlock spawned the listener on this port.
+
+        The file is deliberately not a lock and is never trusted to say a server
+        is running -- ``_port_in_use`` answers that. Its one job is to say who
+        started the thing that is listening, so a reclaim can tell our own
+        orphan from somebody else's live server (RUN-01).
+        """
+        path = self._owner_path
+        if path is None:
+            return
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"owner_pid": os.getpid(), "server_pid": pid}),
+                encoding="utf-8",
+            )
+
+    def _release_port_claim(self) -> None:
+        path = self._owner_path
+        if path is not None:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+
+    def _recorded_owner(self) -> int | None:
+        """The pid of the Warlock that last claimed this port, if any."""
+        path = self._owner_path
+        if path is None:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return int(data.get("owner_pid") or 0) or None
+        except (OSError, ValueError, TypeError):
+            return None
+
     async def _reclaim_port(self) -> None:
         """Kill a provably-ours orphan holding the port, or refuse to guess.
 
-        "Provably ours" is the whole safety argument: only a process whose
-        image is the very exe this instance is configured to spawn gets killed.
-        Anything else -- another app, or a path we cannot read -- is named in
-        the error and left alone.
+        Two conditions, and the second is the one RUN-01 added. Executable
+        identity alone was treated as proof the listener was *our* orphan --
+        but the exe path is a property of the install, not of the instance, so
+        two Warlocks configured against the same binary and the same port share
+        it. The single-instance lock stops that for one home; it does not stop
+        it for two homes (``WARLOCK_HOME`` exists precisely so a second library
+        is possible, and ``WARLOCK_TRELLIS_PORT`` still defaults to 17971 in
+        both). A second instance could therefore terminate the first's *live*
+        server and read the kill as a successful orphan cleanup.
+
+        So the listener must also be one *this* home claimed, and that claim's
+        owner must be gone. A crash leaves the claim file naming a dead pid,
+        which is exactly the orphan case; a live owner that is not us means the
+        server belongs to somebody still running, and the answer is to say so.
         """
         pid = winjob.listener_pid(self._port)
         if pid is None:
@@ -331,6 +409,21 @@ class TrellisServer:
                 f"port {self._port} is held by pid {pid} ({path or 'unknown program'}), "
                 f"which is not this Warlock's trellis-server ({ours}). Stop it or "
                 "change WARLOCK_TRELLIS_PORT before retrying."
+            )
+        owner = self._recorded_owner()
+        if owner is None:
+            raise RuntimeError(
+                f"port {self._port} is held by a trellis-server (pid {pid}) that this "
+                f"Warlock did not start -- there is no record of this home claiming "
+                f"it. It may belong to another Warlock using a different "
+                f"WARLOCK_HOME. Stop it, or change WARLOCK_TRELLIS_PORT, before "
+                f"retrying."
+            )
+        if owner != os.getpid() and _pid_alive(owner):
+            raise RuntimeError(
+                f"port {self._port} is held by a trellis-server started by a Warlock "
+                f"that is still running (pid {owner}). Close it, or give this one its "
+                f"own WARLOCK_TRELLIS_PORT, before retrying."
             )
         log.warning(
             "port %d is held by an orphaned trellis-server (pid %d) from a previous "
@@ -438,6 +531,11 @@ class TrellisServer:
                 self._logfh = None
             self._proc = None
             self._spawned_at = None
+            # Only once the process is confirmed dead -- the raise above skips
+            # this deliberately. A claim outliving a server that survived its
+            # kill would invite the next start to "reclaim" a port whose holder
+            # is very much alive.
+            self._release_port_claim()
 
     async def generate(
         self,
@@ -476,10 +574,25 @@ class TrellisServer:
                     data=data,
                 ) as r:
                     if r.status_code >= 400:
-                        # The error shape is unchanged; a streamed response has
-                        # to be read before `.text` is available.
-                        body = await r.aread()
-                        detail = r.text[:500] if body else "(no body; see trellis.log)"
+                        # Streamed and capped, exactly like the success body
+                        # below. ``await r.aread()`` is unbounded: only ~500
+                        # characters of the result are ever shown, but the whole
+                        # thing was pulled into memory first, so a wedged or
+                        # compromised local server could exhaust the host by
+                        # answering an error with gigabytes (MDL-13).
+                        #
+                        # A far smaller ceiling than the GLB one, because this
+                        # is a *message*: nothing legitimate needs more than the
+                        # 500 characters that get displayed, and the extra room
+                        # is only so a multi-byte character at the boundary
+                        # still decodes.
+                        error_bytes = bytearray()
+                        async for chunk in r.aiter_bytes():
+                            error_bytes.extend(chunk)
+                            if len(error_bytes) >= MAX_ERROR_BYTES:
+                                break
+                        text = bytes(error_bytes).decode("utf-8", "replace")
+                        detail = text[:500] if text else "(no body; see trellis.log)"
                         raise RuntimeError(f"trellis-server {r.status_code}: {detail}")
                     async for chunk in r.aiter_bytes():
                         received += len(chunk)

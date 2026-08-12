@@ -133,9 +133,13 @@ def test_a_marker_from_a_dead_pid_reports_an_unclean_shutdown(data_dir, caplog):
     assert any("did not shut down cleanly" in r.getMessage() for r in caplog.records)
 
 
-def test_a_marker_from_a_live_pid_reports_a_second_instance(data_dir, caplog, monkeypatch):
-    """Two Warlocks share one sqlite DB and one trellis port, which is worth
-    saying out loud before either misbehaves."""
+def test_a_marker_from_a_live_pid_is_read_as_a_recycled_pid(data_dir, caplog, monkeypatch):
+    """The marker's live-pid branch used to announce a second Warlock. It cannot
+    be one any more: ``run()`` takes an OS-level instance lock on the home
+    before anything else, so a real second instance is refused with a dialog and
+    never reaches this function (RUN-01). What *can* still land here is a pid the
+    OS recycled onto an unrelated process, and the wording now says that rather
+    than asserting something the lock has already ruled out."""
     monkeypatch.setattr(main, "_pid_alive", lambda pid: True)
     (data_dir / main.SESSION_MARKER).write_text(
         json.dumps({"pid": os.getpid() + 1, "started_at": "now", "version": "0.0.6"}),
@@ -144,7 +148,7 @@ def test_a_marker_from_a_live_pid_reports_a_second_instance(data_dir, caplog, mo
     with caplog.at_level(logging.WARNING):
         main._note_previous_session()
     messages = [r.getMessage() for r in caplog.records]
-    assert any("appears to be running" in m for m in messages)
+    assert any("recycled pid" in m for m in messages)
     assert not any("did not shut down cleanly" in m for m in messages)
 
 

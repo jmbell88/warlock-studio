@@ -317,13 +317,24 @@ async def test_ensure_started_refuses_a_port_an_orphan_already_holds(tmp_path, m
 @pytest.mark.asyncio
 async def test_an_orphan_of_our_own_exe_is_reclaimed(tmp_path, monkeypatch):
     """The job object stops new orphans; it cannot clear one a pre-fix crash
-    already stranded. Killing it is safe only because the holder's image is the
-    very exe this instance is configured to spawn."""
+    already stranded.
+
+    Killing it takes *two* proofs, not one. The holder's image must be the very
+    exe this instance is configured to spawn -- and this home must have claimed
+    the port, with the claim naming an owner that is gone. Executable identity
+    alone is a property of the install rather than of the instance, so on its
+    own it would let a second Warlock (different WARLOCK_HOME, same binary, same
+    default port) terminate the first one's live server (RUN-01).
+    """
     exe = tmp_path / "trellis-server.exe"
     exe.write_bytes(b"")
     models = tmp_path / "models"
     models.mkdir()
-    srv = TrellisServer(exe, models, 17971)
+    srv = TrellisServer(exe, models, 17971, log_path=tmp_path / "trellis.log")
+    # The claim a crashed previous run left behind: an owner pid that is gone.
+    (tmp_path / "trellis-17971.owner").write_text(
+        '{"owner_pid": 999999001, "server_pid": 4321}', encoding="utf-8"
+    )
 
     spawned: list = []
     killed: list[int] = []
@@ -334,7 +345,11 @@ async def test_an_orphan_of_our_own_exe_is_reclaimed(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: held["port"])
     monkeypatch.setattr(trellis_mod.winjob, "listener_pid", lambda _port: 4321)
-    monkeypatch.setattr(trellis_mod.winjob, "image_path", lambda _pid: str(exe.resolve()))
+    monkeypatch.setattr(
+        trellis_mod.winjob,
+        "image_path",
+        lambda pid: None if pid == 999999001 else str(exe.resolve()),
+    )
     monkeypatch.setattr(trellis_mod.winjob, "assign", lambda _pid: True)
 
     def _kill(pid):
@@ -596,3 +611,94 @@ def test_concurrent_stops_do_not_double_tear_down(tmp_path):
     assert srv._proc is None
     assert srv._reader is None
     assert srv._logfh is None
+
+
+@pytest.mark.asyncio
+async def test_a_live_second_warlocks_server_is_never_terminated(tmp_path, monkeypatch):
+    """RUN-01's sharp edge: the exe path is a property of the *install*.
+
+    Two Warlocks with different WARLOCK_HOMEs share the same binary and, by
+    default, the same port 17971. Executable identity alone therefore "proved"
+    the other one's *live* server was our orphan, and reclaiming it terminated
+    it -- with the kill logged as a successful cleanup.
+    """
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971, log_path=tmp_path / "trellis.log")
+
+    killed: list[int] = []
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: True)
+    monkeypatch.setattr(trellis_mod.winjob, "listener_pid", lambda _port: 4321)
+    monkeypatch.setattr(trellis_mod.winjob, "image_path", lambda _pid: str(exe.resolve()))
+    monkeypatch.setattr(trellis_mod.winjob, "terminate", lambda pid: killed.append(pid))
+
+    # No claim file at all: this home never started a server on this port, so
+    # whoever is there belongs to somebody else.
+    with pytest.raises(RuntimeError, match="did not start"):
+        await srv.ensure_started()
+    assert killed == []
+
+    # And with a claim naming an owner that is still alive -- the other Warlock
+    # running right now -- it is still refused, in different words.
+    (tmp_path / "trellis-17971.owner").write_text(
+        '{"owner_pid": 4242, "server_pid": 4321}', encoding="utf-8"
+    )
+    monkeypatch.setattr(trellis_mod.winjob, "image_path", lambda pid: str(exe.resolve()))
+    with pytest.raises(RuntimeError, match="still running"):
+        await srv.ensure_started()
+    assert killed == []
+
+
+def test_an_error_body_is_streamed_and_capped_like_a_success_body(tmp_path, monkeypatch):
+    """MDL-13: the error path called ``await r.aread()`` -- unbounded.
+
+    Only ~500 characters are ever displayed, but the whole body was pulled into
+    memory first, so a wedged or compromised local server could answer a failing
+    request with gigabytes. The success path has streamed under a ceiling for
+    exactly this reason; the error path simply was not given one.
+    """
+    monkeypatch.setattr(trellis_mod, "MAX_ERROR_BYTES", 32)
+    consumed = {"bytes": 0}
+
+    class FakeResponse:
+        status_code = 500
+
+        async def aiter_bytes(self):
+            # A server that keeps talking. If the ceiling is not honoured this
+            # never ends, which is the failure in its purest form -- so the
+            # generator is bounded far above the cap and the assertion below is
+            # about how much was actually taken.
+            for _ in range(1000):
+                consumed["bytes"] += 16
+                yield b"x" * 16
+
+    class _Stream:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, *a, **k):
+            return _Stream()
+
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", FakeClient)
+    server = trellis_mod.TrellisServer(tmp_path / "x.exe", tmp_path, 1234)
+    monkeypatch.setattr(server, "ensure_started", _noop_async)
+    image = tmp_path / "in.png"
+    image.write_bytes(b"png")
+    with pytest.raises(RuntimeError, match="trellis-server 500"):
+        asyncio.run(server.generate(image, tmp_path / "out.glb"))
+    assert consumed["bytes"] <= 64, "the whole body was read despite the cap"

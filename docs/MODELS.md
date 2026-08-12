@@ -35,42 +35,42 @@ for free.
 # and no longer part of the core setup. Worth having when iteration speed
 # matters more than fidelity, and the entry WARLOCK_T2I_DIR redirects.
 uvx hf download stabilityai/sdxl-turbo --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
-  --exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo
+  --exclude "sd_xl_turbo_1.0*" --local-dir $HOME/.warlock/models/sdxl-turbo
 
 # SDXL 1.0 + Hyper-SD (787 MB on top of the base above). Style LoRAs are
 # trained against full SDXL at 20-25 steps with CFG, so they land noticeably
 # stronger here than on Turbo's 4 steps at guidance 0. Hyper-SD buys the step
 # count back. If you skipped the README's step 4, the base line comes first:
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
-uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir models/loras
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
+uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir $HOME/.warlock/models/loras
 
 # Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
 uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/playground-v2.5
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/playground-v2.5
 
 # SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
 # guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
 # LCM LoRA has to be renamed: loras/ is flat, and the upstream filename is
 # generic enough that any other repo's default-named adapter would overwrite it.
 uvx hf download latent-consistency/lcm-lora-sdxl `
-  pytorch_lora_weights.safetensors --local-dir models/loras
-Rename-Item models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
+  pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
+Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
 
 # SDXL 1.0 + Lightning (394 MB, reuses the sdxl-base-1.0 weights above): a
 # second 4-step distillation, adversarial where Hyper-SD is trajectory-
 # consistency, so the two are directly comparable with everything else fixed.
 uvx hf download ByteDance/SDXL-Lightning `
-  sdxl_lightning_4step_lora.safetensors --local-dir models/loras
+  sdxl_lightning_4step_lora.safetensors --local-dir $HOME/.warlock/models/loras
 
 # Juggernaut XL v9 (~6.9 GB): a photoreal SDXL finetune, DPM++ 2M Karras at 35
 # steps with CFG 4.0 -- the middle of the ranges its own model card gives.
 uvx hf download RunDiffusion/Juggernaut-XL-v9 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/juggernaut-xl-v9
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/juggernaut-xl-v9
 
 # DreamShaper XL (~6.9 GB): the stylised counterpart, DEIS at 25 steps per its card.
 uvx hf download Lykon/dreamshaper-xl-1-0 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/dreamshaper-xl
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/dreamshaper-xl
 
 # FLUX.2 klein-base 4B (~16 GB): the one non-SDXL architecture -- one Qwen3 text
 # encoder at 512 tokens instead of two CLIPs at 77, and a DiT instead of a UNet.
@@ -86,7 +86,7 @@ uvx hf download Lykon/dreamshaper-xl-1-0 `
 # 7.75 GB single-file checkpoint the repo ships beside the diffusers layout.
 uvx hf download black-forest-labs/FLUX.2-klein-base-4B `
   --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
-  --exclude "flux-2-klein-base-4b.safetensors" --local-dir models/flux2-klein-base-4b
+  --exclude "flux-2-klein-base-4b.safetensors" --local-dir $HOME/.warlock/models/flux2-klein-base-4b
 
 # FLUX.2 klein 4B distilled (~16 GB): the same architecture at the opposite
 # recipe -- 4 steps at guidance 1.0 rather than 50 at 4.0. It registers
@@ -96,22 +96,22 @@ uvx hf download black-forest-labs/FLUX.2-klein-base-4B `
 # against it.
 uvx hf download black-forest-labs/FLUX.2-klein-4B `
   --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
-  --exclude "flux-2-klein-4b.safetensors" --local-dir models/flux2-klein-4b
+  --exclude "flux-2-klein-4b.safetensors" --local-dir $HOME/.warlock/models/flux2-klein-4b
 
-# Style LoRAs -> models/loras/
-uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
+# Style LoRAs -> ~/.warlock/models/loras/
+uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir $HOME/.warlock/models/loras
 uvx hf download artificialguybr/3DRedmond-V1 `
-  3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir models/loras
+  3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir $HOME/.warlock/models/loras
 uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
-  PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
+  PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
-uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art for FLUX.2 klein -- the one non-SDXL adapter, offered only on the two
 # klein entries above. Renamed on the way in because loras/ is flat and shared
 # across families, and lcm-lora-sdxl ships the same generic filename.
 uvx hf download Limbicnation/pixel-art-lora `
-  pytorch_lora_weights.safetensors --local-dir models/loras
-Rename-Item models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
+  pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
+Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
 ```
 
 ## Conditioning, matting and measurement models
@@ -124,31 +124,31 @@ records; `warlock doctor` reports each one and the Settings pane can fetch it.
 # IP-Adapter Plus (~3.5 GB): condition on a reference image's appearance. Both
 # halves are needed -- the weights alone load fine and then fail at the first call.
 uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
-  --local-dir models/ip-adapter
-uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir models/ip-adapter
+  --local-dir $HOME/.warlock/models/ip-adapter
+uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir $HOME/.warlock/models/ip-adapter
 
 # ControlNet, Canny (~2.5 GB): lock the silhouette to a reference image's edges.
 uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
-  --include "*.json" --include "*fp16.safetensors" --local-dir models/controlnet-canny-sdxl
+  --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
 
 # BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
 # alpha comes from a corner flood fill, with visibly rougher edges. Its own
 # modelling code runs on load and imports einops/kornia/timm/torchvision, so it
 # also wants `uv sync --extra text2image`.
 uvx hf download ZhengPeng7/BiRefNet `
-  --include "*.json" --include "*.py" --include "*.safetensors" --local-dir models/birefnet
+  --include "*.json" --include "*.py" --include "*.safetensors" --local-dir $HOME/.warlock/models/birefnet
 
 # DINOv2 base (~400 MB): the identity metric `python -m warlock.bench` scores
 # with. A missing one costs a number, never a job.
 uvx hf download facebook/dinov2-base `
-  --include "*.json" --include "*.safetensors" --local-dir models/dinov2-base
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/dinov2-base
 ```
 
 ## Landmark-informed joint placement (rigging)
 
 ```powershell
 uvx hf download usyd-community/vitpose-base-simple `
-  --include "*.json" --include "*.safetensors" --local-dir models/vitpose-base
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/vitpose-base
 ```
 
 Without it, a humanoid rig places its joints by scaling the template onto the mesh's bounding box

@@ -99,14 +99,20 @@ def _ensure_job_locked() -> int | None:
         return None
     try:
         kernel32 = ctypes.windll.kernel32
-        # Handle-returning calls need an explicit restype: ctypes defaults to
-        # c_int, which truncates a 64-bit HANDLE to its low 32 bits.
-        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
-        kernel32.OpenProcess.restype = wintypes.HANDLE
+        # Full prototypes, not only the restypes. A handle-returning call needs
+        # an explicit ``restype`` because ctypes defaults to ``c_int``, which
+        # truncates a 64-bit HANDLE to its low 32 bits -- but the *arguments*
+        # need declaring for the same reason: without ``argtypes`` ctypes
+        # guesses from the Python value, and a handle that happens to fit in 32
+        # bits is passed as an int while one above 2^31 is not. It works until
+        # the machine is busy enough to hand out a large handle, which is the
+        # worst possible failure schedule (RUN-04).
+        _declare(kernel32)
         handle = kernel32.CreateJobObjectW(None, None)
         if not handle:
             # GetLastError directly: windll builds functions with
             # use_last_error=False, so ctypes.get_last_error() always reads 0.
+            # Read *immediately*, before any other call can overwrite it.
             log.warning("CreateJobObject failed (%s)", kernel32.GetLastError())
             return None
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
@@ -118,7 +124,10 @@ def _ensure_job_locked() -> int | None:
             ctypes.sizeof(info),
         )
         if not ok:
-            log.warning("SetInformationJobObject failed; not using a job object")
+            error = kernel32.GetLastError()
+            log.warning(
+                "SetInformationJobObject failed (%s); not using a job object", error
+            )
             kernel32.CloseHandle(handle)
             return None
     except (OSError, AttributeError):
@@ -126,6 +135,34 @@ def _ensure_job_locked() -> int | None:
         return None
     _job = handle
     return _job
+
+
+def _declare(kernel32: Any) -> None:
+    """Give every handle-taking call this module makes a full signature.
+
+    Idempotent and cheap -- ctypes caches the function objects, so re-declaring
+    is assigning the same attributes again. Declared in one place rather than
+    beside each call so a new call site cannot quietly inherit the guesswork.
+    """
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.GetLastError.restype = wintypes.DWORD
+    kernel32.GetLastError.argtypes = []
 
 
 def assign(pid: int) -> bool:
@@ -139,8 +176,7 @@ def assign(pid: int) -> bool:
     if job is None:
         return False
     kernel32 = ctypes.windll.kernel32
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    _declare(kernel32)
     handle = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
     if not handle:
         log.warning("could not open pid %d to assign it to the job object", pid)
@@ -152,6 +188,54 @@ def assign(pid: int) -> bool:
         return ok
     finally:
         kernel32.CloseHandle(handle)
+
+
+# Every child this process has spawned and not yet reaped, by pid. The job
+# object already guarantees they die when *this* process does -- but shutdown is
+# reached on paths where the interpreter carries on, and a 4-hour fetch child or
+# a Blender bake parked on a socket is then simply left running with nothing
+# holding a handle to it (MDL-02). The registry is what lets shutdown say "and
+# stop those too" instead of trusting an exit that may not come.
+#
+# Weak in intent, strong in practice: entries are removed on reap, and a pid
+# that has already exited is a no-op to terminate. A dict rather than a set so
+# the reason a child is running can be logged when one has to be killed.
+_children: dict[int, str] = {}
+_children_lock = threading.Lock()
+
+
+def track(pid: int, what: str) -> None:
+    """Record a live child so ``terminate_tracked`` can find it."""
+    with _children_lock:
+        _children[pid] = what
+
+
+def untrack(pid: int) -> None:
+    """Forget a child that has been reaped. Safe for an unknown pid."""
+    with _children_lock:
+        _children.pop(pid, None)
+
+
+def tracked() -> dict[int, str]:
+    """A snapshot of the live children, for diagnostics and shutdown."""
+    with _children_lock:
+        return dict(_children)
+
+
+def terminate_tracked() -> list[int]:
+    """Kill every tracked child. -> the pids that were asked to stop.
+
+    Best-effort, like everything else here: a child that has already exited,
+    or that this process cannot open, is not a reason to raise on the way out
+    of a shutdown. The job object remains the backstop for a hard kill.
+    """
+    killed: list[int] = []
+    for pid, what in tracked().items():
+        log.info("terminating tracked child %d (%s)", pid, what)
+        if terminate(pid):
+            killed.append(pid)
+        untrack(pid)
+    return killed
 
 
 def armed() -> bool:

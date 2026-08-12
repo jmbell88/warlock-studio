@@ -97,7 +97,7 @@ uv run warlock doctor   # checks dependencies, weights, and configuration
 
 ### Configuration
 
-There is no config file — everything is a `WARLOCK_*` env var; the full table lives in [docs/manual/16-configuration.md](docs/manual/16-configuration.md). The main knobs: `WARLOCK_DATA_DIR` (where assets and the job store live), `WARLOCK_EXPORT_DIR`, `WARLOCK_T2I_ROOT`/`WARLOCK_T2I_MODEL` (image-model home and default), and `WARLOCK_VRAM_EXCLUSIVE`.
+There is no *engine* config file — every path, port, timeout and mode is a `WARLOCK_*` env var, and the full table lives in [docs/manual/16-configuration.md](docs/manual/16-configuration.md). Studio's own UI preferences (theme, UI scale, pane layout, remembered form fields) are a separate thing and do persist, in `studio_settings.json` in the data directory; they are edited in the app rather than in a file. The main knobs: `WARLOCK_DATA_DIR` (where assets and the job store live), `WARLOCK_EXPORT_DIR`, `WARLOCK_T2I_ROOT`/`WARLOCK_T2I_MODEL` (image-model home and default), and `WARLOCK_VRAM_EXCLUSIVE`.
 
 On VRAM: the trellis server subprocess starts on the first 3D job and by default stays resident alongside the image model (~16 GB + ~7 GB on a 32 GB card); both are evicted after 10 minutes idle. `WARLOCK_VRAM_EXCLUSIVE=1` restores sequential VRAM use for text jobs (trellis stopped → image model loads, generates, unloads → trellis restarts) — needed for smaller GPUs, resolution 1536, or a resident FLUX.
 
@@ -105,8 +105,13 @@ On VRAM: the trellis server subprocess starts on the first 3D job and by default
 
 ```powershell
 uv run pytest -q            # unit tests; the renderer's skip without a GL 3.3 context
+uv run pytest -m gpu -q     # the opt-in lane: real card, real weights, minutes not seconds
 uv run ruff check .
 ```
+
+The default run excludes the `gpu` marker (`addopts = -m "not gpu"`): those tests load real
+checkpoints onto a real card, so they belong to a deliberate lane rather than to every `pytest`.
+Run that lane before changing model loading, VRAM accounting or conditioning.
 
 The app is a single process: a pygame window, one ModernGL context, and [imgui-bundle](https://github.com/pthom/imgui_bundle) panels drawn through that same context (the 3D viewport is a texture the panels show). Three threads — the frame loop, an asyncio worker for the GPU queue, and a task pool for blocking calls; jobs run one at a time. `warlock.service` is the single business-logic layer the panes and the tests both call. Model loads that would bloat the app process run in subprocesses that end (Blender, BiRefNet matting, the fetch worker), all tied to a kill-on-close job object.
 

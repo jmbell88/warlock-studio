@@ -14,6 +14,7 @@ a no-op, which is what stops a double-clicked button starting two exports.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -223,6 +224,30 @@ class TaskRunner:
         # workaround is to drop them from that registry.
         for thread in list(self._pool._threads):
             _threads_queues.pop(thread, None)
+        if not_done:
+            # Something is still running, and dropping the pool threads from
+            # that registry means nothing will ever join them. Whatever those
+            # tasks spawned is therefore *also* unowned from here on -- a fetch
+            # child with a four-hour ceiling, a Blender bake, a matting worker.
+            # The kill-on-close job stops them when this process actually exits,
+            # but shutdown is reached on paths where the interpreter carries on,
+            # and "it will die eventually" is not a claim about a 16 GB download
+            # still writing to the disk (MDL-02).
+            #
+            # Only on the timeout path: a pool that drained has already reaped
+            # its children through their own code, and terminating there would
+            # race a child in the middle of a clean exit.
+            from .. import winjob
+
+            with contextlib.suppress(Exception):
+                stopped = winjob.terminate_tracked()
+                if stopped:
+                    log.warning(
+                        "shutdown stopped %d child process(es) belonging to tasks "
+                        "that outlived the grace period: %s",
+                        len(stopped),
+                        stopped,
+                    )
         with self._lock:
             self._pending.clear()
             self._progress.clear()

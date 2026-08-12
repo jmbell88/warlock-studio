@@ -197,6 +197,33 @@ file behind.
 - Positional Alt+digit mode switching is gone. Twelve modes and ten digits was
   never going to fit; the palette (Ctrl+K) is the keyboard route.
 
+## 0.0.15 — 2026-08-09
+
+Backfilled on 2026-08-12 from commit `4504d7c`, which shipped under this version
+and was the one release with no entry here. The file's own preamble says it is
+the only record of what a version changed, so a gap in it is a defect rather
+than a shrug.
+
+- **The UI got its visual pass.** Elevation and depth are real drawing now:
+  `shadows.py` strokes shadow bands instead of filling them (one recipe, any
+  radius), `surfaces.py` owns panel/inspector surfaces, `ninepatch.py` supplies
+  the scalable frames, and `vibrancy.py` blurs the last clean frame behind modal
+  surfaces. Each of the GPU-tier effects sits behind its own switch in
+  app-Settings and none of them is load-bearing: turning them all off changes
+  how the app looks and nothing about what it does.
+- **Motion, with a reduced-motion switch.** `motion.py` and `effects.py` add the
+  small transitions — the progress card fading *out* after its job is already
+  gone, the splash reporting the load it is actually waiting on.
+- **Field-level errors and a keyboard focus ring.** A refusal now records the
+  control it is about and that control draws the error, rather than the message
+  arriving as an unaddressed toast; `focus.py` owns the traversal order for the
+  primary 2D and 3D forms, written down rather than emergent.
+- **The 2D form grew a common path and a fold.** The fields most jobs never
+  touch moved behind "More", and the fold is guaranteed not to hide anything
+  that can refuse a submit.
+- Home's tile table stopped being the drawn list; one function owns what appears
+  there.
+
 ## 0.0.14 — 2026-08-09
 
 - **Plotter**: a tilemap editor, with Tiled `.tmx` import and export.

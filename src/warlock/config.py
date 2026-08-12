@@ -10,6 +10,34 @@ from .models import DEFAULT_BASE_MODEL as DEFAULT_T2I_MODEL
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
+def source_checkout() -> bool:
+    """Whether this package is running from a source checkout.
+
+    **Warlock is source-checkout-only, and that is a decision rather than an
+    omission** (DST-01, D4). Every native default below resolves against
+    ``PROJECT_ROOT`` -- ``Path(__file__).parents[2]`` -- which is the repository
+    root for an editable install and, inside a wheel, points somewhere under the
+    environment (``Lib/vendor``). The wheel carries the package, the manual and
+    the changelog but *not* ``vendor/``, which is git-ignored in full: the
+    binaries are one-time manual downloads. So a non-editable install can never
+    find the reconstruction engine, and the failure would arrive as a missing
+    file at the first job rather than as anything anyone could act on.
+
+    Supporting wheels properly means installing pinned native assets under a
+    versioned app-data location or shipping them as package resources resolved
+    through ``importlib.resources``. That is a distribution project, not a
+    bugfix, and nothing asks for it today -- so the supported model is stated
+    and checked instead of half-implemented.
+
+    The probe is the marker that only a checkout has: ``pyproject.toml`` beside
+    the package's parent. Deliberately not "is vendor/ present" -- a checkout
+    that has not downloaded the binaries yet is a *supported* state with its own
+    Doctor rows, and conflating the two would refuse to start over a missing
+    optional file.
+    """
+    return (PROJECT_ROOT / "pyproject.toml").is_file()
+
 # None on purpose, and confirmed by measurement -- see Config.trellis_band.
 DEFAULT_TRELLIS_BAND: int | None = None
 
@@ -29,6 +57,56 @@ def _home() -> Path:
     return _env_path("WARLOCK_HOME", Path.home() / ".warlock")
 
 
+# Every environment variable this process could not make sense of, as
+# ``(name, raw value, what was expected)``. Collected rather than raised, and
+# this is the whole of RUN-03's fix.
+#
+# The failure it replaces: several fields called bare ``int()``/``float()``
+# inside their ``default_factory``, so one typo in a port, a timeout or a
+# threshold raised out of ``get_config()`` -- which runs before ``studio.main``
+# has a log handler, before Doctor exists, and before there is a window to say
+# anything in. The user got a traceback naming ``int()`` and no indication of
+# which variable was wrong. Meanwhile *other* fields (the optional VRAM floats)
+# silently turned a malformed value into ``None``, so an explicit safety limit
+# with a typo in it became "unset" -- the two halves of one policy disagreeing
+# about whether bad input is fatal or invisible.
+#
+# So: malformed input never raises and never vanishes. It falls back to the
+# documented default and is recorded here, and Doctor reports every one of them
+# in a single actionable row.
+INVALID_ENV: list[tuple[str, str, str]] = []
+
+
+def _note_invalid(name: str, raw: str, expected: str) -> None:
+    entry = (name, raw, expected)
+    if entry not in INVALID_ENV:
+        INVALID_ENV.append(entry)
+
+
+def _env_int(name: str, default: int) -> int:
+    """``int`` from the environment, or the default with a note. Never raises."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        _note_invalid(name, raw, "a whole number")
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """``float`` from the environment, or the default with a note. Never raises."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        _note_invalid(name, raw, "a number")
+        return default
+
+
 def _env_opt_int(name: str, default: int | None) -> int | None:
     """Like int(os.environ[name]) but with an explicit "leave it to the exe" value.
 
@@ -38,8 +116,17 @@ def _env_opt_int(name: str, default: int | None) -> int | None:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    raw = raw.strip().lower()
-    return None if raw in ("", "auto") else int(raw)
+    text = raw.strip().lower()
+    if text in ("", "auto"):
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        # Recorded and defaulted, like every other numeric field. This used to
+        # raise out of ``get_config()`` -- before any log handler, Doctor or
+        # window existed -- over a typo in a texture resolution (RUN-03).
+        _note_invalid(name, raw, "a whole number, or 'auto'")
+        return default
 
 
 def _env_opt_bool(name: str) -> bool | None:
@@ -58,12 +145,21 @@ def _env_opt_bool(name: str) -> bool | None:
 
 
 def _env_opt_float(name: str) -> float | None:
+    """An optional float: unset is None, and so is a malformed value.
+
+    ``None`` is still the fallback -- these are the VRAM limits, where "unset"
+    genuinely is the default and there is no better number to substitute. What
+    changed is that a malformed one is no longer *silent*: an explicit safety
+    limit with a typo in it used to become "unset" with nothing said anywhere,
+    which is the same policy inconsistency RUN-03 names from the other side.
+    """
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return None
     try:
-        return float(raw)
+        return float(raw.strip())
     except ValueError:
+        _note_invalid(name, raw, "a number")
         return None
 
 
@@ -153,7 +249,7 @@ class Config:
     # The ceiling still ends the loop rather than a verdict, so past it the
     # user gets the last draw and the model stage gets its ordinary refusal.
     reference_retries: int = field(
-        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_REFERENCE_RETRIES", "2")))
+        default_factory=lambda: max(0, _env_int("WARLOCK_REFERENCE_RETRIES", 2))
     )
     # How many extra times the trellis stage may run when the finished mesh
     # audits worse than mesh_hole_max. 0 -- off -- because a retry is two
@@ -162,7 +258,7 @@ class Config:
     # the first, which is why the loop keeps whichever attempt measured best
     # rather than whichever came last.
     mesh_retries: int = field(
-        default_factory=lambda: max(0, int(os.environ.get("WARLOCK_MESH_RETRIES", "0")))
+        default_factory=lambda: max(0, _env_int("WARLOCK_MESH_RETRIES", 0))
     )
     # The worst-view see-through fraction past which a mesh is worth redoing.
     # 0.07 is measured, not guessed, the same way trellis_band was settled by a
@@ -174,7 +270,7 @@ class Config:
     # and the one least disturbed by a future sample shifting one of them; any
     # threshold inside the gap selects the identical fifteen meshes.
     mesh_hole_max: float = field(
-        default_factory=lambda: float(os.environ.get("WARLOCK_MESH_HOLE_MAX", "0.07"))
+        default_factory=lambda: _env_float("WARLOCK_MESH_HOLE_MAX", 0.07)
     )
     # Where `python -m warlock.bench` writes its runs. A sibling of data_dir
     # rather than a child, on purpose: a benchmark run copies its artifacts
@@ -198,11 +294,11 @@ class Config:
         )
     )
     trellis_port: int = field(
-        default_factory=lambda: int(os.environ.get("WARLOCK_TRELLIS_PORT", "17971"))
+        default_factory=lambda: _env_int("WARLOCK_TRELLIS_PORT", 17971)
     )
     # Seconds of queue inactivity before the trellis server is stopped to free VRAM.
     trellis_idle_timeout: float = field(
-        default_factory=lambda: float(os.environ.get("WARLOCK_TRELLIS_IDLE", "600"))
+        default_factory=lambda: _env_float("WARLOCK_TRELLIS_IDLE", 600.0)
     )
     # Where every image model lives: models.BASE_MODELS[k].dir_name resolves
     # against this, and style LoRAs against its loras/ subdirectory. All
@@ -240,7 +336,7 @@ class Config:
     # trellis-cli.exe: default auto is noise, explicit --tex-res 512 is clean).
     # Pin it to 512 until upstream fixes the auto heuristic.
     trellis_tex_res: int = field(
-        default_factory=lambda: int(os.environ.get("WARLOCK_TRELLIS_TEX_RES", "512"))
+        default_factory=lambda: _env_int("WARLOCK_TRELLIS_TEX_RES", 512)
     )
     # Width of the narrow band the DC remesh runs over. The exe defaults it to
     # res/512 when the flag is absent, which is what None gives you.
@@ -275,7 +371,7 @@ class Config:
     # explicitly (1/true/on or 0/false/off) it is honoured verbatim and
     # auto-detection never overrides it.
     #
-    # False (coexist) keeps SDXL-Turbo (~7 GB) and trellis-server (~16 GB)
+    # False (coexist) keeps an SDXL-class pipe (~7 GB) and trellis-server (~16 GB)
     # resident together, which is right on a 32 GB card and is what a 32 GB
     # card still auto-selects. True restores the stop-trellis -> run-SDXL ->
     # unload -> restart handoff for OOM situations (resolution 1536, smaller
@@ -326,13 +422,13 @@ class Config:
     # 300k-face mesh are minutes of CPU; anything past this is a hang, and a
     # hung bpy holds the single-worker queue against every other job.
     rig_timeout: float = field(
-        default_factory=lambda: float(os.environ.get("WARLOCK_RIG_TIMEOUT", "1800"))
+        default_factory=lambda: _env_float("WARLOCK_RIG_TIMEOUT", 1800.0)
     )
     # Baking a pose is an import, a handful of quaternion assignments and an
     # export -- seconds, not minutes. It gets its own much tighter ceiling
     # because it runs inline in a request rather than on the queue.
     pose_timeout: float = field(
-        default_factory=lambda: float(os.environ.get("WARLOCK_POSE_TIMEOUT", "300"))
+        default_factory=lambda: _env_float("WARLOCK_POSE_TIMEOUT", 300.0)
     )
     # Render the deformation battery after a rig. A kill-switch rather than an
     # opt-in, for the reason pose_fit is one: with it off a rig is byte for
@@ -348,7 +444,7 @@ class Config:
     # Generous because the cell count is user-chosen, but still bounded: this
     # runs on the serial queue and a hang would block every later job.
     sheet_timeout: float = field(
-        default_factory=lambda: float(os.environ.get("WARLOCK_SHEET_TIMEOUT", "1800"))
+        default_factory=lambda: _env_float("WARLOCK_SHEET_TIMEOUT", 1800.0)
     )
 
     @property

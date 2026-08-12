@@ -111,3 +111,61 @@ def test_terminating_really_kills_the_process():
         if proc.poll() is None:  # pragma: no cover - only if terminate failed
             proc.kill()
             proc.wait(timeout=10)
+
+
+def test_the_child_registry_is_a_plain_add_remove_snapshot():
+    """Tracking is separate from the job object and answers a different
+    question. The job object says "these die when this process does"; the
+    registry says "these are alive *now*", which is what a shutdown that leaves
+    the interpreter running needs in order to stop them (MDL-02)."""
+    before = winjob.tracked()
+    winjob.track(999_999_001, "a fetch")
+    winjob.track(999_999_002, "a bake")
+    try:
+        live = winjob.tracked()
+        assert live[999_999_001] == "a fetch"
+        assert live[999_999_002] == "a bake"
+        # A snapshot, not the live dict: mutating what you got back must not
+        # reach into the registry.
+        live.clear()
+        assert winjob.tracked()
+
+        winjob.untrack(999_999_001)
+        assert 999_999_001 not in winjob.tracked()
+        # Untracking something unknown is a no-op, not an error: every reap
+        # path calls it and several of them run during an unwind.
+        winjob.untrack(999_999_001)
+    finally:
+        winjob.untrack(999_999_001)
+        winjob.untrack(999_999_002)
+    assert winjob.tracked() == before
+
+
+def test_terminating_the_tracked_set_empties_it_even_for_dead_pids():
+    """Best-effort by contract, like every other call in this module. A pid that
+    has already exited is not a reason to raise on the way out of a shutdown --
+    but it must still leave the registry, or the next shutdown tries again."""
+    winjob.track(999_999_003, "already gone")
+    try:
+        winjob.terminate_tracked()
+        assert 999_999_003 not in winjob.tracked()
+    finally:
+        winjob.untrack(999_999_003)
+
+
+@windows_only
+def test_terminate_tracked_actually_stops_a_live_child():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        winjob.track(proc.pid, "a sleeper")
+        assert proc.pid in winjob.terminate_tracked()
+        assert proc.wait(timeout=10) is not None
+        assert proc.pid not in winjob.tracked()
+    finally:
+        winjob.untrack(proc.pid)
+        if proc.poll() is None:  # pragma: no cover - only if terminate failed
+            proc.kill()
+            proc.wait(timeout=10)

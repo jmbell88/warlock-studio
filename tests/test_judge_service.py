@@ -28,6 +28,7 @@ import pytest
 from warlock import judge
 from warlock.service import judge as svc_judge
 from warlock.service import verdicts as svc_verdicts
+from warlock.service.errors import Invalid
 
 
 def _labelled(svc, verdict, *, stage="blank", image=True, prompt="a rogue"):
@@ -226,7 +227,7 @@ def test_the_mesh_probe_cannot_be_trained_on_reference_pixels(svc, monkeypatch):
         lambda: svc_judge.score_job(svc, "whatever", "model"),
         lambda: svc_judge.score_jobs(svc, ["whatever"], "model"),
     ):
-        with pytest.raises(ValueError, match="declared"):
+        with pytest.raises(Invalid, match="declared"):
             call()
 
 
@@ -239,7 +240,7 @@ def test_the_trainable_stages_are_the_verdict_tables_image_stages(svc):
 
 
 def test_an_unknown_stage_is_refused_rather_than_writing_a_stray_probe(svc):
-    with pytest.raises(ValueError):
+    with pytest.raises(Invalid):
         svc_judge.train(svc, "mesh")
 
 
@@ -291,3 +292,18 @@ def test_a_row_with_no_pixels_scores_none_beside_rows_that_do(svc, monkeypatch):
 
     assert scores[pruned] is None
     assert isinstance(scores[good], float)
+
+
+def test_the_stage_refusal_names_the_control_it_is_about():
+    """SVC-04: this was the one service-layer refusal outside the
+    ``service.errors`` hierarchy.
+
+    The contract is what lets the UI put a message beside the control it
+    concerns -- a bare ``ValueError`` escaping the boundary is a 500 rather
+    than a highlighted select.
+    """
+    from warlock.service import judge as svc_judge
+
+    with pytest.raises(Invalid) as caught:
+        svc_judge._check_stage("mesh")
+    assert caught.value.field == "stage"

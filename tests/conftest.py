@@ -6,6 +6,7 @@ testable without a GPU."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import threading
 import time
@@ -138,14 +139,21 @@ def materialize_weights():
 
 
 def _materialize_generative_weights(config) -> None:
-    """Empty files at every path ``fetch.present`` probes for a *selectable*
-    model: the checkpoints, their step-distillation LoRAs, the style LoRAs, the
-    IP-Adapters and the ControlNets.
+    """Placeholder files at every path ``fetch.present`` probes for a
+    *selectable* model: the checkpoints, their step-distillation LoRAs, the
+    style LoRAs, the IP-Adapters and the ControlNets.
 
-    Empty on purpose -- nothing here is ever loaded, and a probe is an existence
-    test. Driven off the registries rather than a hardcoded list, so adding a
-    model to ``models.py`` does not silently start refusing every text job in
-    the suite.
+    One byte rather than zero, and the difference is now load-bearing. These
+    were empty on the reasoning that nothing here is ever loaded and a probe is
+    an existence test -- true until MDL-08, which made a *zero-length* weight
+    file mean something specific: a download that did not finish, or a copy that
+    lost its contents. ``fetch.suspect_files`` reports those, and a fixture
+    writing them would have every model in the suite permanently flagged as
+    corrupt. Still nothing that can be loaded; just not a file that claims to be
+    broken.
+
+    Driven off the registries rather than a hardcoded list, so adding a model to
+    ``models.py`` does not silently start refusing every text job in the suite.
     """
     from warlock import fetch, models
 
@@ -154,7 +162,7 @@ def _materialize_generative_weights(config) -> None:
     def touch(path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_bytes(b"")
+            path.write_bytes(b"x")
 
     for spec in models.BASE_MODELS.values():
         base = fetch.base_model_dir(config, spec)
@@ -191,6 +199,34 @@ def gl():
         pytest.skip(f"no GL 3.3 context: {exc}")
     yield ctx
     ctx.release()
+
+
+@functools.lru_cache(maxsize=1)
+def _tiny_glb() -> bytes:
+    """A structurally valid GLB carrying one real cube.
+
+    ART-02. The fakes used to write the markers ``b"fake-glb"`` and
+    ``b"fake-png"``, and everything downstream of them is wrapped in
+    catch-everything handlers -- ``normalize_glb``, the mesh audit, the report,
+    every 2D derive. So a queue test asserting ``status == "done"`` was, for the
+    most part, asserting that the *degraded* path completes: the artifact never
+    parsed, every post-processing step raised and was swallowed, and the job
+    reached ``done`` regardless. Which is exactly what happens when a real
+    reconstruction comes back malformed -- so the happy-path tests and the
+    degraded-path tests were testing the same thing.
+
+    Real geometry and not merely a parseable header, because that is what the
+    steps under test need: ``normalize_glb`` measures extents and a mesh with no
+    finite geometry is as unusable to it as a byte string. Built with trimesh
+    (a core dependency, so no extra is required) and cached, since it is
+    identical for every call and every test.
+
+    Malformed artifacts are still exercised, deliberately, by the tests that ask
+    for them -- ``should_raise`` and the explicit degraded-path cases.
+    """
+    import trimesh
+
+    return trimesh.creation.box(extents=(1.0, 1.0, 1.0)).export(file_type="glb")
 
 
 class FakeTrellisServer:
@@ -266,7 +302,7 @@ class FakeTrellisServer:
         # contract (C37) -- a fake that wrote in place would model a writer
         # the app does not have and scribble through the link.
         tmp = output_path.with_suffix(".glb.tmp")
-        tmp.write_bytes(b"fake-glb")
+        tmp.write_bytes(_tiny_glb())
         os.replace(tmp, output_path)
         self.last_used = time.monotonic()
         return output_path
@@ -359,7 +395,18 @@ class FakeText2Image:
 
             Image.new("RGB", (1024, 1024), (10, 200, 90)).save(output_path, "PNG")
         else:
-            output_path.write_bytes(b"fake-png")
+            from PIL import Image, ImageDraw
+
+            # A real PNG with a real subject on it, not a marker -- see
+            # ``_tiny_glb`` for why. A *flat* image would parse and then be
+            # refused by ``reference.measure`` ("No subject found against the
+            # background"), which is a true answer about a picture of nothing;
+            # the happy path needs a picture of something. Plain white ground
+            # with one centred dark block: enough for the composition report to
+            # find a subject, small enough to cost nothing.
+            image = Image.new("RGB", (512, 512), (255, 255, 255))
+            ImageDraw.Draw(image).rectangle((160, 160, 352, 352), fill=(40, 40, 48))
+            image.save(output_path, "PNG")
         self.last_used = time.monotonic()
         return output_path
 

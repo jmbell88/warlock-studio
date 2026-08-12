@@ -181,8 +181,17 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
     sampler = _Sampler(staging, float(spec.get("size_gib") or 0.0))
     sampler.start()
     try:
+        # ``revision`` is the pin, and passing it is the whole of what makes
+        # it one: unpinned, this follows whatever the repository's default
+        # branch points at *today*, so a Download click a year from now can
+        # retrieve different weights -- and, for BiRefNet, different Python,
+        # which the matting pipeline then loads with
+        # ``trust_remote_code=True`` (MDL-03). ``None`` for an unpinned entry
+        # keeps the previous behaviour exactly rather than inventing a default.
+        revision = str(spec.get("revision") or "") or None
         snapshot_download(
             repo_id=str(spec["repo_id"]),
+            revision=revision,
             local_dir=str(staging),
             allow_patterns=patterns or None,
             ignore_patterns=ignore or None,
@@ -211,7 +220,44 @@ def fetch_one(spec: dict[str, Any]) -> dict[str, Any]:
         raise
     sampler.stop()
     shutil.rmtree(staging, ignore_errors=True)
+    _write_manifest(dest, spec, moved)
     return {"ok": True, "dest": str(dest), "files": moved}
+
+
+def _write_manifest(dest: Path, spec: dict[str, Any], moved: list[str]) -> None:
+    """Record what this fetch published, and from which revision.
+
+    Written *last*, after the publish succeeded, which is what makes it a
+    completion marker rather than an intention: a fetch killed partway leaves
+    no manifest, so "this directory was finished by a Warlock download" is a
+    question with a real answer for the first time (MDL-08).
+
+    Merged with whatever is already there rather than replacing it, because a
+    destination is legitimately shared -- ``loras/`` accumulates adapters from
+    several fetches, and a manifest that named only the last one would be a
+    worse record than none.
+
+    Never raises: a manifest that could not be written must not fail a download
+    that succeeded. Its absence already means "unknown", which is exactly what
+    would be true.
+    """
+    path = dest / ".warlock-fetch.json"
+    record = {
+        "repo_id": str(spec.get("repo_id") or ""),
+        "revision": str(spec.get("revision") or ""),
+        "files": sorted(moved),
+    }
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        repos = existing.get("repos") if isinstance(existing, dict) else None
+        repos = repos if isinstance(repos, dict) else {}
+    except (OSError, ValueError):
+        repos = {}
+    repos[record["repo_id"]] = record
+    with contextlib.suppress(OSError):
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(json.dumps({"repos": repos}, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
 
 
 def main() -> int:

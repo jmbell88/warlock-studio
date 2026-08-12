@@ -29,6 +29,7 @@ from typing import Any
 from .. import judge as judge_mod
 from . import verdicts as verdicts_mod
 from .core import WarlockService
+from .errors import Invalid
 
 log = logging.getLogger(__name__)
 
@@ -48,10 +49,16 @@ TRAINABLE_STAGES = verdicts_mod.IMAGE_STAGES
 
 def _check_stage(stage: str) -> str:
     if stage not in TRAINABLE_STAGES:
-        raise ValueError(
+        # ``errors.Invalid`` with a ``field``, like every other refusal in this
+        # layer. A bare ``ValueError`` was the single exception, and the
+        # refusal contract is what lets the UI put the message beside the
+        # control it is about -- a ValueError escaping the service boundary is
+        # a 500 rather than a highlighted select (SVC-04).
+        raise Invalid(
             f"stage must be one of {list(TRAINABLE_STAGES)}; {stage!r} is declared "
             "and unbuilt -- the mesh probe pools over rendered views and cannot "
-            "be fitted to a reference image"
+            "be fitted to a reference image",
+            field="stage",
         )
     return stage
 

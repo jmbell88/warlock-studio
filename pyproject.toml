@@ -1,6 +1,6 @@
 [project]
 name = "warlock"
-version = "0.0.22"
+version = "0.0.21"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
 dependencies = [
@@ -128,4 +128,12 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["gpu: requires local GPU + model weights (deselect with '-m \"not gpu\"')"]
+markers = ["gpu: requires local GPU + model weights (opt in with '-m gpu')"]
+# The marker was registered and nothing excluded it, so "deselected by default"
+# was true only on a host that could not run them: on an unprovisioned machine
+# the gpu tests skipped at a fixture and looked deselected, while a provisioned
+# one silently ran real 7 GB model loads inside `uv run pytest`. Both gpu test
+# modules' docstrings claimed the deselection, so the claim is made true here
+# rather than deleted. `-m gpu` on the command line overrides this (pytest takes
+# the last -m it is given), which is the documented way to run the lane.
+addopts = ["-m", "not gpu"]

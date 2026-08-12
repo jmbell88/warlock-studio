@@ -57,7 +57,20 @@ def main() -> None:
     # Imported here, not at module scope: doctor and sweep must keep working on
     # a machine with no display and no GL, and importing the app pulls in
     # pygame and moderngl.
-    from .studio.main import run
+    try:
+        from .studio.main import run
+    except ImportError as exc:
+        # ``studio`` is an *extra*, so a base install has this command on its
+        # PATH and none of what it needs. The failure was an import traceback
+        # naming moderngl or pygame -- accurate, and useless to somebody who
+        # installed a thing and ran it (DST-03). The remedy is one line and it
+        # is the same line the README opens with.
+        raise SystemExit(
+            f"Warlock Studio's window could not be loaded: {exc}\n\n"
+            f"The app's renderer is an optional extra. Install it with:\n\n"
+            f"    uv sync --extra studio --extra text2image --extra rig\n\n"
+            f"`warlock doctor` and `warlock sweep` work without it."
+        ) from exc
 
     raise SystemExit(run())
 

@@ -508,13 +508,18 @@ def _resume_row(ctx: Any, row: Row, index: int, *, focused: bool) -> None:
 
 def _actions(ctx: Any) -> None:
     """The "New ..." row. One per thing this app can start from nothing."""
+    # "New 3D model" and "New Model" sat side by side and the second one meant
+    # *Clay* -- two buttons whose labels differ by a word neither of them
+    # defines, one of which generates a mesh from a prompt and the other opens a
+    # modelling workspace (UX-23). Named for what they do instead: the mode is
+    # the noun a user can act on.
     buttons: tuple[tuple[str, str, Any], ...] = (
         ("2D image", icons.IMAGE, start_2d),
         ("3D model", icons.BOX, start_3d),
         ("Drawing", icons.PEN_TOOL, start_inker),
-        ("Model", icons.RULER, start_clay),
-        ("Map", icons.GRID, start_plotter),
-        ("Atlas", icons.LAYERS, start_packwright),
+        ("Clay model", icons.RULER, start_clay),
+        ("Tile map", icons.GRID, start_plotter),
+        ("Sprite atlas", icons.LAYERS, start_packwright),
     )
     width = widgets.grid_width(3)
     for index, (label, icon, action) in enumerate(buttons):

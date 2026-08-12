@@ -29,7 +29,14 @@ def worker(tmp_path, fake_pipelines):
     store.close()
 
 
-async def _wait_until(predicate, timeout: float = 5.0) -> None:
+# Twenty seconds, up from five. The fakes now emit a *real* PNG and a *real*
+# GLB (ART-02), so a queue job does the post-processing it always claimed to do
+# -- measure the reference, parse the mesh, ground it, audit the silhouette --
+# instead of having every one of those steps raise on a marker string and be
+# swallowed. That is the point of the change, and it costs seconds rather than
+# milliseconds on a conditioned job. Still bounded, because a hang has to fail
+# rather than run the suite out of time.
+async def _wait_until(predicate, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -433,6 +440,133 @@ async def test_coexist_text_job_keeps_trellis_and_sdxl_resident(worker):
     await worker.shutdown()
 
 
+async def test_a_load_is_refused_when_commit_is_short_in_bytes_not_in_percent(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """MDL-04: the ceiling is a percentage, and a percentage is not a quantity.
+
+    An offloaded FLUX.2 klein is ~16 GiB of *host* weights. A machine at 85%
+    commit passes the 90% ceiling with far less than 16 GiB left, is admitted,
+    and crosses the limit during checkpoint allocation -- which on Windows is
+    the OS terminating the process, i.e. exactly the failure the check exists to
+    prevent. So the bytes the next load needs are asked for by name, immediately
+    before it.
+    """
+    import warlock.queue as queue_mod
+    from warlock import memlog, models
+
+    klein = next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.residency == models.OFFLOAD
+    )
+    spec = models.BASE_MODELS[klein]
+    assert spec.host_peak_gib > spec.vram_gib, "offload is why the host figure is larger"
+
+    # Comfortably under the ceiling...
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.85)
+    # ...and 6 GiB free against a ~16 GiB load.
+    monkeypatch.setattr(
+        memlog, "system_memory", lambda: memlog.SystemMemory(54.0, 60.0)
+    )
+    worker = _make_worker(tmp_path)
+    try:
+        with pytest.raises(RuntimeError, match="host memory"):
+            await worker._acquire_t2i(spec, klein)
+        assert worker._text2image is None, "nothing may be loaded after a refusal"
+
+        # With room for it, the same load goes ahead.
+        monkeypatch.setattr(
+            memlog, "system_memory", lambda: memlog.SystemMemory(10.0, 60.0)
+        )
+        pipe, _handoff = await worker._acquire_t2i(spec, klein)
+        assert pipe is not None
+    finally:
+        worker.store.close()
+
+
+async def test_idle_cache_eviction_runs_again_for_a_cache_loaded_off_the_queue(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """MDL-12: the eviction was latched, and the latch only reopened on a GPU job.
+
+    Matting is loaded by exports and matte previews through ``TaskRunner``,
+    never through the queue -- so on an idle session the first pass evicted,
+    the latch closed, an export then loaded BiRefNet's ~1.5 GB child, and
+    nothing ever dropped it again. Throttling by time instead means the next
+    idle window gets its own pass.
+    """
+    import warlock.queue as queue_mod
+
+    drops: list[int] = []
+    monkeypatch.setattr(
+        queue_mod.asyncio, "to_thread", _counting_to_thread(drops)
+    )
+    worker = _make_worker(tmp_path, trellis_idle_timeout=1.0)
+    try:
+        # Idle for longer than the timeout: the first pass runs.
+        worker._last_job_at = time.monotonic() - 10.0
+        await worker._maybe_evict_caches()
+        assert len(drops) == 1
+
+        # Immediately after, the throttle holds it off -- this is what the
+        # latch was for and it is preserved.
+        await worker._maybe_evict_caches()
+        assert len(drops) == 1
+
+        # A whole idle window later -- during which an export may well have
+        # loaded matting through the task pool -- it runs again.
+        worker._caches_evicted_at = time.monotonic() - 10.0
+        worker._last_job_at = time.monotonic() - 10.0
+        await worker._maybe_evict_caches()
+        assert len(drops) == 2, "a cache loaded off the queue path must still be dropped"
+    finally:
+        worker.store.close()
+
+
+def _counting_to_thread(seen: list[int]):
+    async def _to_thread(fn, *args, **kwargs):
+        seen.append(1)
+        return fn(*args, **kwargs)
+
+    return _to_thread
+
+
+async def test_installing_a_model_while_a_pipe_is_warm_rebuilds_it(worker):
+    """MDL-05: the pipe freezes its adapter set at ``load()`` and stays warm for
+    600 s, so a style LoRA installed in Settings between two jobs was invisible
+    to the second one -- which then generated with no style while recording
+    that it had used one.
+
+    The fix is a model-store generation the service bumps on every successful
+    download or uninstall; the worker compares it and rebuilds rather than
+    handing back a pipe that predates the weights.
+    """
+    from warlock import fetch
+
+    first = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(first)["status"] == "done")
+    warm = worker._text2image
+    assert warm.loaded is True
+    unloads = warm.unload_calls
+
+    # Same base, same key: without the generation this is a plain cache hit.
+    same = await worker._get_text2image(worker._t2i_key)
+    assert same is warm
+    assert warm.unload_calls == unloads
+
+    # Now the store changes under it, exactly as a Settings install does.
+    fetch.bump_store_generation()
+    rebuilt = await worker._get_text2image(worker._t2i_key)
+    assert rebuilt is not warm, "a pipe older than the store must not be reused"
+    assert warm.unload_calls == unloads + 1
+
+    # And the rebuilt pipe is current, so the next job is a cache hit again.
+    assert await worker._get_text2image(worker._t2i_key) is rebuilt
+    await worker.shutdown()
+
+
 async def test_an_offloaded_base_hands_off_even_in_coexist_mode(tmp_path, fake_pipelines):
     """The driving defect, and it is measured rather than theorised.
 
@@ -548,7 +682,10 @@ async def test_the_3d_stage_is_withheld_when_commit_crosses_after_the_image(
     """
     import warlock.queue as queue_mod
 
-    readings = iter([0.50])
+    # Two healthy readings, then the wall: dispatch asks, and so does the check
+    # immediately before the checkpoint load (MDL-04). The one under test is the
+    # third, after the image stage.
+    readings = iter([0.50, 0.50])
     monkeypatch.setattr(queue_mod, "commit_fraction", lambda: next(readings, 0.97))
     worker = _make_worker(tmp_path)
     try:
@@ -636,6 +773,60 @@ async def test_an_image_job_gets_no_credit_for_the_resident_pipe(
     try:
         worker._text2image = SimpleNamespace(loaded=True)
         job = {"kind": "image", "stage": "model", "params": {"resolution": 1024}}
+        with pytest.raises(RuntimeError, match="GiB of VRAM"):
+            worker._check_resources(job)
+    finally:
+        worker.store.close()
+
+
+@pytest.mark.parametrize(
+    "kind,params",
+    [
+        ("sprite_synthesis", {"base_model": "sdxl_cfg"}),
+        ("pixel_sheet", {"base_model": "sdxl_cfg"}),
+        ("retexture", {"base_model": "sdxl_cfg"}),
+    ],
+)
+async def test_every_kind_that_is_charged_for_a_checkpoint_is_credited_for_one(
+    tmp_path, fake_pipelines, monkeypatch, kind, params
+):
+    """MDL-06: the credit was gated on ``kind == "text"`` and three kinds that
+    are charged an image-model term were not on the list.
+
+    The flow that broke is the natural one on the flagship card: generate a 2D
+    reference (which leaves a ~7.5 GiB pipe warm *by design*, so free VRAM is at
+    its lowest exactly here), then start a sprite synthesis over it. Need came
+    to ~26.7 against ~23.5 free and the job was refused at dispatch with "close
+    other GPU applications" -- for reusing the very pipe it was being charged
+    for. The true incremental need is the ControlNet and IP encoder, ~3.7 GiB.
+
+    Waiting out the 600 s idle eviction made it work, which is what made this
+    read as a phantom leak rather than as an accounting bug.
+    """
+    import warlock.queue as queue_mod
+    from warlock import vram
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
+    monkeypatch.setattr(queue_mod, "vram_gib", lambda: (7.1, 7.52))
+    # Trellis warm and the pipe warm: the coexist steady state.
+    monkeypatch.setattr(vram, "device_memory", lambda: vram.DeviceMemory(32.0, 23.5))
+    worker = _make_worker(tmp_path)
+    try:
+        worker.trellis.running = True
+        worker._text2image = SimpleNamespace(loaded=True)
+        job = {"kind": kind, "stage": "model", "params": params}
+        # The estimate does charge a checkpoint term for this kind...
+        _need, image_term = vram.estimate_job_parts(job)
+        assert image_term > 0
+        # ...so the resident pipe is credited and the job is admitted.
+        worker._check_resources(job)
+
+        # And the credit is not a blanket pass. With trellis *not* yet running
+        # its ~16 GiB is still in `need` under coexist but not yet given back by
+        # the running-server branch, so a nearly full card refuses exactly as
+        # before -- the credit covers the resident checkpoint and nothing else.
+        worker.trellis.running = False
+        monkeypatch.setattr(vram, "device_memory", lambda: vram.DeviceMemory(32.0, 0.5))
         with pytest.raises(RuntimeError, match="GiB of VRAM"):
             worker._check_resources(job)
     finally:
@@ -799,7 +990,19 @@ async def test_a_failing_optimize_still_ships_the_reconstruction(worker, monkeyp
     job_dir = worker.config.job_dir(job_id)
     assert job["status"] == "done"
     assert "optimize" not in job["params"]
-    assert (job_dir / "model.glb").read_bytes() == (job_dir / "source.glb").read_bytes()
+    # ``model.glb`` is the reconstruction with the budget *not* applied -- and
+    # then grounded, which is a separate step that still runs. This used to
+    # assert the two files were byte-identical, which was only ever true because
+    # the fake wrote a marker that ``normalize_glb`` could not parse: the
+    # grounding failed silently and the "happy path" was the degraded one
+    # (ART-02). Both files exist and neither is empty; the transform is what
+    # makes them differ.
+    assert (job_dir / "model.glb").stat().st_size > 0
+    assert (job_dir / "source.glb").stat().st_size > 0
+    assert job["params"]["transform"], "grounding still runs when optimize fails"
+    # And the failure is *recorded* rather than only logged, so a user can see
+    # why this mesh is at full density (ART-01).
+    assert "optimize" in job["params"]["degraded"]
 
 
 async def test_finished_job_carries_a_mesh_report(worker, monkeypatch):
@@ -1874,7 +2077,12 @@ async def test_a_failed_staging_copy_gives_up_on_retrying_rather_than_on_the_job
         return real_link(src, dst, *args, **kwargs)
 
     def copyfile(src, dst, *args, **kwargs):
-        if str(dst).endswith("best.glb"):
+        # ``in``, not ``endswith``: the fallback stages through a temp sibling
+        # and renames now, so the copy's destination is ``best.glb.copy.<hex>
+        # .tmp`` rather than the served name itself (CON-04). Matching only the
+        # final name would let this copy succeed and the test would silently
+        # stop exercising a failed staging at all.
+        if "best.glb" in str(dst):
             raise OSError(28, "No space left on device")
         return real(src, dst, *args, **kwargs)
 
@@ -2450,3 +2658,35 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
                 if name.startswith(("warlock.service", "warlock.studio")):
                     offenders.append(f"{path.name}: {name}")
     assert offenders == []
+
+
+async def test_a_happy_path_job_really_ran_its_post_processing(worker):
+    """ART-02: a ``done`` assertion used to prove almost nothing.
+
+    Every post-processing step -- parse, normalize, audit, report -- is wrapped
+    in a catch-everything handler, and the fakes wrote ``b"fake-glb"``. So the
+    canonical "the job finished" test was asserting that the *degraded* path
+    completes: nothing parsed, every step raised and was swallowed, and the row
+    reached ``done`` anyway. Which is precisely what happens when a real
+    reconstruction comes back malformed, so the happy-path and degraded-path
+    tests were indistinguishable.
+
+    With a valid artifact and ART-01's health record there is finally something
+    to assert: the steps ran, and *nothing* was swallowed.
+    """
+    job_id = _make_image_job(worker)
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    await worker.shutdown()
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "done", job["error"]
+    params = job["params"]
+    assert "degraded" not in params, (
+        f"a step was swallowed on the happy path: {params.get('degraded')}"
+    )
+    # And the evidence each step leaves behind, so this cannot pass by the
+    # steps having been skipped rather than having succeeded.
+    assert params["transform"], "grounding did not run"
+    assert params["mesh_audit"], "the silhouette audit did not run"
+    assert params["mesh_report"], "the mesh report did not run"

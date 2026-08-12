@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import models
+from .. import leases, models
 from .prompt import (
     PROMPT_TEMPLATE,
     SHEET_TEMPLATE,
@@ -210,9 +210,36 @@ class Text2Image:
         self._adapters: set[str] = set()
         self._base_adapter: str | None = None
         self._pipe = None
+        # Set by ``close()`` when the process is shutting down. Read at the one
+        # point that matters: just before ``load`` publishes a pipe. See there.
+        self._closed = threading.Event()
         self.last_used: float = 0.0
         self.last_prompt: str = ""
         self.last_recipe: dict[str, Any] = {}
+
+    def _download_hint(self, spec: Any = None) -> str:
+        """``spec.download``, rendered against the directories *this pipe* uses.
+
+        The registry's own ``download`` property renders the documented default
+        home, because ``models`` cannot see a ``Config``. Neither can this
+        module -- no pipeline imports config -- but it does not need to: it was
+        handed the resolved model root and model dir at construction, which is
+        exactly what ``models.fetch_dests`` asks for. So a message printed by a
+        host with ``WARLOCK_T2I_ROOT`` set names that root, rather than telling
+        the user to download into a directory this pipe will never read.
+        """
+        spec = spec or self.spec
+        fetches = tuple(getattr(spec, "fetch", ()) or ())
+        if not fetches:
+            return ""
+        own = spec is self.spec
+        dests = models.fetch_dests(
+            fetches,
+            root=self._model_root,
+            dir_name=spec.dir_name if own else None,
+            base_dir=self._model_dir if own else None,
+        )
+        return models.download_text(fetches, [str(p) for p in dests])
 
     @property
     def _has_adapters(self) -> bool:
@@ -239,6 +266,10 @@ class Text2Image:
         return self._model_dir
 
     def load(self, on_state: Callable[[str], None] | None = None) -> None:
+        with leases.MODELS.use():
+            self._load(on_state)
+
+    def _load(self, on_state: Callable[[str], None] | None) -> None:
         if self._pipe is not None:
             return
         # Checked before the (slow) torch import: instant, actionable failure,
@@ -246,7 +277,7 @@ class Text2Image:
         if not (self._model_dir / "model_index.json").exists():
             raise RuntimeError(
                 f"{self.spec.label} weights not found at {self._model_dir}. "
-                f"Download once with:\n  {self.spec.download}"
+                f"Download once with:\n  {self._download_hint()}"
             )
         import torch
         from diffusers import AutoPipelineForText2Image
@@ -293,15 +324,45 @@ class Text2Image:
             del pipe
             self._reclaim()
             raise
+        if self._closed.is_set():
+            # Asked to stop while this was reading. Publishing now would hand a
+            # fully resident checkpoint to a process that has already decided to
+            # tear down -- and shutdown's own ``.loaded`` check has, by then,
+            # already read False and skipped the unload, so nothing would ever
+            # release it (MDL-02). The lease makes that ordering *observable*;
+            # this makes it moot even if a caller forgets to take one.
+            log.info("dropping %s: a stop was requested during the load", self._model_dir)
+            del pipe
+            self._reclaim()
+            raise JobCancelled
         self._pipe = pipe
 
     def _load_loras(self, pipe) -> None:
-        """Attach the base step-distillation LoRA and every style LoRA on disk.
+        """Attach the base step-distillation LoRA. Style adapters come later.
 
-        A missing file is skipped, not fatal: the LoRAs are separate optional
-        downloads and a user who fetched one of the three must still be able to
-        generate. The base LoRA is the exception -- without it a Hyper-SD base
-        is a 4-step run of undistilled SDXL, i.e. noise -- so that one raises.
+        The base LoRA is required and fatal: without it a Hyper-SD base is a
+        4-step run of undistilled SDXL, i.e. noise. It is also the only adapter
+        whose absence can be decided here, because it is the only one every job
+        on this checkpoint uses.
+
+        Style LoRAs used to load here too -- *every* compatible one on disk,
+        whether or not any job would ask for it. Three things were wrong with
+        that, and they compound:
+
+        * One corrupt or truncated optional file raised inside the load
+          transaction, so a style the user had never selected made the whole
+          base model unusable. The unwind is correct and the checkpoint is
+          dropped cleanly; the user simply cannot generate at all until they
+          work out which unrelated file to delete (MDL-07).
+        * The adapter set was frozen for the pipe's life, and the pipe stays
+          warm for the idle timeout -- so a style installed in Settings between
+          two jobs was invisible to the second one (MDL-05).
+        * Every fitting adapter's weights sat on the device unconditionally,
+          which ``BaseModel.vram_gib`` does not account for (MDL-17).
+
+        Loading on demand answers all three: only what a job selects is
+        attached, a file that arrives later is picked up at the next job that
+        wants it, and a corrupt adapter refuses the one job that asked for it.
 
         Takes ``pipe`` explicitly rather than reading ``self._pipe``: that is
         what lets ``load`` configure everything on a local and publish it only
@@ -316,7 +377,7 @@ class Text2Image:
             if not path.exists():
                 raise RuntimeError(
                     f"{self.spec.label} requires {self.spec.base_lora}, missing at "
-                    f"{path}. Download once with:\n  {self.spec.download}"
+                    f"{path}. Download once with:\n  {self._download_hint()}"
                 )
             pipe.load_lora_weights(
                 str(path.parent),
@@ -325,28 +386,49 @@ class Text2Image:
                 local_files_only=True,
             )
             self._base_adapter = models.BASE_LORA_ADAPTER
-        for lora in models.STYLE_LORAS.values():
-            if not models.lora_fits(self.spec, lora):
-                # Deliberately *not* the missing-file tolerance below: the file
-                # is on disk and names another architecture's modules, so
-                # loading it would raise with the checkpoint already resident.
-                continue
-            path = self._lora_dir / lora.filename
-            if not path.exists():
-                log.info("style LoRA %s not downloaded (%s); skipping", lora.key, path)
-                continue
+        log.info("loaded base LoRA: %s", self._base_adapter or "none")
+
+    def _ensure_adapter(self, pipe, key: str) -> None:
+        """Attach one style adapter, once, at the moment a job selects it.
+
+        Idempotent: a second job picking the same style is a no-op, so a warm
+        pipe pays the load exactly once per adapter rather than once per job.
+
+        Raises rather than warns on a missing or unloadable file. This is the
+        style the *user chose*: generating without it produces an image that
+        silently is not what was asked for, and the job would go on to record
+        ``style_lora`` in its params -- a key that is in ``VECTOR_PARAMS``, so
+        the row joins the findings corpus as evidence about a style that never
+        ran. The caller handles the one case that is legitimately non-fatal, a
+        stored job naming an adapter fitted to another architecture.
+        """
+        if key in self._adapters:
+            return
+        spec = models.STYLE_LORAS[key]
+        path = self._lora_dir / spec.filename
+        if not path.exists():
+            raise RuntimeError(
+                f"The style LoRA {spec.label!r} is not downloaded, so this job "
+                f"cannot use it. Expected at {path}. "
+                f"Install it in Settings -> Models."
+            )
+        try:
             pipe.load_lora_weights(
                 str(path.parent),
                 weight_name=path.name,
-                adapter_name=lora.key,
+                adapter_name=key,
                 local_files_only=True,
             )
-            self._adapters.add(lora.key)
-        log.info(
-            "loaded LoRAs: base=%s styles=%s",
-            self._base_adapter,
-            sorted(self._adapters) or "none",
-        )
+        except Exception as exc:
+            # Contained to this adapter and this job. Eagerly, this same raise
+            # happened inside ``load()`` and took the whole checkpoint with it.
+            raise RuntimeError(
+                f"The style LoRA {spec.label!r} could not be loaded from {path} "
+                f"({exc}). The file may be incomplete -- remove and reinstall it "
+                f"in Settings -> Models."
+            ) from exc
+        self._adapters.add(key)
+        log.info("attached style LoRA %s", key)
 
     def _apply_adapters(self, pipe, lora: str | None, weight: float) -> None:
         """Set the active adapters on ``pipe``.
@@ -367,11 +449,28 @@ class Text2Image:
             names.append(self._base_adapter)
             weights.append(1.0)
         if lora is not None:
-            if lora not in self._adapters:
-                # Not fatal: it validated against the registry, it just is not
-                # on disk. Losing the style beats failing a job over it.
-                log.warning("style LoRA %s not downloaded; generating without it", lora)
+            spec = models.STYLE_LORAS.get(lora)
+            if spec is None or not models.lora_fits(self.spec, spec):
+                # Fitted to another architecture (or gone from the registry
+                # entirely). Loading it would raise with the checkpoint already
+                # resident, and ``guidance.normalize`` refuses the pair at the
+                # door while ``queue`` drops it for a stored row -- so this is
+                # the third line of defence, reached only by a job the user can
+                # no longer edit. Dropping it is right; raising would strand an
+                # artifact nobody can fix.
+                log.warning(
+                    "style LoRA %s does not fit %s; generating without it",
+                    lora,
+                    self.spec.key,
+                )
             else:
+                # Attached here, at the moment it is selected, rather than at
+                # load() -- see ``_ensure_adapter``. Raises if the file is
+                # missing or unloadable, which is the honest answer for a style
+                # the user picked: generating without it produced an image that
+                # was silently not what was asked for, on a row that recorded
+                # the style anyway (MDL-05).
+                self._ensure_adapter(pipe, lora)
                 names.append(lora)
                 weights.append(weight)
         if names:
@@ -456,7 +555,7 @@ class Text2Image:
                 if not (root / "config.json").exists():
                     raise RuntimeError(
                         f"{spec.label} weights not found at {root}. "
-                        f"Download once with:\n  {spec.download}"
+                        f"Download once with:\n  {self._download_hint(spec)}"
                     )
                 import torch
                 from diffusers import (
@@ -556,7 +655,7 @@ class Text2Image:
                 if not weights.exists():
                     raise RuntimeError(
                         f"{spec.label} weights not found at {weights}. "
-                        f"Download once with:\n  {spec.download}"
+                        f"Download once with:\n  {self._download_hint(spec)}"
                     )
                 # Onto the target: diffusers explicitly supports loading an
                 # IP-Adapter onto a ControlNet pipeline, and the adapter's
@@ -578,6 +677,17 @@ class Text2Image:
 
         return target, extra, teardown
 
+    def close(self) -> None:
+        """Say that no further load should publish. Cheap, thread-safe, sticky.
+
+        Separate from ``unload`` because they answer different questions at
+        different times: ``unload`` drops what *is* resident, this one forbids
+        what is about to become resident. Shutdown needs both, and needs this
+        one first -- a load that starts after the unload has run is the window
+        (MDL-02).
+        """
+        self._closed.set()
+
     def unload(self) -> None:
         """Drop the pipeline and give its VRAM back.
 
@@ -590,6 +700,10 @@ class Text2Image:
         a base-model switch, which unloads one 7 GB pipe to make room for the
         next -- a leak there means two resident pipes, not one.
         """
+        with leases.MODELS.use():
+            self._unload()
+
+    def _unload(self) -> None:
         if self._pipe is None:
             return
         import torch
@@ -693,6 +807,46 @@ class Text2Image:
         same resident pipeline serves ordinary references, so the patch is
         applied here and reverted before this method returns.
         """
+        # One lease for the whole call, taken here rather than around each
+        # piece: the load, the conditioning attach, the sample and the teardown
+        # are one model operation as far as maintenance is concerned, and a
+        # download that slipped between the load and the sample would be no
+        # better than one that landed in the middle of either. Re-entrant, so
+        # the ``self.load`` below takes it again harmlessly (leases.py).
+        with leases.MODELS.use():
+            return self._generate(
+                prompt,
+                output_path,
+                seed=seed,
+                lora=lora,
+                lora_weight=lora_weight,
+                negative_prompt=negative_prompt,
+                conditioning=conditioning,
+                on_state=on_state,
+                on_step=on_step,
+                cancel_event=cancel_event,
+                tile=tile,
+                sheet=sheet,
+                framing=framing,
+            )
+
+    def _generate(
+        self,
+        prompt: str,
+        output_path: Path,
+        *,
+        seed: int = 42,
+        lora: str | None = None,
+        lora_weight: float = models.DEFAULT_LORA_WEIGHT,
+        negative_prompt: str | None = None,
+        conditioning: Any | None = None,
+        on_state: Callable[[str], None] | None = None,
+        on_step: Callable[[int, int], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        tile: bool = False,
+        sheet: bool = False,
+        framing: str = "",
+    ) -> Path:
         self.load(on_state)
         assert self._pipe is not None
         # load()/download() have no interruption point of their own; check

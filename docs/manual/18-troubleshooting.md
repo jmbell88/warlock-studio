@@ -77,7 +77,9 @@ command that fetches it, so you can copy the line and run it. The commands are a
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and
-have to be fixed before any mesh job will run.
+have to be fixed before any mesh job will run. A third can join them on a small card: **VRAM
+budget** is fatal when the budget cannot hold even a lone reconstruction, because there is nothing
+to degrade to there either. On a card with room it is an ordinary green row.
 
 The model combo marks an unavailable model rather than hiding it. Listing every registered model
 regardless of its weights meant picking one and learning at job-failure time what `doctor` already

@@ -61,6 +61,18 @@ class Settings:
         self.data: dict[str, Any] = {}
         self._dirty = False
         self._next_save = 0.0
+        # What went wrong with this file, for the app to say out loud once.
+        #
+        # Both halves used to be invisible. A corrupt settings file was reset
+        # to defaults with only a log line, so a user whose theme, UI scale,
+        # pane layout and remembered form fields had all reverted had nothing
+        # on screen telling them why -- and, worse, the first successful save
+        # then overwrote the file they might have wanted back. A *failed* save
+        # was ignored entirely, so a read-only or full data directory meant
+        # every preference silently stopped persisting for the whole session
+        # (UX-10).
+        self.notice: str | None = None
+        self._save_failed = False
 
     @classmethod
     def load(cls, data_dir: Path) -> Settings:
@@ -71,8 +83,19 @@ class Settings:
             return out
         except (OSError, ValueError):
             # A corrupt file is not worth failing startup over, and the
-            # defaults are all recoverable by using the app for a minute.
+            # defaults are all recoverable by using the app for a minute. But
+            # it is worth *saying*, and worth not destroying: the original is
+            # renamed aside rather than overwritten by the first save, so a
+            # user who wants their layout back has something to go to.
             log.warning("ignoring an unreadable %s", out.path)
+            kept = out._preserve_corrupt()
+            out.notice = (
+                f"Your Studio preferences could not be read and have been reset "
+                f"to defaults. The old file was kept as {kept.name}."
+                if kept is not None
+                else "Your Studio preferences could not be read and have been "
+                "reset to defaults."
+            )
             return out
         if isinstance(raw, dict) and raw.get("version") == VERSION:
             # Type-checked, not just present: a "data" that is a list or null
@@ -119,11 +142,47 @@ class Settings:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
             os.replace(raw, self.path)
-        except OSError:
+        except OSError as exc:
             log.exception("could not save settings")
+            # Latched separately from ``notice``, which ``take_notice``
+            # clears: a read-only data directory fails on every debounced tick,
+            # and guarding on the notice alone would re-raise it the moment the
+            # last toast was read -- one toast per second, forever.
+            if not self._save_failed:
+                self._save_failed = True
+                self.notice = (
+                    f"Studio preferences cannot be saved ({exc.strerror or exc}). "
+                    f"Changes will be lost when Warlock closes."
+                )
             return False
+        # Recovered: a later failure is a new problem and is worth saying again.
+        self._save_failed = False
         self._dirty = False
         return True
+
+    def take_notice(self) -> str | None:
+        """The pending problem with this file, cleared by reading it.
+
+        Cleared on read so the frame loop can poll it and raise exactly one
+        toast: this is a *notice*, not a status.
+        """
+        notice, self.notice = self.notice, None
+        return notice
+
+    def _preserve_corrupt(self) -> Path | None:
+        """Rename an unreadable settings file aside. -> where it went, or None.
+
+        Timestamped rather than a single ``.bad`` name, so a second corruption
+        does not overwrite the evidence from the first.
+        """
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        kept = self.path.with_name(f"{self.path.stem}.corrupt-{stamp}.json")
+        try:
+            os.replace(self.path, kept)
+        except OSError:
+            log.warning("could not preserve %s", self.path, exc_info=True)
+            return None
+        return kept
 
 
 def sanitise_form(form: dict[str, Any]) -> dict[str, Any]:

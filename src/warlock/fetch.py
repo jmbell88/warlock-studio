@@ -166,9 +166,98 @@ def destination(config: Config, entry: Entry, one: models.Fetch) -> Path:
     ``--local-dir models/...`` in the command string never did.
     """
     spec = entry.spec
-    if entry.kind == "base" and one.local_dir == spec.dir_name:
-        return base_model_dir(config, spec)
-    return config.t2i_model_root / one.local_dir
+    is_base = entry.kind == "base"
+    return models.fetch_dests(
+        (one,),
+        root=config.t2i_model_root,
+        dir_name=spec.dir_name if is_base else None,
+        base_dir=base_model_dir(config, spec) if is_base else None,
+    )[0]
+
+
+def quote_for_shell(path: Path) -> str:
+    """A path a person can paste into PowerShell without thinking about it.
+
+    Single quotes are PowerShell's *literal* string, so a Windows path's
+    backslashes survive them unescaped; the only character that needs care
+    inside one is the apostrophe, which doubles. Quoting only when something
+    needs it keeps the common command readable -- an unquoted
+    ``C:\\Users\\me\\.warlock\\models\\sdxl-base-1.0`` is what every existing
+    doc line looks like, and wrapping all of them would be churn for nothing.
+    """
+    text = str(path)
+    if not any(ch in text for ch in " '`$&(){}[];,"):
+        return text
+    return "'" + text.replace("'", "''") + "'"
+
+
+def download_text(config: Config, kind: str, spec: Any) -> str:
+    """``spec.download``, but rendered against *this* machine's configuration.
+
+    ``models.download_text`` cannot do this: ``config`` imports ``models``, so
+    the registry has no way to ask where the model root is and falls back to the
+    documented default home. Every caller that has a ``Config`` in its hand
+    should come here instead, because the two can differ by a whole volume --
+    ``WARLOCK_T2I_ROOT`` relocates everything and ``WARLOCK_T2I_DIR`` relocates
+    the ``turbo`` entry alone, and a command naming neither is a command that
+    downloads gigabytes into a directory the app will not look in. Doctor's
+    paste-able remedies are the sharpest case: doctor reports a model missing
+    *at a resolved path* and then used to print a command targeting a different
+    one.
+
+    Resolution is ``destination``'s, not a second copy of it, so the text and
+    the button cannot come to disagree about where a fetch goes.
+    """
+    fetches = tuple(getattr(spec, "fetch", ()) or ())
+    if not fetches:
+        return ""
+    entry = Entry(kind, getattr(spec, "key", ""), getattr(spec, "label", ""), spec)
+    return models.download_text(
+        fetches, [quote_for_shell(destination(config, entry, one)) for one in fetches]
+    )
+
+
+# --- the model store's generation --------------------------------------------
+#
+# A counter bumped whenever anything on disk under the model root changes -- a
+# download that published, an uninstall that removed. It exists because
+# ``Text2Image._load_loras`` runs *once*, inside ``load()``: the set of adapters
+# a pipe carries is frozen for that pipe's life, and the pipe stays warm for the
+# 600 s idle timeout. So the sequence "generate once, install a style LoRA in
+# Settings, submit a styled job" found the LoRA on disk at the door
+# (``check_weights`` passes), reused the resident pipe, and dropped the adapter
+# with a *wrong* "not downloaded" warning -- producing an image with no style,
+# a params row claiming the style (and ``style_lora`` is in ``VECTOR_PARAMS``,
+# so that row joined the findings corpus as evidence about a style that never
+# ran), and a pixel-sheet sidecar naming an adapter that never loaded (MDL-05).
+#
+# Process-local and deliberately so: what it guards is a process-local cache.
+# A *second process* mutating the store is a different problem with a different
+# answer (see RUN-01's single-instance lock and MDL-11's mutation lock), and a
+# counter here would not have detected it anyway.
+#
+# An int rather than an mtime: directory mtimes are not a reliable change signal
+# on Windows (docs/measurements/2026-08-07-directory-mtime-granularity.md), and
+# this needs no persistence -- a fresh process has a fresh pipe.
+_store_generation = 0
+
+
+def store_generation() -> int:
+    """How many times the model store has been mutated in this process."""
+    return _store_generation
+
+
+def bump_store_generation() -> int:
+    """Record that the weights on disk are no longer what a cache last saw.
+
+    Called by the service after a download or uninstall *succeeds*. A failed
+    mutation deliberately does not bump: staging means a failure leaves the
+    store exactly as it was, and an unnecessary bump costs a full checkpoint
+    reload on the next job.
+    """
+    global _store_generation
+    _store_generation += 1
+    return _store_generation
 
 
 # --- the plan ----------------------------------------------------------------
@@ -180,6 +269,11 @@ class Job:
 
     repo_id: str
     dest: Path
+    # The immutable commit this job pins, or "" for the repo's default branch.
+    # Carried from ``models.Fetch.revision`` through to the worker's
+    # ``snapshot_download`` call, so the pin is one string with one owner
+    # (MDL-03).
+    revision: str = ""
     filenames: tuple[str, ...] = ()
     allow_patterns: tuple[str, ...] = ()
     ignore_patterns: tuple[str, ...] = ()
@@ -196,6 +290,7 @@ class Job:
         return {
             "repo_id": self.repo_id,
             "dest": str(self.dest),
+            "revision": self.revision,
             "filenames": list(self.filenames),
             "allow_patterns": list(self.allow_patterns),
             "ignore_patterns": list(self.ignore_patterns),
@@ -262,6 +357,7 @@ def plan(config: Config, chosen: list[Entry]) -> list[Job]:
             jobs[key] = Job(
                 repo_id=one.repo_id,
                 dest=dest,
+                revision=one.revision,
                 filenames=one.filenames,
                 allow_patterns=one.allow_patterns,
                 ignore_patterns=one.ignore_patterns,
@@ -302,18 +398,38 @@ def disk_refusal(jobs: list[Job]) -> str | None:
     a machine that cannot write anything else, and the failure surfaces
     somewhere unrelated. Unreadable free space is not a refusal: an answer
     nobody can obtain is not evidence there is no room.
+
+    **Grouped per destination volume.** The plan's *whole* size used to be
+    compared against the free space of ``jobs[0].dest`` alone, which is right
+    only while every fetch lands on one drive -- and ``WARLOCK_T2I_DIR``
+    relocates the ``turbo`` entry by itself, so a plan can straddle two. A roomy
+    first volume then approved a large write to a nearly full second one, and a
+    tight first volume falsely refused a plan whose bytes were mostly going
+    elsewhere (MDL-09).
+
+    The message names the destination that is short, because "not enough disk
+    space" on a machine with a half-empty drive is not actionable.
     """
     if not jobs:
         return None
-    need = total_gib(jobs) + DISK_HEADROOM_GIB
-    free = free_gib(jobs[0].dest)
-    if free is None or free >= need:
-        return None
-    return (
-        f"Not enough disk space: this needs about {need:.1f} GB "
-        f"(including {DISK_HEADROOM_GIB:.0f} GB headroom) and "
-        f"{free:.1f} GB is free."
-    )
+    groups: dict[Path, list[Job]] = {}
+    for job in jobs:
+        # Keyed on the volume, not the directory: two models under one root are
+        # one budget. ``anchor`` is the drive on Windows and "/" elsewhere,
+        # which is the same granularity ``free_gib`` reports at.
+        groups.setdefault(Path(job.dest).anchor or Path(job.dest), []).append(job)
+    for volume, group in groups.items():
+        need = total_gib(group) + DISK_HEADROOM_GIB
+        free = free_gib(group[0].dest)
+        if free is None or free >= need:
+            continue
+        where = f" on {volume}" if len(groups) > 1 else ""
+        return (
+            f"Not enough disk space{where}: this needs about {need:.1f} GB "
+            f"(including {DISK_HEADROOM_GIB:.0f} GB headroom) and "
+            f"{free:.1f} GB is free."
+        )
+    return None
 
 
 # --- taking one back out ------------------------------------------------------
@@ -461,6 +577,65 @@ def base_model_state(config: Config, spec: models.BaseModel) -> tuple[bool, Path
         if not lora_path.exists():
             return False, lora_path
     return ok, None
+
+
+# The file a completed fetch leaves in its destination, naming what it wrote
+# and which revision it wrote. Dot-prefixed so it sorts out of the way and so
+# nothing mistakes it for model data.
+MANIFEST_NAME = ".warlock-fetch.json"
+
+
+def manifest_path(dest: Path) -> Path:
+    return dest / MANIFEST_NAME
+
+
+def read_manifest(dest: Path) -> dict[str, Any] | None:
+    """What a completed fetch recorded here, or None. Never raises."""
+    try:
+        import json
+
+        data = json.loads(manifest_path(dest).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def suspect_files(config: Config, kind: str, spec: Any) -> list[str]:
+    """Files that are present but obviously unusable. Cheap: sizes only.
+
+    MDL-08. "Installed" means a handful of ``Path.exists()`` calls against a
+    sentinel set -- so an empty file, a truncated download, a copied directory
+    or a hard-killed publication all read as a finished model, and the failure
+    surfaces minutes later with a checkpoint already resident in VRAM.
+
+    A full hash manifest verified against the pinned revision is the complete
+    answer and belongs with the download that produces it. This is the half
+    that costs one ``stat`` per file and catches the case that actually
+    happens: a zero-length weight file. Reported separately from ``present``
+    on purpose -- "files found" and "the files are usable" are two questions,
+    and collapsing them is what made the first one mean the second.
+    """
+    out: list[str] = []
+    root = config.t2i_model_root
+    base = base_model_dir(config, spec) if kind == "base" else root / getattr(
+        spec, "dir_name", ""
+    )
+    candidates: list[Path] = []
+    if kind == "lora":
+        candidates = [root / "loras" / spec.filename]
+    elif base.is_dir():
+        candidates = [
+            p
+            for p in base.rglob("*")
+            if p.is_file() and p.suffix in (".safetensors", ".gguf", ".bin")
+        ]
+    for path in candidates:
+        try:
+            if path.exists() and path.stat().st_size == 0:
+                out.append(str(path))
+        except OSError:
+            continue
+    return out
 
 
 def present(config: Config, kind: str, spec: Any) -> bool:

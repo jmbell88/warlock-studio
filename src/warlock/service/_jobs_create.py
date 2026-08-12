@@ -41,6 +41,7 @@ from .validation import (
     check_trellis_tex_res,
     check_vram,
     check_weights,
+    note_degraded,
     random_seed,
     valid_template,
 )
@@ -488,18 +489,36 @@ def import_mesh(
                 model, float(size_m) if size_m else None
             )
             params["scale_factor"] = params["transform"]["scale"]
-        except Exception:
+        except Exception as exc:
             # Logged and swallowed, as the worker's own grounding step is: the
             # GLB is already on disk, and a mesh trimesh cannot parse must not
             # fail a job that has produced one. Grounding runs on every asset
             # regardless of whether a size was asked for.
+            #
+            # Recorded as well as logged, and for the reason ART-01 gives: this
+            # row is inserted with ``status="done"``, so without the note the
+            # user has a successful-looking asset whose pivot and scale are the
+            # engine's, and no way at all to find that out.
             log.exception("normalize failed for built asset %s; leaving the mesh as-is", job_id)
+            note_degraded(
+                params,
+                "normalize",
+                f"the mesh was not centred, grounded"
+                f"{' or resized' if size_m else ''} ({exc}); its pivot and scale "
+                f"are the engine's",
+            )
         try:
             from .. import meshreport
 
             params["mesh_report"] = meshreport.build(model, target_size_m=size_m)
-        except Exception:
+        except Exception as exc:
             log.exception("mesh report failed for built asset %s", job_id)
+            note_degraded(
+                params,
+                "report",
+                f"the mesh could not be measured ({exc}); size, triangle count "
+                f"and watertightness are unknown for this asset",
+            )
         svc.store.create("image", prompt or "", params, job_id, stage="model", status="done")
     except Exception:
         shutil.rmtree(job_dir, ignore_errors=True)

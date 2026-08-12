@@ -697,6 +697,13 @@ def _card_context(ctx: Any, job: Any) -> None:
     if imgui.is_window_hovered() and imgui.is_mouse_clicked(1):
         # Right-clicking selects first: a menu acting on a card other than the
         # marked one is how the wrong asset gets deleted.
+        #
+        # Which is also why the comparison baseline is remembered *here*, on
+        # the frame the menu opens and before the selection moves. "Compare
+        # with selected" read ``state.selected`` when the item was clicked, by
+        # which time this line had already made it the target -- so it compared
+        # a mesh with itself (UX-04).
+        ctx.state.compare_baseline = ctx.state.selected
         select(ctx, job["id"])
         imgui.open_popup("more")
     _overflow(ctx, job)
@@ -794,7 +801,14 @@ def _overflow(ctx: Any, job: Any) -> None:
             from .. import clay_mode
 
             clay_mode.edit_asset_in_clay(ctx, job)
-        if imgui.menu_item("Compare with selected", "", False)[0]:
+        # The baseline is captured *before* the menu ran, not read after it.
+        # Right-clicking a card selects it first (see ``_context_menu`` -- a
+        # menu acting on a card other than the marked one is how the wrong
+        # asset gets deleted), so by the time this item is clicked
+        # ``state.selected`` is already this card: "Compare with selected"
+        # compared a mesh with itself, and a later sync could make both sides
+        # identical (UX-04). The label says which way round it goes.
+        if imgui.menu_item("Compare selected with this", "", False)[0]:
             compare(ctx, job_id)
         if ctx.rigging_available and imgui.menu_item("Rig", "", False)[0]:
             ctx.submit(
@@ -1009,15 +1023,51 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         set_mode(ctx.state, "2d" if job.get("stage") in ("reference", "tile") else "3d")
 
 
+COMPARE_KEY = "compare-parse"
+
+
 def compare(ctx: Any, job_id: str) -> None:
+    """Put ``job_id``'s mesh beside the selected one. Off-thread and contained.
+
+    Three things were wrong with this and they compound (UX-04).
+
+    *It could compare a mesh with itself.* Right-clicking a card selects it
+    before the menu runs, so "Compare with selected" read a selection this very
+    gesture had just moved onto the target. The baseline is captured in
+    ``_context_menu`` now, on the frame the menu opens, and an identical pair is
+    refused with a sentence rather than drawn as two copies of one mesh.
+
+    *It parsed on the frame thread.* ``Viewer.compare`` loads the GLB and
+    uploads GPU resources inline -- on a large model that is a visible freeze,
+    and ``_sync_viewer`` grew its ``pending``/task split for precisely this
+    reason. The parse goes through ``TaskRunner`` here, exactly as the primary
+    viewer's does.
+
+    *It had no error boundary.* The primary path catches around adopt and
+    toasts; this one let a malformed GLB or a failed upload propagate out of
+    the frame loop, which exits the app. A compare is a *look* at something --
+    the one thing it must never do is take the session with it.
+    """
     if ctx.state.comparing == job_id:
         ctx.state.comparing = None
         if ctx.viewer is not None:
             ctx.viewer.exit_compare()
         return
+    baseline = ctx.state.compare_baseline or ctx.state.selected
+    if baseline == job_id:
+        ctx.toast("Select a different asset to compare this one with.", "error")
+        return
+    if ctx.viewer is None:
+        return
+    path = ctx.job_dir(job_id) / "model.glb"
     ctx.state.comparing = job_id
-    if ctx.viewer is not None:
-        ctx.viewer.compare(ctx.job_dir(job_id) / "model.glb")
+    ctx.state.compare_pending = path
+    if not ctx.submit(COMPARE_KEY, ctx.viewer.parse_model, path, tag=path):
+        # Another compare parse is in flight. Its result is checked against
+        # ``compare_pending`` before adoption, so this one is simply dropped
+        # rather than queued -- the same rule ``_sync_viewer`` follows.
+        ctx.state.comparing = None
+        ctx.state.compare_pending = None
 
 
 def delete_asset(ctx: Any, job_id: str) -> None:
@@ -1108,6 +1158,19 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
                 )
             )
         return
+    # The one bulk action the failures affordance sets you up for and never
+    # offered. "N jobs failed - show" filters the list, Select all ticks them,
+    # and then the bar had Export/Save/Delete -- nothing to *retry* with, so a
+    # user who had just been told about twelve failures retried them one card
+    # at a time (UX-14). ``run_action(..., "retry")`` already exists per job;
+    # this is a loop over it, and it picks remesh-or-reroll per job exactly as
+    # the single-job path does.
+    failed = [job for job in (ctx.cache.get(j) for j in picked) if job and job["status"] == "error"]
+    if failed:
+        if imgui.button(f"Try again ({len(failed)})"):
+            for job in failed:
+                run_action(ctx, job, "retry")
+        imgui.same_line()
     if imgui.button("Export zip..."):
         _export_zip(ctx, picked)
     if ctx.export_dir:

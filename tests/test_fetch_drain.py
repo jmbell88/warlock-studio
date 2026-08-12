@@ -209,3 +209,56 @@ def test_a_move_that_succeeds_leaves_no_backup_tree(tmp_path, fetch_worker):
     assert (dest / "a.bin").read_text(encoding="utf-8") == "a.bin"
     assert (dest / "sub" / "b.bin").exists()
     assert not (tmp_path / ".dest.fetch.bak").exists()
+
+
+def test_a_failure_partway_names_what_already_landed(svc, monkeypatch):
+    """MDL-10: repositories publish one at a time, so a failure leaves the
+    earlier ones *installed*.
+
+    Making that not so means staging the whole selection and publishing through
+    a journal, which is a larger piece of work. What is wrong today is smaller
+    and worse: the refusal said nothing about the gigabytes that had already
+    arrived, so a user told "the download failed" had no way to know a 7 GiB
+    checkpoint was on disk and only its adapter was missing.
+    """
+    from warlock.service import downloads
+    from warlock.service.errors import Failed, Invalid
+
+    seen: list[str] = []
+
+    def _run(job, **_kw):
+        seen.append(job.repo_id)
+        if len(seen) > 1:
+            raise Failed("The download stopped.")
+        return {"ok": True}
+
+    monkeypatch.setattr(downloads, "_run_worker", _run)
+    with pytest.raises(Invalid) as caught:
+        downloads.download(svc, ["base:sdxl"])
+
+    message = caught.value.message
+    assert "Already installed before this failed" in message
+    assert seen[0] in message, "the repo that landed has to be named"
+    assert "what downloaded is kept" in message
+
+
+def test_staging_left_by_a_killed_fetch_is_swept_before_the_next_one(svc, monkeypatch):
+    """Unwinding inside Python rolls a publish back; being *killed* mid-publish
+    cannot. The names are deterministic, so the next download finds them --
+    otherwise the disk quietly holds a second copy of a checkpoint that no
+    presence probe will ever look at."""
+    from warlock.service import downloads
+
+    root = svc.config.t2i_model_root
+    root.mkdir(parents=True, exist_ok=True)
+    stranded = root / ".sdxl-base-1.0.fetch.part"
+    stranded.mkdir()
+    (stranded / "half.safetensors").write_bytes(b"x")
+    orphan_backup = root / ".loras.fetch.bak"
+    orphan_backup.mkdir()
+
+    monkeypatch.setattr(downloads, "_run_worker", lambda job, **_kw: {"ok": True})
+    downloads.download(svc, ["base:sdxl"])
+
+    assert not stranded.exists()
+    assert not orphan_backup.exists()

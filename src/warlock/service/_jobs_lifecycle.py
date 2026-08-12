@@ -19,6 +19,7 @@ undo is the feature.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import time
@@ -311,10 +312,25 @@ def trash_job(svc: WarlockService, job_id: str) -> dict[str, Any]:
         # used to remove the row, so the worker's poll never saw it again; a
         # trashed row is still a row, and without this the worker would pick up
         # a job the user has thrown away, spend two minutes of GPU on it and
-        # write a mesh into a directory nothing shows. Best-effort: a claim
-        # landing in the gap is caught by the conditional write below, which
-        # refuses and leaves the job running and untrashed.
-        svc.store.cancel(job_id)
+        # write a mesh into a directory nothing shows.
+        #
+        # Through ``cancel_job`` rather than the bare ``store.cancel``, which is
+        # the correction CON-05 names. The comment here used to say a claim
+        # landing in the gap was "caught by the conditional write below, which
+        # refuses" -- and that is not what happened. The row was still `queued`
+        # when the store's atomic cancel ran, so the cancel *succeeded* and the
+        # job was duly trashed, with a correct final state. What never happened
+        # was ``request_cancel``: the worker had already claimed the row, saw no
+        # cancel flag, and burned the full two-minute reconstruction before its
+        # ``finish()`` returned False. The outcome was right and the GPU time
+        # was wasted. ``cancel_job`` is the function that knows to signal a
+        # running job, and routing through it costs one extra status read.
+        #
+        # ``Conflict`` is swallowed on purpose: it means the job reached a
+        # terminal state in the gap, which is not a reason to refuse *trashing*
+        # something that has finished.
+        with contextlib.suppress(Conflict):
+            cancel_job(svc, job_id)
     if not svc.store.set_deleted_if_not_running(job_id, time.time()):
         raise Conflict("cancel the job before deleting it")
     return {"ok": True}

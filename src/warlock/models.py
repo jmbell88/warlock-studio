@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # The one blessed base download, and therefore what an unconfigured job runs.
@@ -102,6 +103,19 @@ CONTROL_END_MAX = 1.0
 DEFAULT_CONTROL_END = 0.8
 
 
+# Where a pasted command should send weights when there is no ``Config`` to
+# resolve against -- the README's spelling of the default model root, which is
+# ``Config.t2i_model_root``'s default (``~/.warlock/models``) written the way a
+# PowerShell reader can paste it. ``$HOME`` rather than ``~`` because PowerShell
+# expands the variable anywhere in an argument and only expands ``~`` at the
+# start of a path.
+#
+# This is a *display* default and nothing resolves through it: an actual fetch
+# goes through ``fetch.destination``, and anything rendering a command for a
+# live app should go through ``fetch.download_text`` so the two cannot disagree.
+DEFAULT_MODEL_ROOT_TEXT = "$HOME/.warlock/models"
+
+
 @dataclass(frozen=True, slots=True)
 class Fetch:
     """One repository fetch: what to get, where it lands, roughly how big.
@@ -115,12 +129,21 @@ class Fetch:
     keeps doctor's text, the README and what the button actually does from
     drifting apart again.
 
-    ``local_dir`` is relative to the model root and is rendered into the
-    command as ``models/<local_dir>``, which is what every existing command and
-    the README both say. Resolution for an actual fetch is *not* that literal:
-    ``warlock.fetch`` resolves it against ``Config.t2i_model_root``, so
-    ``WARLOCK_T2I_ROOT`` relocates a download the way it already relocates a
-    load.
+    ``local_dir`` is relative to the model root. Rendering it needs to know
+    where that root actually is, and this module cannot ask: ``config`` imports
+    ``models``, not the other way round. So ``command``/``steps`` take the
+    resolved destination as an argument and fall back to
+    ``DEFAULT_MODEL_ROOT_TEXT`` when nobody supplies one --
+    ``fetch.download_text(config, kind, spec)`` is the caller that does, and it
+    resolves through ``fetch.destination`` so ``WARLOCK_T2I_ROOT`` and the
+    ``turbo``-only ``WARLOCK_T2I_DIR`` override are both honoured.
+
+    The literal used to be ``models/<local_dir>``, which was a *relative* path:
+    pasting a command from the docs into any shell whose working directory was
+    not the checkout put gigabytes somewhere the app never looks, and the
+    one-time home migration skips a root that already holds something, so on any
+    machine that had ever fetched in-app the stranding was permanent and doctor
+    kept reporting the model missing.
 
     ``size_gib`` is approximate and exists for two things only: the progress
     bar's denominator and the free-disk refusal. Understating it weakens the
@@ -129,6 +152,26 @@ class Fetch:
 
     repo_id: str
     local_dir: str
+    # The immutable commit this fetch pins, or "" for the repository's current
+    # default branch.
+    #
+    # Unpinned, ``snapshot_download`` follows whatever ``main`` points at today,
+    # so a Download click a year from now can retrieve different weights -- and,
+    # for BiRefNet, different *Python*, which is loaded with
+    # ``trust_remote_code=True``. The fetch child is crash and RSS isolation,
+    # not a sandbox: it runs with the user's filesystem and network permissions,
+    # and ``uv.lock`` says nothing about code downloaded at runtime (MDL-03).
+    #
+    # A string on the record rather than a lookup elsewhere, so the pin travels
+    # with the thing it pins: the planner puts it in the job, the worker passes
+    # it to ``snapshot_download``, and ``download_text`` renders it into the
+    # paste-able command -- which is what stops a hand-run download from
+    # quietly being a different one.
+    #
+    # Empty means "not pinned yet" and is honest about it rather than pretending
+    # a default branch is a version. ``tests/test_fetch.py`` pins which entries
+    # are expected to carry one.
+    revision: str = ""
     # Explicit paths inside the repo, passed positionally to `hf download`.
     filenames: tuple[str, ...] = ()
     # The --include / --exclude sets.
@@ -142,38 +185,87 @@ class Fetch:
     # one, and it names a `uv sync` rather than a download.
     note: str = ""
 
-    def command(self) -> str:
+    def dest_text(self, dest: str | None = None) -> str:
+        """What ``--local-dir`` should say: the caller's resolved path, or the
+        documented default home when there is no config to resolve against."""
+        return dest if dest is not None else f"{DEFAULT_MODEL_ROOT_TEXT}/{self.local_dir}"
+
+    def command(self, dest: str | None = None) -> str:
         """The one-line `hf download` this record stands for.
 
         --include is repeated per pattern deliberately; see the note on
         BaseModel below.
         """
         parts = [f"uvx hf download {self.repo_id}"]
+        if self.revision:
+            # Rendered into the pasted command as well as passed to the
+            # in-app fetch: a hand-run download that silently took the branch
+            # tip would defeat the pin for exactly the user most likely to be
+            # reproducing something (MDL-03).
+            parts.append(f"--revision {self.revision}")
         parts.extend(self.filenames)
         parts.extend(f'--include "{pat}"' for pat in self.allow_patterns)
         parts.extend(f'--exclude "{pat}"' for pat in self.ignore_patterns)
-        parts.append(f"--local-dir models/{self.local_dir}")
+        parts.append(f"--local-dir {self.dest_text(dest)}")
         return " ".join(parts)
 
-    def steps(self) -> list[str]:
+    def steps(self, dest: str | None = None) -> list[str]:
         """Every line a person has to run for this record, in order."""
-        out = [self.command()]
+        out = [self.command(dest)]
         if self.rename is not None:
             src, dst = self.rename
-            out.append(f"then rename models/{self.local_dir}/{src} to {dst}")
+            out.append(f"then rename {self.dest_text(dest)}/{src} to {dst}")
         if self.note:
             out.append(self.note)
         return out
 
 
-def download_text(fetches: Iterable[Fetch]) -> str:
+def fetch_dests(
+    fetches: Iterable[Fetch],
+    *,
+    root: Path,
+    dir_name: str | None = None,
+    base_dir: Path | None = None,
+) -> list[Path]:
+    """Where each record lands, given *already resolved* directories.
+
+    The rule, in one place: a base model's own weights go to that model's
+    directory -- which is not always ``root / dir_name``, because the legacy
+    ``WARLOCK_T2I_DIR`` relocates the ``turbo`` entry alone -- and everything
+    else (a step-distillation LoRA into the flat ``loras/``, an adapter, a
+    metric) resolves flat under the root.
+
+    Taking resolved paths rather than a ``Config`` is what lets both callers
+    share it: ``fetch.destination`` resolves them from config, and
+    ``pipelines/text2image.py`` already holds its own two directories and must
+    not import config (no pipeline does). A second copy of "where does turbo
+    live" is exactly how the paste-able command and the button came to disagree
+    in the first place.
+    """
+    out: list[Path] = []
+    for one in fetches:
+        own = dir_name is not None and base_dir is not None and one.local_dir == dir_name
+        out.append(base_dir if own else root / one.local_dir)  # type: ignore[arg-type]
+    return out
+
+
+def download_text(fetches: Iterable[Fetch], dests: Iterable[str | None] | None = None) -> str:
     """The prose ``spec.download`` used to be a literal of.
 
     Two spaces of continuation indent, because doctor prints it after
     ``download with:\\n  `` and every line of a multi-command entry has to line
     up with the first.
+
+    ``dests`` pairs one resolved destination with each fetch, in order. Only
+    ``fetch.download_text`` passes it; ``spec.download`` renders the default
+    home, which is what the docs say and what a reader with no app running can
+    paste. See the note on ``Fetch``.
     """
-    return "\n  ".join(step for f in fetches for step in f.steps())
+    fetches = tuple(fetches)
+    paths = tuple(dests) if dests is not None else (None,) * len(fetches)
+    return "\n  ".join(
+        step for f, dest in zip(fetches, paths, strict=True) for step in f.steps(dest)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +314,28 @@ class BaseModel:
     # Peak device footprint under ``residency``, in GiB -- what vram.estimate
     # charges a text job for this checkpoint. Deliberately conservative:
     # refusing a job is the good outcome.
+    #
+    # The checkpoint *alone*: adapters are priced separately by
+    # ``vram._adapter_cost``, because which ones are on the device depends on
+    # the job rather than on the spec. This number excluded them entirely until
+    # 2026-08-12, which under-priced every distilled recipe by the ~0.8 GiB of
+    # its required step-distillation LoRA -- the one direction the "deliberately
+    # conservative" above forbids (MDL-17).
     vram_gib: float = 7.0
+    # Peak *host* commit this checkpoint charges while it is loaded, in GiB.
+    # A different question from vram_gib and not derivable from it: under
+    # RESIDENT the weights are read and handed to the device, so the host charge
+    # is transient and roughly the checkpoint's size; under OFFLOAD the whole
+    # checkpoint stays in host memory for the pipe's life and streams one
+    # submodule at a time, so vram_gib is small precisely *because* this is
+    # large. FLUX.2 klein is the case: 10 GiB on the card, ~16 GiB on the host.
+    #
+    # Admission used to ask only whether commit was past a 90% ceiling, which
+    # is a percentage and not a quantity -- a machine at 85% can have well under
+    # 16 GiB of commit left, be admitted, and cross the limit mid-load, which
+    # Windows answers by terminating the process (MDL-04). 0 means "no better
+    # figure than the default", and the loader falls back to ``vram_gib``.
+    host_peak_gib: float = 0.0
     # Files (relative to the model directory) whose presence means "downloaded",
     # for doctor. Empty keeps the default unet/-shaped formula, which is right
     # for every SDXL checkpoint and wrong for anything that has no unet/.
@@ -557,6 +670,10 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         family=FAMILY_FLUX2_KLEIN,
         residency=OFFLOAD,
         vram_gib=10.0,
+        # The whole ~16 GiB checkpoint stays in host memory for the pipe's
+        # life -- that is what offload means, and it is why vram_gib above is
+        # 10 rather than 16. Admission has to have the host number by name.
+        host_peak_gib=16.0,
         probe=(
             "transformer/diffusion_pytorch_model.safetensors",
             "text_encoder/model-00001-of-00002.safetensors",
@@ -599,6 +716,10 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         family=FAMILY_FLUX2_KLEIN,
         residency=OFFLOAD,
         vram_gib=10.0,
+        # The whole ~16 GiB checkpoint stays in host memory for the pipe's
+        # life -- that is what offload means, and it is why vram_gib above is
+        # 10 rather than 16. Admission has to have the host number by name.
+        host_peak_gib=16.0,
         probe=(
             "transformer/diffusion_pytorch_model.safetensors",
             "text_encoder/model-00001-of-00002.safetensors",

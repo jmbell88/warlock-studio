@@ -67,6 +67,16 @@ def draw(ctx: Any) -> None:
     # rigged mesh meant scrolling past the whole pose editor.
     _header(ctx, job)
     manual_render.help_button(ctx, "inspector")
+    # Said out loud, because the two halves of the screen are not in step yet.
+    # The inspector follows the selection immediately; the viewport parses off
+    # the frame thread and adopts when the parse lands. That gap is bounded and
+    # short now that a selection change triggers the sync -- but it exists, and
+    # an unlabelled stale mesh beside a new inspector is what makes an export or
+    # a compare decision untrustworthy (UX-03). Naming the asset is the point:
+    # "loading" alone would not say *which*.
+    viewer = getattr(ctx, "viewer", None)
+    if viewer is not None and getattr(viewer, "pending", None) is not None:
+        widgets.muted(f"Loading {job.get('name') or job['id']}...")
     _meta(ctx, job)
     if job.get("status") == "error":
         _error(ctx, job)

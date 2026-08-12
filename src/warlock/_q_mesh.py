@@ -31,6 +31,35 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 log = logging.getLogger(__name__)
 
+# The params key recording a swallowed post-processing failure.
+#
+# Spelled here rather than imported: the queue layer may not import ``service``,
+# which is the same reason ``VECTOR_PARAMS`` lives in ``vectors.py``. The
+# authority is ``service.validation.ARTIFACT_HEALTH`` -- and its membership of
+# ``DERIVED_PARAMS``, without which a reroll would wear a degradation belonging
+# to the run it replaced. A test pins the two spellings together.
+ARTIFACT_HEALTH = "degraded"
+
+
+def _note_degraded(params: dict[str, Any], step: str, detail: str) -> None:
+    """Record that a canonical step did not run, on the job's own row.
+
+    ART-01: normalization and the mesh report are wrapped in catch-everything
+    handlers, deliberately -- a mesh trimesh cannot parse must not fail a job
+    whose ``source.glb`` is a good reconstruction. But the job then stayed
+    ``done`` with the only evidence in a log line, so a user could export a
+    visibly successful asset with the wrong pivot or scale and never find out.
+
+    The non-fatal decision stands; the silence does not. Steps accumulate rather
+    than overwrite, because a mesh can fail more than one of them and the second
+    failure is not a correction of the first.
+    """
+    health = params.setdefault(ARTIFACT_HEALTH, {})
+    if not isinstance(health, dict):  # a hand-edited row; start fresh
+        health = {}
+        params[ARTIFACT_HEALTH] = health
+    health[step] = detail
+
 
 class MeshPostOps:
     """Mesh post-processing, mixed into :class:`~.queue.Worker`."""
@@ -97,11 +126,18 @@ class MeshPostOps:
                     exe=self.config.gltfpack_exe,
                 )
             )
-        except Exception:
+        except Exception as exc:
             log.exception("optimize failed for job %s; shipping the reconstruction", job_id)
             # Staged, not copyfile: on the /optimize route dest is a done
             # job's model.glb that a concurrent GET may be serving.
             await asyncio.to_thread(optimize.staged_copy, source, dest)
+            _note_degraded(
+                params,
+                "optimize",
+                f"the triangle budget was not applied ({exc}); this mesh is the "
+                f"raw reconstruction",
+            )
+            await asyncio.to_thread(self.store.set_params, job_id, params)
             return
         params["optimize"] = result
         await asyncio.to_thread(self.store.set_params, job_id, params)
@@ -139,13 +175,20 @@ class MeshPostOps:
             transform = await asyncio.to_thread(
                 postprocess.normalize_glb, glb_path, float(size_m) if size_m else None
             )
-        except Exception:
+        except Exception as exc:
             # Grounding runs on every job now, not just sized ones, so a mesh
             # trimesh cannot parse must not fail a job whose GLB is already on
             # disk -- the same rule _audit_mesh and the report follow. The
             # report's achieved_size_m is what tells the user the size did not
             # land, rather than a job that errored after producing a model.
             log.exception("normalize failed for job %s; leaving the mesh as-is", job_id)
+            _note_degraded(
+                params,
+                "normalize",
+                f"the mesh was not centred, grounded{' or resized' if size_m else ''} "
+                f"({exc}); its pivot and scale are the engine's",
+            )
+            await asyncio.to_thread(self.store.set_params, job_id, params)
             return
         params["scale_factor"] = transform["scale"]
         params["transform"] = transform
@@ -255,8 +298,18 @@ class MeshPostOps:
                     silhouette=params["mesh_audit"],
                 )
             )
-        except Exception:
+        except Exception as exc:
             log.exception("mesh report failed for job %s", job_id)
+            # The measurements, not the mesh: the asset is fine and only the
+            # description of it is missing. Recorded all the same, because an
+            # inspector with no dimensions and no explanation reads as a bug in
+            # the panel rather than as a step that did not run (ART-01).
+            _note_degraded(
+                params,
+                "report",
+                f"the mesh could not be measured ({exc}); size, triangle count "
+                f"and watertightness are unknown for this asset",
+            )
         log.info(
             "job %s mesh audit: worst %.3f, mean %.3f over %d faces",
             job_id, report["worst"], report["mean"], report["faces"],

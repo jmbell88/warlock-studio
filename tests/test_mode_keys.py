@@ -43,8 +43,14 @@ def _app(mode: str = "3d") -> SimpleNamespace:
     return app
 
 
-def _press(app: SimpleNamespace, key: int) -> None:
-    main.App._shortcut(app, pygame.event.Event(pygame.KEYDOWN, key=key))
+def _press(app: SimpleNamespace, key: int, mod: int = 0) -> None:
+    # ``mod`` is not optional on a real event: every pygame KEYDOWN carries the
+    # modifier state at the moment of the press, and the shortcut handler reads
+    # it from there rather than from ``pygame.key.get_mods()`` -- ``mod`` is the
+    # state *then*, ``get_mods()`` is the state now, and events drain in a batch
+    # after the frame (UX-12). Synthesising an event without it modelled a
+    # pygame that does not exist.
+    main.App._shortcut(app, pygame.event.Event(pygame.KEYDOWN, key=key, mod=mod))
 
 
 @pytest.fixture

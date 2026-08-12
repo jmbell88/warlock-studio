@@ -22,6 +22,14 @@ from . import settings_2d
 
 
 def draw(ctx: Any) -> None:
+    # The heading comes first, and that is not cosmetic. ``help_button`` is a
+    # ``same_line``, and ``same_line`` returns to the *previous row*
+    # unconditionally -- with nothing drawn before it, the (?) attached to
+    # whatever the last pane had left on screen, which here is the global mode
+    # switch, and overlapped the health dot on it. ``app_settings._interface``
+    # carries the same comment for the same reason; this pane called it first
+    # in ``draw`` and got exactly the defect that one describes (UX-15).
+    widgets.section("Style profiles")
     manual_render.help_button(ctx, "profiles")
     if ctx.state.profile_draft is not None:
         _editor(ctx)
@@ -171,13 +179,38 @@ def _editor(ctx: Any) -> None:
         imgui.end_disabled()
         widgets.muted(inert)
 
-    widgets.section("Style")
-    for field in profiles.TAXONOMY:
-        draft[field] = widgets.combo(
-            f"##p_{field}", draft.get(field, ""), widgets.field_options(ctx, field)
-        )
+    # Grouped and labelled, through the 2D form's own tables rather than a
+    # second arrangement of the same fields (UX-16). These combos were a column
+    # of identical unlabelled selects -- the exact defect ``GUIDANCE_GROUPS``
+    # and ``FIELD_LABELS`` were written to fix on the generate form, where a
+    # chosen value ("worn", "brass") no longer said which question it answered.
+    # A profile is a saved instance of that same form, so it gets the same
+    # headings, the same names and the same "art style..." placeholder.
+    for title, fields in settings_2d.GUIDANCE_GROUPS:
+        shown = [f for f in fields if f in profiles.TAXONOMY]
+        if not shown:
+            continue
+        widgets.section(title)
+        for field in shown:
+            imgui.text(settings_2d.field_label(field))
+            draft[field] = widgets.combo(
+                f"##p_{field}", draft.get(field, ""), settings_2d._field_options(ctx, field)
+            )
+    # Anything the registry has that the groups do not mention, so adding a
+    # taxonomy cannot silently drop it off this pane.
+    grouped = {f for _t, fields in settings_2d.GUIDANCE_GROUPS for f in fields}
+    rest = [f for f in profiles.TAXONOMY if f not in grouped]
+    if rest:
+        widgets.section("Other")
+        for field in rest:
+            imgui.text(settings_2d.field_label(field))
+            draft[field] = widgets.combo(
+                f"##p_{field}", draft.get(field, ""), settings_2d._field_options(ctx, field)
+            )
+    widgets.section("Platform")
+    imgui.text(settings_2d.field_label("platform"))
     draft["platform"] = widgets.combo(
-        "##p_platform", draft.get("platform", ""), widgets.field_options(ctx, "platform")
+        "##p_platform", draft.get("platform", ""), settings_2d._field_options(ctx, "platform")
     )
 
     _anchor(ctx, name)
@@ -189,7 +222,10 @@ def _editor(ctx: Any) -> None:
         _save(ctx)
     imgui.same_line()
     if imgui.button("Cancel", (sp(150), 0)):
-        _close(ctx)
+        # Guarded, like every other document mode's close. Cancel used to
+        # discard an edited profile outright with no question at all -- nine
+        # fields and an anchor image, gone on one click (UX-17).
+        guard(ctx, "cancel", lambda: _close(ctx))
 
 
 def _anchor(ctx: Any, name: str) -> None:
@@ -288,6 +324,59 @@ def _save(ctx: Any) -> None:
     profiles.set_active(ctx.settings, name)
     ctx.toast(f"Saved the profile {name}.")
     _close(ctx)
+
+
+def is_dirty(ctx: Any) -> bool:
+    """Whether the open profile draft differs from what it was opened on.
+
+    A draft is a document like any other -- nine fields and an anchor image --
+    and it was the only one no guard knew about: Cancel discarded it outright
+    and Quit did not ask (UX-17). Compared against the origin rather than
+    tracked with a flag, because the editor writes every field on every frame
+    and a flag would be true the moment the pane was opened.
+    """
+    # ``getattr`` rather than attribute access, which is ``docmodes.guard``'s
+    # own rule and for its reason: asking whether there is unsaved work must
+    # not require the state that says there is none to exist yet. The quit
+    # chain runs against panes that have never been opened.
+    draft = getattr(ctx.state, "profile_draft", None)
+    if draft is None:
+        return False
+    origin = getattr(ctx.state, "profile_draft_origin", "")
+    if not origin:
+        # A new profile: dirty as soon as it has a name or any field set.
+        name = getattr(ctx.state, "profile_draft_name", "")
+        return bool(name.strip()) or any(draft.values())
+    saved = profiles.list_profiles(ctx.settings).get(origin) or {}
+    if getattr(ctx.state, "profile_draft_name", "").strip() != origin:
+        return True
+    return any(draft.get(k, "") != saved.get(k, "") for k in set(draft) | set(saved))
+
+
+def guard(ctx: Any, action: str, proceed: Any) -> bool:
+    """Ask before losing an unsaved profile draft. -> whether it went ahead now.
+
+    The same shape as every other document mode's guard, so the quit chain can
+    walk it beside them.
+    """
+    from .. import dialogs
+
+    if not is_dirty(ctx):
+        proceed()
+        return True
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Discard unsaved work?",
+            message=(
+                f"This style profile has unsaved changes, which will be lost if "
+                f"you {action}."
+            ),
+            confirm_label="Discard",
+            cancel_label="Keep editing",
+            on_confirm=proceed,
+        )
+    )
+    return False
 
 
 def _close(ctx: Any) -> None:

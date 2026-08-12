@@ -1239,5 +1239,39 @@ class JobStore:
     @staticmethod
     def _to_dict(row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
-        d["params"] = json.loads(d["params"] or "{}")
+        d["params"] = JobStore._params_blob(d["params"], d.get("id"))
         return d
+
+    @staticmethod
+    def _params_blob(text: Any, job_id: Any = None) -> dict[str, Any]:
+        """``params``, tolerating a blob that will not parse.
+
+        The bare ``json.loads`` this replaces raised straight out of the store,
+        and ``next_queued`` is the caller that made it unrecoverable: the worker
+        loop asks for the oldest queued row, the parse raises, the loop logs and
+        retries -- and gets the *same* row again, forever. One corrupt blob
+        therefore starved every job behind it permanently, with the only symptom
+        a traceback per poll (CON-06).
+
+        The same tolerance the other three JSON columns already have, and added
+        after this exact failure class; ``params`` was simply missed. ``{}``
+        rather than ``None`` here because every consumer indexes into params and
+        a row with no readable settings is still a row the queue can refuse or
+        run with defaults -- whereas a store that cannot be read at all is a
+        library that cannot be opened.
+
+        Reachable only through a hand-edited database or disk corruption, which
+        is exactly the situation in which "the app will not start" is the worst
+        possible answer.
+        """
+        if not text:
+            return {}
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            log.error(
+                "job %s has an unreadable params blob; treating it as empty",
+                job_id or "?",
+            )
+            return {}
+        return value if isinstance(value, dict) else {}

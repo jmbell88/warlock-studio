@@ -48,6 +48,7 @@ import os
 import shutil
 import sqlite3
 import sys
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -147,28 +148,58 @@ def _pending(config: Config) -> list[tuple[Path, Path]]:
     return out
 
 
-def _require_no_live_writer() -> None:
+@contextlib.contextmanager
+def _no_live_writer() -> Iterator[None]:
+    """Hold the legacy store exclusively for the whole migration.
+
+    The check this replaces opened the database, ran ``BEGIN EXCLUSIVE`` /
+    ``ROLLBACK``, and *closed the connection* -- proving only that nothing was
+    live at that instant, and then dropping the guarantee before a cross-volume
+    copy of tens of gigabytes began. A second Warlock launched during those
+    minutes passed its own identical precondition, opened the legacy store, and
+    wrote into ``assets/``; this process then finished copying, verified against
+    the sizes it measured *before* those writes, and ``rmtree``'d the legacy
+    root on top of them. The recount catches added files, but an in-place
+    modification of equal size is invisible to it, so the good case is a loud
+    failure and the bad case is a silently split library (RUN-02).
+
+    So the transaction stays open across ``_move`` and is only rolled back
+    afterwards -- including after the deletes, because the window that matters
+    runs right up to the ``rmtree``. The single-instance lock (RUN-01) now makes
+    a second Warlock on the same home impossible in the first place; this is the
+    same guarantee taken at the level of the thing actually being moved, which
+    still holds when the two processes have different homes and one of them is
+    migrating the shared legacy directory.
+    """
     db = PROJECT_ROOT / "assets" / "jobs.sqlite"
     if not db.exists():
+        yield
         return
     try:
         conn = sqlite3.connect(str(db), timeout=0)
     except sqlite3.Error as exc:  # pragma: no cover -- a corrupt or unreadable file
         raise MigrationError(f"cannot open {db}: {exc}") from exc
     try:
-        conn.execute("BEGIN EXCLUSIVE")
-        conn.execute("ROLLBACK")
-    except sqlite3.OperationalError as exc:
-        raise MigrationError(
-            f"another Warlock process is using {db} -- close it and start again "
-            f"(moving a live library would lose whatever it is writing)"
-        ) from exc
-    except sqlite3.DatabaseError:
-        # Not a database at all -- truncated, foreign, or a leftover of some
-        # older layout. Nothing can be holding it as one, which is the only
-        # question this function asks, so the move goes ahead and copies the
-        # file verbatim like every other byte in the tree.
-        pass
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as exc:
+            raise MigrationError(
+                f"another Warlock process is using {db} -- close it and start again "
+                f"(moving a live library would lose whatever it is writing)"
+            ) from exc
+        except sqlite3.DatabaseError:
+            # Not a database at all -- truncated, foreign, or a leftover of some
+            # older layout. Nothing can be holding it as one, which is the only
+            # question this asks, so the move goes ahead and copies the file
+            # verbatim like every other byte in the tree. No transaction to
+            # hold, and nothing to roll back.
+            yield
+            return
+        try:
+            yield
+        finally:
+            with contextlib.suppress(sqlite3.Error):
+                conn.execute("ROLLBACK")
     finally:
         conn.close()
 
@@ -189,8 +220,20 @@ def _require_space(config: Config, needed: int) -> None:
         )
 
 
-def _move(legacy: Path, dest: Path, files: int, total: int) -> None:
-    """Copy ``legacy`` to ``dest`` via a staging directory, verify, then delete."""
+def _move(legacy: Path, dest: Path, files: int, total: int, *, remove: bool = True) -> None:
+    """Copy ``legacy`` to ``dest`` via a staging directory, verify, then delete.
+
+    ``remove=False`` stops after publishing the destination and leaves the
+    legacy tree in place for the caller to delete. That is what :func:`run`
+    passes, because the exclusive hold it takes on the legacy ``jobs.sqlite``
+    keeps an open handle on a file *inside* ``legacy`` -- and on Windows a file
+    with an open handle cannot be unlinked, so deleting under the lock would
+    silently leave the store behind (``rmtree(..., ignore_errors=True)``) and
+    the next start would see a non-empty legacy root and decline to migrate
+    again. The copy and the verify are the window that needs protecting; by the
+    time the destination is published, a writer that opens the legacy store is
+    writing into an orphan.
+    """
     staging = dest.parent / f"{dest.name}.incoming"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(staging, ignore_errors=True)
@@ -219,7 +262,7 @@ def _move(legacy: Path, dest: Path, files: int, total: int) -> None:
             raise MigrationError(f"could not clear {dest}: {exc}") from exc
     os.replace(staging, dest)
 
-    if os.environ.get("WARLOCK_MIGRATE_KEEP") == "1":
+    if not remove or os.environ.get("WARLOCK_MIGRATE_KEEP") == "1":
         return
     shutil.rmtree(legacy, ignore_errors=True)
 
@@ -254,25 +297,38 @@ def run(config: Config) -> list[str]:
     if not pending:
         return []
 
-    _require_no_live_writer()
-
-    sizes = [_tree_size(legacy) for legacy, _ in pending]
-    _require_space(config, sum(total for _, total in sizes))
-
     moved: list[tuple[Path, Path]] = []
-    for (legacy, dest), (files, total) in zip(pending, sizes, strict=True):
-        # stderr rather than the log: this runs inside get_config(), which is
-        # called long before studio.main installs a file handler, and a 95 GB
-        # copy with no output at all is indistinguishable from a hang.
-        print(
-            f"warlock: moving {legacy} ({_human(total)}) to {dest} -- "
-            f"this happens once.",
-            file=sys.stderr,
-            flush=True,
-        )
-        _move(legacy, dest, files, total)
-        print(f"warlock: moved {dest.name}.", file=sys.stderr, flush=True)
-        moved.append((legacy, dest))
+    # The exclusive hold spans the measure, the copy, the verify *and* the
+    # delete -- see ``_no_live_writer``. Measuring inside it as well is not
+    # incidental: sizes taken before the lock could already be stale by the time
+    # the copy starts, and the verify compares against them.
+    with _no_live_writer():
+        sizes = [_tree_size(legacy) for legacy, _ in pending]
+        _require_space(config, sum(total for _, total in sizes))
+
+        for (legacy, dest), (files, total) in zip(pending, sizes, strict=True):
+            # stderr rather than the log: this runs inside get_config(), which is
+            # called long before studio.main installs a file handler, and a 95 GB
+            # copy with no output at all is indistinguishable from a hang.
+            print(
+                f"warlock: moving {legacy} ({_human(total)}) to {dest} -- "
+                f"this happens once.",
+                file=sys.stderr,
+                flush=True,
+            )
+            _move(legacy, dest, files, total, remove=False)
+            print(f"warlock: moved {dest.name}.", file=sys.stderr, flush=True)
+            moved.append((legacy, dest))
+
+    # Outside the hold, and deliberately last. The destinations are already
+    # published, so nothing is at risk here except the disk space the legacy
+    # trees occupy -- and the open handle on the legacy ``jobs.sqlite`` has to
+    # be gone before Windows will let it be unlinked. A failure to delete is not
+    # a failed migration: ``_pending`` skips a root whose destination is
+    # populated, so a leftover legacy tree costs space and nothing else.
+    if os.environ.get("WARLOCK_MIGRATE_KEEP") != "1":
+        for legacy, _dest in moved:
+            shutil.rmtree(legacy, ignore_errors=True)
 
     _breadcrumb(config, moved)
     MOVED.extend(str(dest) for _, dest in moved)

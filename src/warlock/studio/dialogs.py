@@ -246,21 +246,28 @@ class ConfirmQueue:
         # The action is red, the escape is neutral: two identical buttons make
         # a destructive question a coin toss.
         confirmed = widgets.destructive_button(confirm.confirm_label, (sp(BUTTON_W), 0))
-        # Focus lands on the confirming button (I77) so Enter is unambiguous
-        # and so a keyboard user can see where they are. Only on the frame the
-        # modal appears: re-focusing every frame would fight the Tab key.
+        imgui.same_line()
+        cancelled = imgui.button(confirm.cancel_label, (sp(BUTTON_W), 0))
+        # Focus lands on the *safe* button, and Enter activates that one.
+        #
+        # It used to land on the destructive one, with Enter confirming it --
+        # so a user dismissing the previous dialog with Enter, or simply
+        # pressing it out of habit, deleted something (UX-07). "Where am I"
+        # deserves an answer and Enter deserves a meaning; neither requires
+        # that the answer be Delete. Destroying now takes an explicit act: a
+        # click, or Tab to the red button and Space.
+        #
+        # Only on the frame the modal appears: re-focusing every frame would
+        # fight the Tab key.
         if not confirm._focused:
             imgui.set_item_default_focus()
             confirm._focused = True
-        imgui.same_line()
-        cancelled = imgui.button(confirm.cancel_label, (sp(BUTTON_W), 0))
-        # Esc cancels, Enter confirms. Enter is read here rather than left to
-        # imgui's own nav activation because keyboard nav is not enabled: with
-        # it off, a focused button is drawn as focused and does nothing.
-        if _escape_pressed():
+        # Esc cancels, Enter takes the safe way out. Both are read here rather
+        # than left to imgui's own nav activation because keyboard nav is not
+        # enabled: with it off, a focused button is drawn as focused and does
+        # nothing.
+        if _escape_pressed() or _enter_pressed():
             cancelled = True
-        elif _enter_pressed():
-            confirmed = True
         if confirmed:
             self._answered()
             if confirm.on_confirm is not None:
@@ -354,7 +361,22 @@ class PromptQueue:
         prompt.value = value
         if self.waiting:
             widgets.muted(f"{self.waiting} more to answer")
-        accepted = entered or imgui.button("Save", (sp(BUTTON_W), 0))
+        # A blank name has always been refused -- silently. Save looked
+        # enabled, clicking it closed nothing and did nothing, and the modal sat
+        # there with no indication that the field was the problem (UX-24). The
+        # refusal is the same; what is added is saying so and disabling the
+        # control that cannot work.
+        blank = not prompt.value.strip()
+        if blank:
+            # Through the module-local ``imgui`` rather than ``widgets.muted``,
+            # deliberately: this file's tests replace ``dialogs.imgui`` with a
+            # fake, and ``widgets`` reaches for the real module -- which, with
+            # no imgui context in a headless test, is an access violation
+            # rather than an error. The existing ``waiting`` note gets away
+            # with it only because that branch is never taken in those tests.
+            imgui.text_disabled("Name required.")
+        saved = imgui.button("Save", (sp(BUTTON_W), 0))
+        accepted = (entered or saved) and not blank
         imgui.same_line()
         cancelled = imgui.button("Cancel", (sp(BUTTON_W), 0)) or _escape_pressed()
         if accepted and prompt.value.strip():

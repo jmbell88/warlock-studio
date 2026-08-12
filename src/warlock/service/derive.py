@@ -491,6 +491,10 @@ def _write_manifest(
         if name is not None and meta is not None:
             artifacts[name] = meta
         manifest["artifacts"] = artifacts
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        # Unique, dot-prefixed and cleaned up in a ``finally`` -- the
+        # ``_save_source`` shape (SVC-01). The fixed ``.json.tmp`` it replaces
+        # stranded a visible file on any failure between the write and the
+        # rename, and two concurrent derives of one job shared the name.
+        from .files import _staged_write
+
+        _staged_write(path, json.dumps(manifest, indent=2), text=True)

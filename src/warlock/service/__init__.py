@@ -3,8 +3,10 @@
 Everything here used to live inside ``app.py``'s route bodies. It is plain
 synchronous Python that raises :mod:`~warlock.service.errors` exceptions
 instead of ``HTTPException``, so the desktop UI can call it from a worker
-thread and the (transitional) HTTP routes can map the same exceptions back to
-status codes.
+thread. The HTTP routes that shape was originally kept for are gone -- the app
+has no server of its own, and the one socket it opens is the client for the
+local trellis subprocess -- so the exceptions are the whole contract now rather
+than an intermediate form on the way back to status codes.
 
 Functions take a :class:`~warlock.service.core.WarlockService` as their first
 argument rather than hanging off it as methods: the split into modules is by

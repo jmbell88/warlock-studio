@@ -55,6 +55,7 @@ class _FakeImgui:
         self.enter = enter
         self.press = press
         self.closed = False
+        self.notes: list[str] = []
 
     def open_popup(self, _title: str) -> None: ...
     def get_main_viewport(self) -> Any:
@@ -82,6 +83,11 @@ class _FakeImgui:
         # Esc and Enter are read from imgui because the frame loop stops
         # dispatching shortcuts while a modal is up. Nothing here presses one.
         return False
+
+    def text_disabled(self, text: str) -> None:
+        # UX-24's "Name required." note. Recorded rather than ignored: the
+        # point of the change is that a blank submit *says* something.
+        self.notes.append(text)
 
     def same_line(self) -> None: ...
     def close_current_popup(self) -> None:
@@ -153,3 +159,19 @@ def test_a_second_question_does_not_displace_the_one_on_screen(monkeypatch) -> N
     queue.ask(first)
     queue.ask(dialogs.Prompt(title="B", label="Name"))
     assert queue.pending is first
+
+
+def test_a_blank_name_says_why_rather_than_doing_nothing(monkeypatch):
+    """UX-24: the refusal was already correct and entirely silent.
+
+    Save looked enabled, clicking it closed nothing and did nothing, and the
+    modal sat there with no indication that the empty field was the reason.
+    """
+    saved: list[str] = []
+    prompt = dialogs.Prompt(title="Name it", label="Name", on_accept=saved.append)
+    fake = _FakeImgui(typed="   ")
+    _run(monkeypatch, prompt, fake)
+
+    assert saved == [], "a blank name is still refused"
+    assert not fake.closed, "and the modal still stays open"
+    assert "Name required." in fake.notes, "but it now says so"

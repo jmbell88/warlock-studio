@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -12,6 +13,8 @@ from .. import doctor, fetch, guidance, models
 from .core import WarlockService
 from .errors import Invalid, NotFound, invalid_from
 from .validation import MAX_PROMPT
+
+log = logging.getLogger(__name__)
 
 # Health used to run the full doctor suite -- a socket bind, a disk stat and a
 # dozen path probes -- on every call, and the UI calls it continuously. None of
@@ -168,8 +171,15 @@ def prompt_preview(
         tokenizers = prompt_pipeline.load_tokenizers(t2i.model_dir, spec.family)
         tokens = prompt_pipeline.count(positive, tokenizers)
         chunks = len(prompt_pipeline.chunk(positive, tokenizers))
-    except (ImportError, OSError):
-        pass  # transformers not installed, or this base model's weights aren't downloaded
+    except Exception:
+        # Every failure, not the two that were anticipated. This is a *preview*:
+        # the token count is a nicety beside a prompt box that refreshes as the
+        # user types, and the only correct response to not having it is to leave
+        # it out. The narrow ``(ImportError, OSError)`` covered "not installed"
+        # and "not downloaded" but not a corrupt tokenizer directory, which
+        # raises ValueError or JSONDecodeError out of transformers -- turning a
+        # live preview into an error toast on every keystroke (SVC-07).
+        log.debug("prompt preview could not count tokens", exc_info=True)
 
     return {
         "prompt": positive,

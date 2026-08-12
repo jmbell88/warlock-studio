@@ -163,6 +163,23 @@ def rerun_job(
     # decision itself.
     check_weights(svc, kind, params)
     check_vram(svc, kind, stage, params)
+    if kind == "retexture":
+        # The same door ``retexture_job`` holds, held again on the way back in.
+        # A stored row's ``base_model`` outlives the door that admitted it -- a
+        # row written before the family check existed, or one whose checkpoint
+        # the registry has since re-declared -- and a reroll that skipped this
+        # would spend the six Blender views and a ~16 GiB load to reach a
+        # runtime refusal, exactly as the original did (MDL-15).
+        from .. import models
+        from ._jobs_rework import _check_retexture_family
+
+        # ``.get``, not ``[]``: a stored row may name a checkpoint the registry
+        # no longer carries, which is the tolerance ``Worker._resolve_base_key``
+        # owns for every t2i stage. An unknown key is that path's problem, not a
+        # family refusal's.
+        stored = models.BASE_MODELS.get(str(params.get("base_model") or ""))
+        if stored is not None:
+            _check_retexture_family(stored)
 
     new_id = uuid.uuid4().hex[:12]
     new_dir = None

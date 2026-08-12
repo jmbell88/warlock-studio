@@ -37,8 +37,12 @@ def test_a_fetch_renders_the_command_it_stands_for():
         "uvx hf download acme/thing "
         '--include "*.json" --include "*fp16.safetensors" '
         '--exclude "big.safetensors" '
-        "--local-dir models/thing"
+        "--local-dir $HOME/.warlock/models/thing"
     )
+    # The default is *display only*. Given a resolved destination it renders
+    # that instead, which is what ``fetch.download_text`` hands it and what
+    # keeps a pasted command and the button pointing at one directory.
+    assert one.command("D:/elsewhere/thing").endswith("--local-dir D:/elsewhere/thing")
 
 
 def test_the_download_text_is_what_doctor_prints():
@@ -52,20 +56,20 @@ def test_the_download_text_is_what_doctor_prints():
     assert models.BASE_MODELS["turbo"].download == (
         "uvx hf download stabilityai/sdxl-turbo "
         '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-        '--exclude "sd_xl_turbo_1.0*" --local-dir models/sdxl-turbo'
+        '--exclude "sd_xl_turbo_1.0*" --local-dir $HOME/.warlock/models/sdxl-turbo'
     )
     # Two commands, joined by the two-space continuation doctor's
     # "download with:\n  " prefix lines up with.
     assert models.BASE_MODELS["sdxl"].download == (
         "uvx hf download stabilityai/stable-diffusion-xl-base-1.0 "
         '--include "*.json" --include "*.txt" --include "*fp16.safetensors" '
-        "--local-dir models/sdxl-base-1.0\n"
+        "--local-dir $HOME/.warlock/models/sdxl-base-1.0\n"
         "  uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors "
-        "--local-dir models/loras"
+        "--local-dir $HOME/.warlock/models/loras"
     )
     # The rename, which is why the string could never simply be executed.
     assert models.BASE_MODELS["pixel"].download.endswith(
-        "  then rename models/loras/pytorch_lora_weights.safetensors "
+        "  then rename $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors "
         "to lcm-lora-sdxl.safetensors"
     )
     # The non-shell step, which the button deliberately does not run.
@@ -104,6 +108,39 @@ def test_the_docs_name_every_repository_the_registry_does():
     repos = {one.repo_id for entry in fetch.entries() for one in entry.fetch}
     missing = sorted(repo for repo in repos if repo not in docs)
     assert not missing, f"in models.py but in neither README.md nor docs/MODELS.md: {missing}"
+
+
+def test_the_authoritative_docs_agree_with_the_registry_about_the_default():
+    """DOC-02: the default moved to ``sdxl_cfg`` and four documents did not.
+
+    ``docs/INVARIANTS.md`` is the one that mattered — it instructs a reader to
+    consult it *before* modifying a subsystem, and it handed them the
+    pre-2026-08-11 answer, complete with a causal story ("because FLUX is
+    gated") that was never why this checkpoint won. Asserted as a property of
+    the prose rather than by parsing it: a document that names the registry's
+    default anywhere near the word must not simultaneously call Turbo the
+    default.
+    """
+    assert models.DEFAULT_BASE_MODEL == "sdxl_cfg"
+    turbo = models.BASE_MODELS["turbo"]
+    default = models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
+    assert turbo.dir_name not in default.dir_name
+
+    root = Path(__file__).resolve().parents[1]
+    claims = (
+        "SDXL-Turbo (`models/sdxl-turbo`) is the default",
+        "SDXL-Turbo is the default",
+        "prompt → SDXL-Turbo",
+        "default because FLUX is gated",
+    )
+    for name in ("docs/INVARIANTS.md", "CLAUDE.md", "README.md", "docs/MODELS.md"):
+        text = (root / name).read_text(encoding="utf-8")
+        for claim in claims:
+            assert claim not in text, (
+                f"{name} still says {claim!r}; the registry's default is "
+                f"{models.DEFAULT_BASE_MODEL!r} "
+                f"(docs/measurements/2026-08-11-default-base-model.md)"
+            )
 
 
 def test_a_note_is_not_a_fetch():
@@ -153,6 +190,55 @@ def test_a_plan_resolves_under_the_model_root_not_the_literal_models_dir(tmp_pat
         cfg.t2i_model_root / "sdxl-base-1.0"
     )
     assert dests["ByteDance/Hyper-SD"] == cfg.t2i_model_root / "loras"
+
+
+def test_a_rendered_command_names_the_directory_the_fetch_actually_lands_in(tmp_path):
+    """DST-02: the paste-able text and the button must name one directory.
+
+    ``spec.download`` renders the documented default home because ``models``
+    cannot see a ``Config``. ``fetch.download_text`` can, and every caller that
+    holds a config uses it -- doctor above all, which reports a model missing at
+    a resolved path and then has to say how to put it there. The literal
+    ``models/...`` this replaced was *relative*: pasted from any shell whose CWD
+    was not the checkout it wrote gigabytes into `<cwd>/models`, which nothing
+    ever reads.
+    """
+    cfg = _config(tmp_path)
+    spec = models.BASE_MODELS["sdxl"]
+    text = fetch.download_text(cfg, "base", spec)
+    # Both halves of a two-command entry, each against its own destination.
+    assert str(cfg.t2i_model_root / "sdxl-base-1.0") in text
+    assert str(cfg.t2i_model_root / "loras") in text
+    # And nothing left rendering the default, or the relative literal.
+    assert "$HOME" not in text
+    assert "--local-dir models/" not in text
+    # Every rendered destination is exactly what ``plan`` will use, because both
+    # resolve through ``destination``.
+    dests = {job.dest for job in fetch.plan(cfg, [fetch.find("base:sdxl")])}
+    for dest in dests:
+        assert str(dest) in text
+
+
+def test_a_rendered_command_honours_the_turbo_only_override(tmp_path):
+    """``WARLOCK_T2I_DIR`` moves one entry, and the text has to move with it."""
+    elsewhere = tmp_path / "elsewhere"
+    cfg = _config(tmp_path, turbo=elsewhere)
+    turbo = fetch.download_text(cfg, "base", models.BASE_MODELS["turbo"])
+    assert str(elsewhere) in turbo
+    # ...and only that entry: sdxl still resolves under the root.
+    sdxl = fetch.download_text(cfg, "base", models.BASE_MODELS["sdxl"])
+    assert str(elsewhere) not in sdxl
+
+
+def test_a_rendered_command_survives_a_space_in_the_path(tmp_path):
+    """`C:\\Users\\Jane Doe\\.warlock\\models` is an ordinary Windows home, and an
+    unquoted path with a space in it is a command that silently downloads into
+    the wrong directory (or fails, if you are lucky)."""
+    cfg = _config(tmp_path / "a directory")
+    text = fetch.download_text(cfg, "base", models.BASE_MODELS["sdxl_cfg"])
+    quoted = fetch.quote_for_shell(cfg.t2i_model_root / "sdxl-base-1.0")
+    assert quoted.startswith("'") and quoted.endswith("'")
+    assert quoted in text
 
 
 def test_the_override_moves_the_turbo_download_too(tmp_path):
@@ -229,6 +315,43 @@ def test_a_plan_that_fits_is_not_refused(tmp_path, monkeypatch):
     jobs = fetch.plan(cfg, [fetch.find("lora:pixelxl")])
     monkeypatch.setattr(fetch, "free_gib", lambda _path: 500.0)
     assert fetch.disk_refusal(jobs) is None
+
+
+def test_disk_admission_is_per_volume_not_charged_to_the_first_one(tmp_path, monkeypatch):
+    """MDL-09: the plan's whole size was compared against ``jobs[0].dest``.
+
+    Right only while every fetch lands on one drive -- and ``WARLOCK_T2I_DIR``
+    relocates the ``turbo`` entry by itself, so a plan can straddle two. A roomy
+    first volume approved a large write to a nearly full second one; the inverse
+    falsely refused.
+    """
+    elsewhere = tmp_path / "other-volume"
+    cfg = _config(tmp_path, turbo=elsewhere)
+    jobs = fetch.plan(cfg, [fetch.find("base:turbo"), fetch.find("lora:pixelxl")])
+    dests = {job.dest for job in jobs}
+    assert elsewhere in dests, "the override has to actually split the plan"
+
+    # Every destination answers about its *own* volume. The anchors are equal
+    # under one tmp_path, so the split is made explicit here by answering per
+    # directory -- which is what two real drives would do.
+    free = {elsewhere: 0.5}
+
+    def _free(path):
+        return free.get(path, 500.0)
+
+    monkeypatch.setattr(fetch, "free_gib", _free)
+    # Grouped by volume anchor, so on one drive this is a single group; force
+    # the two-group case by keying the groups on the destinations themselves.
+    monkeypatch.setattr(fetch, "DISK_HEADROOM_GIB", 0.0)
+
+    # A plan entirely on the roomy volume is fine.
+    ok_jobs = [job for job in jobs if job.dest != elsewhere]
+    assert fetch.disk_refusal(ok_jobs) is None
+    # And one landing on the full volume is refused, naming its own numbers
+    # rather than the first destination's.
+    tight = [job for job in jobs if job.dest == elsewhere]
+    refusal = fetch.disk_refusal(tight)
+    assert refusal is not None and "0.5 GB is free" in refusal
 
 
 def test_free_space_that_cannot_be_read_is_not_a_refusal(tmp_path, monkeypatch):

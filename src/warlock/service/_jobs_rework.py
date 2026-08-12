@@ -68,6 +68,7 @@ def optimize_job(
     job = svc.require_job(job_id)
     if job["status"] in ("queued", "running"):
         raise Conflict(f"job is {job['status']}; re-optimize it once it finishes")
+    _require_no_dependents(svc, job_id, "re-optimize")
     job_dir = svc.job_dir(job_id)
     source = job_dir / "source.glb"
     if not source.exists():
@@ -174,6 +175,7 @@ def retexture_job(
     job = svc.require_job(job_id)
     if job["status"] in ("queued", "running"):
         raise Conflict(f"job is {job['status']}; re-texture it once it finishes")
+    _require_no_dependents(svc, job_id, "re-texture")
     job_dir = svc.job_dir(job_id)
     if not (job_dir / "model.glb").exists():
         raise Invalid("this job has no mesh to re-texture")
@@ -206,6 +208,7 @@ def retexture_job(
     base_key = str(base_model or svc.config.t2i_model)
     if base_key not in models.BASE_MODELS:
         raise Invalid(f"unknown base model {base_key!r}", field="base_model")
+    _check_retexture_family(models.BASE_MODELS[base_key])
 
     params = {
         # Inputs, every one of them: what the re-texture recorded about the
@@ -226,6 +229,72 @@ def retexture_job(
     new_id = svc.store.create("retexture", text, params, uuid.uuid4().hex[:12])
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "stale": stale_surface_artifacts(job_dir)}
+
+
+def _require_no_dependents(svc: WarlockService, job_id: str, what: str) -> None:
+    """Refuse while another job is still writing into this one's directory.
+
+    Both doors here refuse on the *target row's* own status, which is the wrong
+    question by itself: a re-texture, a rig or a sheet is a **separate row**
+    whose artifacts land in the done job's directory, so the target reads `done`
+    the whole time one is in flight -- which is exactly why it could be queued
+    for it in the first place.
+
+    The failure is silent and it inverts an explicit user choice. Queue a
+    re-texture for done mesh J, then retarget J: the re-texture's ``os.replace``
+    publishes a skin baked from the *pre-retarget* geometry over the retargeted
+    mesh, so the triangle budget quietly reverts while ``params["profile"]``
+    goes on claiming the tier ran. A rig in flight binds the old mesh and
+    ``stale_rig_artifacts`` reports nothing, because nothing it looks at
+    changed. Per-artifact locks do not cover this: the two writers are different
+    jobs writing different names (CON-01).
+
+    ``dependent_jobs`` already exists and ``_jobs_lifecycle``'s docstring
+    already names it as the answer to this shape.
+    """
+    from ._jobs_lifecycle import dependent_jobs
+
+    blocking = dependent_jobs(svc, job_id)
+    if blocking:
+        raise Conflict(
+            f"{len(blocking)} job(s) started from this mesh are still queued or "
+            f"running and will write into its directory; wait for them to finish "
+            f"before you {what} it."
+        )
+
+
+def _check_retexture_family(base: models.BaseModel) -> None:
+    """Refuse a non-SDXL checkpoint here, where refusing is still cheap.
+
+    A re-texture is six conditioned img2img passes, and ``Text2Image._conditioned``
+    refuses a non-SDXL family outright -- but it does so at *runtime*, which for
+    this kind means after the job has queued, rendered all six Blender views,
+    stopped trellis and loaded a ~16 GiB checkpoint into host commit. Minutes of
+    the serial worker plus a trellis restart, to arrive at a refusal the
+    registry could have given instantly (MDL-15).
+
+    Reachable without anyone picking an exotic model, too: ``base_model`` is
+    optional here and falls back to ``config.t2i_model``, so a host whose
+    ``WARLOCK_T2I_MODEL`` names a klein entry qualified merely by leaving the
+    field alone -- and ``rerun_job --reroll`` repeated the whole thing.
+
+    Mirrors ``create_pixel_sheet``'s refusal in shape and in field, including
+    naming the models that *would* work: a door that only says no is a door the
+    user has to guess their way past.
+    """
+    if base.family == models.FAMILY_SDXL:
+        return
+    # Spelled out rather than borrowed from ``tile_bases()``, on that list's own
+    # reasoning: a seamless tile and a conditioned re-texture are two different
+    # questions whose answers happen to coincide today, and sharing the
+    # derivation is how one of them silently acquires the other's rule.
+    usable = sorted(k for k, m in models.BASE_MODELS.items() if m.family == models.FAMILY_SDXL)
+    raise Invalid(
+        f"base_model {base.key!r} is {base.family}; a re-texture conditions "
+        f"every view on its render, which only SDXL-family checkpoints support. "
+        f"Pick one of {usable}",
+        field="base_model",
+    )
 
 
 def stale_surface_artifacts(job_dir: Path) -> list[str]:

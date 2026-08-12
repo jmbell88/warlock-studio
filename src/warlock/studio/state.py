@@ -771,6 +771,19 @@ class AppState:
     palette_query: str = ""
     palette_index: int = 0
     comparing: str | None = None
+    # The other side of a comparison, and the parse that is on its way.
+    #
+    # ``compare_baseline`` is recorded when the context menu *opens*, because
+    # right-clicking a card selects it first -- so reading ``selected`` at the
+    # moment the menu item is clicked gives the target, and "compare with
+    # selected" compared a mesh with itself (UX-04).
+    #
+    # ``compare_pending`` is the compare half of ``viewer.pending``: the parse
+    # runs on a task thread and the result is checked against this before it is
+    # adopted, so a selection that moves while a large GLB is being read cannot
+    # drop a stale mesh into the right-hand pane.
+    compare_baseline: str | None = None
+    compare_pending: Any = None
     # Which asset the inspector's tag toggles are staged against, and what is
     # staged. Keyed by job id rather than being a bare list, so selecting a
     # different asset drops them -- staged state belongs to the thing that was
@@ -1026,6 +1039,10 @@ class AppState:
             # it across a selection change would compare two jobs neither of
             # which the user just clicked.
             self.comparing = None
+            # And the parse in flight for it is no longer wanted. Left set, a
+            # result landing after the selection moved would be adopted into a
+            # comparison that no longer exists.
+            self.compare_pending = None
 
     def toggle_check(self, job_id: str) -> None:
         self.checked.symmetric_difference_update({job_id})

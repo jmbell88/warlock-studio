@@ -85,6 +85,36 @@ def test_index_links_every_chapter():
     assert linked == set(EXPECTED_KEYS) - {"00-index"}
 
 
+def test_index_sections_match_the_loaders_parts():
+    """A chapter's number decides its order *and* its part, in both directions.
+
+    CLAUDE.md has claimed this gate covers grouping for as long as it has
+    claimed the number decides the part, but ``test_index_links_every_chapter``
+    only ever asserted linkage -- so the index could list a chapter under one
+    heading while ``loader.PARTS`` filed it under another, which is exactly what
+    chapter 14 did (index: Part I; PARTS: "Setup & operations"). Asserting the
+    index's own ``##`` sections against PARTS closes that direction.
+    """
+    text = loader.load("00-index")
+    index: dict[str, list[int]] = {}
+    section: str | None = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+            index.setdefault(section, [])
+        elif section is not None:
+            found = re.search(r"\((\d\d)-[\w-]+\.md", line)
+            if found:
+                index[section].append(int(found.group(1)))
+
+    expected = {label: [n for n in rng if n <= 21] for label, rng in loader.PARTS}
+    assert index == expected, (
+        "docs/manual/00-index.md's sections and loader.PARTS disagree about "
+        "which part a chapter belongs to. Move the index entry or widen the "
+        "range -- but not only one of them."
+    )
+
+
 def test_help_targets_resolve():
     from warlock.studio.manual.targets import HELP_TARGETS
 

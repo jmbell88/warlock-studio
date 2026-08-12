@@ -7,6 +7,10 @@ It exists because every 2D engine wants an atlas and nothing else in Warlock mad
 sheet baked from a 3D model is a regular grid by construction; a folder of hand-drawn frames is not,
 and packing it by hand is exactly the sort of arithmetic a person should never do.
 
+There are four images in `examples/` in the source checkout to try it on — `player.png`, two sprite
+sheets and a tileset. They are inputs, not fixtures: nothing in the app or the test suite reads
+them, so they are safe to delete if you would rather not carry them.
+
 It is a mode, not a takeover. Switching away leaves every open document where it was. Several
 atlases stay open at once, and the layout follows the rest of the app: sources and settings on the
 left, the packed atlas in the middle, the placement list and the file panel on the right.

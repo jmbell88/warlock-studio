@@ -9,6 +9,8 @@ containment rule in ``fetch.removal_plan`` is the second line of defence.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from warlock import fetch
@@ -106,6 +108,8 @@ def test_the_resident_image_model_is_unloaded_before_anything_is_deleted(svc):
     calls: list[str] = []
 
     class FakeWorker:
+        current_job_id = None
+
         async def unload_text2image(self) -> None:
             calls.append("unload")
             assert _lora(svc, "pixel-art-xl.safetensors").exists(), (
@@ -115,6 +119,100 @@ def test_the_resident_image_model_is_unloaded_before_anything_is_deleted(svc):
     svc.worker = FakeWorker()
     svc_downloads.uninstall(svc, ["lora:pixelxl"])
     assert calls == ["unload"]
+
+
+def test_an_uninstall_waits_for_a_model_thread_rather_than_deleting_under_it(
+    svc, monkeypatch
+):
+    """MDL-01, structurally: the guards that existed could not see this.
+
+    The live-jobs query and the ``current_job_id`` re-check both answer
+    questions about rows and about the event loop. The thing that must not be
+    interrupted is a *thread* -- ``from_pretrained`` reading a checkpoint, or a
+    sampler running -- and while that thread works, the loop is idle and every
+    row already says "running" or nothing at all.
+
+    So the uninstall takes the exclusive model lease, and a thread holding a use
+    lease keeps it out. Here the timeout is short and the refusal is what is
+    asserted; in the app the wait is generous and usually simply waits.
+    """
+    from warlock import leases
+
+    lora = _lora(svc, "pixel-art-xl.safetensors")
+    inside = threading.Event()
+    release = threading.Event()
+    deleted_while_running = []
+
+    def model_thread() -> None:
+        with leases.MODELS.use():
+            inside.set()
+            release.wait(5.0)
+            deleted_while_running.append(lora.exists())
+
+    thread = threading.Thread(target=model_thread)
+    thread.start()
+    try:
+        assert inside.wait(5.0)
+        # A short lease timeout so the test does not sit for the real three
+        # minutes; the behaviour under test is the refusal, not the duration.
+        monkeypatch.setattr(leases, "MAINTAIN_TIMEOUT", 0.2)
+        with pytest.raises(Conflict):
+            svc_downloads.uninstall(svc, ["lora:pixelxl"])
+    finally:
+        release.set()
+        thread.join(5.0)
+    assert deleted_while_running == [True], (
+        "the weights must still be there while the model thread holds the lease"
+    )
+    assert lora.exists()
+
+
+def test_a_queued_job_off_the_end_of_a_page_still_blocks_the_uninstall(svc, monkeypatch):
+    """MDL-01(a): the guard used to filter a *page*, not the queue.
+
+    ``store.list(limit=MAX_LIST_LIMIT)`` returns the newest 5,000 rows; on a
+    library past that, a queued job older than the page was invisible and its
+    weights were deleted while it waited. ``active_jobs()`` exists for exactly
+    this question and is unbounded, so the page is simulated as empty here and
+    the refusal must still fire.
+    """
+    lora = _lora(svc, "pixel-art-xl.safetensors")
+    monkeypatch.setattr(svc.store, "list", lambda **_kw: [])
+    monkeypatch.setattr(
+        svc.store, "active_jobs", lambda: [{"id": "old", "status": "queued"}]
+    )
+    with pytest.raises(Conflict):
+        svc_downloads.uninstall(svc, ["lora:pixelxl"])
+    assert lora.exists()
+
+
+def test_a_job_claimed_in_the_gap_refuses_the_uninstall_instead_of_racing_it(svc):
+    """MDL-01(b): the live-jobs guard is a snapshot, and the loop is free.
+
+    Nothing stops a ``create_job`` landing between that check and the unload,
+    being claimed, and putting a ``generate()`` in flight -- ``_generate``
+    spends its whole life awaiting a ``to_thread``, so the event loop is idle
+    and will happily run an unload against a pipe that is mid-sample. The
+    re-check therefore lives *inside* the loop-side callable, where
+    ``current_job_id`` cannot change under the read, and a busy worker refuses
+    the whole uninstall rather than deleting weights out from under it.
+    """
+    lora = _lora(svc, "pixel-art-xl.safetensors")
+    calls: list[str] = []
+
+    class BusyWorker:
+        # Claimed in the gap: the store says nothing is queued, the worker
+        # says it is already running one.
+        current_job_id = "abc123"
+
+        async def unload_text2image(self) -> None:  # pragma: no cover - must not run
+            calls.append("unload")
+
+    svc.worker = BusyWorker()
+    with pytest.raises(Conflict):
+        svc_downloads.uninstall(svc, ["lora:pixelxl"])
+    assert calls == [], "a running job must not have its weights unloaded"
+    assert lora.exists(), "nothing may be deleted once the uninstall is refused"
 
 
 def test_a_locked_file_fails_loudly_and_the_trash_is_swept_next_time(svc, monkeypatch):

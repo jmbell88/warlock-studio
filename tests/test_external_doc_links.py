@@ -33,14 +33,17 @@ MANUAL = ROOT / "docs" / "manual"
 # The files outside docs/manual/ that are allowed to link into it. Named rather
 # than globbed: a glob would quietly stop covering a file that was renamed, and
 # the whole point here is that a link nobody walks is a link that rots.
+# ``docs/TODO.md`` sat here until 2026-08-11, when the roadmap file was deleted
+# outright (`de87838`; there is no roadmap file now -- see docs/INVARIANTS.md).
+# Its entry is gone rather than commented into the tuple, because a declared
+# source that does not exist used to be *silent*: ``_manual_links`` skipped a
+# missing path, so the link count simply fell, and the global-count guard below
+# was slack enough to absorb it. That is the exact silent-shrink failure this
+# file's own comments warn about, and it is why
+# ``test_every_declared_source_exists`` now fails on the missing file itself
+# rather than leaving the shrink to be inferred from a total.
 SOURCES = (
     ROOT / "README.md",
-    # LEFTOVERS.md until 2026-08-10, when the roadmap was rewritten as
-    # TODO.md. A missing entry here is silent -- ``_manual_links`` skips a path
-    # that does not exist, so the count simply falls -- which is exactly what
-    # ``test_the_sources_actually_carry_manual_links`` is for, and it caught
-    # both this rename and the 2026-08-09 move out of the repo root.
-    ROOT / "docs" / "TODO.md",
     ROOT / "CLAUDE.md",
     # The invariants reference CLAUDE.md's detail moved into on 2026-08-10. It
     # carries no manual mentions yet, but it is exactly the file that will grow
@@ -115,11 +118,53 @@ def _resolve(source: Path, target: Path | str) -> tuple[Path, str]:
     return (source.parent / raw).resolve(), anchor
 
 
+# The named sources that are expected to point readers into the manual. Not
+# every declared source is here, and the difference is deliberate:
+# ``docs/INVARIANTS.md`` and ``CLAUDE.md`` are declared because they are exactly
+# the files that will grow manual links, but neither carries one today, and
+# asserting one would be asserting a wish rather than a fact. The measurement
+# documents are globbed and each is free to carry none. Everything in this set
+# has links today, so a file that loses its last one is a regression rather
+# than an edit.
+LINKED_SOURCES = (
+    ROOT / "README.md",
+    ROOT / "docs" / "MODELS.md",
+)
+
+
+@pytest.mark.parametrize("source", SOURCES, ids=lambda p: p.name)
+def test_every_declared_source_exists(source: Path):
+    """A declared source that is missing must fail *here*, not shrink coverage.
+
+    ``docs/TODO.md`` was deleted on 2026-08-11 while still named in ``SOURCES``,
+    and nothing failed: ``_manual_links`` skips a path that does not exist, so
+    the only symptom was a lower total that the count guard below still passed.
+    A source is either present and walked, or removed from the tuple on purpose.
+    """
+    assert source.exists(), (
+        f"{source} is declared in SOURCES but does not exist. Either restore it "
+        f"or delete its entry -- a named source that silently vanishes is how "
+        f"this file stops covering what it claims to cover."
+    )
+
+
 def test_the_sources_actually_carry_manual_links():
     """A guard on the guard: if the regex or the filter ever stops matching,
     every assertion below passes vacuously and says nothing."""
     links = _manual_links()
     assert len(links) >= 3, f"expected several links into docs/manual/, found {links}"
+
+
+@pytest.mark.parametrize("source", LINKED_SOURCES, ids=lambda p: p.name)
+def test_each_linking_source_still_carries_its_own_links(source: Path):
+    """Per-source, because a global count hides a file going quiet.
+
+    The total above is satisfied by three links from one file; this is what
+    notices that README stopped linking into the manual while MODELS.md grew
+    two more.
+    """
+    mine = [target for src, target in _manual_links() if src == source]
+    assert mine, f"{source.name} carries no link or mention of docs/manual/ any more"
 
 
 @pytest.mark.parametrize("source,target", _manual_links(), ids=str)

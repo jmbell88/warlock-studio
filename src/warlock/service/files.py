@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import secrets
 import shutil
 import time
 from pathlib import Path
@@ -95,6 +96,35 @@ class ImageTooLarge(ValueError):
     """The upload decodes to more pixels than the pipeline will accept."""
 
 
+def _staged_write(dest, data, *, text: bool = False) -> None:
+    """Write ``data`` onto ``dest`` through a unique dot-prefixed temp sibling.
+
+    The shape ``_save_source`` documents as the fix, applied at the sites that
+    still had the old one (SVC-01). Two things were wrong with
+    ``dest.with_suffix(".png.tmp")``:
+
+    * **Not dot-prefixed, and never cleaned up.** An ENOSPC or a
+      ``PermissionError`` between the write and the rename stranded a visible
+      ``model.png.tmp`` -- up to ~22 MB -- in the user's job directory forever,
+      with nothing that would ever remove it.
+    * **A fixed name.** ``save_edited_image``'s temp is the same string for
+      every caller, so two concurrent saves of one job wrote into one file and
+      could rename a torn result onto the served ``input.png``.
+
+    A token in the name fixes the second; the ``finally`` fixes the first.
+    """
+    tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        if text:
+            tmp.write_text(data, encoding="utf-8")
+        else:
+            tmp.write_bytes(data)
+        os.replace(tmp, dest)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+
+
 def to_png(data: bytes) -> bytes:
     """Re-encode any uploaded image as PNG; trellis.cpp only decodes PNG/JPEG.
 
@@ -148,9 +178,7 @@ def save_thumbnail(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     # most visible. The re-save case is the real one -- the file already exists
     # and is already being shown when the second snapshot lands on it.
     dest = job_dir / "thumb.png"
-    tmp = dest.with_suffix(".png.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, dest)
+    _staged_write(dest, data)
     return {"ok": True}
 
 
@@ -207,9 +235,7 @@ def save_inker_working(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     if not data.startswith(ORA_MAGIC):
         raise Invalid("the layered source must be an OpenRaster file")
     dest = svc.job_dir(job_id) / INKER_WORKING
-    tmp = dest.with_suffix(".ora.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, dest)
+    _staged_write(dest, data)
     return {"ok": True}
 
 
@@ -275,9 +301,7 @@ def save_clay_source(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
         raise Invalid("the clay source must be a .wblk archive")
     dest = svc.job_dir(job_id) / CLAY_SOURCE
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".wblk.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, dest)
+    _staged_write(dest, data)
     return {"ok": True}
 
 
@@ -510,9 +534,7 @@ def save_edited_image(svc: Any, job_id: str, data: bytes) -> dict[str, Any]:
     # Staged: promote_to_model and remesh copy input.png with a bare copyfile,
     # so a direct write_bytes onto a served name is a torn read waiting to
     # happen.
-    tmp = dest.with_suffix(".png.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, dest)
+    _staged_write(dest, data)
     _remeasure(svc, job_id, dest, hand_edited=True, stage=job["stage"])
     return {"ok": True}
 

@@ -254,3 +254,53 @@ def test_a_copy_that_does_not_match_leaves_the_source_alone(home, legacy, monkey
     assert (legacy / "assets" / "jobs.sqlite").exists()
     assert not (home / "assets").exists()
     assert not list(home.glob("*.incoming"))
+
+
+def test_the_exclusive_hold_survives_the_copy_and_not_only_the_check(home, legacy, monkeypatch):
+    """RUN-02: the guarantee has to cover the *copy*, not one instant before it.
+
+    The precondition used to be ``BEGIN EXCLUSIVE`` / ``ROLLBACK`` on the legacy
+    store, with the connection closed immediately -- so a second Warlock
+    launched during the multi-minute cross-volume copy passed its own identical
+    precondition, opened the store, and wrote into ``assets/`` while its
+    contents were being copied out from under it. The recount catches a file
+    that was *added*; an in-place write of equal size is invisible to it, and
+    the legacy root is then deleted on top of those writes.
+
+    Asserted from inside the copy, which is the only place the question is
+    interesting: a second writer must be locked out *there*.
+    """
+    db = legacy / "assets" / "jobs.sqlite"
+    db.unlink()
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE jobs (id TEXT)")
+    conn.commit()
+    conn.close()
+
+    locked_out: list[bool] = []
+    real_move = migrate._move
+
+    def _watched(*args, **kwargs):
+        other = sqlite3.connect(str(db), timeout=0)
+        try:
+            other.execute("BEGIN EXCLUSIVE")
+            locked_out.append(False)
+            other.execute("ROLLBACK")
+        except sqlite3.OperationalError:
+            locked_out.append(True)
+        finally:
+            other.close()
+        return real_move(*args, **kwargs)
+
+    monkeypatch.setattr(migrate, "_move", _watched)
+    migrate.run(Config())
+
+    assert locked_out and all(locked_out), (
+        "a second process could take the legacy store while the copy was running"
+    )
+    # And the move still completed: holding the lock across the copy must not
+    # stop the legacy tree being removed afterwards. The delete happens once the
+    # hold is released, because Windows will not unlink a file with an open
+    # handle -- and jobs.sqlite is inside the tree being deleted.
+    assert (home / "assets" / "jobs.sqlite").exists()
+    assert not (legacy / "assets").exists()

@@ -93,8 +93,44 @@ def _trellis_cost(params: dict[str, Any] | None) -> float:
     return TRELLIS_GIB * TRELLIS_RES_MULT[_resolution(params)]
 
 
+# A step-distillation LoRA's device footprint, in GiB. Hyper-SDXL-4steps is
+# 787 MB on disk and the weights are what land on the card, so 0.8 rounded up.
+# The three distilled recipes are within a few tens of MB of each other, which
+# is why this is one number and not a per-entry field.
+BASE_LORA_GIB = 0.8
+
+
+def _adapter_cost(spec: Any, params: dict[str, Any] | None) -> float:
+    """What the adapters attached alongside this checkpoint cost, in GiB.
+
+    ``BaseModel.vram_gib`` is the checkpoint alone, and its own comment says
+    under-pricing is the direction not to err in -- but the required
+    step-distillation LoRA is loaded unconditionally inside ``load()`` and was
+    charged nowhere, so a Hyper-SD/LCM/Lightning recipe was under-priced by
+    ~0.8 GiB every time (MDL-17).
+
+    A *style* adapter is now attached only when a job selects one
+    (``Text2Image._ensure_adapter``, MDL-07), so at most one is on the device
+    and only when ``params`` names it -- which is why this reads the selection
+    rather than summing every fitting adapter in the registry, as the eager
+    load would have required.
+
+    A style's size comes from its own ``Fetch`` records rather than a constant:
+    a LoRA's device footprint is its weights, and ``size_gib`` is the field that
+    already records how big those are. ``StyleLora`` carries no size of its own,
+    which is why this sums the fetches instead of reading one attribute.
+    """
+    from . import models
+
+    total = BASE_LORA_GIB if getattr(spec, "base_lora", None) else 0.0
+    style = models.STYLE_LORAS.get(str((params or {}).get("style_lora") or ""))
+    if style is not None and models.lora_fits(spec, style):
+        total += sum(one.size_gib for one in style.fetch)
+    return total
+
+
 def _image_model_cost(params: dict[str, Any] | None) -> float:
-    """What this job's chosen checkpoint costs, in GiB.
+    """What this job's chosen checkpoint costs, in GiB, adapters included.
 
     Not every image model is 7 GB any more: a spec carries its own
     ``vram_gib``, measured under its own ``residency``. Importing ``models``
@@ -104,7 +140,9 @@ def _image_model_cost(params: dict[str, Any] | None) -> float:
     from . import models
 
     spec = models.BASE_MODELS.get(str((params or {}).get("base_model") or ""))
-    return SDXL_GIB if spec is None else spec.vram_gib
+    if spec is None:
+        return SDXL_GIB
+    return spec.vram_gib + _adapter_cost(spec, params)
 
 
 def offloaded_base(params: dict[str, Any] | None) -> bool:
@@ -145,7 +183,37 @@ def estimate(
     *sum*. That is the whole reason auto-selecting the mode can rescue a
     smaller card rather than only refusing it.
     """
+    return estimate_parts(kind, stage, params, exclusive=exclusive)[0]
+
+
+def estimate_parts(
+    kind: str,
+    stage: str,
+    params: dict[str, Any] | None = None,
+    *,
+    exclusive: bool = False,
+) -> tuple[float, float]:
+    """``estimate``, plus the checkpoint term it charged.
+
+    Returns ``(total, image_model_gib)``. The second number is what a *resident*
+    pipe has already been debited from free VRAM for, and therefore what
+    ``queue._check_resources`` must credit back so the same weights are not
+    charged twice. It is returned from here rather than recomputed there on
+    purpose: the caller used to decide by kind (``kind == "text"``), and three
+    kinds whose estimate does carry a checkpoint term -- ``pixel_sheet``,
+    ``sprite_synthesis``, ``retexture`` -- were missing from that list, so on
+    the flagship 32 GiB coexist card the natural flow (generate a reference,
+    which leaves a ~7.5 GiB pipe warm *by design*, then start a sprite sheet)
+    computed need 26.7 against free 23.5 and refused a job that would have
+    **reused** the very pipe being counted against it. Waiting out the 600 s
+    idle eviction "fixed" it, which presents as a phantom VRAM leak.
+
+    Deriving it from the same expression that charges it means a new kind cannot
+    be added to one half and forgotten in the other: whatever
+    ``_image_model_cost`` is added to the total is what comes back here.
+    """
     params = params or {}
+    image = 0.0
     # An offloaded checkpoint hands off whether or not the flag is set, because
     # its cost is in host commit rather than in VRAM and nothing about the
     # coexist budget describes it (see ``offloaded_base``). Applied here, at the
@@ -163,13 +231,14 @@ def estimate(
         # renders in EEVEE at 512px, `op_project` bakes emission at one sample),
         # so they cost this budget nothing -- the same reason a rig job
         # estimates zero below.
-        pass_gib = _image_model_cost(params)
+        image = _image_model_cost(params)
+        pass_gib = image
         if params.get("control"):
             pass_gib += CONTROLNET_GIB
         # Never trellis: the mesh was reconstructed long before, and nothing
         # here goes near it. Under coexist a warm trellis is still holding its
         # memory, which is what the reference stage below accounts for too.
-        return pass_gib if exclusive else pass_gib + TRELLIS_GIB
+        return (pass_gib if exclusive else pass_gib + TRELLIS_GIB), image
     if kind == "pixel_sheet":
         # An img2img restyle: the same resident pipe as a text job, plus a
         # ControlNet, and never trellis -- the mesh was reconstructed long
@@ -180,8 +249,9 @@ def estimate(
         # `queue._pixel_sheet` reads params["base_model"], so charging a flat
         # SDXL_GIB was correct only for as long as the one caller kept writing
         # "sdxl_cfg" into it.
-        pixel = _image_model_cost(params) + CONTROLNET_GIB
-        return pixel if exclusive else pixel + TRELLIS_GIB
+        image = _image_model_cost(params)
+        pixel = image + CONTROLNET_GIB
+        return (pixel if exclusive else pixel + TRELLIS_GIB), image
     if kind == "sprite_synthesis":
         # Two txt2img passes, one after the other through the same resident
         # pipe, each carrying both adapters at once -- so the peak is one pass
@@ -192,15 +262,17 @@ def estimate(
         #
         # The matte is a CPU flood fill in this process and the reduction is
         # Pillow, so neither costs this budget anything.
-        sprite = _image_model_cost(params) + CONTROLNET_GIB + IP_ENCODER_GIB
-        return sprite if exclusive else sprite + TRELLIS_GIB
+        image = _image_model_cost(params)
+        sprite = image + CONTROLNET_GIB + IP_ENCODER_GIB
+        return (sprite if exclusive else sprite + TRELLIS_GIB), image
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.
-        return 0.0
+        return 0.0, 0.0
 
     sdxl = 0.0
     if kind == "text":
-        sdxl = _image_model_cost(params)
+        image = _image_model_cost(params)
+        sdxl = image
         if params.get("control"):
             sdxl += CONTROLNET_GIB
         if params.get("ip_adapter"):
@@ -211,15 +283,20 @@ def estimate(
         # circular-padding patch allocates nothing. Under coexist a warm
         # trellis is still resident beside the pipe and its memory is not
         # given back.
-        return sdxl if exclusive else sdxl + TRELLIS_GIB
+        return (sdxl if exclusive else sdxl + TRELLIS_GIB), image
 
     trellis = _trellis_cost(params)
-    return max(sdxl, trellis) if exclusive else sdxl + trellis
+    return (max(sdxl, trellis) if exclusive else sdxl + trellis), image
 
 
 def estimate_job(job: dict[str, Any], *, exclusive: bool = False) -> float:
     """``estimate`` for a job row as the store hands it back."""
-    return estimate(
+    return estimate_job_parts(job, exclusive=exclusive)[0]
+
+
+def estimate_job_parts(job: dict[str, Any], *, exclusive: bool = False) -> tuple[float, float]:
+    """``estimate_parts`` for a job row as the store hands it back."""
+    return estimate_parts(
         job.get("kind", ""),
         job.get("stage", "model"),
         job.get("params") or {},

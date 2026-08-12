@@ -134,7 +134,7 @@ def _check_weights(svc: WarlockService) -> None:
             continue
         raise Invalid(
             f"A sprite sheet needs {spec.label!r}, which is not downloaded. "
-            f"{install_remedy(spec.label, spec.download)}",
+            f"{install_remedy(spec.label, fetch.download_text(svc.config, kindname, spec))}",
             field=field,
             # Every row the feature is short of, not merely the one that
             # tripped: a user offered "install what this needs" wants one

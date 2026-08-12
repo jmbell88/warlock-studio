@@ -351,6 +351,10 @@ def _start_child(key: str) -> None:
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     winjob.assign(proc.pid)
+    # Tracked as well as assigned. The job object kills it when *this* process
+    # dies; the registry is what lets a shutdown that leaves the interpreter
+    # alive stop it too (MDL-02).
+    winjob.track(proc.pid, "birefnet matting")
     lines: Any = _queue.Queue()
 
     def _pump(stream: Any) -> None:

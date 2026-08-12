@@ -76,7 +76,12 @@ def test_a_text_job_whose_checkpoint_is_absent_is_refused_with_its_command(svc):
         svc_jobs.create_job(svc, kind="text", prompt="a rock", output="reference")
     message = caught.value.message
     assert caught.value.field == "base_model"
-    assert spec.download in message
+    # The command resolved against *this* service's config, not the registry's
+    # default-home rendering: a refusal that names one directory and a remedy
+    # that names another is DST-02, and this door is one of the places a user
+    # copies the line straight out of.
+    assert fetch.download_text(svc.config, "base", spec) in message
+    assert str(fetch.base_model_dir(svc.config, spec)) in message
     # And it leads with the route that does not need a terminal.
     assert "Settings" in message
 
@@ -86,7 +91,7 @@ def test_a_missing_style_lora_is_refused_rather_than_silently_skipped(svc):
     missing style adapter, so the job would finish looking wrong while its
     params claimed a style that never ran -- and that row would then join the
     findings corpus as evidence about it."""
-    from warlock import models
+    from warlock import fetch, models
     from warlock.service import jobs as svc_jobs
 
     key, lora = next(iter(models.STYLE_LORAS.items()))
@@ -98,7 +103,8 @@ def test_a_missing_style_lora_is_refused_rather_than_silently_skipped(svc):
             guidance_fields={"style_lora": key},
         )
     assert caught.value.field == "style_lora"
-    assert lora.download in caught.value.message
+    assert fetch.download_text(svc.config, "lora", lora) in caught.value.message
+    assert str(svc.config.t2i_model_root / "loras") in caught.value.message
 
 
 def test_an_image_job_is_not_asked_about_image_models(svc):

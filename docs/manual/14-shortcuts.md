@@ -118,6 +118,10 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | Ctrl+N / Ctrl+O | New / open a document |
 | Ctrl+E | Export to the library |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous document |
+| Ctrl+W | Close the document |
+| Ctrl+1 / Ctrl+3 / Ctrl+7 | Look along front / right / top |
+| Ctrl+Shift+1 / +3 / +7 | The opposite view: back / left / bottom |
+| Ctrl+5 | Toggle orthographic and perspective |
 | Esc | Cancel a drag; otherwise step back: element selection, then element mode, then object selection |
 
 **The mouse.** Left-drag in empty space orbits, and `Alt`+left-drag always orbits whatever mode you

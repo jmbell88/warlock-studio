@@ -499,9 +499,15 @@ def test_quit_is_never_a_mode_and_is_no_longer_a_segment():
     # the whole of what moved.
     assert "modes.MODES, modes.QUIT" not in source
     assert "*modes.MODES" not in source
-    # The unsaved-work chain is _request_quit's, in the order the plumbing test
-    # pins; re-inlining it here would be a second chain to keep in step.
-    assert "self._request_quit" in source
+    # The unsaved-work chain is ``_request_quit``'s, in the order the plumbing
+    # test pins; re-inlining it here would be a second chain to keep in step.
+    # It is reached through ``_ask_quit``, which is the *preflight* -- it asks
+    # the generic question only when there is something for it to be about, so
+    # an idle app with nothing dirty no longer gets a warning about generating
+    # that is not happening (UX-21).
+    assert "self._ask_quit" in source
+    chain = inspect.getsource(main.App._ask_quit)
+    assert "self._request_quit" in chain
 
 
 def test_the_switch_groups_the_places_apart_from_the_workspaces():

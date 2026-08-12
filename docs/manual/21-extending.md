@@ -31,8 +31,11 @@ Adding one means adding an entry. The fields worth thinking about:
 - `controlnet` — stated explicitly rather than inferred from the guidance scale, so a future
   checkpoint does not silently become "controllable" by clearing a threshold nobody qualified it
   against.
-- `download` — the exact one-time `hf download` command, which is what the diagnostics show when
-  the weights are absent.
+- `fetch` — a tuple of `Fetch` records saying what to download, where it lands and roughly how big
+  it is. This is the field you declare; `download` is a *derived* property that renders those
+  records into the one-time `hf download` text the diagnostics show when the weights are absent, so
+  passing `download=` to the frozen dataclass is a `TypeError`, and omitting `fetch` leaves the
+  model unfetchable from the app.
 
 What you should not do is hardcode any of those numbers in `pipelines/text2image.py`. The pipeline
 reads them off the spec, which is what lets a job name a model and get the right sampler settings

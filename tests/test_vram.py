@@ -362,12 +362,60 @@ def test_an_offloaded_base_is_priced_sequentially_whatever_the_flag_says():
 
 
 def test_a_resident_base_is_still_priced_by_the_flag():
-    # The other half: nothing about SDXL's accounting moved.
+    # The other half: nothing about SDXL's *residency* accounting moved.
+    # ``sdxl`` is the Hyper-SD recipe, so it carries a required
+    # step-distillation LoRA that is loaded unconditionally inside load() and
+    # was charged nowhere until 2026-08-12 (MDL-17).
     params = {"base_model": "sdxl"}
+    assert models.BASE_MODELS["sdxl"].base_lora
     assert vram.estimate("text", "model", params, exclusive=False) == (
-        vram.SDXL_GIB + vram.TRELLIS_GIB
+        vram.SDXL_GIB + vram.BASE_LORA_GIB + vram.TRELLIS_GIB
     )
     assert vram.estimate("text", "model", params, exclusive=True) == vram.TRELLIS_GIB
+
+
+def test_the_adapters_a_job_will_actually_load_are_priced(tmp_path):
+    """MDL-17: ``vram_gib`` is the checkpoint alone, and the adapters loaded
+    beside it are real device memory.
+
+    A style adapter is charged only when the job selects one, because only then
+    is it attached -- optional adapters stopped loading eagerly in the same pass
+    (MDL-07), so summing every fitting one would now over-charge as badly as
+    excluding them under-charged.
+    """
+    # A base with no required LoRA and no style selected: the checkpoint alone.
+    plain = {"base_model": "sdxl_cfg"}
+    assert models.BASE_MODELS["sdxl_cfg"].base_lora is None
+    bare = vram.estimate("text", "reference", plain, exclusive=True)
+    assert bare == models.BASE_MODELS["sdxl_cfg"].vram_gib
+
+    # Select a style that fits, and its weights are charged.
+    style = next(
+        lo
+        for lo in models.STYLE_LORAS.values()
+        if models.lora_fits(models.BASE_MODELS["sdxl_cfg"], lo)
+    )
+    styled = vram.estimate(
+        "text", "reference", {**plain, "style_lora": style.key}, exclusive=True
+    )
+    assert styled == pytest.approx(bare + sum(f.size_gib for f in style.fetch))
+
+    # One fitted to another architecture never loads, so it is never charged.
+    foreign = next(
+        (
+            lo
+            for lo in models.STYLE_LORAS.values()
+            if not models.lora_fits(models.BASE_MODELS["sdxl_cfg"], lo)
+        ),
+        None,
+    )
+    if foreign is not None:
+        assert (
+            vram.estimate(
+                "text", "reference", {**plain, "style_lora": foreign.key}, exclusive=True
+            )
+            == bare
+        )
 
 
 def test_a_tile_costs_what_a_reference_costs():

@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from . import guidance, models, provenance
+from . import fetch, guidance, models, provenance
 from .pipelines import control, reference, seam
 from .pipelines import prompt as prompt_lib
 
@@ -669,6 +669,24 @@ class GenerateOps:
         unload() call site does: gc.collect() plus empty_cache() on the event
         loop stalls every other job on the queue.
         """
+        generation = fetch.store_generation()
+        if self._text2image is not None and self._t2i_generation != generation:
+            # The weights on disk changed while this pipe was warm, so what it
+            # loaded is no longer what the store holds. The pipe's adapter set
+            # is fixed at load() time and never revisited, so a style LoRA
+            # installed since would be silently dropped at generate with a
+            # "not downloaded" warning that is not true -- and the job would
+            # finish looking successful, having recorded a style that never ran
+            # (MDL-05). Rebuilding is the honest answer and costs one reload of
+            # a checkpoint the user just changed the disk under.
+            log.info(
+                "model store changed (generation %s -> %s); reloading %s",
+                self._t2i_generation,
+                generation,
+                self._t2i_key,
+            )
+            await asyncio.to_thread(self._text2image.unload)
+            self._text2image = None
         if self._text2image is not None and self._t2i_key != base_key:
             log.info("switching image model %s -> %s", self._t2i_key, base_key)
             await asyncio.to_thread(self._text2image.unload)
@@ -688,4 +706,7 @@ class GenerateOps:
                 self.config.t2i_turbo_dir if base_key == models.T2I_DIR_MODEL else None,
             )
             self._t2i_key = base_key
+            # Read *after* the object is built, so a mutation that lands during
+            # construction is seen as stale on the next job rather than missed.
+            self._t2i_generation = fetch.store_generation()
         return self._text2image

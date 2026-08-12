@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 
-from warlock import doctor
+from warlock import doctor, fetch
 from warlock import models as model_registry
 from warlock.config import Config
 from warlock.doctor import run_checks
@@ -76,10 +76,15 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 
 
 def test_run_checks_returns_every_check(tmp_path):
-    # Eleven fixed checks plus one row per registry entry -- derived rather
+    # Thirteen fixed checks plus one row per registry entry -- derived rather
     # than hardcoded so adding a model doesn't fail an unrelated assertion.
+    # The twelfth is "single instance", which RUN-01 added alongside the
+    # startup lock: the refusal fires once, and two Warlocks over one job
+    # database is exactly what somebody goes looking for in diagnostics
+    # afterwards. The thirteenth is "environment", RUN-03's single surface for
+    # every WARLOCK_* value that would not parse.
     expected = (
-        11
+        13
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)
@@ -123,7 +128,7 @@ def test_base_model_check_passes_with_local_weights(tmp_path):
     spec = model_registry.BASE_MODELS["turbo"]
     (root / spec.dir_name / "unet").mkdir(parents=True)
     (root / spec.dir_name / "model_index.json").write_text("{}")
-    (root / spec.dir_name / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"")
+    (root / spec.dir_name / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"x")
     checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
     assert checks[f"image model: {spec.label}"].ok is True
 
@@ -155,11 +160,11 @@ def test_a_probe_driven_row_checks_every_file_it_names(tmp_path):
     for rel in spec.probe[:-1]:
         path = base / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"")
+        path.write_bytes(b"x")
     assert row().ok is False, "a partial download must not read as present"
     last = base / spec.probe[-1]
     last.parent.mkdir(parents=True, exist_ok=True)
-    last.write_bytes(b"")
+    last.write_bytes(b"x")
     assert row().ok is True
 
 
@@ -169,7 +174,7 @@ def test_turbo_dir_override_is_still_honoured(tmp_path):
     override = tmp_path / "elsewhere"
     (override / "unet").mkdir(parents=True)
     (override / "model_index.json").write_text("{}")
-    (override / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"")
+    (override / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"x")
     config = _config(tmp_path, t2i_model_root=tmp_path / "m", t2i_turbo_dir=override)
     checks = {c.name: c for c in run_checks(config)}
     assert checks[f"image model: {model_registry.BASE_MODELS['turbo'].label}"].ok is True
@@ -392,7 +397,12 @@ def test_pose_model_row_is_not_fatal_and_names_the_consequence(tmp_path):
     assert row.ok is False
     assert row.fatal is False
     assert "bbox" in row.detail
-    assert spec.download in row.detail
+    # The *resolved* command, not ``spec.download``. The registry renders the
+    # documented default home because it cannot see a Config; doctor can, and a
+    # remedy that names a different directory from the one the row above just
+    # reported the model missing at is how gigabytes get stranded (DST-02).
+    assert fetch.download_text(config, "pose", spec) in row.detail
+    assert str(config.t2i_model_root / spec.dir_name) in row.detail
 
 
 def test_pose_model_row_goes_green_on_weights(tmp_path):

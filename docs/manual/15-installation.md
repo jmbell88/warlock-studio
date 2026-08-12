@@ -64,22 +64,44 @@ that `vendor/trellis/trellis-server.exe` exists.
 The vendored build is **v0.5.4** (2026-07-27). If you keep the binary somewhere else, point
 `WARLOCK_TRELLIS_EXE` at it — see [Environment variables](16-configuration.md#environment-variables).
 
-A missing binary is one of only two **fatal** startup checks: no reconstruction engine means no
-mesh, and there is nothing to degrade to.
+A missing binary is one of the **fatal** startup checks: no reconstruction engine means no mesh, and
+there is nothing to degrade to. The other two are the TRELLIS GGUF weights, for the same reason, and
+the VRAM budget — that last one is fatal only when the budget cannot hold a lone reconstruction, so
+on a card large enough it never fires and only two rows can ever be red.
+
+## gltfpack
+
+`gltfpack` is the mesh optimiser every decimating triangle tier runs through. It is a second
+vendored binary and it is acquired exactly the way the trellis one is — by hand, once. `vendor/` is
+git-ignored in its entirety, so a fresh clone has neither binary and the manual should not be read
+as saying otherwise.
+
+Get `gltfpack.exe` from [meshoptimizer](https://github.com/zeux/meshoptimizer/releases) and put it
+at `vendor/gltfpack/gltfpack.exe`, or point `WARLOCK_GLTFPACK` at a copy you keep elsewhere.
+
+The build this project is qualified against reports **gltfpack 1.2**; the exact file measured is
+2,966,528 bytes with SHA-256
+`ff64f45e84aac9a1f58880e40934b3f29277413e2d0b3ed257322261ec021d2b`. A different build is very likely
+fine — the checksum is here so a stale or mismatched copy can be *identified*, not so it can be
+enforced.
+
+Unlike the trellis binary, a missing `gltfpack` is not fatal and not even a warning about a broken
+install: `warlock doctor` reports it, the generate form is unaffected, and every job simply ships
+the raw reconstruction at full density instead of decimating it.
 
 ## Model weights
 
 Two downloads are enough to make the app work end to end. Both are one-time.
 
 ```powershell
-# TRELLIS.2 GGUF weights -> models/trellis2-gguf/
+# TRELLIS.2 GGUF weights -> ~/.warlock/models/trellis2-gguf/
 uvx hf download ilintar/trellis2-gguf --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
-  --local-dir models/trellis2-gguf
+  --local-dir $HOME/.warlock/models/trellis2-gguf
 
-# SDXL 1.0 weights (fp16 variant, ~7 GB) -> models/sdxl-base-1.0/  (text-to-3D only,
+# SDXL 1.0 weights (fp16 variant, ~7 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only,
 # needs `uv sync --extra studio --extra text2image` to pull torch cu128)
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
 ```
 
 That second download is the default image model, and it is also three others: the Hyper-SD, LCM
@@ -97,6 +119,15 @@ can only be as good as the picture it is handed — so the image model and an op
 per-job choices in the guidance panel. Everything below is optional and independently skippable, and
 `warlock doctor` lists each one with the exact command to fetch it.
 
+**Only the models listed here can be selected, and that is deliberate.** Dropping a
+`.safetensors` into `loras/` does *not* add a style: Warlock's picker is driven by a registry in
+`src/warlock/models.py`, not by a directory listing. Every entry there declares the architecture it
+was fitted to, the weight it was *measured* at, and its trigger words — none of which a bare file
+carries, and each of which is wrong-by-default rather than merely missing. A LoRA trained with
+`use_rslora` needs a default weight an order of magnitude smaller than an ordinary one; an adapter
+fitted to another architecture raises with the checkpoint already resident in VRAM. Adding a model
+is [an ordinary code change](21-extending.md), and a small one.
+
 Base models are one-resident-at-a-time: a 32 GB card holds the reconstruction engine plus a single
 SDXL-class pipeline, not two, so switching between jobs costs a reload. Style LoRAs are the
 opposite — adapters on the resident pipeline, switched for free.
@@ -106,35 +137,35 @@ opposite — adapters on the resident pipeline, switched for free.
 # SDXL at 20-25 steps with CFG, so they land noticeably stronger here than on
 # Turbo's 4 steps at guidance 0. Hyper-SD buys the step count back.
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/sdxl-base-1.0
-uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir models/loras
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
+uvx hf download ByteDance/Hyper-SD Hyper-SDXL-4steps-lora.safetensors --local-dir $HOME/.warlock/models/loras
 
 # Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
 uvx hf download playgroundai/playground-v2.5-1024px-aesthetic `
-  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir models/playground-v2.5
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/playground-v2.5
 
 # SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
 # guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
 # LCM LoRA has to be renamed: loras/ is flat, and the upstream filename is
 # generic enough that any other repo's default-named adapter would overwrite it.
 uvx hf download latent-consistency/lcm-lora-sdxl `
-  pytorch_lora_weights.safetensors --local-dir models/loras
-Rename-Item models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
+  pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
+Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
 
-# Style LoRAs -> models/loras/
-uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir models/loras
+# Style LoRAs -> ~/.warlock/models/loras/
+uvx hf download goofyai/3d_render_style_xl 3d_render_style_xl.safetensors --local-dir $HOME/.warlock/models/loras
 uvx hf download artificialguybr/3DRedmond-V1 `
-  3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir models/loras
+  3DRedmond-3DRenderStyle-3DRenderAF.safetensors --local-dir $HOME/.warlock/models/loras
 uvx hf download artificialguybr/ps1redmond-ps1-game-graphics-lora-for-sdxl `
-  PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir models/loras
+  PS1Redmond-PS1Game-Playstation1Graphics.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art: generates on a pixel grid rather than being downscaled into one.
-uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir models/loras
+uvx hf download nerijs/pixel-art-xl pixel-art-xl.safetensors --local-dir $HOME/.warlock/models/loras
 # Pixel art for FLUX.2 klein. Renamed for the same reason the LCM LoRA above is:
 # loras/ is flat and shared across architectures, and this repo ships the same
 # generic filename. It is offered only on the two klein entries.
 uvx hf download Limbicnation/pixel-art-lora `
-  pytorch_lora_weights.safetensors --local-dir models/loras
-Rename-Item models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
+  pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
+Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-art-klein.safetensors
 ```
 
 The SDXL 1.0 weights serve three entries in the model list — the Hyper-SD one above, and a full-CFG
@@ -150,12 +181,12 @@ makes its control unavailable until it is present.
 # IP-Adapter Plus: condition on an image's appearance. Both halves are needed --
 # the weights alone load fine and then fail at the first call.
 uvx hf download h94/IP-Adapter sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors `
-  --local-dir models/ip-adapter
-uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir models/ip-adapter
+  --local-dir $HOME/.warlock/models/ip-adapter
+uvx hf download h94/IP-Adapter --include "models/image_encoder/*" --local-dir $HOME/.warlock/models/ip-adapter
 
 # ControlNet (Canny): lock the silhouette to an image's edges.
 uvx hf download diffusers/controlnet-canny-sdxl-1.0 `
-  --include "*.json" --include "*fp16.safetensors" --local-dir models/controlnet-canny-sdxl
+  --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
 ```
 
 See [Conditioning on an image](03-generating-references.md#conditioning-on-an-image) for what these

@@ -117,7 +117,44 @@ DERIVED_PARAMS = (
     # inherit a coverage figure about an atlas it is about to reconstruct from
     # scratch.
     "retexture",
+    # Which canonical post-processing steps failed on *this* run. Derived by
+    # definition -- it is a statement about the artifacts this reconstruction
+    # produced -- so a reroll must start clean or it would wear a degradation
+    # that belongs to the run it replaced. See ``ARTIFACT_HEALTH`` and
+    # ``_q_mesh._note_degraded``.
+    "degraded",
 )
+
+# The params key that records swallowed post-processing failures, named once so
+# the worker that writes it and the readers that surface it cannot drift.
+#
+# ART-01: normalization (requested size, X/Z centring, floor grounding) and the
+# mesh report are wrapped in catch-everything handlers -- deliberately, because
+# a mesh that trimesh cannot parse must not fail a job whose ``source.glb`` is a
+# perfectly good reconstruction. But the job then stayed ``done`` with nothing
+# anywhere except a log line, so a user could export a visibly successful asset
+# with the wrong pivot or the wrong scale and have no way to find out. The
+# non-fatal decision is right; the silence was not.
+ARTIFACT_HEALTH = "degraded"
+
+
+def note_degraded(params: dict[str, Any], step: str, detail: str) -> None:
+    """Record that a canonical post-processing step did not run.
+
+    The service-layer half of ``_q_mesh._note_degraded``. Two copies rather than
+    one import, because the queue layer may not import ``service`` and the
+    service layer must not reach into a queue private -- the same shape as
+    ``VECTOR_PARAMS`` living in ``vectors.py``. A test pins the key and the
+    behaviour together so the pair cannot drift.
+
+    Steps accumulate rather than overwrite: a mesh can fail more than one, and
+    the second failure is not a correction of the first.
+    """
+    health = params.setdefault(ARTIFACT_HEALTH, {})
+    if not isinstance(health, dict):  # a hand-edited row; start fresh
+        health = {}
+        params[ARTIFACT_HEALTH] = health
+    health[step] = detail
 
 # The conditioning selection itself, which is an *input* rather than a derived
 # value -- so it survives a reroll, unlike DERIVED_PARAMS. It does not survive
@@ -304,7 +341,7 @@ def check_base_model_weights(
     )
     raise Invalid(
         f"The image model {base.label!r} cannot run: {what}. "
-        f"{install_remedy(base.label, base.download)}",
+        f"{install_remedy(base.label, fetch.download_text(svc.config, 'base', base))}",
         field="base_model",
         rows=(f"base:{base.key}",) if rows is None else rows,
     )
@@ -354,7 +391,7 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
             continue
         raise Invalid(
             f"{spec.label!r} is selected but not downloaded. "
-            f"{install_remedy(spec.label, spec.download)}",
+            f"{install_remedy(spec.label, fetch.download_text(svc.config, kindname, spec))}",
             field=field,
             rows=(f"{kindname}:{spec.key}",),
         )

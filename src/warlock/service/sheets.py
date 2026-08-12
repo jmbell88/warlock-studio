@@ -350,9 +350,10 @@ def create_pixel_sheet(
     # whole request over an optional hint would be the wrong trade.
     check_base_model_weights(svc, base, rows=needed_keys(svc, PIXEL_SHEET_ROWS))
     if not fetch.present(svc.config, "lora", pixel_lora):
+        remedy = fetch.download_text(svc.config, "lora", pixel_lora)
         raise Invalid(
             f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
-            f"{install_remedy(pixel_lora.label, pixel_lora.download)}",
+            f"{install_remedy(pixel_lora.label, remedy)}",
             field="base_model",
             rows=needed_keys(svc, PIXEL_SHEET_ROWS),
         )

@@ -474,7 +474,17 @@ def submit_promotion(ctx: Any, job_id: str, kwargs: dict[str, Any], force: bool)
         # source image before promoting it) permanently hides the model job
         # this creates.
         ctx.state.filters.kind = "all"
-    ctx.submit("submit", svc_jobs.promote_candidates, ctx.svc, job_id, force=force, **kwargs)
+    # The return is checked, and the reason is the shared ``"submit"`` key.
+    # ``TaskRunner.submit`` refuses a key that is already in flight -- which is
+    # right, because a second click almost always means "I did not see the
+    # first one work". But this call arrives from the matte modal's Accept, and
+    # the modal closes on its own regardless: an Accept landing while an earlier
+    # create was still running was dropped, silently, with the modal closing and
+    # looking exactly like success. Nothing queued, nothing said (UX-26).
+    if not ctx.submit(
+        "submit", svc_jobs.promote_candidates, ctx.svc, job_id, force=force, **kwargs
+    ):
+        ctx.toast("Still submitting the last one - try again in a moment.")
 
 
 def matte_modal(ctx: Any) -> None:

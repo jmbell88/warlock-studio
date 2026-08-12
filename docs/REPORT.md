@@ -1,5 +1,16 @@
 # ComfyUI and AI Pipelines for Game-Ready 2D and 3D Assets in Warlock Studio
 
+> **Historical research note — the project went the other way.** This is a
+> pre-implementation study, written before Warlock Studio existed in its current
+> shape, and its central recommendation (drive ComfyUI as a backend worker over
+> HTTP/WebSocket) was **rejected**. Warlock is a single desktop process with no
+> HTTP surface of its own: the only socket it opens is the client for the local
+> `trellis-server.exe` subprocess. Nothing below describes how the app works, and
+> nothing below is a plan. It is kept because the survey of models, adapters and
+> techniques is still worth reading and because the reasoning for *not* taking
+> the ComfyUI route is only legible beside the case for it. See
+> `docs/INVARIANTS.md` for what the architecture actually is.
+
 ## Executive summary
 
 ComfyUI is best understood as a **visual orchestration and automation layer**, not as a single asset generator. Its node graph can combine diffusion checkpoints, LoRAs, ControlNet preprocessors, reference-image adapters, masking, inpainting, upscaling, depth estimation, 3D reconstruction, file conversion, and external scripts into repeatable workflows. ComfyUI can also run headlessly through REST and WebSocket APIs, making it suitable as a backend worker for Warlock Studio rather than merely an artist-facing GUI.

@@ -1,9 +1,14 @@
 # Configuration
 
-Warlock Studio has no configuration file. Every path, port, timeout and mode is an environment
-variable, read once when the process starts, with a default that works for the tested machine.
-Changing one means setting it before launching the app; changing it while the app is running has no
-effect until a restart.
+Warlock Studio has no *engine* configuration file. Every path, port, timeout and mode is an
+environment variable, read once when the process starts, with a default that works for the tested
+machine. Changing one means setting it before launching the app; changing it while the app is
+running has no effect until a restart.
+
+One thing does persist to a file, and it is deliberately not on this page: the app's own UI
+preferences — theme, UI scale, pane layout and the form fields it remembers — live in
+`studio_settings.json` in the data directory, written by the app itself. They are edited in
+[App settings](17-app-settings.md), never by hand, and nothing in the table below is stored there.
 
 ## Environment variables
 
@@ -25,7 +30,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
 | `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](18-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
-| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary, vendored and present. Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
+| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Vendored by hand like the engine — `vendor/` is git-ignored, so a fresh clone has neither (see [gltfpack](15-installation.md#gltfpack)). Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
 | `WARLOCK_BENCH_DIR` | `~/.warlock/bench` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
 | `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
@@ -116,7 +121,8 @@ never cloned the repository.
 `palettes/` and `models/` are created empty at startup, because both are directories you put files
 into by hand and an empty folder is a clearer instruction than a paragraph in this manual. The
 vendored binaries — `trellis-server.exe`, `gltfpack.exe`, `warlockc.dll` — stay under the checkout's
-`vendor/`, because they ship with the source rather than being produced by it.
+`vendor/`, which is git-ignored in full: the first two are one-time manual downloads and the third
+is built locally by `native\build.ps1`, so none of them arrives with a clone.
 
 ### The one-time move
 

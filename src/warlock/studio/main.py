@@ -42,6 +42,22 @@ LOG_STAT_SECONDS = 1.0
 # retried on the next tick, and a landed result is checked against
 # ``viewer.pending`` before it is adopted.
 VIEWER_KEY = "viewer-load"
+# The post-download re-probe. Its own key rather than "health"'s, so a slow
+# forced verification cannot be mistaken for the periodic poll and dropped by
+# key-dedupe while the user is watching for it (UX-09).
+VERIFY_KEY = "verify-install"
+
+
+def _compare_key() -> str:
+    """``library.COMPARE_KEY``, looked up lazily.
+
+    A function rather than a module-level import: ``panes.library`` imports a
+    great deal of the app and every other reference to it in this file is
+    already deferred to its call site for that reason.
+    """
+    from .panes import library
+
+    return library.COMPARE_KEY
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
 # Pane widths live in layout.py and are *fixed*, not draggable: three named
@@ -235,6 +251,11 @@ class App:
         # mode can resync the viewer -- a mode change is not something the
         # job cache announces.
         self._last_mode: str | None = None
+        # What the viewport was last asked to show. A selection change is not
+        # announced by the cache, so without this the viewer only caught up on
+        # the 3 s idle reread and the inspector described one asset while the
+        # viewport drew another (UX-03).
+        self._last_selected: str | None = None
         # How long the veil over the whole viewport takes to clear, or 0.0 for
         # "there is no transition running". A duration rather than a bool
         # because the two things that raise one want different lengths: a mode
@@ -825,6 +846,14 @@ class App:
 
         vibrancy.capture(self.ctx, io.display_size)
         self.app_ctx.settings.tick()
+        # One toast per problem, polled rather than pushed: ``Settings`` is a
+        # plain file object with no way to reach the UI, and both of the things
+        # it has to report -- a file that could not be read at startup, and one
+        # that cannot be written now -- used to be log lines nobody saw while
+        # every preference silently reverted or stopped persisting (UX-10).
+        notice = self.app_ctx.settings.take_notice()
+        if notice is not None:
+            self.app_ctx.toast(notice, "error")
 
     # -- frame steps -------------------------------------------------------
 
@@ -962,17 +991,21 @@ class App:
             # takes the same body rather than a second one that could drift.
             from ..service import system as svc_system
 
-            try:
-                self.runtime.checks = svc_system.current_checks(self.svc, force=True)
-            except Exception:
-                log.exception("could not re-run the diagnostics after a download")
-            self._refresh_model_answers()
-            # Untick whatever is now on disk, rather than the rows this task
-            # named: the plan is deduped, so fetching one SDXL 1.0 recipe
-            # satisfies the other three and leaving them ticked would offer to
-            # download 7 GB that is already there.
-            present = {row["row_key"] for row in ctx.model_rows if row.get("present")}
-            ctx.model_picks -= present
+            # Off the frame thread. ``force=True`` re-runs *every* probe,
+            # including the slow ones the startup path deliberately defers --
+            # the torch import and the bpy subprocess, which is seconds of
+            # frozen window on the frame that is supposed to say "Download
+            # finished" (UX-09). The model answers below are refreshed when the
+            # probe lands, so the pane catches up a moment later instead of the
+            # whole app stopping for it.
+            ctx.submit(VERIFY_KEY, svc_system.current_checks, self.svc, force=True)
+            ctx.tasks.set_progress(VERIFY_KEY, 0.0, "Verifying installation...")
+            # The untick happens when the probe lands (see ``VERIFY_KEY``
+            # above), because the rows it reads are derived from the checks it
+            # is still computing. Unticking against the *old* answers would
+            # leave every row exactly as it was: the plan is deduped, so
+            # fetching one SDXL 1.0 recipe satisfies the other three, and
+            # leaving them ticked offers to download 7 GB that is already there.
             ctx.toast(
                 "Model removed." if key.startswith("remove:") else "Download finished."
             )
@@ -1047,7 +1080,13 @@ class App:
             ctx.cache.invalidate()
             # Say where in line it landed: five rapid submits used to produce
             # five identical "Queued." toasts and no sense of depth.
-            waiting = sum(1 for j in ctx.cache.jobs if j.get("status") == "queued")
+            # ``+ 1`` for the job this submit just created. ``invalidate()``
+            # above only marks the cache dirty -- it does not reread -- so
+            # ``cache.jobs`` here is still the page from *before* this submit,
+            # and the count was short by exactly one every time: the first
+            # submit of an idle queue counted 0 and said "Queued." while two
+            # jobs were in line (UX-25).
+            waiting = sum(1 for j in ctx.cache.jobs if j.get("status") == "queued") + 1
             ctx.toast("Queued." if waiting <= 1 else f"Queued - {waiting} jobs in line.")
             return
         if key.startswith("save:") or key.startswith("bake:") or key.startswith("sheet-save:"):
@@ -1080,9 +1119,20 @@ class App:
             if done.result is not None:
                 ctx.cache.storage = done.result
             return
-        if key.startswith(("delete:", "prune", "rename:", "name:", "tags:", "fav:")):
+        if key.startswith(
+            ("delete:", "prune", "rename:", "name:", "tags:", "fav:", "restore:", "purge:")
+        ) or key == "empty-trash":
             ctx.cache.invalidate()
-            if key.startswith(("delete:", "prune")):
+            # ``restore:`` and ``purge:`` were missing from both lists, and each
+            # absence showed differently. Restore (the toast's Undo, and the
+            # trash's own button) left the row looking untouched for up to the
+            # 3 s cache backstop, so the action read as inert and users clicked
+            # it twice. Purge and Empty trash are worse: they are the actions
+            # that actually *free disk*, and nothing re-measured -- so the
+            # "N jobs - X GB" footer kept the pre-delete figure for the rest of
+            # the session, which is the one number the whole affordance exists
+            # to move (UX-11).
+            if key.startswith(("delete:", "prune", "purge:")) or key == "empty-trash":
                 self._request_storage()
             return
         if key.startswith("retarget:"):
@@ -1113,6 +1163,19 @@ class App:
             return
         if key == VIEWER_KEY:
             self._adopt_model(done)
+            return
+        if key == _compare_key():
+            self._adopt_compare(done)
+            return
+        if key == VERIFY_KEY:
+            # The slow half of the post-download refresh, landing off the frame
+            # thread (UX-09). Everything that reads the checks happens here, so
+            # the pane updates in one step rather than half now and half later.
+            if done.result is not None:
+                self.runtime.checks = done.result
+            self._refresh_model_answers()
+            present = {row["row_key"] for row in ctx.model_rows if row.get("present")}
+            ctx.model_picks -= present
             return
         if key.startswith("pose-library:"):
             # The global pose library rows the asset Pose panel offers, keyed
@@ -1350,6 +1413,34 @@ class App:
             # on the next tick rather than queued.
             self.viewer.pending = None
 
+    def _adopt_compare(self, done: Any) -> None:
+        """Take a parsed comparison mesh. Frame thread only, and contained.
+
+        The mirror of ``_adopt_model`` and for the same three reasons: the GPU
+        upload has to be on the frame thread, a result nobody is waiting for
+        any more must be dropped rather than shown, and a failure must produce
+        a toast rather than take the process out.
+
+        That last one is what UX-04 is actually about. ``Viewer.compare`` used
+        to parse *and* upload inline from the menu handler with no error
+        boundary at all, so a corrupt GLB -- or an upload that failed on a
+        driver hiccup -- propagated out of the frame loop and exited Studio. A
+        comparison is a *look* at something; it must never be able to cost the
+        session.
+        """
+        ctx = self.app_ctx
+        wanted = done.tag
+        if wanted is None or ctx.state.compare_pending != wanted:
+            ctx.state.compare_pending = None
+            return
+        ctx.state.compare_pending = None
+        try:
+            self.viewer.adopt_compare(done.result)
+        except Exception:
+            log.exception("could not open %s for comparison", wanted)
+            ctx.state.comparing = None
+            ctx.toast("Could not open that asset to compare.", "error")
+
     def _adopt_model(self, done: Any) -> None:
         """Take a parsed GLB as the viewer's current model. Frame thread only.
 
@@ -1564,9 +1655,25 @@ class App:
         return True
 
     def _modal_open(self) -> bool:
-        """Whether a confirm or a prompt is on screen and owns the keyboard."""
+        """Whether *any* modal is on screen and owns the keyboard.
+
+        It used to know about exactly two: the confirm queue and the prompt
+        queue. The matte preview is a third -- a real modal, drawn in front of
+        the promotion, with its own Accept and Cancel -- and every global
+        shortcut leaked straight through it (UX-08). Ctrl+K opened the palette
+        behind it; Ctrl+Enter submitted the form the modal was a *question
+        about*; a mode key left the app somewhere else with the modal still up.
+        Ownership is a property of "a modal is up", not of which queue happens
+        to hold it, so the predicate asks all three.
+        """
+        from . import matte_preview
+
         ctx = self.app_ctx
-        return ctx.confirms.pending is not None or ctx.prompts.pending is not None
+        return (
+            ctx.confirms.pending is not None
+            or ctx.prompts.pending is not None
+            or matte_preview.is_open(ctx)
+        )
 
     def _note_mode(self, state: Any) -> None:
         """Sample ``mode`` so Esc knows where it came from.
@@ -1624,10 +1731,19 @@ class App:
         # away with the tenth-and-eleventh mode, the only keyboard route to a
         # mode at all. K is bound by neither Inker nor Clay, so no workspace
         # binding is displaced.
+        # ``event.mod``, not ``pygame.key.get_mods()`` -- the rule
+        # ``_passes_text_field`` states a few hundred lines down and
+        # ``review_mode.handle_key`` already follows. ``mod`` is the modifier
+        # state at the moment this key was *pressed*; ``get_mods()`` is the
+        # state now, and events drain in a batch after the frame. A Ctrl
+        # released between the press and this call made ``get_mods()`` lie, so
+        # a fast Ctrl+K fell through to bare ``k`` -- which in Inker is the
+        # **Rect tool**, so the palette failed to open *and* the active tool
+        # changed under the user (UX-12).
         if (
             event.type == pygame.KEYDOWN
             and event.key == pygame.K_k
-            and pygame.key.get_mods() & pygame.KMOD_CTRL
+            and event.mod & pygame.KMOD_CTRL
         ):
             from .panes import palette
 
@@ -1732,7 +1848,10 @@ class App:
         # Ctrl+Enter.
         if event.type != pygame.KEYDOWN:
             return
-        mods = pygame.key.get_mods()
+        # ``event.mod``, for ``_passes_text_field``'s reason -- the state when
+        # the key was pressed, not the state after the batch drained. A fast
+        # Ctrl+Enter used to submit nothing at all, silently (UX-12).
+        mods = event.mod
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
             from .panes import settings_2d, settings_3d
 
@@ -1755,6 +1874,23 @@ class App:
             from .panes import library
 
             library.select_relative(ctx, -1 if event.key == pygame.K_UP else 1)
+        elif event.key == pygame.K_DELETE and ctx.state.selected:
+            # The library keyboard used to stop at navigation: Up/Down/Enter
+            # moved and opened, and every action was mouse-only (UX-27).
+            #
+            # Delete specifically, and unguarded, because delete-to-trash is
+            # deliberately confirm-free here -- "the trash *is* the
+            # confirmation", which is the reasoning the menu item already
+            # stands on. So this binding is exactly as safe as the menu item it
+            # mirrors, and no safer or less safe.
+            #
+            # ``F`` is deliberately not bound to favourite despite the finding
+            # offering it: F already frames the viewer a few lines below, and
+            # taking a live 3D binding to add a library one would be a trade,
+            # not a fix.
+            from .panes import library
+
+            library.delete_asset(ctx, ctx.state.selected)
         elif event.key == pygame.K_f:
             self.viewer.frame()
         elif event.key == pygame.K_w:
@@ -1853,6 +1989,56 @@ class App:
         state.drop_flash_slot = slot
         state.drop_flash_at = time.monotonic()
 
+    def _quit_summary(self) -> str:
+        """What quitting would actually interrupt, in one sentence per thing.
+
+        Empty when nothing is going on, which is the common case and the whole
+        point: the confirm this feeds used to say "Anything still generating is
+        cancelled" *unconditionally*, on an idle app with nothing unsaved --
+        a warning about a thing that was not happening, which teaches people to
+        click through warnings (UX-21).
+        """
+        ctx = self.app_ctx
+        lines: list[str] = []
+        if self.runtime.current_job_id is not None or ctx.cache.active is not None:
+            lines.append("A job is still generating and will be cancelled.")
+        # Named, not counted: "3 tasks" is not something a user can weigh, and
+        # a 16 GB download is a very different thing to interrupt than a
+        # thumbnail. Downloads and exports are the two worth calling out.
+        busy = set(ctx.tasks.busy_keys)
+        if any(k.startswith("download:") for k in busy):
+            lines.append("A model download is in progress and will be stopped.")
+        if any(k.startswith(("export", "save:", "bake:")) for k in busy):
+            lines.append("An export is still being written.")
+        return "\n".join(lines)
+
+    def _ask_quit(self) -> None:
+        """Ask once, about what is actually true, then run the guards.
+
+        The chain below still asks per unsaved document, because each of those
+        is a genuine question with a genuine answer ("discard *this* one?").
+        What is gone is the unconditional preamble in front of it: on an idle
+        app with nothing dirty -- the common state -- quitting used to raise a
+        warning about generating that was not happening, and confirming it
+        could then raise up to six more (UX-21). Now the generic question is
+        asked only when it has something to say.
+        """
+        from . import dialogs
+
+        summary = self._quit_summary()
+        if not summary:
+            self._request_quit()
+            return
+        self.app_ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Quit Warlock Studio?",
+                message=summary,
+                confirm_label="Quit",
+                cancel_label="Stay",
+                on_confirm=self._request_quit,
+            )
+        )
+
     def _request_quit(self) -> None:
         """One chain, in order: painted pixels, then built geometry, then a pose.
 
@@ -1865,7 +2051,7 @@ class App:
         dismiss, after the user has already said they are not quitting.
         """
         from . import clay_mode, inker_mode, packwright_mode, plotter_mode, poser_mode
-        from .panes import pose_panel
+        from .panes import pose_panel, profiles_panel
 
         ctx = self.app_ctx
         # The two pose guards are mutually exclusive by construction: the
@@ -1878,6 +2064,10 @@ class App:
             packwright_mode.guard,
             pose_panel.guard,
             poser_mode.guard,
+            # A profile draft is a document too -- nine fields and an anchor
+            # image -- and it was the only one this chain did not know about
+            # (UX-17).
+            profiles_panel.guard,
         )
 
         def step(index: int) -> None:
@@ -1927,6 +2117,17 @@ class App:
         # to show what was just picked.
         if ctx.state.mode != self._last_mode and ctx.state.mode in modes.VIEWPORT_MODES:
             self._sync_viewer()
+        # And on a *selection* change, which is the trigger UX-03 found missing.
+        # ``_sync_viewer`` was driven off the cache reread (a 3 s idle timer)
+        # and off mode transitions, so clicking a card updated ``state.selected``
+        # -- and therefore the inspector -- immediately while the viewport went
+        # on showing the previous asset for up to three seconds. The inspector
+        # described B and the viewport drew A, with nothing on screen saying so,
+        # which makes an export or a compare decision untrustworthy.
+        if ctx.state.selected != self._last_selected:
+            self._last_selected = ctx.state.selected
+            if ctx.state.mode in modes.VIEWPORT_MODES:
+                self._sync_viewer()
         if self._last_mode is not None and ctx.state.mode != self._last_mode:
             # The content crossfade (UX.md Phase 1). One place, zero per-pane
             # work: the mode switch's pill already slides, and before this the
@@ -3426,17 +3627,7 @@ class App:
         # the unsaved-work chain instead.
         imgui.same_line()
         if widgets.icon_button(modes.QUIT[2], f"{modes.QUIT[1]} Warlock Studio", danger=True):
-            from . import dialogs
-
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Quit Warlock Studio?",
-                    message="Anything still generating is cancelled.",
-                    confirm_label="Quit",
-                    cancel_label="Stay",
-                    on_confirm=self._request_quit,
-                )
-            )
+            self._ask_quit()
 
     # Every binding the app answers to, in one place the user can find. The
     # tuples are (keys, what), grouped; Inker's letters come from TOOL_KEYS so
@@ -3538,9 +3729,18 @@ class App:
                 ("Alt+drag", "Orbit, in any mode"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-                ("Ctrl+N / O", "New / open"),
+                # "Ctrl+N / O / W", matching Inker's row below rather than
+                # stopping at O: Clay closes a document with Ctrl+W like every
+                # other document mode, and the popup simply never said so
+                # (UX-13). The axis views were missing from both this popup and
+                # the manual's "full list", which made six of them
+                # undiscoverable.
+                ("Ctrl+N / O / W", "New / open / close"),
                 ("Ctrl+E", "Export to the library"),
                 ("Ctrl+Tab", "Next document"),
+                ("Ctrl+1 / 3 / 7", "Look along front / right / top"),
+                ("Ctrl+Shift+1 / 3 / 7", "The opposite view: back / left / bottom"),
+                ("Ctrl+5", "Orthographic / perspective"),
             ],
         )
         tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
@@ -4195,9 +4395,16 @@ def _note_previous_session() -> None:
         log.warning("previous session marker is unreadable: %r", raw[:200])
         return
     if _pid_alive(pid) and pid != os.getpid():
+        # Unreachable in an ordinary launch since the single-instance lock went
+        # in: a live second instance is refused before this runs. What can still
+        # reach it is a *recycled* pid -- the marker names a process that died
+        # and whose number the OS handed to something unrelated -- so the
+        # sentence says what is actually known rather than asserting a second
+        # Warlock the lock has already ruled out (RUN-01).
         log.warning(
-            "another Warlock instance (pid %d, started %s) appears to be running; "
-            "they share the job database and the trellis port",
+            "the previous session's marker names pid %d (started %s), which is "
+            "alive; the instance lock was free, so that is almost certainly a "
+            "recycled pid rather than another Warlock",
             pid, data.get("started_at", "?"),
         )
         return
@@ -4231,16 +4438,67 @@ def _clear_session_marker() -> None:
 
 def run() -> int:
     """The ``warlock`` entry point."""
-    from .runtime import Runtime
-
     _setup_logging()
     _install_excepthooks()
     log.info(
         "Warlock Studio %s starting: pid=%d python=%s argv=%s",
         _version(), os.getpid(), sys.version.split()[0], sys.argv[1:],
     )
+    # Before ``migrate`` is even imported, because importing it *performs* the
+    # one-time move: a second instance starting mid-copy is RUN-02's window, and
+    # the whole point of this lock is to be taken before anything touches the
+    # home directory. Also before the store is opened and before the runtime
+    # claims the engine port.
+    from .. import instance
+    from ..config import get_config, source_checkout
+
+    if not source_checkout():
+        # Refused at the door with a sentence, rather than left to fail as a
+        # missing ``trellis-server.exe`` at the first job (DST-01, D4). Every
+        # native path resolves against the repository root, which inside a
+        # wheel points under the environment -- and ``vendor/`` is not in the
+        # wheel, because the binaries are manual downloads. Saying so is the
+        # supported answer; pretending otherwise is not.
+        log.error("not a source checkout; refusing to start (see DST-01)")
+        instance.alert(
+            "Warlock Studio must be run from its source checkout",
+            "This copy of Warlock was installed as a package rather than run "
+            "from a checkout, and it cannot find the native binaries it needs: "
+            "they live in vendor/ beside the source and are downloaded by hand.\n\n"
+            "Clone the repository and run:\n\n"
+            "    uv sync --extra studio --extra text2image --extra rig\n"
+            "    uv run warlock-studio",
+        )
+        return 1
+    lock = instance.InstanceLock(get_config().home / instance.LOCK_NAME)
+    if not lock.acquire():
+        # A dialog, not a log line. The behaviour this replaces wrote a warning
+        # into warlock.log and carried on, so the second instance went on to
+        # share the job database and the engine port with the first -- and
+        # could terminate the first's trellis server -- with nothing on screen
+        # to say why anything was going wrong (RUN-01).
+        log.error("another Warlock instance holds %s; refusing to start", lock.path)
+        instance.alert(
+            "Warlock Studio is already running",
+            "Another Warlock Studio is using this data directory.\n\n"
+            "Only one can run at a time: they would share the job database and "
+            "the reconstruction engine's port.\n\n"
+            "Close the other window and try again. If you meant to run a second "
+            "copy against a separate library, set WARLOCK_HOME to a different "
+            "directory first.",
+        )
+        return 1
+    try:
+        return _run_locked()
+    finally:
+        lock.release()
+
+
+def _run_locked() -> int:
+    """Everything after the single-instance lock is held."""
     from .. import migrate
     from ..config import get_config
+    from .runtime import Runtime
 
     if migrate.MOVED:
         # Said twice on purpose. The move itself printed to stderr because it

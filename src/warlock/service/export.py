@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import secrets
 import shutil
 import zipfile
 from pathlib import Path
@@ -11,7 +14,7 @@ from . import files
 from .core import WarlockService
 from .errors import Invalid, NotFound
 from .files import MEDIA
-from .validation import check_job_id
+from .validation import ARTIFACT_HEALTH, check_job_id
 
 
 def export_names(names_wanted: list[str] | None) -> list[str]:
@@ -101,6 +104,48 @@ def export_to_folder(
     for arcname, path in members:
         dest = svc.config.export_dir / arcname
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, dest)
+        _staged_copy(path, dest)
         copied += 1
-    return {"copied": copied, "dir": str(svc.config.export_dir)}
+    return {
+        "copied": copied,
+        "dir": str(svc.config.export_dir),
+        # Named rather than counted: "3 of 12 assets are degraded" is not
+        # something a user can act on, and which ones is (ART-01).
+        "degraded": degraded_ids(svc, ids),
+    }
+
+
+def degraded_ids(svc: WarlockService, ids: list[str]) -> list[str]:
+    """Which of these jobs had a canonical post-processing step fail.
+
+    Normalization and the mesh report are non-fatal by design -- see
+    ``validation.ARTIFACT_HEALTH`` -- so a job can be ``done`` and still carry a
+    ``model.glb`` whose pivot and scale are the engine's rather than this
+    project's. An export is the moment that stops being an internal detail: the
+    file is on its way into a game project, where a wrong pivot is a manual
+    fixup on every import and nothing anywhere would say why.
+    """
+    out: list[str] = []
+    for job_id in ids:
+        job = svc.store.get(job_id)
+        if job and (job.get("params") or {}).get(ARTIFACT_HEALTH):
+            out.append(job_id)
+    return out
+
+
+def _staged_copy(source: Path, dest: Path) -> None:
+    """Copy through a temp sibling and rename. Never truncates the destination.
+
+    ``WARLOCK_EXPORT_DIR`` exists to be *watched* -- it is a game project's
+    assets folder -- and ``shutil.copyfile`` truncates its target before writing
+    a byte, so a hot-reloading engine could read a torn GLB for the length of
+    the copy. Outside the letter of the staged-writes invariant, which is about
+    files this app serves, and squarely inside its reasoning (SVC-06).
+    """
+    tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        shutil.copyfile(source, tmp)
+        os.replace(tmp, dest)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()

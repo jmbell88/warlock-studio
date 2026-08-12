@@ -92,7 +92,14 @@ def close(ctx: Any) -> None:
 
 
 def is_open(ctx: Any) -> bool:
-    state = ctx.state.matte
+    """Whether the preview modal is up. Tolerant of a partial ctx.
+
+    ``getattr`` rather than attribute access, which is ``docmodes.guard``'s rule
+    and here for the same reason: ``App._modal_open`` asks this on every key
+    press to decide whether a shortcut is suppressed (UX-08), and it must not
+    require a state object that a caller with no matte preview has never built.
+    """
+    state = getattr(getattr(ctx, "state", None), "matte", None)
     return bool(state is not None and state.job_id)
 
 

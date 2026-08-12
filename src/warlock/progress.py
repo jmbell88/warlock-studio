@@ -85,12 +85,45 @@ PHASES_SPRITE: dict[str, tuple[float, float]] = {
     "assemble_b": (0.92, 1.00),
 }
 
+# A pixel sheet is one img2img pass per *band* of the atlas, through the
+# resident pipe, followed by a short CPU reassembly. The load is a real slice
+# because the pipe is often cold when a sheet is started from the library, and
+# the sampling slice is the rest: an N-band sheet reports band k's steps inside
+# it, which is why the table needs no per-band entries.
+#
+# It had none at all, and the fallback is ``PHASES_IMAGE`` -- whose only real
+# phase is ``trellis``. An unknown phase maps onto the *whole* bar, so the last
+# sampling step of the **first** band emitted 100%, and the never-regress creep
+# then pinned it there for the rest of a multi-minute job (CON-02). Exactly the
+# trap docs/INVARIANTS.md documents; ``_sprite_synthesis`` routed around it with
+# its own table and its two siblings walked in.
+PHASES_PIXEL_SHEET: dict[str, tuple[float, float]] = {
+    "restyle": (0.00, 0.10),
+    "t2i_load": (0.10, 0.20),
+    "t2i_sample": (0.20, 0.90),
+    "quantize": (0.90, 1.00),
+}
+# A re-texture is six img2img passes over one mesh's renders, with a Blender
+# render before them and a Blender bake plus a host-side assemble after. The
+# two Blender halves are out of process and report nothing of their own, so
+# they get flat slices at their boundaries rather than a share of the sampling.
+PHASES_RETEXTURE: dict[str, tuple[float, float]] = {
+    "views": (0.00, 0.15),
+    "restyle": (0.15, 0.20),
+    "t2i_load": (0.20, 0.25),
+    "t2i_sample": (0.25, 0.78),
+    "project": (0.78, 0.95),
+    "assemble": (0.95, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
     "rig": PHASES_RIG,
     "sheet": PHASES_SHEET,
     "sprite_synthesis": PHASES_SPRITE,
+    "pixel_sheet": PHASES_PIXEL_SHEET,
+    "retexture": PHASES_RETEXTURE,
 }
 
 

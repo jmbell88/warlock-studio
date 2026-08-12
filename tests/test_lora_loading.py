@@ -65,16 +65,33 @@ def _fitting(base_key: str) -> list[str]:
     return models.loras_by_base()[base_key]
 
 
+def _select_all_fitting(t2i, pipe, base_key: str) -> list[str]:
+    """Drive one job per fitting style, which is what attaches them now.
+
+    Style adapters are loaded on selection rather than at ``load()`` (MDL-07),
+    so a test about *which* adapters a base will accept has to ask for them.
+    """
+    for key in _fitting(base_key):
+        t2i._apply_adapters(pipe, key, 1.0)
+    return _fitting(base_key)
+
+
 @pytest.mark.parametrize("base_key", sorted(models.BASE_MODELS))
 def test_only_same_family_adapters_are_loaded(tmp_path, base_key):
-    """Every style LoRA in the registry is on disk; only the fitting ones are
-    handed to the pipe. Loading a foreign one would raise with the checkpoint
-    already resident, which is why this is a filter and not the missing-file
-    tolerance beside it."""
+    """Every style LoRA in the registry is on disk; only the fitting ones ever
+    reach the pipe. Loading a foreign one would raise with the checkpoint
+    already resident, which is why this is a filter and not a tolerance.
+
+    The filter moved from ``_load_loras`` to the moment of selection, but it is
+    the same filter and this asserts the same thing about the result.
+    """
     base = models.BASE_MODELS[base_key]
     files = _all_files() + ([base.base_lora] if base.base_lora else [])
     t2i, pipe = _t2i(tmp_path, base_key, files)
     t2i._load_loras(pipe)
+    # Nothing optional is attached before a job asks for it.
+    assert t2i._adapters == set()
+    _select_all_fitting(t2i, pipe, base_key)
     assert sorted(t2i._adapters) == sorted(_fitting(base_key))
     foreign = {
         lora.key for lora in models.STYLE_LORAS.values() if lora.family != base.family
@@ -82,13 +99,69 @@ def test_only_same_family_adapters_are_loaded(tmp_path, base_key):
     assert not foreign & set(pipe.loaded)
 
 
+def test_no_optional_adapter_is_attached_until_a_job_selects_it(tmp_path):
+    """MDL-07: every compatible style LoRA on disk used to load during base
+    init, so one corrupt file the user had never selected made the whole
+    checkpoint unusable -- and the weights of styles nobody asked for sat on
+    the device, which ``BaseModel.vram_gib`` does not account for."""
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    assert pipe.loaded == [], "load() must attach no optional adapters"
+    assert t2i._adapters == set()
+
+    chosen = _fitting("turbo")[0]
+    t2i._apply_adapters(pipe, chosen, 1.0)
+    assert pipe.loaded == [chosen], "exactly the one selected, and only it"
+
+    # Idempotent: a warm pipe pays the load once per adapter, not once per job.
+    t2i._apply_adapters(pipe, chosen, 0.5)
+    assert pipe.loaded == [chosen]
+
+
+def test_a_corrupt_optional_adapter_fails_only_the_job_that_selects_it(tmp_path):
+    """The compounding half of MDL-07: eagerly, this raise happened inside the
+    load transaction, so an unrelated corrupt file left the user unable to
+    generate at all until they worked out which one to delete."""
+    fitting = _fitting("turbo")
+    chosen, other = fitting[0], fitting[1]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+
+    def _explode(_dir, weight_name, adapter_name, **_kw):
+        if adapter_name == chosen:
+            raise RuntimeError("HeaderTooLarge")
+        pipe.loaded.append(adapter_name)
+
+    pipe.load_lora_weights = _explode
+    t2i._load_loras(pipe)  # the base loads fine, which is the whole point
+
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        t2i._apply_adapters(pipe, chosen, 1.0)
+    # A different style still works, and so does generating with none.
+    t2i._apply_adapters(pipe, other, 1.0)
+    assert other in t2i._adapters
+    assert chosen not in t2i._adapters
+
+
 def test_a_missing_same_family_adapter_is_still_skipped_not_fatal(tmp_path):
-    """The pre-existing tolerance is untouched: the LoRAs are separate optional
-    downloads and a user who fetched none must still be able to generate."""
+    """Loading a base with no style LoRAs on disk at all must still work: they
+    are separate optional downloads and a user who fetched none has to be able
+    to generate."""
     t2i, pipe = _t2i(tmp_path, "turbo", [])
     t2i._load_loras(pipe)
     assert t2i._adapters == set()
     assert pipe.loaded == []
+
+
+def test_selecting_a_style_that_is_not_downloaded_refuses_the_job(tmp_path):
+    """It used to warn and generate bare -- so the job finished looking
+    successful without the style, on a row whose ``style_lora`` claimed one.
+    That key is in ``VECTOR_PARAMS``, so the row then joined the findings
+    corpus as evidence about a style that never ran (MDL-05)."""
+    t2i, pipe = _t2i(tmp_path, "turbo", [])
+    t2i._load_loras(pipe)
+    with pytest.raises(RuntimeError, match="not downloaded"):
+        t2i._apply_adapters(pipe, _fitting("turbo")[0], 1.0)
+    assert pipe.applied == []
 
 
 def test_a_pipe_with_no_adapters_is_never_disabled(tmp_path):
@@ -106,6 +179,10 @@ def test_a_pipe_with_no_adapters_is_never_disabled(tmp_path):
 def test_a_loaded_adapter_is_disabled_when_nothing_is_selected(tmp_path):
     t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
     t2i._load_loras(pipe)
+    # A style has to have been selected at some point for there to be PEFT
+    # state to disable -- which is the same condition as before, reached the
+    # lazy way.
+    t2i._apply_adapters(pipe, _fitting("turbo")[0], 1.0)
     assert t2i._has_adapters
     t2i._apply_adapters(pipe, None, 1.0)
     assert pipe.disabled == 1
@@ -139,6 +216,40 @@ def test_a_foreign_adapter_selected_anyway_is_warned_about_not_applied(tmp_path,
     assert any(lora_key in r.getMessage() for r in caplog.records)
 
 
+def test_a_style_installed_while_the_pipe_is_warm_is_picked_up(tmp_path):
+    """MDL-05, the case that motivated lazy loading.
+
+    ``_load_loras`` ran once and froze the adapter set for the pipe's life,
+    while the pipe stays warm for the idle timeout. So: generate once, install
+    a style in Settings, submit a styled job -- the file passed
+    ``check_weights`` at the door, then got dropped here with a "not
+    downloaded" warning that was not true, and the job finished looking
+    successful with no style on a row that recorded one.
+
+    Attaching on selection means the adapter that arrived after the load is
+    simply found when it is asked for.
+    """
+    base_key = "turbo"
+    chosen = _fitting(base_key)[0]
+    base = models.BASE_MODELS[base_key]
+    others = [lo.filename for lo in models.STYLE_LORAS.values() if lo.key != chosen]
+    t2i, pipe = _t2i(
+        tmp_path, base_key, others + ([base.base_lora] if base.base_lora else [])
+    )
+    t2i._load_loras(pipe)
+
+    # Not on disk yet: the job that selects it is refused rather than run bare.
+    with pytest.raises(RuntimeError, match="not downloaded"):
+        t2i._apply_adapters(pipe, chosen, 1.0)
+    assert pipe.applied == []
+
+    # Installed in Settings, with the same pipe still resident.
+    (tmp_path / "loras" / models.STYLE_LORAS[chosen].filename).write_bytes(b"")
+    t2i._apply_adapters(pipe, chosen, 0.9)
+    assert pipe.applied == [([chosen], [0.9])]
+    assert chosen in t2i._adapters
+
+
 def test_a_style_survives_a_run_that_had_none_before_it(tmp_path):
     """The pipe stays resident across jobs, so PEFT state outlives the job that
     set it. ``disable_lora`` sets ``_disable_adapters`` on every layer and
@@ -150,11 +261,16 @@ def test_a_style_survives_a_run_that_had_none_before_it(tmp_path):
     t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
     t2i._load_loras(pipe)
     chosen = _fitting("turbo")[0]
+    # A first styled job, which is what puts PEFT state on the pipe at all now
+    # that adapters attach on selection rather than at load().
+    t2i._apply_adapters(pipe, chosen, 0.9)
+    # Then a job with no style: this is the call that sets _disable_adapters.
     t2i._apply_adapters(pipe, None, 1.0)
     assert pipe.disabled == 1
+    # And a third that wants the style back.
     t2i._apply_adapters(pipe, chosen, 0.9)
-    assert pipe.enabled == 1, "the adapter was never re-enabled"
-    assert pipe.applied == [([chosen], [0.9])]
+    assert pipe.enabled == 2, "the adapter was never re-enabled"
+    assert pipe.applied[-1] == ([chosen], [0.9])
 
 
 def test_enabling_precedes_the_weights_it_is_meant_to_restore(tmp_path):
@@ -211,6 +327,10 @@ def test_the_recipe_records_a_style_only_when_it_actually_applied(tmp_path):
     t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
     t2i._load_loras(pipe)
     chosen = _fitting("turbo")[0]
+    # ``_apply_adapters`` runs before ``_recipe`` in a real generate, and it is
+    # what attaches the adapter now -- so the predicate reads the same thing it
+    # always did, "did this style actually load", just filled in later.
+    t2i._apply_adapters(pipe, chosen, 0.5)
     assert t2i._recipe(1, "p", None, chosen, 0.5, None, 1, False)["style_lora"] == chosen
 
     bare_root = tmp_path / "bare"
@@ -332,9 +452,12 @@ def test_a_load_that_succeeds_publishes_a_fully_configured_pipe(tmp_path, monkey
     t2i.load()
     assert t2i.loaded is True
     assert t2i._pipe is pipe
-    # Published *after* everything: placement happened, adapters attached.
+    # Published *after* everything: placement happened, the required adapter
+    # attached. The optional ones deliberately did not -- they attach when a
+    # job selects one, so that a corrupt style nobody asked for cannot take the
+    # checkpoint down with it (MDL-07).
     assert pipe.placed == ["cuda"]
-    assert sorted(t2i._adapters) == sorted(_fitting("lightning"))
+    assert t2i._adapters == set()
     assert t2i._base_adapter == models.BASE_LORA_ADAPTER
 
 

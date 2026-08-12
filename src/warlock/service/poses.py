@@ -217,20 +217,32 @@ def apply_library_pose(svc: WarlockService, job_id: str, pose_id: str) -> dict[s
     except ValueError as exc:
         raise invalid_from(exc, "That pose cannot be applied") from exc
 
-    if len(rigging.list_poses(job_dir)) >= rigging.MAX_POSES:
-        raise Conflict(f"a job may hold at most {rigging.MAX_POSES} poses")
-    return rigging.save_pose(
-        job_dir,
-        pose,
-        extra={
-            "root_translation": record.get("root_translation") or [0.0, 0.0, 0.0],
-            "source_pose": {
-                "id": record["id"],
-                "name": record["name"],
-                "updated": record.get("updated"),
+    # Under the same job-wide lock ``rig.save_pose`` takes, and for the identical
+    # reason: the cap is a check-then-write, so the count and the write that
+    # depends on it must happen under one hold. This is the *other* door onto
+    # that write, and it held nothing -- which voided the sibling's guarantee
+    # rather than merely lacking one of its own. Two callers (one from the rig
+    # panel, one applying a library pose) both read ``MAX_POSES - 1`` and both
+    # save, and the job ends up over its cap with nothing to notice (CON-03).
+    #
+    # The key is ``"poses"``, matching ``rig.save_pose`` exactly: what is guarded
+    # is the *set*, not any one pose, and a different string here would be two
+    # locks that never exclude each other.
+    with svc.convert_lock(job_id, "poses"):
+        if len(rigging.list_poses(job_dir)) >= rigging.MAX_POSES:
+            raise Conflict(f"a job may hold at most {rigging.MAX_POSES} poses")
+        return rigging.save_pose(
+            job_dir,
+            pose,
+            extra={
+                "root_translation": record.get("root_translation") or [0.0, 0.0, 0.0],
+                "source_pose": {
+                    "id": record["id"],
+                    "name": record["name"],
+                    "updated": record.get("updated"),
+                },
             },
-        },
-    )
+        )
 
 
 def template_preview(svc: WarlockService, template: str) -> Path:
