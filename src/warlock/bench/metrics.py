@@ -1,5 +1,8 @@
 """Two numbers per rendered view, and what each one is worth.
 
+* ``pixel_similarity`` -- is this literally the same picture? A 64-bit
+  difference hash, pure NumPy and Pillow. Survives rescaling and re-encoding,
+  and cannot rank two *different* images against each other at all.
 * ``silhouette_iou`` -- does the mesh have the shape the picture showed?
   Pure NumPy, no weights, no network. This is the metric that actually
   measures what conditioning changes.
@@ -30,6 +33,14 @@ from . import imageprep
 # not depend on either image's original resolution.
 IOU_SIZE = 256
 
+# The difference hash: an 8x9 grayscale downscale, compared left-to-right, so
+# 8*8 = 64 bits. HASH_FLOOR is the *measured* agreement between unrelated
+# images, which is chance and not zero -- see docs/measurements/. Every
+# user-facing number goes through hash_similarity, which subtracts it.
+HASH_SIDE = 8
+HASH_BITS = HASH_SIDE * HASH_SIDE
+HASH_FLOOR = 0.5
+
 _model_cache: dict[str, Any] = {}
 
 
@@ -53,7 +64,9 @@ def unload() -> None:
     _model_cache.clear()
 
 
-def silhouette_iou(reference_path: Path, render_path: Path) -> float | None:
+def silhouette_iou(
+    reference_path: Path, render_path: Path, *, auto_mask: bool = False
+) -> float | None:
     """Intersection over union of the two subject masks, each cropped to its
     own bounding box first.
 
@@ -63,6 +76,12 @@ def silhouette_iou(reference_path: Path, render_path: Path) -> float | None:
     this would mostly measure the camera distance.
 
     None when either side has no subject.
+
+    ``auto_mask`` takes the render side from its alpha only if it *has* one,
+    falling back to the flood fill the reference side uses. Off by default
+    because the scoring path's render is a transparent PNG by construction and
+    a silent fallback there would hide a broken render; ``compare`` turns it on
+    because both of its sides are arbitrary and usually opaque.
     """
     import numpy as np
     from PIL import Image
@@ -70,7 +89,12 @@ def silhouette_iou(reference_path: Path, render_path: Path) -> float | None:
     def mask_of(path: Path, is_render: bool):
         with Image.open(path) as im:
             im.load()
-            mask = imageprep.render_mask(im) if is_render else imageprep.reference_mask(im)
+            if not is_render:
+                mask = imageprep.reference_mask(im)
+            else:
+                mask = imageprep.render_mask(im)
+                if mask is None and auto_mask:
+                    mask = imageprep.reference_mask(im)
         if mask is None:
             return None
         ys, xs = np.nonzero(mask)
@@ -95,6 +119,74 @@ def silhouette_iou(reference_path: Path, render_path: Path) -> float | None:
     if not union:
         return None
     return float(np.logical_and(a, b).sum()) / float(union)
+
+
+def perceptual_hash(image_path: Path) -> int | None:
+    """The image's 64-bit difference hash, or None if it cannot be read as one.
+
+    dHash rather than aHash or a downscaled mean-absolute-difference: each bit
+    compares a pixel to its right-hand neighbour, so the hash keys on *gradient
+    direction* and largely survives brightness and contrast shifts. Measured at
+    0.828 raw agreement across a 1.4x brightness multiply, where an absolute
+    metric would have collapsed.
+
+    The limits are as load-bearing as the property, and are the reason this is
+    reported beside ``dino_cosine`` rather than instead of it:
+
+    * Not rotation- or reflection-invariant. A mirrored image is unrelated here.
+    * 64 bits over an 8x9 downscale cannot see fine detail -- two renders that
+      differ only in a decal score 1.0.
+    * It does not distinguish "different subject" from "unrelated noise". A
+      drawn sword against a drawn shield scored 0.531 raw -- the mean over 400
+      unrelated random-noise pairs is 0.520. Ranking *related but different*
+      images is not something this metric can do at all.
+    * A 6-pixel translation on a 256px image already costs 0.28 raw. Two
+      renders from an almost-identical camera are a job for ``silhouette_iou``,
+      not for this.
+
+    It answers "is this the same image", not "is this a good image".
+    """
+    import numpy as np
+    from PIL import Image
+
+    try:
+        with Image.open(image_path) as im:
+            im.load()
+            small = im.convert("L").resize((HASH_SIDE + 1, HASH_SIDE), Image.LANCZOS)
+    except (OSError, ValueError):
+        return None
+    arr = np.asarray(small, dtype=np.int16)
+    bits = (arr[:, 1:] > arr[:, :-1]).reshape(-1)
+    out = 0
+    for bit in bits:
+        out = (out << 1) | int(bit)
+    return out
+
+
+def hash_similarity(a: int, b: int) -> float:
+    """Two hashes' agreement, rescaled so unrelated reads as 0 and not as 0.5.
+
+    Independent hash bits agree half the time by chance -- measured mean 0.520
+    over 400 unrelated pairs, p95 0.625 -- so raw agreement is a percentage
+    with a floor under it, and reporting it as-is would call a worst-case pair
+    of pure-noise plates "75% similar". Subtracting the floor and rescaling is
+    what ``pipelines.rank`` already does to the cosine's -1..1 range. The corpus
+    is ``docs/measurements/2026-08-11-perceptual-hash-floor.md``; do not
+    "simplify" this back to a bit count.
+    """
+    agreement = 1.0 - bin(a ^ b).count("1") / HASH_BITS
+    return max(0.0, (agreement - HASH_FLOOR) / (1.0 - HASH_FLOOR))
+
+
+def pixel_similarity(a_path: Path, b_path: Path) -> float | None:
+    """Near-duplicate score for two images, 1.0 identical, ~0 unrelated.
+
+    None when either file cannot be read as an image.
+    """
+    a, b = perceptual_hash(a_path), perceptual_hash(b_path)
+    if a is None or b is None:
+        return None
+    return hash_similarity(a, b)
 
 
 def dino_available(config: Any = None) -> bool:
@@ -302,4 +394,35 @@ def score_view(
     }
     if dino_available(config):
         out["dino_cosine"] = dino_cosine(reference_path, render_path, config)
+    return out
+
+
+def compare(a_path: Path, b_path: Path, config: Any = None) -> dict[str, float | None]:
+    """Every available metric for an arbitrary pair of images.
+
+    Three numbers answering three different questions, deliberately reported
+    side by side and never blended:
+
+    * ``pixel_similarity`` -- the same picture, modulo rescaling and codec.
+    * ``silhouette_iou`` -- the same shape, modulo framing and scale.
+    * ``dino_cosine`` -- the same subject, modulo everything. Present only when
+      the DINOv2 weights are on disk, and readable only as A-against-B: the
+      art-versus-render style gap dominates its absolute value.
+
+    Distinct from ``score_view``, which pairs a *reference* against a *render*
+    and takes the render's subject from its alpha. Both sides here are
+    arbitrary and usually opaque, so the DINOv2 half goes through
+    ``prepare_references``; the alpha route would score most pairs None.
+
+    No threshold and no boolean, on the same reasoning ``service.judge`` returns
+    a probability with no cut: what counts as "similar enough" depends on what
+    the caller is deciding, and a constant here would pretend otherwise. One
+    would owe its own pre-registration first.
+    """
+    out: dict[str, float | None] = {
+        "pixel_similarity": pixel_similarity(a_path, b_path),
+        "silhouette_iou": silhouette_iou(a_path, b_path, auto_mask=True),
+    }
+    if dino_available(config):
+        out["dino_cosine"] = reference_cosine(a_path, b_path, config)
     return out

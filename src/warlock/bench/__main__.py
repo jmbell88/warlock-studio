@@ -107,6 +107,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="a second scored run to compare against -- the A/B",
     )
 
+    comp = sub.add_parser(
+        "compare", help="compare two images: same picture, same shape, same subject"
+    )
+    comp.add_argument("a", type=Path)
+    comp.add_argument("b", type=Path)
+
     cal = sub.add_parser(
         "calibrate", help="sweep yaw/elevation over finished meshes to find the matched view"
     )
@@ -211,6 +217,40 @@ def _score(config, args) -> int:
     return 0
 
 
+def _compare(config, args) -> int:
+    """Print all three numbers, labelled so the output teaches the distinction.
+
+    The pixel figure is a percentage because it is calibrated -- 0 is unrelated
+    and 100 is the same picture. The cosine is printed bare, with no percent
+    sign, because it is only ever readable as A-against-B. Deliberately no
+    verdict line: nothing here knows what the caller means by "close enough".
+    """
+    for path in (args.a, args.b):
+        if not path.is_file():
+            print(f"no such file: {path}")
+            return 1
+
+    scores = metrics_mod.compare(args.a, args.b, config)
+    labels = {
+        "pixel_similarity": "same picture (perceptual hash)",
+        "silhouette_iou": "same shape   (silhouette IoU) ",
+        "dino_cosine": "same subject (DINOv2 cosine)  ",
+    }
+    for key, label in labels.items():
+        if key not in scores:
+            continue
+        value = scores[key]
+        if value is None:
+            print(f"{label}  --  (no subject found)")
+        elif key == "dino_cosine":
+            print(f"{label}  {value:.3f}  (comparative only, not a percentage)")
+        else:
+            print(f"{label}  {value * 100:.1f}%")
+    if "dino_cosine" not in scores:
+        print("\nDINOv2 is not installed, so 'same subject' was not measured.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args(argv)
@@ -240,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "score":
         return _score(config, args)
+
+    if args.command == "compare":
+        return _compare(config, args)
 
     if args.command == "calibrate":
         return _calibrate(config, args)

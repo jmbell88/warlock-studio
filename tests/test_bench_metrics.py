@@ -154,6 +154,99 @@ def test_dino_says_how_to_get_its_weights(tmp_path, monkeypatch):
         metrics._dino_model()
 
 
+# --- perceptual hash ---------------------------------------------------------
+
+
+def test_an_image_is_identical_to_itself(tmp_path):
+    ref = _reference(tmp_path)
+    assert metrics.pixel_similarity(ref, ref) == 1.0
+
+
+def test_a_rescaled_copy_is_still_the_same_image(tmp_path):
+    """The property that makes the metric worth having: a thumbnail and its
+    original are the same picture, and a metric that said otherwise would be
+    answering a question nobody asked."""
+    ref = _reference(tmp_path)
+    small = tmp_path / "small.png"
+    with Image.open(ref) as im:
+        im.resize((64, 64), Image.LANCZOS).save(small)
+    assert metrics.pixel_similarity(ref, small) > 0.95
+
+
+def test_a_re_encoded_copy_is_still_the_same_image(tmp_path):
+    ref = _reference(tmp_path)
+    jpg = tmp_path / "q40.jpg"
+    with Image.open(ref) as im:
+        im.convert("RGB").save(jpg, quality=40)
+    assert metrics.pixel_similarity(ref, jpg) > 0.95
+
+
+def test_a_brightness_shift_barely_moves_the_score(tmp_path):
+    """dHash compares neighbours, so it keys on gradient direction rather than
+    level -- which is why an exposure change is not a different image."""
+    from PIL import ImageEnhance
+
+    ref = _reference(tmp_path)
+    bright = tmp_path / "bright.png"
+    with Image.open(ref) as im:
+        ImageEnhance.Brightness(im).enhance(1.4).save(bright)
+    assert metrics.pixel_similarity(ref, bright) > 0.6
+
+
+def test_two_different_shapes_score_near_zero_and_not_near_half(tmp_path):
+    """The whole reason HASH_FLOOR exists. Raw bit agreement between unrelated
+    images sits at chance, so an unrescaled metric would report ~50% for two
+    pictures with nothing in common."""
+    a = _reference(tmp_path, "a.png", box=(120, 20, 135, 235))
+    b = _reference(tmp_path, "b.png", box=(10, 100, 245, 118))
+    assert metrics.pixel_similarity(a, b) < 0.35
+
+
+def test_the_floor_is_subtracted_rather_than_reported(tmp_path):
+    """Half the bits agreeing is chance, which is 0 -- not 0.5."""
+    every_bit = (1 << metrics.HASH_BITS) - 1
+    half = int("10" * (metrics.HASH_BITS // 2), 2)
+    assert metrics.hash_similarity(0, 0) == 1.0
+    assert metrics.hash_similarity(0, every_bit) == 0.0
+    assert metrics.hash_similarity(0, half) == 0.0
+
+
+def test_a_file_that_is_not_an_image_has_no_hash(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("not a png")
+    assert metrics.perceptual_hash(path) is None
+    assert metrics.pixel_similarity(path, _reference(tmp_path)) is None
+
+
+def test_compare_omits_dino_when_the_weights_are_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(metrics, "dino_available", lambda config=None: False)
+    out = metrics.compare(_reference(tmp_path, "a.png"), _reference(tmp_path, "b.png"))
+    assert set(out) == {"pixel_similarity", "silhouette_iou"}
+    assert out["pixel_similarity"] == 1.0
+    # Two opaque images: the alpha route finds no subject, and auto_mask is
+    # what stops that from reporting None for every ordinary pair.
+    assert out["silhouette_iou"] is not None
+
+
+def test_the_pixel_metric_needs_no_torch_at_all(tmp_path, monkeypatch):
+    """A near-duplicate check must work in a checkout without text2image."""
+    import builtins
+    import sys
+
+    a = _reference(tmp_path, "a.png")
+    b = _reference(tmp_path, "b.png", box=(10, 100, 245, 118))
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    real_import = builtins.__import__
+
+    def refusing_import(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise AssertionError("pixel_similarity must not import torch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refusing_import)
+    assert metrics.pixel_similarity(a, b) is not None
+
+
 # --- calibrate ---------------------------------------------------------------
 
 
