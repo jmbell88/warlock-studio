@@ -11,6 +11,7 @@ from typing import Any
 
 from .. import icons, plotter_mode, plotter_state, widgets
 from ..manual import render as manual_render
+from . import plotter_layers
 
 # The tool letters, drawn on the buttons. From ``plotter_state.TOOLS`` rather
 # than restated, so a tool added there cannot get a button with no key or a key
@@ -175,6 +176,17 @@ def draw(ctx: Any) -> None:
     if tab.busy:
         widgets.muted("Saving...")
         return
+
+    imgui.dummy((0, 6))
+    if widgets.header("Properties", default_open=False, persist_key="plotter/map-props"):
+        # The map's own custom properties. They survive a Tiled round trip and
+        # always have; this is the first way to set one without a text editor.
+        plotter_layers.property_editor(
+            ctx,
+            f"plotter_map_prop:{tab.uid}",
+            doc.properties,
+            doc.set_map_properties,
+        )
 
     imgui.dummy((0, 6))
     if widgets.header("Resize", default_open=False, persist_key="plotter/resize"):

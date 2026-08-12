@@ -218,6 +218,16 @@ one — a lock is not a reason to lose sight of your own work.
 Locks are saved in `.wmap`, and in `.tmx`/`.tmj` exports where Tiled understands them. A map written
 before this existed opens with everything unlocked.
 
+### Layer and map properties
+
+Layers and the map itself carry typed custom properties, the same kind objects do. A layer's live
+under a collapsed **Properties** header in the layer's expanded row; the map's under one in the
+tools pane, below the size readout.
+
+Both have been part of the file format — and survived every Tiled round trip — since Plotter
+shipped. What was missing was any way to set one without opening the file in a text editor. Both are
+undoable, and both are saved.
+
 ### Object properties
 
 An object carries a name, a class, and any number of typed custom properties: string, int, float,

@@ -52,6 +52,7 @@ from ._map_objects import ObjectOps
 from ._map_paint import PaintOps
 from ._map_project import ProjectionOps
 from ._map_tilesets import TilesetOps
+from .edits import MapPropsEdit
 from .tileset import TilesetRef
 
 # Re-exported, not merely imported. ``wmap``, ``tmx``, the panes and the tests
@@ -143,6 +144,26 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         later edits saved.
         """
         self.saved_head = self.history.head if head is None else int(head)
+
+    # -- the map's own properties ---------------------------------------------
+
+    def set_map_properties(self, properties: dict[str, Any]) -> None:
+        """Replace the map's custom properties, undoably.
+
+        Whole-replacement rather than key-at-a-time, which is what the object
+        and layer property editors already do: a rename is a delete and an add,
+        and expressing that as two steps puts a state on the undo stack the user
+        never saw. A call that changes nothing pushes nothing, the rule every
+        other writer here follows.
+        """
+        after = dict(properties)
+        if after == self.properties:
+            return
+        self.history.push(MapPropsEdit(before=dict(self.properties), after=after))
+        self._apply_map_properties(after)
+
+    def _apply_map_properties(self, values: dict[str, Any]) -> None:
+        self.properties = dict(values)
 
     # -- history -------------------------------------------------------------
 

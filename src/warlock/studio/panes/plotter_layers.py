@@ -97,6 +97,19 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
         name = widgets.input_text("##name", layer.name, max_length=64)
         if name != layer.name:
             doc.set_layer_props(layer.uid, name=name)
+        # Collapsed by default: most maps carry none, and an always-open form
+        # for an empty mapping is a row of controls that explain nothing. The
+        # model has supported these since the format did; only the way in was
+        # missing. Rides ``LayerPropsEdit``, so it undoes with the rest.
+        if widgets.header("Properties", default_open=False, persist_key="plotter/layer-props"):
+            imgui.begin_disabled(layer.locked)
+            property_editor(
+                ctx,
+                f"plotter_layer_prop:{layer.uid}",
+                layer.properties,
+                lambda values: doc.set_layer_props(layer.uid, properties=values),
+            )
+            imgui.end_disabled()
     imgui.pop_id()
 
 
@@ -178,34 +191,42 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         state.selected_object = None
 
 
-def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
-    """The typed key/value editor.
+def property_editor(ctx: Any, form_key: str, props: dict[str, Prop], on_change: Any) -> None:
+    """The typed key/value editor, for anything that carries custom properties.
 
-    Edits go through ``set_object`` with a *whole* replacement dict rather than
-    a mutation of the live one, because ``ObjectPropsEdit`` snapshots what it is
-    given -- writing into the object's own dict would leave undo restoring the
-    value it had already been changed to.
+    ``on_change`` is handed a **whole replacement dict** and never a mutation of
+    the live one, which is the rule that makes the three callers correct rather
+    than a convention they each have to remember: the props edits snapshot what
+    they are given, so writing into the owner's own dict would leave undo
+    restoring the value it had already been changed to.
+
+    ``form_key`` scopes the half-typed new-key row in ``ctx.state.preview``, so
+    two editors drawn in one frame -- a layer's and the map's -- do not share
+    the name being typed into one of them.
+
+    It lives here rather than in ``widgets`` because this pane owns it and the
+    other two reach for it; a cross-pane import is house-normal, and moving it
+    would put a Tiled-shaped control in the generic widget set.
     """
     from imgui_bundle import imgui
 
-    for key in sorted(obj.properties):
-        prop = obj.properties[key]
+    for key in sorted(props):
+        prop = props[key]
         imgui.push_id(f"prop-{key}")
         widgets.muted(key)
         imgui.same_line()
         value = _value_editor(prop)
         if value is not None and value != prop.value:
-            replacement = dict(obj.properties)
+            replacement = dict(props)
             replacement[key] = Prop(type=prop.type, value=value)
-            doc.set_object(layer.uid, obj.uid, properties=replacement)
+            on_change(replacement)
         imgui.same_line()
         if widgets.small_icon_button(icons.X, "Remove"):
-            replacement = dict(obj.properties)
+            replacement = dict(props)
             replacement.pop(key, None)
-            doc.set_object(layer.uid, obj.uid, properties=replacement)
+            on_change(replacement)
         imgui.pop_id()
 
-    form_key = f"plotter_prop:{obj.uid}"
     form = ctx.state.preview.setdefault(form_key, {"name": "", "type": "string"})
     form["name"] = widgets.input_text("##prop-name", form["name"], max_length=48, hint="new key")
     imgui.same_line()
@@ -215,12 +236,21 @@ def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
     )
     imgui.same_line()
     if widgets.disabled_button(f"{icons.PLUS}##add-prop", bool(form["name"].strip())):
-        replacement = dict(obj.properties)
+        replacement = dict(props)
         replacement[form["name"].strip()] = Prop(
             type=form["type"], value=_blank_value(form["type"])
         )
-        doc.set_object(layer.uid, obj.uid, properties=replacement)
+        on_change(replacement)
         form["name"] = ""
+
+
+def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
+    property_editor(
+        ctx,
+        f"plotter_prop:{obj.uid}",
+        obj.properties,
+        lambda values: doc.set_object(layer.uid, obj.uid, properties=values),
+    )
 
 
 def _blank_value(kind: str) -> Any:

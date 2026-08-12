@@ -458,6 +458,68 @@ def test_a_replace_undoes_back_to_the_original_art():
     assert np.array_equal(doc.tilesets[0].tileset.pixels, original)
 
 
+def test_the_maps_own_properties_are_undoable():
+    from warlock.studio.plotter.tsx import Prop
+
+    doc = _doc()
+    depth = len(doc.history)
+    doc.set_map_properties({"theme": Prop("string", "cave")})
+    assert doc.properties == {"theme": Prop("string", "cave")}
+    assert len(doc.history) == depth + 1
+
+    doc.set_map_properties({"theme": Prop("string", "cave")})
+    assert len(doc.history) == depth + 1, "a no-op pushes nothing"
+
+    doc.undo()
+    assert doc.properties == {}
+    doc.redo()
+    assert doc.properties == {"theme": Prop("string", "cave")}
+
+
+def test_a_map_properties_edit_owns_its_dicts():
+    """Handed the live mapping, a "before" that moves with the document
+    restores nothing."""
+    from warlock.studio.plotter.tsx import Prop
+
+    doc = _doc()
+    doc.set_map_properties({"a": Prop("int", 1)})
+    edit = doc.history.top
+    assert edit.before is not doc.properties
+    assert edit.after is not doc.properties
+
+    doc.properties["b"] = Prop("int", 2)
+    assert "b" not in edit.after
+    doc.undo()
+    assert doc.properties == {}
+
+
+def test_a_layer_properties_edit_keeps_its_two_sides_apart():
+    """``set_layer_props`` builds ``after`` by spreading ``before``, so the two
+    shared one mapping whenever properties was not the field being changed.
+    Nothing mutated it in place, so this is the hazard removed rather than a bug
+    fixed -- but the two sides of an edit should never be one object."""
+    from warlock.studio.plotter.tsx import Prop
+
+    doc = _doc()
+    layer = doc.add_tile_layer()
+    layer.properties = {"a": Prop("int", 1)}
+    doc.set_layer_props(layer.uid, name="Renamed")
+    edit = doc.history.top
+    assert edit.before["properties"] is not edit.after["properties"]
+    assert edit.before["properties"] is not layer.properties
+
+
+def test_layer_properties_survive_an_undo():
+    from warlock.studio.plotter.tsx import Prop
+
+    doc = _doc()
+    layer = doc.add_tile_layer()
+    doc.set_layer_props(layer.uid, properties={"kind": Prop("string", "floor")})
+    assert layer.properties == {"kind": Prop("string", "floor")}
+    doc.undo()
+    assert layer.properties == {}
+
+
 def test_locking_a_layer_is_undoable_and_a_no_op_pushes_nothing():
     """``set_layer_props`` filters through ``snapshot``, so the edit records the
     new field for free -- but undo replays through ``_apply_layer_props``, and a

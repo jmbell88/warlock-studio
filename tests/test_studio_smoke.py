@@ -2549,6 +2549,20 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     _frame(imgui_ctx, build)
 
+    # Both property editors, with a property in each so the value row and the
+    # remove button rasterise rather than only the empty new-key form.
+    from warlock.studio.plotter.tsx import Prop
+
+    widgets.request_open("plotter/map-props")
+    widgets.request_open("plotter/layer-props")
+    tab.doc.set_map_properties({"theme": Prop("string", "cave"), "hard": Prop("bool", True)})
+    tab.doc.set_layer_props(
+        layer.uid, properties={"kind": Prop("string", "floor"), "cost": Prop("int", 3)}
+    )
+    tab.doc.set_active_layer(layer.uid)
+    state.tool = "stamp"
+    _frame(imgui_ctx, build)
+
     # And an isometric map, which is the only way ``_backdrop``, ``_layers``,
     # ``_grid``, ``_cursor`` and ``_visible_range`` take their diamond branch.
     iso = plotter_mode.new_document(app_ctx, (6, 6, 32, 16))

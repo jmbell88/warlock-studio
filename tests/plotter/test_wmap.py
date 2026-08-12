@@ -381,3 +381,14 @@ def test_a_file_written_before_locks_existed_opens_unlocked():
             dst.writestr(info, payload)
     back = wmap.read_wmap(out.getvalue())
     assert all(layer.locked is False for layer in back.layers)
+
+
+def test_layer_properties_set_through_the_editor_survive_a_round_trip():
+    """The model has carried these since the format did; T8 added the way in,
+    so the way out is worth pinning beside it."""
+    doc = _doc()
+    doc.set_layer_props(doc.layers[0].uid, properties={"kind": tsx.Prop("string", "floor")})
+    doc.set_map_properties({"theme": tsx.Prop("string", "crypt")})
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.layers[0].properties == {"kind": tsx.Prop("string", "floor")}
+    assert back.properties == {"theme": tsx.Prop("string", "crypt")}

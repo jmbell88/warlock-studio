@@ -142,15 +142,43 @@ class LayerPropsEdit(Edit):
     def __post_init__(self) -> None:
         # Copied: the caller routinely hands us the live dict it is about to
         # write into, and a "before" that mutates with the document restores
-        # nothing.
-        self.before = dict(self.before)
-        self.after = dict(self.after)
+        # nothing. One level deeper than a bare ``dict()``, matching
+        # ``ObjectPropsEdit``: ``set_layer_props`` builds ``after`` by spreading
+        # ``before``, so the two share one ``properties`` mapping whenever that
+        # is not the field being changed. Nothing mutates it in place today --
+        # ``_apply_layer_props`` rebinds with a fresh copy -- so this is the
+        # hazard removed rather than a bug fixed, and it costs one call.
+        self.before = _snapshot(self.before)
+        self.after = _snapshot(self.after)
 
     def undo(self, doc: Any) -> None:
         doc._apply_layer_props(self.layer_uid, self.before)
 
     def redo(self, doc: Any) -> None:
         doc._apply_layer_props(self.layer_uid, self.after)
+
+
+@dataclass
+class MapPropsEdit(Edit):
+    """The map's own custom properties.
+
+    Separate from ``LayerPropsEdit`` because it addresses no layer: the map is
+    the thing being changed, and giving the layer edit a nullable uid would make
+    every reader of it ask which kind it was.
+    """
+
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self.before = dict(self.before)
+        self.after = dict(self.after)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_map_properties(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_map_properties(self.after)
 
 
 @dataclass
