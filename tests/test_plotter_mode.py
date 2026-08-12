@@ -872,6 +872,63 @@ def test_a_cut_is_refused_while_the_tab_is_busy(monkeypatch):
     assert state.clipboard is None
 
 
+def test_a_resize_pins_the_opposite_corner():
+    """Named by the corner that moves; the other stays still."""
+    from warlock.studio.panes import plotter_canvas
+
+    class Obj:
+        x, y, w, h = 10.0, 20.0, 30.0, 40.0
+        kind = "rect"
+
+    obj = Obj()
+    assert plotter_canvas._opposite("nw", obj) == (40.0, 60.0)
+    assert plotter_canvas._opposite("se", obj) == (10.0, 20.0)
+    assert plotter_canvas._opposite("ne", obj) == (10.0, 60.0)
+    assert plotter_canvas._opposite("sw", obj) == (40.0, 20.0)
+
+
+def test_dragging_a_corner_past_its_opposite_flips_rather_than_going_negative():
+    """A negative size draws as nothing and exports as a rectangle no engine
+    can read, so the rect is normalized as it goes."""
+    from warlock.studio.panes import plotter_canvas
+
+    # Pinned at (40, 60); the pointer crosses well past it.
+    x, y, w, h = plotter_canvas._resized("nw", (40.0, 60.0), (100.0, 90.0))
+    assert (x, y, w, h) == (40.0, 60.0, 60.0, 30.0)
+    assert w >= 0 and h >= 0
+
+
+def test_only_a_rect_has_resize_handles():
+    """A point has no corners; its position *is* the object."""
+    from warlock.studio.panes import plotter_canvas
+
+    class Point:
+        x, y, w, h = 5.0, 5.0, 0.0, 0.0
+        kind = "point"
+
+    assert plotter_canvas._handle_at(None, None, Point(), (0.0, 0.0)) is None
+
+
+def test_a_moved_object_is_one_undo_step_through_the_document():
+    """The canvas drives the session; this pins the shape of what it drives."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    layer = tab.doc.add_object_layer("Things")
+    obj = MapObject(uid=new_uid(), name="zone", kind="rect", x=0, y=0, w=8, h=8)
+    tab.doc.add_object(layer.uid, obj)
+    depth = len(tab.doc.history)
+
+    tab.doc.begin_object_edit(layer.uid, obj.uid)
+    for step in range(1, 20):
+        tab.doc.place_object(x=float(step), y=float(step))
+    tab.doc.end_object_edit()
+
+    assert len(tab.doc.history) == depth + 1
+    assert (obj.x, obj.y) == (19.0, 19.0)
+    tab.doc.undo()
+    assert (obj.x, obj.y) == (0.0, 0.0)
+
+
 def test_painting_a_locked_layer_toasts_and_pushes_nothing():
     from warlock.studio.panes import plotter_canvas
 

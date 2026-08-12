@@ -2563,6 +2563,23 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     state.tool = "stamp"
     _frame(imgui_ctx, build)
 
+    # A selected rect object, which is the only way the resize handles draw --
+    # and the same object on a locked layer, where they must not.
+    objects = tab.doc.add_object_layer("Things")
+    zone = tab.doc.add_object(
+        objects.uid,
+        MapObject(uid=new_uid(), name="zone", kind="rect", x=8, y=8, w=48, h=32),
+    )
+    tab.doc.set_active_layer(objects.uid)
+    state.tool = "object"
+    state.selected_object = zone.uid
+    _frame(imgui_ctx, build)
+    tab.doc.set_layer_props(objects.uid, locked=True)
+    _frame(imgui_ctx, build)
+    tab.doc.set_layer_props(objects.uid, locked=False)
+    tab.doc.set_active_layer(layer.uid)
+    state.tool = "stamp"
+
     # And an isometric map, which is the only way ``_backdrop``, ``_layers``,
     # ``_grid``, ``_cursor`` and ``_visible_range`` take their diamond branch.
     iso = plotter_mode.new_document(app_ctx, (6, 6, 32, 16))

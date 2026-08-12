@@ -634,3 +634,90 @@ def test_an_isometric_map_is_taller_and_narrower_than_the_grid_suggests():
     assert (doc.pixel_width, doc.pixel_height) == (128, 64)
     assert MapDoc(4, 4, 32, 16).pixel_width == 128
     assert MapDoc(4, 4, 32, 16).pixel_height == 64
+
+
+# --- the object edit session --------------------------------------------------
+
+
+def _object_doc():
+    doc = _doc()
+    layer = doc.add_object_layer("Things")
+    obj = MapObject(uid=new_uid(), name="zone", kind="rect", x=1.0, y=2.0, w=4.0, h=5.0)
+    doc.add_object(layer.uid, obj)
+    return doc, layer, obj
+
+
+def test_a_whole_object_drag_is_one_step():
+    """``_map_paint``'s stroke session, for objects: a drag mutates live and
+    pushes nothing, and one edit lands at release."""
+    doc, layer, obj = _object_doc()
+    depth = len(doc.history)
+
+    doc.begin_object_edit(layer.uid, obj.uid)
+    for step in range(1, 6):
+        doc.place_object(x=float(step), y=float(step))
+    assert len(doc.history) == depth, "nothing pushed while the drag is open"
+    assert (obj.x, obj.y) == (5.0, 5.0), "but the object moved"
+
+    assert doc.end_object_edit() is True
+    assert len(doc.history) == depth + 1
+    doc.undo()
+    assert (obj.x, obj.y) == (1.0, 2.0)
+
+
+def test_a_drag_that_moves_nothing_pushes_nothing():
+    doc, layer, obj = _object_doc()
+    depth = len(doc.history)
+    doc.begin_object_edit(layer.uid, obj.uid)
+    doc.place_object(x=obj.x, y=obj.y)
+    assert doc.end_object_edit() is False
+    assert len(doc.history) == depth
+
+
+def test_ending_an_object_edit_is_idempotent():
+    """A release can be missed to focus loss, a tab switch, Esc or a save
+    beginning mid-drag, and none of those should have to know."""
+    doc, layer, obj = _object_doc()
+    doc.begin_object_edit(layer.uid, obj.uid)
+    doc.place_object(x=9.0)
+    assert doc.end_object_edit() is True
+    assert doc.end_object_edit() is False
+    assert doc.end_object_edit() is False
+
+
+def test_re_opening_a_session_commits_the_previous_one():
+    doc, layer, obj = _object_doc()
+    depth = len(doc.history)
+    doc.begin_object_edit(layer.uid, obj.uid)
+    doc.place_object(x=9.0)
+    doc.begin_object_edit(layer.uid, obj.uid)
+    assert len(doc.history) == depth + 1
+
+
+def test_undo_mid_drag_commits_the_drag_first():
+    """The stroke session's rule: undoing *through* an open session would
+    reverse the step before it and leave the uncommitted move on the object."""
+    doc, layer, obj = _object_doc()
+    doc.begin_object_edit(layer.uid, obj.uid)
+    doc.place_object(x=9.0, y=9.0)
+    doc.undo()
+    assert doc.editing_object is False
+    assert (obj.x, obj.y) == (1.0, 2.0), "the drag was committed, then undone"
+
+
+def test_placing_an_object_outside_a_session_is_refused():
+    """Rather than silently falling back to the undoable path, which would push
+    a step per frame and only be caught by counting the stack."""
+    doc, layer, obj = _object_doc()
+    with pytest.raises(RuntimeError, match="no object edit"):
+        doc.place_object(x=3.0)
+
+
+def test_a_session_whose_object_was_deleted_commits_nothing():
+    doc, layer, obj = _object_doc()
+    doc.begin_object_edit(layer.uid, obj.uid)
+    doc.place_object(x=9.0)
+    doc.remove_object(layer.uid, obj.uid)
+    depth = len(doc.history)
+    assert doc.end_object_edit() is False
+    assert len(doc.history) == depth

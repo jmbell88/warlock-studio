@@ -199,6 +199,9 @@ class PlotterState:
     drag_kind: str = ""
     drag_anchor: tuple[int, int] | None = None
     drag_object: tuple[float, float] | None = None
+    # Which corner a resize is pulling ("nw" / "ne" / "se" / "sw"), or "". The
+    # *opposite* corner is what stays pinned, so this names the moving end.
+    drag_handle: str = ""
     space_held: bool = False
     # The last cell a stamp actually landed on, which is where Shift+click draws
     # a line *from* -- Tiled's model. Document-scoped view state: it names a cell
@@ -330,6 +333,7 @@ class PlotterState:
         self.drag_kind = ""
         self.drag_anchor = None
         self.drag_object = None
+        self.drag_handle = ""
         self.palette_anchor = None
         # Not ``last_paint``: that outlives the gesture on purpose, because the
         # whole point of it is to be there on the *next* click.

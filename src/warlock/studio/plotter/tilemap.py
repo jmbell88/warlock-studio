@@ -128,6 +128,9 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         # The open stroke session, or None. View-adjacent and never serialized:
         # a document is always saved with its strokes closed.
         self._stroke: dict[str, Any] | None = None
+        # The open object drag, or None. The same thing for objects, and closed
+        # at the same three chokepoints.
+        self._object_edit: dict[str, Any] | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -190,6 +193,7 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         silently discarding it.
         """
         self.end_stroke()
+        self.end_object_edit()
         return self.history.undo(self)
 
     def redo(self) -> bool:
@@ -197,4 +201,5 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         in appearance: redoing with a session open would replay a step onto
         pixels the session has already changed underneath it."""
         self.end_stroke()
+        self.end_object_edit()
         return self.history.redo(self)

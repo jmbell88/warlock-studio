@@ -204,6 +204,15 @@ are metadata an engine reads. With the **Objects** tool active, click empty spac
 rectangle, or click without dragging to drop a point. Click an existing object to select it, and its
 form appears under the layer list.
 
+**Selected objects can be moved and resized on the canvas.** Drag an object's body to move it, or
+one of the four corner handles to resize it — the opposite corner stays pinned, and dragging a
+corner past it flips the rectangle rather than giving it a negative size. Hold Ctrl while dragging
+to snap to the grid. A whole drag is one undo step, and a click that moves nothing costs none at
+all. Delete removes the selected object.
+
+Handles appear only on the selected rectangle, and not at all on a locked layer, where the drag
+would be refused anyway.
+
 ### Locking a layer
 
 The padlock beside the eye locks a layer. A locked layer cannot be painted on, erased, cut from,

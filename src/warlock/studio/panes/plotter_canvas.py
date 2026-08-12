@@ -94,6 +94,7 @@ def draw(ctx: Any) -> None:
     if not imgui.is_mouse_down(0):
         for entry in state.docs:
             entry.doc.end_stroke()
+            entry.doc.end_object_edit()
     avail = imgui.get_content_region_avail()
     region = (max(float(avail.x), 1.0), max(float(avail.y), 1.0))
     size_px = (doc.pixel_width, doc.pixel_height)
@@ -388,6 +389,16 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
             else:
                 p1 = inker_state.to_screen(view, origin, obj.x + obj.w, obj.y + obj.h)
                 draw_list.add_rect(p0, p1, colour, 0.0, sp(2) if selected else sp(1))
+                if selected and not layer.locked:
+                    # Only on the selected one, and only when it can actually be
+                    # dragged: a handle on a locked layer is a control that
+                    # looks live and does nothing.
+                    for corner in _HANDLES:
+                        cx, cy = _handle_corners(obj)[corner]
+                        sx, sy = inker_state.to_screen(view, origin, cx, cy)
+                        draw_list.add_rect_filled(
+                            (sx - sp(4), sy - sp(4)), (sx + sp(4), sy + sp(4)), colour
+                        )
             if obj.name:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
 
@@ -876,18 +887,58 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
     point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
 
     if hovered and imgui.is_mouse_clicked(0):
+        # Priority: a handle on the selected rect, then any object's body, then
+        # empty space. Handles win because they sit *on* the outline and so
+        # overlap the body -- checking the body first would make them unreachable.
+        selected = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        handle = (
+            _handle_at(tab.view, origin, selected, (mouse.x, mouse.y))
+            if selected is not None and not layer.locked
+            else None
+        )
+        if handle is not None:
+            doc.begin_object_edit(layer.uid, selected.uid)
+            state.drag_kind = "object-resize"
+            state.drag_handle = handle
+            return
         hit = _object_at(layer, point)
         if hit is not None:
             # Selecting on a locked layer stays allowed -- it is how you read an
             # object's properties, and it changes nothing.
             state.selected_object = hit.uid
             state.drag_kind = ""
+            if not layer.locked:
+                doc.begin_object_edit(layer.uid, hit.uid)
+                state.drag_kind = "object-move"
+                # The grab offset, so the object does not jump its own top-left
+                # corner to the pointer on the first frame of the drag.
+                state.drag_object = (point[0] - hit.x, point[1] - hit.y)
             return
         if layer.locked:
             ctx.toast(f"{layer.name} is locked.", "error")
             return
         state.drag_kind = "object"
         state.drag_object = point
+    elif state.drag_kind == "object-move" and imgui.is_mouse_down(0):
+        offset = state.drag_object or (0.0, 0.0)
+        x, y = point[0] - offset[0], point[1] - offset[1]
+        if imgui.get_io().key_ctrl:
+            x, y = doc.cell_corner(*doc.cell_at(x, y))
+        doc.place_object(x=float(x), y=float(y))
+    elif state.drag_kind == "object-resize" and imgui.is_mouse_down(0):
+        target = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        if target is not None:
+            fixed = _opposite(state.drag_handle, target)
+            at = point
+            if imgui.get_io().key_ctrl:
+                at = doc.cell_corner(*doc.cell_at(*point))
+            x, y, w, h = _resized(state.drag_handle, fixed, at)
+            doc.place_object(x=float(x), y=float(y), w=float(w), h=float(h))
+    elif state.drag_kind in ("object-move", "object-resize") and imgui.is_mouse_released(0):
+        # One step for the whole gesture, and none at all for a click that never
+        # moved anything -- the session finds no diff and pushes nothing.
+        doc.end_object_edit()
+        state.clear_drag()
     elif state.drag_kind == "object" and imgui.is_mouse_released(0):
         start = state.drag_object or point
         x0, x1 = sorted((start[0], point[0]))
@@ -899,6 +950,55 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         )
         state.selected_object = obj.uid
         state.clear_drag()
+
+
+# The four corners of a rect object, in the order the handles are drawn. Named
+# by the corner that *moves*; a resize pins the opposite one.
+_HANDLES = ("nw", "ne", "se", "sw")
+
+
+def _handle_corners(obj: Any) -> dict[str, tuple[float, float]]:
+    """Each handle's position in map-pixel space."""
+    return {
+        "nw": (obj.x, obj.y),
+        "ne": (obj.x + obj.w, obj.y),
+        "se": (obj.x + obj.w, obj.y + obj.h),
+        "sw": (obj.x, obj.y + obj.h),
+    }
+
+
+def _opposite(handle: str, obj: Any) -> tuple[float, float]:
+    """The corner a resize keeps still."""
+    return _handle_corners(obj)[{"nw": "se", "ne": "sw", "se": "nw", "sw": "ne"}[handle]]
+
+
+def _handle_at(view: Any, origin, obj: Any, mouse: tuple[float, float]) -> str | None:
+    """Which resize handle the pointer is over, or ``None``.
+
+    Tested in *screen* space, because the handles are drawn at a fixed ``sp()``
+    size: their grab radius has to be the same however far the map is zoomed
+    out, and a map-space radius would shrink to nothing at low zoom exactly
+    where the handles are hardest to hit.
+    """
+    if obj.kind != "rect":
+        return None
+    for name, (px, py) in _handle_corners(obj).items():
+        sx, sy = inker_state.to_screen(view, origin, px, py)
+        if abs(sx - mouse[0]) <= sp(6) and abs(sy - mouse[1]) <= sp(6):
+            return name
+    return None
+
+
+def _resized(handle: str, fixed: tuple[float, float], point: tuple[float, float]):
+    """``(x, y, w, h)`` from the pinned corner and the pointer.
+
+    Normalized as it goes, so dragging a corner *past* its opposite flips the
+    rectangle rather than giving it a negative size -- which would draw as
+    nothing and export as a rectangle no engine can read.
+    """
+    x0, x1 = sorted((fixed[0], point[0]))
+    y0, y1 = sorted((fixed[1], point[1]))
+    return x0, y0, x1 - x0, y1 - y0
 
 
 def _object_at(layer: Any, point: tuple[float, float]):
