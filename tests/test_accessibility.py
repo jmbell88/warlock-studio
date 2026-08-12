@@ -409,3 +409,192 @@ def test_the_reserving_modes_are_the_ones_that_bind_arrows() -> None:
     assert not missing, (
         f"these modes bind arrows or Space but do not reserve them: {missing}"
     )
+
+
+# -- display scale (UX-22) ----------------------------------------------------
+
+
+class _ScaleApp:
+    """Just enough of ``App`` to exercise ``_resample_display_scale``.
+
+    The real one needs a GL context, a window and a service layer; what the
+    method actually touches is four attributes and the token module, so the
+    test builds those rather than the app.
+    """
+
+    from warlock.studio.main import App
+
+    _resample_display_scale = App._resample_display_scale
+
+    def __init__(self, monitor: float, ui_scale: float) -> None:
+        from types import SimpleNamespace
+
+        self._monitor_scale = monitor
+        self._min_size = (0, 0)
+        self.app_ctx = SimpleNamespace(
+            dpi_scale=monitor,
+            state=SimpleNamespace(fonts_dirty=False),
+            settings=SimpleNamespace(get=lambda _k, ui=ui_scale: ui),
+        )
+
+
+@pytest.fixture
+def quiet_rescale(monkeypatch: pytest.MonkeyPatch):
+    """Stub the two things the method does to the outside world."""
+    from warlock.studio import main, theme
+
+    monkeypatch.setattr(theme, "apply", lambda _imgui: None)
+    return main
+
+
+def test_moving_to_another_monitor_rebuilds_the_scale(
+    monkeypatch: pytest.MonkeyPatch, quiet_rescale
+) -> None:
+    """The whole of UX-22: a 100% -> 150% move used to change nothing."""
+    from warlock.studio import dpi, tokens
+
+    monkeypatch.setattr(dpi, "window_scale", lambda _p: 1.5)
+    app = _ScaleApp(monitor=1.0, ui_scale=1.0)
+    try:
+        assert app._resample_display_scale() == pytest.approx(1.5)
+        assert app.app_ctx.dpi_scale == pytest.approx(1.5)
+        assert app.app_ctx.state.fonts_dirty, "the atlas is baked at the old size"
+        assert app._min_size != (0, 0), "the resize floor follows the monitor"
+    finally:
+        tokens.set_scale(1.0)
+
+
+def test_staying_on_the_same_monitor_rebuilds_nothing(
+    monkeypatch: pytest.MonkeyPatch, quiet_rescale
+) -> None:
+    """WINDOWMOVED fires on every drag; almost none of them change the DPI.
+
+    Rebuilding the font atlas on each would re-bake it whenever the window was
+    nudged, which is a visible hitch for no reason.
+    """
+    from warlock.studio import dpi
+
+    monkeypatch.setattr(dpi, "window_scale", lambda _p: 1.0)
+    app = _ScaleApp(monitor=1.0, ui_scale=1.0)
+    app._resample_display_scale()
+    assert not app.app_ctx.state.fonts_dirty
+
+
+def test_a_clamped_zoom_is_not_baked_in_by_moving(
+    monkeypatch: pytest.MonkeyPatch, quiet_rescale
+) -> None:
+    """The trap in recovering the user's zoom by division.
+
+    ``set_scale`` clamps the *product* to 4.0, so on a 250% display a stored
+    2.0x zoom is really drawn at 1.6x. Dividing the scale in force by the old
+    monitor scale to recover "the zoom" would read back 1.6, and each move
+    between two such monitors would shrink the UI again -- permanently, since
+    nothing ever writes it back up. Re-reading the stored preference is what
+    makes the operation repeatable.
+    """
+    from warlock.studio import dpi, tokens
+
+    try:
+        monkeypatch.setattr(dpi, "window_scale", lambda _p: 2.5)
+        app = _ScaleApp(monitor=1.0, ui_scale=2.0)
+        app._resample_display_scale()
+        # 2.0x is not offerable at 250%: the product ceiling leaves room for
+        # 1.6x, so this is the clamp biting.
+        assert pytest.approx(4.0) == tokens.SCALE
+
+        # The discriminating move. Recovering the zoom by division would read
+        # 4.0 / 2.5 == 1.6 and draw the 100% monitor at 1.6x; re-reading the
+        # stored preference gives the 2.0x the user actually asked for. Both
+        # implementations agree on every other value in this test, which is
+        # what makes this the only assertion that proves anything.
+        monkeypatch.setattr(dpi, "window_scale", lambda _p: 1.0)
+        app._resample_display_scale()
+        assert pytest.approx(2.0) == tokens.SCALE, "the clamp was baked in"
+    finally:
+        tokens.set_scale(1.0)
+
+
+# -- responsive columns (UX-01) -----------------------------------------------
+
+
+@pytest.fixture
+def unscaled():
+    """``fit`` reads ``tokens.SCALE`` through ``sp``; pin it and put it back."""
+    from warlock.studio import tokens
+
+    before = tokens.SCALE
+    yield tokens.set_scale
+    tokens.set_scale(before)
+
+
+def test_a_roomy_window_gets_the_full_sidebar(unscaled) -> None:
+    from warlock.studio import layout
+
+    unscaled(1.0)
+    assert layout.fit(2400.0, 8.0) == pytest.approx(layout.SIDEBAR_W)
+
+
+def test_the_reported_failure_no_longer_overflows(unscaled) -> None:
+    """UX-01 as the audit stated it, in numbers.
+
+    A 1100-px window at 2x UI scale: two 300-design-px sidebars and a 300-px
+    centre want 1800 physical px before gutters. Unconditionally reserving
+    them is what pushed the inspector past the window edge, because the
+    right-hand column is the one sized from what is left.
+    """
+    from warlock.studio import layout
+
+    unscaled(2.0)
+    spacing = 8.0
+    room = 1100.0
+    side = layout.fit(room, spacing)
+    assert side * 2 + spacing * 2 <= room, "the sidebars alone must fit"
+    centre = room - (side * 2 + spacing * 2)
+    assert centre > 0, "and must leave something for the centre"
+
+
+def test_the_sidebars_give_way_before_the_centre(unscaled) -> None:
+    """The stated order: squeeze the sidebars, then the centre.
+
+    Discriminating rather than decorative -- at a width where *something* has
+    to give, this asserts which. An implementation that shrank the centre
+    first would return the full sidebar here.
+    """
+    from warlock.studio import layout
+    from warlock.studio.tokens import sp
+
+    unscaled(1.0)
+    # Room for the comfortable centre and two sidebars a little too narrow.
+    room = sp(layout.SIDEBAR_W) * 2 + sp(layout.CENTRE_MIN) + 16.0 - 80.0
+    side = layout.fit(room, 8.0)
+    assert side < sp(layout.SIDEBAR_W), "the sidebar should have given way"
+    assert side >= sp(layout.SIDEBAR_MIN)
+
+
+def test_a_sidebar_is_never_squeezed_past_usefulness(unscaled) -> None:
+    """Below SIDEBAR_MIN a form's labels wrap to a word a line.
+
+    So the squeeze stops, and past that point it is the centre that shrinks --
+    which ``centre_width``'s lower floor is what allows.
+    """
+    from warlock.studio import layout
+    from warlock.studio.tokens import sp
+
+    unscaled(2.0)
+    assert layout.fit(200.0, 8.0) == pytest.approx(sp(layout.SIDEBAR_MIN))
+
+
+def test_the_fit_is_unset_until_a_frame_measures_one() -> None:
+    """Headless callers get the unconstrained width, not a fit against zero.
+
+    ``tick`` stays pure for this reason -- it is called by tests with no imgui
+    context, where reaching for a viewport is an access violation rather than
+    an error -- so the measurement is a separate call and this is what the
+    world looks like before it has happened.
+    """
+    from warlock.studio import layout
+    from warlock.studio.tokens import sp
+
+    assert layout.SIDEBAR_FIT is None or isinstance(layout.SIDEBAR_FIT, float)
+    if layout.SIDEBAR_FIT is None:
+        assert layout.sidebar_width() == pytest.approx(sp(layout.SIDEBAR_W))

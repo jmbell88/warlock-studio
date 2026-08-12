@@ -77,12 +77,87 @@ def set_sidebar(key: str, *, animate: bool = False) -> str:
     return key
 
 
+# What a centre pane wants, and what it will accept before the sidebars start
+# giving way instead (UX-01), both in design px. 300 was already the floor in
+# ``centre_width`` -- what it was missing is that a floor which cannot be met
+# does not stop being claimed, it just pushes the column after it off the
+# window. The two numbers separate "this is the comfortable size" from "this
+# is the size below which shrinking the centre is the wrong answer".
+CENTRE_MIN = 300.0
+CENTRE_FLOOR = 220.0
+
+# How narrow a sidebar may be squeezed. Below this a form's labels wrap to one
+# word a line, which is a pane nobody can use rather than a small one -- so
+# this is where squeezing stops and the centre gives instead.
+SIDEBAR_MIN = 200.0
+
+# The width the two sidebars actually get this frame, in *physical* px. Module
+# state, computed once by :func:`measure` for the same reason ``SIDEBAR_W`` is
+# eased in ``tick``: the left column and the right must agree within a frame,
+# and the right one is sized ``(0, h)`` from whatever the centre left behind.
+#
+# ``None`` until a frame has measured one. Its own sentinel rather than a
+# plausible default, so that the headless callers -- tests, and anything asking
+# what a sidebar is before there is a window -- get the unconstrained width
+# rather than a fit computed against a viewport of zero.
+SIDEBAR_FIT: float | None = None
+
+
+def fit(available: float, spacing: float) -> float:
+    """How wide each sidebar can be, given the room. Physical px, pure.
+
+    The whole of UX-01 is that this used to be unconditional. Three columns
+    reserved two 300-design-px sidebars and floored the centre at 300 more, so
+    at 1.5x the workspace demanded ~1350 physical px and at 2x ~1800 -- while
+    the resize floor follows the *monitor's* scale alone and stays near 1100.
+    (Deliberately: see ``main._min_window_size``. A floor that multiplied the
+    user's zoom in demanded a window bigger than a 1080p display and refused to
+    shrink, which is worse.) The arithmetic simply overflowed, and since the
+    right-hand column is the one sized from the leftovers, the pane that fell
+    off the edge was always the inspector.
+
+    So the columns give way in a stated order: the sidebars narrow first, down
+    to :data:`SIDEBAR_MIN`, and only then does the centre drop below
+    :data:`CENTRE_MIN`. Somebody who enlarges the UI to read it ends up with
+    three narrow columns rather than two comfortable ones and a third they
+    cannot reach.
+    """
+    want = sp(SIDEBAR_W)
+    if available >= want * 2 + sp(CENTRE_MIN) + spacing * 2:
+        return want
+    # What is left for the two sidebars once the centre keeps its comfortable
+    # width -- which may be negative, hence the floor rather than a clamp.
+    slack = (available - sp(CENTRE_MIN) - spacing * 2) / 2.0
+    return max(min(slack, want), sp(SIDEBAR_MIN))
+
+
 def tick() -> None:
     """Advance the sidebar width one frame. Called once, before anything reads
     ``SIDEBAR_W`` -- a half-eased width read by the left column and the settled
     one by the right would be two columns disagreeing about the same frame."""
     global SIDEBAR_W
     SIDEBAR_W = motion.value(_SIDEBAR_KEY, SIDEBAR_TARGET, duration=tokens.DUR_BASE)
+
+
+def measure() -> float:
+    """Settle this frame's sidebar fit. Called once, straight after :func:`tick`.
+
+    Separate from ``tick`` rather than folded into it, and the reason is not
+    tidiness: ``tick`` is pure arithmetic over the motion table and is called
+    by headless tests that have no imgui context at all, where reaching for a
+    viewport is an access violation rather than an error.
+
+    Measured from the whole window rather than from the content region a column
+    happens to be standing in: ``centre_width`` runs *after* the left sidebar is
+    drawn, so recomputing there would fit the right sidebar against a width the
+    left has already taken its share of, and the two columns would come out
+    different widths.
+    """
+    global SIDEBAR_FIT
+    style = imgui.get_style()
+    room = imgui.get_main_viewport().work_size[0] - style.window_padding.x * 2
+    SIDEBAR_FIT = fit(room, style.item_spacing.x)
+    return SIDEBAR_FIT
 
 
 # Between a pane's border and its content. 5 was the most utilitarian number in
@@ -140,16 +215,36 @@ def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -
     return open_
 
 
+def sidebar_width() -> float:
+    """A sidebar's width this frame, in physical px. Narrowed to fit (UX-01).
+
+    What the seven workspaces call instead of ``sp(SIDEBAR_W)``. Same value
+    whenever there is room, which is the ordinary case; the difference only
+    shows at high UI scale in a small window, which is exactly the case a user
+    who enlarged the UI to read it is in.
+    """
+    return sp(SIDEBAR_W) if SIDEBAR_FIT is None else SIDEBAR_FIT
+
+
 def centre_width() -> float:
     """What is left for the centre pane once the right sidebar is reserved.
 
     Called with the cursor between the left sidebar and the centre, so the
     available width still contains the centre, one item spacing and the right
     sidebar. The right sidebar itself is then sized ``(0, h)`` and resolves to
-    ``SIDEBAR_W`` because this reserved exactly that.
+    :data:`SIDEBAR_FIT` because this reserved exactly that.
+
+    The floor is :data:`CENTRE_FLOOR` and not ``CENTRE_MIN``, which is the
+    other half of UX-01: a floor is a claim, and a claim that cannot be met
+    does not fail -- it silently pushes the *next* column past the window edge.
+    Reserving the sidebar's real width and flooring lower is what keeps the
+    right-hand pane on screen when the arithmetic is tight.
     """
     spacing = imgui.get_style().item_spacing.x
-    return max(imgui.get_content_region_avail().x - (sp(SIDEBAR_W) + spacing), sp(300))
+    return max(
+        imgui.get_content_region_avail().x - (sidebar_width() + spacing),
+        sp(CENTRE_FLOOR),
+    )
 
 
 def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> float:

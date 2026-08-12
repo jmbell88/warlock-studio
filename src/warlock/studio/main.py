@@ -1567,6 +1567,16 @@ class App:
                 )
                 ctx.settings.set("window_size", list(sized))
                 continue
+            if event.type in (pygame.WINDOWDISPLAYCHANGED, pygame.WINDOWMOVED):
+                # UX-22. Both, because neither is sufficient: SDL2 reports the
+                # display change when a window is dragged to another monitor,
+                # but a display whose *own* scale is changed in Windows'
+                # settings raises no such event and the window simply starts
+                # being drawn at the wrong size. WINDOWMOVED catches the first
+                # case again and costs one Win32 call, which is cheaper than
+                # being wrong until the next restart.
+                self._resample_display_scale()
+                continue
             if event.type == pygame.DROPFILE:
                 self._on_drop(Path(event.file))
                 continue
@@ -1923,6 +1933,52 @@ class App:
             ctx.state.turntable = not ctx.state.turntable
             self.viewer.set_turntable(ctx.state.turntable)
 
+    def _resample_display_scale(self) -> float:
+        """Re-read the monitor's scale and rebuild what is baked at it (UX-22).
+
+        DPI was sampled once, at startup, and the module comment said a
+        mid-session change "would need a rebuild" as though that were
+        unavailable -- but the UI-scale slider has done exactly this rebuild
+        since K99, and every piece of it is reusable. Dragging the window from
+        a 100% monitor to a 150% one left the whole UI drawn at the old scale
+        until the next launch; on the pair of displays this is most likely to
+        happen on, that is either a UI two-thirds the size it should be or one
+        half again too big.
+
+        -> the scale in force afterwards, so a caller can tell whether
+        anything moved.
+
+        The font atlas is *not* rebuilt here. It cannot be: rebuilding
+        invalidates every ImFont handle, and those are pushed and popped all
+        through ``_build_ui``, so the flag is raised and the frame loop
+        consumes it between frames (K99) -- the same route the slider takes.
+        """
+        import pygame
+        from imgui_bundle import imgui
+
+        from . import dpi, theme, tokens
+
+        monitor_scale = dpi.window_scale(pygame)
+        if monitor_scale == self._monitor_scale:
+            return tokens.SCALE
+        # The user's zoom is re-read rather than divided back out of the old
+        # product: ``set_scale`` clamps, so on a display scaled past the
+        # ceiling the stored zoom and the zoom in force differ, and recovering
+        # it by division would bake that clamp in permanently -- each move
+        # between two such monitors shrinking the UI again.
+        self._monitor_scale = monitor_scale
+        self.app_ctx.dpi_scale = monitor_scale
+        lo, hi = tokens.ui_scale_bounds(monitor_scale)
+        tokens.set_scale(monitor_scale * min(max(_ui_scale(self.app_ctx.settings), lo), hi))
+        theme.apply(imgui)
+        self.app_ctx.state.fonts_dirty = True
+        # The resize floor follows the monitor too, and a stale one is the
+        # difference between a window that can be made small enough to fit and
+        # one that cannot.
+        self._min_size = _min_window_size(monitor_scale)
+        log.info("display scale changed to %.2fx; rebuilding style and fonts", monitor_scale)
+        return tokens.SCALE
+
     def _on_drop(self, path: Path) -> None:
         from .panes import settings_3d
 
@@ -2125,6 +2181,10 @@ class App:
         # a half-eased width read by the left sidebar and the settled one read
         # by the right would be two columns disagreeing about the same frame.
         layout_mod.tick()
+        # Straight after, and before any column is drawn: how wide a sidebar
+        # can be is a fact about this frame's window, and the left column must
+        # not settle it for itself and leave the right one to find out (UX-01).
+        layout_mod.measure()
         # Recomputed every frame by whoever draws the viewport image. Every
         # mode but 3D returns without drawing it, so it stays false there and
         # the viewer gets no events at all.
@@ -2235,10 +2295,9 @@ class App:
         # instead, so the left column is settings alone (nothing left to split
         # against) and the right column is the two-scroller stack that used to
         # live on the left.
-        from .tokens import sp
 
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
         if layout_mod.pane_child("settings", (sidebar_w, 0)):
             if ctx.state.mode == "2d":
                 settings_2d.draw(ctx)
@@ -2281,10 +2340,9 @@ class App:
 
         from . import layout as layout_mod
         from .panes import poser_controls, poser_library
-        from .tokens import sp
 
         ctx = self.app_ctx
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
         if layout_mod.pane_child("poser-library", (sidebar_w, 0)):
             poser_library.draw(ctx)
         imgui.end_child()
@@ -2458,11 +2516,10 @@ class App:
         from . import clay_mode, widgets
         from . import layout as layout_mod
         from .panes import clay_bridge, clay_outliner, clay_props, clay_tools
-        from .tokens import sp
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
@@ -2669,7 +2726,7 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
         tab = None if ctx.state.inker is None else ctx.state.inker.active
         animated = tab is not None and tab.doc.anim is not None
         imgui.begin_group()
@@ -2735,11 +2792,10 @@ class App:
             plotter_tileset,
             plotter_tools,
         )
-        from .tokens import sp
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
@@ -2788,11 +2844,10 @@ class App:
             packwright_settings,
             packwright_sources,
         )
-        from .tokens import sp
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
         sources_height = imgui.get_content_region_avail().y * lay.settings_share
@@ -2838,12 +2893,11 @@ class App:
 
         from . import layout as layout_mod
         from . import review_mode
-        from .tokens import sp
 
         ctx = self.app_ctx
         state = review_mode.ensure(ctx)
         lay = self.layout
-        sidebar_w = sp(layout_mod.SIDEBAR_W)
+        sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
         runs_height = imgui.get_content_region_avail().y * lay.settings_share
