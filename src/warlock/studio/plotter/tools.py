@@ -62,6 +62,48 @@ def flood_mask(match: np.ndarray, x: int, y: int) -> np.ndarray:
         seen |= grown
 
 
+def _bresenham(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+    """The all-octant integer form, endpoint inclusive."""
+    dx, dy = abs(x1 - x0), -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    out: list[tuple[int, int]] = []
+    x, y = x0, y0
+    while True:
+        out.append((x, y))
+        if x == x1 and y == y1:
+            return out
+        step = 2 * err
+        if step >= dy:
+            err += dy
+            x += sx
+        if step <= dx:
+            err += dx
+            y += sy
+
+
+def line(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
+    """Every cell on the segment from one point to the other, both ends included.
+
+    Integer Bresenham, eight-connected: consecutive cells differ by at most one
+    in each axis, so a shallow diagonal steps rather than leaving gaps. **No
+    clipping** -- the caller places a brush at each cell and every placement
+    clips itself, which is what lets a line be drawn partly off the map exactly
+    as a drag across the edge already is.
+
+    Computed in a canonical direction and reversed when asked backwards, so
+    ``line(a, b)`` is exactly ``reversed(line(b, a))``. Bresenham's error term
+    resolves ties toward whichever end it started from, and a user who drags a
+    line one way, undoes, and drags it the other should not get two different
+    sets of cells out of the same two endpoints.
+    """
+    x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+    if (x1, y1) < (x0, y0):
+        return list(reversed(_bresenham(x1, y1, x0, y0)))
+    return _bresenham(x0, y0, x1, y1)
+
+
 def stamp(data: np.ndarray, x: int, y: int, brush: np.ndarray) -> Region | None:
     """Place a multi-tile brush with its top-left corner at ``(x, y)``.
 

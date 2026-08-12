@@ -160,6 +160,14 @@ class PlotterState:
     drag_anchor: tuple[int, int] | None = None
     drag_object: tuple[float, float] | None = None
     space_held: bool = False
+    # The last cell a stamp actually landed on, which is where Shift+click draws
+    # a line *from* -- Tiled's model. Document-scoped view state: it names a cell
+    # in a particular map, so it is dropped when the tab changes.
+    last_paint: tuple[int, int] | None = None
+    # The cell the open drag last visited, so a fast drag that skips cells can be
+    # filled in. Belongs to the gesture rather than the document, and so is
+    # cleared with the rest of the drag.
+    drag_last_cell: tuple[int, int] | None = None
 
     # -- documents ---------------------------------------------------------
 
@@ -221,6 +229,9 @@ class PlotterState:
         self.brush = None
         self.terrain = None
         self.selected_object = None
+        # Names a cell in the document being left, so a Shift+click in the new
+        # one would draw a line from somewhere the user never clicked.
+        self.last_paint = None
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:
@@ -260,6 +271,9 @@ class PlotterState:
         self.drag_anchor = None
         self.drag_object = None
         self.palette_anchor = None
+        # Not ``last_paint``: that outlives the gesture on purpose, because the
+        # whole point of it is to be there on the *next* click.
+        self.drag_last_cell = None
 
 
 

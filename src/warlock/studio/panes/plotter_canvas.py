@@ -406,23 +406,34 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
     columns, rows = 1, 1
     if state.tool == "stamp" and state.brush is not None:
         rows, columns = state.brush.shape
-    # The parallelogram through four lattice nodes, which degenerates to the
-    # rectangle this used to draw when the map is orthogonal.
-    quad = [
-        inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
-        for column, row in (
-            (cell[0], cell[1]),
-            (cell[0] + columns, cell[1]),
-            (cell[0] + columns, cell[1] + rows),
-            (cell[0], cell[1] + rows),
+
+    def outline(at: tuple[int, int], alpha: float) -> None:
+        # The parallelogram through four lattice nodes, which degenerates to the
+        # rectangle this used to draw when the map is orthogonal.
+        quad = [
+            inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+            for column, row in (
+                (at[0], at[1]),
+                (at[0] + columns, at[1]),
+                (at[0] + columns, at[1] + rows),
+                (at[0], at[1] + rows),
+            )
+        ]
+        draw_list.add_polyline(
+            quad,
+            imgui.get_color_u32((1.0, 1.0, 1.0, alpha)),
+            sp(1.5),
+            imgui.ImDrawFlags_.closed.value,
         )
-    ]
-    draw_list.add_polyline(
-        quad,
-        imgui.get_color_u32((1.0, 1.0, 1.0, 0.75)),
-        sp(1.5),
-        imgui.ImDrawFlags_.closed.value,
-    )
+
+    # Shift with a "from" cell in hand: show the run that is about to land, not
+    # just where the pointer is. Drawn from the same lattice corners as the
+    # footprint, so an isometric map previews as a diagonal of diamonds for
+    # free. Faint, because the cell under the pointer is still the cursor.
+    if _line_pending(state, imgui.get_io()):
+        for step in plotter_tools.line(*state.last_paint, cell[0], cell[1])[:-1]:
+            outline(step, 0.3)
+    outline(cell, 0.75)
 
 
 # --- input --------------------------------------------------------------------
@@ -478,14 +489,63 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
             layer = tab.doc.active()
             if state.tool in ("stamp", "erase", "terrain") and isinstance(layer, TileLayer):
                 tab.doc.begin_stroke(layer.uid)
-            _apply(ctx, state, tab, cell)
+            if _line_pending(state, io):
+                # Inside the session opened just above, so a forty-cell line is
+                # one step exactly as a forty-cell drag is.
+                _apply_line(ctx, state, tab, state.last_paint, cell)
+            else:
+                _apply(ctx, state, tab, cell)
+            state.drag_last_cell = cell
+            if state.tool == "stamp":
+                state.last_paint = cell
     elif state.drag_kind == "paint" and imgui.is_mouse_down(0):
-        _apply(ctx, state, tab, cell)
+        _apply_drag(ctx, state, tab, cell)
     elif state.drag_kind and imgui.is_mouse_released(0):
         if state.drag_kind == "rect" and state.drag_anchor is not None:
             _apply_rect(ctx, state, tab, state.drag_anchor, cell)
         tab.doc.end_stroke()
         state.clear_drag()
+
+
+def _line_pending(state: Any, io: Any) -> bool:
+    """Whether this click should draw a line rather than place one stamp.
+
+    Tiled's rule, and Stamp only: the other tools that repeat on a drag have no
+    "from" -- Erase and Terrain both self-select per cell, so a line of them is
+    a stroke, which the drag already is.
+    """
+    return bool(io.key_shift) and state.tool == "stamp" and state.last_paint is not None
+
+
+def _apply_drag(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
+    """One frame of a paint drag, with the run since the last frame filled in.
+
+    A drag is sampled once a frame, so a fast one arrives as a sequence of cells
+    with gaps between them; painting only the cells the pointer was *seen* in
+    leaves a dotted line. Every write goes into the session already open, so the
+    interpolation costs no extra undo steps.
+    """
+    previous = state.drag_last_cell
+    if previous is None:
+        _apply(ctx, state, tab, cell)
+    else:
+        # ``[1:]`` drops the cell painted last frame. Two samples inside one cell
+        # then leave nothing to do, which falls out rather than being tested for.
+        for step in plotter_tools.line(previous[0], previous[1], cell[0], cell[1])[1:]:
+            _apply(ctx, state, tab, step)
+    state.drag_last_cell = cell
+    if state.tool == "stamp":
+        state.last_paint = cell
+
+
+def _apply_line(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int, int]) -> None:
+    if state.brush is None:
+        # Checked once here rather than per cell: ``_apply`` toasts about an
+        # empty hand, and a forty-cell line would raise forty of them.
+        ctx.toast("Pick a tile from the tileset first.", "error")
+        return
+    for cell in plotter_tools.line(a[0], a[1], b[0], b[1]):
+        _apply(ctx, state, tab, cell)
 
 
 def _terrain_ref(state: Any, doc: Any):

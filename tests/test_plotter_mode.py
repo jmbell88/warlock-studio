@@ -477,6 +477,139 @@ def test_picking_from_the_second_tileset_selects_the_second_tileset():
     assert state.tileset_index == 1
 
 
+def _stamping(ctx: FakeCtx):
+    """A tab with the stamp tool and a one-tile brush in hand."""
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.tool = "stamp"
+    state.brush = np.array([[tab.doc.tilesets[0].firstgid]], gid.DTYPE)
+    return tab, state, tab.doc.tile_layers()[0]
+
+
+def test_a_shift_click_line_is_one_undo_step():
+    """The whole point of drawing it inside the open session: forty cells must
+    cost one Ctrl+Z, exactly as a forty-cell drag does."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    depth = len(tab.doc.history)
+
+    tab.doc.begin_stroke(layer.uid)
+    plotter_canvas._apply_line(ctx, state, tab, (0, 0), (3, 0))
+    tab.doc.end_stroke()
+
+    assert len(tab.doc.history) == depth + 1
+    assert int((layer.data[0, 0:4] != 0).sum()) == 4
+    tab.doc.undo()
+    assert not layer.data.any()
+
+
+def test_a_line_with_nothing_in_hand_toasts_once():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, _layer = _stamping(ctx)
+    state.brush = None
+    plotter_canvas._apply_line(ctx, state, tab, (0, 0), (3, 3))
+    assert len(ctx.toasts) == 1
+
+
+def test_a_fast_drag_paints_the_cells_it_skipped_over():
+    """A drag is sampled once a frame, so a fast one arrives with gaps. Without
+    interpolation the stroke comes out dotted."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    tab.doc.begin_stroke(layer.uid)
+    plotter_canvas._apply_drag(ctx, state, tab, (0, 0))
+    plotter_canvas._apply_drag(ctx, state, tab, (3, 3))  # three cells in one frame
+    tab.doc.end_stroke()
+
+    assert [int(layer.data[i, i] != 0) for i in range(4)] == [1, 1, 1, 1]
+
+
+def test_a_drag_that_stays_in_one_cell_paints_it_once():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    depth = len(tab.doc.history)
+    tab.doc.begin_stroke(layer.uid)
+    for _ in range(5):
+        plotter_canvas._apply_drag(ctx, state, tab, (2, 2))
+    tab.doc.end_stroke()
+    assert len(tab.doc.history) == depth + 1
+    assert int((layer.data != 0).sum()) == 1
+
+
+def test_the_line_origin_follows_the_last_stamp():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, _layer = _stamping(ctx)
+    assert state.last_paint is None
+    plotter_canvas._apply_drag(ctx, state, tab, (2, 3))
+    assert state.last_paint == (2, 3)
+
+
+def test_the_line_origin_does_not_survive_a_tab_switch():
+    """It names a cell in a particular map; a Shift+click in another one would
+    otherwise draw from somewhere the user never clicked."""
+    ctx = FakeCtx()
+    first = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.last_paint = (2, 3)
+    second = plotter_mode.new_document(ctx, (4, 4, 16, 16))
+    assert state.last_paint is None
+
+    state.last_paint = (1, 1)
+    state.activate(first.uid)
+    assert state.last_paint is None
+    assert second is not None
+
+
+def test_a_line_needs_shift_a_stamp_and_somewhere_to_start_from():
+    """All three, because each rules out a different wrong line: no shift is an
+    ordinary click, another tool has no "from" to draw from, and no last cell
+    means the user has not placed anything in this map yet."""
+    from warlock.studio.panes import plotter_canvas
+
+    class Io:
+        def __init__(self, shift):
+            self.key_shift = shift
+
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.tool = "stamp"
+    state.last_paint = (1, 1)
+
+    assert plotter_canvas._line_pending(state, Io(True)) is True
+    assert plotter_canvas._line_pending(state, Io(False)) is False
+
+    state.tool = "erase"
+    assert plotter_canvas._line_pending(state, Io(True)) is False
+
+    state.tool = "stamp"
+    state.last_paint = None
+    assert plotter_canvas._line_pending(state, Io(True)) is False
+
+
+def test_clearing_a_drag_keeps_the_line_origin():
+    """``drag_last_cell`` belongs to the gesture and ``last_paint`` outlives it
+    -- the whole point of the second is to be there on the *next* click."""
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.last_paint = (2, 3)
+    state.drag_last_cell = (2, 3)
+    state.clear_drag()
+    assert state.drag_last_cell is None
+    assert state.last_paint == (2, 3)
+
+
 def _terrain_tab(ctx: FakeCtx):
     """A tab with a generated terrain set adopted and that terrain in hand."""
     tab = _tab(ctx, tileset=False)

@@ -213,6 +213,48 @@ def test_pick_returns_the_encoded_cell_or_none():
     assert tools.pick(layer, 99, 0) is None
 
 
+# --- lines --------------------------------------------------------------------
+
+
+def test_a_line_includes_both_ends_and_steps_one_cell_at_a_time():
+    cells = tools.line(0, 0, 5, 2)
+    assert cells[0] == (0, 0) and cells[-1] == (5, 2)
+    for (ax, ay), (bx, by) in zip(cells[:-1], cells[1:], strict=True):
+        assert max(abs(bx - ax), abs(by - ay)) == 1, "eight-connected: no gaps"
+
+
+def test_a_line_is_the_same_cells_drawn_either_way():
+    """Bresenham resolves ties toward the end it started from, so a user who
+    drags one way, undoes, and drags back must not get a different line."""
+    for a, b in (((0, 0), (5, 2)), ((1, 7), (9, 2)), ((3, 3), (-4, 8)), ((0, 0), (7, 7))):
+        assert tools.line(*a, *b) == list(reversed(tools.line(*b, *a)))
+
+
+def test_a_degenerate_line_is_the_one_cell():
+    assert tools.line(4, 4, 4, 4) == [(4, 4)]
+
+
+def test_steep_shallow_and_axis_aligned_lines_all_span_their_endpoints():
+    steep = tools.line(0, 0, 1, 6)
+    shallow = tools.line(0, 0, 6, 1)
+    vertical = tools.line(2, 0, 2, 4)
+    horizontal = tools.line(0, 2, 4, 2)
+    assert len(steep) == 7 and len(shallow) == 7
+    assert vertical == [(2, 0), (2, 1), (2, 2), (2, 3), (2, 4)]
+    assert horizontal == [(0, 2), (1, 2), (2, 2), (3, 2), (4, 2)]
+
+
+def test_a_line_is_not_clipped_to_anything():
+    """Every placement clips itself, which is what lets a line be drawn partly
+    off the map exactly as a drag across the edge already is."""
+    cells = tools.line(-2, -2, 2, 2)
+    assert (-2, -2) in cells and (0, 0) in cells
+
+
+def test_a_perfect_diagonal_is_pure_diagonal_steps():
+    assert tools.line(0, 0, 4, 4) == [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]
+
+
 # --- transforming a brush -----------------------------------------------------
 
 
