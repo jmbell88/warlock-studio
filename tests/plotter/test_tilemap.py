@@ -458,6 +458,63 @@ def test_a_replace_undoes_back_to_the_original_art():
     assert np.array_equal(doc.tilesets[0].tileset.pixels, original)
 
 
+def test_the_tileset_epoch_moves_for_every_way_the_list_changes():
+    """The three hooks are the tileset list's only mutators, which is the whole
+    licence for a cache keyed on this number."""
+    from warlock.studio.plotter import tilegen
+
+    doc = MapDoc(6, 6, 16, 16)
+    start = doc.tileset_epoch
+
+    doc.add_tileset(_tileset("a"))
+    after_add = doc.tileset_epoch
+    assert after_add > start
+
+    doc.replace_tileset(0, _tileset("b"))
+    after_swap = doc.tileset_epoch
+    assert after_swap > after_add
+
+    # A projection change alone must *not* move it: it changes where a cell is
+    # drawn, never which tileset owns an id.
+    iso = tilegen.generate(tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric"))
+    doc.set_projection("orthogonal")
+    assert doc.tileset_epoch == after_swap
+
+    # ...but one arriving welded to a tileset does, because the tileset does.
+    doc.set_projection("isometric", adding=iso)
+    assert doc.tileset_epoch > after_swap
+
+
+def test_undoing_a_tileset_change_moves_the_epoch_too():
+    """A restored tileset list must not restore the epoch with it -- a cache
+    that matched again on the way back would be serving the wrong answer."""
+    doc = MapDoc(6, 6, 16, 16)
+    doc.add_tileset(_tileset("a"))
+    seen = doc.tileset_epoch
+
+    doc.undo()
+    assert not doc.tilesets
+    assert doc.tileset_epoch > seen
+
+    undone = doc.tileset_epoch
+    doc.redo()
+    assert len(doc.tilesets) == 1
+    assert doc.tileset_epoch > undone
+
+
+def test_a_failed_detach_leaves_the_epoch_alone():
+    """The bump sits past the raise, so nothing invalidates on a no-op."""
+    from warlock.studio.plotter.tileset import TilesetRef
+
+    doc = MapDoc(6, 6, 16, 16)
+    doc.add_tileset(_tileset("a"))
+    settled = doc.tileset_epoch
+    stranger = TilesetRef(firstgid=99, tileset=_tileset("elsewhere"), source="")
+    with pytest.raises(KeyError):
+        doc._detach_tileset(stranger)
+    assert doc.tileset_epoch == settled
+
+
 def test_a_projection_and_its_tileset_arrive_as_one_step():
     """Two steps would leave a Ctrl+Z on a map whose only tileset is drawn for
     the lattice it is no longer on."""

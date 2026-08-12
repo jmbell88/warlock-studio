@@ -2491,6 +2491,18 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     state.brush = np.array([[ref.firstgid]], gid.DTYPE)
     _frame(imgui_ctx, build)
 
+    # The draw loop resolves each id to its tileset through a memo rather than
+    # rescanning the list per visible cell. Asserted here because this is the
+    # only place the real ``_layers`` runs: both painted ids must have landed on
+    # the one tileset, and the flipped cell must resolve like the plain one --
+    # the memo is keyed on the *masked* id, so it would collide otherwise.
+    from warlock.studio.panes import plotter_canvas
+
+    epoch, resolved = plotter_canvas._TILESET_MEMO[tab.uid]
+    assert epoch == tab.doc.tileset_epoch
+    assert resolved[ref.firstgid] == 0
+    assert resolved[ref.firstgid + 1] == 0
+
     # Every tool, twice over: once with no terrain set on the map (the Terrain
     # tool's empty branch, which offers the generator) and once with one and a
     # terrain in hand (the swatch grid). Neither branch executes anywhere else.

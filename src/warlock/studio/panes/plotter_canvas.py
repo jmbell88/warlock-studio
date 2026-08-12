@@ -34,6 +34,44 @@ from . import plotter_layers, plotter_textures
 # cell it is a solid wash rather than a guide, and it costs one line per column.
 MIN_GRID_PX = 6
 
+# Which tileset owns a tile id, memoised per document: ``{uid: (epoch, {id: index})}``.
+#
+# ``MapDoc.resolve`` is a linear scan of the tileset list, and the draw loop below
+# asks once per *visible cell per tile layer* -- so a 60x40 viewport over four
+# layers is ~9,600 scans a frame, every frame, for an answer that changes only
+# when a tileset is attached, detached or swapped. That is what ``tileset_epoch``
+# counts, and because the three hooks it counts are the tileset list's only
+# mutators, an undo invalidates this cache exactly as the edit did.
+#
+# ``None`` is a real memoised answer -- "this id belongs to no tileset here" is
+# the expensive question asked of every cell painted from a tileset that has
+# since been detached -- so absence is spelled with a sentinel, not with ``None``.
+_TILESET_MEMO: dict[str, tuple[int, dict[int, int | None]]] = {}
+_UNMEMOISED = object()
+
+
+def _index_memo(uid: str, epoch: int) -> dict[int, int | None]:
+    """This document's id -> tileset-index map, emptied when the epoch moves."""
+    entry = _TILESET_MEMO.get(uid)
+    if entry is None or entry[0] != epoch:
+        entry = (epoch, {})
+        _TILESET_MEMO[uid] = entry
+    return entry[1]
+
+
+def forget_doc(uid: str) -> None:
+    """Drop a closed document's memo, beside ``plotter_textures.release_doc``.
+
+    A tab uid is never reissued, so a leak here is unbounded rather than merely
+    stale -- the same reason the texture cache is released by uid at the same
+    moment.
+    """
+    _TILESET_MEMO.pop(uid, None)
+
+
+def forget_all() -> None:
+    _TILESET_MEMO.clear()
+
 
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
@@ -231,15 +269,17 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
         return
     zoom = view.zoom
     tile_w, tile_h = doc.tile_w, doc.tile_h
-    # One texture per tileset per frame, resolved once: ``tileset_texture`` is a
-    # dict lookup but ``resolve`` is a linear scan of the tileset list, and the
-    # inner loop runs once per visible cell per layer.
+    # One texture per tileset per frame. This hoist only ever covered the
+    # *upload* -- ``tileset_texture`` is a dict lookup, but deciding which ref
+    # holds a given id stayed a linear scan run once per visible cell per layer,
+    # which is what ``_TILESET_MEMO`` now answers instead.
     refs = {
         index: (ref, plotter_textures.tileset_texture(ctx, tab.uid, index, ref.tileset))
         for index, ref in enumerate(doc.tilesets)
     }
     if not refs:
         return
+    memo = _index_memo(tab.uid, doc.tileset_epoch)
 
     for layer in doc.layers:
         if not isinstance(layer, TileLayer):
@@ -262,14 +302,19 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
             tile_id = int(ids[row, column])
             if not tile_id:
                 continue
-            entry = None
-            for index, (ref, texture) in refs.items():
-                if ref.holds(tile_id):
-                    entry = (ref, texture, index)
-                    break
-            if entry is None or entry[1] is None:
+            index = memo.get(tile_id, _UNMEMOISED)
+            if index is _UNMEMOISED:
+                index = None
+                for candidate, (ref, _texture) in refs.items():
+                    if ref.holds(tile_id):
+                        index = candidate
+                        break
+                memo[tile_id] = index
+            if index is None:
                 continue
-            ref, texture, _index = entry
+            ref, texture = refs[index]
+            if texture is None:
+                continue
             uv = ref.tileset.uv(ref.local(tile_id))
             mask = int(flags[row, column])
             corners = _corner_uvs(

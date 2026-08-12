@@ -330,9 +330,10 @@ def close_tab(ctx: Any, uid: str) -> None:
         return
 
     def drop() -> None:
-        from .panes import plotter_textures
+        from .panes import plotter_canvas, plotter_textures
 
         plotter_textures.release_doc(ctx, uid)
+        plotter_canvas.forget_doc(uid)
         state.close(uid)
 
     if not tab.dirty:
@@ -348,9 +349,10 @@ def close_tab(ctx: Any, uid: str) -> None:
 
 
 def release_all(ctx: Any) -> None:
-    from .panes import plotter_textures
+    from .panes import plotter_canvas, plotter_textures
 
     plotter_textures.release_all(ctx)
+    plotter_canvas.forget_all()
 
 
 # --- keys ---------------------------------------------------------------------

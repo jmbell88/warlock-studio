@@ -106,6 +106,12 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.projection = project.check(projection)
         self.layers: list[Layer] = list(layers or [])
         self.tilesets: list[TilesetRef] = list(tilesets or [])
+        # Bumped by every hook that mutates the tileset list, so a cache keyed
+        # on it is invalidated by an undo exactly as it is by the edit itself --
+        # the hooks are what both paths run through. Not serialized and not
+        # undoable: it counts changes, and a restored count would let a stale
+        # cache match. Starts at 0 and only ever rises.
+        self.tileset_epoch = 0
         self.properties: dict[str, Any] = {}
         # Preserved verbatim across a round trip. Neither is honoured by the
         # renderer yet, and writing back something a user set in Tiled is

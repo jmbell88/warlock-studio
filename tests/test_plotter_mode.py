@@ -615,6 +615,67 @@ def test_the_canvas_and_the_flat_renderer_agree_about_every_flag():
             )
 
 
+def test_the_tileset_memo_is_kept_until_the_epoch_moves():
+    """Which tileset owns an id is a linear scan, asked once per visible cell
+    per layer. It is memoised, and ``tileset_epoch`` is the only thing that may
+    invalidate it. Imgui-free like ``_corner_uvs``, so it is safe headlessly.
+    """
+    from warlock.studio.panes import plotter_canvas
+
+    plotter_canvas.forget_all()
+    memo = plotter_canvas._index_memo("tab-a", 0)
+    memo[7] = 3
+    # Same epoch: the very same dict, so a seeded answer is what the draw loop
+    # reads back -- this is the test that the memo is consulted at all.
+    assert plotter_canvas._index_memo("tab-a", 0) is memo
+    assert plotter_canvas._index_memo("tab-a", 0)[7] == 3
+
+    moved = plotter_canvas._index_memo("tab-a", 1)
+    assert moved is not memo
+    assert moved == {}
+
+
+def test_the_tileset_memo_remembers_that_an_id_belongs_to_nothing():
+    """``None`` is the expensive answer, not the missing one: every cell painted
+    from a since-detached tileset scans the whole list to reach it."""
+    from warlock.studio.panes import plotter_canvas
+
+    plotter_canvas.forget_all()
+    memo = plotter_canvas._index_memo("tab-a", 0)
+    memo[9] = None
+    assert 9 in memo
+    assert memo.get(9, plotter_canvas._UNMEMOISED) is None
+
+
+def test_each_document_memoises_separately():
+    from warlock.studio.panes import plotter_canvas
+
+    plotter_canvas.forget_all()
+    plotter_canvas._index_memo("tab-a", 0)[1] = 0
+    plotter_canvas._index_memo("tab-b", 0)[1] = 1
+    assert plotter_canvas._index_memo("tab-a", 0)[1] == 0
+    assert plotter_canvas._index_memo("tab-b", 0)[1] == 1
+
+    plotter_canvas.forget_doc("tab-a")
+    assert plotter_canvas._index_memo("tab-a", 0) == {}
+    assert plotter_canvas._index_memo("tab-b", 0)[1] == 1
+
+
+def test_closing_a_tab_drops_its_tileset_memo():
+    """A tab uid is never reissued, so a memo left behind leaks rather than
+    merely going stale -- released at the moment the textures are."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    plotter_canvas.forget_all()
+    plotter_canvas._index_memo(tab.uid, tab.doc.tileset_epoch)[1] = 0
+    assert tab.uid in plotter_canvas._TILESET_MEMO
+
+    plotter_mode.close_tab(ctx, tab.uid)
+    assert tab.uid not in plotter_canvas._TILESET_MEMO
+
+
 # --- the guard ----------------------------------------------------------------
 
 

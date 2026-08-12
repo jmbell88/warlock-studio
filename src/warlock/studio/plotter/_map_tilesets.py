@@ -127,11 +127,13 @@ class TilesetOps:
 
     def _attach_tileset(self: MapDoc, ref: TilesetRef) -> None:
         self.tilesets.append(ref)
+        self.tileset_epoch += 1
 
     def _detach_tileset(self: MapDoc, ref: TilesetRef) -> None:
         for index, entry in enumerate(self.tilesets):
             if entry is ref:
                 del self.tilesets[index]
+                self.tileset_epoch += 1
                 return
         raise KeyError("that tileset is not in this map")
 
@@ -140,3 +142,4 @@ class TilesetOps:
 
     def _swap_tileset(self: MapDoc, index: int, ref: TilesetRef) -> None:
         self.tilesets[int(index)] = ref
+        self.tileset_epoch += 1
