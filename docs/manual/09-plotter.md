@@ -102,11 +102,30 @@ you left it.
 | --- | --- | --- |
 | `B` | Stamp | Puts the brush down, following the drag |
 | `E` | Erase | Clears cells, following the drag; a terrain cell re-fits its neighbours |
-| `G` | Fill | Floods the connected run under the cursor, or the terrain field with a terrain in hand |
+| `F` | Fill | Floods the connected run under the cursor, or the terrain field with a terrain in hand |
 | `T` | Terrain | Paints a terrain and re-fits the eight cells around it |
-| `R` | Rect | Fills a rectangle between press and release |
+| `P` | Shape | Fills a rectangle or an ellipse between press and release |
+| `R` | Select | Drags a rectangular selection; a plain click clears it |
 | `I` | Pick | Takes the tile under the cursor as the brush |
-| `O` | Objects | Selects and draws objects (see below) |
+| `S` | Objects | Selects and draws objects (see below) |
+
+The letters are [Tiled](https://www.mapeditor.org/)'s, because that is the editor whose files this
+one reads and writes, and so the one you are most likely arriving from.
+
+**Shape** is one tool with two modes rather than two tools — Tiled's Shape Fill. The buttons for
+rectangle and ellipse appear beside the tools while Shape is in hand. Either way the gesture, the
+outline that previews it and the single undo step are the same; only the cells differ. An ellipse
+is measured from the box you drag and then clipped to the map, so dragging half of one off the edge
+does not reshape the half still on it.
+
+**The brush itself can be transformed before it lands.** `X` mirrors it across, `Y` mirrors it
+down, and `Z` turns it a quarter clockwise (`Shift+Z` turns it back). These move the arrangement
+*and* each tile in it, so a flipped brush stamps a mirrored picture rather than a mirrored
+arrangement of unmirrored tiles.
+
+**Shift+click stamps a line** from the last cell you painted to the one you clicked, and the whole
+line is one undo step. A fast drag no longer skips cells either: the run between one frame's cell
+and the next is filled in.
 
 The fill matches on the tile *and how it is flipped*, so a mirrored wall tile bounds a fill of its
 unmirrored twin. That is deliberate: two cells that draw differently are two different cells, and a
@@ -130,6 +149,19 @@ so it is one thing to take back.
 
 Painting lands on the *active* layer — the highlighted row in the layers pane. Painting with an
 object layer active says so rather than doing nothing.
+
+## Selection
+
+`R` is the rectangular select tool. Drag a marquee; a plain click with no drag clears it. Ctrl+A
+selects the whole map and Ctrl+D deselects (Ctrl+Shift+A does too, which is what Inker uses).
+
+A selection is **not** part of the document. It is not undoable, it is not saved, and dragging one
+across a map does not mark it as changed — Tiled treats selections the same way, and the
+alternative is a map that asks to be saved because you looked at part of it. It is dropped when you
+switch to another map, because it names cells in the one you left.
+
+Esc clears it, but only once there is nothing else to cancel: a drag first, then the selected
+object, then the selection.
 
 ## Layers
 

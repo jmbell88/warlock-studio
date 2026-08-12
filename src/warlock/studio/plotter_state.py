@@ -50,17 +50,29 @@ MAP_SUFFIXES = (WMAP_SUFFIX, TMX_SUFFIX, TMJ_SUFFIX)
 #: not droppable. ``filetypes.describe`` is the same argument one layer up.
 MAP_SUFFIX_TEXT = " / ".join(MAP_SUFFIXES)
 
-# (key, label, letter). B/E/G/R deliberately match the raster editor's brush,
-# eraser, fill and rectangle, because a user arriving from Inker already has
-# that map in their hand.
+# (key, label, letter), and the order is the order of the button grid.
+#
+# **The letters are Tiled's, not the raster editor's.** They used to match
+# Inker's B/E/G/R on the argument that a user arriving from there already had
+# that map in their hand -- but this is a *tile map* editor, and the tool a user
+# reaches for it with is Tiled, where the same four letters mean something else
+# in two cases. Following both was never possible; following the neighbour that
+# shares this editor's file formats is the one that pays.
+#
+# Four letters moved together, and they had to: R is Tiled's rectangular select,
+# so Shape had to vacate it before Select could take it, which is why this is
+# one change rather than four. Fill goes G -> F (Ctrl+G still toggles the grid,
+# a chord, so nothing collides) and Objects goes O -> S, plain, because Ctrl+S
+# is save and a chord does not take the bare letter.
 TOOLS = (
     ("stamp", "Stamp", "B"),
     ("erase", "Erase", "E"),
-    ("fill", "Fill", "G"),
+    ("fill", "Fill", "F"),
     ("terrain", "Terrain", "T"),
-    ("shape", "Shape", "R"),
+    ("shape", "Shape", "P"),
+    ("select", "Select", "R"),
     ("pick", "Pick", "I"),
-    ("object", "Objects", "O"),
+    ("object", "Objects", "S"),
 )
 
 TOOL_KEYS = {letter.lower(): key for key, _label, letter in TOOLS}
@@ -157,11 +169,24 @@ class PlotterState:
     # The object under the cursor's attention, by uid. View state: not
     # undoable and not persisted, exactly as Clay's element selection is.
     selected_object: int | None = None
+    # The marquee, as a normalized *inclusive* cell rect ``(x0, y0, x1, y1)``.
+    #
+    # View state on the mode, beside ``brush`` and ``selected_object``, and
+    # deliberately **not** an undoable document edit: Tiled's selections are not
+    # undoable either, and making one an Edit would mark a saved map dirty
+    # because somebody dragged a marquee across it. It is also not clamped when
+    # stored -- a resize can shrink the map under it -- so every use clamps
+    # against the map's current size instead.
+    select: tuple[int, int, int, int] | None = None
 
     # Canvas drag state, decided on press because several tools start the same
     # way. ``drag_anchor`` is in *tile* coordinates -- the rectangle tool needs
     # the cell the drag began in, not the pixel.
-    drag_kind: str = ""  # "" | paint | rect | pan | object
+    # "" | paint | rect | select | object. No "pan": panning is read from
+    # ``space_held`` and the middle button on the frame, and never claimed a
+    # drag kind -- the value was advertised here for a long time and assigned
+    # nowhere, which is the kind of comment that outlives the code it described.
+    drag_kind: str = ""
     drag_anchor: tuple[int, int] | None = None
     drag_object: tuple[float, float] | None = None
     space_held: bool = False
@@ -237,6 +262,9 @@ class PlotterState:
         # Names a cell in the document being left, so a Shift+click in the new
         # one would draw a line from somewhere the user never clicked.
         self.last_paint = None
+        # Likewise a rectangle of cells: carried across, it would constrain
+        # painting in a map the user never drew it on.
+        self.select = None
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:
@@ -270,6 +298,23 @@ class PlotterState:
         return None
 
     # -- drag ---------------------------------------------------------------
+
+    def selection_in(self, doc: Any) -> tuple[int, int, int, int] | None:
+        """The marquee clamped to one map's current size, or ``None``.
+
+        Clamped here rather than when stored, because the map can change size
+        under a selection: a resize is undoable and the marquee is not, so a
+        rect trimmed at store time could not grow back when the resize was
+        undone. ``None`` when the map has shrunk out from under it entirely.
+        """
+        if self.select is None:
+            return None
+        x0, y0, x1, y1 = self.select
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        x1, y1 = min(int(doc.width) - 1, int(x1)), min(int(doc.height) - 1, int(y1))
+        if x1 < x0 or y1 < y0:
+            return None
+        return x0, y0, x1, y1
 
     def clear_drag(self) -> None:
         self.drag_kind = ""

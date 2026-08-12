@@ -21,6 +21,7 @@ _ICONS = {
     "fill": icons.PAINT_BUCKET,
     "terrain": icons.WAND,
     "shape": icons.SQUARE,
+    "select": icons.SQUARE_DASHED,
     "pick": icons.PIPETTE,
     "object": icons.FLAG,
 }

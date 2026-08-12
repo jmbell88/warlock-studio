@@ -570,6 +570,122 @@ def test_the_line_origin_does_not_survive_a_tab_switch():
     assert second is not None
 
 
+def test_a_marquee_drag_selects_and_a_plain_click_clears_it():
+    """Tiled's gesture, including the last part: a click with no drag is how a
+    selection is dropped without reaching for a menu."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.tool = "select"
+
+    # Press, drag, release -- driven directly, since the gesture branches on
+    # imgui's mouse state.
+    state.drag_kind = "select"
+    state.drag_anchor = (1, 1)
+    state.select = plotter_canvas._normalized((1, 1), (1, 1))
+    state.select = plotter_canvas._normalized(state.drag_anchor, (3, 2))
+    assert state.select == (1, 1, 3, 2)
+
+    # Dragged back past the anchor: still lowest-first.
+    state.select = plotter_canvas._normalized(state.drag_anchor, (0, 0))
+    assert state.select == (0, 0, 1, 1)
+    assert tab is not None
+
+
+def test_a_selection_is_clamped_to_the_map_it_is_used_on():
+    """Clamped at use, not when stored: a resize is undoable and the marquee is
+    not, so a rect trimmed at store time could not grow back."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)  # 4x4
+    state = plotter_mode.ensure(ctx)
+
+    state.select = (2, 2, 99, 99)
+    assert state.selection_in(tab.doc) == (2, 2, 3, 3)
+
+    state.select = (-5, -5, 1, 1)
+    assert state.selection_in(tab.doc) == (0, 0, 1, 1)
+
+    state.select = (10, 10, 20, 20)
+    assert state.selection_in(tab.doc) is None, "wholly off the map is nothing"
+
+    state.select = None
+    assert state.selection_in(tab.doc) is None
+
+
+def test_escape_cancels_one_thing_at_a_time(monkeypatch):
+    """Staged, outermost first: a press that abandons a drag must not also throw
+    away the marquee the user spent a gesture placing."""
+    import pygame
+
+    ctx = FakeCtx()
+    _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.select = (0, 0, 2, 2)
+    state.selected_object = 7
+    state.drag_kind = "paint"
+    event, mods = _key("ESCAPE")
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert state.drag_kind == ""
+    assert state.selected_object == 7 and state.select == (0, 0, 2, 2)
+
+    plotter_mode.handle_key(ctx, event)
+    assert state.selected_object is None
+    assert state.select == (0, 0, 2, 2)
+
+    plotter_mode.handle_key(ctx, event)
+    assert state.select is None
+
+    # Consumed even with nothing left to drop: Esc belongs to this mode.
+    assert plotter_mode.handle_key(ctx, event) is True
+
+
+def test_ctrl_a_selects_everything_and_ctrl_d_drops_it(monkeypatch):
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    head = tab.doc.history.head
+
+    event, mods = _key("a", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    assert plotter_mode.handle_key(ctx, event) is True
+    assert state.select == (0, 0, tab.doc.width - 1, tab.doc.height - 1)
+
+    event, mods = _key("d", ctrl=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert state.select is None
+
+    # Inker's spelling deselects too.
+    state.select = (0, 0, 1, 1)
+    event, mods = _key("a", ctrl=True, shift=True)
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    plotter_mode.handle_key(ctx, event)
+    assert state.select is None
+
+    # None of it touched the document.
+    assert tab.doc.history.head == head
+    assert not tab.dirty
+
+
+def test_a_selection_does_not_survive_a_tab_switch():
+    ctx = FakeCtx()
+    first = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.select = (0, 0, 2, 2)
+    plotter_mode.new_document(ctx, (4, 4, 16, 16))
+    assert state.select is None
+
+    state.select = (0, 0, 1, 1)
+    state.activate(first.uid)
+    assert state.select is None
+
+
 def test_the_shape_tool_fills_whichever_shape_is_chosen():
     """One tool with a mode, not two tools: the gesture, the preview and the
     undo step are the same and only the set of cells differs."""
@@ -923,15 +1039,33 @@ def _key(name: str, *, ctrl: bool = False, shift: bool = False):
 
 
 def test_a_tool_letter_picks_that_tool(monkeypatch):
+    """Every letter, derived from ``TOOLS`` rather than one hard-coded pair:
+    this test named G/fill and so had to be edited by hand when the keymap moved
+    to Tiled's letters, which is exactly the drift the derivation prevents."""
     import pygame
+
+    from warlock.studio import plotter_state
 
     ctx = FakeCtx()
     _tab(ctx)
     state = plotter_mode.ensure(ctx)
-    event, mods = _key("g")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
-    assert plotter_mode.handle_key(ctx, event) is True
-    assert state.tool == "fill"
+    for key, _label, letter in plotter_state.TOOLS:
+        state.tool = "stamp" if key != "stamp" else "erase"
+        event, mods = _key(letter.lower())
+        monkeypatch.setattr(pygame.key, "get_mods", lambda held=mods: held)
+        assert plotter_mode.handle_key(ctx, event) is True, letter
+        assert state.tool == key, f"{letter} should pick {key}"
+
+
+def test_no_tool_letter_collides_with_another_binding():
+    """X, Y and Z transform the brush and are read before the tool table, so a
+    tool that took one of them would be unreachable rather than ambiguous."""
+    from warlock.studio import plotter_mode as mode
+    from warlock.studio import plotter_state
+
+    letters = [letter.lower() for _k, _l, letter in plotter_state.TOOLS]
+    assert len(letters) == len(set(letters)), "two tools share a letter"
+    assert not set(letters) & set(mode._BRUSH_TRANSFORMS), "a tool shadows a brush transform"
 
 
 def test_undo_is_refused_while_the_tab_is_busy(monkeypatch):

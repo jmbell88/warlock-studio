@@ -181,11 +181,16 @@ to the current one, and **Alt** subtracts. Both are described in
 | --- | --- |
 | `B` | Stamp |
 | `E` | Erase |
-| `G` | Fill |
+| `F` | Fill |
 | `T` | Terrain |
-| `R` | Rect |
+| `P` | Shape (rectangle or ellipse) |
+| `R` | Rectangular select |
 | `I` | Pick the tile under the cursor |
-| `O` | Objects |
+| `S` | Objects |
+| `X` / `Y` | Flip the brush across / down |
+| `Z` | Turn the brush a quarter clockwise (Shift+Z turns it back) |
+| Shift+click | Stamp a line from the last cell painted |
+| Ctrl+A / Ctrl+D | Select all / deselect (Ctrl+Shift+A also deselects) |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+E | Export to the library |
@@ -197,10 +202,14 @@ to the current one, and **Alt** subtracts. Both are described in
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous map |
 | Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
 | Space drag, middle drag | Pan (the wheel zooms) |
-| Esc | Cancel a drag, then deselect the object |
+| Esc | Cancel a drag, then the object, then the selection |
 
-The tool letters match [Inker](07-inker.md)'s brush, eraser, fill and rectangle, because a user
-arriving from there already has that map in their hand.
+The tool letters are [Tiled](https://www.mapeditor.org/)'s. This editor reads and writes Tiled's
+files, so the editor you are most likely arriving from is that one — and its letters differ from
+[Inker](07-inker.md)'s in two places, so following both was never possible.
+
+Esc is **staged**: one press undoes one thing, outermost first. Cancelling a drag does not also
+throw away the selection you spent a gesture placing.
 
 ## Packwright
 

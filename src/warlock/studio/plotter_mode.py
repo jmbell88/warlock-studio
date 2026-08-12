@@ -451,10 +451,18 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return _ctrl_key(ctx, state, tab, name, shift=shift)
 
     if event.key == pygame.K_ESCAPE:
-        # In-mode only: Esc drops a drag or an object selection and never
-        # leaves the mode, which is what every work mode does.
-        state.clear_drag()
-        state.selected_object = None
+        # In-mode only: Esc never leaves the mode, which is what every work mode
+        # does. **Staged**, the raster editor's idiom, rather than clearing
+        # everything at once: one press undoes one thing, outermost first, so a
+        # user who pressed it to abandon a drag does not also lose the marquee
+        # they spent a gesture placing. Consumed either way -- Esc belongs to
+        # this mode even when there is nothing left for it to drop.
+        if state.drag_kind:
+            state.clear_drag()
+        elif state.selected_object is not None:
+            state.selected_object = None
+        else:
+            state.select = None
         return True
     if name in _BRUSH_TRANSFORMS and state.brush is not None:
         # Tiled's X / Y / Z. Deliberately outside the busy gate: the brush is
@@ -501,6 +509,15 @@ def _ctrl_key(
         return True
     if name == "g":
         state.grid = not state.grid
+        return True
+    if name == "a":
+        # Ctrl+Shift+A deselects, which is Inker's spelling; Ctrl+D is Tiled's.
+        # Both, because this editor is reached from both, and neither is taken.
+        # View state, so outside the busy gate: a marquee writes nothing.
+        state.select = None if shift else (0, 0, tab.doc.width - 1, tab.doc.height - 1)
+        return True
+    if name == "d":
+        state.select = None
         return True
     if name == "tab":
         state.cycle(-1 if shift else 1)

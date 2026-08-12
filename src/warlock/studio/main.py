@@ -3773,6 +3773,9 @@ class App:
                     " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
                     " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),
                 ),
+                ("X / Y / Z", "Flip the brush across, down; turn it (Shift turns back)"),
+                ("Shift+click", "Stamp a line from the last cell painted"),
+                ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
                 ("Ctrl+E", "Export to the library"),
@@ -3782,6 +3785,7 @@ class App:
                 ("Ctrl+Tab", "Next map"),
                 ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
                 ("Space / middle drag", "Pan (wheel zooms)"),
+                ("Esc", "Cancel a drag, then the object, then the selection"),
             ],
         )
         table(

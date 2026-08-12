@@ -117,6 +117,9 @@ def draw(ctx: Any) -> None:
         _grid(draw_list, doc, view, (origin.x, origin.y))
     if state.show_objects:
         _objects(state, doc, draw_list, view, (origin.x, origin.y))
+    # Above the grid so its edge reads against one, below the cursor so the
+    # footprint stays the thing under the pointer.
+    _marquee(state, tab, draw_list, (origin.x, origin.y))
     _cursor(state, tab, draw_list, (origin.x, origin.y), hovered)
     draw_list.pop_clip_rect()
 
@@ -389,6 +392,34 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
 
 
+def _marquee(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """The selection, as a low-alpha fill with an outline on it.
+
+    Drawn from the clamped rect rather than the stored one, so a marquee left
+    hanging over a map that has since been resized shows what it actually
+    constrains. A parallelogram through four lattice nodes, the footprint's
+    idiom, so the isometric case is the same four calls.
+    """
+    from imgui_bundle import imgui
+
+    rect = state.selection_in(tab.doc)
+    if rect is None:
+        return
+    x0, y0, x1, y1 = rect
+    doc, view = tab.doc, tab.view
+    quad = [
+        inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+        for column, row in ((x0, y0), (x1 + 1, y0), (x1 + 1, y1 + 1), (x0, y1 + 1))
+    ]
+    draw_list.add_convex_poly_filled(quad, imgui.get_color_u32(theme.rgba(theme.ACCENT, 0.15)))
+    draw_list.add_polyline(
+        quad,
+        imgui.get_color_u32(theme.rgba(theme.ACCENT)),
+        sp(1.5),
+        imgui.ImDrawFlags_.closed.value,
+    )
+
+
 def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None:
     """The brush footprint under the pointer.
 
@@ -540,6 +571,10 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
         _object_input(ctx, state, tab, origin, hovered)
         return
 
+    if state.tool == "select":
+        _select_input(state, tab, cell, hovered)
+        return
+
     if hovered and imgui.is_mouse_clicked(0):
         # The drag *kind* stays "rect" whatever the shape tool is filling: the
         # gesture is a corner-to-corner drag either way, and only what lands at
@@ -580,6 +615,39 @@ def _line_pending(state: Any, io: Any) -> bool:
     a stroke, which the drag already is.
     """
     return bool(io.key_shift) and state.tool == "stamp" and state.last_paint is not None
+
+
+def _normalized(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Two dragged corners as an inclusive ``(x0, y0, x1, y1)``, lowest first."""
+    lo_x, hi_x = sorted((int(a[0]), int(b[0])))
+    lo_y, hi_y = sorted((int(a[1]), int(b[1])))
+    return lo_x, lo_y, hi_x, hi_y
+
+
+def _select_input(state: Any, tab: Any, cell: tuple[int, int], hovered: bool) -> None:
+    """The marquee gesture: press anchors, drag resizes, a plain click clears.
+
+    Tiled's behaviour, including the last part -- a click with no drag is how
+    you get rid of a selection without reaching for a menu. Stored unclamped
+    (``selection_in`` clamps at use), and it writes nothing to the document, so
+    none of this is guarded by ``tab.busy``: the guard above already returned.
+    """
+    from imgui_bundle import imgui
+
+    if hovered and imgui.is_mouse_clicked(0):
+        state.drag_kind = "select"
+        state.drag_anchor = cell
+        state.select = _normalized(cell, cell)
+    elif state.drag_kind == "select" and imgui.is_mouse_down(0):
+        if state.drag_anchor is not None:
+            state.select = _normalized(state.drag_anchor, cell)
+    elif state.drag_kind == "select" and imgui.is_mouse_released(0):
+        # A press and release inside one cell is a click, not a one-cell
+        # selection: the marquee is already that rect, so compare rather than
+        # tracking whether the pointer moved.
+        if state.select == _normalized(cell, cell):
+            state.select = None
+        state.clear_drag()
 
 
 def _apply_drag(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
