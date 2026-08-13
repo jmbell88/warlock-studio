@@ -18,8 +18,6 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 MATRIX = Path(__file__).resolve().parents[2] / "docs" / "PLOTTER_COMPAT.md"
 ENGINE = Path(__file__).resolve().parents[2] / "src" / "warlock" / "studio" / "plotter"
 

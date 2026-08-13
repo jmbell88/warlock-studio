@@ -58,7 +58,7 @@ def _prop(value: Any) -> Any:
     kind = getattr(value, "type", None)
     if kind is None:
         return ["untyped", value if not isinstance(value, float) else _num(value)]
-    raw = getattr(value, "value")
+    raw = value.value
     return [kind, _num(raw) if kind == "float" else raw]
 
 

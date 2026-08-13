@@ -85,7 +85,9 @@ def test_a_float_written_two_ways_compares_equal():
         pytest.param(lambda d: d.set_layer_props(d.layers[0].uid, visible=False), id="visible"),
         pytest.param(lambda d: d.set_layer_props(d.layers[0].uid, locked=True), id="locked"),
         pytest.param(
-            lambda d: d.write_region(d.layers[0].uid, 0, 0, np.full((1, 1), gid.compose(9), gid.DTYPE)),
+            lambda d: d.write_region(
+                d.layers[0].uid, 0, 0, np.full((1, 1), gid.compose(9), gid.DTYPE)
+            ),
             id="cells",
         ),
         pytest.param(
