@@ -50,6 +50,10 @@ def _read(source: str, directory: Path, extra: dict[str, bytes]) -> bytes:
             return extra[key]
     candidate = directory / source
     if not candidate.is_file():
+        # Falls back to the bare basename, which would resolve to the wrong
+        # file if two references in the corpus ever shared one -- fine for a
+        # flat fixture directory where every stem is unique by construction,
+        # but not a guarantee this function itself makes.
         candidate = directory / Path(source).name
     return candidate.read_bytes()
 

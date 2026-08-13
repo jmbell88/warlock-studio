@@ -98,8 +98,19 @@ def test_a_float_written_two_ways_compares_equal():
             lambda d: setattr(d.layers[1].objects[0], "obj_class", "Spawn"), id="object-class"
         ),
         pytest.param(
-            lambda d: d.__setattr__("properties", {"theme": tsx.Prop("string", "forest")}),
+            lambda d: setattr(d, "properties", {"theme": tsx.Prop("string", "forest")}),
             id="map-properties",
+        ),
+        pytest.param(lambda d: setattr(d, "width", 7), id="map-width"),
+        pytest.param(lambda d: setattr(d.layers[1].objects[0], "kind", "rect"), id="object-kind"),
+        pytest.param(
+            lambda d: setattr(d.layers[1].objects[0], "visible", False), id="object-visible"
+        ),
+        pytest.param(
+            lambda d: d.set_layer_props(
+                d.layers[0].uid, properties={"foo": tsx.Prop("string", "bar")}
+            ),
+            id="layer-properties",
         ),
     ],
 )
@@ -111,6 +122,54 @@ def test_every_field_the_comparator_claims_to_cover_actually_moves_it(mutate):
     doc = _doc()
     mutate(doc)
     assert doc_facts(doc) != before
+
+
+def test_a_tilesets_firstgid_moves_the_facts():
+    """``firstgid`` is allocated by ``add_tileset`` from append order and the
+    ref that carries it is frozen, so there is no mutator to reach for here --
+    unlike the cases above, this is a standalone test rather than a
+    ``pytest.param`` lambda, built with ``dataclasses.replace`` so only
+    ``firstgid`` moves and the tileset's own content and the document's
+    tileset order do not."""
+    import dataclasses
+
+    doc = _doc()
+    before = doc_facts(doc)
+    doc.tilesets[0] = dataclasses.replace(doc.tilesets[0], firstgid=99)
+    assert doc_facts(doc) != before
+
+
+def test_a_tilesets_terrain_order_moves_the_facts():
+    """A terrain's position in the list is precedence, per :class:`TerrainSpec`'s
+    own docstring in ``tileset.py`` -- when a cell sits between two terrains,
+    the earlier one wins. Reordering two terrains without changing either one
+    must therefore move the facts. ``Tileset`` is frozen, so this is built as
+    two documents rather than one mutated in place."""
+    from warlock.studio.plotter import blob
+    from warlock.studio.plotter.tileset import TerrainSpec
+
+    terrains = (
+        TerrainSpec(name="grass", fill=(0, 255, 0, 255), outline=(0, 128, 0, 255)),
+        TerrainSpec(name="sand", fill=(255, 255, 0, 255), outline=(128, 128, 0, 255)),
+    )
+
+    # A terrain set is a strict grid: one column per blob case, one row per
+    # terrain -- see the shape check in ``Tileset.__post_init__`` -- so the
+    # atlas has to be sized for it rather than reused from ``_pixels()``.
+    def _with_terrains(order: tuple[TerrainSpec, ...]) -> MapDoc:
+        doc = MapDoc(6, 4, 16, 16)
+        pixels = _pixels(blob.TILE_COUNT * 16, len(order) * 16)
+        doc.add_tileset(
+            Tileset(name="terrain", pixels=pixels, tile_w=16, tile_h=16, terrains=order)
+        )
+        return doc
+
+    assert doc_facts(_with_terrains(terrains)) != doc_facts(
+        _with_terrains(tuple(reversed(terrains)))
+    )
+    # And a sanity check that the helper itself is not accidentally always
+    # different for some unrelated reason (e.g. object identity leaking in).
+    assert doc_facts(_with_terrains(terrains)) == doc_facts(_with_terrains(terrains))
 
 
 def test_a_different_atlas_moves_the_facts():

@@ -21,7 +21,7 @@ from pathlib import Path
 MATRIX = Path(__file__).resolve().parents[2] / "docs" / "PLOTTER_COMPAT.md"
 ENGINE = Path(__file__).resolve().parents[2] / "src" / "warlock" / "studio" / "plotter"
 
-STATES = {"round-trips", "refused", "preserved-verbatim"}
+STATES = {"round-trips", "refused", "preserved-verbatim", "silently-dropped"}
 
 
 def _normal_form(node: ast.expr) -> str | None:
@@ -49,6 +49,12 @@ def _normal_form(node: ast.expr) -> str | None:
 # site can actually raise, read off the code. A *new* computed site fails the
 # scan until it is added here -- the exception is enumerated rather than
 # waived, which is what keeps both directions of the ledger honest.
+#
+# Keyed by (filename, enclosing function name); a call at module scope keys
+# under "<module>". The key names *where the call to TiledUnsupported sits*,
+# not how it reaches ``raise`` -- the scan below no longer cares whether the
+# call is the direct argument of a ``raise`` or is assigned to a name and
+# raised later, so the key does not need to either.
 DYNAMIC_REFUSALS: dict[tuple[str, str], tuple[str, ...]] = {
     ("tmx.py", "_refuse_object_shape"): (
         "ellipse objects",
@@ -59,34 +65,62 @@ DYNAMIC_REFUSALS: dict[tuple[str, str], tuple[str, ...]] = {
 }
 
 
+class _RefusalCallVisitor(ast.NodeVisitor):
+    """Every call to ``TiledUnsupported`` in one module, wherever it sits.
+
+    Deliberately not a ``raise ... `` matcher: ``raise TiledUnsupported(...)`` is
+    the common spelling but not the only legal one -- ``err =
+    TiledUnsupported(...); raise err`` constructs the same exception, and a scan
+    that only looks at ``ast.Raise.exc`` would wave that spelling straight
+    through with no assertion at all. Finding the *call* rather than the
+    *raise* is what makes both spellings, and a callee written as
+    ``tsx.TiledUnsupported`` or raised at module scope, visible to the ledger.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._stack: list[str] = []
+        self.found: set[str] = set()
+
+    def _enter_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    visit_FunctionDef = _enter_function
+    visit_AsyncFunctionDef = _enter_function
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        callee = func.id if isinstance(func, ast.Name) else (
+            func.attr if isinstance(func, ast.Attribute) else None
+        )
+        if callee == "TiledUnsupported":
+            self._record(node)
+        self.generic_visit(node)
+
+    def _record(self, node: ast.Call) -> None:
+        feature = _normal_form(node.args[0]) if node.args else None
+        if feature is not None:
+            self.found.add(feature)
+            return
+        where = self._stack[-1] if self._stack else "<module>"
+        declared = DYNAMIC_REFUSALS.get((self.path.name, where))
+        assert declared is not None, (
+            f"{self.path.name}:{node.lineno} ({where}) calls TiledUnsupported with a "
+            "computed feature the scan cannot read -- declare it in DYNAMIC_REFUSALS "
+            "with the features it raises, or make the argument a literal"
+        )
+        self.found.update(declared)
+
+
 def _raised_features() -> set[str]:
     found: set[str] = set()
-    for path in sorted(ENGINE.glob("*.py")):
+    for path in sorted(ENGINE.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for func in ast.walk(tree):
-            if not isinstance(func, ast.FunctionDef):
-                continue
-            for node in ast.walk(func):
-                if not isinstance(node, ast.Raise) or node.exc is None:
-                    continue
-                call = node.exc
-                if not isinstance(call, ast.Call):
-                    continue
-                if not (isinstance(call.func, ast.Name) and call.func.id == "TiledUnsupported"):
-                    continue
-                if not call.args:
-                    continue
-                feature = _normal_form(call.args[0])
-                if feature is not None:
-                    found.add(feature)
-                    continue
-                declared = DYNAMIC_REFUSALS.get((path.name, func.name))
-                assert declared is not None, (
-                    f"{path.name}:{func.name} raises TiledUnsupported with a computed "
-                    "feature the scan cannot read -- declare it in DYNAMIC_REFUSALS "
-                    "with the features it raises, or make the argument a literal"
-                )
-                found.update(declared)
+        visitor = _RefusalCallVisitor(path)
+        visitor.visit(tree)
+        found |= visitor.found
     return found
 
 
@@ -148,13 +182,17 @@ def test_every_refused_row_still_refuses():
 
 def test_a_row_that_claims_to_round_trip_names_a_fixture_that_exists():
     """A ``round-trips`` claim is only worth what backs it. The note column
-    carries the fixture stem in backticks; the file has to be there."""
+    carries the fixture stem behind a ``fixture:`` marker -- see the ``Feature
+    names are...`` intro paragraph and the ``round-trips`` bullet in the doc's
+    own header -- rather than in any backticked word, because notes already
+    carry unrelated backticked prose (` ``zstd`` `, format names, and so on)
+    that an unanchored pattern would mistake for a fixture stem."""
     from ._corpus import FIXTURE_DIR
 
     for feature, state, note in _rows():
         if state != "round-trips":
             continue
-        stems = re.findall(r"`([a-z0-9-]+)`", note)
+        stems = re.findall(r"fixture:\s*`([a-z0-9-]+)`", note)
         assert stems, f"{feature!r} claims to round-trip but names no fixture"
         for stem in stems:
             assert (FIXTURE_DIR / f"{stem}.tmx").is_file(), (

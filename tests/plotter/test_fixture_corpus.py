@@ -37,9 +37,19 @@ def test_the_fixture_directory_and_its_recipe_exist():
 def test_every_required_fixture_is_present():
     """``MANIFEST`` is the shopping list and ``pairs()`` is what is on the
     shelf. Comparing them is what stops this file passing over an empty
-    directory -- a corpus test that only iterates what it finds is not a gate."""
-    missing = [stem for stem in MANIFEST if stem not in pairs()]
+    directory -- a corpus test that only iterates what it finds is not a gate.
+
+    Checked both ways: a stem ``pairs()`` has that ``MANIFEST`` does not is
+    just as much a defect as the reverse. ``FIXTURES.md`` says it plainly --
+    "a file in this directory that nothing lists is a file nothing tests" --
+    and a one-directional check would let seven fixtures ship with six listed
+    and never notice the seventh was going untested.
+    """
+    on_shelf = pairs()
+    missing = [stem for stem in MANIFEST if stem not in on_shelf]
     assert not missing, f"missing fixture pairs: {missing}"
+    unlisted = [stem for stem in on_shelf if stem not in MANIFEST]
+    assert not unlisted, f"fixture pairs present but not in MANIFEST: {unlisted}"
 
 
 @pytest.mark.parametrize("stem", MANIFEST)
@@ -90,12 +100,15 @@ def test_a_tiled_map_survives_our_own_save_format(stem):
     assert doc_facts(again) == doc_facts(original)
 
 
-def test_two_exports_of_a_fixture_are_byte_identical():
+@pytest.mark.parametrize("stem", MANIFEST)
+def test_two_exports_of_a_fixture_are_byte_identical(stem):
     """The determinism rule, applied to the corpus rather than to a synthetic
-    document. Skipped rather than failed while the corpus is empty, because
-    'no fixtures yet' is a state this milestone passes through on purpose."""
-    if not MANIFEST:
-        pytest.skip("no fixtures authored yet")
+    document, and to every fixture rather than only the first -- a writer
+    that is deterministic on one map and not another is a writer with a
+    conditional in it somewhere, and the first fixture alone cannot find it.
+    Collects zero cases while the corpus is empty, consistent with every
+    other parametrized test in this file: 'no fixtures yet' is a state this
+    milestone passes through on purpose, not a failure to paper over."""
     loaders = loaders_for(FIXTURE_DIR)
-    doc = tmx.read_tmx((FIXTURE_DIR / f"{MANIFEST[0]}.tmx").read_bytes(), **loaders)
+    doc = tmx.read_tmx((FIXTURE_DIR / f"{stem}.tmx").read_bytes(), **loaders)
     assert tmx.tmx_export(doc) == tmx.tmx_export(doc)
