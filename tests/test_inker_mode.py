@@ -527,43 +527,74 @@ def _dirty_tab(state, title="a"):
     return tab
 
 
-def test_a_clean_document_is_never_autosaved(tmp_path):
-    from warlock.studio import inker, inker_mode
+def _sidecar(root, payload, title, kind="inker"):
+    """Write the completion gate beside a payload, as the journal would."""
+    import json as _json
+
+    from warlock.studio import journal
+
+    journal.meta_path(payload).write_text(
+        _json.dumps(
+            {
+                "version": journal.VERSION,
+                "kind": kind,
+                "title": title,
+                "uid": "pd9",
+                "at": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return payload
+
+
+def _leave_behind(root, title, kind="inker"):
+    """A crash copy from a previous session: payload *and* sidecar."""
+    payload = root / f"{title}-pd9.ora"
+    payload.write_bytes(b"not really an ora")
+    return _sidecar(root, payload, title, kind=kind)
+
+
+def test_a_clean_document_is_never_journalled(tmp_path):
+    from warlock.studio import inker, inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     doc = inker.Document.blank(8, 8)
     state.add(InkerDoc(doc=doc, title="clean", saved_head=doc.history.head))
-    inker_mode.pump_autosave(ctx, now=10_000.0)
+    journal.pump(ctx, now=10_000.0)
     assert ctx.submitted == []
     assert not list(tmp_path.glob("*.ora"))
 
 
-def test_a_dirty_document_is_autosaved_once_the_interval_has_passed(tmp_path):
-    from warlock.studio import inker_mode
+def test_a_dirty_document_is_journalled_once_the_interval_has_passed(tmp_path):
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
 
-    inker_mode.pump_autosave(ctx, now=0.0)
+    journal.pump(ctx, now=0.0)
     assert ctx.submitted == [], "not immediately -- the interval starts at zero"
-    inker_mode.pump_autosave(ctx, now=inker_mode.AUTOSAVE_SECONDS + 1.0)
-    assert ctx.submitted == [f"inker-autosave:{tab.uid}"]
-    assert (tmp_path / tab.autosave_name).exists()
+    journal.pump(ctx, now=journal.JOURNAL_SECONDS + 1.0)
+    assert ctx.submitted == [f"journal:inker:{tab.uid}"]
+    assert (tmp_path / tab.journal_name).exists()
+    # And the sidecar, which is the completion gate: a payload without one was
+    # interrupted mid-write and is never offered.
+    assert journal.meta_path(tmp_path / tab.journal_name).exists()
 
 
-def test_an_autosave_is_not_a_save(tmp_path):
+def test_a_journal_entry_is_not_a_save(tmp_path):
     """It must not clear dirty, move the saved head or retitle the tab: all
     three would answer "where should this go" on the user's behalf."""
-    from warlock.studio import inker_mode
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
     head, title = tab.saved_head, tab.title
 
-    inker_mode.pump_autosave(ctx, now=inker_mode.AUTOSAVE_SECONDS + 1.0)
+    journal.pump(ctx, now=journal.JOURNAL_SECONDS + 1.0)
     assert tab.dirty
     assert tab.saved_head == head
     assert tab.title == title
@@ -573,84 +604,140 @@ def test_an_autosave_is_not_a_save(tmp_path):
 
 def test_an_idle_document_is_not_rewritten_every_interval(tmp_path):
     """Compared against the history head rather than tracked with a flag, so
-    an undo back to the autosaved position is not a new edit either."""
-    from warlock.studio import inker_mode
+    an undo back to the journalled position is not a new edit either."""
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     _dirty_tab(state)
 
-    inker_mode.pump_autosave(ctx, now=200.0)
-    inker_mode.pump_autosave(ctx, now=400.0)
+    journal.pump(ctx, now=200.0)
+    journal.pump(ctx, now=400.0)
     assert len(ctx.submitted) == 1
 
     state.active.doc.add_layer()
-    inker_mode.pump_autosave(ctx, now=600.0)
+    journal.pump(ctx, now=600.0)
     assert len(ctx.submitted) == 2
 
 
 def test_a_busy_document_is_skipped(tmp_path):
     """write_ora walks the stack; a second encode mid-save is the archive whose
     parts disagree about the canvas size."""
-    from warlock.studio import inker_mode
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
     tab.saving = True
-    inker_mode.pump_autosave(ctx, now=10_000.0)
+    journal.pump(ctx, now=10_000.0)
     assert ctx.submitted == []
 
 
 def test_saving_for_real_drops_the_crash_copy(tmp_path):
-    from warlock.studio import inker_mode
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
-    inker_mode.pump_autosave(ctx, now=10_000.0)
-    path = tmp_path / tab.autosave_name
-    assert path.exists()
+    journal.pump(ctx, now=10_000.0)
+    path = tmp_path / tab.journal_name
+    assert path.exists() and journal.meta_path(path).exists()
 
     inker_mode.drop_autosave(ctx, tab)
     assert not path.exists()
-    assert tab.autosave_name == ""
+    assert not journal.meta_path(path).exists()
+    assert tab.journal_name == ""
 
 
 def test_dropping_a_copy_that_is_already_gone_does_not_raise(tmp_path):
     """Cleanup, not an edit."""
-    from warlock.studio import inker_mode
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
-    inker_mode.pump_autosave(ctx, now=10_000.0)
-    (tmp_path / tab.autosave_name).unlink()
+    journal.pump(ctx, now=10_000.0)
+    (tmp_path / tab.journal_name).unlink()
     inker_mode.drop_autosave(ctx, tab)
 
 
 def test_recovery_is_offered_only_when_something_was_left_behind(tmp_path):
-    from warlock.studio import inker_mode
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
-    assert inker_mode.offer_recovery(ctx) is False
+    inker_mode.ensure(ctx)
+    assert journal.offer(ctx) is False
     assert ctx.confirms.pending is None
 
-    (tmp_path / "sketch-pd9.ora").write_bytes(b"not really an ora")
-    assert inker_mode.offer_recovery(ctx) is True
+    _leave_behind(tmp_path, "sketch")
+    assert journal.offer(ctx) is True
     assert ctx.confirms.pending is not None
     assert "sketch" in ctx.confirms.pending.message
 
 
-def test_declining_recovery_keeps_the_files(tmp_path):
-    """"Not now" is not "delete my work"."""
-    from warlock.studio import inker_mode
+def test_a_payload_with_no_sidecar_is_never_offered(tmp_path):
+    """The completion gate. A copy interrupted between the two writes is a
+    payload nothing knows the shape of, and offering it would hand the user a
+    truncated archive as though it were their work."""
+    from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
-    left = tmp_path / "sketch-pd9.ora"
-    left.write_bytes(b"x")
-    inker_mode.offer_recovery(ctx)
+    inker_mode.ensure(ctx)
+    (tmp_path / "half-pd9.ora").write_bytes(b"interrupted")
+    assert journal.recoverable(ctx) == []
+    assert journal.offer(ctx) is False
+
+
+def test_a_sidecar_naming_a_payload_that_has_gone_is_skipped(tmp_path):
+    from warlock.studio import inker_mode, journal
+
+    ctx = _AutosaveCtx(tmp_path)
+    inker_mode.ensure(ctx)
+    _leave_behind(tmp_path, "sketch")
+    (tmp_path / "sketch-pd9.ora").unlink()
+    assert journal.recoverable(ctx) == []
+
+
+def test_a_sidecar_from_a_version_nobody_understands_is_skipped(tmp_path):
+    """A half-understood recovery is worse than none."""
+    import json as _json
+
+    from warlock.studio import inker_mode, journal
+
+    ctx = _AutosaveCtx(tmp_path)
+    inker_mode.ensure(ctx)
+    _leave_behind(tmp_path, "sketch")
+    side = journal.meta_path(tmp_path / "sketch-pd9.ora")
+    side.write_text(_json.dumps({"version": 99, "kind": "inker"}), encoding="utf-8")
+    assert journal.recoverable(ctx) == []
+
+
+def test_declining_recovery_keeps_the_files(tmp_path):
+    """"Not now" is not "delete my work"."""
+    from warlock.studio import inker_mode, journal
+
+    ctx = _AutosaveCtx(tmp_path)
+    inker_mode.ensure(ctx)
+    left = _leave_behind(tmp_path, "sketch")
+    journal.offer(ctx)
     ctx.confirms.dismiss()
+    assert left.exists()
+    assert journal.meta_path(left).exists()
+
+
+def test_a_kind_nothing_can_adopt_is_skipped_rather_than_deleted(tmp_path):
+    """The mode may simply not be built into this run, and deleting somebody's
+    work because this build does not understand it is the one outcome worse
+    than not offering it."""
+    from warlock.studio import inker_mode, journal
+
+    ctx = _AutosaveCtx(tmp_path)
+    inker_mode.ensure(ctx)
+    left = _leave_behind(tmp_path, "mystery", kind="from-the-future")
+    found = journal.recoverable(ctx)
+    assert [r.kind for r in found] == ["from-the-future"]
+    assert found[0].adoptable is False
+    assert journal.adopt(ctx, found) == 0
     assert left.exists()
 
 
@@ -658,7 +745,7 @@ def test_a_recovered_document_opens_untitled_and_dirty(tmp_path):
     """The file it was copied from may still be on disk with its own contents,
     so adopting the path would arm Ctrl+S to overwrite something the user has
     not looked at."""
-    from warlock.studio import inker, inker_mode
+    from warlock.studio import inker, inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
@@ -666,8 +753,9 @@ def test_a_recovered_document_opens_untitled_and_dirty(tmp_path):
     source.stack.active.pixels[:, :] = (1, 2, 3, 255)
     path = tmp_path / "sketch-pd9.ora"
     inker.write_ora(source, path)
+    _sidecar(tmp_path, path, "sketch")
 
-    inker_mode.recover(ctx, [path])
+    journal.adopt(ctx, journal.recoverable(ctx))
     inker_mode.on_task_done(
         ctx,
         type("Done", (), {"key": "inker-recover:1", "result": ctx.result})(),
@@ -677,7 +765,7 @@ def test_a_recovered_document_opens_untitled_and_dirty(tmp_path):
     assert tab.path is None
     assert tab.dirty
     assert "recovered" in tab.title
-    assert tab.autosave_name == path.name
+    assert tab.journal_name == path.name
 
 
 # --- a custom new canvas (Ink7) ----------------------------------------------

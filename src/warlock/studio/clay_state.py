@@ -110,6 +110,15 @@ class ClayTab:
     # because it counts changes and an undo is one.
     saved_head: int = 0
     saving: bool = False
+
+    # Crash-safety, owned by :mod:`studio.journal` (UX-05). Inker's three
+    # fields, verbatim, because they are the same three questions: which file
+    # this tab owns under the autosave directory (minted on the first copy, so
+    # an untouched tab litters nothing), the history position that copy
+    # captured (an undo back to it is not a new edit), and the debounce.
+    journal_name: str = ""
+    journal_head: int | None = None
+    journal_at: float = 0.0
     # The asset this document was last exported to, if any. Not a link in the
     # raster editor's sense: a built asset is a *snapshot*, and editing the
     # document afterwards does not change the mesh already on disk.

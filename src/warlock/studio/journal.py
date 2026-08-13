@@ -1,0 +1,547 @@
+"""Crash recovery for authored documents, for every mode rather than one.
+
+UX-05. Inker has had a crash-safe autosave since it shipped and nothing else
+did: a Clay model, a Plotter map, a Packwright atlas, a pose being authored and
+a profile draft were all one power cut away from gone. The mechanism Inker
+proved is right, and the whole of what was wrong was that it was written into
+one mode.
+
+**Not in an engine package.** ``studio/inker/``, ``clay/``, ``plotter/`` and
+``packwright/`` import no imgui, no moderngl and no ``service``, and their
+import sets are pinned by tests. This knows about ``ctx``.
+
+**Not in ``service/``.** That layer is about *jobs* -- rows in a store, work in
+a queue, artifacts on disk under a job id. A document open in a tab is none of
+those things, and putting it there would give the service layer an opinion
+about editor state it has managed not to have.
+
+So: beside ``docmodes``, and following its import discipline -- stdlib only at
+module scope, everything else lazy, headlessly testable. A discipline test pins
+that, because the reason it holds is the reason ``docmodes`` holds: this is
+called from the frame loop in every mode, including the ones that have loaded
+none of the editors.
+
+## The storage
+
+Files in ``data_dir/autosave/`` -- the directory Inker already writes to, kept
+rather than renamed, because a rename would strand every crash copy sitting in
+it right now behind a version that no longer looks there.
+
+Two files per slot: the **payload** (``.ora``, ``.wblk``, ``.wmap``, ``.wpack``,
+``.pose.json``, ``.profile.json`` -- each mode's own format, so a recovered file
+is openable by hand and by the mode's ordinary reader) and a ``<stem>.meta.json``
+sidecar naming the kind, the title and when it was taken.
+
+**The sidecar is written last and is the completion gate.** A payload with no
+sidecar is a copy that was interrupted mid-write, and it is not offered. Both go
+through a temp name and ``os.replace``, which is the staged-write rule this repo
+applies to everything it serves -- but the ordering is the part that matters:
+tmp+replace makes each file whole or absent, and the sidecar makes the *pair*
+atomic.
+
+No sqlite. The store is one connection behind an RLock on the asyncio thread,
+this runs on the frame thread, and a crash copy that needed a lock the crashing
+thread was holding is a crash copy that is not written.
+
+## The loop
+
+Inker's, verbatim in shape, because every part of it was load-bearing:
+
+- **Frame-pumped**, in every mode. A crash while the user is looking at the
+  library still loses the painting.
+- **Debounced** at ``JOURNAL_SECONDS``. Long enough that the encode is
+  invisible, short enough that what is lost is one idea.
+- **Gated on the document's head**, not on a flag: an undo back to the copied
+  position is not a new edit, and re-encoding an idle document every two
+  minutes is work nobody asked for.
+- **Encoded on the frame thread**, written on a task. The encoders read the
+  live document, and encoding after a hand-off would capture whatever the user
+  drew in between.
+- **Through ``ctx.submit``**, whose key-dedupe is the backpressure: a slow
+  encode skips a beat rather than queuing.
+- **Declining keeps the files.** "Not now" is not "delete my work".
+
+## The rule the whole feature turns on
+
+**A journal entry is never a save.** It does not clear ``dirty``, does not move
+``saved_head``, does not retitle the tab and does not touch a linked job. All it
+promises is that a crash loses minutes rather than an afternoon, and every one
+of those omissions is what stops it silently answering a question the user has
+not been asked -- "where should this go".
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+#: How long a document may go unjournalled before a copy is taken. Two minutes
+#: is the interval every editor with this feature has converged on.
+JOURNAL_SECONDS = 120.0
+
+#: How many recovered slots the startup offer lists by name. A crash with more
+#: open than this is one where the count is the useful part.
+MAX_RECOVERY = 8
+
+#: The sidecar's suffix. A full second suffix rather than a replacement, so a
+#: payload's own extension survives in the stem and ``foo.pose.json`` and
+#: ``foo.ora`` cannot collide on one sidecar.
+META_SUFFIX = ".meta.json"
+
+#: Sidecar schema. Bumped only for a change a reader cannot ignore; a version
+#: it has never heard of is skipped rather than guessed at.
+VERSION = 1
+
+
+@dataclass(frozen=True)
+class Provider:
+    """One mode's answers. Everything the journal knows about a document kind.
+
+    Callables rather than a subclass, matching how the rest of ``studio``
+    composes: a mode is a module of functions with no instance to hang methods
+    on, which is the same reason ``AppState`` holds the panes' state.
+
+    ``head_of`` returns anything comparable with ``==``. An undo stack's serial
+    is the good answer where there is one; a small document with no history --
+    a pose, a profile draft -- passes its encoded payload, so "has it changed"
+    is payload equality. Both are the same question and neither needs a flag.
+    """
+
+    kind: str
+    #: The payload's suffix, including the dot. ``.pose.json`` is legal.
+    ext: str
+    #: What one of these is called in a sentence: "two drawings have...".
+    label: str
+    #: ``ctx -> [slot]``. Only slots worth journalling: a mode returns the
+    #: dirty ones and skips the rest, because it knows what dirty means.
+    slots: Callable[[Any], list[Any]]
+    uid_of: Callable[[Any], str]
+    title_of: Callable[[Any], str]
+    head_of: Callable[[Any], Any]
+    #: ``slot -> bytes``. **Frame thread.** See the module docstring.
+    encode: Callable[[Any], bytes]
+    #: ``(ctx, path, meta) -> bool``. Reopen one recovered payload; False means
+    #: "could not, and has said so".
+    adopt: Callable[[Any, Path, dict[str, Any]], bool]
+
+
+_PROVIDERS: dict[str, Provider] = {}
+
+
+def register(provider: Provider) -> Provider:
+    """Add a kind. Idempotent, so a module re-imported under a test is fine."""
+    _PROVIDERS[provider.kind] = provider
+    return provider
+
+
+#: The modules that register a provider. Imported on demand rather than at
+#: module scope, which keeps this file stdlib-only and keeps a session that
+#: never opens Clay from paying for the mesh engine.
+_PROVIDER_MODULES = (
+    "inker_mode",
+    "clay_mode",
+    "plotter_mode",
+    "packwright_mode",
+    "poser_mode",
+    # A pane rather than a mode: the profiles panel owns the draft, and there
+    # is no ``profiles_mode`` for it to live in.
+    "panes.profiles_panel",
+)
+
+
+def ensure_providers() -> None:
+    """Import every mode that owns a kind, so recovery can see all of them.
+
+    The registration is a side effect of importing a mode, which is right for
+    the *pump* -- a Clay document cannot exist before ``clay_mode`` has been
+    imported -- and wrong for the startup offer, which runs before any mode
+    has been opened and would otherwise find nothing able to adopt a Clay copy
+    and log that as a mystery.
+
+    Failures are swallowed per module: a mode that cannot import on this host
+    is a kind that cannot be recovered, which is worth a log line and is not
+    worth taking the other three down for.
+    """
+    from importlib import import_module
+
+    for name in _PROVIDER_MODULES:
+        try:
+            module = import_module(f".{name}", __package__)
+        except Exception:
+            log.exception("journal: %s could not be imported to register its kind", name)
+            continue
+        # Re-registered from the module's own ``JOURNAL`` rather than relying on
+        # the import's side effect: the second call to ``import_module`` is a
+        # cache hit and runs no module body, so a registry that was cleared --
+        # by a test's teardown, or by a future reload -- would stay cleared and
+        # every crash copy would read as a kind nothing can adopt.
+        provider = getattr(module, "JOURNAL", None)
+        if isinstance(provider, Provider):
+            register(provider)
+
+
+def providers() -> list[Provider]:
+    """Every registered kind, in registration order."""
+    return list(_PROVIDERS.values())
+
+
+def provider_for(kind: str) -> Provider | None:
+    return _PROVIDERS.get(kind)
+
+
+# --- bookkeeping, carried on the slot -----------------------------------------
+#
+# Three fields per state class, which is Inker's ``autosave_name``/``_head``/
+# ``_at`` generalised. On the slot rather than in a dict here because the slot
+# is what has a lifetime: a tab closed while the journal held a dict entry for
+# it would leak one, and a tab reopened would inherit a stranger's.
+
+
+@dataclass
+class Mark:
+    """What the journal remembers about one slot. Defaults mean "never taken"."""
+
+    name: str = ""
+    head: Any = None
+    at: float = 0.0
+
+
+def mark_of(slot: Any) -> Mark:
+    return Mark(
+        name=getattr(slot, "journal_name", "") or "",
+        head=getattr(slot, "journal_head", None),
+        at=float(getattr(slot, "journal_at", 0.0) or 0.0),
+    )
+
+
+def set_mark(slot: Any, mark: Mark) -> None:
+    slot.journal_name = mark.name
+    slot.journal_head = mark.head
+    slot.journal_at = mark.at
+
+
+# --- where it lives -----------------------------------------------------------
+
+
+def directory(ctx: Any) -> Path:
+    """``data_dir/autosave/``. The name is Inker's and is deliberately kept."""
+    return Path(ctx.svc.config.autosave_dir)
+
+
+def _safe(text: str, limit: int = 40) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in text)[:limit]
+
+
+def payload_name(provider: Provider, slot: Any) -> str:
+    """A stable, safe filename for one slot.
+
+    From the title and the slot's uid rather than from its path: a path can be
+    absent, can hold anything the filesystem allows, and can change under a
+    Save As while a copy is already on disk under the old name.
+    """
+    stem = _safe(provider.title_of(slot)) or "untitled"
+    return f"{stem}-{provider.uid_of(slot)}{provider.ext}"
+
+
+def meta_path(payload: Path) -> Path:
+    return Path(payload).with_name(Path(payload).name + META_SUFFIX)
+
+
+# --- writing ------------------------------------------------------------------
+
+
+def pump(ctx: Any, now: float | None = None) -> int:
+    """One frame's worth. -> how many copies were submitted.
+
+    Called once a frame by the app, in every mode. Every provider, every slot,
+    and the same three gates Inker's loop applied: not busy, changed since the
+    last copy, and past the debounce.
+    """
+    stamp = time.monotonic() if now is None else now
+    written = 0
+    for provider in providers():
+        try:
+            slots = provider.slots(ctx)
+        except Exception:
+            # A provider that raises must not stop the others: this runs every
+            # frame in every mode, and one broken kind taking the whole journal
+            # down is the failure the journal exists to prevent.
+            log.exception("journal: %s could not list its slots", provider.kind)
+            continue
+        for slot in slots:
+            if _write_if_due(ctx, provider, slot, stamp):
+                written += 1
+    return written
+
+
+def _write_if_due(ctx: Any, provider: Provider, slot: Any, stamp: float) -> bool:
+    mark = mark_of(slot)
+    head = provider.head_of(slot)
+    if mark.head is not None and _same_head(mark.head, head):
+        # Nothing has changed since the last copy. Compared against the head
+        # rather than tracked with a flag, for ``dirty``'s reason: an undo back
+        # to the journalled position is not a new edit.
+        return False
+    if stamp - mark.at < JOURNAL_SECONDS:
+        # From zero, not from the first copy: a document dirtied in the first
+        # two minutes of a session waits like every other one. Inker's loop
+        # compared against a ``0.0`` default in exactly this way, and the
+        # difference is observable -- without it the very first pump after an
+        # edit writes, which is a copy taken while the user is still typing the
+        # first stroke.
+        return False
+    return write(ctx, provider, slot, stamp)
+
+
+def _same_head(a: Any, b: Any) -> bool:
+    """``==``, but never raising and never returning an array.
+
+    A payload-equality provider compares ``bytes``; a history-backed one
+    compares ints. Both are fine. What is not fine is a comparison that raises
+    or answers with something whose truth value is ambiguous, in a function
+    called sixty times a second.
+    """
+    try:
+        return bool(a == b)
+    except Exception:
+        return False
+
+
+def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -> bool:
+    """Take one copy now, ignoring the debounce. -> whether it was submitted.
+
+    The encode happens **here**, on the frame thread, and only the write goes
+    to a task -- see the module docstring. The mark is advanced only if the
+    submit was accepted, so a refused key is retried on the next pump rather
+    than being recorded as done.
+    """
+    stamp = time.monotonic() if stamp is None else stamp
+    mark = mark_of(slot)
+    name = mark.name or payload_name(provider, slot)
+    root = directory(ctx)
+    payload = root / name
+    head = provider.head_of(slot)
+    try:
+        data = provider.encode(slot)
+    except Exception:
+        log.exception("journal: could not encode %s/%s", provider.kind, name)
+        return False
+    meta = {
+        "version": VERSION,
+        "kind": provider.kind,
+        "title": provider.title_of(slot),
+        "uid": provider.uid_of(slot),
+        "at": time.time(),
+    }
+
+    def run() -> None:
+        _write_pair(payload, data, meta)
+
+    if not ctx.submit(f"journal:{provider.kind}:{provider.uid_of(slot)}", run):
+        return False
+    set_mark(slot, Mark(name=name, head=head, at=stamp))
+    return True
+
+
+def _write_pair(payload: Path, data: bytes, meta: dict[str, Any]) -> None:
+    """Payload then sidecar, each staged, the sidecar last. Task thread.
+
+    The ordering is the completion gate: tmp+replace makes each file whole or
+    absent, and writing the sidecar second makes the *pair* atomic. A crash
+    between them leaves a payload nothing offers, which is the right answer --
+    it is a copy that was interrupted mid-write.
+    """
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    tmp = payload.with_name(f".{payload.name}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, payload)
+    side = meta_path(payload)
+    tmp_meta = side.with_name(f".{side.name}.tmp")
+    tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    os.replace(tmp_meta, side)
+
+
+def drop(ctx: Any, slot: Any) -> None:
+    """Forget one slot's copy. Never raises -- it is cleanup, not an edit.
+
+    Called when the document is saved or closed: at that moment the work is
+    somewhere the user chose, and a crash copy of it is clutter that would be
+    offered back on the next launch.
+
+    **Quitting is deliberately not one of those moments**, and the asymmetry is
+    checked rather than assumed. Closing a dirty tab confirms and then drops
+    the copy; confirming "Discard unsaved work?" on the way *out* of the app
+    leaves it, so the next launch offers it back. That is a mild surprise and
+    the safe direction of one: "discard" at quit is answered under time
+    pressure about possibly several documents at once, and the cost of being
+    wrong is asymmetric -- an unwanted offer is one click, and a discarded
+    afternoon is an afternoon. It is also what makes the journal's promise
+    unconditional, which is the only form of that promise anybody can rely on.
+    """
+    mark = mark_of(slot)
+    if not mark.name:
+        return
+    payload = directory(ctx) / mark.name
+    set_mark(slot, Mark())
+    for path in (meta_path(payload), payload):
+        # Sidecar first: it is the completion gate, so removing it first means
+        # a crash between the two unlinks leaves an unoffered payload rather
+        # than a sidecar naming a file that has gone.
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            log.warning("journal: could not remove %s", path, exc_info=True)
+
+
+# --- reading ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Recovered:
+    """One offerable crash copy: a payload, and what its sidecar said."""
+
+    path: Path
+    kind: str
+    title: str
+    at: float
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def adoptable(self) -> bool:
+        return provider_for(self.kind) is not None
+
+
+def _read_meta(side: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(side.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != VERSION:
+        # A version this build has never heard of is skipped rather than
+        # guessed at: a half-understood recovery is worse than none.
+        return None
+    return data
+
+
+def recoverable(ctx: Any) -> list[Recovered]:
+    """What a previous session left, newest first.
+
+    Driven by the **sidecars**, which is what makes the completion gate real: a
+    payload whose sidecar is missing was interrupted mid-write and is not here.
+    """
+    root = directory(ctx)
+    try:
+        sides = [p for p in root.glob(f"*{META_SUFFIX}") if p.is_file()]
+    except OSError:
+        return []
+    out: list[Recovered] = []
+    for side in sides:
+        meta = _read_meta(side)
+        if meta is None:
+            continue
+        payload = side.with_name(side.name[: -len(META_SUFFIX)])
+        if not payload.is_file():
+            continue
+        out.append(
+            Recovered(
+                path=payload,
+                kind=str(meta.get("kind") or ""),
+                title=str(meta.get("title") or payload.stem),
+                at=float(meta.get("at") or 0.0),
+                meta=meta,
+            )
+        )
+    out.sort(key=lambda r: r.at, reverse=True)
+    return out[:MAX_RECOVERY]
+
+
+def adopt(ctx: Any, found: list[Recovered]) -> int:
+    """Reopen each. -> how many were handed to a provider.
+
+    A kind with no provider is skipped and logged rather than dropped from
+    disk: the mode may simply not be built into this run, and deleting
+    somebody's work because this build does not understand it is the one
+    outcome worse than not offering it.
+    """
+    taken = 0
+    for one in found:
+        provider = provider_for(one.kind)
+        if provider is None:
+            log.warning("journal: nothing can adopt a %r copy at %s", one.kind, one.path)
+            continue
+        try:
+            if provider.adopt(ctx, one.path, one.meta):
+                taken += 1
+        except Exception:
+            log.exception("journal: %s could not adopt %s", one.kind, one.path)
+    return taken
+
+
+def summary(found: list[Recovered]) -> str:
+    """The sentence the offer asks with. Names up to three, counts the rest."""
+    names = ", ".join(one.title for one in found[:3])
+    more = "" if len(found) <= 3 else f" and {len(found) - 3} more"
+    return f"{names}{more}"
+
+
+def offer(ctx: Any) -> bool:
+    """Ask whether to reopen what a crashed session left. -> whether it asked.
+
+    A question rather than a silent reopen: the files may be from a session the
+    user deliberately abandoned, and opening six documents unasked is its own
+    kind of data loss. Declining **keeps** them -- the answer to "not now" is
+    not "delete my work" -- and they are cleared by saving or closing whatever
+    is recovered, or by the next offer being declined again.
+
+    One question for every kind at once (4a). Per-row choosing is a real want
+    and a bigger dialog; what it cannot be is the *first* version, because the
+    common case is one crash and one or two documents, and a chooser there is a
+    second decision in front of the answer everybody gives.
+    """
+    from . import dialogs
+
+    # Before reading the directory, not after: a copy whose kind nothing has
+    # registered would be listed and then found unadoptable, which reads as a
+    # corrupt journal rather than as an unimported module.
+    ensure_providers()
+    found = recoverable(ctx)
+    if not found:
+        return False
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Recover unsaved work?",
+            message=(
+                f"Warlock closed with unsaved changes in {summary(found)}. "
+                "Reopening gives you the documents as they were; you still "
+                "choose where to save them."
+            ),
+            confirm_label="Recover",
+            cancel_label="Not now",
+            on_confirm=lambda: adopt(ctx, found),
+        )
+    )
+    return True
+
+
+def status_line(ctx: Any) -> str:
+    """One sentence about the journal, for the crash dialog (UX-06).
+
+    Computed from the directory rather than from memory, because the caller is
+    a process that is on its way out and may have nothing left to ask.
+    """
+    try:
+        found = recoverable(ctx)
+    except Exception:
+        return "Unsaved work may not have been kept."
+    if not found:
+        return "No unsaved work was waiting to be recovered."
+    what = "document" if len(found) == 1 else "documents"
+    return f"{len(found)} unsaved {what} will be offered back on the next launch."

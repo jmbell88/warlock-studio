@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import poselib, rigging
-from . import dialogs
+from . import dialogs, journal
 
 log = logging.getLogger(__name__)
 
@@ -554,3 +554,163 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # broken Blender is a sentence on screen rather than a toast that
         # scrolled away.
         state.error = str(getattr(done, "message", "") or "Could not build the pose preview.")
+
+
+# --- crash recovery (UX-05) ---------------------------------------------------
+#
+# A pose is the smallest thing in the app and the easiest to lose: it lives
+# entirely in a ``PoseEditor`` until somebody presses Save, so a crash during an
+# authoring session took the whole of it. Both entry points are covered by one
+# provider because both are one editor -- Poser's own viewer and the
+# inspector's shared one -- which is the same argument
+# ``docmodes.pose_undo_key`` makes about the keyboard.
+#
+# **Payload equality is the head.** A pose has no undo serial to compare
+# against... except that since A-2 it does, and it is deliberately not used: the
+# editor's history is dropped on every rebind, so its head restarts and an
+# unchanged pose would be re-encoded after every model adoption. The payload is
+# a few dozen floats and comparing it is cheaper than the encode it prevents.
+
+
+def _journal_slot_for(ctx: Any, viewer: Any, key: str) -> Any:
+    """One journallable pose session, or None.
+
+    A ``SimpleNamespace``-shaped slot rather than a real object: the editor is
+    not a document and has no place to keep three bookkeeping fields, so the
+    journal's marks live on the *viewer*, which has exactly the lifetime the
+    session does. ``key`` distinguishes the two viewers so the inspector's
+    session and Poser's cannot share a filename.
+    """
+    if viewer is None or not getattr(viewer, "pose_mode", False):
+        return None
+    editor = getattr(viewer, "editor", None)
+    if editor is None or not editor.bound or not editor.has_unsaved_edits():
+        return None
+    return _PoseSlot(viewer=viewer, editor=editor, key=key)
+
+
+class _PoseSlot:
+    """A pose session as the journal sees it. Marks proxy onto the viewer."""
+
+    def __init__(self, viewer: Any, editor: Any, key: str) -> None:
+        self.viewer = viewer
+        self.editor = editor
+        self.key = key
+
+    @property
+    def journal_name(self) -> str:
+        return getattr(self.viewer, "journal_name", "") or ""
+
+    @journal_name.setter
+    def journal_name(self, value: str) -> None:
+        self.viewer.journal_name = value
+
+    @property
+    def journal_head(self) -> Any:
+        return getattr(self.viewer, "journal_head", None)
+
+    @journal_head.setter
+    def journal_head(self, value: Any) -> None:
+        self.viewer.journal_head = value
+
+    @property
+    def journal_at(self) -> float:
+        return float(getattr(self.viewer, "journal_at", 0.0) or 0.0)
+
+    @journal_at.setter
+    def journal_at(self, value: float) -> None:
+        self.viewer.journal_at = value
+
+
+def _pose_payload(slot: Any) -> bytes:
+    import json as _json
+
+    editor = slot.editor
+    return _json.dumps(
+        {
+            "bones": editor.pose(),
+            "root_translation": editor.root_translation(),
+            "moved": {name: list(delta) for name, delta in editor.moved.items()},
+            "mode": editor.mode,
+            # Which job's rig this was bound to, so the inspector's copy can
+            # refuse to land on a different asset.
+            "job_id": getattr(slot.viewer, "pose_job_id", None) or "",
+            "where": slot.key,
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _journal_slots(ctx: Any) -> list[Any]:
+    """Both pose sessions -- Poser's own viewer and the inspector's."""
+    out = []
+    for viewer, key in ((viewer_of(ctx), "poser"), (getattr(ctx, "viewer", None), "asset")):
+        slot = _journal_slot_for(ctx, viewer, key)
+        if slot is not None:
+            out.append(slot)
+    return out
+
+
+def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
+    """Put a recovered pose back onto a bound editor, or say why not.
+
+    **A pose is not a document and cannot be opened on its own**: it is a set
+    of rotations for a named skeleton, and applying it needs that skeleton
+    loaded. So this is the one adopter that can decline for a reason the user
+    has to hear -- the job it was authored against may have been deleted, or
+    the session may simply not be open -- and it declines by *keeping* the file
+    and saying so, because the alternative is applying a stranger's rotations
+    to whatever rig happens to be in front of them.
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        log.exception("could not read the recovered pose at %s", path)
+        return False
+    where = str(data.get("where") or "poser")
+    viewer = viewer_of(ctx) if where == "poser" else getattr(ctx, "viewer", None)
+    editor = getattr(viewer, "editor", None)
+    if viewer is None or editor is None or not editor.bound:
+        ctx.toast(
+            "An unsaved pose was recovered. Open the rig it belongs to and it "
+            "will be offered again.",
+            "warn",
+        )
+        return False
+    job_id = str(data.get("job_id") or "")
+    if job_id and str(getattr(viewer, "pose_job_id", "") or "") != job_id:
+        # The asset it was authored against is not the one in front of us. Kept
+        # rather than applied: rotations by bone name land on whatever shares a
+        # name, silently and wrongly.
+        ctx.toast(
+            "An unsaved pose was recovered, but it belongs to a different "
+            "asset. Open that one and it will be offered again.",
+            "warn",
+        )
+        return False
+    editor.apply(data.get("bones") or {}, pose_id=None, dirty=True)
+    if data.get("root_translation"):
+        editor.set_root_translation(data["root_translation"])
+    after = getattr(viewer, "_after_pose_change", None)
+    if after is not None:
+        after()
+    ctx.toast("An unsaved pose was recovered.", "success")
+    return True
+
+
+JOURNAL = journal.register(
+    journal.Provider(
+        kind="pose",
+        ext=".pose.json",
+        label="pose",
+        slots=_journal_slots,
+        uid_of=lambda slot: slot.key,
+        title_of=lambda slot: "Pose" if slot.key == "poser" else "Asset pose",
+        # Payload equality: see the section note above.
+        head_of=_pose_payload,
+        encode=_pose_payload,
+        adopt=_journal_adopt,
+    )
+)

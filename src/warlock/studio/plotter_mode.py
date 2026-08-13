@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, plotter_state, recents
+from . import dialogs, docmodes, journal, plotter_state, recents
 
 # ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
 # but ``ctx.state.plotter`` -- and the file layer lives in :mod:`.plotter_io`.
@@ -290,6 +290,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     tab.mark_saved(result.get("head"))
+    # See ``inker_mode``: saved is the moment the crash copy stops
+    # describing anything at risk (UX-05).
+    journal.drop(ctx, tab)
     if result.get("retitle") and result.get("path"):
         tab.path = Path(result["path"])
         tab.title = plotter_state.title_for(tab.path)
@@ -330,6 +333,12 @@ def close_tab(ctx: Any, uid: str) -> None:
         return
 
     def drop() -> None:
+        # The document is on disk under a name the user chose, or is gone
+        # from the session: either way the crash copy describes work that
+        # is no longer at risk, and one left behind is exactly the file
+        # that gets offered back after a clean session and confuses
+        # somebody (UX-05).
+        journal.drop(ctx, tab)
         from .panes import plotter_canvas, plotter_textures
 
         plotter_textures.release_doc(ctx, uid)
@@ -650,3 +659,53 @@ def _ctrl_key(
         tab.view.pending_zoom = 1.0
         return True
     return False
+
+
+# --- crash recovery (UX-05) ---------------------------------------------------
+#
+# ``clay_mode``'s four answers, for maps. See :mod:`studio.journal`.
+
+
+def _journal_slots(ctx: Any) -> list[Any]:
+    state = getattr(ctx.state, "plotter", None)
+    if state is None:
+        return []
+    return [tab for tab in state.docs if tab.dirty and not tab.busy]
+
+
+def _journal_encode(tab: Any) -> bytes:
+    from .plotter import wmap as wmaplib
+
+    return wmaplib.wmap_bytes(tab.doc)
+
+
+def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
+    from .plotter import wmap as wmaplib
+
+    ensure(ctx)
+    try:
+        doc = wmaplib.read_wmap(Path(path).read_bytes())
+    except Exception:
+        log.exception("could not reopen the recovered map at %s", path)
+        ctx.toast("A recovered map could not be reopened.", "warn", action="log")
+        return False
+    title = f"{meta.get('title') or Path(path).stem} (recovered)"
+    tab = adopt(ctx, doc, path=None, title=title, file_format="wmap")
+    tab.saved_head = -1
+    tab.journal_name = Path(path).name
+    return True
+
+
+JOURNAL = journal.register(
+    journal.Provider(
+        kind="plotter",
+        ext=".wmap",
+        label="map",
+        slots=_journal_slots,
+        uid_of=lambda tab: tab.uid,
+        title_of=lambda tab: tab.title,
+        head_of=lambda tab: tab.doc.history.head,
+        encode=_journal_encode,
+        adopt=_journal_adopt,
+    )
+)

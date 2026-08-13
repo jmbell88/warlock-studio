@@ -585,6 +585,7 @@ class App:
         # startup failure.
         in_setup = True
         rc = 0
+        crashed = False
         try:
             self.setup_window()
             if self._startup_with_splash():
@@ -619,6 +620,7 @@ class App:
                 log.info("closed during startup")
         except Exception:
             rc = 1
+            crashed = True
             if in_setup:
                 log.exception("Warlock Studio could not start")
             else:
@@ -628,7 +630,46 @@ class App:
                 )
         finally:
             self.teardown()
+            if crashed:
+                # *After* teardown, which is the whole reason the flag exists
+                # rather than the report living in the except block: the
+                # journal's last write goes through the task runner, and this
+                # sentence counts what is on disk. Reporting first would tell
+                # the user about a copy that had not been taken yet.
+                self._report_crash(in_setup)
         return rc
+
+    def _report_crash(self, in_setup: bool) -> None:
+        """Say the app crashed, and offer the log (UX-06).
+
+        The window has gone by now -- that is what a crash looks like from
+        outside, and it is precisely the problem: the app vanished and the one
+        artefact that could explain it was in a file the user had no reason to
+        know about. A native box, because the GL context and imgui are gone.
+
+        The journal sentence is computed rather than promised: "your work is
+        safe" is only worth saying when it is true, and "nothing was waiting"
+        is the honest answer the rest of the time.
+        """
+        from .. import instance
+        from . import journal
+
+        try:
+            data_dir = Path(self.config.data_dir)
+        except Exception:  # noqa: BLE001 -- a crash report must not crash
+            data_dir = None
+        try:
+            note = journal.status_line(self.app_ctx) if self.app_ctx else ""
+        except Exception:  # noqa: BLE001
+            note = ""
+        when = "while starting" if in_setup else "and had to close"
+        instance.alert_fatal(
+            "Warlock Studio",
+            f"Warlock Studio ran into a problem {when}.\n\n"
+            + (note + "\n\n" if note else "")
+            + "The details are in warlock.log. Open the log folder?",
+            log_dir=data_dir,
+        )
 
     def _startup_with_splash(self) -> bool:
         """Draw the logo while ``setup_runtime`` runs. -> keep going?
@@ -1272,9 +1313,13 @@ class App:
         # here because ``inker_mode`` pulls the raster engine in and a session
         # that never opens Inker should not pay for it -- the same reason
         # ``ensure`` builds its state lazily.
-        from . import inker_mode
+        from . import inker_mode, journal
 
-        inker_mode.pump_autosave(self.app_ctx)
+        # Every registered document kind, not only Inker (UX-05). Importing
+        # ``inker_mode`` is what registers its provider; the other modes
+        # register theirs the same way, lazily, so a session that never opens
+        # Clay pays for nothing.
+        journal.pump(self.app_ctx)
         # Beside it, and in every mode for the same reason: an export flattens
         # one frame per app frame rather than a whole clip on the frame the
         # button was clicked, and a user who started one and switched to the
@@ -1285,7 +1330,7 @@ class App:
             # is also where *this* session's copies land, so a second offer
             # would hand the user their own open documents back.
             ctx.state.recovery_offered = True
-            inker_mode.offer_recovery(ctx)
+            journal.offer(ctx)
 
     def _check_worker(self) -> None:
         """Say so, once, when the GPU worker dies.

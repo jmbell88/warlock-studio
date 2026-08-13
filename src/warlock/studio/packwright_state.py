@@ -46,6 +46,15 @@ class PackTab:
     saved_head: int = 0
     saving: bool = False
 
+    # Crash-safety, owned by :mod:`studio.journal` (UX-05). Inker's three
+    # fields, verbatim, because they are the same three questions: which file
+    # this tab owns under the autosave directory (minted on the first copy, so
+    # an untouched tab litters nothing), the history position that copy
+    # captured (an undo back to it is not a new edit), and the debounce.
+    journal_name: str = ""
+    journal_head: int | None = None
+    journal_at: float = 0.0
+
     # The last successful pack. ``layout`` is what the items pane lists and the
     # preview outlines; ``atlas`` is what it draws.
     layout: Any = None

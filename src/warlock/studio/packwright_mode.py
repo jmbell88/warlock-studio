@@ -28,7 +28,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, packwright_io, packwright_state, recents
+from . import dialogs, docmodes, journal, packwright_io, packwright_state, recents
 
 # ``ensure`` and ``active`` live in :mod:`.packwright_state` -- they touch
 # nothing but ``ctx.state.packwright`` -- and the file layer lives in
@@ -386,6 +386,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     tab.mark_saved(result.get("head"))
+    # See ``inker_mode``: saved is the moment the crash copy stops
+    # describing anything at risk (UX-05).
+    journal.drop(ctx, tab)
     if result.get("retitle") and result.get("path"):
         tab.path = Path(result["path"])
         tab.title = packwright_state.title_for(tab.path)
@@ -440,6 +443,12 @@ def close_tab(ctx: Any, uid: str) -> None:
         return
 
     def drop() -> None:
+        # The document is on disk under a name the user chose, or is gone
+        # from the session: either way the crash copy describes work that
+        # is no longer at risk, and one left behind is exactly the file
+        # that gets offered back after a clean session and confuses
+        # somebody (UX-05).
+        journal.drop(ctx, tab)
         from .panes import packwright_textures
 
         packwright_textures.release_doc(ctx, uid)
@@ -557,3 +566,58 @@ def _ctrl_key(
         tab.view.pending_zoom = 1.0
         return True
     return False
+
+
+# --- crash recovery (UX-05) ---------------------------------------------------
+#
+# ``clay_mode``'s four answers, for atlases. See :mod:`studio.journal`.
+#
+# The *layout* is deliberately not journalled, for the reason it is not saved:
+# it is derived, and a re-export of an unchanged document is byte-identical
+# with nothing to invalidate. A recovered atlas repacks itself, which is
+# seconds and is the only answer that cannot be stale.
+
+
+def _journal_slots(ctx: Any) -> list[Any]:
+    state = getattr(ctx.state, "packwright", None)
+    if state is None:
+        return []
+    return [tab for tab in state.docs if tab.dirty and not tab.busy]
+
+
+def _journal_encode(tab: Any) -> bytes:
+    from .packwright import wpack
+
+    return wpack.wpack_bytes(tab.doc)
+
+
+def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
+    from .packwright import wpack
+
+    ensure(ctx)
+    try:
+        doc = wpack.read_wpack(Path(path).read_bytes())
+    except Exception:
+        log.exception("could not reopen the recovered atlas at %s", path)
+        ctx.toast("A recovered atlas could not be reopened.", "warn", action="log")
+        return False
+    title = f"{meta.get('title') or Path(path).stem} (recovered)"
+    tab = adopt(ctx, doc, path=None, title=title)
+    tab.saved_head = -1
+    tab.journal_name = Path(path).name
+    return True
+
+
+JOURNAL = journal.register(
+    journal.Provider(
+        kind="packwright",
+        ext=".wpack",
+        label="atlas",
+        slots=_journal_slots,
+        uid_of=lambda tab: tab.uid,
+        title_of=lambda tab: tab.title,
+        head_of=lambda tab: tab.doc.history.head,
+        encode=_journal_encode,
+        adopt=_journal_adopt,
+    )
+)

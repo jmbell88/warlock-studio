@@ -407,6 +407,21 @@ from may still be on disk with its own contents, and adopting that path would ar
 overwrite something you have not looked at yet. Declining keeps the copies — "not now" is not
 "delete my work" — and they are cleared once you save or close whatever you recover.
 
+**This is no longer only Inker's.** The same two minutes now cover a Clay model, a Plotter map, a
+Packwright atlas, a pose you are authoring and a profile draft you have typed into and not saved —
+one offer at startup covers whatever was open, whichever modes they were in. Each copy is written
+in that mode's own format (`.ora`, `.wblk`, `.wmap`, `.wpack`, and small JSON files for a pose and a
+draft), so anything recovered can also just be opened by hand.
+
+A pose is the one that can decline to come back, and it says so when it does. A pose is a set of
+rotations for a skeleton rather than a document of its own, so putting one back needs that rig
+loaded — if the asset it was authored against is not open, or a different one is, Warlock keeps the
+copy and tells you to open the right one. It would otherwise apply somebody else's rotations to
+whatever bones happened to share a name.
+
+Nothing is ever deleted on age. A copy sits there until you recover it and save, or until you close
+what you recovered; declining at startup keeps everything exactly where it was.
+
 ## Pipeline bridges
 
 Inker is wired into the pipeline in both directions. The **document** panel on the right states

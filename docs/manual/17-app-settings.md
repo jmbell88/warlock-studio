@@ -34,6 +34,11 @@ they were removed rather than left as four settings that only ever meant "preten
 failed". *Reduce motion* above is unaffected: it is an accessibility setting, not a rendering tier,
 and it still turns off spring motion along with everything else that moves.
 
+**If Warlock crashes**, it says so on the way out rather than simply vanishing: a small dialog
+reports that something went wrong, tells you whether there is unsaved work waiting to be offered
+back on the next launch, and asks whether to open the folder your log is in. Answering no costs
+nothing — the log is written either way, and the recovery offer does not depend on it.
+
 **Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
 rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make
 the app look broken — but one number cannot suit a 1600-wide window and a 5120 one. *Reset pane

@@ -15,8 +15,9 @@ from imgui_bundle import imgui
 
 from ...service import validation
 from ...service.validation import MAX_UPLOAD_BYTES
-from .. import dialogs, icons, profiles, theme, widgets
+from .. import dialogs, icons, journal, profiles, theme, widgets
 from ..manual import render as manual_render
+from ..state import set_mode
 from ..tokens import sp
 from . import settings_2d
 
@@ -383,3 +384,124 @@ def _close(ctx: Any) -> None:
     ctx.state.profile_draft = None
     ctx.state.profile_draft_name = ""
     ctx.state.profile_draft_origin = ""
+
+
+# --- crash recovery (UX-05) ---------------------------------------------------
+#
+# A profile draft is the smallest journalled thing in the app and the one most
+# clearly *worth* journalling: it is a form somebody has filled in and not
+# pressed Save on, held nowhere but ``AppState``, and losing it costs exactly
+# the typing. There is one at a time by construction, which is why the slot's
+# uid is a constant.
+#
+# Payload equality is the head, for the pose provider's reason: a dict of a
+# dozen strings is cheaper to compare than to re-encode.
+
+
+class _DraftSlot:
+    """The open draft as the journal sees it, with its marks on ``AppState``.
+
+    The marks live on the state rather than on the draft dict because the dict
+    is replaced wholesale every time a different profile is opened, and a mark
+    that went with it would mint a new filename per open.
+    """
+
+    def __init__(self, state: Any) -> None:
+        self.state = state
+
+    @property
+    def journal_name(self) -> str:
+        return getattr(self.state, "profile_journal_name", "") or ""
+
+    @journal_name.setter
+    def journal_name(self, value: str) -> None:
+        self.state.profile_journal_name = value
+
+    @property
+    def journal_head(self) -> Any:
+        return getattr(self.state, "profile_journal_head", None)
+
+    @journal_head.setter
+    def journal_head(self, value: Any) -> None:
+        self.state.profile_journal_head = value
+
+    @property
+    def journal_at(self) -> float:
+        return float(getattr(self.state, "profile_journal_at", 0.0) or 0.0)
+
+    @journal_at.setter
+    def journal_at(self, value: float) -> None:
+        self.state.profile_journal_at = value
+
+
+def _draft_payload(slot: Any) -> bytes:
+    import json as _json
+
+    state = slot.state
+    return _json.dumps(
+        {
+            "name": state.profile_draft_name,
+            "origin": state.profile_draft_origin,
+            "fields": state.profile_draft or {},
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _journal_slots(ctx: Any) -> list[Any]:
+    """The open draft, if there is one and it differs from what it came from.
+
+    An untouched draft is not unsaved work: opening a saved profile to look at
+    it and closing the panel must not leave a crash copy that gets offered back
+    as though something had been typed.
+    """
+    state = ctx.state
+    draft = getattr(state, "profile_draft", None)
+    if draft is None:
+        return []
+    origin = getattr(state, "profile_draft_origin", "")
+    saved = (ctx.settings.get("profiles") or {}) if hasattr(ctx, "settings") else {}
+    if origin and origin in saved:
+        from .. import profiles
+
+        if profiles.capture(profiles.apply(dict(draft), saved[origin])) == draft:
+            # Byte-identical to the profile it was opened from: nothing typed.
+            return []
+    return [_DraftSlot(state)]
+
+
+def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
+    """Reopen a recovered draft into the profiles panel.
+
+    It replaces whatever is open, and that is safe in a way the document modes
+    are not: this only ever runs at startup, before anything can have been
+    typed, and a draft is not a file on disk that could be overwritten.
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    ctx.state.profile_draft = dict(data.get("fields") or {})
+    ctx.state.profile_draft_name = str(data.get("name") or "")
+    ctx.state.profile_draft_origin = str(data.get("origin") or "")
+    ctx.state.profile_journal_name = Path(path).name
+    set_mode(ctx.state, "profiles")
+    return True
+
+
+JOURNAL = journal.register(
+    journal.Provider(
+        kind="profile",
+        ext=".profile.json",
+        label="profile draft",
+        slots=_journal_slots,
+        # One at a time by construction: the panel holds a single draft.
+        uid_of=lambda slot: "draft",
+        title_of=lambda slot: slot.state.profile_draft_name or "Untitled profile",
+        head_of=_draft_payload,
+        encode=_draft_payload,
+        adopt=_journal_adopt,
+    )
+)

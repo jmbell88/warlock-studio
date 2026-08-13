@@ -180,3 +180,56 @@ def alert(title: str, message: str) -> None:
         except Exception:  # noqa: BLE001 -- a dialog must never be the failure
             log.warning("could not show a native dialog", exc_info=True)
     print(f"{title}: {message}", file=sys.stderr)
+
+
+#: ``MessageBoxW``'s answer for Yes. Named because the number alone at a call
+#: site is the kind of constant a reader has to go and look up.
+IDYES = 6
+
+
+def alert_fatal(title: str, message: str, *, log_dir: Any = None) -> bool:
+    """Report a crash on the way out, and offer the log. -> did they say yes?
+
+    UX-06. A crash used to be a traceback in a file and a window that simply
+    vanished: the app disappeared, and the one artefact that could explain it
+    was somewhere the user had no reason to know about. This is the whole fix,
+    and it is deliberately small -- a native box, because by the time it runs
+    the GL context and imgui are gone or untrustworthy.
+
+    **MB_YESNO rather than MB_OK.** "Something went wrong, here is a wall of
+    text" is a dialog people dismiss; "Open the log folder?" is a question with
+    an action behind it, and the folder rather than the file because the log's
+    name is not something to have to know. Declining is free and is the
+    default nothing is lost by choosing.
+
+    ``log_dir`` is opened with the shell on Yes -- deliberately not a
+    subprocess and deliberately outside the kill-on-close job, for the reason
+    ``Ctx.open_log`` states: the user's file manager is not ours to kill.
+
+    Never raises. It runs in a ``finally`` on the way out of a process that is
+    already failing, and a dialog that threw there would replace a reported
+    crash with an unreported one.
+    """
+    answered = False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            # MB_YESNO | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+            flags = 0x4 | 0x10 | 0x10000 | 0x40000
+            answered = (
+                ctypes.windll.user32.MessageBoxW(None, message, title, flags) == IDYES
+            )
+        except Exception:  # noqa: BLE001 -- a dialog must never be the failure
+            log.warning("could not show a native crash dialog", exc_info=True)
+            print(f"{title}: {message}", file=sys.stderr)
+    else:
+        print(f"{title}: {message}", file=sys.stderr)
+    if answered and log_dir is not None:
+        try:
+            import os
+
+            os.startfile(str(log_dir))  # noqa: S606 -- the shell, on purpose
+        except Exception:  # noqa: BLE001
+            log.warning("could not open the log folder", exc_info=True)
+    return answered

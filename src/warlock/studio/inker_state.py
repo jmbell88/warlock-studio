@@ -343,15 +343,20 @@ class InkerDoc:
     # pure and the leg has to survive between ticks.
     play_forward: bool = True
 
-    # Crash-safety. ``autosave_name`` is the file this tab owns under the
-    # autosave directory and is minted once, on the first autosave: naming it
-    # eagerly would litter the directory with entries for tabs nobody ever
-    # edited. ``autosave_head`` is the history position the last one captured,
-    # so an idle document is not rewritten every two minutes -- the same
-    # comparison ``dirty`` is, against a different mark.
-    autosave_name: str = ""
-    autosave_head: int | None = None
-    autosave_at: float = 0.0
+    # Crash-safety, owned by :mod:`studio.journal` (UX-05). ``journal_name`` is
+    # the file this tab owns under the autosave directory and is minted once,
+    # on the first copy: naming it eagerly would litter the directory with
+    # entries for tabs nobody ever edited. ``journal_head`` is the history
+    # position the last one captured, so an idle document is not rewritten
+    # every two minutes -- the same comparison ``dirty`` is, against a
+    # different mark. ``journal_at`` is the debounce.
+    #
+    # Named for the journal rather than for Inker, because they are the three
+    # fields *every* document mode now carries: the mechanism Inker proved was
+    # right and the whole of what was wrong was that it lived in one mode.
+    journal_name: str = ""
+    journal_head: int | None = None
+    journal_at: float = 0.0
 
     @property
     def busy(self) -> bool:

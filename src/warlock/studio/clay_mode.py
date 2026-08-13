@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import clay_state, dialogs, docmodes, recents
+from . import clay_state, dialogs, docmodes, journal, recents
 from .clay_state import ClayState, ClayTab
 
 log = logging.getLogger(__name__)
@@ -486,6 +486,9 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     tab.mark_saved(result.get("rev"))
+    # See ``inker_mode``: saved is the moment the crash copy stops
+    # describing anything at risk (UX-05).
+    journal.drop(ctx, tab)
     if result.get("retitle") and result.get("path"):
         tab.path = Path(result["path"])
         tab.title = clay_state.title_for(tab.path)
@@ -556,6 +559,12 @@ def close_tab(ctx: Any, uid: str) -> None:
         return
 
     def drop() -> None:
+        # The document is on disk under a name the user chose, or is gone
+        # from the session: either way the crash copy describes work that
+        # is no longer at risk, and one left behind is exactly the file
+        # that gets offered back after a clean session and confuses
+        # somebody (UX-05).
+        journal.drop(ctx, tab)
         view = getattr(ctx, "clay_view", None)
         if view is not None and tab.uid == state.active_uid:
             if getattr(view, "dragging", False):
@@ -834,3 +843,70 @@ def _duplicate_selection(ctx: Any, state: ClayState, doc: Any) -> None:
 
     del ctx, state
     selection.duplicate_selected(doc)
+
+
+# --- crash recovery (UX-05) ---------------------------------------------------
+#
+# The mechanism is :mod:`studio.journal`'s; these are the four answers that are
+# about *models*. See that module for the loop, the debounce, the head gate and
+# the completion gate, and for the rule they all serve: a journal entry is never
+# a save.
+
+
+def _journal_slots(ctx: Any) -> list[Any]:
+    """Dirty tabs that are not mid-write. ``saving`` for ``write_wblk``'s
+    reason: it walks the object list, and an edit landing mid-encode produces
+    an archive whose parts disagree about what is in the document."""
+    state = getattr(ctx.state, "clay", None)
+    if state is None:
+        return []
+    return [tab for tab in state.docs if tab.dirty and not tab.saving]
+
+
+def _journal_encode(tab: Any) -> bytes:
+    from .clay import serialize
+
+    # The camera goes in for the same reason a save carries it: a recovered
+    # model that framed itself somewhere else is a recovered model the user has
+    # to find their way back around.
+    return serialize.wblk_bytes(tab.doc, view=tab.view)
+
+
+def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
+    """Reopen one recovered ``.wblk`` as an *untitled, dirty* document.
+
+    Untitled for Inker's reason: the file it was copied from may still be on
+    disk with its own contents, and adopting the path would arm Ctrl+S to
+    overwrite something the user has not looked at.
+    """
+    from .clay import serialize
+
+    ensure(ctx)
+    try:
+        doc = serialize.read_wblk(Path(path).read_bytes())
+    except Exception:
+        log.exception("could not reopen the recovered model at %s", path)
+        ctx.toast("A recovered model could not be reopened.", "warn", action="log")
+        return False
+    title = f"{meta.get('title') or Path(path).stem} (recovered)"
+    tab = adopt(ctx, doc, path=None, title=title)
+    # Dirty from the moment it opens, and it owns the file it came from:
+    # saving or closing it is what clears the crash copy.
+    tab.saved_head = -1
+    tab.journal_name = Path(path).name
+    return True
+
+
+JOURNAL = journal.register(
+    journal.Provider(
+        kind="clay",
+        ext=".wblk",
+        label="model",
+        slots=_journal_slots,
+        uid_of=lambda tab: tab.uid,
+        title_of=lambda tab: tab.title,
+        head_of=lambda tab: tab.doc.history.head,
+        encode=_journal_encode,
+        adopt=_journal_adopt,
+    )
+)

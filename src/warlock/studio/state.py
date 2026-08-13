@@ -863,6 +863,13 @@ class AppState:
     # The name the draft was opened under, so renaming one in the editor moves
     # it rather than leaving the old name behind as a duplicate.
     profile_draft_origin: str = ""
+    # The journal's three marks for the open draft (UX-05). Here rather than on
+    # the draft dict because that dict is replaced wholesale every time a
+    # different profile is opened, and a mark travelling with it would mint a
+    # new crash-copy filename per open.
+    profile_journal_name: str = ""
+    profile_journal_head: Any = None
+    profile_journal_at: float = 0.0
     # Inker mode's open documents and tool settings, built on first use.
     # Typed Any so state.py keeps no import of the editor or of Pillow, and
     # lazy so a session that never draws pays nothing for it.
