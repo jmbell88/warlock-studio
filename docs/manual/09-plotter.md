@@ -297,6 +297,9 @@ A *hidden* object is modelled rather than refused — hiding something changes n
 is. A *rotated* one is refused, because an unrotated outline drawn for a rotated object is a wrong
 picture, and a wrong picture is worse than a refusal.
 
+The full list of what Plotter reads, refuses and preserves is kept in `docs/PLOTTER_COMPAT.md`,
+checked against the code on every test run.
+
 ## Sending a map to the library
 
 **Export to the library** (`Ctrl+E`) renders the map flat and mints it as an ordinary reference
