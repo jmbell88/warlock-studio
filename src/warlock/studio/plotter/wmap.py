@@ -64,7 +64,7 @@ import io
 import itertools
 import json
 import zipfile
-from typing import Any
+from typing import Any, NoReturn
 
 import numpy as np
 
@@ -482,8 +482,8 @@ def _read_picture(zf: zipfile.ZipFile, name: str, what: str) -> np.ndarray:
     return np.asarray(image, dtype=np.uint8)
 
 
-def _pair(entry: dict[str, Any], key: str, default: tuple[float, float]) -> tuple[float, float]:
-    """One two-component layer field, tolerantly.
+def _two(entry: dict[str, Any], key: str, default: Any) -> Any:
+    """One two-component layer field, or its default. The tolerance rule.
 
     Absent is the version 2 case and takes the identity default -- the
     ``locked`` precedent. *Present and malformed* is not the same thing and is
@@ -495,11 +495,35 @@ def _pair(entry: dict[str, Any], key: str, default: tuple[float, float]) -> tupl
         return default
     raw = entry[key]
     if not isinstance(raw, (list, tuple)) or len(raw) != 2:
-        return _malformed(f"a layer's {key}")
+        _malformed(f"a layer's {key}")
+    return raw
+
+
+def _pair(entry: dict[str, Any], key: str, default: tuple[float, float]) -> tuple[float, float]:
+    """``offset`` and ``parallax``: two floats."""
+    raw = _two(entry, key, default)
     return (float(raw[0]), float(raw[1]))
 
 
-def _malformed(what: str) -> Any:
+def _flags(entry: dict[str, Any], key: str) -> tuple[bool, bool]:
+    """``repeat``: two booleans, which is a different type and so its own door.
+
+    Its own function rather than ``bool(...)`` over :func:`_pair` at the call
+    site, because the two spellings do not agree on what a value *is*:
+    ``float("")`` raises where ``bool("")`` is ``False``, so routing a flag pair
+    through the float reader would refuse some malformed files and silently
+    accept others.
+    """
+    raw = _two(entry, key, (False, False))
+    return (bool(raw[0]), bool(raw[1]))
+
+
+def _malformed(what: str) -> NoReturn:
+    """Typed ``NoReturn`` so a caller cannot mistake it for a value producer.
+
+    It was reached as ``return _malformed(...)``, which reads as a fallback and
+    is not one -- and a checker had no way to tell the difference.
+    """
     raise ValueError(f"this map holds {what} that is malformed")
 
 
@@ -508,17 +532,19 @@ def _read_layers(
 ) -> list[Layer]:
     """One list of manifest layer entries, as layers. Recursive through groups.
 
-    Bounded by the JSON parser rather than by a depth counter here: a manifest
-    nested past CPython's recursion limit never becomes a ``dict`` in the first
-    place, and :func:`read_wmap` turns that into the same "not a Warlock map
-    document" every other unparseable manifest gets.
+    The depth this will descend is bounded, but *not* by the JSON parser having
+    already survived the same nesting: one frame here is far larger than one
+    frame of the scanner, so a manifest that parsed can still exhaust the stack
+    on the way back out. :func:`read_wmap` catches that at the call site and
+    turns it into the same ``ValueError`` every other unreadable manifest gets
+    -- :func:`_read_shape`'s re-raise, one level up.
     """
     if not isinstance(entries, list):
-        return _malformed("a layer list")
+        _malformed("a layer list")
     out: list[Layer] = []
     for entry in entries:
         if not isinstance(entry, dict):
-            return _malformed("a layer")
+            _malformed("a layer")
         kind = str(entry.get("type", ""))
         name = str(entry.get("name", ""))
         common: dict[str, Any] = {
@@ -563,7 +589,7 @@ def _read_layers(
                 )
             )
         elif kind == "image":
-            repeat_x, repeat_y = _pair(entry, "repeat", (0.0, 0.0))
+            repeat_x, repeat_y = _flags(entry, "repeat")
             out.append(
                 ImageLayer(
                     **common,
@@ -571,8 +597,8 @@ def _read_layers(
                         zf, str(entry.get("image", "")), "an image layer's picture"
                     ),
                     source=str(entry.get("source", "")),
-                    repeat_x=bool(repeat_x),
-                    repeat_y=bool(repeat_y),
+                    repeat_x=repeat_x,
+                    repeat_y=repeat_y,
                 )
             )
         elif kind == "group":
@@ -650,24 +676,40 @@ def _assign_ids(doc: MapDoc, manifest: dict[str, Any]) -> None:
     file claimed: a hand-edited manifest whose ``next_object_id`` sits below an
     id it also carries would otherwise reissue that number to the next object
     the user drew.
+
+    **Minting skips what is already taken**, which is the same defect one step
+    earlier and not covered by the advance above. A file understating its
+    counter *while also mixing* stored and absent ids -- ``next_object_id: 1``
+    over objects wearing ``0`` and ``1`` -- would hand the zero the number the
+    other one already has, and two objects sharing an id is exactly what an
+    object-typed property cannot survive: the reference resolves to whichever
+    is found first. Skipping rather than renumbering, because the stored id is
+    the one something outside this file may already name.
     """
     doc.next_layer_id = max(1, int(manifest.get("next_layer_id", 1)))
     doc.next_object_id = max(1, int(manifest.get("next_object_id", 1)))
-    layer_ids = itertools.count(doc.next_layer_id)
-    object_ids = itertools.count(doc.next_object_id)
-    objects = []
-    for layer in doc.all_layers():
+    layers = doc.all_layers()
+    objects = [
+        obj for layer in layers if isinstance(layer, ObjectLayer) for obj in layer.objects
+    ]
+    layer_ids = _minter(doc.next_layer_id, {layer.id for layer in layers if layer.id})
+    object_ids = _minter(doc.next_object_id, {obj.id for obj in objects if obj.id})
+    for layer in layers:
         if not layer.id:
             layer.id = next(layer_ids)
-        if isinstance(layer, ObjectLayer):
-            for obj in layer.objects:
-                if not obj.id:
-                    obj.id = next(object_ids)
-                objects.append(obj)
-    doc.next_layer_id = max(
-        [doc.next_layer_id, *(layer.id + 1 for layer in doc.all_layers())]
-    )
+    for obj in objects:
+        if not obj.id:
+            obj.id = next(object_ids)
+    doc.next_layer_id = max([doc.next_layer_id, *(layer.id + 1 for layer in layers)])
     doc.next_object_id = max([doc.next_object_id, *(obj.id + 1 for obj in objects)])
+
+
+def _minter(start: int, taken: set[int]) -> Any:
+    """Ids from ``start`` upward, never one this file already spends."""
+    for value in itertools.count(start):
+        if value not in taken:
+            taken.add(value)
+            yield value
 
 
 def read_wmap(data: bytes) -> MapDoc:
@@ -777,7 +819,17 @@ def read_wmap(data: bytes) -> MapDoc:
                 )
             )
 
-        doc.layers.extend(_read_layers(manifest.get("layers", []), zf, doc))
+        try:
+            doc.layers.extend(_read_layers(manifest.get("layers", []), zf, doc))
+        except RecursionError as exc:
+            # A tree deep enough to exhaust the stack on the way *out* of the
+            # parser, which is a file this reader cannot hold rather than a
+            # defect in it -- and it has to leave through ``ValueError`` like
+            # every other refusal, because that is the door the studio's open
+            # path is written against.
+            raise ValueError(
+                "this map's layers are nested deeper than this build can read"
+            ) from exc
 
     _assign_ids(doc, manifest)
     _validate(doc)

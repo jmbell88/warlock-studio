@@ -45,6 +45,19 @@ def _pixels(w: int = 64, h: int = 64) -> np.ndarray:
     return array
 
 
+def _cells(at: tuple[int, int], value: int) -> np.ndarray:
+    """A 6x4 layer with one cell painted. Two calls give two *different* layers.
+
+    Which is the whole reason it exists: the gate document below has a tile
+    leaf at two depths, and giving them the same array would make every check
+    of the flat ``layers/N.npy`` numbering pass on a writer that enumerated the
+    leaves in the wrong order.
+    """
+    array = np.zeros((4, 6), gid.DTYPE)
+    array[at] = value
+    return array
+
+
 def _doc() -> MapDoc:
     doc = MapDoc(6, 4, 16, 24)
     doc.add_tileset(
@@ -535,12 +548,15 @@ def _gate_doc() -> MapDoc:
     doc.set_layer_props(outer.uid, tint=(255, 128, 0, 200), offset_x=3.5, class_name="Deco")
     doc.set_layer_props(inner.uid, parallax_x=0.5, parallax_y=0.25, opacity=0.75)
 
-    # A tile leaf *inside* the nested group, and another at the root, so the
-    # flat depth-first ``.npy`` numbering has something to get wrong.
+    # A tile leaf *inside* the nested group and another at the root, and a
+    # picture at each depth too, so the flat depth-first ``.npy`` and
+    # ``.png`` numbering has something to get wrong. **The two arrays and the
+    # two pictures are deliberately different from each other**: identical
+    # content would make every check below -- the fact digests, the fixed
+    # point, the member-set equality -- pass just as happily on a writer that
+    # numbered the leaves the other way round.
     buried = doc.add_tile_layer("Buried", parent_uid=inner.uid)
-    cells = np.zeros((4, 6), gid.DTYPE)
-    cells[1, 2] = gid.compose(9, flip_v=True)
-    doc.write_region(buried.uid, 0, 0, cells)
+    doc.write_region(buried.uid, 0, 0, _cells((1, 2), gid.compose(9, flip_v=True)))
 
     doc.add_image_layer(
         "Sky",
@@ -552,8 +568,10 @@ def _gate_doc() -> MapDoc:
     )
 
     ground = doc.add_tile_layer("Ground")
-    doc.write_region(ground.uid, 0, 0, cells)
+    doc.write_region(ground.uid, 0, 0, _cells((3, 5), gid.compose(4, flip_h=True)))
     doc.set_layer_props(ground.uid, locked=True, offset_y=-2.0, properties=dict(_RICH_PROPS))
+
+    doc.add_image_layer("Backdrop", pixels=_pixels(6, 4), source="art/backdrop.png")
 
     things = doc.add_object_layer("Things")
     doc.set_layer_props(things.uid, draworder="index")
@@ -617,15 +635,49 @@ def test_the_tile_arrays_stay_a_flat_depth_first_enumeration():
     """The container's shape is the point: the tree went into ``map.json``,
     which is kilobytes, and the members that hold megabytes are numbered
     exactly as they were in version 2 -- ``layers/0.npy``, ``layers/1.npy``, in
-    paint order, whatever the nesting."""
+    paint order, whatever the nesting.
+
+    **The bytes are read back and matched against the layer the manifest names
+    there**, not merely counted. The manifest numbers its leaves in
+    ``_layer_entries`` and the archive numbers them again in ``wmap_bytes``,
+    from two separate walks, and the only thing holding the two in agreement is
+    that both are depth-first pre-order. Asserting that both members *exist*
+    would pass just as well if they had been written the other way round -- the
+    file would then be silently wrong and its own reader could not tell, since
+    both arrays are the map's size.
+    """
     doc = _gate_doc()
     manifest = json.loads(wmap.manifest_json(doc))
     buried = manifest["layers"][0]["layers"][0]["layers"][0]
     ground = manifest["layers"][1]
+    assert (buried["name"], ground["name"]) == ("Buried", "Ground")
     assert buried["data"] == "layers/0.npy"
     assert ground["data"] == "layers/1.npy"
+
+    by_name = {layer.name: layer for layer in doc.all_layers()}
     with zipfile.ZipFile(io.BytesIO(wmap.wmap_bytes(doc))) as zf:
-        assert "layers/0.npy" in zf.namelist() and "layers/1.npy" in zf.namelist()
+        for entry in (buried, ground):
+            stored = np.lib.format.read_array(io.BytesIO(zf.read(entry["data"])))
+            assert np.array_equal(stored, by_name[entry["name"]].data), entry["data"]
+
+
+def test_the_image_pictures_are_numbered_by_the_same_walk():
+    """``images/N.png``'s twin of the case above, and it needs its own because
+    the two enumerations are two loops: a writer that got the tile order right
+    and the picture order wrong would pass that one. The two pictures are
+    different sizes, so a swap is visible in the decoded shape."""
+    doc = _gate_doc()
+    manifest = json.loads(wmap.manifest_json(doc))
+    sky = manifest["layers"][0]["layers"][0]["layers"][1]
+    backdrop = manifest["layers"][2]
+    assert (sky["name"], backdrop["name"]) == ("Sky", "Backdrop")
+    assert (sky["image"], backdrop["image"]) == ("images/0.png", "images/1.png")
+
+    by_name = {layer.name: layer for layer in doc.all_layers()}
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    for name in ("Sky", "Backdrop"):
+        restored = next(layer for layer in back.all_layers() if layer.name == name)
+        assert np.array_equal(restored.pixels, by_name[name].pixels), name
 
 
 def test_every_member_the_manifest_names_is_in_the_archive_and_the_reverse():
@@ -766,6 +818,59 @@ def test_the_counters_advance_past_an_id_a_manifest_understated():
     back = wmap.read_wmap(_rewrite(_gate_doc(), understate))
     assert back.next_layer_id > max(layer.id for layer in back.all_layers())
     assert back.next_object_id > max(obj.id for obj in back.layers[-1].objects)
+
+
+def test_a_minted_id_never_lands_on_one_the_file_already_spends():
+    """The advance-past-everything rule one step earlier. A manifest that
+    understates its counter *and* mixes stored with absent ids would hand the
+    absent one a number another object already wears, and two objects sharing
+    an id is exactly what an object-typed property cannot survive: the
+    reference resolves to whichever is found first."""
+    def collide(manifest):
+        manifest["next_object_id"] = 1
+        # The second object loses its id (2) while the first keeps its 1.
+        manifest["layers"][-1]["objects"][1]["id"] = 0
+
+    back = wmap.read_wmap(_rewrite(_gate_doc(), collide))
+    ids = [obj.id for obj in back.layers[-1].objects]
+    assert len(set(ids)) == len(ids), ids
+    assert ids[1] == 2, "the minter stepped over the id the first object holds"
+
+
+def test_a_malformed_repeat_pair_is_refused_like_any_other():
+    """``repeat`` is two booleans rather than two floats and so has a door of
+    its own, but the tolerance rule is the same one: absent defaults, present
+    and malformed is refused."""
+    def half(manifest):
+        manifest["layers"][0]["layers"][0]["layers"][1]["repeat"] = [True]
+
+    with pytest.raises(ValueError, match="malformed"):
+        wmap.read_wmap(_rewrite(_gate_doc(), half))
+
+
+def test_a_tree_nested_past_what_this_build_can_read_is_refused_as_a_value_error():
+    """Whichever of the two doors catches it -- the JSON scanner refusing to
+    build the object, or the reader exhausting the stack on the way back out --
+    it has to leave as a ``ValueError``, because that is what the studio's open
+    path is written against. A bare ``RecursionError`` would reach the frame
+    thread instead of the "could not open" frame.
+
+    The manifest is built as *text* rather than through ``json.dumps``, because
+    the encoder recurses too and would be the thing that failed -- in the test,
+    not in the reader.
+    """
+    depth = 5000
+    layers = '[{"type": "group", "layers": ' * depth + "[]" + "}]" * depth
+    manifest = (
+        '{"version": 3, "width": 1, "height": 1, "tile_w": 1, "tile_h": 1, '
+        '"layers": ' + layers + "}"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr(wmap.MANIFEST, manifest)
+
+    with pytest.raises(ValueError):
+        wmap.read_wmap(out.getvalue())
 
 
 def test_the_recursive_property_types_survive_at_every_level_of_the_tree():
