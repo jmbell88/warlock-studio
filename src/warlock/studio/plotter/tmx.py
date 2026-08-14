@@ -390,16 +390,12 @@ def _adopt_object_space(doc: MapDoc) -> None:
     for layer in doc.layers:
         if isinstance(layer, ObjectLayer):
             for obj in layer.objects:
-                obj.x, obj.y = project.object_to_pixels(
-                    doc.projection, doc.width, doc.height, doc.tile_w, doc.tile_h, obj.x, obj.y
-                )
+                obj.x, obj.y = project.object_to_pixels(doc._lattice(), obj.x, obj.y)
 
 
 def _object_xy(doc: MapDoc, obj: MapObject) -> tuple[float, float]:
     """One object's position in Tiled's space, for the two writers."""
-    return project.object_from_pixels(
-        doc.projection, doc.width, doc.height, doc.tile_w, doc.tile_h, obj.x, obj.y
-    )
+    return project.object_from_pixels(doc._lattice(), obj.x, obj.y)
 def read_tmx(
     data: bytes, *, image_loader: ImageLoader, tsx_loader: TilesetLoader
 ) -> MapDoc:
