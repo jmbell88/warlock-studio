@@ -447,6 +447,30 @@ def test_a_tmj_embedded_tileset_with_terrain_types_is_refused():
     assert "terrain types" in str(exc.value)
 
 
+def test_a_tmj_embedded_tileset_with_a_grid_key_is_not_refused():
+    """``grid`` marks an isometric tileset's own rendering grid, not an image
+    collection. ``check_tileset_features`` -- the XML path's version of these
+    checks -- has no test for it at all, so an XML embedded tileset carrying
+    ``<grid/>`` beside its ``<image>`` already loads cleanly. The JSON path
+    used to refuse on ``grid`` alone (the old blanket ``entry.get("tiles") or
+    entry.get("grid")`` check), which is a case the two per-format readers
+    were never supposed to disagree about. Asserted here, beside the
+    refusals that stayed, so the removal reads as a decision rather than a
+    case somebody deleted -- the same pattern
+    ``test_an_isometric_map_loads_now_that_plotter_draws_one`` follows above."""
+    data = _tmj(
+        {
+            "name": "g",
+            "image": "a.png",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "grid": {"orientation": "isometric", "width": 16, "height": 8},
+        }
+    )
+    doc = tmx.read_tmj(data, **LOADERS)
+    assert doc.tilesets[0].tileset.name == "g"
+
+
 # --- properties ---------------------------------------------------------------
 
 
