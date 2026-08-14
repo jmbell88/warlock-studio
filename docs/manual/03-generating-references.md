@@ -346,7 +346,7 @@ guessed over it.
 When a tile finishes, the app measures its own wrap seam and reports it in the inspector's **Seam**
 section. The number is a ratio: how much sharper the difference across the wrap edge is than the
 picture's own grain. Around 1 means the seam is indistinguishable from ordinary texture detail;
-above 2 the app calls it a visible seam and says so. Both directions are measured and reported
+above 3.5 the app calls it a visible seam and says so. Both directions are measured and reported
 separately, because an image that wraps one way and not the other is not a tile.
 
 A ratio is hard to calibrate against by eye, so the section also offers a wrapped view: the image

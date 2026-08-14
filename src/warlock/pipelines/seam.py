@@ -34,7 +34,7 @@ from typing import Any
 # is a mean over every adjacent pair and so is tiny on a mostly-flat picture,
 # while the numerator is one column that may land on a grout line. Re-measure
 # before moving it, and re-measure it per checkpoint -- the corpus is turbo at
-# 4 steps, and a CFG base at 25 draws harder edges than any of it.
+# 4 steps, and a CFG base at 30 draws harder edges than any of it.
 SEAM_MAX = 3.5
 
 # Below this many pixels on a side there is no interior to compare against.

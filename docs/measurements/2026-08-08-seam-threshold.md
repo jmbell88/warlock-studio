@@ -110,10 +110,12 @@ Anything in (2.50, 5.52) scores identically on this corpus — 3.5 is chosen for
 its position in the band, not because the data distinguishes it from 4.0. What
 the data does settle is that the answer is **not** 2.0, and that is what moves.
 
-The corpus is one checkpoint. `sdxl-turbo` at 4 steps is the default and the
-one every tile in the app is generated with today, but a CFG base at 25 steps
-draws harder edges, and the failure mode found here is *about* hard edges. A
-tile base other than turbo is the first thing that should re-run these scripts.
+The corpus is one checkpoint. `sdxl-turbo` at 4 steps was the default when this
+was measured (until 2026-08-11 — see
+[`2026-08-11-default-base-model.md`](2026-08-11-default-base-model.md)), but a
+CFG base at 30 steps draws harder edges, and the failure mode found here is
+*about* hard edges. A tile base other than turbo is the first thing that should
+re-run these scripts.
 
 The band is empty because there is nothing in this corpus that seams *slightly*.
 Circular padding either applies or it does not, so the plain arm is a proxy for
