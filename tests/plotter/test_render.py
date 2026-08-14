@@ -175,7 +175,7 @@ def test_the_flat_render_places_an_isometric_cell_where_the_canvas_does():
 
     out = render.render_map(doc)
     assert out.shape[:2] == (doc.pixel_height, doc.pixel_width)
-    x0, y0 = project.cell_origin("isometric", 3, 3, 32, 16, 2, 1)
+    x0, y0 = project.cell_origin(project.Lattice("isometric", 3, 3, 32, 16), 2, 1)
     # The centre of that cell's diamond is opaque; the map's top-left corner,
     # which no diamond covers, is not.
     assert out[int(y0) + 8, int(x0) + 16, 3] == 255
