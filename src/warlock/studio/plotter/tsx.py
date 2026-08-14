@@ -216,6 +216,34 @@ def check_tileset_features(root: ET.Element) -> None:
             raise TiledUnsupported("per-tile custom properties", where)
 
 
+def check_tileset_features_json(entry: dict[str, Any]) -> None:
+    """``check_tileset_features`` over Tiled's JSON tileset spelling.
+
+    Covers the same two checks that read straight off the tileset object --
+    ``terrains`` (JSON's pre-1.5 ``<terraintypes>``) and the four per-tile
+    refusals -- so the JSON embedded-tileset path in :mod:`.tmx` refuses the
+    same file the XML path does, by the same names. Wangsets and the
+    top-level ``image`` question are decided elsewhere in that caller, each
+    with its own JSON-specific recognise-or-refuse logic already in place, so
+    this stays to the part the two formats read identically: one dict, not an
+    element, but the same four keys per tile.
+    """
+    if entry.get("terrains"):
+        raise TiledUnsupported("terrain types")
+    for tile in entry.get("tiles") or ():
+        if not isinstance(tile, dict):
+            continue
+        where = f"tile {tile.get('id', '?')}"
+        if tile.get("animation"):
+            raise TiledUnsupported("per-tile animation", where)
+        if tile.get("image"):
+            raise TiledUnsupported("an image-collection tileset", where)
+        if tile.get("objectgroup"):
+            raise TiledUnsupported("per-tile collision shapes", where)
+        if tile.get("properties"):
+            raise TiledUnsupported("per-tile custom properties", where)
+
+
 def tsx_source(data: bytes) -> str:
     """The image path a ``.tsx`` names, relative to the ``.tsx`` itself.
 

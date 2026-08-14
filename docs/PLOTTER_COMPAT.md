@@ -108,12 +108,15 @@ gets an actual home: layer decorations (`parallaxx`/`parallaxy`,
 `tintcolor`), `class` and `id` on both layers and objects.
 
 `draworder` is the one entry here that is not merely lost but actively wrong
-on a round trip: `tmx_export` writes every object layer's `<objectgroup>`
-with `draworder="topdown"` regardless of what the source file said, so a
-Tiled map authored with `draworder="index"` (objects drawn in list order
-rather than sorted by `y`) changes what it *means* — not just what it
-carries — the moment it passes through this editor, even though nothing
-about the shapes or their positions changed.
+on a round trip: `tmj_export` writes every object layer's JSON `objectgroup`
+with `"draworder": "topdown"` regardless of what the source file said (the
+XML writer, `tmx_export`, writes no `draworder` attribute at all — TMX's own
+default *is* `topdown`, so the on-disk effect matches even though the
+attribute is absent rather than written), so a Tiled map authored with
+`draworder="index"` (objects drawn in list order rather than sorted by `y`)
+changes what it *means* — not just what it carries — the moment it passes
+through this editor, even though nothing about the shapes or their positions
+changed.
 
 | Feature | State | Notes |
 |---|---|---|
@@ -122,7 +125,7 @@ about the shapes or their positions changed.
 | `layer class` | silently-dropped | Tiled's per-layer custom type. See M2. |
 | `layer id` | silently-dropped | Tiled's own layer id; a fresh one is minted on every export. See M2. |
 | `object id` | silently-dropped | Read only far enough to name the object in a refusal message; never stored. A fresh one is minted on every export. See M2. |
-| `object-layer draworder` | silently-dropped | Not read at all, and always written back as `"topdown"` -- an `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. See M2. |
+| `object-layer draworder` | silently-dropped | Not read at all. `tmj_export` always writes `"draworder": "topdown"`; `tmx_export` writes no `draworder` attribute (TMX's default is already topdown, so the effect matches) -- either way an `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. See M2. |
 
 ## Permanent non-goals
 

@@ -351,6 +351,102 @@ def test_an_external_tsj_tileset_is_refused_with_the_remedy():
     assert ".tsj" in str(exc.value) and ".tsx" in str(exc.value)
 
 
+def test_an_external_tsj_tileset_on_the_xml_path_is_refused_with_the_remedy():
+    """The TMX spelling of the same file: ``<tileset source="x.tsj"/>``. Before
+    this refusal existed, the XML path fell through to ``tsx_loader`` and died
+    with the host's generic "not a readable tileset" -- the right outcome, but
+    the wrong sentence, and one that does not say to re-save as ``.tsx``."""
+    data = _map().replace(b'source="t.tsx"', b'source="t.tsj"')
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmx(data, **LOADERS)
+    assert ".tsj" in str(exc.value) and ".tsx" in str(exc.value)
+
+
+# --- embedded-JSON tileset feature checks --------------------------------------
+#
+# The XML embedded-tileset path runs every one of these through
+# ``check_tileset_features``; the JSON embedded-tileset path used to run a
+# single blanket check (``entry.get("tiles") or entry.get("grid")``) that
+# mislabelled per-tile animation/collision/properties as "an image-collection
+# tileset", and let ``terrains`` (the JSON spelling of ``<terraintypes>``) slip
+# past into an unrelated ``ValueError`` from the tile-size arithmetic further
+# down. Each case below pins the correct, XML-matching refusal.
+
+
+def test_a_tmj_embedded_tileset_with_per_tile_animation_is_refused():
+    data = _tmj(
+        {
+            "name": "g",
+            "image": "a.png",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "tiles": [{"id": 0, "animation": [{"tileid": 0, "duration": 100}]}],
+        }
+    )
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(data, **LOADERS)
+    assert "per-tile animation" in str(exc.value)
+
+
+def test_a_tmj_embedded_tileset_with_a_per_tile_image_is_refused_as_a_collection():
+    data = _tmj(
+        {
+            "name": "g",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "tiles": [{"id": 0, "image": "0.png"}],
+        }
+    )
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(data, **LOADERS)
+    assert "image-collection" in str(exc.value)
+
+
+def test_a_tmj_embedded_tileset_with_per_tile_collision_is_refused():
+    data = _tmj(
+        {
+            "name": "g",
+            "image": "a.png",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "tiles": [{"id": 0, "objectgroup": {"objects": []}}],
+        }
+    )
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(data, **LOADERS)
+    assert "per-tile collision" in str(exc.value)
+
+
+def test_a_tmj_embedded_tileset_with_per_tile_properties_is_refused():
+    data = _tmj(
+        {
+            "name": "g",
+            "image": "a.png",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "tiles": [{"id": 0, "properties": [{"name": "p", "type": "bool", "value": True}]}],
+        }
+    )
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(data, **LOADERS)
+    assert "per-tile custom properties" in str(exc.value)
+
+
+def test_a_tmj_embedded_tileset_with_terrain_types_is_refused():
+    data = _tmj(
+        {
+            "name": "g",
+            "image": "a.png",
+            "tilewidth": 16,
+            "tileheight": 16,
+            "terrains": [{"name": "Grass", "tile": 0}],
+        }
+    )
+    with pytest.raises(tsx.TiledUnsupported) as exc:
+        tmx.read_tmj(data, **LOADERS)
+    assert "terrain types" in str(exc.value)
+
+
 # --- properties ---------------------------------------------------------------
 
 

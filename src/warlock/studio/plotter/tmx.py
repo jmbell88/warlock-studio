@@ -58,6 +58,7 @@ from .tsx import (
     Prop,
     TiledUnsupported,
     check_tileset_features,
+    check_tileset_features_json,
     read_properties,
     read_wangsets,
     read_wangsets_json,
@@ -315,6 +316,14 @@ def _read_tmx_tilesets(
         firstgid = int(node.get("firstgid", 1) or 1)
         source = node.get("source")
         if source:
+            # Same refusal the JSON path raises for a ``.tsj`` reference: the
+            # right outcome either way is refusal, but falling through to
+            # ``tsx_loader`` here would die on the host's generic "not a
+            # readable tileset" instead of naming the actual problem.
+            if str(source).lower().endswith(".tsj"):
+                raise TiledUnsupported(
+                    "an external .tsj tileset", "re-save the tileset as .tsx in Tiled"
+                )
             refs.append(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )
@@ -537,11 +546,13 @@ def _read_tmj_tilesets(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )
             continue
-        # ``tiles`` or ``grid`` is an image collection: every tile its own file.
-        # Kept ahead of the wangset question because it decides whether there is
-        # one sliced atlas at all, which everything below assumes.
-        if entry.get("tiles") or entry.get("grid"):
-            raise TiledUnsupported("an image-collection tileset", str(entry.get("name", "")))
+        # ``check_tileset_features`` over the JSON spelling: terrain types and
+        # the four per-tile refusals (animation, per-tile image -- a true
+        # image collection, collision, custom properties), read off ``tiles``
+        # tile by tile rather than guessed from its mere presence. Kept ahead
+        # of the wangset question because a refused tileset never needs one
+        # decided.
+        check_tileset_features_json(entry)
         wangsets = entry.get("wangsets")
         terrains: tuple[TerrainSpec, ...] = (
             () if not wangsets else _refuse_wangsets(read_wangsets_json(wangsets))
