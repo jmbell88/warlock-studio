@@ -1,0 +1,540 @@
+"""The layer tree and the resolver that flattens it.
+
+Three properties are what this file exists for, and all three are the tree
+restating rules the flat stack already had.
+
+**A group is not a layer with children drawn onto it.** Nothing composites a
+group; a group is a *state* its descendants inherit, so the same six numbers --
+offset, parallax, opacity, visibility, tint, lock -- have to combine the same
+way for every consumer or the canvas and an export start disagreeing about what
+a nested layer looks like. :mod:`warlock.studio.plotter.scene` is that one
+answer and both renderers iterate it.
+
+**A uid still addresses.** The whole point of never recording an index is that
+an edit survives the list moving under it, and a tree gives the list more ways
+to move: a layer can now change *parent*. An edit recorded before a reparent
+has to land afterwards, which is what ``_an_edit_inside_a_moved_group`` pins.
+
+**A subtree travels as one object.** Removing a group is one step whose cost is
+every array under it, and undoing it puts the whole subtree back where it was --
+not the group with its children stranded somewhere else.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import numpy as np
+import pytest
+
+from warlock.studio.plotter import gid, scene
+from warlock.studio.plotter.tilemap import (
+    GroupLayer,
+    ImageLayer,
+    MapDoc,
+    MapObject,
+    ObjectLayer,
+    TileLayer,
+    new_uid,
+)
+from warlock.studio.plotter.tileset import Tileset
+
+
+def _tileset(name: str = "t", tiles: int = 4) -> Tileset:
+    pixels = np.zeros((16, 16 * tiles, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    return Tileset(name=name, pixels=pixels, tile_w=16, tile_h=16)
+
+
+def _doc() -> MapDoc:
+    doc = MapDoc(8, 6, 16, 16)
+    doc.add_tileset(_tileset())
+    return doc
+
+
+def _picture(w: int = 4, h: int = 4) -> np.ndarray:
+    pixels = np.zeros((h, w, 4), dtype=np.uint8)
+    pixels[..., 0] = 200
+    pixels[..., 3] = 255
+    return pixels
+
+
+# --- the model ----------------------------------------------------------------
+
+
+def test_every_layer_kind_carries_the_same_decorations():
+    """One vocabulary for four classes. They are declared field by field rather
+    than inherited (a base class would force ``data`` to carry a default), so
+    the only thing keeping the four in step is this."""
+    doc = _doc()
+    kinds = [
+        doc.add_tile_layer("t"),
+        doc.add_object_layer("o"),
+        doc.add_group_layer("g"),
+        doc.add_image_layer("i"),
+    ]
+    for layer in kinds:
+        for name in scene.DECORATION_FIELDS:
+            assert hasattr(layer, name), f"{type(layer).__name__} has no {name}"
+        assert layer.tint == (255, 255, 255, 255)
+        assert (layer.parallax_x, layer.parallax_y) == (1.0, 1.0)
+        assert (layer.offset_x, layer.offset_y) == (0.0, 0.0)
+        assert layer.class_name == ""
+        snapshot = layer.snapshot()
+        for name in scene.DECORATION_FIELDS:
+            assert name in snapshot
+
+
+def test_an_image_layers_pixels_are_frozen_like_a_tilesets():
+    layer = ImageLayer(uid=1, name="sky", pixels=_picture())
+    assert layer.pixels.shape == (4, 4, 4)
+    with pytest.raises(ValueError):
+        layer.pixels[0, 0, 0] = 1
+
+
+def test_an_image_layer_with_no_picture_is_legal_and_empty():
+    layer = ImageLayer(uid=1, name="sky")
+    assert layer.pixels.shape == (0, 0, 4)
+    assert (layer.source, layer.repeat_x, layer.repeat_y) == ("", False, False)
+
+
+def test_a_tint_outside_the_channel_range_is_refused():
+    with pytest.raises(ValueError):
+        TileLayer(uid=1, name="t", data=gid.empty_layer(2, 2), tint=(255, 300, 0, 255))
+
+
+# --- the tree -----------------------------------------------------------------
+
+
+def test_a_layer_added_into_a_group_is_not_in_the_root_list():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    assert doc.layers == [group]
+    assert group.children == [inner]
+    assert doc.layer(inner.uid) is inner
+    assert doc.parent_uid_of(inner.uid) == group.uid
+    assert doc.index_of(inner.uid) == 0
+
+
+def test_tile_layers_are_the_leaves_in_depth_first_paint_order():
+    doc = _doc()
+    floor = doc.add_tile_layer("floor")
+    group = doc.add_group_layer("G")
+    inner_a = doc.add_tile_layer("a", parent_uid=group.uid)
+    inner_b = doc.add_tile_layer("b", parent_uid=group.uid)
+    roof = doc.add_tile_layer("roof")
+    assert [layer.name for layer in doc.tile_layers()] == ["floor", "a", "b", "roof"]
+    assert doc.tile_layers() == [floor, inner_a, inner_b, roof]
+    assert [layer.name for layer in doc.all_layers()] == ["floor", "G", "a", "b", "roof"]
+
+
+def test_a_group_cannot_be_moved_inside_its_own_subtree():
+    doc = _doc()
+    outer = doc.add_group_layer("outer")
+    inner = doc.add_group_layer("inner", parent_uid=outer.uid)
+    with pytest.raises(ValueError):
+        doc.move_layer(outer.uid, 0, parent_uid=inner.uid)
+    with pytest.raises(ValueError):
+        doc.move_layer(outer.uid, 0, parent_uid=outer.uid)
+    assert doc.layers == [outer]
+    assert outer.children == [inner]
+
+
+def test_a_reparent_is_one_step_and_undoes_to_the_old_parent():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    layer = doc.add_tile_layer("t")
+    head = doc.history.head
+    doc.move_layer(layer.uid, 0, parent_uid=group.uid)
+    assert doc.history.head == head + 1
+    assert group.children == [layer]
+    assert doc.layers == [group]
+    doc.undo()
+    assert group.children == []
+    assert doc.layers == [group, layer]
+
+
+def test_moving_a_layer_where_it_already_is_pushes_nothing():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    layer = doc.add_tile_layer("t", parent_uid=group.uid)
+    head = doc.history.head
+    doc.move_layer(layer.uid, 0)
+    doc.move_layer(layer.uid, 0, parent_uid=group.uid)
+    assert doc.history.head == head
+
+
+# --- the three the plan names -------------------------------------------------
+
+
+def test_group_visibility_and_opacity_resolve_through_ancestors():
+    """The five combination rules, all at once and all through one group.
+
+    Hidden wins by AND, opacity multiplies, offsets sum, parallax multiplies and
+    a lock spreads downward -- so a layer that is itself visible, unlocked and
+    at full opacity resolves to none of those things under a group that is not.
+    """
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.set_layer_props(
+        group.uid,
+        opacity=0.5,
+        locked=True,
+        offset_x=10.0,
+        offset_y=4.0,
+        parallax_x=0.5,
+        tint=(255, 128, 128, 255),
+    )
+    doc.set_layer_props(
+        inner.uid, opacity=0.5, offset_x=1.0, parallax_x=0.5, tint=(128, 255, 255, 255)
+    )
+
+    (entry,) = scene.resolve(doc)
+    assert entry.layer is inner
+    assert entry.opacity == pytest.approx(0.25)
+    assert entry.offset == (11.0, 4.0)
+    assert entry.parallax == (0.25, 1.0)
+    assert entry.tint == (128, 128, 128, 255)
+    assert entry.locked is True
+    assert entry.visible is True
+
+    doc.set_layer_props(group.uid, visible=False)
+    assert scene.resolve(doc) == []
+    hidden = scene.resolve(doc, include_hidden=True)
+    assert [e.layer for e in hidden] == [inner]
+    assert hidden[0].visible is False
+    # The leaf's own flag never moved -- the group is what is hidden.
+    assert inner.visible is True
+
+
+def test_an_edit_inside_a_moved_group_still_lands_by_uid():
+    """The travelling rule, under the one thing a tree adds: a change of parent.
+
+    The patch is recorded while the layer sits in one group and undone after it
+    has been moved into another, at a different depth and a different index.
+    """
+    doc = _doc()
+    left = doc.add_group_layer("left")
+    right = doc.add_group_layer("right")
+    inner = doc.add_tile_layer("inner", parent_uid=left.uid)
+    doc.add_tile_layer("decoy", parent_uid=right.uid)
+
+    value = gid.compose(2)
+    doc.write_region(inner.uid, 1, 1, np.full((2, 2), value, gid.DTYPE))
+    assert int(inner.data[1, 1]) == value
+
+    doc.move_layer(inner.uid, 0, parent_uid=right.uid)
+    assert doc.parent_uid_of(inner.uid) == right.uid
+
+    doc.undo()  # the move
+    doc.undo()  # the patch, recorded two parents ago
+    assert int(inner.data[1, 1]) == 0
+    assert doc.parent_uid_of(inner.uid) == left.uid
+
+    doc.redo()
+    assert int(inner.data[1, 1]) == value
+
+
+def test_removing_a_group_removes_and_restores_the_subtree_as_one_step():
+    doc = _doc()
+    keep = doc.add_tile_layer("keep")
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    nested = doc.add_group_layer("nested", parent_uid=group.uid)
+    deep = doc.add_tile_layer("deep", parent_uid=nested.uid)
+    doc.write_region(deep.uid, 0, 0, np.full((1, 1), gid.compose(3), gid.DTYPE))
+
+    head = doc.history.head
+    doc.remove_layer(group.uid)
+    assert doc.history.head == head + 1
+    assert doc.layers == [keep]
+    assert doc.layer(inner.uid) is None
+    assert doc.layer(deep.uid) is None
+
+    # The cost is the whole subtree, not the group's own nothing.
+    step = doc.history.top
+    assert step.cost == inner.data.nbytes + deep.data.nbytes
+
+    doc.undo()
+    assert doc.layers == [keep, group]
+    assert doc.layer(deep.uid) is deep
+    assert doc.parent_uid_of(deep.uid) == nested.uid
+    assert doc.index_of(nested.uid) == 1
+    assert int(deep.data[0, 0]) == gid.compose(3)
+
+    doc.redo()
+    assert doc.layers == [keep]
+
+
+def test_removing_a_group_the_active_layer_is_inside_falls_back_to_a_real_layer():
+    doc = _doc()
+    keep = doc.add_tile_layer("keep")
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.set_active_layer(inner.uid)
+    doc.remove_layer(group.uid)
+    assert doc.active_layer == keep.uid
+
+
+# --- resolve ------------------------------------------------------------------
+
+
+def test_resolve_yields_only_leaves_in_paint_order():
+    doc = _doc()
+    bottom = doc.add_tile_layer("bottom")
+    group = doc.add_group_layer("G")
+    inner = doc.add_object_layer("inner", parent_uid=group.uid)
+    image = doc.add_image_layer("sky", pixels=_picture(), parent_uid=group.uid)
+    top = doc.add_tile_layer("top")
+    assert [e.layer for e in scene.resolve(doc)] == [bottom, inner, image, top]
+    assert all(not isinstance(e.layer, GroupLayer) for e in scene.resolve(doc))
+
+
+def test_an_empty_group_resolves_to_nothing_at_all():
+    doc = _doc()
+    doc.add_group_layer("G")
+    assert scene.resolve(doc) == []
+
+
+def test_a_hidden_group_is_not_descended_into_unless_hidden_are_asked_for():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.set_layer_props(group.uid, visible=False)
+    assert scene.resolve(doc) == []
+    assert len(scene.resolve(doc, include_hidden=True)) == 1
+
+
+def test_resolved_for_answers_about_a_group_as_well_as_a_leaf():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.set_layer_props(group.uid, offset_x=8.0)
+    assert scene.resolved_for(doc, group.uid).offset == (8.0, 0.0)
+    assert scene.resolved_for(doc, inner.uid).offset == (8.0, 0.0)
+    assert scene.resolved_for(doc, 99999) is None
+
+
+def test_a_resolved_state_is_frozen():
+    doc = _doc()
+    doc.add_tile_layer("t")
+    (entry,) = scene.resolve(doc)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        entry.opacity = 0.5
+
+
+# --- both renderers -----------------------------------------------------------
+
+
+def test_a_group_opacity_reaches_the_flat_render():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.write_region(inner.uid, 0, 0, np.full((1, 1), gid.compose(1), gid.DTYPE))
+    full = plotter_render.render_map(doc)
+    assert int(full[0, 0, 3]) == 255
+    doc.set_layer_props(group.uid, opacity=0.5)
+    faded = plotter_render.render_map(doc)
+    assert 100 < int(faded[0, 0, 3]) < 200
+
+
+def test_a_hidden_group_hides_its_children_from_the_export_and_the_minimap():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    inner = doc.add_tile_layer("inner", parent_uid=group.uid)
+    doc.write_region(inner.uid, 0, 0, np.full((1, 1), gid.compose(1), gid.DTYPE))
+    assert int(plotter_render.render_map(doc)[0, 0, 3]) == 255
+    assert int(plotter_render.minimap(doc)[0, 0, 3]) > 0
+    doc.set_layer_props(group.uid, visible=False)
+    assert int(plotter_render.render_map(doc)[0, 0, 3]) == 0
+    assert int(plotter_render.minimap(doc)[0, 0, 3]) == 0
+
+
+def test_a_layer_offset_moves_what_the_flat_render_draws():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    doc.write_region(layer.uid, 0, 0, np.full((1, 1), gid.compose(1), gid.DTYPE))
+    doc.set_layer_props(layer.uid, offset_x=16.0, offset_y=16.0)
+    out = plotter_render.render_map(doc)
+    assert int(out[0, 0, 3]) == 0
+    assert int(out[16, 16, 3]) == 255
+
+
+def test_an_image_layer_composites_into_the_flat_render():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    doc.add_image_layer("sky", pixels=_picture(8, 8))
+    out = plotter_render.render_map(doc)
+    assert int(out[0, 0, 0]) == 200
+    assert int(out[7, 7, 3]) == 255
+    assert int(out[8, 8, 3]) == 0
+
+
+def test_a_repeating_image_layer_fills_the_map():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    doc.add_image_layer("sky", pixels=_picture(8, 8), repeat_x=True, repeat_y=True)
+    out = plotter_render.render_map(doc)
+    assert int(out[-1, -1, 3]) == 255
+
+
+def test_a_layer_tint_multiplies_the_flat_render():
+    from warlock.studio.plotter import render as plotter_render
+
+    doc = _doc()
+    doc.add_image_layer("sky", pixels=_picture(4, 4), tint=(128, 255, 255, 255))
+    out = plotter_render.render_map(doc)
+    assert int(out[0, 0, 0]) == 100
+
+
+# --- the writer doors ---------------------------------------------------------
+
+
+def test_a_wmap_of_a_document_holding_a_group_is_refused_by_name():
+    from warlock.studio.plotter import wmap
+
+    doc = _doc()
+    doc.add_tile_layer("t")
+    doc.add_group_layer("G")
+    with pytest.raises(ValueError, match="group"):
+        wmap.wmap_bytes(doc)
+
+
+def test_a_wmap_of_a_document_holding_an_image_layer_is_refused_by_name():
+    from warlock.studio.plotter import wmap
+
+    doc = _doc()
+    doc.add_image_layer("sky", pixels=_picture())
+    with pytest.raises(ValueError, match="image"):
+        wmap.wmap_bytes(doc)
+
+
+def test_a_flat_document_still_writes_a_wmap():
+    from warlock.studio.plotter import wmap
+
+    doc = _doc()
+    doc.add_tile_layer("t")
+    doc.add_object_layer("o")
+    assert wmap.read_wmap(wmap.wmap_bytes(doc)).width == doc.width
+
+
+@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
+def test_exporting_a_document_holding_a_group_is_refused(export):
+    from warlock.studio.plotter import tmx
+    from warlock.studio.plotter.props import TiledUnsupported
+
+    doc = _doc()
+    doc.add_tile_layer("t")
+    doc.add_group_layer("G")
+    with pytest.raises(TiledUnsupported) as excinfo:
+        getattr(tmx, export)(doc)
+    assert excinfo.value.feature == "group layers"
+    assert excinfo.value.exporting is True
+
+
+@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
+def test_exporting_a_document_holding_an_image_layer_is_refused(export):
+    from warlock.studio.plotter import tmx
+    from warlock.studio.plotter.props import TiledUnsupported
+
+    doc = _doc()
+    doc.add_tile_layer("t")
+    doc.add_image_layer("sky", pixels=_picture())
+    with pytest.raises(TiledUnsupported) as excinfo:
+        getattr(tmx, export)(doc)
+    assert excinfo.value.feature == "image layers"
+    assert excinfo.value.exporting is True
+
+
+@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
+@pytest.mark.parametrize(
+    ("values", "feature"),
+    [
+        ({"offset_y": 8.0}, "layer pixel offsets"),
+        ({"tint": (255, 0, 0, 255)}, "a tinted layer"),
+        ({"parallax_x": 0.5}, "a parallax-scrolling layer"),
+        ({"class_name": "Ground"}, "a class-tagged layer"),
+    ],
+)
+def test_exporting_a_decorated_layer_is_refused_by_name(export, values, feature):
+    """The rotation precedent, one level up. A field the document models and no
+    writer can spell is a refusal at the writer door, never a silent drop."""
+    from warlock.studio.plotter import tmx
+    from warlock.studio.plotter.props import TiledUnsupported
+
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    doc.set_layer_props(layer.uid, **values)
+    with pytest.raises(TiledUnsupported) as excinfo:
+        getattr(tmx, export)(doc)
+    assert excinfo.value.feature == feature
+    assert excinfo.value.exporting is True
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"offset_y": 8.0},
+        {"tint": (255, 0, 0, 255)},
+        {"parallax_x": 0.5},
+        {"class_name": "Ground"},
+    ],
+)
+def test_a_wmap_of_a_decorated_layer_is_refused_until_v3(values):
+    from warlock.studio.plotter import wmap
+
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    doc.set_layer_props(layer.uid, **values)
+    with pytest.raises(ValueError, match="cannot store yet"):
+        wmap.wmap_bytes(doc)
+
+
+def test_an_undecorated_document_is_not_caught_by_either_door():
+    """The guard that keeps the four refusals above from being a size limit on
+    every map: identity values are not decorations."""
+    from warlock.studio.plotter import tmx, wmap
+
+    doc = _doc()
+    doc.add_tile_layer("t")
+    doc.add_object_layer("o")
+    assert wmap.wmap_bytes(doc)
+    assert tmx.tmx_export(doc)
+    assert tmx.tmj_export(doc)
+
+
+# --- the rest of the document keeps working -----------------------------------
+
+
+def test_a_resize_moves_objects_on_a_nested_layer_too():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    layer = doc.add_object_layer("o", parent_uid=group.uid)
+    doc.add_object(layer.uid, MapObject(uid=new_uid(), name="spawn", x=16.0, y=16.0))
+    doc.resize(10, 8, offset_x=1, offset_y=1)
+    assert (layer.objects[0].x, layer.objects[0].y) == (32.0, 32.0)
+
+
+def test_a_nested_tile_layer_is_resized_with_the_rest():
+    doc = _doc()
+    group = doc.add_group_layer("G")
+    layer = doc.add_tile_layer("t", parent_uid=group.uid)
+    doc.resize(10, 8)
+    assert layer.data.shape == (8, 10)
+
+
+def test_the_layer_kinds_are_all_in_the_union():
+    from warlock.studio.plotter import _map_model
+
+    assert set(_map_model.LEAF_LAYERS) == {TileLayer, ObjectLayer, ImageLayer}
+    assert GroupLayer not in _map_model.LEAF_LAYERS

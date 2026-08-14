@@ -1,9 +1,14 @@
 """The plain data a map is made of: layers, objects, and what a dimension may be.
 
-The leaf of the document's own dependency graph, and the reason the split starts
-here. Everything the ``_map_*`` mixins do is *to* one of these types, so a mixin
-that needed ``TileLayer`` from ``tilemap`` and ``tilemap`` that needed the mixin
-would be a cycle; pulling the types out one level breaks it before it exists.
+The leaf of the *document's* own dependency graph, and the reason the split
+starts here. Everything the ``_map_*`` mixins do is *to* one of these types, so
+a mixin that needed ``TileLayer`` from ``tilemap`` and ``tilemap`` that needed
+the mixin would be a cycle; pulling the types out one level breaks it before it
+exists. The one thing it reaches for is :mod:`.tileset`, which is a leaf of its
+own (numpy and :mod:`.blob`) and knows nothing about layers -- for the pixel and
+colour rules, ``frozen_rgba`` and ``rgba_colour``, rather than for a type. A
+private copy of either beside :class:`ImageLayer` is how the two spellings of
+"an image is RGBA and nothing may write through it" come to disagree.
 
 Nothing here knows about history, and that is the line the file draws: a
 :class:`TileLayer` is a rectangle of gids with a name and an opacity, and every
@@ -32,6 +37,8 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
+
+from .tileset import RGBA, frozen_rgba, rgba_colour
 
 _uids = itertools.count(1)
 
@@ -462,6 +469,72 @@ def merged_object_values(before: dict[str, Any], values: dict[str, Any]) -> dict
     return after
 
 
+# --- what every layer kind carries --------------------------------------------
+#
+# Tiled decorates *every* layer, whatever kind it is, with the same six things,
+# and this package spells them the same way for all four. They are declared
+# field by field on each class rather than inherited from a base, because a
+# dataclass base would have to carry them with defaults and every default field
+# must precede every non-default one -- so ``TileLayer.data``, which has no
+# sensible default, could not follow them. What keeps the four in step instead
+# is this tuple and the two helpers under it: ``snapshot`` and
+# ``_apply_layer_props`` both work from the same list, and
+# ``tests/plotter/test_scene.py`` asserts all four classes carry it.
+
+#: The tint that changes nothing, and therefore the default: Tiled's own
+#: ``#ffffffff``. Multiplying by it is the identity in every channel, which is
+#: what lets :mod:`.scene` combine tints unconditionally.
+OPAQUE_WHITE: RGBA = (255, 255, 255, 255)
+
+DECORATION_FIELDS = (
+    "class_name",
+    "tint",
+    "offset_x",
+    "offset_y",
+    "parallax_x",
+    "parallax_y",
+)
+
+
+def _normalize_layer(layer: Any) -> None:
+    """Coerce and refuse the shared fields. Called from every kind's post-init.
+
+    ``class_name`` rather than ``class``, which is a keyword, and rather than
+    ``obj_class``, which is :class:`MapObject`'s field and would suggest the two
+    were one thing: Tiled's ``class`` attribute means the same on both, but a
+    layer's and an object's are separate values.
+    """
+    layer.class_name = str(layer.class_name)
+    layer.tint = rgba_colour(layer.tint, "a layer tint")
+    layer.offset_x = float(layer.offset_x)
+    layer.offset_y = float(layer.offset_y)
+    layer.parallax_x = float(layer.parallax_x)
+    layer.parallax_y = float(layer.parallax_y)
+
+
+def _layer_snapshot(layer: Any) -> dict[str, Any]:
+    """Everything :class:`~.edits.LayerPropsEdit` restores on any layer kind.
+
+    What is deliberately absent is the layer's *contents* -- a tile layer's
+    array, a group's children, an image layer's pixels -- which travel with
+    add/remove edits instead, and the persistent ``id``, which is the layer's
+    identity rather than a property an edit may rewrite.
+    """
+    return {
+        "name": layer.name,
+        "class_name": str(layer.class_name),
+        "visible": bool(layer.visible),
+        "opacity": float(layer.opacity),
+        "locked": bool(layer.locked),
+        "tint": tuple(layer.tint),
+        "offset_x": float(layer.offset_x),
+        "offset_y": float(layer.offset_y),
+        "parallax_x": float(layer.parallax_x),
+        "parallax_y": float(layer.parallax_y),
+        "properties": dict(layer.properties),
+    }
+
+
 @dataclass
 class TileLayer:
     uid: int
@@ -478,7 +551,21 @@ class TileLayer:
     # semantics, and the useful ones: a lock is there to stop you painting on
     # the wrong layer, not to stop you managing the stack.
     locked: bool = False
+    # The six every layer kind carries; see ``DECORATION_FIELDS`` above. The
+    # comment sits here and nowhere else, because repeating it on all four
+    # classes is how one copy comes to describe something the others do not do.
+    # ``offset`` is in pixels and sums down the tree, ``parallax`` is a factor
+    # against the camera and multiplies, ``tint`` multiplies per channel.
+    class_name: str = ""
+    tint: RGBA = OPAQUE_WHITE
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    parallax_x: float = 1.0
+    parallax_y: float = 1.0
     properties: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _normalize_layer(self)
 
     @property
     def width(self) -> int:
@@ -489,13 +576,7 @@ class TileLayer:
         return int(self.data.shape[0])
 
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "visible": bool(self.visible),
-            "opacity": float(self.opacity),
-            "locked": bool(self.locked),
-            "properties": dict(self.properties),
-        }
+        return _layer_snapshot(self)
 
 
 @dataclass
@@ -520,6 +601,12 @@ class ObjectLayer:
     # survives a save; whether a renderer honours it is the renderer's
     # question.
     draworder: str = "topdown"
+    class_name: str = ""
+    tint: RGBA = OPAQUE_WHITE
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    parallax_x: float = 1.0
+    parallax_y: float = 1.0
     properties: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -527,16 +614,122 @@ class ObjectLayer:
             raise ValueError(
                 f"a draw order is one of {list(DRAW_ORDERS)}, not {self.draworder!r}"
             )
+        _normalize_layer(self)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {**_layer_snapshot(self), "draworder": str(self.draworder)}
+
+
+@dataclass
+class GroupLayer:
+    """A layer that holds layers. It draws nothing of its own.
+
+    **A group is a state its descendants inherit, not a surface anything is
+    composited onto.** Tiled's own semantics, and the distinction decides the
+    whole design: if a group were a surface, its opacity would apply to the
+    *flattened* subtree and two half-opaque siblings inside it would not show
+    through each other. They do, here and in Tiled, because the group's numbers
+    reach each leaf separately -- which is exactly what :func:`.scene.resolve`
+    computes and why nothing else is allowed to work it out for itself.
+
+    ``children`` is not in :meth:`snapshot`, for the reason ``data`` is not in
+    :class:`TileLayer`'s: it is the layer's *contents*, and contents travel with
+    the add/remove edits that hold the layer object itself.
+    """
+
+    uid: int
+    name: str
+    id: int = 0
+    children: list[Layer] = field(default_factory=list)
+    visible: bool = True
+    opacity: float = 1.0
+    locked: bool = False
+    class_name: str = ""
+    tint: RGBA = OPAQUE_WHITE
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    parallax_x: float = 1.0
+    parallax_y: float = 1.0
+    properties: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _normalize_layer(self)
+
+    def snapshot(self) -> dict[str, Any]:
+        return _layer_snapshot(self)
+
+
+def _no_image() -> np.ndarray:
+    """The picture an image layer has before it has one.
+
+    Zero-sized rather than ``None``, so every consumer can ask an image layer
+    for its pixels' shape without first asking whether there are any -- and a
+    ``(0, 0, 4)`` array is still RGBA, so :func:`~.tileset.frozen_rgba`'s
+    refusal keeps meaning what it says.
+    """
+    return frozen_rgba(np.zeros((0, 0, 4), dtype=np.uint8), "an image layer's picture")
+
+
+@dataclass
+class ImageLayer:
+    """One picture placed on the map: Tiled's ``<imagelayer>``.
+
+    The pixels are frozen on construction, the :class:`~.tileset.Tileset` rule
+    for the :class:`~.tileset.Tileset` reason -- the UI keys a texture upload on
+    the array's identity, so an in-place edit would leave the cache holding a
+    live key over stale pixels.
+
+    ``source`` is where the picture came from, carried verbatim and never
+    resolved (the host's problem, exactly as a ``file`` property's path is), and
+    ``repeat_x``/``repeat_y`` are Tiled's two tiling flags: a repeating image
+    layer fills the map in that axis rather than sitting once at its offset.
+    """
+
+    uid: int
+    name: str
+    id: int = 0
+    pixels: np.ndarray = field(default_factory=_no_image)
+    source: str = ""
+    repeat_x: bool = False
+    repeat_y: bool = False
+    visible: bool = True
+    opacity: float = 1.0
+    locked: bool = False
+    class_name: str = ""
+    tint: RGBA = OPAQUE_WHITE
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    parallax_x: float = 1.0
+    parallax_y: float = 1.0
+    properties: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.pixels = frozen_rgba(self.pixels, "an image layer's picture")
+        self.source = str(self.source)
+        self.repeat_x, self.repeat_y = bool(self.repeat_x), bool(self.repeat_y)
+        _normalize_layer(self)
+
+    @property
+    def width(self) -> int:
+        return int(self.pixels.shape[1])
+
+    @property
+    def height(self) -> int:
+        return int(self.pixels.shape[0])
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "name": self.name,
-            "visible": bool(self.visible),
-            "opacity": float(self.opacity),
-            "locked": bool(self.locked),
-            "draworder": str(self.draworder),
-            "properties": dict(self.properties),
+            **_layer_snapshot(self),
+            "source": str(self.source),
+            "repeat_x": bool(self.repeat_x),
+            "repeat_y": bool(self.repeat_y),
         }
 
 
-Layer = TileLayer | ObjectLayer
+Layer = TileLayer | ObjectLayer | GroupLayer | ImageLayer
+
+#: The three kinds that are *drawn* -- everything a resolver yields and every
+#: renderer's loop body. A group is absent because it draws nothing; asking
+#: ``isinstance(layer, LEAF_LAYERS)`` rather than ``not isinstance(layer,
+#: GroupLayer)`` is what keeps a fifth kind from silently arriving as a leaf.
+LEAF_LAYERS = (TileLayer, ObjectLayer, ImageLayer)

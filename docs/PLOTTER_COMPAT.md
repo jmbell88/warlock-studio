@@ -50,10 +50,13 @@ per value it can name.
 
 | Feature | State | Notes |
 |---|---|---|
-| `group layers` | refused | Flatten in Tiled first; see M2/M3. |
-| `image layers` | refused | See M2/M3. |
+| `group layers` | refused | **Both doors** since M2 chunk 4: the readers refuse a `<group>` in a file, and `tmx._refuse_unwritable_layers` refuses to export a `GroupLayer` the document holds — flattening one into its parent changes paint order, not just an attribute. Flatten in Tiled first; see M3. |
+| `image layers` | refused | **Both doors** since M2 chunk 4, for `group layers`' reason: the document models an `ImageLayer` now, so an export would drop the picture in silence. See M3. |
 | `{} layers` | refused | Any layer kind the JSON reader does not model. |
-| `layer pixel offsets` | refused | See M2/M3. |
+| `layer pixel offsets` | refused | **Both doors** since M2 chunk 4: `offset_x`/`offset_y` are modelled on every layer kind and honoured by both renderers, and neither exporter can write one. See M3. |
+| `a tinted layer` | refused | **Writer door only.** `tint` is modelled on every layer kind and multiplied through `scene.resolve`; neither exporter emits `tintcolor`, so exporting one would drop it. The read side is the `layer tintcolor` row under "Read but not modelled". See M3. |
+| `a parallax-scrolling layer` | refused | **Writer door only.** Same story as `a tinted layer`, for `parallax_x`/`parallax_y`. Read side: `layer parallaxx` / `layer parallaxy`. See M3. |
+| `a class-tagged layer` | refused | **Writer door only.** Same story again, for `class_name`. Read side: `layer class`. See M3. |
 | `layer data encoded as {}` | refused | CSV and base64 are read; anything else is refused. |
 | `{}-compressed layer data` | refused | zlib and gzip are read; zstd is not. |
 
@@ -133,15 +136,26 @@ by `tests/plotter/test_props.py`
 ## Read but not modelled
 
 These attributes are present in a Tiled file and the reader parses far enough
-to see them, but nothing in `MapDoc`, `TileLayer`, `ObjectLayer` or
-`MapObject` carries a place to put them, so they never reach the document and
-are gone the moment the map is exported again. This is not the `refused`
-state — there is no name-and-stop for any of these, so a map holding them
-loads cleanly and looks, until compared closely with the original, like it
-loaded completely. `PLOTTER_PLAN.md` § Milestone 2 is where each of these
-gets an actual home: layer decorations (`parallaxx`/`parallaxy`,
-`tintcolor`) and `class` on both layers and objects. `id` already moved out
-of this section -- see "Preserved but not honoured" below.
+to see them, but nothing carries them from the file into the document, so they
+never reach it and are gone the moment the map is exported again. This is not
+the `refused` state — there is no name-and-stop on the way *in* for any of
+these, so a map holding them loads cleanly and looks, until compared closely
+with the original, like it loaded completely.
+
+**Three of them are now half-closed, which is why they are still here.** M2
+chunk 4 gave `TileLayer`, `ObjectLayer`, `GroupLayer` and `ImageLayer` a real
+`class_name`, `tint`, `offset_x`/`offset_y` and `parallax_x`/`parallax_y`, and
+`plotter/scene.py` resolves all of them through the tree for both renderers —
+so a document the *editor* puts a tint, a parallax factor or a class on is
+refused at the writer door by name (the `a tinted layer`,
+`a parallax-scrolling layer` and `a class-tagged layer` rows under "Layers")
+rather than exported without it. What is unchanged, and what keeps these rows
+in this section, is the read side: a `.tmx` that arrives carrying `tintcolor`
+still loses it at the door, so the field is modelled but not adopted. Both
+halves close in M3, when the readers learn the attributes in the same commit
+the writers do. `id` already moved out of this section -- see "Preserved but
+not honoured" below, and `layer pixel offsets` was always a refusal rather than
+a drop.
 
 `draworder` is the one entry here that is not merely lost but actively wrong
 on a round trip: `tmj_export` writes every object layer's JSON `objectgroup`

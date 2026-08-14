@@ -57,7 +57,16 @@ from .props import (
     write_json_properties,
     write_properties,
 )
-from .tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
+from .tilemap import (
+    OPAQUE_WHITE,
+    GroupLayer,
+    ImageLayer,
+    MapDoc,
+    MapObject,
+    ObjectLayer,
+    TileLayer,
+    new_uid,
+)
 from .tileset import TerrainSpec, Tileset, TilesetRef
 from .tsx import (
     TILED_VERSION,
@@ -134,6 +143,48 @@ def _refuse_container_layers(has: Callable[[str], bool]) -> None:
 def _refuse_layer_offsets(offset: Callable[[str], float], name: str) -> None:
     if offset("offsetx") or offset("offsety"):
         raise TiledUnsupported("layer pixel offsets", f"layer {name!r}")
+
+
+def _refuse_unwritable_layers(doc: MapDoc) -> None:
+    """What the *document's tree* can hold and neither writer can yet spell.
+
+    ``_refuse_unwritable_objects``' twin one level up, and for the identical
+    reason: M2 gave the document a real layer tree, image layers and per-layer
+    pixel offsets before the exporters gained any way to emit them, so without
+    this an export would flatten a group into its parent (changing paint order),
+    drop a picture entirely, and write an offset layer at the origin. Each is a
+    silent half-*write*, which is worse than the half-read the ledger already
+    forbids: the file handed to an engine is quietly wrong with nothing saying
+    so.
+
+    The first three reuse the readers' own strings verbatim -- ``group
+    layers``, ``image layers``, ``layer pixel offsets`` -- because each is one
+    limit with two doors and not two features that happen to share a name; the
+    matrix rows already exist and ``test_compat_matrix.py`` holds the two
+    spellings together.
+
+    The last three do **not**, and the asymmetry is the ``an index-ordered
+    object layer`` precedent: the readers do not refuse a ``tintcolor``, a
+    ``parallaxx`` or a layer ``class`` -- they drop them, which is a
+    ``silently-dropped`` row and a stated debt -- so borrowing a reader's
+    sentence for a door the reader does not stand at would make the ledger claim
+    a refusal that does not exist. They get their own writer-side names, and the
+    read-side rows stay where they are until M3 closes both halves at once.
+    """
+    for layer in doc.all_layers():
+        where = f"layer {layer.name!r}"
+        if isinstance(layer, GroupLayer):
+            raise TiledUnsupported("group layers", where, exporting=True)
+        if isinstance(layer, ImageLayer):
+            raise TiledUnsupported("image layers", where, exporting=True)
+        if layer.offset_x or layer.offset_y:
+            raise TiledUnsupported("layer pixel offsets", where, exporting=True)
+        if tuple(layer.tint) != OPAQUE_WHITE:
+            raise TiledUnsupported("a tinted layer", where, exporting=True)
+        if (layer.parallax_x, layer.parallax_y) != (1.0, 1.0):
+            raise TiledUnsupported("a parallax-scrolling layer", where, exporting=True)
+        if layer.class_name:
+            raise TiledUnsupported("a class-tagged layer", where, exporting=True)
 
 
 def _refuse_wangsets(recognised: tuple[TerrainSpec, ...] | None) -> tuple[TerrainSpec, ...]:
@@ -882,6 +933,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     image: a tileset is a ``.tsx`` plus a ``.png`` beside the map. The caller
     writes them; deciding *where* is not this module's business.
     """
+    _refuse_unwritable_layers(doc)
     _refuse_unwritable_objects(doc)
     files, tsx_paths = _tileset_files(doc)
     root = ET.Element(
@@ -956,6 +1008,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
 
 def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     """The JSON spelling. Same external tilesets, same names, same bytes."""
+    _refuse_unwritable_layers(doc)
     _refuse_unwritable_objects(doc)
     files, tsx_paths = _tileset_files(doc)
     layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)

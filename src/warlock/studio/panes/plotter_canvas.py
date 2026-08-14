@@ -26,9 +26,10 @@ import numpy as np
 from .. import inker_state, plotter_mode, plotter_state, theme, widgets
 from ..plotter import gid as gidlib
 from ..plotter import render as plotter_render
+from ..plotter import scene as plotter_scene
 from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
-from ..plotter.tilemap import ObjectLayer, TileLayer
+from ..plotter.tilemap import ImageLayer, ObjectLayer, TileLayer
 from ..tokens import sp
 from . import plotter_layers, plotter_textures
 
@@ -230,7 +231,9 @@ def _backdrop(draw_list: Any, doc: Any, view: Any, origin: tuple[float, float]) 
     )
 
 
-def _visible_range(view: Any, doc: Any, origin, region) -> tuple[int, int, int, int]:
+def _visible_range(
+    view: Any, doc: Any, origin, region, shift: tuple[float, float] = (0.0, 0.0)
+) -> tuple[int, int, int, int]:
     """The inclusive tile rectangle the pane can actually see.
 
     Clamped to the map, so the loop below is bounded by the *window* rather
@@ -241,10 +244,64 @@ def _visible_range(view: Any, doc: Any, origin, region) -> tuple[int, int, int, 
     corners rather than two: under an isometric projection a screen rectangle
     maps to a *rhombus* in cell space, so the min and max of one diagonal pair
     culls cells that are on screen.
+
+    ``shift`` is where a layer's own content sits relative to the grid --
+    :func:`_layer_shift`'s answer -- and it is subtracted rather than ignored
+    because the cull is what decides which cells are *asked for*: an offset
+    layer's visible cells are a different rectangle, and using the grid's would
+    clip a nudged layer along the pane edge it was nudged towards.
     """
     x0, y0 = inker_state.to_image(view, origin, origin[0], origin[1])
     x1, y1 = inker_state.to_image(view, origin, origin[0] + region[0], origin[1] + region[1])
-    return doc.cell_bounds(x0, y0, x1, y1)
+    return doc.cell_bounds(x0 - shift[0], y0 - shift[1], x1 - shift[0], y1 - shift[1])
+
+
+def _layer_shift(view: Any, origin, entry: Any) -> tuple[float, float]:
+    """Where one resolved layer's content sits, in map pixels.
+
+    Two things at once, because on screen they are one displacement: the
+    layer's own summed pixel ``offset``, and what its ``parallax`` factor does
+    against the view.
+
+    The parallax half is ``(1 - p) * view_origin``. Read it off the two ends: at
+    ``p == 1`` the term vanishes and the layer moves exactly with the map, which
+    is why 1 is the identity; at ``p == 0`` the shift is the whole view origin,
+    so the layer's own origin lands at the pane's top-left however far the map
+    has been panned -- a background pinned to the screen. Everything between
+    those is the parallax the name promises.
+
+    ``render.py`` does none of this on purpose: an export is a still and a still
+    has no camera, so there is no view origin for it to be a fraction of.
+    """
+    vx, vy = inker_state.to_image(view, origin, origin[0], origin[1])
+    return (
+        entry.offset[0] + (1.0 - entry.parallax[0]) * vx,
+        entry.offset[1] + (1.0 - entry.parallax[1]) * vy,
+    )
+
+
+def _active_shift(tab: Any, origin) -> tuple[float, float]:
+    """The displacement the *active* layer is drawn at, or none.
+
+    Hit-testing subtracts it before asking which cell the pointer is in: what
+    the user is clicking is what they can see, and on an offset layer the cell
+    under the pointer is not the cell the grid says it is.
+    """
+    entry = plotter_scene.resolved_for(tab.doc, tab.doc.active_layer)
+    return (0.0, 0.0) if entry is None else _layer_shift(tab.view, origin, entry)
+
+
+def _layer_tint(imgui: Any, entry: Any) -> int:
+    """One resolved layer's tint and opacity as imgui's single colour word.
+
+    They multiply into one value because a draw-list quad takes one: the tint's
+    own alpha is part of how transparent the layer is, exactly as the group
+    opacity above it is.
+    """
+    r, g, b, a = entry.tint
+    return imgui.get_color_u32(
+        (r / 255.0, g / 255.0, b / 255.0, (a / 255.0) * float(entry.opacity))
+    )
 
 
 def _corner_uvs(uv, flip_h: bool, flip_v: bool, flip_d: bool):
@@ -267,13 +324,18 @@ def _corner_uvs(uv, flip_h: bool, flip_v: bool, flip_d: bool):
 
 
 def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
+    """Every drawable layer, through the resolver both renderers share.
+
+    ``scene.resolve`` is what decides visibility, opacity, tint, offset and
+    parallax here exactly as it does in ``render.render_map`` -- the two
+    renderers agree about a nested layer for the same reason they already agree
+    about which way round a flipped tile is, which is that neither works it out
+    for itself.
+    """
     from imgui_bundle import imgui
 
     doc = tab.doc
     view = tab.view
-    c0, r0, c1, r1 = _visible_range(view, doc, origin, region)
-    if c1 < c0 or r1 < r0:
-        return
     zoom = view.zoom
     tile_w, tile_h = doc.tile_w, doc.tile_h
     # One texture per tileset per frame. This hoist only ever covered the
@@ -284,16 +346,22 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
         index: (ref, plotter_textures.tileset_texture(ctx, tab.uid, index, ref.tileset))
         for index, ref in enumerate(doc.tilesets)
     }
-    if not refs:
-        return
     memo = _index_memo(tab.uid, doc.tileset_epoch)
 
-    for layer in doc.layers:
-        if not isinstance(layer, TileLayer):
+    for entry in plotter_scene.resolve(doc):
+        if entry.opacity <= 0.0:
             continue
-        if not layer.visible or layer.opacity <= 0.0:
+        layer = entry.layer
+        shift = _layer_shift(view, origin, entry)
+        if isinstance(layer, ImageLayer):
+            _image_layer(ctx, tab, draw_list, origin, layer, entry, shift)
             continue
-        tint = imgui.get_color_u32((1.0, 1.0, 1.0, float(layer.opacity)))
+        if not isinstance(layer, TileLayer) or not refs:
+            continue
+        c0, r0, c1, r1 = _visible_range(view, doc, origin, region, shift)
+        if c1 < c0 or r1 < r0:
+            continue
+        tint = _layer_tint(imgui, entry)
         block = layer.data[r0 : r1 + 1, c0 : c1 + 1]
         ids = gidlib.tile_ids(block)
         flags = gidlib.flags(block)
@@ -331,7 +399,7 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
                 bool(mask & gidlib.FLIP_D),
             )
             px, py = doc.cell_origin(c0 + column, r0 + row)
-            p0 = inker_state.to_screen(view, origin, px, py)
+            p0 = inker_state.to_screen(view, origin, px + shift[0], py + shift[1])
             p2 = (p0[0] + tile_w * zoom, p0[1] + tile_h * zoom)
             draw_list.add_image_quad(
                 widgets.texture_ref(texture),
@@ -343,6 +411,50 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
                 corners[1],
                 corners[2],
                 corners[3],
+                tint,
+            )
+
+
+def _image_layer(
+    ctx: Any, tab: Any, draw_list: Any, origin, layer: Any, entry: Any, shift
+) -> None:
+    """One image layer, as a quad -- or a grid of them when it repeats.
+
+    Bounded by the *map's* extent rather than by the pane, which is what
+    ``render.render_image`` does too: the two renderers have to put the same
+    number of copies in the same places, and a viewport-bounded tiling would put
+    copies on screen that an export does not carry.
+
+    The texture is keyed on the pixel array's identity, the tileset rule --
+    :class:`~..plotter.tilemap.ImageLayer` freezes its picture on construction,
+    so a matching id is the same art and a replaced picture is a new array.
+    """
+    if layer.pixels.size == 0:
+        return
+    from imgui_bundle import imgui
+
+    texture = plotter_textures.image_texture(
+        ctx, tab.uid, f"img{layer.uid}", layer.pixels, id(layer.pixels)
+    )
+    if texture is None:
+        return
+    doc, view = tab.doc, tab.view
+    zoom = view.zoom
+    width, height = float(layer.width), float(layer.height)
+    tint = _layer_tint(imgui, entry)
+    for py in plotter_render.repeats(
+        int(round(shift[1])), int(height), int(doc.pixel_height), layer.repeat_y
+    ):
+        for px in plotter_render.repeats(
+            int(round(shift[0])), int(width), int(doc.pixel_width), layer.repeat_x
+        ):
+            p0 = inker_state.to_screen(view, origin, px, py)
+            draw_list.add_image(
+                widgets.texture_ref(texture),
+                p0,
+                (p0[0] + width * zoom, p0[1] + height * zoom),
+                (0.0, 0.0),
+                (1.0, 1.0),
                 tint,
             )
 
@@ -373,31 +485,44 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
 
 
 def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
+    """The object outlines, through the same resolver the tiles go through.
+
+    An object layer draws no pixels, so it is absent from an export -- but it is
+    still a layer in the tree, and a group that is hidden, offset or under a
+    parallax factor has to move its objects with everything else or the handles
+    stop sitting on what they resize.
+    """
     from imgui_bundle import imgui
 
-    for layer in doc.layers:
-        if not isinstance(layer, ObjectLayer) or not layer.visible:
+    for entry in plotter_scene.resolve(doc):
+        layer = entry.layer
+        if not isinstance(layer, ObjectLayer):
             continue
+        dx, dy = _layer_shift(view, origin, entry)
         for obj in layer.objects:
             selected = state.selected_object == obj.uid
             alpha = 1.0 if obj.visible else 0.4
             colour = imgui.get_color_u32(
                 theme.rgba(theme.ACCENT if selected else theme.OK, alpha)
             )
-            p0 = inker_state.to_screen(view, origin, obj.x, obj.y)
+            p0 = inker_state.to_screen(view, origin, obj.x + dx, obj.y + dy)
             if obj.kind == "point":
                 draw_list.add_circle_filled(p0, sp(4), colour, 12)
                 draw_list.add_circle(p0, sp(7), colour, 12)
             else:
-                p1 = inker_state.to_screen(view, origin, obj.x + obj.w, obj.y + obj.h)
+                p1 = inker_state.to_screen(
+                    view, origin, obj.x + obj.w + dx, obj.y + obj.h + dy
+                )
                 draw_list.add_rect(p0, p1, colour, 0.0, sp(2) if selected else sp(1))
-                if selected and not layer.locked:
+                if selected and not entry.locked:
                     # Only on the selected one, and only when it can actually be
                     # dragged: a handle on a locked layer is a control that
-                    # looks live and does nothing.
+                    # looks live and does nothing. ``entry.locked``, not the
+                    # layer's own flag -- a lock on a group above it is just as
+                    # real a reason the drag will be refused.
                     for corner in _HANDLES:
                         cx, cy = _handle_corners(obj)[corner]
-                        sx, sy = inker_state.to_screen(view, origin, cx, cy)
+                        sx, sy = inker_state.to_screen(view, origin, cx + dx, cy + dy)
                         draw_list.add_rect_filled(
                             (sx - sp(4), sy - sp(4)), (sx + sp(4), sy + sp(4)), colour
                         )
@@ -422,10 +547,13 @@ def _minimap_rect(tab: Any, region) -> tuple[float, float, float, float]:
 def _minimap(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> None:
     """The whole map in the corner, one pixel per cell.
 
-    Cached on ``(history.head, len(layers))`` rather than recomputed per frame:
+    Cached on ``(history.head, tree_shape())`` rather than recomputed per frame:
     the head moves for every edit, which is exactly when the picture changes,
-    and the layer count catches a visibility toggle that pushed a step of its
-    own. Both are cheap integers, so the comparison costs nothing on the frame
+    and the tree's shape catches anything that moved a layer without moving the
+    head. It was ``len(layers)``, which the tree quietly made dishonest --
+    adding a layer inside a group, or dragging one out of it, leaves the root
+    list exactly as long as it was, so the picture would change under a key that
+    did not. Both halves are cheap, so the comparison costs nothing on the frame
     that does not need it.
     """
     from imgui_bundle import imgui
@@ -435,7 +563,7 @@ def _minimap(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> 
     doc = tab.doc
     x, y, w, h = _minimap_rect(tab, region)
     x, y = origin[0] + x, origin[1] + y
-    stamp = (doc.history.head, len(doc.layers))
+    stamp = (doc.history.head, doc.tree_shape())
     key = f"plotter_minimap:{tab.uid}"
     entry = ctx.state.preview.get(key)
     if entry is None or entry[0] != stamp:
@@ -509,12 +637,17 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
     columns, rows = 1, 1
     if state.tool == "stamp" and state.brush is not None:
         rows, columns = state.brush.shape
+    # Drawn where the *active layer* is drawn, because that is the layer the
+    # cell under the pointer belongs to -- ``_cell_under`` already took this
+    # off, and a footprint left on the bare grid would sit somewhere the stamp
+    # is not about to land.
+    shift = _active_shift(tab, origin)
 
     def outline(at: tuple[int, int], alpha: float) -> None:
         # The parallelogram through four lattice nodes, which degenerates to the
         # rectangle this used to draw when the map is orthogonal.
         quad = [
-            inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
+            inker_state.to_screen(view, origin, *_shifted(doc.cell_corner(column, row), shift))
             for column, row in (
                 (at[0], at[1]),
                 (at[0] + columns, at[1]),
@@ -581,6 +714,11 @@ def _shape_points(
     ]
 
 
+def _shifted(point: tuple[float, float], shift: tuple[float, float]) -> tuple[float, float]:
+    """One map-pixel point moved by a layer's displacement."""
+    return (point[0] + shift[0], point[1] + shift[1])
+
+
 def _shape_preview(
     state: Any, tab: Any, draw_list: Any, origin, a: tuple[int, int], b: tuple[int, int]
 ) -> None:
@@ -588,9 +726,10 @@ def _shape_preview(
     from imgui_bundle import imgui
 
     doc, view = tab.doc, tab.view
+    shift = _active_shift(tab, origin)
     draw_list.add_polyline(
         [
-            inker_state.to_screen(view, origin, *doc.cell_corner(px, py))
+            inker_state.to_screen(view, origin, *_shifted(doc.cell_corner(px, py), shift))
             for px, py in _shape_points(state.shape_mode, a, b)
         ],
         imgui.get_color_u32(theme.rgba(theme.ACCENT)),
@@ -607,10 +746,14 @@ def _cell_under(state: Any, tab: Any, origin) -> tuple[int, int] | None:
 
     mouse = imgui.get_mouse_pos()
     x, y = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    # The active layer's own displacement comes off first: what a click is about
+    # is the cell the user can see under the pointer, and on an offset layer
+    # that is not the cell the grid is drawn at.
+    dx, dy = _active_shift(tab, origin)
     # ``MapDoc`` owns the inverse so this pane's hit test and the tools' cannot
     # drift; it is exact rather than a polygon test, and unclamped because every
     # tool clips its own placement.
-    return tab.doc.cell_at(x, y)
+    return tab.doc.cell_at(x - dx, y - dy)
 
 
 def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> None:
@@ -983,7 +1126,13 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
             ctx.toast("Pick an object layer first.", "error")
         return
     mouse = imgui.get_mouse_pos()
-    point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    # In the *layer's* space, not the map's: the handle tests below compare
+    # against object coordinates, and an object on an offset layer is drawn
+    # somewhere its own ``x``/``y`` does not say. One subtraction here rather
+    # than an addition at every comparison.
+    dx, dy = _active_shift(tab, origin)
+    raw = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    point = (raw[0] - dx, raw[1] - dy)
 
     if hovered and imgui.is_mouse_clicked(0):
         # Priority: a handle on the selected rect, then any object's body, then
@@ -991,7 +1140,7 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         # overlap the body -- checking the body first would make them unreachable.
         selected = next((o for o in layer.objects if o.uid == state.selected_object), None)
         handle = (
-            _handle_at(tab.view, origin, selected, (mouse.x, mouse.y))
+            _handle_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
             if selected is not None and not layer.locked
             else None
         )
@@ -1071,18 +1220,25 @@ def _opposite(handle: str, obj: Any) -> tuple[float, float]:
     return _handle_corners(obj)[{"nw": "se", "ne": "sw", "se": "nw", "sw": "ne"}[handle]]
 
 
-def _handle_at(view: Any, origin, obj: Any, mouse: tuple[float, float]) -> str | None:
+def _handle_at(
+    view: Any,
+    origin,
+    obj: Any,
+    mouse: tuple[float, float],
+    shift: tuple[float, float] = (0.0, 0.0),
+) -> str | None:
     """Which resize handle the pointer is over, or ``None``.
 
     Tested in *screen* space, because the handles are drawn at a fixed ``sp()``
     size: their grab radius has to be the same however far the map is zoomed
     out, and a map-space radius would shrink to nothing at low zoom exactly
-    where the handles are hardest to hit.
+    where the handles are hardest to hit. ``shift`` is the layer's displacement,
+    the same one ``_objects`` drew the handles at.
     """
     if obj.kind != "rect":
         return None
     for name, (px, py) in _handle_corners(obj).items():
-        sx, sy = inker_state.to_screen(view, origin, px, py)
+        sx, sy = inker_state.to_screen(view, origin, px + shift[0], py + shift[1])
         if abs(sx - mouse[0]) <= sp(6) and abs(sy - mouse[1]) <= sp(6):
             return name
     return None

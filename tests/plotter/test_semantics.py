@@ -126,6 +126,26 @@ def test_a_float_written_two_ways_compares_equal():
             ),
             id="layer-properties",
         ),
+        pytest.param(
+            lambda d: d.set_layer_props(d.layers[0].uid, class_name="Ground"),
+            id="layer-class",
+        ),
+        pytest.param(
+            lambda d: d.set_layer_props(d.layers[0].uid, tint=(255, 0, 0, 255)), id="layer-tint"
+        ),
+        pytest.param(
+            lambda d: d.set_layer_props(d.layers[0].uid, offset_y=8.0), id="layer-offset"
+        ),
+        pytest.param(
+            lambda d: d.set_layer_props(d.layers[0].uid, parallax_x=0.5), id="layer-parallax"
+        ),
+        # The tree itself. Same layers, different parents, and a comparator that
+        # flattened the stack would call the two maps equal.
+        pytest.param(
+            lambda d: d.move_layer(d.layers[0].uid, 0, parent_uid=d.add_group_layer("G").uid),
+            id="layer-nesting",
+        ),
+        pytest.param(lambda d: d.add_image_layer("sky"), id="image-layer"),
     ],
 )
 def test_every_field_the_comparator_claims_to_cover_actually_moves_it(mutate):

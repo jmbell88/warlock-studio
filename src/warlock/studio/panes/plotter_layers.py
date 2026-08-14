@@ -16,8 +16,18 @@ from typing import Any
 from .. import icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..plotter.props import CONTAINER_TYPES, PROPERTY_TYPES, Prop
-from ..plotter.tilemap import MapObject, ObjectLayer, TileLayer, new_uid
+from ..plotter.tilemap import GroupLayer, ImageLayer, MapObject, ObjectLayer, TileLayer, new_uid
 from ..tokens import sp
+
+#: The glyph each layer kind is listed under. A dict rather than a chain of
+#: ``isinstance``, so a fifth kind is one line and cannot be forgotten in the
+#: middle of a draw function.
+_KIND_ICONS = {
+    TileLayer: icons.GRID,
+    ObjectLayer: icons.FLAG,
+    GroupLayer: icons.FOLDER_OPEN,
+    ImageLayer: icons.IMAGE,
+}
 
 
 def draw(ctx: Any) -> None:
@@ -52,6 +62,20 @@ def draw(ctx: Any) -> None:
 
 
 def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
+    """One layer's row, and -- if it is a group -- its children indented under it.
+
+    **Display only.** There is no way to make a group here, and no drag to move
+    a layer into one: authoring the tree is M3's work, and half of it (a folder
+    button with no reparent gesture) would be a control that can only make a
+    document worse. What this does have to do is show a tree that arrives from
+    the document, because the alternative is a group's contents being invisible
+    in the one pane that lists what a map is made of.
+
+    A group's eye and padlock are its own flags, and they reach the subtree
+    through :func:`~..plotter.scene.resolve` rather than by being written onto
+    each child -- so unhiding the group restores exactly what was showing, and
+    a child that was hidden on its own stays hidden.
+    """
     from imgui_bundle import imgui
 
     imgui.push_id(str(layer.uid))
@@ -74,7 +98,7 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
         doc.set_layer_props(layer.uid, locked=not layer.locked)
     imgui.end_disabled()
     imgui.same_line()
-    kind = icons.GRID if isinstance(layer, TileLayer) else icons.FLAG
+    kind = _KIND_ICONS.get(type(layer), icons.LAYERS)
     active = doc.active_layer == layer.uid
     if imgui.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
         doc.set_active_layer(layer.uid)
@@ -111,6 +135,15 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
             )
             imgui.end_disabled()
     imgui.pop_id()
+    if isinstance(layer, GroupLayer):
+        # After ``pop_id``, so a child's own id scope is the one it pushes --
+        # nesting them would make the same layer's controls answer to a
+        # different string depending on how deep it happens to sit, and imgui
+        # keys open popups and active items on exactly that.
+        imgui.indent(sp(12))
+        for child in reversed(layer.children):
+            _row(ctx, doc, state, child, editable)
+        imgui.unindent(sp(12))
 
 
 def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
@@ -129,7 +162,10 @@ def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:
 def _selected_object(doc: Any, state: Any) -> tuple[Any, MapObject] | None:
     if state.selected_object is None:
         return None
-    for layer in doc.layers:
+    # ``all_layers`` rather than ``doc.layers``: an object layer inside a group
+    # is still an object layer, and a selection that could not be found again
+    # would be silently forgotten one frame after it was made.
+    for layer in doc.all_layers():
         if isinstance(layer, ObjectLayer):
             for obj in layer.objects:
                 if obj.uid == state.selected_object:

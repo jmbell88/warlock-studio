@@ -71,6 +71,27 @@ class TilePatchEdit(Edit):
         doc._blit(self.layer_uid, self.x0, self.y0, self.after)
 
 
+def _subtree_bytes(layer: Any) -> int:
+    """Every array a layer *and everything under it* owns.
+
+    Duck-typed rather than by ``isinstance``, which is this module's rule
+    already (``layer: Any`` everywhere): ``edits`` sits below the model and
+    importing the four layer classes to ask what kind one is would invert that.
+
+    Recursive because a group travels as one object. An add or remove of a group
+    is one step holding the whole subtree, so while it stands this edit is the
+    only thing keeping several megabytes of nested tile layers and image-layer
+    pictures alive -- and a cost that stopped at the group would report zero for
+    all of it, which is exactly the mistake ``LayerAddEdit`` was written to
+    avoid in the raster editor.
+    """
+    total = int(getattr(getattr(layer, "data", None), "nbytes", 0))
+    total += int(getattr(getattr(layer, "pixels", None), "nbytes", 0))
+    for child in getattr(layer, "children", None) or ():
+        total += _subtree_bytes(child)
+    return total
+
+
 @dataclass
 class LayerAddEdit(Edit):
     """Holds the layer object itself, not a copy of it.
@@ -78,34 +99,41 @@ class LayerAddEdit(Edit):
     Re-insertion has to bring back the *same* uid, or every patch recorded
     against the layer before it was removed is stranded on a number nothing
     answers to.
+
+    ``parent_uid`` is the group the layer belongs to, or ``None`` for the root
+    list. Recorded beside the index rather than being derivable from it, because
+    an index alone stopped being an address the moment a layer could be
+    somewhere other than the root.
     """
 
     layer: Any
     index: int
+    parent_uid: int | None = None
 
     def __post_init__(self) -> None:
-        self.cost = int(getattr(getattr(self.layer, "data", None), "nbytes", 0))
+        self.cost = _subtree_bytes(self.layer)
 
     def undo(self, doc: Any) -> None:
         doc._detach_layer(self.layer)
 
     def redo(self, doc: Any) -> None:
-        doc._attach_layer(self.layer, self.index)
+        doc._attach_layer(self.layer, self.index, self.parent_uid)
 
 
 @dataclass
 class LayerRemoveEdit(Edit):
-    """The mirror of the add. Its cost is the same array, for the same reason:
-    while the removal stands, this edit is what keeps the layer alive."""
+    """The mirror of the add. Its cost is the same arrays, for the same reason:
+    while the removal stands, this edit is what keeps the subtree alive."""
 
     layer: Any
     index: int
+    parent_uid: int | None = None
 
     def __post_init__(self) -> None:
-        self.cost = int(getattr(getattr(self.layer, "data", None), "nbytes", 0))
+        self.cost = _subtree_bytes(self.layer)
 
     def undo(self, doc: Any) -> None:
-        doc._attach_layer(self.layer, self.index)
+        doc._attach_layer(self.layer, self.index, self.parent_uid)
 
     def redo(self, doc: Any) -> None:
         doc._detach_layer(self.layer)
@@ -113,21 +141,27 @@ class LayerRemoveEdit(Edit):
 
 @dataclass
 class LayerMoveEdit(Edit):
-    """A reorder, recorded as the uid and the two positions.
+    """A reorder *or* a reparent, recorded as the uid and the two places.
 
     By uid rather than by holding the layer, so that a move undone after an
-    unrelated add still finds its subject where the list actually has it.
+    unrelated add still finds its subject where the tree actually has it.
+
+    A *place* is ``(parent_uid, index)`` and not an index, because the tree made
+    the two halves of one gesture: dragging a layer into a group both changes
+    which list it is in and where in that list it lands. Two steps would put a
+    state on the undo stack the user never saw -- the layer at the root, at the
+    new index -- and one of them would be a position the gesture never visited.
     """
 
     layer_uid: int
-    before_index: int
-    after_index: int
+    before: tuple[int | None, int]
+    after: tuple[int | None, int]
 
     def undo(self, doc: Any) -> None:
-        doc._relocate(self.layer_uid, self.before_index)
+        doc._relocate(self.layer_uid, self.before)
 
     def redo(self, doc: Any) -> None:
-        doc._relocate(self.layer_uid, self.after_index)
+        doc._relocate(self.layer_uid, self.after)
 
 
 @dataclass

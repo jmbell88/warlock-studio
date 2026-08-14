@@ -52,7 +52,10 @@ class GeometryOps:
         shift_x, shift_y = dx * self.tile_w, dy * self.tile_h
         before_objects: dict[int, list[tuple[float, float]]] = {}
         after_objects: dict[int, list[tuple[float, float]]] = {}
-        for layer in self.layers:
+        # ``all_layers`` rather than ``self.layers``: an object layer inside a
+        # group is still on the grid being resized, and leaving its objects put
+        # is exactly the detachment this whole shift exists to prevent.
+        for layer in self.all_layers():
             if not isinstance(layer, ObjectLayer):
                 continue
             before_objects[layer.uid] = [(o.x, o.y) for o in layer.objects]

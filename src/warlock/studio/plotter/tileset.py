@@ -30,7 +30,16 @@ from . import blob
 RGBA = tuple[int, int, int, int]
 
 
-def _rgba(colour: Any, what: str) -> RGBA:
+def rgba_colour(colour: Any, what: str) -> RGBA:
+    """Four channels of 0..255 as the hashable tuple every colour here is.
+
+    Public for :func:`frozen_rgba`'s reason and no other: a second caller
+    turned up. :class:`~._map_model.TileLayer` and its three siblings each
+    carry a ``tint``, and a private copy of these four lines beside them is how
+    one of the two comes to accept a channel the other refuses. ``what`` names
+    the thing in the refusal, because "a terrain fill must be four channels" is
+    the wrong sentence to show someone tinting a layer.
+    """
     values = tuple(int(part) for part in colour)
     if len(values) != 4 or any(part < 0 or part > 255 for part in values):
         raise ValueError(f"{what} must be four channels of 0..255")
@@ -59,8 +68,8 @@ class TerrainSpec:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", str(self.name))
-        object.__setattr__(self, "fill", _rgba(self.fill, "a terrain fill"))
-        object.__setattr__(self, "outline", _rgba(self.outline, "a terrain outline"))
+        object.__setattr__(self, "fill", rgba_colour(self.fill, "a terrain fill"))
+        object.__setattr__(self, "outline", rgba_colour(self.outline, "a terrain outline"))
 
 
 def frozen_rgba(pixels: Any, what: str = "a tileset image") -> np.ndarray:

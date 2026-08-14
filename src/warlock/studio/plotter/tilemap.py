@@ -49,11 +49,16 @@ from . import project
 from ._map_geometry import GeometryOps
 from ._map_layers import LayerOps
 from ._map_model import (
+    DECORATION_FIELDS,
     DRAW_ORDERS,
+    LEAF_LAYERS,
     MAX_DIMENSION,
     OBJECT_KINDS,
+    OPAQUE_WHITE,
     SHAPE_KINDS,
     Ellipse,
+    GroupLayer,
+    ImageLayer,
     Layer,
     MapObject,
     ObjectLayer,
@@ -85,11 +90,16 @@ from .tileset import TilesetRef
 # existed -- every mixin operates on these types -- not about changing where
 # anybody looks for them.
 __all__ = [
+    "DECORATION_FIELDS",
     "DRAW_ORDERS",
+    "LEAF_LAYERS",
     "MAX_DIMENSION",
     "OBJECT_KINDS",
+    "OPAQUE_WHITE",
     "SHAPE_KINDS",
     "Ellipse",
+    "GroupLayer",
+    "ImageLayer",
     "Layer",
     "MapDoc",
     "MapObject",

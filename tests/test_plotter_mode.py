@@ -262,10 +262,11 @@ def test_a_refused_submit_clears_the_lock_too(tmp_path):
 
 def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(tmp_path):
     """Encoding used to be the one step of a save that could not fail, so every
-    caller ran it bare on the frame thread. The Tiled writers refuse by name
-    now -- the document models a rotation, a draw order and five shapes they
-    cannot spell -- and an exception raised here takes the window with it. The
-    ``.wmap`` path is deliberately unaffected: it refuses nothing.
+    caller ran it bare on the frame thread. Both writers refuse by name now --
+    the Tiled ones because the document models a rotation, a draw order, five
+    shapes, a layer tree and layer decorations they cannot spell, and ``.wmap``
+    because its version 2 manifest has nowhere to put the last two -- and an
+    exception raised here takes the window with it.
     """
     ctx = FakeCtx()
     tab = _tab(ctx)
@@ -280,6 +281,35 @@ def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(tmp
     ctx.toasts.clear()
     plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
     assert not [t for t in ctx.toasts if t[1] == "error"]
+
+
+def test_a_wmap_writer_door_refusal_is_toasted_too_rather_than_raised(tmp_path):
+    """The ``.wmap`` door raises a plain ``ValueError`` -- our own format's
+    limit is not a Tiled feature -- so a guard that only caught
+    ``TiledUnsupported`` would let a ``.wmap`` save crash the window while a
+    ``.tmx`` save of the same document toasted politely."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.doc.add_group_layer("G")
+
+    plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert "group layer" in ctx.toasts[-1][0]
+    assert not tab.saving
+
+
+def test_exporting_a_map_the_wmap_writer_refuses_toasts_rather_than_raising():
+    """``export_to_library`` is the one other frame-thread encode: it writes the
+    ``.wmap`` beside the render so ``Edit in Plotter`` can reopen the real
+    document, and it does so before the task starts."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.doc.add_group_layer("G")
+
+    plotter_mode.export_library(ctx, tab)
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert "group layer" in ctx.toasts[-1][0]
+    assert not tab.saving
 
 
 def test_a_cancelled_dialog_leaves_the_document_alone():

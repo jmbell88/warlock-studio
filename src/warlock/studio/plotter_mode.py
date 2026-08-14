@@ -189,7 +189,16 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
         ctx.toast("There is nothing to render -- add a tileset first.", "error")
         return
 
-    source = wmaplib.wmap_bytes(doc)
+    try:
+        source = wmaplib.wmap_bytes(doc)
+    except ValueError as exc:
+        # The ``.wmap`` writer door, on the frame thread. It refuses what the
+        # document models and version 2 has nowhere to store (a group, an image
+        # layer, a decorated layer), and an unguarded raise here would take the
+        # window down -- ``plotter_io._encoded`` already guards the save path
+        # for the same reason, and this is the one other frame-thread encode.
+        ctx.toast(f"Nothing was exported. {exc}", "error")
+        return
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files

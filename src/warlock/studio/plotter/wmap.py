@@ -58,6 +58,9 @@ from .pngio import png_bytes
 from .props import read_wmap_properties, write_wmap_properties
 from .tilemap import (
     OBJECT_KINDS,
+    OPAQUE_WHITE,
+    GroupLayer,
+    ImageLayer,
     MapDoc,
     MapObject,
     ObjectLayer,
@@ -125,6 +128,46 @@ def _npy_bytes(array: np.ndarray) -> bytes:
     return out.getvalue()
 
 
+def _refuse_unstorable_layers(doc: MapDoc) -> None:
+    """Everything the document models that version 2 has no way to write down.
+
+    The document grew a layer tree, image layers and per-layer decorations
+    before this format did; version 3 -- recursive manifest entries, embedded
+    ``images/N.png``, id/class/tint/offset/parallax per layer -- is the next
+    piece of work rather than this one. Until it lands, a save that quietly
+    flattened the tree and dropped the rest would be the silent half-*write*
+    this format's own read-side refusals exist to prevent, and worse than
+    theirs: the file would be turned away by the very reader that wrote it, on
+    the line about a layer of unknown kind, naming nothing the user could act
+    on. **This is the whole of the honesty available here** -- there is no
+    remedy sentence to offer, because a ``.tmx`` export cannot hold these
+    either, which is why it names the format version rather than suggesting one.
+
+    A plain ``ValueError`` and not a ``TiledUnsupported``: this is our own
+    format's limit rather than a Tiled feature, and the compat ledger is keyed
+    on the latter. Every one of these refusals goes away in version 3.
+    """
+    for layer in doc.all_layers():
+        what = ""
+        if isinstance(layer, GroupLayer):
+            what = "is a group layer"
+        elif isinstance(layer, ImageLayer):
+            what = "is an image layer"
+        elif layer.class_name:
+            what = "carries a class"
+        elif tuple(layer.tint) != OPAQUE_WHITE:
+            what = "carries a tint"
+        elif layer.offset_x or layer.offset_y:
+            what = "carries a pixel offset"
+        elif (layer.parallax_x, layer.parallax_y) != (1.0, 1.0):
+            what = "carries a parallax factor"
+        if what:
+            raise ValueError(
+                f"layer {layer.name or 'unnamed'!r} {what}, which the version "
+                f"{VERSION} .wmap format cannot store yet"
+            )
+
+
 def manifest_json(doc: MapDoc) -> str:
     """``map.json``'s text: sorted keys, indented, one entry per layer.
 
@@ -132,6 +175,7 @@ def manifest_json(doc: MapDoc) -> str:
     *read* -- the arrays are the reason the format is a zip, and there is no
     size argument left for minifying the small half.
     """
+    _refuse_unstorable_layers(doc)
     tilesets = []
     for index, ref in enumerate(doc.tilesets):
         ts = ref.tileset
@@ -221,11 +265,15 @@ def wmap_bytes(doc: MapDoc) -> bytes:
     Two saves of an unchanged document are byte-identical, which is what the
     fixed timestamps and the sorted manifest are for.
     """
+    # Built before the archive is opened, so the writer door's refusal is raised
+    # with nothing half-written behind it -- ``read_wmap``'s "every refusal is
+    # inside the ``with``" rule, from the other side.
+    manifest = manifest_json(doc)
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         # First member, so a reader can identify the file without a full
         # directory scan and a human running ``unzip -p`` gets the readable half.
-        zf.writestr(zipfile.ZipInfo(MANIFEST, _EPOCH), manifest_json(doc))
+        zf.writestr(zipfile.ZipInfo(MANIFEST, _EPOCH), manifest)
         for index, layer in enumerate(doc.tile_layers()):
             zf.writestr(
                 zipfile.ZipInfo(f"{LAYER_DIR}/{index}.npy", _EPOCH),

@@ -139,20 +139,39 @@ def _object_facts(obj: Any) -> dict[str, Any]:
 def _layer_facts(layer: Any) -> dict[str, Any]:
     facts: dict[str, Any] = {
         "name": layer.name,
+        "class_name": str(layer.class_name),
         "visible": bool(layer.visible),
         "opacity": _num(layer.opacity),
         "locked": bool(layer.locked),
+        "tint": [int(part) for part in layer.tint],
+        "offset": [_num(layer.offset_x), _num(layer.offset_y)],
+        "parallax": [_num(layer.parallax_x), _num(layer.parallax_y)],
         "properties": _props(layer.properties),
     }
-    objects = getattr(layer, "objects", None)
-    if objects is None:
+    # Which kind, asked of what the layer *has* rather than by importing the
+    # classes -- this module is a vocabulary, not a consumer of the model, and
+    # the order matters: a group has children, an image has pixels, an object
+    # layer has objects, and a tile layer is what is left.
+    if hasattr(layer, "children"):
+        facts["type"] = "group"
+        # Nested, because the shape of the tree is a fact about the document:
+        # two maps with the same layers under different parents are not the
+        # same map, and a flattened list would say they were.
+        facts["layers"] = [_layer_facts(child) for child in layer.children]
+    elif hasattr(layer, "pixels"):
+        facts["type"] = "image"
+        facts["source"] = str(layer.source)
+        facts["repeat"] = [bool(layer.repeat_x), bool(layer.repeat_y)]
+        facts["shape"] = list(np.asarray(layer.pixels).shape)
+        facts["image"] = _digest(layer.pixels)
+    elif hasattr(layer, "objects"):
+        facts["type"] = "object"
+        facts["draworder"] = str(layer.draworder)
+        facts["objects"] = [_object_facts(obj) for obj in layer.objects]
+    else:
         facts["type"] = "tile"
         facts["shape"] = [int(layer.height), int(layer.width)]
         facts["cells"] = _digest(layer.data)
-    else:
-        facts["type"] = "object"
-        facts["draworder"] = str(layer.draworder)
-        facts["objects"] = [_object_facts(obj) for obj in objects]
     return facts
 
 

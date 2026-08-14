@@ -228,20 +228,29 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
     Encoding used to be the one step in a save that could not fail, so every
     caller ran it bare on the frame thread. It can now: the Tiled exporters
     refuse by name what the document models and they cannot yet spell (a
-    rotation, an ``"index"``-ordered object layer, five object shapes), and an
-    exception raised on the frame thread takes the window with it.
+    rotation, an ``"index"``-ordered object layer, five object shapes, a group,
+    an image layer, a decorated layer), ``.wmap``'s writer refuses the two of
+    those its version 2 manifest has nowhere to put, and an exception raised on
+    the frame thread takes the window with it.
+
+    **``ValueError`` and not ``TiledUnsupported``**, which is the wider of the
+    two on purpose: ``TiledUnsupported`` *is* a ``ValueError``, so this still
+    catches every Tiled refusal, and ``.wmap``'s own door raises the plain kind
+    -- our format's limit is not a Tiled feature, and a door that only caught
+    the Tiled spelling would let a ``.wmap`` save crash the window while a
+    ``.tmx`` save of the same document toasted politely.
 
     Toasted rather than framed through ``invalid_from`` like :func:`_load`'s
     refusals, because the two are different sentences: opening is an operation
-    on a file the user chose, and ``TiledUnsupported(exporting=True)`` already
-    speaks about the map on screen with a subject in front of it.
+    on a file the user chose. The frame in front of the refusal is the outcome
+    rather than the action -- what somebody looking at a failed save needs first
+    is that nothing was written, and every one of these refusals happens before
+    a single byte reaches the disk.
     """
-    from .plotter.tsx import TiledUnsupported
-
     try:
         return _encode(doc, file_format)
-    except TiledUnsupported as exc:
-        ctx.toast(str(exc), "error")
+    except ValueError as exc:
+        ctx.toast(f"Nothing was written. {exc}", "error")
         return None
 
 
