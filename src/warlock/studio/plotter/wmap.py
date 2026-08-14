@@ -28,6 +28,14 @@ through. The accepted cost, stated rather than hidden: editing the source PNG on
 disk does not propagate into a map already saved. A ``.tmx`` export is the way
 out to an external, editable tileset.
 
+**Custom properties are stored recursively and the version did not move.** A
+property record gained an optional ``propertytype`` and a ``value`` that may be
+a block of member records (``class``) or a list of them (``list``). A document
+using none of that writes exactly the bytes version 2 wrote, and an older build
+reading one that does drops what it does not understand -- the ``locked``
+precedent, and the same accepted cost: a tolerant addition rather than a format
+version that would refuse every file this build writes.
+
 **A half-read document is worse than a refused one.** A file from a newer
 version, a layer whose array is the wrong shape or dtype, a tileset naming a
 member the archive does not carry, a gid no tileset accounts for, tilesets whose
@@ -47,6 +55,7 @@ import numpy as np
 from . import gid as gidlib
 from . import project
 from .pngio import png_bytes
+from .props import read_wmap_properties, write_wmap_properties
 from .tilemap import (
     OBJECT_KINDS,
     MapDoc,
@@ -56,7 +65,6 @@ from .tilemap import (
     new_uid,
 )
 from .tileset import TerrainSpec, Tileset, TilesetRef
-from .tsx import Prop
 
 VERSION = 2
 MANIFEST = "map.json"
@@ -78,14 +86,11 @@ WMAP_SUFFIX = ".wmap"
 MAX_DECOMPRESSED_BYTES = 1 << 30
 
 
-# --- properties ---------------------------------------------------------------
-
-
-def _props_json(props: dict[str, Prop]) -> dict[str, Any]:
-    return {
-        name: {"type": props[name].type, "value": props[name].value}
-        for name in sorted(props)
-    }
+# --- tilesets -----------------------------------------------------------------
+#
+# Custom properties are :mod:`.props`' job, in both directions -- this format
+# used to carry a third copy of the property codec and so a third opinion about
+# what a property may be.
 
 
 def _terrains_from(entry: Any) -> tuple[TerrainSpec, ...]:
@@ -109,17 +114,6 @@ def _terrains_from(entry: Any) -> tuple[TerrainSpec, ...]:
             )
         )
     return tuple(out)
-
-
-def _props_from(entry: Any) -> dict[str, Prop]:
-    out: dict[str, Prop] = {}
-    for name, record in (entry or {}).items():
-        if not isinstance(record, dict):
-            raise ValueError(f"property {name!r} is malformed")
-        # ``Prop`` refuses an unknown type by name, so there is one list of
-        # legal types and this is not a second copy of it.
-        out[str(name)] = Prop(type=str(record.get("type", "string")), value=record.get("value"))
-    return out
 
 
 # --- writing ------------------------------------------------------------------
@@ -151,7 +145,7 @@ def manifest_json(doc: MapDoc) -> str:
                 "spacing": ts.spacing,
                 "margin": ts.margin,
                 "image": f"{TILESET_DIR}/{index}.png",
-                "properties": _props_json(ts.properties),
+                "properties": write_wmap_properties(ts.properties),
                 # A *list*, because a terrain's position is its precedence and
                 # ``sort_keys`` below would shuffle the ranks of a dict. Written
                 # even when empty, so the shape does not depend on the content.
@@ -176,7 +170,7 @@ def manifest_json(doc: MapDoc) -> str:
             # the key, and drops the lock on resave -- the worst outcome is a
             # layer that stops being protected, which is visible in the pane.
             "locked": bool(layer.locked),
-            "properties": _props_json(layer.properties),
+            "properties": write_wmap_properties(layer.properties),
         }
         if isinstance(layer, TileLayer):
             layers.append(
@@ -198,7 +192,7 @@ def manifest_json(doc: MapDoc) -> str:
                             "h": float(obj.h),
                             "class": obj.obj_class,
                             "visible": bool(obj.visible),
-                            "properties": _props_json(obj.properties),
+                            "properties": write_wmap_properties(obj.properties),
                         }
                         for obj in layer.objects
                     ],
@@ -214,7 +208,7 @@ def manifest_json(doc: MapDoc) -> str:
         "projection": doc.projection,
         "renderorder": doc.renderorder,
         "backgroundcolor": doc.backgroundcolor,
-        "properties": _props_json(doc.properties),
+        "properties": write_wmap_properties(doc.properties),
         "tilesets": tilesets,
         "layers": layers,
     }
@@ -338,7 +332,7 @@ def read_wmap(data: bytes) -> MapDoc:
         )
         doc.renderorder = str(manifest.get("renderorder", "right-down"))
         doc.backgroundcolor = manifest.get("backgroundcolor")
-        doc.properties = _props_from(manifest.get("properties"))
+        doc.properties = read_wmap_properties(manifest.get("properties"))
 
         previous = 0
         for entry in manifest.get("tilesets", []):
@@ -363,7 +357,7 @@ def read_wmap(data: bytes) -> MapDoc:
                         tile_h=int(entry.get("tile_h", 1)),
                         spacing=int(entry.get("spacing", 0)),
                         margin=int(entry.get("margin", 0)),
-                        properties=_props_from(entry.get("properties")),
+                        properties=read_wmap_properties(entry.get("properties")),
                         terrains=_terrains_from(entry.get("terrains")),
                     ),
                     source=str(entry.get("source", "")),
@@ -381,7 +375,7 @@ def read_wmap(data: bytes) -> MapDoc:
                 # Tolerant, so a version 2 file written before locks existed
                 # opens unlocked rather than being refused.
                 "locked": bool(entry.get("locked", False)),
-                "properties": _props_from(entry.get("properties")),
+                "properties": read_wmap_properties(entry.get("properties")),
             }
             if kind == "tile":
                 member = str(entry.get("data", ""))
@@ -426,7 +420,7 @@ def _read_object(entry: Any) -> MapObject:
         h=float(entry.get("h", 0.0)),
         obj_class=str(entry.get("class", "")),
         visible=bool(entry.get("visible", True)),
-        properties=_props_from(entry.get("properties")),
+        properties=read_wmap_properties(entry.get("properties")),
     )
 
 

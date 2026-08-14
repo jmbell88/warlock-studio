@@ -354,12 +354,75 @@ def test_an_external_tsj_tileset_is_refused_with_the_remedy():
 # --- properties ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["object", "file", "class"])
-def test_a_property_type_outside_the_supported_five_is_refused(kind):
+@pytest.mark.parametrize(
+    ("kind", "raw", "expected"),
+    [("file", "art/hero.png", "art/hero.png"), ("object", "7", 7)],
+)
+def test_a_file_or_object_property_loads_now_that_plotter_models_one(kind, raw, expected):
+    """These two left the refusal list *because the model gained a place to
+    put them*, which is the only reason a refusal is ever allowed to move --
+    the isometric case above, applied to properties. Flipped in place rather
+    than deleted, so the removal reads as a decision."""
     body = _EMPTY_LAYER.replace(
-        "<data", f'<properties><property name="p" type="{kind}" value="x"/></properties><data'
+        "<data", f'<properties><property name="p" type="{kind}" value="{raw}"/></properties><data'
     )
-    _refuses(_map(body=body), kind)
+    doc = tmx.read_tmx(_map(body=body), **LOADERS)
+    assert doc.layers[0].properties["p"] == tsx.Prop(kind, expected)
+    again = tmx.read_tmx(tmx.tmx_export(doc)["map.tmx"], **LOADERS)
+    assert again.layers[0].properties == doc.layers[0].properties
+
+
+def test_a_class_property_loads_with_its_members_and_its_type_name():
+    """The recursive one. ``propertytype`` names a class declared in a Tiled
+    *project*, which this editor never reads -- so it is carried verbatim
+    rather than validated, and every member carries its own type."""
+    block = (
+        '<properties><property name="npc" type="class" propertytype="NPC">'
+        '<properties><property name="hp" type="int" value="3"/>'
+        '<property name="tint" type="color" value="#ff00ff00"/></properties>'
+        "</property></properties>"
+    )
+    doc = tmx.read_tmx(_map(body=_EMPTY_LAYER.replace("<data", block + "<data")), **LOADERS)
+    npc = doc.layers[0].properties["npc"]
+    assert npc.propertytype == "NPC"
+    assert npc.value == {"hp": tsx.Prop("int", 3), "tint": tsx.Prop("color", "#ff00ff00")}
+    again = tmx.read_tmx(tmx.tmx_export(doc)["map.tmx"], **LOADERS)
+    assert again.layers[0].properties == doc.layers[0].properties
+
+
+def test_the_new_property_types_survive_the_json_round_trip_too():
+    """One model, two syntaxes: what the XML reader accepts the JSON reader
+    accepts, and both writers write it back. The ``color`` member is left out
+    of the class here on purpose -- Tiled's JSON stores class members
+    untyped, and ``test_props.py`` pins that one documented loss."""
+    block = (
+        '<properties><property name="art" type="file" value="a/b.png"/>'
+        '<property name="target" type="object" value="4"/>'
+        '<property name="npc" type="class" propertytype="NPC">'
+        '<properties><property name="hp" type="int" value="3"/></properties>'
+        "</property></properties>"
+    )
+    doc = tmx.read_tmx(_map(body=_EMPTY_LAYER.replace("<data", block + "<data")), **LOADERS)
+    again = tmx.read_tmj(tmx.tmj_export(doc)["map.tmj"], **LOADERS)
+    assert again.layers[0].properties == doc.layers[0].properties
+
+
+def test_a_property_type_outside_tileds_nine_is_still_refused():
+    body = _EMPTY_LAYER.replace(
+        "<data", '<properties><property name="p" type="vector2" value="1,2"/></properties><data'
+    )
+    _refuses(_map(body=body), "vector2")
+
+
+def test_a_list_property_is_refused_because_tiled_has_no_syntax_for_one():
+    """Modelled in the document and stored in a ``.wmap``, refused at the
+    Tiled door: Tiled 1.12.2 has no list-valued property, so there is nothing
+    to write that it would read back, and inventing a syntax would produce a
+    file only this editor can open. See ``tests/plotter/test_props.py``."""
+    body = _EMPTY_LAYER.replace(
+        "<data", '<properties><property name="bag" type="list" value="1"/></properties><data'
+    )
+    _refuses(_map(body=body), "list-valued custom property")
 
 
 def test_an_embedded_tileset_image_with_no_path_is_refused():

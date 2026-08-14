@@ -40,7 +40,6 @@ from ._map_layers import LayerOps
 from ._map_model import (
     MAX_DIMENSION,
     OBJECT_KINDS,
-    PROPERTY_TYPES,
     Layer,
     MapObject,
     ObjectLayer,
@@ -64,7 +63,6 @@ from .tileset import TilesetRef
 __all__ = [
     "MAX_DIMENSION",
     "OBJECT_KINDS",
-    "PROPERTY_TYPES",
     "Layer",
     "MapDoc",
     "MapObject",

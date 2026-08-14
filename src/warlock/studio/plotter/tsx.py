@@ -18,23 +18,29 @@ user's work. :class:`TiledUnsupported` is a ``ValueError`` subclass so a caller
 that only wants "this did not load" needs no new except clause, and it carries
 the feature's name so the message can say which one.
 
-:class:`Prop` and the two property codecs live here rather than in :mod:`.tmx`
-because the dependency runs that way: a map reads external tilesets, so
-``tmx`` imports ``tsx`` and not the reverse. Properties are typed explicitly
-rather than inferred from the Python value, because ``color`` and ``string`` are
-both ``str`` and a round trip that guessed would silently retype every colour a
-user set in Tiled.
+:class:`Prop`, :class:`TiledUnsupported` and the XML property codec used to
+live here -- one property model per syntax, three of them, each deciding for
+itself what a property may be. They live in :mod:`.props` now, the package's
+leaf, and are **re-exported from this module**: ``tmx``, ``wmap``, the panes
+and the tests all say ``from .tsx import Prop``, and the move was about having
+one model rather than about moving where anybody looks for it.
 """
 
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from . import blob
+from .props import (
+    PROPERTY_TYPES,
+    Prop,
+    TiledUnsupported,
+    read_properties,
+    write_properties,
+)
 from .tileset import TerrainSpec, Tileset
 
 # What this build writes. Tiled accepts anything it recognises; these are the
@@ -42,112 +48,27 @@ from .tileset import TerrainSpec, Tileset
 TSX_VERSION = "1.10"
 TILED_VERSION = "1.10.2"
 
-PROPERTY_TYPES = ("string", "int", "float", "bool", "color")
-
-
-class TiledUnsupported(ValueError):
-    """A Tiled file using a feature this editor does not model.
-
-    ``feature`` is the name to put in front of the user; the message already
-    contains it, and the attribute exists so a test can assert on the feature
-    rather than on the sentence around it.
-    """
-
-    def __init__(self, feature: str, detail: str = "") -> None:
-        self.feature = feature
-        tail = f" ({detail})" if detail else ""
-        super().__init__(
-            f"this file uses {feature}, which Plotter does not support{tail}. "
-            "Open it in Tiled and remove or flatten that feature first."
-        )
-
-
-@dataclass(frozen=True)
-class Prop:
-    """One typed custom property, as Tiled stores it."""
-
-    type: str
-    value: Any
-
-    def __post_init__(self) -> None:
-        if self.type not in PROPERTY_TYPES:
-            raise TiledUnsupported(
-                f"a custom property of type {self.type!r}",
-                f"supported types are {', '.join(PROPERTY_TYPES)}",
-            )
-
-
-# --- properties ---------------------------------------------------------------
-
-
-def _parse_value(kind: str, text: str) -> Any:
-    if kind == "bool":
-        return text.strip().lower() == "true"
-    if kind == "int":
-        return int(float(text))
-    if kind == "float":
-        return float(text)
-    return str(text)
-
-
-def read_properties(parent: ET.Element | None) -> dict[str, Prop]:
-    """The ``<properties>`` child of an element, as a mapping.
-
-    An element with no properties gives an empty dict, and so does one with an
-    empty ``<properties>`` block -- the two are the same document.
-    """
-    if parent is None:
-        return {}
-    node = parent.find("properties")
-    if node is None:
-        return {}
-    out: dict[str, Prop] = {}
-    for entry in node.findall("property"):
-        name = entry.get("name")
-        if not name:
-            continue
-        kind = entry.get("type", "string")
-        if kind not in PROPERTY_TYPES:
-            raise TiledUnsupported(f"a custom property of type {kind!r}", f"property {name!r}")
-        # Tiled puts a multi-line string in the element's text instead of in
-        # the attribute, so the attribute is preferred and the text is the
-        # fallback rather than the other way round.
-        raw = entry.get("value")
-        if raw is None:
-            raw = entry.text or ""
-        out[name] = Prop(type=kind, value=_parse_value(kind, raw))
-    return out
-
-
-def _value_text(prop: Prop) -> str:
-    if prop.type == "bool":
-        return "true" if prop.value else "false"
-    if prop.type == "int":
-        return str(int(prop.value))
-    if prop.type == "float":
-        return repr(float(prop.value))
-    return str(prop.value)
-
-
-def write_properties(parent: ET.Element, props: dict[str, Prop]) -> None:
-    """Append a ``<properties>`` block, or nothing at all when there are none.
-
-    Written in sorted name order rather than in whatever order they were read.
-    The output is canonical on purpose -- two saves of an unchanged document
-    have to be byte-identical, and a dict's order is not a property of the
-    document.
-    """
-    if not props:
-        return
-    node = ET.SubElement(parent, "properties")
-    for name in sorted(props):
-        prop = props[name]
-        entry = ET.SubElement(node, "property", {"name": name})
-        # Tiled omits type="string", and matching that keeps a file written
-        # here diff-clean against the same file written there.
-        if prop.type != "string":
-            entry.set("type", prop.type)
-        entry.set("value", _value_text(prop))
+#: Re-exported, not merely imported -- see the module docstring. Listed so a
+#: linter reads the names as public rather than as unused imports.
+__all__ = [
+    "PROPERTY_TYPES",
+    "TILED_VERSION",
+    "TSX_VERSION",
+    "Prop",
+    "TiledUnsupported",
+    "check_tileset_features",
+    "read_properties",
+    "read_tsx",
+    "read_wangsets",
+    "read_wangsets_json",
+    "to_bytes",
+    "tsx_bytes",
+    "tsx_element",
+    "tsx_source",
+    "write_properties",
+    "write_wangsets",
+    "xml_root",
+]
 
 
 # --- reading ------------------------------------------------------------------

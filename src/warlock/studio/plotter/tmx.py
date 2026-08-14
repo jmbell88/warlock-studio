@@ -7,7 +7,7 @@ isometric grids, infinite chunked layers, group and image layers, five object
 shapes this cannot draw, Wang sets, per-tile animation. Loading such a file and
 quietly keeping the half we understand would be fine right up to the moment the
 user saved, at which point the other half is gone. So the reader raises
-:class:`~.tsx.TiledUnsupported`, whose message names the feature and says what to
+:class:`~.props.TiledUnsupported`, whose message names the feature and says what to
 do about it, and ``tests/plotter/test_tmx_refusals.py`` has one case per entry.
 
 **Gid payloads are reinterpreted, never re-derived.** A base64 layer is decoded
@@ -50,26 +50,29 @@ import numpy as np
 from . import blob, project
 from . import gid as gidlib
 from .pngio import png_bytes
+from .props import (
+    TiledUnsupported,
+    read_json_properties,
+    read_properties,
+    write_json_properties,
+    write_properties,
+)
 from .tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
 from .tileset import TerrainSpec, Tileset, TilesetRef
 from .tsx import (
     TILED_VERSION,
     TSX_VERSION,
-    Prop,
-    TiledUnsupported,
     check_tileset_features,
-    read_properties,
     read_wangsets,
     read_wangsets_json,
     to_bytes,
     tsx_bytes,
-    write_properties,
     xml_root,
 )
 
-# Re-exported deliberately: ``TiledUnsupported`` is defined in :mod:`.tsx`
-# because the dependency runs that way (a map reads external tilesets), but it
-# is *about* Tiled interop as a whole and every caller meets it here first.
+# Re-exported deliberately: ``TiledUnsupported`` is defined in :mod:`.props`
+# because the property model is the package's leaf, but it is *about* Tiled
+# interop as a whole and every caller meets it here first.
 __all__ = [
     "TiledUnsupported",
     "read_tmj",
@@ -484,19 +487,6 @@ def read_tmx(
 # --- JSON reading -------------------------------------------------------------
 
 
-def _json_properties(entries: Any) -> dict[str, Prop]:
-    out: dict[str, Prop] = {}
-    for entry in entries or []:
-        name = str(entry.get("name", ""))
-        if not name:
-            continue
-        kind = str(entry.get("type", "string"))
-        # ``Prop`` refuses an unknown type by name, so the JSON side needs no
-        # list of its own -- one place decides what a property may be.
-        out[name] = Prop(type=kind, value=entry.get("value"))
-    return out
-
-
 def _json_object(entry: dict[str, Any]) -> MapObject:
     where = f"object {entry.get('id', '?')}"
     if entry.get("template"):
@@ -516,7 +506,7 @@ def _json_object(entry: dict[str, Any]) -> MapObject:
         h=float(entry.get("height", 0) or 0),
         obj_class=str(entry.get("class") or entry.get("type") or ""),
         visible=bool(entry.get("visible", True)),
-        properties=_json_properties(entry.get("properties")),
+        properties=read_json_properties(entry.get("properties")),
     )
 
 
@@ -559,7 +549,7 @@ def _read_tmj_tilesets(
                     tile_h=int(entry.get("tileheight", 0) or 0),
                     spacing=int(entry.get("spacing", 0) or 0),
                     margin=int(entry.get("margin", 0) or 0),
-                    properties=_json_properties(entry.get("properties")),
+                    properties=read_json_properties(entry.get("properties")),
                     terrains=terrains,
                 ),
             )
@@ -602,7 +592,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
                     visible=bool(entry.get("visible", True)),
                     opacity=float(entry.get("opacity", 1) or 1),
                     locked=bool(entry.get("locked", False)),
-                    properties=_json_properties(entry.get("properties")),
+                    properties=read_json_properties(entry.get("properties")),
                 )
             )
         elif kind == "objectgroup":
@@ -614,7 +604,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
                     visible=bool(entry.get("visible", True)),
                     opacity=float(entry.get("opacity", 1) or 1),
                     locked=bool(entry.get("locked", False)),
-                    properties=_json_properties(entry.get("properties")),
+                    properties=read_json_properties(entry.get("properties")),
                 )
             )
         elif kind:
@@ -649,7 +639,7 @@ def read_tmj(
     )
     doc.renderorder = str(payload.get("renderorder", "right-down"))
     doc.backgroundcolor = payload.get("backgroundcolor")
-    doc.properties = _json_properties(payload.get("properties"))
+    doc.properties = read_json_properties(payload.get("properties"))
     doc.tilesets = _read_tmj_tilesets(
         payload, image_loader=image_loader, tsx_loader=tsx_loader
     )
@@ -808,13 +798,6 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     return files
 
 
-def _json_props(props: dict[str, Prop]) -> list[dict[str, Any]]:
-    return [
-        {"name": name, "type": props[name].type, "value": props[name].value}
-        for name in sorted(props)
-    ]
-
-
 def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     """The JSON spelling. Same external tilesets, same names, same bytes."""
     files, tsx_paths = _tileset_files(doc)
@@ -836,7 +819,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
             # it was before locks existed. Tiled omits the key too.
             entry["locked"] = True
         if layer.properties:
-            entry["properties"] = _json_props(layer.properties)
+            entry["properties"] = write_json_properties(layer.properties)
         if isinstance(layer, TileLayer):
             entry.update(
                 {
@@ -866,7 +849,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
                     record["width"] = float(obj.w)
                     record["height"] = float(obj.h)
                 if obj.properties:
-                    record["properties"] = _json_props(obj.properties)
+                    record["properties"] = write_json_properties(obj.properties)
                 objects.append(record)
             entry.update({"type": "objectgroup", "draworder": "topdown", "objects": objects})
         layers.append(entry)
@@ -896,7 +879,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     if doc.backgroundcolor:
         payload["backgroundcolor"] = str(doc.backgroundcolor)
     if doc.properties:
-        payload["properties"] = _json_props(doc.properties)
+        payload["properties"] = write_json_properties(doc.properties)
 
     files["map.tmj"] = (json.dumps(payload, indent=2) + "\n").encode()
     return files

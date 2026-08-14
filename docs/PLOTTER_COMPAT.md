@@ -84,9 +84,28 @@ per value it can name.
 
 ## Properties
 
+Eight of Tiled's nine property types are modelled: `string`, `int`, `float`,
+`bool`, `color`, `file`, `object` and `class` — the last three since M2, with
+`class` recursive and its `propertytype` (the name of a class or enum declared
+in a Tiled *project*, which Plotter never reads) carried verbatim. They are
+**not** listed as `round-trips` because that state's note has to name a corpus
+fixture that proves it, and the corpus is still empty — `FIXTURES.md` forbids
+synthesizing one from our own exporter, so the row would have to name a file
+that does not exist. What backs them today is
+`tests/plotter/test_props.py`, `test_tsx.py` and `test_tmx_refusals.py`
+(read → export → re-read, in both syntaxes); the rows below move to
+`round-trips` with a `fixture:` marker as soon as a Tiled-authored fixture
+carrying them lands.
+
+The one loss, stated rather than hidden: Tiled's **JSON** stores a class
+property's members as bare values and recovers their types from the project's
+`propertytypes.json`, so a `color` or `file` member of a class comes back from
+a `.tmj` as a `string`. The XML spelling types every member and is lossless.
+
 | Feature | State | Notes |
 |---|---|---|
-| `a custom property of type {}` | refused | `file`, `object`, `class` and `list`; see M2. |
+| `a custom property of type {}` | refused | Any type outside Tiled's nine — `file`, `object` and `class` no longer refuse. |
+| `a list-valued custom property` | refused | Modelled in the document and stored in `.wmap`; refused at the Tiled door because Tiled 1.12.2 has no list-valued property to write it as. See M2. |
 
 ## Preserved but not honoured
 

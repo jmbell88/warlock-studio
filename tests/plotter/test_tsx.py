@@ -123,14 +123,38 @@ line two</property></properties>
     assert back.properties["note"].value == "line one\nline two"
 
 
-def test_an_unknown_property_type_is_refused_by_name():
+def test_an_object_property_on_a_tileset_loads_now_that_plotter_models_one():
+    """This case used to assert ``type="object"`` was refused. It is one of
+    the four types the property model gained, so the case is *flipped* rather
+    than deleted -- the refusal moved because the model did."""
     data = b"""<tileset name="t" tilewidth="16" tileheight="16">
  <image source="a.png" width="64" height="64"/>
  <properties><property name="who" type="object" value="3"/></properties>
 </tileset>"""
+    assert tsx.read_tsx(data, _pixels()).properties == {"who": tsx.Prop("object", 3)}
+
+
+def test_the_new_property_types_round_trip_through_a_tileset():
+    """``tsx`` is the second writer of the XML property block and the one
+    Packwright emits, so the types it can carry are asserted here too rather
+    than assumed from the map side."""
+    props = {
+        "art": tsx.Prop("file", "art/atlas.png"),
+        "owner": tsx.Prop("object", 4),
+        "npc": tsx.Prop("class", {"hp": tsx.Prop("int", 3)}, propertytype="NPC"),
+    }
+    ts = Tileset(name="t", pixels=_pixels(), tile_w=16, tile_h=16, properties=props)
+    assert tsx.read_tsx(tsx.tsx_bytes(ts, image_name="a.png"), _pixels()).properties == props
+
+
+def test_a_property_type_outside_tileds_nine_is_refused_by_name():
+    data = b"""<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+ <properties><property name="who" type="vector2" value="1,2"/></properties>
+</tileset>"""
     with pytest.raises(tsx.TiledUnsupported) as exc:
         tsx.read_tsx(data, _pixels())
-    assert "object" in str(exc.value)
+    assert "vector2" in str(exc.value)
 
 
 # --- refusals -----------------------------------------------------------------

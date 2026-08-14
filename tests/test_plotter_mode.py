@@ -1721,3 +1721,40 @@ class _FakeInkerDoc:
 
     def flatten(self, *, matte: bool = True) -> np.ndarray:
         return self._pixels
+
+
+# --- the property rows the layers pane draws ----------------------------------
+#
+# The pane itself needs a frame to draw, but what it *offers* and what it makes
+# of a value it cannot edit are plain functions, and both are the half that goes
+# wrong when the property model grows a type.
+
+
+def test_the_new_property_row_offers_every_type_that_fits_on_one_line():
+    """``class`` and ``list`` are deliberately absent: a class needs its
+    members and a list its items, neither of which a single row can author.
+    Both still *display* -- the case below."""
+    from warlock.studio.panes import plotter_layers
+
+    assert plotter_layers.AUTHORABLE_TYPES == (
+        "string",
+        "int",
+        "float",
+        "bool",
+        "color",
+        "file",
+        "object",
+    )
+    assert plotter_layers._blank_value("object") == 0
+    assert plotter_layers._blank_value("file") == ""
+
+
+def test_a_container_property_gets_a_one_line_summary_rather_than_a_crash():
+    """A map arriving from Tiled with a class property has to be readable
+    before it is editable; the recursive editor is a later milestone."""
+    from warlock.studio.panes import plotter_layers
+    from warlock.studio.plotter.props import Prop
+
+    npc = Prop("class", {"hp": Prop("int", 3), "name": Prop("string", "Bob")}, propertytype="NPC")
+    assert plotter_layers._summary(npc) == "NPC (2 members)"
+    assert plotter_layers._summary(Prop("list", [Prop("int", 1)])) == "list (1 item)"

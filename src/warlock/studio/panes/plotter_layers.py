@@ -15,8 +15,8 @@ from typing import Any
 
 from .. import icons, plotter_mode, widgets
 from ..manual import render as manual_render
+from ..plotter.props import CONTAINER_TYPES, PROPERTY_TYPES, Prop
 from ..plotter.tilemap import MapObject, ObjectLayer, TileLayer, new_uid
-from ..plotter.tsx import PROPERTY_TYPES, Prop
 from ..tokens import sp
 
 
@@ -218,7 +218,12 @@ def property_editor(ctx: Any, form_key: str, props: dict[str, Prop], on_change: 
         value = _value_editor(prop)
         if value is not None and value != prop.value:
             replacement = dict(props)
-            replacement[key] = Prop(type=prop.type, value=value)
+            # ``propertytype`` travels with the value: it names a class or an
+            # enum declared in a Tiled project, and editing a value is not a
+            # reason to forget which type the user's value belongs to.
+            replacement[key] = Prop(
+                type=prop.type, value=value, propertytype=prop.propertytype
+            )
             on_change(replacement)
         imgui.same_line()
         if widgets.small_icon_button(icons.X, "Remove"):
@@ -232,7 +237,7 @@ def property_editor(ctx: Any, form_key: str, props: dict[str, Prop], on_change: 
     imgui.same_line()
     imgui.set_next_item_width(sp(90))
     form["type"] = widgets.combo(
-        "##prop-type", form["type"], [(t, t) for t in PROPERTY_TYPES], width=sp(90)
+        "##prop-type", form["type"], [(t, t) for t in AUTHORABLE_TYPES], width=sp(90)
     )
     imgui.same_line()
     if widgets.disabled_button(f"{icons.PLUS}##add-prop", bool(form["name"].strip())):
@@ -253,8 +258,30 @@ def _properties(ctx: Any, doc: Any, layer: Any, obj: MapObject) -> None:
     )
 
 
+#: What the new-property row offers. The two container types are deliberately
+#: absent: a ``class`` needs its members and a ``list`` its items, and neither
+#: can be authored on one line -- the recursive editor is a later milestone.
+#: Both still *display*, because a document that arrives holding one has to be
+#: readable rather than a crash.
+AUTHORABLE_TYPES = tuple(t for t in PROPERTY_TYPES if t not in CONTAINER_TYPES)
+
+
 def _blank_value(kind: str) -> Any:
-    return {"int": 0, "float": 0.0, "bool": False}.get(kind, "")
+    return {"int": 0, "float": 0.0, "bool": False, "object": 0}.get(kind, "")
+
+
+def _summary(prop: Prop) -> str:
+    """A container property on one line, for the read-only row.
+
+    Counts rather than contents: the point is that the property is *there* and
+    carries something, which is what stops a class arriving from Tiled looking
+    like an empty string until the recursive editor lands.
+    """
+    count = len(prop.value)
+    if prop.type == "class":
+        name = prop.propertytype or "class"
+        return f"{name} ({count} member{'' if count == 1 else 's'})"
+    return f"list ({count} item{'' if count == 1 else 's'})"
 
 
 def _value_editor(prop: Prop) -> Any:
@@ -264,12 +291,22 @@ def _value_editor(prop: Prop) -> Any:
     if prop.type == "bool":
         changed, value = imgui.checkbox("##v", bool(prop.value))
         return value if changed else None
-    if prop.type == "int":
+    if prop.type in ("int", "object"):
+        # An ``object`` property is a Tiled object id and zero means none, so
+        # the int row is the honest control until an object *picker* exists.
         changed, value = imgui.input_int("##v", int(prop.value or 0))
         return value if changed else None
     if prop.type == "float":
         changed, value = imgui.input_float("##v", float(prop.value or 0.0))
         return value if changed else None
+    if prop.type in CONTAINER_TYPES:
+        # Read-only, and shown rather than hidden: editing a class member or a
+        # list item is the recursive editor's job, and returning ``None`` here
+        # is what says "nothing changed" to the caller.
+        widgets.muted(_summary(prop))
+        return None
+    # ``file`` lands here with ``string`` and ``color``: the path is text this
+    # editor never resolves, so a text row is the whole control.
     text = widgets.input_text("##v", str(prop.value or ""), max_length=200)
     return text if text != str(prop.value or "") else None
 

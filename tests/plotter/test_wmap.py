@@ -392,3 +392,52 @@ def test_layer_properties_set_through_the_editor_survive_a_round_trip():
     back = wmap.read_wmap(wmap.wmap_bytes(doc))
     assert back.layers[0].properties == {"kind": tsx.Prop("string", "floor")}
     assert back.properties == {"theme": tsx.Prop("string", "crypt")}
+
+
+#: Every type the model gained, including the one Tiled has no syntax for.
+#: ``.wmap`` is the *complete* codec -- it has one reader and no foreign schema
+#: to fit inside, which is why ``list`` lives here and is refused at the Tiled
+#: door rather than the other way round.
+_NEW_TYPES = {
+    "art": tsx.Prop("file", "art/hero.png"),
+    "target": tsx.Prop("object", 7),
+    "none": tsx.Prop("object", 0),
+    "npc": tsx.Prop(
+        "class",
+        {"hp": tsx.Prop("int", 3), "tint": tsx.Prop("color", "#ff00ff00")},
+        propertytype="NPC",
+    ),
+    "bag": tsx.Prop("list", [tsx.Prop("int", 1), tsx.Prop("string", "two")]),
+}
+
+
+def test_the_recursive_property_types_survive_a_round_trip_at_every_level():
+    doc = _doc()
+    doc.set_map_properties(dict(_NEW_TYPES))
+    doc.set_layer_props(doc.layers[0].uid, properties=dict(_NEW_TYPES))
+    objects = doc.layers[1]
+    doc.set_object(objects.uid, objects.objects[0].uid, properties=dict(_NEW_TYPES))
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.properties == _NEW_TYPES
+    assert back.layers[0].properties == _NEW_TYPES
+    assert back.layers[1].objects[0].properties == _NEW_TYPES
+
+
+def test_two_saves_of_a_document_with_recursive_properties_are_byte_identical():
+    """Determinism reaches all the way down: class members are written
+    sorted, at every depth, so a nested dict's order is not in the file."""
+    doc = _doc()
+    doc.set_map_properties(dict(_NEW_TYPES))
+    assert wmap.wmap_bytes(doc) == wmap.wmap_bytes(doc)
+
+
+def test_a_property_that_gained_nothing_is_stored_as_version_2_stored_it():
+    """The extension is tolerant and the version did not move: a document
+    using none of the new machinery has to write the bytes it already wrote,
+    or every ``.wmap`` in the world changes on the next save for nothing."""
+    doc = _doc()
+    raw = wmap.wmap_bytes(doc)
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        manifest = json.loads(zf.read(wmap.MANIFEST))
+    assert manifest["version"] == 2
+    assert manifest["properties"]["theme"] == {"type": "string", "value": "cave"}

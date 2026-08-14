@@ -141,6 +141,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         gid,
         pngio,
         project,
+        props,
         render,
         terrain,
         tilegen,

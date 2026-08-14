@@ -250,9 +250,15 @@ undoable, and both are saved.
 ### Object properties
 
 An object carries a name, a class, and any number of typed custom properties: string, int, float,
-bool or colour. The type is stored rather than guessed, so a colour stays a colour on the way out to
-Tiled and back. Those properties are the whole point of an object layer — they are how a map says
-"this door needs the brass key" to code that has never heard of Warlock.
+bool, colour, file, object and class. The type is stored rather than guessed, so a colour stays a
+colour on the way out to Tiled and back. Those properties are the whole point of an object layer —
+they are how a map says "this door needs the brass key" to code that has never heard of Warlock.
+
+A **file** property is a path Plotter carries verbatim and never resolves; an **object** property is
+a Tiled object id, where 0 means none; and a **class** property holds a block of properties of its
+own, under a type name declared in a Tiled project. All three arrive from Tiled and survive the trip
+back. The new-property row offers the seven you can fill in on one line — a class arriving from a
+file is shown as a read-only summary until the recursive editor lands.
 
 ## Files
 
@@ -291,7 +297,7 @@ Refused: staggered and hexagonal maps; infinite (chunked) maps; group and image 
 ellipse, polygon, polyline and text objects; tile objects and object templates; rotated objects;
 image-collection tilesets; Wang sets that are not one of Plotter's own terrain sets, and Tiled's
 older terrain types; per-tile animation, properties and collision shapes; zstd-compressed
-layer data; layer pixel offsets; and custom properties outside the five supported types.
+layer data; layer pixel offsets; and custom properties of a type outside Tiled's own set.
 
 A *hidden* object is modelled rather than refused — hiding something changes nothing about where it
 is. A *rotated* one is refused, because an unrotated outline drawn for a rotated object is a wrong

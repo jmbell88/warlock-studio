@@ -33,9 +33,10 @@ _uids = itertools.count(1)
 # so these are the two the editor can actually author.
 OBJECT_KINDS = ("rect", "point")
 
-# The property types a map, layer or object may carry. Tiled's own set minus
-# ``file``, ``object`` and ``class``, which reference things outside the file.
-PROPERTY_TYPES = ("string", "int", "float", "bool", "color")
+# What a custom property may be is :mod:`.props`' single answer -- this module
+# carried a byte-identical second copy of that tuple, re-exported through
+# ``tilemap`` and read by nothing, which is exactly how the two would have come
+# to disagree the first time one of them gained a type.
 
 MAX_DIMENSION = 4096
 
