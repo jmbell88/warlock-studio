@@ -32,6 +32,14 @@ class ObjectOps:
         layer = self.layer(layer_uid)
         if not isinstance(layer, ObjectLayer):
             raise KeyError(f"no object layer {layer_uid}")
+        # ``0`` is "unassigned" -- every caller that builds a fresh object
+        # leaves it at the dataclass default, and this is the one place that
+        # mints a real one. A caller that already set one (adopted from an
+        # imported file, say) keeps it: this is an "at creation" assignment,
+        # not an overwrite.
+        if obj.id == 0:
+            obj.id = self.next_object_id
+            self.next_object_id += 1
         at = len(layer.objects) if index is None else max(0, min(int(index), len(layer.objects)))
         self.history.push(ObjectAddEdit(layer_uid=int(layer_uid), obj=obj, index=at))
         self._attach_object(layer_uid, obj, at)

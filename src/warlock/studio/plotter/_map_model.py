@@ -70,6 +70,13 @@ class MapObject:
     """
 
     uid: int
+    # Tiled's own persistent object id -- distinct from ``uid`` above, which
+    # is a per-process address undo steps are written against and means
+    # nothing outside this run. ``0`` is "unassigned yet"; ``MapDoc`` mints a
+    # real one from ``next_object_id`` at creation, monotone and never
+    # reused, because an object-typed property may go on naming this id after
+    # the object it named is deleted. See ``docs/PLOTTER_PLAN.md`` Milestone 2.
+    id: int = 0
     name: str = ""
     kind: str = "rect"
     x: float = 0.0
@@ -110,6 +117,10 @@ class TileLayer:
     uid: int
     name: str
     data: np.ndarray
+    # Tiled's own persistent layer id, ``MapObject.id``'s twin: ``0`` until
+    # ``MapDoc`` mints one from ``next_layer_id`` at creation, monotone and
+    # never reused or decremented on undo.
+    id: int = 0
     visible: bool = True
     opacity: float = 1.0
     # Blocks *content* edits only. Renaming, reordering, hiding, changing the
@@ -141,6 +152,9 @@ class TileLayer:
 class ObjectLayer:
     uid: int
     name: str
+    # See ``TileLayer.id`` -- the same field, the same counter's twin
+    # (``next_layer_id`` covers both layer kinds, one namespace).
+    id: int = 0
     objects: list[MapObject] = field(default_factory=list)
     visible: bool = True
     opacity: float = 1.0

@@ -104,6 +104,27 @@ def test_an_undone_edit_still_counts_against_the_budget():
     assert doc.history.bytes == charged
 
 
+def test_a_layer_and_object_id_survive_undo_and_redo_of_an_add():
+    """``LayerAddEdit``/``ObjectAddEdit`` hold the layer or object itself, not
+    a snapshot, so a redo re-inserts the very instance whose ``id`` was
+    minted at creation -- no edit-class change is needed for the id to come
+    back unchanged."""
+    doc = MapDoc(8, 8, 16, 16)
+    layer = doc.add_tile_layer()
+    assert layer.id == 1
+    doc.undo()
+    doc.redo()
+    assert layer.id == 1
+
+    objects = doc.add_object_layer()
+    obj = doc.add_object(objects.uid, MapObject(uid=new_uid(), name="a", kind="point"))
+    assert obj.id == 1
+    doc.undo()
+    doc.redo()
+    assert obj.id == 1
+    assert doc.layer(objects.uid).objects[0] is obj
+
+
 def test_an_object_edit_undoes_the_properties_as_well_as_the_position():
     doc = MapDoc(8, 8, 16, 16)
     layer = doc.add_object_layer()

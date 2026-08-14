@@ -60,6 +60,7 @@ class LayerOps:
     def add_tile_layer(self: MapDoc, name: str = "", *, index: int | None = None) -> TileLayer:
         layer = TileLayer(
             uid=new_uid(),
+            id=self._mint_layer_id(),
             name=name or f"Tiles {len(self.tile_layers()) + 1}",
             data=gidlib.empty_layer(self.width, self.height),
         )
@@ -68,8 +69,19 @@ class LayerOps:
     def add_object_layer(
         self: MapDoc, name: str = "", *, index: int | None = None
     ) -> ObjectLayer:
-        layer = ObjectLayer(uid=new_uid(), name=name or "Objects")
+        layer = ObjectLayer(uid=new_uid(), id=self._mint_layer_id(), name=name or "Objects")
         return self._add_layer(layer, index)
+
+    def _mint_layer_id(self: MapDoc) -> int:
+        """The next persistent layer id, and advance past it.
+
+        One namespace for both layer kinds -- ``next_layer_id`` does not care
+        which -- matching the uid counter's own reason: nothing downstream
+        should have to ask which kind of layer an id belongs to.
+        """
+        minted = self.next_layer_id
+        self.next_layer_id += 1
+        return minted
 
     def _add_layer(self: MapDoc, layer: Any, index: int | None) -> Any:
         at = len(self.layers) if index is None else max(0, min(int(index), len(self.layers)))

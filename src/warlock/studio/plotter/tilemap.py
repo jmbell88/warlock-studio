@@ -27,6 +27,17 @@ fresh on read, so nothing here is ever restored onto a number already issued and
 a ``reserve_uid`` would have no case to answer. One namespace covers layers
 *and* objects, because both are undo subjects and a single counter makes "is
 this uid a layer or an object" a question nothing has to ask.
+
+**``next_layer_id``/``next_object_id`` are the opposite of the uid counter in
+every way that matters, which is the point of having two.** They *are*
+document state -- Tiled's own persistent ``id``, the thing an object-typed
+property references, and :mod:`.tmx` writes and reads them (:mod:`.wmap`
+does not, yet; that is a later milestone). Monotone and never decremented on
+undo: an object property may go on naming a deleted object's id, so undoing
+the add that minted it must not let a later add reissue the same number. The
+one cost that follows is accepted rather than engineered around -- after an
+add-then-undo, a re-save differs from the prior bytes only in these two
+fields, and Tiled behaves identically.
 """
 
 from __future__ import annotations
@@ -113,6 +124,11 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         # undoable: it counts changes, and a restored count would let a stale
         # cache match. Starts at 0 and only ever rises.
         self.tileset_epoch = 0
+        # Document state, not view state: see the module docstring. Both start
+        # at 1 because 0 is "unassigned" on a layer or object's own ``id``,
+        # matching Tiled's own convention that a real id is never zero.
+        self.next_layer_id = 1
+        self.next_object_id = 1
         self.properties: dict[str, Any] = {}
         # Preserved verbatim across a round trip. Neither is honoured by the
         # renderer yet, and writing back something a user set in Tiled is
