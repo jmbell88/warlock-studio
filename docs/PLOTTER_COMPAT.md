@@ -144,26 +144,29 @@ gets an actual home: layer decorations (`parallaxx`/`parallaxy`,
 of this section -- see "Preserved but not honoured" below.
 
 `draworder` is the one entry here that is not merely lost but actively wrong
-on a round trip: `tmx_export` writes every object layer's `<objectgroup>`
-with `draworder="topdown"` regardless of what the source file said, so a
-Tiled map authored with `draworder="index"` (objects drawn in list order
-rather than sorted by `y`) changes what it *means* — not just what it
-carries — the moment it passes through this editor, even though nothing
-about the shapes or their positions changed. **Half of that is now closed.**
-M2 chunk 3 gave `ObjectLayer` a real `draworder`, so a layer the *editor* sets
-to `"index"` is refused at the writer door by name (the `an index-ordered
-object layer` row under "Objects") rather than flattened. The read side is
-unchanged and stays here: a `.tmx` that arrives with `draworder="index"` is
-still not read, so it still becomes a `"topdown"` document and exports as one
-without complaint. Both halves close together in M3, when the readers and the
-writers learn the attribute in the same commit.
+on a round trip: `tmj_export` writes every object layer's JSON `objectgroup`
+with `"draworder": "topdown"` regardless of what the source file said (the
+XML writer, `tmx_export`, writes no `draworder` attribute at all — TMX's own
+default *is* `topdown`, so the on-disk effect matches even though the
+attribute is absent rather than written), so a Tiled map authored with
+`draworder="index"` (objects drawn in list order rather than sorted by `y`)
+changes what it *means* — not just what it carries — the moment it passes
+through this editor, even though nothing about the shapes or their positions
+changed. **Half of that is now closed.** M2 chunk 3 gave `ObjectLayer` a real
+`draworder`, so a layer the *editor* sets to `"index"` is refused at the
+writer door by name (the `an index-ordered object layer` row under "Objects")
+rather than flattened. The read side is unchanged and stays here: a `.tmx`
+that arrives with `draworder="index"` is still not read, so it still becomes
+a `"topdown"` document and exports as one without complaint. Both halves
+close together in M3, when the readers and the writers learn the attribute in
+the same commit.
 
 | Feature | State | Notes |
 |---|---|---|
 | `layer parallaxx` / `layer parallaxy` | silently-dropped | Per-layer parallax factor. See M2. |
 | `layer tintcolor` | silently-dropped | Per-layer colour multiply. See M2. |
 | `layer class` | silently-dropped | Tiled's per-layer custom type. See M2. |
-| `object-layer draworder` | silently-dropped | Not read at all, and always written back as `"topdown"` -- an `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. See M2. |
+| `object-layer draworder` | silently-dropped | Not read at all. `tmj_export` always writes `"draworder": "topdown"`; `tmx_export` writes no `draworder` attribute (TMX's default is already topdown, so the effect matches) -- either way an incoming `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. The editor's own `"index"` layers are refused at the writer door since M2 chunk 3. See M3. |
 
 ## Permanent non-goals
 
