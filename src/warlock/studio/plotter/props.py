@@ -121,9 +121,14 @@ class TiledUnsupported(ValueError):
         tail = f" ({detail})" if detail else ""
         if exporting:
             # No remedy sentence, deliberately. The reader's names one, and
-            # every remedy available here would be a lie today: ``.wmap`` does
-            # not persist these fields either until its v3, so "save it as
-            # .wmap instead" would send the user to a second silent drop.
+            # this door has nowhere to send the user: there is no file to open
+            # and nothing to remove in Tiled, because the map is their own
+            # unsaved work. "Save it as .wmap instead" *became* a true sentence
+            # when the version 3 container landed -- it stores the tree, the
+            # pictures, the decorations, the rotations and every shape -- and
+            # whether to offer it belongs with the milestone that decides which
+            # of these refusals survive at all (M3), not with a message edited
+            # in isolation while the list around it is about to move.
             message = (
                 f"this map uses {feature}, which Plotter cannot write to a "
                 f"Tiled file yet{tail}."

@@ -229,9 +229,16 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
     caller ran it bare on the frame thread. It can now: the Tiled exporters
     refuse by name what the document models and they cannot yet spell (a
     rotation, an ``"index"``-ordered object layer, five object shapes, a group,
-    an image layer, a decorated layer), ``.wmap``'s writer refuses the two of
-    those its version 2 manifest has nowhere to put, and an exception raised on
-    the frame thread takes the window with it.
+    an image layer, a decorated layer), and an exception raised on the frame
+    thread takes the window with it.
+
+    ``.wmap``'s own door is quieter than it was and is still named here: its
+    version 3 container stores everything version 2 refused, so nothing an
+    ordinary document holds reaches ``WmapUnstorable`` today. The handler stays
+    because the door does -- a layer kind the container has no entry for lands
+    there now, and chunked storage (M5) will -- and removing the plumbing in
+    order to re-add it next wave would leave the intervening builds crashing
+    the frame thread instead of toasting.
 
     **Both refusal types by name, and nothing wider.** ``TiledUnsupported``
     covers the two exporters and ``WmapUnstorable`` covers ours -- a door that

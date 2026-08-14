@@ -416,3 +416,34 @@ def test_each_document_kind_writes_its_own_format(suffix: str):
     which is what makes a crash copy inspectable rather than opaque."""
     journal.ensure_providers()
     assert suffix in {p.ext for p in journal.providers()}
+
+
+def test_a_map_with_a_layer_tree_journals_and_comes_back():
+    """The plotter provider encodes through ``wmap.wmap_bytes``, so what the
+    journal can save is exactly what that format can store -- and until version
+    3 that excluded a group, an image layer and every per-layer decoration.
+    A crash while the user had a nested map open wrote *nothing at all* for
+    that tab (``_journal_write`` catches the encode and skips the slot), which
+    is the one failure mode the whole mechanism exists to prevent. This is the
+    case that says it is over; imported inside the test because the mode is one
+    of the four engines this file's import-discipline case forbids at module
+    scope."""
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.plotter import wmap
+    from warlock.studio.plotter.tilemap import MapDoc
+
+    doc = MapDoc(4, 4, 16, 16)
+    group = doc.add_group_layer("G")
+    doc.add_tile_layer("Ground", parent_uid=group.uid)
+    doc.add_image_layer(
+        "Sky", pixels=np.zeros((2, 2, 4), dtype=np.uint8), parent_uid=group.uid
+    )
+    doc.set_layer_props(group.uid, tint=(255, 0, 0, 255), offset_x=4.0, class_name="Deco")
+
+    payload = plotter_mode._journal_encode(SimpleNamespace(doc=doc))
+    back = wmap.read_wmap(payload)
+    recovered = back.layers[0]
+    assert (recovered.name, recovered.class_name, recovered.offset_x) == ("G", "Deco", 4.0)
+    assert [child.name for child in recovered.children] == ["Ground", "Sky"]
