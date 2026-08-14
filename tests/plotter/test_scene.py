@@ -103,6 +103,49 @@ def test_a_tint_outside_the_channel_range_is_refused():
         TileLayer(uid=1, name="t", data=gid.empty_layer(2, 2), tint=(255, 300, 0, 255))
 
 
+@pytest.mark.parametrize("tint", [(255, 300, 0, 255), (1, 2), (0, 0, 0, -1), "red"])
+def test_the_setter_refuses_every_tint_the_constructor_refuses(tint):
+    """The door and the constructor have to agree, or the setter is a way in
+    for a value the type will not accept.
+
+    ``(1, 2)`` is the case that made this urgent: it is not merely wrong, it
+    survived being stored and then failed *elsewhere and later*, inside
+    ``scene._tint_product``'s strict ``zip``, on the frame thread, one resolve
+    after anybody could have connected the two.
+    """
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    head = doc.history.head
+    with pytest.raises(ValueError):
+        doc.set_layer_props(layer.uid, tint=tint)
+    assert layer.tint == (255, 255, 255, 255), "the refusal left the layer alone"
+    assert doc.history.head == head, "a refused change must push no step"
+    assert scene.resolve(doc)[0].tint == (255, 255, 255, 255)
+
+
+def test_a_tint_spelled_as_a_list_is_the_same_tint_and_pushes_nothing():
+    """The coercion runs before the no-op test, so an unchanged value spelled
+    differently is still an unchanged value."""
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    head = doc.history.head
+    doc.set_layer_props(layer.uid, tint=[255, 255, 255, 255])
+    assert doc.history.head == head
+    doc.set_layer_props(layer.uid, tint=[128, 255, 255, 255])
+    assert layer.tint == (128, 255, 255, 255)
+    assert isinstance(layer.tint, tuple)
+
+
+def test_a_decoration_that_is_not_a_number_is_refused_before_the_push():
+    doc = _doc()
+    layer = doc.add_tile_layer("t")
+    head = doc.history.head
+    with pytest.raises(ValueError):
+        doc.set_layer_props(layer.uid, offset_x="over there")
+    assert doc.history.head == head
+    assert layer.offset_x == 0.0
+
+
 # --- the tree -----------------------------------------------------------------
 
 
@@ -406,7 +449,7 @@ def test_a_wmap_of_a_document_holding_a_group_is_refused_by_name():
     doc = _doc()
     doc.add_tile_layer("t")
     doc.add_group_layer("G")
-    with pytest.raises(ValueError, match="group"):
+    with pytest.raises(wmap.WmapUnstorable, match="group"):
         wmap.wmap_bytes(doc)
 
 
@@ -415,8 +458,39 @@ def test_a_wmap_of_a_document_holding_an_image_layer_is_refused_by_name():
 
     doc = _doc()
     doc.add_image_layer("sky", pixels=_picture())
-    with pytest.raises(ValueError, match="image"):
+    with pytest.raises(wmap.WmapUnstorable, match="image"):
         wmap.wmap_bytes(doc)
+
+
+def test_the_wmap_writer_door_has_a_name_of_its_own():
+    """A refusal the save path can catch *by type*. A handler on bare
+    ``ValueError`` would dress every genuine encoder defect up as a polite
+    refusal the user is meant to act on."""
+    from warlock.studio.plotter import wmap
+
+    assert issubclass(wmap.WmapUnstorable, ValueError)
+    doc = _doc()
+    doc.add_group_layer("G")
+    with pytest.raises(wmap.WmapUnstorable):
+        wmap.wmap_bytes(doc)
+
+
+def test_the_wmap_door_is_the_encoder_rather_than_the_json_formatter():
+    """``wmap_bytes`` refuses before it formats anything, so no caller of the
+    encoder is trusting the *formatter* to have held the line."""
+    import warlock.studio.plotter.wmap as wmap
+
+    doc = _doc()
+    doc.add_group_layer("G")
+    called: list[int] = []
+    original = wmap.manifest_json
+    try:
+        wmap.manifest_json = lambda d: called.append(1) or original(d)  # type: ignore[assignment]
+        with pytest.raises(wmap.WmapUnstorable):
+            wmap.wmap_bytes(doc)
+    finally:
+        wmap.manifest_json = original
+    assert called == [], "the refusal came before the manifest was built"
 
 
 def test_a_flat_document_still_writes_a_wmap():

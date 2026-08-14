@@ -233,12 +233,14 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
     those its version 2 manifest has nowhere to put, and an exception raised on
     the frame thread takes the window with it.
 
-    **``ValueError`` and not ``TiledUnsupported``**, which is the wider of the
-    two on purpose: ``TiledUnsupported`` *is* a ``ValueError``, so this still
-    catches every Tiled refusal, and ``.wmap``'s own door raises the plain kind
-    -- our format's limit is not a Tiled feature, and a door that only caught
-    the Tiled spelling would let a ``.wmap`` save crash the window while a
-    ``.tmx`` save of the same document toasted politely.
+    **Both refusal types by name, and nothing wider.** ``TiledUnsupported``
+    covers the two exporters and ``WmapUnstorable`` covers ours -- a door that
+    caught only the Tiled spelling would let a ``.wmap`` save crash the window
+    while a ``.tmx`` save of the same document toasted politely, and one that
+    caught bare ``ValueError`` would be worse in the other direction: every
+    genuine defect in an encoder raises one, and each would reach the user
+    dressed as a polite refusal they are meant to act on, with the traceback
+    swallowed.
 
     Toasted rather than framed through ``invalid_from`` like :func:`_load`'s
     refusals, because the two are different sentences: opening is an operation
@@ -247,9 +249,12 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
     is that nothing was written, and every one of these refusals happens before
     a single byte reaches the disk.
     """
+    from .plotter.tsx import TiledUnsupported
+    from .plotter.wmap import WmapUnstorable
+
     try:
         return _encode(doc, file_format)
-    except ValueError as exc:
+    except (TiledUnsupported, WmapUnstorable) as exc:
         ctx.toast(f"Nothing was written. {exc}", "error")
         return None
 

@@ -41,8 +41,10 @@ from ._map_model import (
     ObjectLayer,
     TileLayer,
     new_uid,
+    normalize_layer_values,
 )
 from .edits import LayerAddEdit, LayerMoveEdit, LayerPropsEdit, LayerRemoveEdit
+from .tileset import rgba_colour
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc
@@ -298,7 +300,14 @@ class LayerOps:
         if layer is None:
             raise KeyError(f"no layer {uid}")
         before = layer.snapshot()
-        after = {**before, **{k: v for k, v in values.items() if k in before}}
+        # Coerced and refused *before* the no-op test, so that a caller spelling
+        # an unchanged value differently -- a tint as a list, an opacity as an
+        # int -- still compares equal and still pushes nothing. This is also
+        # what stops ``set_layer_props`` accepting a tint the constructor would
+        # refuse; see ``normalize_layer_values``.
+        after = normalize_layer_values(
+            {**before, **{k: v for k, v in values.items() if k in before}}
+        )
         if after == before:
             return
         # Refused before the push, not inside ``_apply_layer_props``: that hook
@@ -358,7 +367,12 @@ class LayerOps:
         layer.opacity = float(values["opacity"])
         layer.locked = bool(values["locked"])
         layer.class_name = str(values["class_name"])
-        layer.tint = tuple(values["tint"])  # type: ignore[assignment]
+        # Through the validator rather than a bare ``tuple``, even though
+        # ``set_layer_props`` has already refused anything this could reject:
+        # this hook is reachable from an edit, and a field whose only guard is
+        # one call site is a field that stops being guarded the day a second one
+        # appears. It cannot raise on a value that came from a snapshot.
+        layer.tint = rgba_colour(values["tint"], "a layer tint")
         layer.offset_x = float(values["offset_x"])
         layer.offset_y = float(values["offset_y"])
         layer.parallax_x = float(values["parallax_x"])

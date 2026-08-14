@@ -128,6 +128,23 @@ def _npy_bytes(array: np.ndarray) -> bytes:
     return out.getvalue()
 
 
+class WmapUnstorable(ValueError):
+    """Something the document models that this format version cannot write down.
+
+    A *named* exception rather than a bare ``ValueError``, and the name is the
+    whole point: the studio's save path has to turn a writer-door refusal into a
+    toast instead of letting it take the frame thread down, and a handler catching
+    ``ValueError`` would catch far more than the door -- a numpy shape complaint,
+    a bad float, any genuine defect in the encoder -- and dress every one of them
+    up as a polite refusal the user is meant to act on. ``TiledUnsupported``
+    already exists for exactly this reason at the other door; this is its
+    counterpart for ours.
+
+    A ``ValueError`` subclass, so callers that only care that the encode was
+    refused keep working unchanged.
+    """
+
+
 def _refuse_unstorable_layers(doc: MapDoc) -> None:
     """Everything the document models that version 2 has no way to write down.
 
@@ -143,7 +160,7 @@ def _refuse_unstorable_layers(doc: MapDoc) -> None:
     remedy sentence to offer, because a ``.tmx`` export cannot hold these
     either, which is why it names the format version rather than suggesting one.
 
-    A plain ``ValueError`` and not a ``TiledUnsupported``: this is our own
+    :class:`WmapUnstorable` and not a ``TiledUnsupported``: this is our own
     format's limit rather than a Tiled feature, and the compat ledger is keyed
     on the latter. Every one of these refusals goes away in version 3.
     """
@@ -162,7 +179,7 @@ def _refuse_unstorable_layers(doc: MapDoc) -> None:
         elif (layer.parallax_x, layer.parallax_y) != (1.0, 1.0):
             what = "carries a parallax factor"
         if what:
-            raise ValueError(
+            raise WmapUnstorable(
                 f"layer {layer.name or 'unnamed'!r} {what}, which the version "
                 f"{VERSION} .wmap format cannot store yet"
             )
@@ -174,8 +191,15 @@ def manifest_json(doc: MapDoc) -> str:
     Sorted and indented rather than compact because this half exists to be
     *read* -- the arrays are the reason the format is a zip, and there is no
     size argument left for minifying the small half.
+
+    **The writer door is upstream**, in :func:`wmap_bytes`, and not here: a
+    function whose job is to render a document as JSON is a poor place to keep
+    the rule about which documents may be written at all, because then every
+    caller of the encoder is trusting the *formatter* to have refused. Called
+    directly on a document this format cannot store, this raises where it walks
+    the layer -- loudly and in the wrong sentence, which is the honest failure
+    for a helper whose door is one level up.
     """
-    _refuse_unstorable_layers(doc)
     tilesets = []
     for index, ref in enumerate(doc.tilesets):
         ts = ref.tileset
@@ -265,9 +289,11 @@ def wmap_bytes(doc: MapDoc) -> bytes:
     Two saves of an unchanged document are byte-identical, which is what the
     fixed timestamps and the sorted manifest are for.
     """
-    # Built before the archive is opened, so the writer door's refusal is raised
-    # with nothing half-written behind it -- ``read_wmap``'s "every refusal is
-    # inside the ``with``" rule, from the other side.
+    # The writer door, and then the encode. Both before the archive is opened,
+    # so a refusal is raised with nothing half-written behind it -- which is
+    # ``read_wmap``'s "every refusal is inside the ``with``" rule, from the
+    # other side.
+    _refuse_unstorable_layers(doc)
     manifest = manifest_json(doc)
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:

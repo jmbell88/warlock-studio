@@ -916,6 +916,8 @@ def _export_ids(
     object_ids: dict[int, int] = {}
     fallback_layer_id = itertools.count(doc.next_layer_id)
     fallback_object_id = itertools.count(doc.next_object_id)
+    # Root-only, and only sound because the writer door has refused every
+    # document with a group in it -- see ``tmx_export``.
     for layer in doc.layers:
         layer_ids[layer.uid] = layer.id or next(fallback_layer_id)
         if isinstance(layer, ObjectLayer):
@@ -960,6 +962,11 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     for ref, path in zip(doc.tilesets, tsx_paths, strict=True):
         ET.SubElement(root, "tileset", {"firstgid": str(ref.firstgid), "source": path})
 
+    # ``doc.layers`` -- the *root* list -- and not ``all_layers()``, which is
+    # correct only because ``_refuse_unwritable_layers`` above has already
+    # refused any document holding a group: with no groups there is no nesting,
+    # so the root list *is* every layer. That refusal is what licenses this
+    # loop, and the two have to move together in M3.
     for layer in doc.layers:
         common = {"id": str(layer_ids[layer.uid]), "name": layer.name}
         if isinstance(layer, TileLayer):
@@ -1014,6 +1021,8 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)
 
     layers: list[dict[str, Any]] = []
+    # Root-only, for ``tmx_export``'s reason: the group refusal above is what
+    # makes the root list every layer.
     for layer in doc.layers:
         entry: dict[str, Any] = {
             "id": layer_ids[layer.uid],

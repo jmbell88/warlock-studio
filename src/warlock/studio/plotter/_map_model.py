@@ -512,6 +512,40 @@ def _normalize_layer(layer: Any) -> None:
     layer.parallax_y = float(layer.parallax_y)
 
 
+def normalize_layer_values(values: dict[str, Any]) -> dict[str, Any]:
+    """One layer-props dict coerced and refused, **at the door**.
+
+    :meth:`~._map_layers.LayerOps.set_layer_props` builds its ``after`` by
+    spreading whatever a caller handed in over a snapshot, and then hands that
+    dict to an edit *and* to ``_apply_layer_props``. Both of those trusted it:
+    the constructor refuses a tint of ``(999, 0, 0, 255)`` and a tint of
+    ``(1, 2)``, and nothing stood between ``set_layer_props(uid, tint=…)`` and
+    the field, so the setter accepted what the constructor would not. The second
+    of those two did not even fail there -- it failed later and elsewhere, in
+    :func:`.scene._tint_product`'s strict ``zip``, on the frame thread, one
+    resolve after the value was stored.
+
+    So the same coercion :func:`_normalize_layer` applies at construction is
+    applied here, and it runs **before** the no-op comparison rather than after:
+    a caller spelling an unchanged tint as a list has changed nothing, and a
+    dict that compared unequal only by type would push a step for it. Refusing
+    here also keeps the raise on the *near* side of ``history.push`` -- a step
+    that raises halfway through leaves the stack describing a change the
+    document never made, which is the argument the ``draworder`` refusal beside
+    it already makes.
+    """
+    out = dict(values)
+    out["name"] = str(out["name"])
+    out["class_name"] = str(out["class_name"])
+    out["visible"] = bool(out["visible"])
+    out["opacity"] = float(out["opacity"])
+    out["locked"] = bool(out["locked"])
+    out["tint"] = rgba_colour(out["tint"], "a layer tint")
+    for name in ("offset_x", "offset_y", "parallax_x", "parallax_y"):
+        out[name] = float(out[name])
+    return out
+
+
 def _layer_snapshot(layer: Any) -> dict[str, Any]:
     """Everything :class:`~.edits.LayerPropsEdit` restores on any layer kind.
 
