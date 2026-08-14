@@ -62,6 +62,17 @@ DYNAMIC_REFUSALS: dict[tuple[str, str], tuple[str, ...]] = {
         "polyline objects",
         "text objects",
     ),
+    # The writer door. Same five sentences the readers use, looked up by shape
+    # kind out of ``tmx._UNWRITABLE_SHAPES`` -- one table rather than a second
+    # list, so the two doors cannot drift into refusing an ellipse under two
+    # different names.
+    ("tmx.py", "_refuse_unwritable_objects"): (
+        "ellipse objects",
+        "polygon objects",
+        "polyline objects",
+        "text objects",
+        "tile objects",
+    ),
 }
 
 

@@ -261,6 +261,10 @@ def test_objects_add_edit_and_remove_by_uid():
 
 
 def test_an_unknown_object_kind_is_refused():
+    """``OBJECT_KINDS`` is what the *editor* can author, and the kind door is
+    still held to it. The document models all seven geometries -- see
+    ``test_shapes.py`` -- but an exotic one is constructed rather than
+    spelled, so a kind string nothing can draw is still a refusal."""
     with pytest.raises(ValueError):
         MapObject(uid=new_uid(), kind="ellipse")
 
@@ -294,6 +298,30 @@ def test_undo_of_an_add_does_not_reuse_its_id():
     second = doc.add_object(layer.uid, MapObject(uid=new_uid(), name="b", kind="point"))
     assert second.id == 2
     assert doc.next_object_id == 3
+
+
+def test_an_object_layer_carries_a_draw_order():
+    doc = _doc()
+    layer = doc.add_object_layer()
+    assert layer.draworder == "topdown"
+    doc.set_layer_props(layer.uid, draworder="index")
+    assert doc.layer(layer.uid).draworder == "index"
+    with pytest.raises(ValueError):
+        doc.set_layer_props(layer.uid, draworder="sideways")
+    doc.undo()
+    assert doc.layer(layer.uid).draworder == "topdown"
+
+
+def test_a_tile_layers_props_are_unaffected_by_the_draw_order():
+    """One ``_apply_layer_props`` serves both layer kinds, and a tile layer's
+    snapshot carries no ``draworder`` at all -- so the hook has to ask the
+    values, not the layer."""
+    doc = _doc()
+    tiles = doc.add_tile_layer()
+    assert "draworder" not in tiles.snapshot()
+    doc.set_layer_props(tiles.uid, name="Ground", draworder="index")
+    assert not hasattr(doc.layer(tiles.uid), "draworder")
+    assert doc.layer(tiles.uid).name == "Ground"
 
 
 def test_a_tile_op_on_an_object_layer_is_a_key_error():

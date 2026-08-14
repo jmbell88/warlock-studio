@@ -16,7 +16,7 @@ import json
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import tmx, tsx
+from warlock.studio.plotter import tilemap, tmx, tsx
 from warlock.studio.plotter.tileset import Tileset
 
 
@@ -463,6 +463,87 @@ def test_a_tsx_declaring_a_dtd_is_refused_by_the_same_door():
             '<image source="a.png"/></tileset>').encode()
     with pytest.raises(ValueError, match="DTD"):
         tsx.tsx_source(data)
+
+
+# --- the writer door ----------------------------------------------------------
+#
+# The document models rotation, a draw order and five object shapes that
+# neither exporter can yet spell, so the same list is refused on the way *out*.
+# A silent half-write is worse than the half-read every case above forbids: the
+# user keeps their document, and the file they just handed to an engine is
+# quietly wrong with nothing saying so. Both doors flip together in M3.
+
+
+def _exportable_doc() -> tilemap.MapDoc:
+    """A map that exports cleanly, so each case below changes one thing."""
+    doc = tilemap.MapDoc(2, 2, 16, 16)
+    doc.add_tileset(Tileset(name="t", pixels=_pixels(), tile_w=16, tile_h=16))
+    doc.add_tile_layer("L")
+    doc.add_object_layer("O")
+    return doc
+
+
+def _refuses_export(doc: tilemap.MapDoc, feature: str) -> None:
+    """Both writers, one assertion: a refusal only one of them made would let
+    a user reach the same broken file by picking the other format."""
+    for export in (tmx.tmx_export, tmx.tmj_export):
+        with pytest.raises(tsx.TiledUnsupported) as exc:
+            export(doc)
+        assert exc.value.feature == feature
+        assert feature in str(exc.value)
+        assert "this map uses" in str(exc.value), "an export refusal is not about a file"
+
+
+def test_the_control_map_exports_from_both_writers():
+    """The control, first: everything below refuses, so this is what says the
+    writer door is not simply refusing everything."""
+    doc = _exportable_doc()
+    doc.add_object(doc.layers[1].uid, tilemap.MapObject(uid=tilemap.new_uid(), kind="rect"))
+    assert tmx.tmx_export(doc) and tmx.tmj_export(doc)
+
+
+def test_exporting_a_rotated_object_is_refused():
+    doc = _exportable_doc()
+    doc.add_object(
+        doc.layers[1].uid,
+        tilemap.MapObject(uid=tilemap.new_uid(), kind="rect", rotation=45.0),
+    )
+    _refuses_export(doc, "rotated objects")
+
+
+@pytest.mark.parametrize(
+    ("shape", "feature"),
+    [
+        (tilemap.Ellipse(4, 4), "ellipse objects"),
+        (tilemap.Polygon(((0, 0), (4, 0), (4, 4))), "polygon objects"),
+        (tilemap.Polyline(((0, 0), (4, 0))), "polyline objects"),
+        (tilemap.Text("hi"), "text objects"),
+        (tilemap.TileShape(gid=1, w=16, h=16), "tile objects"),
+    ],
+)
+def test_exporting_a_shape_no_writer_can_spell_is_refused(shape, feature):
+    """The same five sentences the readers refuse these with, out of one table
+    -- two doors on one limit, not two features that share a name."""
+    doc = _exportable_doc()
+    doc.add_object(doc.layers[1].uid, tilemap.MapObject(uid=tilemap.new_uid(), shape=shape))
+    _refuses_export(doc, feature)
+
+
+def test_exporting_an_index_ordered_object_layer_is_refused():
+    """Not merely an attribute lost: ``"index"`` means the list order *is* the
+    stacking order, so flattening it to ``"topdown"`` changes which object is
+    drawn on top."""
+    doc = _exportable_doc()
+    doc.set_layer_props(doc.layers[1].uid, draworder="index")
+    _refuses_export(doc, "an index-ordered object layer")
+
+
+def test_a_default_object_layer_still_exports():
+    """The other half of the draworder case: ``"topdown"`` is the default and
+    must not have become a refusal."""
+    doc = _exportable_doc()
+    assert doc.layers[1].draworder == "topdown"
+    assert tmx.tmx_export(doc) and tmx.tmj_export(doc)
 
 
 # --- what is *not* refused ----------------------------------------------------

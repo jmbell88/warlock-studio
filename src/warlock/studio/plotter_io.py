@@ -222,6 +222,29 @@ def _encode(doc: Any, file_format: str) -> dict[str, bytes]:
     return {"map.wmap": wmaplib.wmap_bytes(doc)}
 
 
+def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
+    """:func:`_encode`, with a writer-door refusal turned into a toast.
+
+    Encoding used to be the one step in a save that could not fail, so every
+    caller ran it bare on the frame thread. It can now: the Tiled exporters
+    refuse by name what the document models and they cannot yet spell (a
+    rotation, an ``"index"``-ordered object layer, five object shapes), and an
+    exception raised on the frame thread takes the window with it.
+
+    Toasted rather than framed through ``invalid_from`` like :func:`_load`'s
+    refusals, because the two are different sentences: opening is an operation
+    on a file the user chose, and ``TiledUnsupported(exporting=True)`` already
+    speaks about the map on screen with a subject in front of it.
+    """
+    from .plotter.tsx import TiledUnsupported
+
+    try:
+        return _encode(doc, file_format)
+    except TiledUnsupported as exc:
+        ctx.toast(str(exc), "error")
+        return None
+
+
 def _write(files: dict[str, bytes], path: Path) -> None:
     """Write an encoded map beside ``path``.
 
@@ -255,7 +278,9 @@ def _write(files: dict[str, bytes], path: Path) -> None:
 def save_to(ctx: Any, tab: PlotterDoc, path: Path, file_format: str) -> None:
     path = Path(path)
     head = tab.doc.history.head
-    files = _encode(tab.doc, file_format)
+    files = _encoded(ctx, tab.doc, file_format)
+    if files is None:
+        return
 
     def run() -> dict[str, Any]:
         _write(files, path)
@@ -284,7 +309,9 @@ def save_as(ctx: Any, tab: PlotterDoc | None = None, *, file_format: str | None 
     )
     filters = {"tmx": TMX_FILTER, "tmj": TMJ_FILTER}.get(fmt, WMAP_FILTER)
     title, head = tab.title, tab.doc.history.head
-    files = _encode(tab.doc, fmt)
+    files = _encoded(ctx, tab.doc, fmt)
+    if files is None:
+        return
     stem = Path(title).stem or "map"
 
     def run() -> dict[str, Any] | None:
@@ -314,7 +341,9 @@ def export_map(ctx: Any, file_format: str, tab: PlotterDoc | None = None) -> Non
     suffix = plotter_state.TMX_SUFFIX if file_format == "tmx" else plotter_state.TMJ_SUFFIX
     filters = TMX_FILTER if file_format == "tmx" else TMJ_FILTER
     stem = Path(tab.title).stem or "map"
-    files = _encode(tab.doc, file_format)
+    files = _encoded(ctx, tab.doc, file_format)
+    if files is None:
+        return
 
     def run() -> dict[str, Any] | None:
         path = dialogs.save_file("Export for Tiled", f"{stem}{suffix}", filters)

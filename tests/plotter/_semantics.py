@@ -22,6 +22,7 @@ the engine has no reason to be able to fingerprint itself, and putting it in
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from typing import Any
 
@@ -89,6 +90,34 @@ def _tileset_facts(ref: Any) -> dict[str, Any]:
     }
 
 
+def _plain(value: Any) -> Any:
+    """One field of a shape, in the JSON-shaped, float-tolerant form."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return _num(value)
+    if isinstance(value, (tuple, list)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _geometry_facts(shape: Any) -> dict[str, Any]:
+    """Every field of an object's shape, read off the dataclass.
+
+    Enumerated rather than listed, which is the opposite of how the rest of
+    this module works and is right exactly here: a shape is a frozen dataclass
+    of plain values, the union has seven members and will gain more, and a
+    hand-written list would be a blind spot per shape rather than one for the
+    whole file. ``kind``, ``w`` and ``h`` are already above -- this is what
+    those three cannot say: a polygon's vertices, a tile object's gid, a text
+    object's styling.
+    """
+    return {
+        field.name: _plain(getattr(shape, field.name))
+        for field in dataclasses.fields(shape)
+    }
+
+
 def _object_facts(obj: Any) -> dict[str, Any]:
     return {
         "name": obj.name,
@@ -97,6 +126,10 @@ def _object_facts(obj: Any) -> dict[str, Any]:
         "y": _num(obj.y),
         "w": _num(obj.w),
         "h": _num(obj.h),
+        "rotation": _num(obj.rotation),
+        # Named ``geometry`` and not ``shape`` because a tile *layer*'s facts
+        # already spend that word on its array's dimensions.
+        "geometry": _geometry_facts(obj.shape),
         "obj_class": obj.obj_class,
         "visible": bool(obj.visible),
         "properties": _props(obj.properties),
@@ -118,6 +151,7 @@ def _layer_facts(layer: Any) -> dict[str, Any]:
         facts["cells"] = _digest(layer.data)
     else:
         facts["type"] = "object"
+        facts["draworder"] = str(layer.draworder)
         facts["objects"] = [_object_facts(obj) for obj in objects]
     return facts
 

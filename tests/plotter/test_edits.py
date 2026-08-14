@@ -19,7 +19,15 @@ from warlock.studio.plotter.edits import (
     TilePatchEdit,
     TilesetAddEdit,
 )
-from warlock.studio.plotter.tilemap import MapDoc, MapObject, TileLayer, new_uid
+from warlock.studio.plotter.tilemap import (
+    Ellipse,
+    MapDoc,
+    MapObject,
+    Polygon,
+    Rect,
+    TileLayer,
+    new_uid,
+)
 from warlock.studio.plotter.tileset import Tileset, TilesetRef
 
 
@@ -135,3 +143,38 @@ def test_an_object_edit_undoes_the_properties_as_well_as_the_position():
     assert (obj.x, obj.properties) == (9.0, {"hp": 2})
     doc.undo()
     assert (obj.x, obj.properties) == (0.0, {"hp": 1})
+
+
+def test_an_object_props_edit_holds_its_shapes_by_reference():
+    """Geometry costs an edit one reference and no bytes.
+
+    The shape is frozen, so the two sides of a step and the document can hold
+    the same object without any of them being able to change it -- which is
+    the whole reason ``snapshot`` can be called once per frame of a drag. A
+    shape that got copied here would put a deep copy in that inner loop.
+    """
+    shape = Ellipse(4.0, 4.0)
+    edit = ObjectPropsEdit(
+        layer_uid=1,
+        obj_uid=2,
+        before={"shape": shape, "properties": {"hp": 1}},
+        after={"shape": Rect(4.0, 4.0), "properties": {"hp": 1}},
+    )
+    assert edit.before["shape"] is shape
+    # ...while ``properties`` is still copied one level, because a caller
+    # routinely hands over the live dict it is about to write into.
+    assert edit.before["properties"] is not edit.after["properties"]
+
+
+def test_an_object_add_and_its_undo_carry_the_whole_object():
+    """The add edit holds the object itself, so an undone remove brings back
+    the same geometry and rotation rather than a rebuilt rect."""
+    doc = MapDoc(8, 8, 16, 16)
+    layer = doc.add_object_layer()
+    shape = Polygon(((0.0, 0.0), (4.0, 0.0), (4.0, 4.0)))
+    obj = doc.add_object(layer.uid, MapObject(uid=new_uid(), shape=shape, rotation=30.0))
+    doc.remove_object(layer.uid, obj.uid)
+    doc.undo()
+    restored = doc.layer(layer.uid).objects[0]
+    assert (restored.shape, restored.rotation) == (shape, 30.0)
+    assert restored.shape is shape

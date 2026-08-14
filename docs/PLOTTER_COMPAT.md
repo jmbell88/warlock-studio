@@ -62,12 +62,13 @@ per value it can name.
 | Feature | State | Notes |
 |---|---|---|
 | `object templates` | refused | See M7. |
-| `tile objects` | refused | See M3. |
-| `rotated objects` | refused | An unrotated outline drawn for a rotated object is a wrong picture. |
-| `ellipse objects` | refused | See M3. |
-| `polygon objects` | refused | See M3. |
-| `polyline objects` | refused | See M3. |
-| `text objects` | refused | See M3. |
+| `tile objects` | refused | **Both doors**: the readers refuse one in a file, and `tmx._refuse_unwritable_objects` refuses to export a `TileShape` the document holds. See M3. |
+| `rotated objects` | refused | An unrotated outline drawn for a rotated object is a wrong picture. **Both doors** since M2 chunk 3: `MapObject.rotation` is modelled now, so an export would otherwise drop it in silence. See M3. |
+| `ellipse objects` | refused | **Both doors**: the document models the shape, neither writer can spell it yet. See M3. |
+| `polygon objects` | refused | Both doors; see `ellipse objects`. |
+| `polyline objects` | refused | Both doors; see `ellipse objects`. |
+| `text objects` | refused | Both doors; see `ellipse objects`. |
+| `an index-ordered object layer` | refused | **Writer door only.** `ObjectLayer.draworder` is modelled but neither exporter emits it, so exporting an `"index"` layer would flatten it to `"topdown"` and change which object is drawn on top. The read side is still the `object-layer draworder` row under "Read but not modelled". See M3. |
 
 ## Tilesets
 
@@ -148,7 +149,14 @@ with `draworder="topdown"` regardless of what the source file said, so a
 Tiled map authored with `draworder="index"` (objects drawn in list order
 rather than sorted by `y`) changes what it *means* — not just what it
 carries — the moment it passes through this editor, even though nothing
-about the shapes or their positions changed.
+about the shapes or their positions changed. **Half of that is now closed.**
+M2 chunk 3 gave `ObjectLayer` a real `draworder`, so a layer the *editor* sets
+to `"index"` is refused at the writer door by name (the `an index-ordered
+object layer` row under "Objects") rather than flattened. The read side is
+unchanged and stays here: a `.tmx` that arrives with `draworder="index"` is
+still not read, so it still becomes a `"topdown"` document and exports as one
+without complaint. Both halves close together in M3, when the readers and the
+writers learn the attribute in the same commit.
 
 | Feature | State | Notes |
 |---|---|---|

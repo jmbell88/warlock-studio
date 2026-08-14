@@ -176,6 +176,54 @@ def _refuse_object_shape(has: Callable[[str], bool], where: str) -> None:
             raise TiledUnsupported(label, where)
 
 
+# The sentence each shape the writers cannot spell is refused under -- the
+# *same* sentence the readers refuse it with, because it is one limit with two
+# doors and not two features that happen to share a name. Keyed by the shape
+# kind ``MapObject.kind`` reports; the two absent keys are the two a writer can
+# spell.
+_UNWRITABLE_SHAPES = {
+    "ellipse": "ellipse objects",
+    "polygon": "polygon objects",
+    "polyline": "polyline objects",
+    "text": "text objects",
+    "tile": "tile objects",
+}
+
+
+def _refuse_unwritable_objects(doc: MapDoc) -> None:
+    """What the *document* can hold and neither writer can yet spell.
+
+    The mirror of the reader's object refusals, at the other door and for the
+    same reason. The model gained rotation, a draw order and five more shapes
+    before the exporters gained any way to emit them, so without this an export
+    would drop a rotation, flatten an index-ordered layer to ``topdown`` --
+    which changes which object is drawn on top, not merely an attribute -- and
+    write an ellipse as a rectangle with no size. A silent half-*write* is
+    worse than the half-read this ledger already forbids: the user still has
+    their document, and the file they just handed to an engine is quietly wrong
+    with nothing anywhere saying so.
+
+    Both writers, one function, exactly as ``_refuse_object_shape`` serves both
+    readers -- if the two lists drifted, one format would be writing a file the
+    other could not read back. Both doors flip together in M3, when the writers
+    learn to emit these and the reader stops refusing them.
+    """
+    for layer in doc.layers:
+        if not isinstance(layer, ObjectLayer):
+            continue
+        if layer.draworder != "topdown":
+            raise TiledUnsupported(
+                "an index-ordered object layer", f"layer {layer.name!r}", exporting=True
+            )
+        for obj in layer.objects:
+            where = f"object {obj.name or obj.uid}"
+            if obj.rotation:
+                raise TiledUnsupported("rotated objects", where, exporting=True)
+            label = _UNWRITABLE_SHAPES.get(obj.kind)
+            if label is not None:
+                raise TiledUnsupported(label, where, exporting=True)
+
+
 # --- XML reading --------------------------------------------------------------
 
 
@@ -710,6 +758,22 @@ def _finish(
                     f"layer {layer.name!r} uses tile {tile_id}, which none of this "
                     "map's tilesets accounts for"
                 )
+    # The same check where the *other* gid in a document lives. A tile object
+    # is a cell that happens to sit on an object layer -- same 29 bits, same
+    # three flags -- so a gid nothing accounts for is the same unreadable file,
+    # and letting it through here would mean the rule held only for tiles that
+    # happened to be on a grid.
+    for layer in doc.layers:
+        if not isinstance(layer, ObjectLayer):
+            continue
+        for obj in layer.objects:
+            gid_value = getattr(obj.shape, "gid", 0)
+            tile_id = gidlib.decompose(int(gid_value))[0]
+            if tile_id and doc.ref_for(tile_id) is None:
+                raise ValueError(
+                    f"object {obj.name or obj.uid} on layer {layer.name!r} uses tile "
+                    f"{tile_id}, which none of this map's tilesets accounts for"
+                )
 
     seen_layer_ids = [layer.id for layer in doc.layers if layer.id]
     seen_object_ids = [
@@ -811,6 +875,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     image: a tileset is a ``.tsx`` plus a ``.png`` beside the map. The caller
     writes them; deciding *where* is not this module's business.
     """
+    _refuse_unwritable_objects(doc)
     files, tsx_paths = _tileset_files(doc)
     root = ET.Element(
         "map",
@@ -884,6 +949,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
 
 def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     """The JSON spelling. Same external tilesets, same names, same bytes."""
+    _refuse_unwritable_objects(doc)
     files, tsx_paths = _tileset_files(doc)
     layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)
 
@@ -921,6 +987,11 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
                     "type": obj.obj_class,
                     "x": _object_xy(doc, obj)[0],
                     "y": _object_xy(doc, obj)[1],
+                    # Both constants are *guaranteed* by
+                    # ``_refuse_unwritable_objects`` above rather than assumed:
+                    # a rotated object and an index-ordered layer are refused
+                    # at this door, so writing them out is a statement of what
+                    # got past it and not a value being dropped.
                     "rotation": 0,
                     "visible": bool(obj.visible),
                 }

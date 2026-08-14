@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from . import gid as gidlib
-from ._map_model import Layer, ObjectLayer, TileLayer, new_uid
+from ._map_model import DRAW_ORDERS, Layer, ObjectLayer, TileLayer, new_uid
 from .edits import LayerAddEdit, LayerMoveEdit, LayerPropsEdit, LayerRemoveEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -119,6 +119,13 @@ class LayerOps:
         after = {**before, **{k: v for k, v in values.items() if k in before}}
         if after == before:
             return
+        # Refused before the push, not inside ``_apply_layer_props``: that hook
+        # is also the undo path, and a step that raises halfway through leaves
+        # the stack describing a change the document never made.
+        if after.get("draworder", "topdown") not in DRAW_ORDERS:
+            raise ValueError(
+                f"a draw order is one of {list(DRAW_ORDERS)}, not {after['draworder']!r}"
+            )
         self.history.push(LayerPropsEdit(layer_uid=int(uid), before=before, after=after))
         self._apply_layer_props(uid, after)
 
@@ -156,4 +163,9 @@ class LayerOps:
         layer.visible = bool(values["visible"])
         layer.opacity = float(values["opacity"])
         layer.locked = bool(values["locked"])
+        # Only object layers have one, and a snapshot only carries the keys its
+        # own layer kind reports -- so this is asked of the values rather than
+        # of the layer, which keeps one hook serving both kinds.
+        if "draworder" in values:
+            layer.draworder = str(values["draworder"])
         layer.properties = dict(values["properties"])

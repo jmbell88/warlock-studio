@@ -49,14 +49,27 @@ from . import project
 from ._map_geometry import GeometryOps
 from ._map_layers import LayerOps
 from ._map_model import (
+    DRAW_ORDERS,
     MAX_DIMENSION,
     OBJECT_KINDS,
+    SHAPE_KINDS,
+    Ellipse,
     Layer,
     MapObject,
     ObjectLayer,
+    Point,
+    Polygon,
+    Polyline,
+    Rect,
+    Shape,
+    Text,
     TileLayer,
+    TileShape,
     _dimension,
     new_uid,
+    shape_for_kind,
+    shape_kind,
+    shape_size,
 )
 from ._map_objects import ObjectOps
 from ._map_paint import PaintOps
@@ -72,14 +85,27 @@ from .tileset import TilesetRef
 # existed -- every mixin operates on these types -- not about changing where
 # anybody looks for them.
 __all__ = [
+    "DRAW_ORDERS",
     "MAX_DIMENSION",
     "OBJECT_KINDS",
+    "SHAPE_KINDS",
+    "Ellipse",
     "Layer",
     "MapDoc",
     "MapObject",
     "ObjectLayer",
+    "Point",
+    "Polygon",
+    "Polyline",
+    "Rect",
+    "Shape",
+    "Text",
     "TileLayer",
+    "TileShape",
     "new_uid",
+    "shape_for_kind",
+    "shape_kind",
+    "shape_size",
 ]
 
 
