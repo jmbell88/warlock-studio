@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from warlock.studio.plotter import gid, tsx
-from warlock.studio.plotter.tilemap import MapDoc, MapObject, new_uid
+from warlock.studio.plotter.tilemap import Ellipse, MapDoc, MapObject, Polygon, Rect, new_uid
 from warlock.studio.plotter.tileset import Tileset
 
 from ._semantics import doc_facts
@@ -102,7 +102,21 @@ def test_a_float_written_two_ways_compares_equal():
             id="map-properties",
         ),
         pytest.param(lambda d: setattr(d, "width", 7), id="map-width"),
-        pytest.param(lambda d: setattr(d.layers[1].objects[0], "kind", "rect"), id="object-kind"),
+        # Through the shape, because ``kind`` is derived from it and read-only:
+        # there is one place an object's geometry is stored, and this is it.
+        pytest.param(
+            lambda d: setattr(d.layers[1].objects[0], "shape", Rect(4, 4)), id="object-kind"
+        ),
+        pytest.param(
+            lambda d: setattr(d.layers[1].objects[0], "shape", Ellipse(0, 0)),
+            id="object-shape-at-the-same-size",
+        ),
+        pytest.param(
+            lambda d: setattr(d.layers[1].objects[0], "rotation", 45.0), id="object-rotation"
+        ),
+        pytest.param(
+            lambda d: d.set_layer_props(d.layers[1].uid, draworder="index"), id="draworder"
+        ),
         pytest.param(
             lambda d: setattr(d.layers[1].objects[0], "visible", False), id="object-visible"
         ),
@@ -122,6 +136,18 @@ def test_every_field_the_comparator_claims_to_cover_actually_moves_it(mutate):
     doc = _doc()
     mutate(doc)
     assert doc_facts(doc) != before
+
+
+def test_a_polygons_vertices_move_the_facts():
+    """The case ``kind``/``w``/``h`` cannot see. Two polygons with the same
+    kind and the same (absent) size differing only in where their vertices
+    are: a comparator that stopped at the three compat fields would call these
+    two documents the same map."""
+    left, right = _doc(), _doc()
+    left.layers[1].objects[0].shape = Polygon(((0, 0), (4, 0), (4, 4)))
+    right.layers[1].objects[0].shape = Polygon(((0, 0), (4, 0), (4, 5)))
+    assert doc_facts(left)["layers"][1]["objects"][0]["kind"] == "polygon"
+    assert doc_facts(left) != doc_facts(right)
 
 
 def test_a_tilesets_firstgid_moves_the_facts():

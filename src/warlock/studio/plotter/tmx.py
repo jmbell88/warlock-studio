@@ -682,6 +682,22 @@ def _finish(doc: MapDoc) -> None:
                     f"layer {layer.name!r} uses tile {tile_id}, which none of this "
                     "map's tilesets accounts for"
                 )
+    # The same check where the *other* gid in a document lives. A tile object
+    # is a cell that happens to sit on an object layer -- same 29 bits, same
+    # three flags -- so a gid nothing accounts for is the same unreadable file,
+    # and letting it through here would mean the rule held only for tiles that
+    # happened to be on a grid.
+    for layer in doc.layers:
+        if not isinstance(layer, ObjectLayer):
+            continue
+        for obj in layer.objects:
+            gid_value = getattr(obj.shape, "gid", 0)
+            tile_id = gidlib.decompose(int(gid_value))[0]
+            if tile_id and doc.ref_for(tile_id) is None:
+                raise ValueError(
+                    f"object {obj.name or obj.uid} on layer {layer.name!r} uses tile "
+                    f"{tile_id}, which none of this map's tilesets accounts for"
+                )
     doc.active_layer = doc.layers[0].uid if doc.layers else None
     doc.history.clear()
     doc.saved_head = doc.history.head

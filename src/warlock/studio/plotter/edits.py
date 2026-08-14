@@ -286,11 +286,18 @@ class ObjectRemoveEdit(Edit):
 
 @dataclass
 class ObjectPropsEdit(Edit):
-    """A moved, resized, renamed or re-keyed object.
+    """A moved, rotated, reshaped, renamed or re-keyed object.
 
     ``properties`` is a dict inside the snapshot dicts, so both are deep-copied
     one level: a shallow copy would hand undo and redo the same live mapping and
     the two would overwrite each other.
+
+    ``shape`` is *not* copied and must not be: it is a frozen dataclass, so the
+    two sides of this step, the document and any open drag session can share
+    one safely -- which is what keeps a snapshot per drag frame free of a deep
+    copy of the geometry. The ``kind``/``w``/``h`` keys travelling beside it
+    are the derived echo the older callers speak; ``_apply_object_props``
+    assigns the shape and ignores them.
     """
 
     layer_uid: int

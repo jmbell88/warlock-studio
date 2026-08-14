@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ._map_model import OBJECT_KINDS, MapObject, ObjectLayer
+from ._map_model import MapObject, ObjectLayer, merged_object_values
 from .edits import ObjectAddEdit, ObjectPropsEdit, ObjectRemoveEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -58,11 +58,12 @@ class ObjectOps:
         if obj is None:
             raise KeyError(f"no object {obj_uid}")
         before = obj.snapshot()
-        after = {**before, **{k: v for k, v in values.items() if k in before}}
+        # Geometry is reconciled *before* the no-op test, not after: a ``w=``
+        # that resizes nothing has to compare equal, and a ``shape=`` that
+        # agrees with the size already stored has to as well.
+        after = merged_object_values(before, values)
         if after == before:
             return
-        if after["kind"] not in OBJECT_KINDS:
-            raise ValueError(f"an object is one of {list(OBJECT_KINDS)}")
         self.history.push(
             ObjectPropsEdit(
                 layer_uid=int(layer_uid), obj_uid=int(obj_uid), before=before, after=after
@@ -148,9 +149,7 @@ class ObjectOps:
         obj = next((o for o in layer.objects if o.uid == session["obj_uid"]), None)
         if obj is None:
             raise KeyError(f"no object {session['obj_uid']}")
-        after = {**obj.snapshot(), **{k: v for k, v in values.items() if k in obj.snapshot()}}
-        if after["kind"] not in OBJECT_KINDS:
-            raise ValueError(f"an object is one of {list(OBJECT_KINDS)}")
+        after = merged_object_values(obj.snapshot(), values)
         self._apply_object_props(session["layer_uid"], session["obj_uid"], after)
 
     # -- the hooks the edits call back into ------------------------------------
@@ -181,9 +180,12 @@ class ObjectOps:
         if obj is None:
             raise KeyError(f"no object {obj_uid}")
         obj.name = str(values["name"])
-        obj.kind = str(values["kind"])
+        # The shape, never the ``kind``/``w``/``h`` echo beside it: those are
+        # derived, and every dict that reaches this hook came through
+        # ``merged_object_values``, which made them agree.
+        obj.shape = values["shape"]
         obj.x, obj.y = float(values["x"]), float(values["y"])
-        obj.w, obj.h = float(values["w"]), float(values["h"])
+        obj.rotation = float(values["rotation"])
         obj.obj_class = str(values["obj_class"])
         obj.visible = bool(values["visible"])
         obj.properties = dict(values["properties"])
