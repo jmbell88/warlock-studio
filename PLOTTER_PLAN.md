@@ -167,6 +167,18 @@ loads or refuses.
 
 ## Milestone 2 — Generalized document model + `.wmap` v3
 
+> **Executed 2026-08-14 (Wave 1), with two amendments discovered in flight.**
+> (1) Tiled 1.12.2 has **no `list` property type** — its set is
+> string/int/float/bool/color/file/object/class (+ project enums). `list` is
+> modelled in `props.py` and stored in `.wmap`, but **refused by name at the
+> TMX/TMJ doors both ways** (`a list-valued custom property`); the
+> "TSX_VERSION bumps on first list emission" trigger below is therefore dead —
+> the format-version bump waits for the corpus author to record what version
+> string a real Tiled 1.12.2 writes. (2) Everything M2 modelled ahead of its
+> writers is refused at the writer doors until M3 flips both doors together
+> (rotation, draworder="index", the five exotic shapes, group/image layers,
+> offsets/tint/parallax/class — see `docs/PLOTTER_COMPAT.md`).
+
 **Objective:** the engine models what Tiled models — a layer tree (tile/object/image/group)
 with per-layer class/tint/pixel-offset/parallax, objects with tagged geometry, rotation and
 persistent ids, the full recursive property descriptor — and `.wmap` v3 stores all of it
