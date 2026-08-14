@@ -154,7 +154,10 @@ def _render_sheets(sources: list[Path], report: tiercheck.Report, out: Path) -> 
             )
             try:
                 rigging.run_worker(spec, timeout=600.0)
-                sheetlib.pack(plan, frames, out / f"{label}.png")
+                # ``pack`` takes an index -> path mapping, not the directory;
+                # the worker names each frame ``{index:04d}.png``.
+                frame_map = {c.index: frames / f"{c.index:04d}.png" for c in plan.cells}
+                sheetlib.pack(plan, frame_map, out / f"{label}.png")
             except Exception as exc:  # noqa: BLE001 -- a picture is not the verdict
                 print(f"sheet for {label} failed: {exc}", file=sys.stderr)
 

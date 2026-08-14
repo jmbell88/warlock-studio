@@ -147,3 +147,17 @@ written up.
 The knight was rejected with the rest, so the rig-handedness question it was
 queued for still has no mesh; its pre-declared asymmetry above stands for
 whatever run next produces one.
+
+## Amendment 1, 2026-08-13 — the anomaly is adjudicated
+
+The diagnosis run this section demanded was taken the same evening:
+[`2026-08-13-mesh-regression-check.md`](2026-08-13-mesh-regression-check.md).
+Its finding: **no code regression** — the 2D stage replays byte-identically
+across 2026-08-09..13 at a fixed seed and every other layer is unchanged — so
+the "regression in the reconstruction path" candidate above is dead. What
+remains is subject (the rock reconstructs as a hollow foliage lattice; boxes
+were already measured failing at 0/30 on the Zelda crate) and the instrument
+(the re-baseline's 46% was binary-era accepts; the graded scale's accept bar
+sits higher). The retry this document's corpus gate demands should re-frame
+its subjects to be trellis-friendly and pre-register its bar against the
+graded scale.
