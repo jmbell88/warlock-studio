@@ -1124,6 +1124,94 @@ def test_a_lock_stops_removing_an_object_but_not_selecting_it():
     assert "locked" in ctx.toasts[-1][0]
 
 
+def _grouped(doc: Any, layer: Any, *, locked: bool = True) -> Any:
+    """``layer`` moved into a fresh group, and the *group* is what gets locked.
+
+    The v3 reader can hand this shape back from a file, so it is reachable
+    without the tree pane ever being asked to build it.
+    """
+    group = doc.add_group_layer("Locked")
+    doc.move_layer(layer.uid, 0, parent_uid=group.uid)
+    doc.set_layer_props(group.uid, locked=bool(locked))
+    doc.set_active_layer(layer.uid)
+    return group
+
+
+def _fake_imgui(monkeypatch, mouse: tuple[float, float], *, clicked: bool = True) -> None:
+    """Just enough of imgui for ``_object_input``: where the pointer is and what
+    the left button did. The canvas imports it inside the function, so the whole
+    module is swapped rather than an attribute patched."""
+    import sys
+    from types import SimpleNamespace
+
+    fake = SimpleNamespace(
+        get_mouse_pos=lambda: SimpleNamespace(x=float(mouse[0]), y=float(mouse[1])),
+        is_mouse_clicked=lambda _button: bool(clicked),
+        is_mouse_down=lambda _button: False,
+        is_mouse_released=lambda _button: False,
+        get_io=lambda: SimpleNamespace(key_ctrl=False),
+    )
+    monkeypatch.setitem(sys.modules, "imgui_bundle", SimpleNamespace(imgui=fake))
+
+
+def test_a_lock_on_a_group_stops_painting_inside_it():
+    """The lock the canvas draws is the *resolved* one -- a group's lock is
+    inherited -- so the lock the input path enforces has to be the same one, or
+    a layer whose handles are hidden goes on taking paint."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, layer = _stamping(ctx)
+    _grouped(tab.doc, layer)
+    depth = len(tab.doc.history)
+
+    plotter_canvas._apply(ctx, state, tab, (0, 0))
+
+    assert not layer.data.any(), "the lock above it refused the write"
+    assert len(tab.doc.history) == depth
+    assert ctx.toasts and "locked" in ctx.toasts[-1][0]
+
+
+def test_a_lock_on_a_group_stops_a_handle_drag_inside_it(monkeypatch):
+    """The handles are not drawn on an inherited lock; without this the hit test
+    still fires where one would sit, and the drag starts on an invisible grip."""
+    from warlock.studio import inker_state
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    obj_layer = tab.doc.add_object_layer("Things")
+    obj = MapObject(uid=new_uid(), name="zone", kind="rect", x=0, y=0, w=16, h=16)
+    tab.doc.add_object(obj_layer.uid, obj)
+    _grouped(tab.doc, obj_layer)
+    state.selected_object = obj.uid
+    origin = (0.0, 0.0)
+    _fake_imgui(monkeypatch, inker_state.to_screen(tab.view, origin, obj.x, obj.y))
+
+    plotter_canvas._object_input(ctx, state, tab, origin, True)
+
+    assert state.drag_kind == "", "no resize began on a layer under a locked group"
+
+
+def test_a_lock_on_a_group_stops_drawing_a_new_object_inside_it(monkeypatch):
+    from warlock.studio import inker_state
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    obj_layer = tab.doc.add_object_layer("Things")
+    _grouped(tab.doc, obj_layer)
+    origin = (0.0, 0.0)
+    _fake_imgui(monkeypatch, inker_state.to_screen(tab.view, origin, 40.0, 40.0))
+
+    plotter_canvas._object_input(ctx, state, tab, origin, True)
+
+    assert state.drag_kind == ""
+    assert ctx.toasts and "locked" in ctx.toasts[-1][0]
+
+
 def test_locking_leaves_the_rest_of_the_stack_alone():
     """Tiled's semantics: a lock is there to stop you painting on the wrong
     layer, not to stop you managing the stack."""

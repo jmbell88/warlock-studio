@@ -31,8 +31,11 @@ this uid a layer or an object" a question nothing has to ask.
 **``next_layer_id``/``next_object_id`` are the opposite of the uid counter in
 every way that matters, which is the point of having two.** They *are*
 document state -- Tiled's own persistent ``id``, the thing an object-typed
-property references, and :mod:`.tmx` writes and reads them (:mod:`.wmap`
-does not, yet; that is a later milestone). Monotone and never decremented on
+property references, and :mod:`.tmx` and :mod:`.wmap` alike write and read
+them: a v3 ``.wmap`` carries both counters in its manifest and every layer's
+and object's ``id`` verbatim beside them, while a v1 or v2 file, which carries
+no ids at all, has them minted on read by the same rule the export door
+applies. Monotone and never decremented on
 undo: an object property may go on naming a deleted object's id, so undoing
 the add that minted it must not let a later add reissue the same number. The
 one cost that follows is accepted rather than engineered around -- after an

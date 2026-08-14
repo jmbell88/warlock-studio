@@ -280,6 +280,29 @@ def _layer_shift(view: Any, origin, entry: Any) -> tuple[float, float]:
     )
 
 
+def _active_entry(tab: Any):
+    """The active layer's resolved state -- its ancestry folded in -- or ``None``.
+
+    Every input path that has to agree with what was drawn goes through here,
+    because what was drawn came out of the same resolver. A walk from the root
+    per event, which is what :func:`~..plotter.scene.resolved_for` is for and
+    what the draw path already pays once per layer per frame.
+    """
+    return plotter_scene.resolved_for(tab.doc, tab.doc.active_layer)
+
+
+def _active_locked(tab: Any) -> bool:
+    """Whether the active layer is locked *or sits under something that is*.
+
+    The layer's own flag is the wrong question: :mod:`~..plotter.scene` ORs the
+    lock down the tree, the canvas hides an object's handles on the resolved
+    answer, and an input path reading the leaf's flag would go on accepting
+    exactly the gestures whose controls were taken away.
+    """
+    entry = _active_entry(tab)
+    return entry is not None and entry.locked
+
+
 def _active_shift(tab: Any, origin) -> tuple[float, float]:
     """The displacement the *active* layer is drawn at, or none.
 
@@ -287,7 +310,7 @@ def _active_shift(tab: Any, origin) -> tuple[float, float]:
     the user is clicking is what they can see, and on an offset layer the cell
     under the pointer is not the cell the grid says it is.
     """
-    entry = plotter_scene.resolved_for(tab.doc, tab.doc.active_layer)
+    entry = _active_entry(tab)
     return (0.0, 0.0) if entry is None else _layer_shift(tab.view, origin, entry)
 
 
@@ -519,7 +542,8 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                     # dragged: a handle on a locked layer is a control that
                     # looks live and does nothing. ``entry.locked``, not the
                     # layer's own flag -- a lock on a group above it is just as
-                    # real a reason the drag will be refused.
+                    # real a reason the drag is refused, and ``_object_input``
+                    # refuses it off the same resolved answer.
                     for corner in _HANDLES:
                         cx, cy = _handle_corners(obj)[corner]
                         sx, sy = inker_state.to_screen(view, origin, cx + dx, cy + dy)
@@ -989,7 +1013,7 @@ def _layer_for_paint(ctx: Any, tab: Any):
     if not isinstance(layer, TileLayer):
         ctx.toast("Pick a tile layer to paint on.", "error")
         return None
-    if layer.locked:
+    if _active_locked(tab):
         # Enforced here rather than in the engine, deliberately: ``write_region``
         # must go on working on a locked layer or an undo could not put back
         # what was there before the lock. The lock stops *the user* painting,
@@ -1130,7 +1154,11 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
     # against object coordinates, and an object on an offset layer is drawn
     # somewhere its own ``x``/``y`` does not say. One subtraction here rather
     # than an addition at every comparison.
-    dx, dy = _active_shift(tab, origin)
+    # One resolver walk for both answers the gesture needs -- where the layer's
+    # content sits, and whether anything above it is locked -- rather than two.
+    entry = _active_entry(tab)
+    locked = entry is not None and entry.locked
+    dx, dy = (0.0, 0.0) if entry is None else _layer_shift(tab.view, origin, entry)
     raw = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
     point = (raw[0] - dx, raw[1] - dy)
 
@@ -1141,7 +1169,7 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         selected = next((o for o in layer.objects if o.uid == state.selected_object), None)
         handle = (
             _handle_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
-            if selected is not None and not layer.locked
+            if selected is not None and not locked
             else None
         )
         if handle is not None:
@@ -1155,14 +1183,14 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
             # object's properties, and it changes nothing.
             state.selected_object = hit.uid
             state.drag_kind = ""
-            if not layer.locked:
+            if not locked:
                 doc.begin_object_edit(layer.uid, hit.uid)
                 state.drag_kind = "object-move"
                 # The grab offset, so the object does not jump its own top-left
                 # corner to the pointer on the first frame of the drag.
                 state.drag_object = (point[0] - hit.x, point[1] - hit.y)
             return
-        if layer.locked:
+        if locked:
             ctx.toast(f"{layer.name} is locked.", "error")
             return
         state.drag_kind = "object"

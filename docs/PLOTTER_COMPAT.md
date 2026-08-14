@@ -130,7 +130,7 @@ by `tests/plotter/test_props.py`
 |---|---|---|
 | `renderorder` | preserved-verbatim | Written back as it arrived; the renderer draws right-down. M5 honours it. |
 | `backgroundcolor` | preserved-verbatim | Round-tripped; not painted. |
-| `layer id` | preserved-verbatim | Tiled's own persistent layer id. Adopted on read, kept in `TileLayer.id`/`ObjectLayer.id`, and written back unchanged; `MapDoc.next_layer_id` mints past whatever the file declared. Nothing in the editor yet acts on it -- it exists to be an object-typed property's anchor, which is later M2 work. |
+| `layer id` | preserved-verbatim | Tiled's own persistent layer id. Adopted on read, kept in `TileLayer.id`/`ObjectLayer.id`, and written back unchanged; `MapDoc.next_layer_id` mints past whatever the file declared. Nothing in the editor yet acts on it -- it exists to be an object-typed property's anchor. M2 executed that half (`.wmap` v3 stores the ids verbatim, so an anchor survives a save); the in-editor picker that would let you *choose* the layer an object-typed property names is M3. |
 | `object id` | preserved-verbatim | Tiled's own persistent object id, `MapObject.id`. Same story as `layer id`: adopted, kept, written back unchanged, minted past by `MapDoc.next_object_id`; not yet referenced by anything in the editor. |
 
 ## Read but not modelled
@@ -154,7 +154,7 @@ in this section, is the read side: a `.tmx` that arrives carrying `tintcolor`
 still loses it at the door, so the field is modelled but not adopted. Both
 halves close in M3, when the readers learn the attributes in the same commit
 the writers do. `id` already moved out of this section -- see "Preserved but
-not honoured" below, and `layer pixel offsets` was always a refusal rather than
+not honoured" above, and `layer pixel offsets` was always a refusal rather than
 a drop.
 
 `draworder` is the one entry here that is not merely lost but actively wrong
