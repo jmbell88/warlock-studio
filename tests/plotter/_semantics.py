@@ -120,6 +120,14 @@ def _geometry_facts(shape: Any) -> dict[str, Any]:
 
 def _object_facts(obj: Any) -> dict[str, Any]:
     return {
+        # Tiled's persistent id, and *not* the ``uid`` beside it: a uid is
+        # minted per process and is one of the three things this module
+        # promises to be blind to, while an id is an ordinary document field
+        # that survives every save and is what an ``object``-typed custom
+        # property references. Two maps whose objects wear different ids are
+        # not the same map, because a property pointing at ``7`` finds a
+        # different thing in each.
+        "id": int(obj.id),
         "name": obj.name,
         "kind": obj.kind,
         "x": _num(obj.x),
@@ -138,6 +146,8 @@ def _object_facts(obj: Any) -> dict[str, Any]:
 
 def _layer_facts(layer: Any) -> dict[str, Any]:
     facts: dict[str, Any] = {
+        # See ``_object_facts`` -- the same field, the same argument.
+        "id": int(layer.id),
         "name": layer.name,
         "class_name": str(layer.class_name),
         "visible": bool(layer.visible),
@@ -182,6 +192,16 @@ def doc_facts(doc: Any) -> dict[str, Any]:
     tileset *order* is significant and preserved -- paint order and firstgid
     allocation are both facts about the document -- while property order is
     not, and is sorted away.
+
+    ``next_layer_id``/``next_object_id`` are a fourth deliberate absence,
+    alongside the three in the module docstring, and the reason is the one
+    ``tilemap.py`` states for the counters themselves: they are monotone and
+    never decremented, so a map that had a layer added and undone carries a
+    higher counter than the identical map that never did. That is a fact about
+    the *editing session*, not about the map -- the ids in use are the same
+    either way -- and a comparator sensitive to it would call a document
+    different from itself after a Ctrl+Z. The ids the counters issued are in,
+    per layer and per object; the counters are not.
     """
     return {
         "projection": doc.projection,

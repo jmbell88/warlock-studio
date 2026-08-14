@@ -443,41 +443,70 @@ def test_a_layer_tint_multiplies_the_flat_render():
 # --- the writer doors ---------------------------------------------------------
 
 
-def test_a_wmap_of_a_document_holding_a_group_is_refused_by_name():
+def test_a_wmap_of_a_document_holding_a_group_stores_the_tree():
+    """Flipped. This was a ``WmapUnstorable`` while the manifest's ``layers``
+    was a flat list; version 3's entries are recursive, so the refusal moved
+    for the only reason a refusal here is ever allowed to move -- the format
+    learned to hold the thing."""
     from warlock.studio.plotter import wmap
 
     doc = _doc()
-    doc.add_tile_layer("t")
-    doc.add_group_layer("G")
-    with pytest.raises(wmap.WmapUnstorable, match="group"):
-        wmap.wmap_bytes(doc)
+    group = doc.add_group_layer("G")
+    doc.add_tile_layer("t", parent_uid=group.uid)
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    outer = back.layers[-1]
+    assert outer.name == "G"
+    assert [child.name for child in outer.children] == ["t"]
 
 
-def test_a_wmap_of_a_document_holding_an_image_layer_is_refused_by_name():
+def test_a_wmap_of_a_document_holding_an_image_layer_stores_the_picture():
+    """Flipped, with the group case above: the pixels are an ``images/N.png``
+    member now, embedded the way a tileset's atlas already was."""
+    import numpy as np
+
     from warlock.studio.plotter import wmap
 
     doc = _doc()
-    doc.add_image_layer("sky", pixels=_picture())
-    with pytest.raises(wmap.WmapUnstorable, match="image"):
-        wmap.wmap_bytes(doc)
+    doc.add_image_layer("sky", pixels=_picture(), source="art/sky.png", repeat_x=True)
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    sky = back.layers[-1]
+    assert (sky.name, sky.source, sky.repeat_x, sky.repeat_y) == (
+        "sky", "art/sky.png", True, False
+    )
+    assert np.array_equal(sky.pixels, _picture())
 
 
 def test_the_wmap_writer_door_has_a_name_of_its_own():
-    """A refusal the save path can catch *by type*. A handler on bare
-    ``ValueError`` would dress every genuine encoder defect up as a polite
-    refusal the user is meant to act on."""
+    """The door outlives the four refusals it was built for. Version 3 stores
+    the tree, the pictures and the decorations, so nothing in an ordinary
+    document reaches this any more -- but a refusal the save path can catch *by
+    type* is what stops a handler on bare ``ValueError`` dressing every genuine
+    encoder defect up as a polite refusal the user is meant to act on, and the
+    milestones ahead (chunked storage, a fifth layer kind) put more behind it.
+    The remaining raise is the unknown-kind fallthrough, which nothing but a
+    future layer type can reach -- so it is provoked with one, and a bare
+    object is enough precisely because the writer decides the kind *before* it
+    asks a layer for anything."""
     from warlock.studio.plotter import wmap
 
     assert issubclass(wmap.WmapUnstorable, ValueError)
+
+    class FutureLayer:
+        """A fifth layer kind, arriving before the container can hold it."""
+
     doc = _doc()
-    doc.add_group_layer("G")
-    with pytest.raises(wmap.WmapUnstorable):
+    doc.layers.append(FutureLayer())
+    with pytest.raises(wmap.WmapUnstorable, match="no entry for"):
         wmap.wmap_bytes(doc)
 
 
 def test_the_wmap_door_is_the_encoder_rather_than_the_json_formatter():
-    """``wmap_bytes`` refuses before it formats anything, so no caller of the
-    encoder is trusting the *formatter* to have held the line."""
+    """Flipped from "the refusal came before the manifest was built" to its
+    other half: with nothing left to refuse for a document like this, the
+    encoder now reaches the formatter -- and the formatter is where the one
+    remaining refusal lives, which is why ``wmap_bytes`` still builds the whole
+    manifest *before* it opens the archive. A refusal raised inside the ``with``
+    would leave a half-written zip behind it."""
     import warlock.studio.plotter.wmap as wmap
 
     doc = _doc()
@@ -486,11 +515,10 @@ def test_the_wmap_door_is_the_encoder_rather_than_the_json_formatter():
     original = wmap.manifest_json
     try:
         wmap.manifest_json = lambda d: called.append(1) or original(d)  # type: ignore[assignment]
-        with pytest.raises(wmap.WmapUnstorable):
-            wmap.wmap_bytes(doc)
+        assert wmap.wmap_bytes(doc)
     finally:
         wmap.manifest_json = original
-    assert called == [], "the refusal came before the manifest was built"
+    assert called == [1], "the encoder formats through the one manifest writer"
 
 
 def test_a_flat_document_still_writes_a_wmap():
@@ -564,14 +592,20 @@ def test_exporting_a_decorated_layer_is_refused_by_name(export, values, feature)
         {"class_name": "Ground"},
     ],
 )
-def test_a_wmap_of_a_decorated_layer_is_refused_until_v3(values):
+def test_a_wmap_of_a_decorated_layer_round_trips_since_v3(values):
+    """Flipped from ``..._is_refused_until_v3``. Version 3 is the "until", and
+    the four decorations the ``.tmx`` door still refuses by name are stored
+    here field for field -- which is what makes the *other* door's message
+    honest, since ".wmap holds it, Tiled cannot" is now a true sentence."""
     from warlock.studio.plotter import wmap
 
     doc = _doc()
     layer = doc.add_tile_layer("t")
     doc.set_layer_props(layer.uid, **values)
-    with pytest.raises(ValueError, match="cannot store yet"):
-        wmap.wmap_bytes(doc)
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    stored = back.layers[-1]
+    for name, value in values.items():
+        assert getattr(stored, name) == value
 
 
 def test_an_undecorated_document_is_not_caught_by_either_door():

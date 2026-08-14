@@ -146,6 +146,14 @@ def test_a_float_written_two_ways_compares_equal():
             id="layer-nesting",
         ),
         pytest.param(lambda d: d.add_image_layer("sky"), id="image-layer"),
+        # The persistent ids. Set by hand rather than through a mutator,
+        # because ``_mint_layer_id`` is the only thing that assigns one and it
+        # never reassigns: an id is the layer's identity, not a property an
+        # edit may rewrite.
+        pytest.param(lambda d: setattr(d.layers[0], "id", 41), id="layer-id"),
+        pytest.param(
+            lambda d: setattr(d.layers[1].objects[0], "id", 41), id="object-id"
+        ),
     ],
 )
 def test_every_field_the_comparator_claims_to_cover_actually_moves_it(mutate):
@@ -156,6 +164,19 @@ def test_every_field_the_comparator_claims_to_cover_actually_moves_it(mutate):
     doc = _doc()
     mutate(doc)
     assert doc_facts(doc) != before
+
+
+def test_the_facts_are_blind_to_the_id_counters():
+    """The fourth deliberate absence. The counters are monotone and never
+    decremented, so an add-then-undo leaves a document whose layers are exactly
+    what they were and whose ``next_layer_id`` is one higher -- and that is a
+    fact about the session, not about the map."""
+    doc = _doc()
+    before = doc_facts(doc)
+    doc.add_tile_layer("scratch")
+    doc.undo()
+    assert doc.next_layer_id > 3, "the counter really did move"
+    assert doc_facts(doc) == before
 
 
 def test_a_polygons_vertices_move_the_facts():

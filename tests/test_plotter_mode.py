@@ -283,18 +283,30 @@ def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(tmp
     assert not [t for t in ctx.toasts if t[1] == "error"]
 
 
+class _FutureLayer:
+    """A fifth layer kind, arriving before ``.wmap`` can hold it.
+
+    The two tests below used to reach the ``.wmap`` writer door with a *group*,
+    which version 3 stores. The door is still there and still has to be caught
+    by name on the frame thread -- chunked storage and the next layer kind both
+    arrive behind it -- so the refusal is provoked with the one thing that
+    still reaches it rather than the tests being deleted along with the
+    refusals they were written for.
+    """
+
+
 def test_a_wmap_writer_door_refusal_is_toasted_too_rather_than_raised(tmp_path):
-    """The ``.wmap`` door raises a plain ``ValueError`` -- our own format's
-    limit is not a Tiled feature -- so a guard that only caught
-    ``TiledUnsupported`` would let a ``.wmap`` save crash the window while a
-    ``.tmx`` save of the same document toasted politely."""
+    """The ``.wmap`` door raises a ``WmapUnstorable`` -- our own format's limit
+    is not a Tiled feature -- so a guard that only caught ``TiledUnsupported``
+    would let a ``.wmap`` save crash the window while a ``.tmx`` save of the
+    same document toasted politely."""
     ctx = FakeCtx()
     tab = _tab(ctx)
-    tab.doc.add_group_layer("G")
+    tab.doc.layers.append(_FutureLayer())
 
     plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
     assert ctx.toasts and ctx.toasts[-1][1] == "error"
-    assert "group layer" in ctx.toasts[-1][0]
+    assert "no entry for" in ctx.toasts[-1][0]
     assert not tab.saving
 
 
@@ -304,12 +316,24 @@ def test_exporting_a_map_the_wmap_writer_refuses_toasts_rather_than_raising():
     document, and it does so before the task starts."""
     ctx = FakeCtx()
     tab = _tab(ctx)
-    tab.doc.add_group_layer("G")
+    tab.doc.layers.append(_FutureLayer())
 
     plotter_mode.export_library(ctx, tab)
     assert ctx.toasts and ctx.toasts[-1][1] == "error"
-    assert "group layer" in ctx.toasts[-1][0]
+    assert "no entry for" in ctx.toasts[-1][0]
     assert not tab.saving
+
+
+def test_a_map_with_a_group_now_saves_rather_than_toasting(tmp_path):
+    """Flipped. The two refusals above were written when the ``.wmap``
+    manifest was a flat list; version 3's entries are recursive, so the save
+    path that used to toast a tree now writes one."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.doc.add_group_layer("G")
+
+    plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
+    assert not [t for t in ctx.toasts if t[1] == "error"]
 
 
 def test_a_cancelled_dialog_leaves_the_document_alone():
