@@ -6,6 +6,29 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.22 — 2026-08-14
+
+- **Plotter models most of what Tiled models.** Maps carry Tiled's richer
+  property vocabulary — file paths, object references and nested classes
+  round-trip through `.tmx`, `.tmj` and `.wmap` alike — and every layer and
+  object keeps its persistent Tiled id across a round trip, so nothing gets
+  renumbered behind an engine's back.
+- **Layers form a real tree.** Groups nest, image layers carry a picture, and
+  visibility, opacity, tint, pixel offsets and locks resolve through ancestors
+  the same way in the editor and in an export. A lock on a group is a lock on
+  everything inside it, including the tools.
+- **Objects have real geometry.** Ellipse, polygon, polyline, text and tile
+  shapes plus rotation and draw order are modelled; drawing them and Tiled
+  interop for them arrive next. Rectangles and points behave exactly as
+  before.
+- **`.wmap` version 3.** The map file stores all of the above; version 1 and 2
+  maps open unchanged. Anything a Tiled export cannot yet spell is refused by
+  name rather than dropped in silence — the compatibility table in
+  `docs/PLOTTER_COMPAT.md` says which door refuses what and why.
+- **Two importer gaps closed.** A `.tsx`-less `.tsj` tileset named from a
+  `.tmx` is refused with the right sentence, and per-tile features hidden in
+  an embedded `.tmj` tileset no longer slip past the named refusals.
+
 ## 0.0.21 — 2026-08-11
 
 - **The app can be driven from the keyboard.** Tab and Shift+Tab move between
