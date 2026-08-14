@@ -46,20 +46,43 @@ PROPERTY_TYPES = ("string", "int", "float", "bool", "color")
 
 
 class TiledUnsupported(ValueError):
-    """A Tiled file using a feature this editor does not model.
+    """A Tiled feature this editor does not model, at whichever door it arrived.
 
     ``feature`` is the name to put in front of the user; the message already
-    contains it, and the attribute exists so a test can assert on the feature
-    rather than on the sentence around it.
+    contains it, and the attribute exists so a test -- and
+    ``tests/plotter/test_compat_matrix.py``'s ledger -- can assert on the
+    feature rather than on the sentence around it.
+
+    **``exporting`` swaps the sentence, never the feature.** A refusal used to
+    only ever be a reader's, so the frame could say "this file uses ... open it
+    in Tiled and remove that feature first". The writers refuse too now (the
+    document models rotation, a draw order and five shapes that neither
+    exporter can yet spell), and that sentence is actively wrong at that door:
+    the map is the user's own unsaved work, there is no file to open, and there
+    is nothing for them to remove in Tiled. One flag rather than a second
+    exception type, because the *feature* is one feature and the ledger is
+    keyed on it.
     """
 
-    def __init__(self, feature: str, detail: str = "") -> None:
+    def __init__(self, feature: str, detail: str = "", *, exporting: bool = False) -> None:
         self.feature = feature
+        self.exporting = bool(exporting)
         tail = f" ({detail})" if detail else ""
-        super().__init__(
-            f"this file uses {feature}, which Plotter does not support{tail}. "
-            "Open it in Tiled and remove or flatten that feature first."
-        )
+        if exporting:
+            # No remedy sentence, deliberately. The reader's names one, and
+            # every remedy available here would be a lie today: ``.wmap`` does
+            # not persist these fields either until its v3, so "save it as
+            # .wmap instead" would send the user to a second silent drop.
+            message = (
+                f"this map uses {feature}, which Plotter cannot write to a "
+                f"Tiled file yet{tail}."
+            )
+        else:
+            message = (
+                f"this file uses {feature}, which Plotter does not support{tail}. "
+                "Open it in Tiled and remove or flatten that feature first."
+            )
+        super().__init__(message)
 
 
 @dataclass(frozen=True)

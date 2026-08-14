@@ -18,7 +18,7 @@ import pytest
 
 from warlock.studio import plotter_io, plotter_mode
 from warlock.studio.plotter import gid, tmx, wmap
-from warlock.studio.plotter.tilemap import MapObject, new_uid
+from warlock.studio.plotter.tilemap import Ellipse, MapObject, new_uid
 from warlock.studio.plotter.tileset import Tileset
 
 
@@ -258,6 +258,28 @@ def test_a_refused_submit_clears_the_lock_too(tmp_path):
     tab = _tab(ctx)
     plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
     assert not tab.saving
+
+
+def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(tmp_path):
+    """Encoding used to be the one step of a save that could not fail, so every
+    caller ran it bare on the frame thread. The Tiled writers refuse by name
+    now -- the document models a rotation, a draw order and five shapes they
+    cannot spell -- and an exception raised here takes the window with it. The
+    ``.wmap`` path is deliberately unaffected: it refuses nothing.
+    """
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    layer = tab.doc.add_object_layer()
+    tab.doc.add_object(layer.uid, MapObject(uid=new_uid(), shape=Ellipse(4, 4)))
+
+    plotter_mode.save_to(ctx, tab, tmp_path / "a.tmx", "tmx")
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert "ellipse objects" in ctx.toasts[-1][0]
+    assert not tab.saving, "a refused encode must not leave the tab locked"
+
+    ctx.toasts.clear()
+    plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
+    assert not [t for t in ctx.toasts if t[1] == "error"]
 
 
 def test_a_cancelled_dialog_leaves_the_document_alone():

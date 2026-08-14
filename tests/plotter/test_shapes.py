@@ -17,6 +17,7 @@ answer comes from.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 
 import numpy as np
 import pytest
@@ -176,6 +177,39 @@ def test_a_shape_and_a_size_cannot_both_be_given():
 def test_something_that_is_not_a_shape_is_refused():
     with pytest.raises(ValueError):
         MapObject(uid=new_uid(), shape="rect")  # type: ignore[arg-type]
+
+
+def test_every_field_is_a_parameter_of_the_hand_written_constructor():
+    """``MapObject.__init__`` is written by hand -- ``kind``/``w``/``h`` go in
+    and are never stored, which ``dataclass`` has no way to express -- so
+    nothing generated keeps the two lists in agreement. A field added to the
+    class and forgotten in the signature breaks ``dataclasses.replace`` and
+    nothing else, which is a failure that surfaces a long way from its cause.
+    """
+    fields = {f.name for f in dataclasses.fields(MapObject)}
+    parameters = set(inspect.signature(MapObject.__init__).parameters)
+    assert fields <= parameters, f"not constructible: {sorted(fields - parameters)}"
+
+
+def test_replace_rebuilds_an_object_around_one_changed_field():
+    """What the agreement above buys. ``replace`` passes every field by name,
+    so it is what actually exercises the whole signature -- and it re-runs
+    ``__post_init__``, so the copy is validated rather than assembled."""
+    obj = MapObject(
+        uid=new_uid(),
+        name="zone",
+        shape=Ellipse(4, 6),
+        rotation=15.0,
+        properties={"hp": 1},
+    )
+    moved = dataclasses.replace(obj, x=5.0)
+    assert (moved.x, moved.y) == (5.0, 0.0)
+    assert (moved.name, moved.rotation, moved.shape) == ("zone", 15.0, Ellipse(4.0, 6.0))
+    assert (moved.kind, moved.w, moved.h) == ("ellipse", 4.0, 6.0)
+    assert moved.properties == {"hp": 1}
+    assert obj.x == 0.0, "the original is untouched"
+    with pytest.raises(ValueError):
+        dataclasses.replace(obj, shape="rect")  # type: ignore[arg-type]
 
 
 # --- rotation -----------------------------------------------------------------

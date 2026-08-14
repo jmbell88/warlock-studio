@@ -297,23 +297,31 @@ class MapObject:
     saying the geometry twice in one call is two chances to disagree.
     """
 
+    # These annotations are the *field list* -- what ``fields()``, ``repr``,
+    # ``__eq__`` and ``dataclasses.replace`` work from. They carry no defaults,
+    # because under ``init=False`` no generated constructor could ever consult
+    # one: the defaults callers actually get are in ``__init__``'s signature
+    # below, and a second set here would be code that cannot run sitting where
+    # a reader looks for the answer.
+    # ``test_shapes.py`` pins the two lists against each other, since nothing
+    # else would notice a field added here and not there.
     uid: int
-    name: str = ""
-    x: float = 0.0
-    y: float = 0.0
-    obj_class: str = ""
+    name: str
+    x: float
+    y: float
+    obj_class: str
     # Tiled lets an individual object be hidden. Modelled rather than refused,
     # because a hidden object is still exactly where it is -- the picture stays
     # right, and drawing it faintly is one branch in the canvas.
-    visible: bool = True
-    properties: dict[str, Any] = field(default_factory=dict)
+    visible: bool
+    properties: dict[str, Any]
     # Degrees clockwise about the object's origin, Tiled's own sense. The
-    # document models it; :mod:`.tmx` still refuses a rotated object at the
-    # door, because an unrotated outline drawn for a rotated object is a
-    # *wrong* picture and a wrong picture is worse than a refusal. This is the
-    # field that refusal will be flipped onto.
-    rotation: float = 0.0
-    shape: Shape = field(default_factory=Rect)
+    # document models it; :mod:`.tmx` refuses a rotated object at *both* doors
+    # -- an unrotated outline drawn for a rotated object is a wrong picture,
+    # and an export that dropped the angle would be a wrong file. This is the
+    # field those refusals will be flipped onto.
+    rotation: float
+    shape: Shape
 
     def __init__(
         self,
