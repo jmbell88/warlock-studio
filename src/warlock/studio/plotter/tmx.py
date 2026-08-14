@@ -368,6 +368,7 @@ def _read_tmx_object(node: ET.Element) -> MapObject:
     kind = "point" if node.find("point") is not None else "rect"
     return MapObject(
         uid=new_uid(),
+        id=int(node.get("id", 0) or 0),
         name=name,
         kind=kind,
         x=float(node.get("x", 0) or 0),
@@ -452,6 +453,7 @@ def read_tmx(
             doc.layers.append(
                 TileLayer(
                     uid=new_uid(),
+                    id=int(node.get("id", 0) or 0),
                     name=name,
                     data=cells,
                     visible=node.get("visible", "1") not in ("0", "false"),
@@ -468,6 +470,7 @@ def read_tmx(
             doc.layers.append(
                 ObjectLayer(
                     uid=new_uid(),
+                    id=int(node.get("id", 0) or 0),
                     name=name,
                     objects=[_read_tmx_object(o) for o in node.findall("object")],
                     visible=node.get("visible", "1") not in ("0", "false"),
@@ -479,7 +482,11 @@ def read_tmx(
                 )
             )
 
-    _finish(doc)
+    _finish(
+        doc,
+        next_layer_id=_optional_int(root.get("nextlayerid")),
+        next_object_id=_optional_int(root.get("nextobjectid")),
+    )
     _adopt_object_space(doc)
     return doc
 
@@ -498,6 +505,7 @@ def _json_object(entry: dict[str, Any]) -> MapObject:
     _refuse_object_shape(lambda tag: bool(entry.get(tag)), where)
     return MapObject(
         uid=new_uid(),
+        id=int(entry.get("id", 0) or 0),
         name=str(entry.get("name", "")),
         kind="point" if entry.get("point") else "rect",
         x=float(entry.get("x", 0) or 0),
@@ -587,6 +595,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
             doc.layers.append(
                 TileLayer(
                     uid=new_uid(),
+                    id=int(entry.get("id", 0) or 0),
                     name=name,
                     data=cells,
                     visible=bool(entry.get("visible", True)),
@@ -599,6 +608,7 @@ def _read_tmj_layers(payload: dict[str, Any], doc: MapDoc) -> None:
             doc.layers.append(
                 ObjectLayer(
                     uid=new_uid(),
+                    id=int(entry.get("id", 0) or 0),
                     name=name,
                     objects=[_json_object(o) for o in entry.get("objects", [])],
                     visible=bool(entry.get("visible", True)),
@@ -645,13 +655,41 @@ def read_tmj(
     )
     _read_tmj_layers(payload, doc)
 
-    _finish(doc)
+    _finish(
+        doc,
+        next_layer_id=_optional_int(payload.get("nextlayerid")),
+        next_object_id=_optional_int(payload.get("nextobjectid")),
+    )
     _adopt_object_space(doc)
     return doc
 
 
-def _finish(doc: MapDoc) -> None:
-    """Validate every gid, then hand back a document that reads clean."""
+def _optional_int(value: Any) -> int | None:
+    """A map-level ``nextlayerid``/``nextobjectid``, or ``None`` if absent.
+
+    Distinct from the ``int(x.get(k, 0) or 0)`` idiom used for a layer or
+    object's own ``id`` throughout this module: there, ``0`` and "absent" are
+    the same fact (unassigned). Here they are not -- a file that omits the
+    attribute needs the *computed* minimum, not zero, so ``_finish`` has to be
+    able to tell "wrote nothing" apart from "wrote 0".
+    """
+    return None if value is None else int(value)
+
+
+def _finish(
+    doc: MapDoc, *, next_layer_id: int | None = None, next_object_id: int | None = None
+) -> None:
+    """Validate every gid, adopt the persistent-id counters, then hand back a
+    document that reads clean.
+
+    ``next_layer_id``/``next_object_id`` are the map's declared
+    ``nextlayerid``/``nextobjectid`` when the file wrote them, else ``None``.
+    Either way the counters are never set *below* one past the highest id
+    actually seen -- a declared value that undershoots the ids present (a
+    hand-edited or otherwise corrupt file) would let the very next allocation
+    collide with an id already in the document, which is the one thing this
+    counter exists to make impossible.
+    """
     for layer in doc.tile_layers():
         if layer.data.shape != (doc.height, doc.width):
             raise ValueError(
@@ -672,6 +710,25 @@ def _finish(doc: MapDoc) -> None:
                     f"layer {layer.name!r} uses tile {tile_id}, which none of this "
                     "map's tilesets accounts for"
                 )
+
+    seen_layer_ids = [layer.id for layer in doc.layers if layer.id]
+    seen_object_ids = [
+        obj.id
+        for layer in doc.layers
+        if isinstance(layer, ObjectLayer)
+        for obj in layer.objects
+        if obj.id
+    ]
+    computed_layer_id = max(seen_layer_ids, default=0) + 1
+    computed_object_id = max(seen_object_ids, default=0) + 1
+    # Deliberately not "adopt the declared value outright" -- real Tiled
+    # trusts its own nextlayerid/nextobjectid unconditionally, but this
+    # reader does not, for the reason in this function's docstring. A
+    # well-formed file (declared and computed agreeing) behaves identically
+    # either way; only a corrupt one sees the difference.
+    doc.next_layer_id = max(next_layer_id or 0, computed_layer_id)
+    doc.next_object_id = max(next_object_id or 0, computed_object_id)
+
     doc.active_layer = doc.layers[0].uid if doc.layers else None
     doc.history.clear()
     doc.saved_head = doc.history.head
@@ -713,6 +770,40 @@ def _tileset_files(doc: MapDoc) -> tuple[dict[str, bytes], list[str]]:
     return files, paths
 
 
+def _export_ids(
+    doc: MapDoc,
+) -> tuple[dict[int, int], dict[int, int], int, int]:
+    """The id every layer and object writes, plus the map-level ``next*``.
+
+    A stored id (nonzero) is used as-is -- it is what an object-typed
+    property references, and this is the only place all of them are visible
+    at once. A layer or object still carrying ``id == 0`` -- a hand-built
+    document, or one read from a ``.wmap``, whose ids are out of scope this
+    milestone -- gets one assigned *here*, sequentially from the same
+    counters a fresh document starts at. That assignment is never written
+    back onto the object: two exports of the same untouched document still
+    agree, because nothing about writing a file is allowed to change the
+    document that asked for it.
+
+    Keyed by ``uid`` -- the process-local address every other lookup in this
+    package already uses -- rather than the persistent ``id`` field this
+    function is computing, which is exactly the value not yet settled for a
+    zero-id entry while this runs.
+    """
+    layer_ids: dict[int, int] = {}
+    object_ids: dict[int, int] = {}
+    fallback_layer_id = itertools.count(doc.next_layer_id)
+    fallback_object_id = itertools.count(doc.next_object_id)
+    for layer in doc.layers:
+        layer_ids[layer.uid] = layer.id or next(fallback_layer_id)
+        if isinstance(layer, ObjectLayer):
+            for obj in layer.objects:
+                object_ids[obj.uid] = obj.id or next(fallback_object_id)
+    next_layer_id = max([doc.next_layer_id, *(v + 1 for v in layer_ids.values())])
+    next_object_id = max([doc.next_object_id, *(v + 1 for v in object_ids.values())])
+    return layer_ids, object_ids, next_layer_id, next_object_id
+
+
 def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     """The whole map as a mapping of relative path to bytes.
 
@@ -737,23 +828,16 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     )
     if doc.backgroundcolor:
         root.set("backgroundcolor", str(doc.backgroundcolor))
-    object_count = sum(
-        len(layer.objects) for layer in doc.layers if isinstance(layer, ObjectLayer)
-    )
-    root.set("nextlayerid", str(len(doc.layers) + 1))
-    root.set("nextobjectid", str(object_count + 1))
+    layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)
+    root.set("nextlayerid", str(next_layer_id))
+    root.set("nextobjectid", str(next_object_id))
     write_properties(root, doc.properties)
 
     for ref, path in zip(doc.tilesets, tsx_paths, strict=True):
         ET.SubElement(root, "tileset", {"firstgid": str(ref.firstgid), "source": path})
 
-    # Ids are minted here rather than carried on the document: they are a
-    # property of the *file*, and a uid minted per process would leak this
-    # session's history into every exported map.
-    layer_ids = itertools.count(1)
-    object_ids = itertools.count(1)
     for layer in doc.layers:
-        common = {"id": str(next(layer_ids)), "name": layer.name}
+        common = {"id": str(layer_ids[layer.uid]), "name": layer.name}
         if isinstance(layer, TileLayer):
             node = ET.SubElement(
                 root, "layer", {**common, "width": str(doc.width), "height": str(doc.height)}
@@ -776,7 +860,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
             data.text = _csv(layer.data)
         else:
             for obj in layer.objects:
-                attrs = {"id": str(next(object_ids))}
+                attrs = {"id": str(object_ids[obj.uid])}
                 if obj.name:
                     attrs["name"] = obj.name
                 if obj.obj_class:
@@ -801,13 +885,12 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
 def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     """The JSON spelling. Same external tilesets, same names, same bytes."""
     files, tsx_paths = _tileset_files(doc)
-    layer_ids = itertools.count(1)
-    object_ids = itertools.count(1)
+    layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)
 
     layers: list[dict[str, Any]] = []
     for layer in doc.layers:
         entry: dict[str, Any] = {
-            "id": next(layer_ids),
+            "id": layer_ids[layer.uid],
             "name": layer.name,
             "opacity": float(layer.opacity),
             "visible": bool(layer.visible),
@@ -833,7 +916,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
             objects = []
             for obj in layer.objects:
                 record: dict[str, Any] = {
-                    "id": next(object_ids),
+                    "id": object_ids[obj.uid],
                     "name": obj.name,
                     "type": obj.obj_class,
                     "x": _object_xy(doc, obj)[0],
@@ -865,11 +948,8 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
         "height": doc.height,
         "tilewidth": doc.tile_w,
         "tileheight": doc.tile_h,
-        "nextlayerid": len(doc.layers) + 1,
-        "nextobjectid": sum(
-            len(layer.objects) for layer in doc.layers if isinstance(layer, ObjectLayer)
-        )
-        + 1,
+        "nextlayerid": next_layer_id,
+        "nextobjectid": next_object_id,
         "tilesets": [
             {"firstgid": ref.firstgid, "source": path}
             for ref, path in zip(doc.tilesets, tsx_paths, strict=True)

@@ -22,7 +22,7 @@ import pytest
 from PIL import Image
 
 from warlock.studio.plotter import gid, tmx, tsx
-from warlock.studio.plotter.tilemap import MapDoc, MapObject, new_uid
+from warlock.studio.plotter.tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
 from warlock.studio.plotter.tileset import Tileset
 
 
@@ -220,6 +220,155 @@ def test_class_members_are_written_in_sorted_order_in_both_spellings():
     # And the properties themselves are sorted, which is what puts the class
     # ahead of the file property rather than leaving them as they were set.
     assert [entry["name"] for entry in payload["properties"]] == ["art", "boss"]
+
+
+# --- persistent ids -------------------------------------------------------
+#
+# Tiled gives every layer and object a persistent ``id`` that survives in the
+# file, distinct from the process-only ``uid`` an undo step is addressed by.
+# Plotter used to mint a throwaway one at every export (``itertools.count``);
+# now the document carries its own, monotone and never reused.
+
+
+def _tmx_with_ids(*, layer_id: int, object_id: int, next_ids: bool = False) -> bytes:
+    next_attrs = ' nextlayerid="42" nextobjectid="55"' if next_ids else ""
+    return (
+        '<map version="1.10" orientation="orthogonal" width="1" height="1" '
+        f'tilewidth="16" tileheight="16"{next_attrs}>'
+        f'<objectgroup id="{layer_id}" name="Things">'
+        f'<object id="{object_id}" name="spawn" x="0" y="0"><point/></object>'
+        "</objectgroup>"
+        "</map>"
+    ).encode()
+
+
+def _bare_loaders():
+    return {"image_loader": lambda s: None, "tsx_loader": lambda s: None}
+
+
+def test_imported_object_ids_survive_a_tmx_round_trip():
+    doc = tmx.read_tmx(_tmx_with_ids(layer_id=9, object_id=7), **_bare_loaders())
+    obj = doc.layers[0].objects[0]
+    assert (doc.layers[0].id, obj.id) == (9, 7)
+
+    files = tmx.tmx_export(doc)
+    back = tmx.read_tmx(files["map.tmx"], **_bare_loaders())
+    assert (back.layers[0].id, back.layers[0].objects[0].id) == (9, 7)
+
+
+def test_new_objects_allocate_past_the_imported_ids():
+    """No declared ``nextlayerid``/``nextobjectid`` in the source file, so the
+    counters fall back to one past the highest id actually seen."""
+    doc = tmx.read_tmx(_tmx_with_ids(layer_id=9, object_id=7), **_bare_loaders())
+    assert (doc.next_layer_id, doc.next_object_id) == (10, 8)
+
+    new_obj = doc.add_object(doc.layers[0].uid, MapObject(uid=new_uid(), name="new", kind="point"))
+    assert new_obj.id == 8
+    new_layer = doc.add_tile_layer()
+    assert new_layer.id == 10
+
+
+def test_declared_next_ids_are_adopted_over_the_computed_minimum():
+    doc = tmx.read_tmx(
+        _tmx_with_ids(layer_id=1, object_id=2, next_ids=True), **_bare_loaders()
+    )
+    assert (doc.next_layer_id, doc.next_object_id) == (42, 55)
+
+
+def test_a_declared_next_id_below_the_actual_max_id_is_not_trusted():
+    """A hand-edited or otherwise corrupt file must not be allowed to make the
+    very next allocation collide with an id already in the document."""
+    data = (
+        b'<map version="1.10" orientation="orthogonal" width="1" height="1" '
+        b'tilewidth="16" tileheight="16" nextlayerid="1" nextobjectid="1">'
+        b'<objectgroup id="5" name="Things">'
+        b'<object id="9" name="spawn" x="0" y="0"><point/></object>'
+        b"</objectgroup>"
+        b"</map>"
+    )
+    doc = tmx.read_tmx(data, **_bare_loaders())
+    assert doc.next_layer_id > 5
+    assert doc.next_object_id > 9
+
+
+def test_a_tmj_import_also_adopts_ids_and_next_counters():
+    payload = {
+        "type": "map",
+        "version": "1.10",
+        "orientation": "orthogonal",
+        "renderorder": "right-down",
+        "infinite": False,
+        "width": 1,
+        "height": 1,
+        "tilewidth": 16,
+        "tileheight": 16,
+        "nextlayerid": 5,
+        "nextobjectid": 6,
+        "layers": [
+            {
+                "type": "objectgroup",
+                "id": 3,
+                "name": "Things",
+                "draworder": "topdown",
+                "objects": [
+                    {"id": 4, "name": "spawn", "x": 0, "y": 0, "point": True, "visible": True}
+                ],
+            }
+        ],
+    }
+    doc = tmx.read_tmj(json.dumps(payload).encode(), **_bare_loaders())
+    assert (doc.layers[0].id, doc.layers[0].objects[0].id) == (3, 4)
+    assert (doc.next_layer_id, doc.next_object_id) == (5, 6)
+
+
+def test_a_tmx_round_trip_preserves_the_docs_own_ids():
+    """``_doc()`` builds through the ops, so every layer and object already
+    carries a real id by the time it is exported."""
+    doc = _doc()
+    files = tmx.tmx_export(doc)
+    back = tmx.read_tmx(files["map.tmx"], **_loaders(files))
+    assert [layer.id for layer in back.layers] == [layer.id for layer in doc.layers]
+    assert [o.id for o in back.layers[1].objects] == [o.id for o in doc.layers[1].objects]
+
+
+def test_export_writes_the_docs_own_persistent_ids():
+    doc = _doc()
+    tiles_layer, things_layer = doc.layers
+    spawn, zone = things_layer.objects
+    files = tmx.tmx_export(doc)
+    root = ET.fromstring(files["map.tmx"])
+    assert root.find("layer").get("id") == str(tiles_layer.id)
+    group = root.find("objectgroup")
+    assert group.get("id") == str(things_layer.id)
+    assert [o.get("id") for o in group.findall("object")] == [str(spawn.id), str(zone.id)]
+    assert root.get("nextlayerid") == str(doc.next_layer_id)
+    assert root.get("nextobjectid") == str(doc.next_object_id)
+
+
+def test_export_assigns_but_does_not_persist_ids_for_hand_built_zero_id_docs():
+    """A document built by direct construction, bypassing the ops that assign
+    ids at creation -- the same shape a ``.wmap``-loaded document has, since
+    ids are out of scope there this milestone -- still exports something
+    valid, and exporting it twice changes nothing about the document itself."""
+    layer = TileLayer(uid=new_uid(), name="l", data=gid.empty_layer(2, 2))
+    other = ObjectLayer(
+        uid=new_uid(),
+        name="o",
+        objects=[MapObject(uid=new_uid(), name="a", kind="point")],
+    )
+    doc = MapDoc(2, 2, 16, 16, layers=[layer, other])
+    assert (layer.id, other.id, other.objects[0].id) == (0, 0, 0)
+
+    files_a = tmx.tmx_export(doc)
+    files_b = tmx.tmx_export(doc)
+    assert files_a == files_b
+    assert (layer.id, other.id, other.objects[0].id) == (0, 0, 0)
+
+    root = ET.fromstring(files_a["map.tmx"])
+    assert root.find("layer").get("id") == "1"
+    assert root.find("objectgroup").get("id") == "2"
+    assert root.find("objectgroup/object").get("id") == "1"
+    assert (root.get("nextlayerid"), root.get("nextobjectid")) == ("3", "2")
 
 
 # --- encodings ----------------------------------------------------------------

@@ -126,6 +126,8 @@ by `tests/plotter/test_props.py`
 |---|---|---|
 | `renderorder` | preserved-verbatim | Written back as it arrived; the renderer draws right-down. M5 honours it. |
 | `backgroundcolor` | preserved-verbatim | Round-tripped; not painted. |
+| `layer id` | preserved-verbatim | Tiled's own persistent layer id. Adopted on read, kept in `TileLayer.id`/`ObjectLayer.id`, and written back unchanged; `MapDoc.next_layer_id` mints past whatever the file declared. Nothing in the editor yet acts on it -- it exists to be an object-typed property's anchor, which is later M2 work. |
+| `object id` | preserved-verbatim | Tiled's own persistent object id, `MapObject.id`. Same story as `layer id`: adopted, kept, written back unchanged, minted past by `MapDoc.next_object_id`; not yet referenced by anything in the editor. |
 
 ## Read but not modelled
 
@@ -137,7 +139,8 @@ state — there is no name-and-stop for any of these, so a map holding them
 loads cleanly and looks, until compared closely with the original, like it
 loaded completely. `PLOTTER_PLAN.md` § Milestone 2 is where each of these
 gets an actual home: layer decorations (`parallaxx`/`parallaxy`,
-`tintcolor`), `class` and `id` on both layers and objects.
+`tintcolor`) and `class` on both layers and objects. `id` already moved out
+of this section -- see "Preserved but not honoured" below.
 
 `draworder` is the one entry here that is not merely lost but actively wrong
 on a round trip: `tmx_export` writes every object layer's `<objectgroup>`
@@ -152,8 +155,6 @@ about the shapes or their positions changed.
 | `layer parallaxx` / `layer parallaxy` | silently-dropped | Per-layer parallax factor. See M2. |
 | `layer tintcolor` | silently-dropped | Per-layer colour multiply. See M2. |
 | `layer class` | silently-dropped | Tiled's per-layer custom type. See M2. |
-| `layer id` | silently-dropped | Tiled's own layer id; a fresh one is minted on every export. See M2. |
-| `object id` | silently-dropped | Read only far enough to name the object in a refusal message; never stored. A fresh one is minted on every export. See M2. |
 | `object-layer draworder` | silently-dropped | Not read at all, and always written back as `"topdown"` -- an `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. See M2. |
 
 ## Permanent non-goals

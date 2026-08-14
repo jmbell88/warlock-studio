@@ -265,6 +265,37 @@ def test_an_unknown_object_kind_is_refused():
         MapObject(uid=new_uid(), kind="ellipse")
 
 
+# --- persistent ids -------------------------------------------------------
+
+
+def test_a_new_layer_and_object_get_a_persistent_id_from_the_doc_counters():
+    """``id`` is Tiled's own persistent id, distinct from ``uid``: the doc's
+    two counters mint it at creation, one namespace for both layer kinds and
+    a separate one for objects."""
+    doc = _doc()
+    tiles = doc.add_tile_layer()
+    objects = doc.add_object_layer()
+    assert (tiles.id, objects.id) == (1, 2)
+    obj = doc.add_object(objects.uid, MapObject(uid=new_uid(), name="a", kind="point"))
+    assert obj.id == 1
+    assert (doc.next_layer_id, doc.next_object_id) == (3, 2)
+
+
+def test_undo_of_an_add_does_not_reuse_its_id():
+    """An object-typed property may go on naming a deleted object's id, so the
+    counter must not walk back just because the add that minted it was
+    undone."""
+    doc = _doc()
+    layer = doc.add_object_layer()
+    first = doc.add_object(layer.uid, MapObject(uid=new_uid(), name="a", kind="point"))
+    assert first.id == 1
+    doc.undo()  # undoes the add
+    assert doc.layer(layer.uid).objects == []
+    second = doc.add_object(layer.uid, MapObject(uid=new_uid(), name="b", kind="point"))
+    assert second.id == 2
+    assert doc.next_object_id == 3
+
+
 def test_a_tile_op_on_an_object_layer_is_a_key_error():
     doc = _doc()
     layer = doc.add_object_layer()
