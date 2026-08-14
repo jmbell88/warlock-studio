@@ -731,6 +731,11 @@ def _finish(
     ]
     computed_layer_id = max(seen_layer_ids, default=0) + 1
     computed_object_id = max(seen_object_ids, default=0) + 1
+    # Deliberately not "adopt the declared value outright" -- real Tiled
+    # trusts its own nextlayerid/nextobjectid unconditionally, but this
+    # reader does not, for the reason in this function's docstring. A
+    # well-formed file (declared and computed agreeing) behaves identically
+    # either way; only a corrupt one sees the difference.
     doc.next_layer_id = max(next_layer_id or 0, computed_layer_id)
     doc.next_object_id = max(next_object_id or 0, computed_object_id)
 
@@ -790,20 +795,20 @@ def _export_ids(
     agree, because nothing about writing a file is allowed to change the
     document that asked for it.
 
-    Keyed by ``id(layer)``/``id(obj)`` (object identity, not the field named
-    ``id``) rather than by uid: purely a call-local lookup built and consumed
-    within one export, so identity is simpler than plumbing a second int
-    namespace through for no reader outside this function to see.
+    Keyed by ``uid`` -- the process-local address every other lookup in this
+    package already uses -- rather than the persistent ``id`` field this
+    function is computing, which is exactly the value not yet settled for a
+    zero-id entry while this runs.
     """
     layer_ids: dict[int, int] = {}
     object_ids: dict[int, int] = {}
     fallback_layer_id = itertools.count(doc.next_layer_id)
     fallback_object_id = itertools.count(doc.next_object_id)
     for layer in doc.layers:
-        layer_ids[id(layer)] = layer.id or next(fallback_layer_id)
+        layer_ids[layer.uid] = layer.id or next(fallback_layer_id)
         if isinstance(layer, ObjectLayer):
             for obj in layer.objects:
-                object_ids[id(obj)] = obj.id or next(fallback_object_id)
+                object_ids[obj.uid] = obj.id or next(fallback_object_id)
     next_layer_id = max([doc.next_layer_id, *(v + 1 for v in layer_ids.values())])
     next_object_id = max([doc.next_object_id, *(v + 1 for v in object_ids.values())])
     return layer_ids, object_ids, next_layer_id, next_object_id
@@ -842,7 +847,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
         ET.SubElement(root, "tileset", {"firstgid": str(ref.firstgid), "source": path})
 
     for layer in doc.layers:
-        common = {"id": str(layer_ids[id(layer)]), "name": layer.name}
+        common = {"id": str(layer_ids[layer.uid]), "name": layer.name}
         if isinstance(layer, TileLayer):
             node = ET.SubElement(
                 root, "layer", {**common, "width": str(doc.width), "height": str(doc.height)}
@@ -865,7 +870,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
             data.text = _csv(layer.data)
         else:
             for obj in layer.objects:
-                attrs = {"id": str(object_ids[id(obj)])}
+                attrs = {"id": str(object_ids[obj.uid])}
                 if obj.name:
                     attrs["name"] = obj.name
                 if obj.obj_class:
@@ -902,7 +907,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     layers: list[dict[str, Any]] = []
     for layer in doc.layers:
         entry: dict[str, Any] = {
-            "id": layer_ids[id(layer)],
+            "id": layer_ids[layer.uid],
             "name": layer.name,
             "opacity": float(layer.opacity),
             "visible": bool(layer.visible),
@@ -928,7 +933,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
             objects = []
             for obj in layer.objects:
                 record: dict[str, Any] = {
-                    "id": object_ids[id(obj)],
+                    "id": object_ids[obj.uid],
                     "name": obj.name,
                     "type": obj.obj_class,
                     "x": _object_xy(doc, obj)[0],
