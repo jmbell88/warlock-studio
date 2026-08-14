@@ -97,10 +97,23 @@ that does not exist. What backs them today is
 `round-trips` with a `fixture:` marker as soon as a Tiled-authored fixture
 carrying them lands.
 
-The one loss, stated rather than hidden: Tiled's **JSON** stores a class
-property's members as bare values and recovers their types from the project's
-`propertytypes.json`, so a `color` or `file` member of a class comes back from
-a `.tmj` as a `string`. The XML spelling types every member and is lossless.
+The losses, stated rather than hidden — both of them Tiled's **JSON** only, and
+both from one cause: a `.tmj` writes a class property's members as bare values
+inside the parent's value object rather than as property records.
+
+1. **Member types.** Tiled recovers them from the project's
+   `propertytypes.json`, which Plotter does not read, so a `color` or a `file`
+   member of a class comes back from a `.tmj` as a `string`.
+2. **A nested class's `propertytype`.** The type name is an attribute of a
+   property *record* and a member is not one, so Tiled's schema has nowhere to
+   put it. The outermost class keeps its name; every class nested inside it
+   comes back with an empty one, its own members intact.
+
+The XML spelling writes a real `<property>` per member — with its `type` and
+its `propertytype`, at every depth — so a `.tmx` loses neither. Both are pinned
+by `tests/plotter/test_props.py`
+(`test_a_colour_member_of_a_class_returns_as_a_string_through_json`,
+`test_a_class_nested_in_a_class_loses_its_type_name_through_json`).
 
 | Feature | State | Notes |
 |---|---|---|

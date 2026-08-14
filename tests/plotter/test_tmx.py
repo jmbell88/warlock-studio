@@ -178,6 +178,50 @@ def test_two_exports_of_one_document_are_byte_identical():
     assert tmx.tmj_export(doc) == tmx.tmj_export(doc)
 
 
+def _classy() -> MapDoc:
+    """``_doc`` plus a two-member class property, at both levels that carry
+    one. Two members because one cannot be out of order, and the sorting that
+    keeps a class deterministic lives *inside* a value the cases above never
+    look at."""
+    doc = _doc()
+    npc = tsx.Prop(
+        "class",
+        {"zeal": tsx.Prop("int", 1), "armour": tsx.Prop("string", "plate")},
+        propertytype="NPC",
+    )
+    doc.properties = {"boss": npc, "art": tsx.Prop("file", "art/boss.png")}
+    doc.set_layer_props(doc.layers[0].uid, properties={"boss": npc})
+    return doc
+
+
+def test_two_exports_of_a_document_with_a_class_property_are_byte_identical():
+    """Determinism reaches all the way down. The case above carries no class
+    property and so exercises none of the nested sorting -- and a writer that
+    is deterministic at the top level but not inside a member is a writer with
+    an unsorted dict in it, which is precisely what the byte rule is for."""
+    doc = _classy()
+    assert tmx.tmx_export(doc) == tmx.tmx_export(doc)
+    assert tmx.tmj_export(doc) == tmx.tmj_export(doc)
+
+
+def test_class_members_are_written_in_sorted_order_in_both_spellings():
+    """Sorted by name rather than by insertion, at every depth -- a dict's
+    order is not a fact about the document. Asserted on the *bytes* rather
+    than on a re-read, because a re-read into a dict would agree either
+    way."""
+    doc = _classy()
+    text = tmx.tmx_export(doc)["map.tmx"].decode()
+    assert text.index('name="armour"') < text.index('name="zeal"')
+
+    payload = json.loads(tmx.tmj_export(doc)["map.tmj"])
+    boss = next(entry for entry in payload["properties"] if entry["name"] == "boss")
+    assert boss["propertytype"] == "NPC"
+    assert list(boss["value"]) == ["armour", "zeal"]
+    # And the properties themselves are sorted, which is what puts the class
+    # ahead of the file property rather than leaving them as they were set.
+    assert [entry["name"] for entry in payload["properties"]] == ["art", "boss"]
+
+
 # --- encodings ----------------------------------------------------------------
 
 

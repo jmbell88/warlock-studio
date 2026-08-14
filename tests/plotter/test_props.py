@@ -238,9 +238,32 @@ def test_a_colour_member_of_a_class_returns_as_a_string_through_json():
     assert back["npc"].value["tint"] == Prop("string", "#ff00ff00")
 
 
-def test_a_nested_class_in_json_keeps_its_members_and_loses_only_the_type_name():
-    values = {"outer": Prop("class", {"inner": Prop("class", {"n": Prop("int", 2)})})}
-    assert _json_round_trip(values) == values
+def test_a_class_nested_in_a_class_loses_its_type_name_through_json():
+    """The second documented asymmetry, and the same cause as the first:
+    Tiled's JSON hangs ``propertytype`` on a *property record*, and a nested
+    class is not a record -- it is a bare value inside its parent's value
+    object, with nowhere to write the name. So the outer class keeps its type
+    name, every nested one comes back empty, and the members survive. The XML
+    spelling writes ``propertytype`` at every level and loses neither.
+
+    Asserted as an inequality first, because the loss is the claim: an earlier
+    version of this case gave the inner class no ``propertytype`` at all and
+    so passed without exercising anything.
+    """
+    values = {
+        "outer": Prop(
+            "class",
+            {"inner": Prop("class", {"n": Prop("int", 2)}, propertytype="Inner")},
+            propertytype="Outer",
+        )
+    }
+    back = _json_round_trip(values)
+    assert back != values
+    assert back["outer"].propertytype == "Outer"
+    inner = back["outer"].value["inner"]
+    assert inner.propertytype == ""
+    assert inner.value == {"n": Prop("int", 2)}
+    assert _xml_round_trip(values) == values
 
 
 # --- the wmap codec -----------------------------------------------------------

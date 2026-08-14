@@ -40,14 +40,25 @@ unknown name is dropping it, and dropping it rewrites the user's file.
     write that it would read back, and inventing one would produce a file that
     only this editor can open while claiming to be a Tiled file.
 
-**The one asymmetry between the syntaxes, stated rather than hidden.** XML
-types every member of a class inside the nested ``<properties>`` block, so the
-XML codec is lossless. Tiled's JSON stores class members as *bare values* and
-recovers their types from the project's ``propertytypes.json``, which this
-editor does not read -- so a ``color`` member comes back from a ``.tmj`` as a
-``string``, and a ``file`` member as a ``string`` too. That is a real loss and
-it is preferred to the alternative: guessing a member's type from the shape of
-its text is precisely the silent retyping the whole model exists to prevent.
+**The asymmetry between the syntaxes, stated rather than hidden.** XML writes
+a class's members as a nested ``<properties>`` block -- real ``<property>``
+elements, each carrying its own ``type`` and ``propertytype`` -- so the XML
+codec is lossless. Tiled's JSON writes them as *bare values* inside the
+parent's value object, and that costs two things on the way back in:
+
+- **member types**, which Tiled recovers from the project's
+  ``propertytypes.json`` and this editor does not read: a ``color`` member
+  comes back from a ``.tmj`` as a ``string``, and so does a ``file`` member;
+- **a nested class's ``propertytype``**, because that name is an attribute of
+  a property *record* and a member is not one -- Tiled's schema has nowhere to
+  put it. The outermost class keeps its name; every class inside it comes back
+  with an empty one, members intact.
+
+Both are real losses, and both beat the alternatives: guessing a member's type
+from the shape of its text is precisely the silent retyping this model exists
+to prevent, and inventing somewhere to hang the nested name would write a
+``.tmj`` Tiled does not read back. ``docs/PLOTTER_COMPAT.md`` enumerates both
+and ``tests/plotter/test_props.py`` pins them.
 
 Nothing here imports anything: it is the package's leaf, below :mod:`.tsx`,
 which re-exports :class:`Prop` and :class:`TiledUnsupported` so every existing
