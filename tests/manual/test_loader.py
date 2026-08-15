@@ -57,11 +57,20 @@ def test_dev_checkout_fallback_finds_repo_docs():
 
 
 def test_manual_state_open_at():
-    """Navigation only. Whether the manual is on screen is ``state.mode``, so
-    open_at deliberately does not carry a second visibility flag."""
+    """Navigation only: ``open_at`` says *where*, never *whether*.
+
+    The visibility flag beside it is new (REDESIGN.md wave 3) and this test is
+    the record of the inversion: while the Manual was a mode, a flag here would
+    have been a second answer to a question ``state.mode`` already answered.
+    There is no mode to disagree with now, and ``open_at`` still leaves it
+    alone -- ``render.open_at`` is what raises the overlay, so a caller that
+    only wants to *pre-position* the reader (a deep link followed while it is
+    already up) does not force it open.
+    """
     state = AppState()
     assert isinstance(state.manual, ManualState)
+    assert state.manual.open is False
     state.manual.open_at("04-generating-meshes", "exports")
-    assert not hasattr(state.manual, "open")
+    assert state.manual.open is False
     assert state.manual.chapter == "04-generating-meshes"
     assert state.manual.pending_anchor == "exports"

@@ -26,7 +26,12 @@ from . import icons
 # four breaks to the two real ones.
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
-    ("manual", "Manual", icons.BOOK_OPEN),
+    # There is no ``manual`` entry, and its absence is a decision rather than an
+    # omission (REDESIGN.md wave 3). Help is consulted *about the screen you are
+    # on*, and a mode took that screen away to show it -- so the (?) beside a
+    # control answered the question by removing it. It is an overlay now:
+    # ``manual.render.draw_overlay``, raised by F1 and by every ``help_button``,
+    # closed by Esc. ``icons.BOOK_OPEN`` still names it in the rail's footer.
     ("2d", "2D", icons.IMAGE),
     ("3d", "3D", icons.BOX),
     ("inker", "Inker", icons.PEN_TOOL),

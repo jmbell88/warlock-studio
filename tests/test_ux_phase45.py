@@ -507,9 +507,14 @@ def test_the_surfaces_that_float_are_the_ones_that_frost():
     """Toasts deliberately do not: the backdrop is the app as it was when the
     surface appeared, and a toast appears while what it reports on is moving."""
     from warlock.studio import dialogs, widgets
+    from warlock.studio.manual import render as manual_render
     from warlock.studio.panes import palette as palette_pane
 
     assert "window_backdrop" in inspect.getsource(palette_pane.draw)
     assert "window_backdrop" in inspect.getsource(dialogs.ConfirmQueue.draw)
     assert "window_backdrop" in inspect.getsource(dialogs.PromptQueue.draw)
+    # The Manual joined them when it stopped being a mode (REDESIGN.md wave 3):
+    # it is a floating surface over the app now, so it frosts like one.
+    assert "window_backdrop" in inspect.getsource(manual_render.draw_overlay)
+    assert "window_shadow" in inspect.getsource(manual_render.draw_overlay)
     assert "window_backdrop" not in inspect.getsource(widgets.toasts)

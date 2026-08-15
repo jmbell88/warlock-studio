@@ -397,6 +397,16 @@ def commands(ctx: Any) -> list[Command]:
             )
         )
 
+    def manual(ctx: Any) -> None:
+        # The Manual stopped being a mode in REDESIGN.md wave 3, so
+        # ``_mode_commands`` no longer derives an entry for it -- and a
+        # reference reachable only by a function key is a reference most people
+        # do not know exists. This is that door, kept in the palette where
+        # every other whole-app action is.
+        from .manual import render as manual_render
+
+        manual_render.open_at(ctx, (ctx.state.manual.chapter, None))
+
     def shortcuts(ctx: Any) -> None:
         # A flag rather than a call, because a palette command cannot open an
         # imgui popup: the palette's own window is closing on this frame, and
@@ -522,6 +532,13 @@ def commands(ctx: Any) -> list[Command]:
             why="Nothing to redo: this is the newest step.",
         ),
         # --- the application commands ---------------------------------------
+        Command(
+            key="manual",
+            label="Open the manual",
+            group="Application",
+            run=manual,
+            hint="F1",
+        ),
         Command(
             key="shortcuts",
             label="Keyboard shortcuts",

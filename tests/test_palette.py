@@ -29,6 +29,8 @@ def _job(job_id: str, **over: Any) -> dict[str, Any]:
 
 
 def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None = None) -> Any:
+    from warlock.studio.state import ManualState
+
     rows = jobs or []
     by_id = {job["id"]: job for job in rows}
     return SimpleNamespace(
@@ -41,6 +43,9 @@ def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None =
             wireframe=False,
             turntable=False,
             show_fps=False,
+            # The real thing rather than a stub: the Manual is an overlay now,
+            # so the palette's entry for it reads and writes this state.
+            manual=ManualState(),
         ),
         cache=SimpleNamespace(jobs=rows, get=by_id.get),
         viewer=None,
@@ -117,10 +122,23 @@ def test_going_somewhere_records_where_it_came_from():
     """Otherwise Esc out of the mode the palette put you in goes two steps
     back -- the palette is a mode switch like any other."""
     ctx = _ctx("3d")
-    command = next(c for c in palette.commands(ctx) if c.key == "go:manual")
+    command = next(c for c in palette.commands(ctx) if c.key == "go:settings")
     command.run(ctx)
-    assert ctx.state.mode == "manual"
+    assert ctx.state.mode == "settings"
     assert ctx.state.previous_mode == "3d"
+
+
+def test_the_manual_is_a_command_rather_than_a_destination():
+    """It stopped being a mode in REDESIGN.md wave 3, so ``_mode_commands`` no
+    longer derives an entry -- and a reference reachable only by a function key
+    is one most people never find."""
+    ctx = _ctx("3d")
+    command = next(c for c in palette.commands(ctx) if c.key == "manual")
+    assert command.hint == "F1"
+    command.run(ctx)
+    assert ctx.state.manual.open
+    # Over the mode it was asked from, not instead of it.
+    assert ctx.state.mode == "3d"
 
 
 def test_library_and_profiles_are_reachable_as_modes():

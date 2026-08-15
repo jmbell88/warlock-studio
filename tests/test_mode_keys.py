@@ -98,8 +98,52 @@ def test_the_palette_is_checked_before_the_workspace_handlers():
 def test_esc_returns_to_the_mode_you_came_from(no_mods):
     app = _app("3d")
     state = app.app_ctx.state
-    _press(app, pygame.K_F1)  # into the Manual
-    assert state.mode == "manual"
+    app._set_mode("settings")
+    assert state.mode == "settings"
+    _press(app, pygame.K_ESCAPE)
+    assert state.mode == "3d"
+
+
+# --- REDESIGN wave 3: the Manual is an overlay, not a mode -------------------
+
+
+def test_f1_raises_the_manual_over_the_mode_you_are_in(no_mods):
+    """It used to *replace* it, which is the defect: the (?) beside a control
+    answered the question by taking the control away."""
+    app = _app("3d")
+    state = app.app_ctx.state
+    _press(app, pygame.K_F1)
+    assert state.manual.open
+    assert state.mode == "3d"
+
+
+def test_f1_puts_it_away_again(no_mods):
+    """The key that raises a reference is the key that closes it."""
+    app = _app("3d")
+    _press(app, pygame.K_F1)
+    _press(app, pygame.K_F1)
+    assert not app.app_ctx.state.manual.open
+
+
+def test_esc_closes_the_manual_before_the_mode_sees_it(no_mods):
+    """Ordering, not tidiness: the workspace modes consume every key they are
+    handed, so an Esc dispatched to Inker with the overlay up would drop a
+    floating selection and leave the reference open on top of it."""
+    app = _app("inker")
+    state = app.app_ctx.state
+    _press(app, pygame.K_F1)
+    _press(app, pygame.K_ESCAPE)
+    assert not state.manual.open
+    assert state.mode == "inker"
+
+
+def test_esc_still_leaves_a_mode_once_the_manual_is_closed(no_mods):
+    app = _app("settings")
+    state = app.app_ctx.state
+    state.previous_mode = "3d"
+    _press(app, pygame.K_F1)
+    _press(app, pygame.K_ESCAPE)
+    assert state.mode == "settings"
     _press(app, pygame.K_ESCAPE)
     assert state.mode == "3d"
 

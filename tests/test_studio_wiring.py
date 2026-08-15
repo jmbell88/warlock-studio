@@ -180,11 +180,11 @@ def test_choosing_the_mode_you_are_already_in_keeps_the_history():
     ``previous_mode == mode`` -- which ``_escape_mode`` reads as no history and
     answers with Home. Esc out of a pass-through mode is documented as going
     back to the mode it came from."""
-    ctx = _palette_ctx("manual")
+    ctx = _palette_ctx("settings")
     ctx.state.previous_mode = "3d"
-    next(c for c in palette.commands(ctx) if c.key == "go:manual").run(ctx)
+    next(c for c in palette.commands(ctx) if c.key == "go:settings").run(ctx)
 
-    assert ctx.state.mode == "manual"
+    assert ctx.state.mode == "settings"
     assert ctx.state.previous_mode == "3d"
 
 

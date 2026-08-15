@@ -645,13 +645,20 @@ class Resources:
 
 @dataclass
 class ManualState:
-    """The Manual mode: which chapter it shows and where in it.
+    """The Manual: which chapter it shows, where in it, and whether it is up.
 
-    Whether it is on screen is ``AppState.mode == "manual"`` and nothing else --
-    the Manual is a mode like any other, so a second "am I visible" flag here
-    would be a way for the two to disagree.
+    **This flag is deliberately the inversion of what this docstring used to
+    say.** The Manual was a mode, and the argument was that a second "am I
+    visible" flag would be a way for the two to disagree -- which was right
+    while it *was* a mode. It is an overlay now (REDESIGN.md wave 3): help is
+    something you consult *about the screen you are on*, and making it a
+    destination meant clicking a (?) replaced the pane whose control you were
+    asking about, so the answer arrived with the question gone. There is no
+    ``mode == "manual"`` left for this to disagree with; this is the only thing
+    that decides.
     """
 
+    open: bool = False
     chapter: str = "00-index"
     # Set alongside a navigation, consumed by the renderer on the frame the
     # heading is drawn -- scrolling needs a cursor position that only exists

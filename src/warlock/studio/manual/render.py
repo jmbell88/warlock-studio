@@ -14,7 +14,6 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import fonts, icons, theme, tokens, widgets
-from ..state import set_mode
 from ..tokens import sp
 from . import loader, parser
 from .targets import HELP_TARGETS, TROUBLESHOOTING
@@ -60,27 +59,32 @@ def _blocks(key: str) -> list[parser.Block]:
 
 
 def help_button(ctx: Any, pane: str) -> None:
-    """The (?) a pane shows; switches to the manual at that pane's chapter."""
+    """The (?) a pane shows; opens the manual overlay at that pane's chapter.
+
+    Name, signature and call-site shape are unchanged from when this switched
+    modes, which is the whole of how the overlay reached forty-odd panes in one
+    edit -- and why both ``tests/manual`` coverage gates went on passing.
+    """
     target = HELP_TARGETS.get(pane)
     if target is None:
         return
     offset = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - sp(26)
     imgui.same_line(max(offset, 0.0))
     if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
-        # Through ``set_mode``, which is what makes Esc go back to the pane the
-        # (?) was clicked in. A bare assignment leaves ``previous_mode`` at
-        # whatever it was before, and the manual is precisely the mode a reader
-        # expects to escape *out of* -- back to the control they were asking
-        # about, not to Home.
-        set_mode(ctx.state, "manual")
-        ctx.state.manual.open_at(*target)
+        open_at(ctx, target)
 
 
 def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
-    """Switch to the manual at ``target``. What ``help_button`` does, without
-    the button -- for the three surfaces that lead to troubleshooting from a
-    control of their own (F57)."""
-    set_mode(ctx.state, "manual")
+    """Raise the manual over the current screen, at ``target``.
+
+    This used to be ``set_mode(ctx.state, "manual")``, and the change is the
+    point rather than a refactor of it (REDESIGN.md wave 3): help is consulted
+    *about the pane you are on*, and a mode switch took that pane away to show
+    it. The reader then had the answer and no longer had the question -- which
+    is worst exactly where the (?) is most useful, beside a control whose
+    setting somebody was in the middle of choosing.
+    """
+    ctx.state.manual.open = True
     ctx.state.manual.open_at(*target)
 
 
@@ -93,11 +97,116 @@ def troubleshooting_button(ctx: Any, label: str = "Troubleshooting") -> bool:
     return True
 
 
-def draw_body(ctx: Any) -> None:
-    """The manual as a mode: two children filling whatever host is current.
+# How wide the overlay is allowed to get, and how much of the window's height
+# it takes. The width is the same argument ``MAX_LINE_CHARS`` makes one level
+# up -- prose stops being readable long before a maximised window runs out of
+# room -- with the TOC's 240 added to it, so the *page* half still lands near
+# the measure the renderer wraps at. The height is a fraction rather than a
+# figure because what has to stay visible is the app *behind* it: an overlay
+# that fills the window is a mode with extra steps.
+OVERLAY_MAX_W = 1040.0
+OVERLAY_HEIGHT = 0.8
+# The margin kept clear on each side when the window is too narrow for the
+# maximum. Two gutters of the host window's own padding.
+OVERLAY_MARGIN = 80.0
 
-    No window of its own, and no visibility flag -- the mode switch decides
-    whether this runs at all, which is the same rule every other pane follows.
+# Whether the overlay was up last frame, so ``popover_enter`` can be told which
+# frame is its first. Module state for the same reason ``_blocks_cache`` is:
+# there is exactly one manual and it is drawn from exactly one place.
+_was_open = [False]
+
+
+def close(ctx: Any) -> None:
+    ctx.state.manual.open = False
+
+
+def toggle(ctx: Any) -> None:
+    """What F1 does. A toggle rather than an open, because the key that raises
+    a reference should be the key that puts it away."""
+    ctx.state.manual.open = not ctx.state.manual.open
+
+
+def draw_overlay(ctx: Any) -> None:
+    """The manual over whatever is on screen, rather than instead of it.
+
+    Drawn from ``App._overlays`` and *before* the command palette, so Ctrl+K
+    still floats above this -- the palette is how you leave anywhere, including
+    here.
+
+    A plain window rather than a modal popup, and that is load-bearing twice
+    over: a modal would take the one popup slot imgui gives a frame (the
+    palette's, and every confirm's), and it would dim the screen behind it,
+    which is the half of "this is a mode" the overlay exists not to be. It is
+    still frosted and shadowed like every other floating surface, so it reads
+    as being *over* the app rather than as a pane inside it.
+    """
+    ms = ctx.state.manual
+    if not ms.open:
+        _was_open[0] = False
+        return
+    appearing = not _was_open[0]
+    _was_open[0] = True
+
+    viewport = imgui.get_main_viewport()
+    alpha, rise = widgets.popover_enter("manual", appearing)
+    width = min(viewport.work_size.x - sp(OVERLAY_MARGIN), sp(OVERLAY_MAX_W))
+    height = viewport.work_size.y * OVERLAY_HEIGHT
+    imgui.set_next_window_pos(
+        (
+            viewport.work_pos.x + viewport.work_size.x * 0.5,
+            viewport.work_pos.y + viewport.work_size.y * 0.5 + rise,
+        ),
+        imgui.Cond_.always.value,
+        (0.5, 0.5),
+    )
+    imgui.set_next_window_size((width, height))
+    # The palette's recipe exactly: the background is cleared before ``begin``
+    # paints it and drawn back below, as a blur when there is one and as the
+    # solid fill when there is not.
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
+    opened = imgui.begin(
+        "##manual-overlay",
+        None,
+        imgui.WindowFlags_.no_title_bar.value
+        | imgui.WindowFlags_.no_move.value
+        | imgui.WindowFlags_.no_resize.value
+        | imgui.WindowFlags_.no_collapse.value
+        | imgui.WindowFlags_.no_saved_settings.value,
+    )
+    widgets.pop_surface_rounding()
+    if opened:
+        widgets.window_shadow("overlay", radius=radius)
+        if frosted:
+            widgets.window_backdrop(radius=radius)
+        _overlay_header(ctx)
+        draw_body(ctx)
+    imgui.end()
+    imgui.pop_style_var()
+
+
+def _overlay_header(ctx: Any) -> None:
+    """The title and the way out, on one line above the split."""
+    widgets.pane_title("Manual")
+    imgui.same_line()
+    close_w = imgui.get_frame_height()
+    imgui.set_cursor_pos_x(
+        max(imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - close_w, 0.0)
+    )
+    if widgets.icon_button(f"{icons.CIRCLE_X}##manual-close", "Close (Esc)", borderless=True):
+        close(ctx)
+
+
+def draw_body(ctx: Any) -> None:
+    """The manual's two children, filling whatever host is current.
+
+    Unchanged by the move off a mode and onto an overlay (REDESIGN.md wave 3):
+    it fills the region it is given, so the region being a window rather than
+    the host is not its business. What *did* go is the claim in the old
+    docstring that there is no visibility flag -- see :class:`state.ManualState`.
     """
     ms = ctx.state.manual
     _warm_blocks()

@@ -736,7 +736,8 @@ def test_library_and_profiles_build_as_their_own_modes(app_ctx, imgui_ctx):
 
 
 def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
-    """As a mode, not a window: no begin/end of its own to get wrong.
+    """The body, in whatever host is current: no begin/end of its own to get
+    wrong.
 
     The loader falls back to the repo's docs/manual in this checkout, so this
     parses and draws the real chapters.
@@ -750,6 +751,40 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     # path rather than the renderer it exists to smoke.
     app_ctx.state.manual.open_at("12-shortcuts", None)
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+
+def test_the_manual_overlay_builds_over_a_mode(app_ctx, imgui_ctx):
+    """Its own window now (REDESIGN.md wave 3), which is a begin/end to get
+    wrong -- and it is drawn *outside* the host, so it cannot be smoked by the
+    pane pass that covers everything else.
+
+    Closed as well as open: the early return is the branch every frame in the
+    app but a handful takes.
+    """
+    from warlock.studio.manual import render
+
+    imgui, renderer = imgui_ctx
+
+    def frame() -> None:
+        imgui.new_frame()
+        imgui.set_next_window_size((1200, 900))
+        imgui.begin("##host")
+        imgui.text("behind")
+        imgui.end()
+        render.draw_overlay(app_ctx)
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+
+    app_ctx.state.manual.open = False
+    frame()
+    render.open_at(app_ctx, ("12-shortcuts", None))
+    assert app_ctx.state.manual.open
+    # Twice: the first is the appearing frame, whose alpha and rise come from
+    # ``popover_enter``; the second is the settled one.
+    frame()
+    frame()
+    render.close(app_ctx)
+    frame()
 
 
 def _model_rows() -> list[dict]:

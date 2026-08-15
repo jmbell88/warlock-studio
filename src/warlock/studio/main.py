@@ -83,9 +83,13 @@ IDLE_FPS = 12
 # The modes that fill the host window with one pane. Inker, Clay, Review,
 # Plotter and Packwright are not here: each fills it with a three-column
 # *workspace* instead, which is ``modes.WORKSPACE_MODES``. Those three
-# categories partition ``modes.KEYS`` exactly (thirteen modes today), and the
-# partition is the guard on ``_build_ui``'s dispatch.
-_SINGLE_PANE_MODES = ("home", "manual", "settings", "library", "profiles")
+# categories partition ``modes.KEYS`` exactly, and the partition is the guard
+# on ``_build_ui``'s dispatch.
+#
+# The Manual left this tuple when it stopped being a mode (REDESIGN.md wave 3):
+# it is an overlay drawn from ``_overlays`` now, so there is no dispatch branch
+# for it to be reached by.
+_SINGLE_PANE_MODES = ("home", "settings", "library", "profiles")
 
 
 # What a drop onto the window is allowed to be. The refusal message and every
@@ -1844,7 +1848,23 @@ class App:
             ctx.state.shortcuts_requested = True
             return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
-            self._set_mode("manual")
+            from .manual import render as manual_render
+
+            manual_render.toggle(ctx)
+            return
+        # Esc closes the Manual before anything else looks at it, and that
+        # ordering is the whole of why this sits here rather than in
+        # ``_escape_mode``: the workspace modes below consume every key they
+        # are handed, so an Esc dispatched to Inker with the overlay up would
+        # drop a floating selection and leave the reference open on top of it.
+        if (
+            event.type == pygame.KEYDOWN
+            and event.key == pygame.K_ESCAPE
+            and ctx.state.manual.open
+        ):
+            from .manual import render as manual_render
+
+            manual_render.close(ctx)
             return
         # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
@@ -2323,10 +2343,6 @@ class App:
         if mode in _SINGLE_PANE_MODES or mode in modes.WORKSPACE_MODES:
             if mode == "home":
                 landing.draw(ctx)
-            elif mode == "manual":
-                from .manual import render as manual_render
-
-                manual_render.draw_body(ctx)
             elif mode == "settings":
                 app_settings.draw(ctx)
             elif mode == "library":
@@ -3566,6 +3582,12 @@ class App:
         # Before the confirms, because it is the same kind of thing and the
         # earlier one wins the single modal slot imgui gives a frame.
         settings_3d.matte_modal(ctx)
+        # The Manual, over whatever ran above (REDESIGN.md wave 3). Before the
+        # palette on purpose: Ctrl+K is how you leave anywhere, this included,
+        # so it has to float above the reference rather than under it.
+        from .manual import render as manual_render
+
+        manual_render.draw_overlay(ctx)
         # Above the confirms it can raise (Delete asks): the palette closes
         # itself in the same frame it runs a command, so the question it asks
         # takes the modal slot on the frame after, with nothing to contend
