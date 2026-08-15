@@ -61,6 +61,10 @@ at once. **Blur** wraps, but each piece blurs its own side of the seam rather th
 it. And a **gradient** never wraps: a ramp has two ends, and wrapping one puts the last colour
 against the first — a hard edge exactly where tiled mode exists to remove one.
 
+Pasting and the floating selection stay on the middle tile: a pasted chunk hanging over the edge is
+cropped there rather than appearing on the far side. What floats is a rectangle you are positioning,
+not colour being laid down, so it lands where the transform box says it will.
+
 Drag across a seam and the stroke carries on in a straight line; it is the *document* that wraps,
 not the cursor. Selections, the grid, the symmetry guides and the marching ants are drawn on the
 middle tile only. Nothing about this is saved: it is how you are looking at the file this afternoon,

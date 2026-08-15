@@ -304,7 +304,8 @@ class PaintOps:
     #
     # The session mirrors the filter session exactly -- begin snapshots, preview
     # re-renders *from the snapshot* so a drag cannot compound, commit pushes
-    # one patch, cancel puts the pixels back and pushes nothing.
+    # one patch, cancel puts the pixels back and pushes nothing -- with one
+    # deliberate difference at the abandon door: see :meth:`end_layer_move`.
 
     def begin_layer_move(self: Document) -> bool:
         """Open a move session on the active layer. -> whether it opened.
@@ -315,7 +316,7 @@ class PaintOps:
         silently ignored a lock is worse than one that reads a default of False
         until the flag exists.
         """
-        self.cancel_layer_move()
+        self.end_layer_move()
         # The lock is read *before* the float is committed: a refusal must
         # leave the document exactly as it found it, and committing first would
         # land a floating buffer as the side effect of a move that never
@@ -398,7 +399,15 @@ class PaintOps:
         return True
 
     def cancel_layer_move(self: Document) -> bool:
-        """Put the pixels back. Nothing was pushed, so nothing is undone."""
+        """Put the pixels back. Nothing was pushed, so nothing is undone.
+
+        The user-initiated half of the pair, and the only one that restores:
+        reachable from Escape and from the canvas, both of which act on a
+        session that is still live. Every *automatic* path -- anything that
+        finds a session somebody else left open -- goes through
+        :meth:`end_layer_move` instead, because restoring from a snapshot of
+        unknown age is how an unrelated edit gets wiped.
+        """
         if self._move is None:
             return False
         layer = self._move_layer()
@@ -411,6 +420,26 @@ class PaintOps:
         width, height = self.size
         self.invalidate((0, 0, width, height), layer_uid=layer.uid)
         return True
+
+    def end_layer_move(self: Document) -> bool:
+        """Close a session left open by a gesture that went away.
+
+        ``end_filter``'s role, with the opposite answer, and the difference is
+        the point. A filter session is a *question* -- a popup with an Apply
+        button the user never pressed -- so abandoning it cancels: an unanswered
+        question is not a yes. A move session is a *drag*: the pixels on screen
+        are where the user put them, and there is no unpressed button.
+
+        So this commits, and committing is also the only safe answer. Cancelling
+        restores ``layer.pixels`` wholesale from the snapshot taken at
+        ``begin_layer_move``, which is correct while the session is live and
+        catastrophic once it is stale -- anything painted in between is
+        overwritten by a snapshot older than it, while those strokes' own
+        ``PatchEdit``s stay in history describing pixels that are no longer
+        there. Committing can never lose a pixel: it records what actually
+        happened as one step and leaves the layer exactly as it looks.
+        """
+        return self.commit_layer_move()
 
     # -- strokes ------------------------------------------------------------
 

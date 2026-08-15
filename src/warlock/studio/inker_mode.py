@@ -1380,18 +1380,23 @@ def handle_key(ctx: Any, event: Any) -> bool:
     elif event.key == pygame.K_ESCAPE:
         # Never leaves the mode: Esc means "drop what I am doing", and losing a
         # workspace full of tabs to a stray keypress is not that.
+        # The move session goes back **unconditionally**, beside ``clear_drag``
+        # below and for a stronger version of its reason. It is the one open
+        # gesture that has already *written* previewed pixels into the layer
+        # with no undo step behind them, so dropping the drag state without it
+        # leaves the layer moved, clean and unrecoverable -- and mid-save those
+        # pixels are exactly what the encoder is reading off the live document,
+        # so they reach the file. Cancelling puts back only what this session
+        # itself wrote, which makes it as safe mid-save as abandoning the drag.
+        moved = doc.cancel_layer_move()
         if tab.playing:
             stop_play(tab)
-        elif not tab.saving:
-            # The move session first, and unconditionally: it is the one open
-            # gesture that has already *written* previewed pixels into the
-            # layer with no undo step behind them, so clearing the drag without
-            # it would leave the layer moved, clean and unrecoverable. Every
-            # other Esc case below only drops something that is still floating.
-            moved = doc.cancel_layer_move()
-            if not moved and doc.floating is not None:
+        elif not tab.saving and not moved:
+            # Only when the move did not already answer the keypress: Esc means
+            # "drop the one thing I am doing", not "unwind everything at once".
+            if doc.floating is not None:
                 doc.cancel_floating()
-            elif not moved and doc.mask is not None:
+            elif doc.mask is not None:
                 doc.deselect()
         # Always: abandoning a half-finished drag is safe mid-save, because it
         # touches the pane's own state and never the document.

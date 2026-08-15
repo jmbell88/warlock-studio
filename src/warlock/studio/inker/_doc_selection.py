@@ -193,7 +193,17 @@ class SelectionOps:
             self.rev += 1
 
     def commit_floating(self: Document) -> bool:
-        """Write the floating pixels where they now sit and stop floating."""
+        """Write the floating pixels where they now sit and stop floating.
+
+        **Canonical-only, tiled or not** -- stated here rather than left to be
+        discovered. The write is clipped to the canvas, so a buffer left hanging
+        over the edge of a tiled document loses its overhang instead of landing
+        on the far side. Everything that *paints* wraps (brush, fill, shapes,
+        wand); this does not, because a floating buffer is a rectangle being
+        positioned rather than coverage being laid down, and wrapping it would
+        have to answer what the transform box and its handles mean when the
+        subject is in four places at once. Deliberate for T-B v1.
+        """
         floating, self.floating = self.floating, None
         if floating is None:
             return False
@@ -351,7 +361,12 @@ class SelectionOps:
         return self.transform_floating(angle=self.floating.angle + degrees)
 
     def paste(self: Document, at: tuple[int, int] | None = None) -> bool:
-        """Paste as a floating buffer, so it can be positioned before it lands."""
+        """Paste as a floating buffer, so it can be positioned before it lands.
+
+        Canonical-only on a tiled document, for :meth:`commit_floating`'s
+        reason and because it is the same landing: the paste floats, and what
+        it eventually writes goes through that method.
+        """
         taken = self.clipboard.take()
         if taken is None:
             return False

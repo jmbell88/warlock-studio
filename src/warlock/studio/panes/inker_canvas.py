@@ -465,7 +465,25 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         _transform_input(state, tab, origin, point, active=active)
         return
     pressed = 0 if imgui.is_mouse_clicked(0) else 1 if imgui.is_mouse_clicked(1) else -1
-    if active and pressed >= 0 and not state.space_held:
+    # **A press is refused while a gesture owns the mouse.** Two buttons is
+    # exactly what C12d made possible and what nothing here could produce
+    # before it: the right button coming down mid-left-drag used to reach
+    # ``_press``, whose inert and Alt-pick arms clear ``drag_kind`` and return
+    # -- abandoning the open gesture in place. A blur or spray stroke was left
+    # with its pixels written and no step (pushed out of band by the *next*
+    # stroke's ``end_stroke``), and a layer move was left previewed, undoable
+    # by nothing and restorable from a snapshot the next ``begin_layer_move``
+    # would have rolled the layer back to. One button owns a gesture from press
+    # to release; the other one does nothing until it is over.
+    holding = bool(state.drag_kind) and imgui.is_mouse_down(state.drag_button)
+    if active and pressed >= 0 and not state.space_held and not holding:
+        if state.drag_kind:
+            # A gesture whose own button is already up but whose release has
+            # not been dispatched yet -- press and release inside one frame.
+            # Closed here, with the *previous* gesture's tile offset still in
+            # ``state``, so it commits where it was drawn rather than being
+            # orphaned by the press below.
+            _release(ctx, state, tab, _snapped(state, _local(state, point)))
         state.drag_button = pressed
         # The tile the press landed in, fixed for the whole gesture. See
         # ``tiling.tile_offset``: folding per point would jump the brush a full

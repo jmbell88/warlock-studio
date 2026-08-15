@@ -48,6 +48,58 @@ def _alt(monkeypatch, held=True):
     )
 
 
+# --- driving ``_input`` frame by frame --------------------------------------
+#
+# The two-button hazard only exists at the dispatch level: ``_press`` on its own
+# cannot tell that another gesture owns the mouse. So these tests drive the real
+# ``_input`` with a fake mouse, one frame per call, which is the only place the
+# "a press is refused while a gesture owns the mouse" rule can be asserted.
+
+
+class _Mouse:
+    """imgui's mouse, as much of it as ``_input`` reads."""
+
+    def __init__(self) -> None:
+        self.at = (0.0, 0.0)
+        self.down = {0: False, 1: False, 2: False}
+        self.clicked = {0: False, 1: False, 2: False}
+
+    def module(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            get_io=lambda: SimpleNamespace(
+                mouse_wheel=0.0, key_shift=False, key_alt=False, delta_time=1.0 / 60.0
+            ),
+            get_mouse_pos=lambda: SimpleNamespace(x=self.at[0], y=self.at[1]),
+            is_mouse_clicked=lambda button: self.clicked[button],
+            is_mouse_down=lambda button: self.down[button],
+            is_mouse_dragging=lambda button: False,
+        )
+
+
+@pytest.fixture
+def driven(monkeypatch):
+    """``_input`` with a fake mouse, at identity view so screen == image."""
+    mouse = _Mouse()
+    monkeypatch.setattr(inker_canvas, "imgui", mouse.module())
+    state = inker_state.InkerState(fg=FG, bg=BG)
+    tab = SimpleNamespace(
+        doc=inker.Document.blank(*SIZE),
+        tiled="off",
+        busy=False,
+        view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0), fitted=True),
+    )
+
+    def frame(at, *, click=None, down=()):
+        mouse.at = (float(at[0]), float(at[1]))
+        mouse.clicked = {0: False, 1: False, 2: False}
+        if click is not None:
+            mouse.clicked[click] = True
+        mouse.down = {b: b in down for b in (0, 1, 2)}
+        inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=True)
+
+    return state, tab, frame
+
+
 # --- the tables -------------------------------------------------------------
 
 
@@ -326,6 +378,96 @@ def test_arrow_nudge_is_gated_on_the_move_tool(scene):
     state.tool = "brush"
     assert not inker_mode.nudge(state, tab, 1, 0)
     assert not tab.doc.history.can_undo
+
+
+# --- two buttons at once (the C12d regression) ------------------------------
+
+
+def test_a_right_click_mid_layer_move_does_not_abandon_the_move(driven):
+    """The critical one. Before the guard, the right button coming down
+    mid-drag reached ``_press``, whose inert arm cleared ``drag_kind`` and
+    returned -- so the release never committed, the layer stayed at the
+    previewed offset with no undo step and no dirty flag, and the *next*
+    ``begin_layer_move`` would have rolled it back from a stale snapshot,
+    taking every stroke painted in between with it."""
+    state, tab, frame = driven
+    tab.doc.stack.active.pixels[4:8, 4:8] = FG
+    tab.doc.invalidate_all()
+    state.tool = "move"
+
+    frame((6, 6), click=0, down=(0,))
+    assert state.drag_kind == "layer_move"
+    frame((9, 6), down=(0,))
+    assert tab.doc._move is not None
+
+    frame((9, 6), click=1, down=(0, 1))
+    # Ignored outright: the gesture is untouched and still owned by button 0.
+    assert state.drag_kind == "layer_move"
+    assert state.drag_button == 0
+    assert tab.doc._move is not None
+
+    frame((9, 6), down=())
+    assert state.drag_kind == ""
+    assert tab.doc._move is None
+    assert tab.doc.history.can_undo  # committed, not orphaned
+    _ys, xs = tab.doc.stack.active.pixels[..., 3].nonzero()
+    assert int(xs.min()) == 7
+
+
+def test_a_right_click_mid_blur_stroke_does_not_orphan_the_stroke(driven):
+    """The other half of the same bug: blur, smudge and spray are paint tools
+    but not right-button tools, so a right-click mid-stroke hit the inert gate
+    and left ``doc._stroke`` open with its pixels already written -- pushed out
+    of band by the *next* stroke's ``end_stroke``."""
+    state, tab, frame = driven
+    tab.doc.stack.active.pixels[:] = 255
+    tab.doc.invalidate_all()
+    state.tool = "blur"
+
+    frame((10, 10), click=0, down=(0,))
+    assert state.drag_kind == "paint"
+    stroke = tab.doc._stroke
+    assert stroke is not None
+
+    frame((14, 10), click=1, down=(0, 1))
+    assert state.drag_kind == "paint"
+    assert tab.doc._stroke is stroke  # the same open stroke, untouched
+
+    frame((14, 10), down=())
+    assert tab.doc._stroke is None
+
+
+def test_a_press_and_release_in_one_frame_closes_before_the_next_press(driven):
+    """The narrow case the guard alone does not cover: the owning button is
+    already up when the next press arrives, so nothing is "holding" -- and the
+    gesture would be orphaned by the press rather than by the button. Closed
+    explicitly, with the previous gesture's tile offset still in state."""
+    state, tab, frame = driven
+    tab.doc.stack.active.pixels[4:8, 4:8] = FG
+    tab.doc.invalidate_all()
+    state.tool = "move"
+
+    frame((6, 6), click=0, down=(0,))
+    frame((9, 6), down=(0,))
+    # Left up and right down in the same frame.
+    frame((9, 6), click=1, down=(1,))
+    assert tab.doc._move is None  # the move was closed, not left open
+    assert tab.doc.history.can_undo
+
+
+def test_the_guard_does_not_stop_an_ordinary_second_gesture(driven):
+    """The control: refusing a press while a gesture owns the mouse must not
+    refuse the *next* one once the button is up."""
+    state, tab, frame = driven
+    state.tool = "brush"
+    state.nib = "square"
+    state.brush_size = 3
+
+    frame((8, 8), click=0, down=(0,))
+    frame((8, 8), down=())
+    assert state.drag_kind == ""
+    frame((20, 20), click=0, down=(0,))
+    assert state.drag_kind == "paint"
 
 
 def test_cancelling_a_move_that_is_not_open_falls_through(scene):

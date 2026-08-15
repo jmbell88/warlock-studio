@@ -143,16 +143,49 @@ def test_a_content_locked_layer_refuses_to_open_a_session():
     assert doc.floating is not None
 
 
-def test_beginning_twice_cancels_the_first_session_rather_than_stacking_them():
+def test_beginning_twice_commits_the_first_session_rather_than_reverting_it():
+    """``end_layer_move``, and the reason it is not ``cancel``. A session still
+    open when the next one begins ended somewhere this class cannot see, so its
+    snapshot is of unknown age -- restoring from it would roll the layer back
+    past whatever happened in between. Committing records what actually
+    happened as a step and leaves the layer where it looks like it is."""
     doc = _doc()
     doc.begin_layer_move()
     doc.preview_layer_move(4, 0)
     doc.begin_layer_move()
     doc.preview_layer_move(1, 0)
     doc.commit_layer_move()
-    # The second session's snapshot is the *unmoved* layer, so the total offset
-    # is one pixel and not five.
-    assert _box(doc.stack.active.pixels) == (5, 4, 9, 8)
+    # Four pixels and then one more, with a step apiece to walk back.
+    assert _box(doc.stack.active.pixels) == (9, 4, 13, 8)
+    doc.undo()
+    assert _box(doc.stack.active.pixels) == (8, 4, 12, 8)
+    doc.undo()
+    assert _box(doc.stack.active.pixels) == (4, 4, 8, 8)
+
+
+def test_an_orphaned_session_cannot_wipe_what_was_painted_after_it():
+    """The catastrophic shape of the C12d bug, pinned at the engine door so no
+    future caller can reach it either: a stale snapshot restored over the layer
+    takes every stroke painted since with it, while those strokes' own
+    ``PatchEdit``s stay in history describing pixels that are no longer there.
+    ``end_layer_move`` commits, so nothing is rolled back over."""
+    doc = _doc()
+    doc.begin_layer_move()
+    doc.preview_layer_move(4, 0)
+    # Somebody else paints, with the session still open.
+    doc.begin_stroke((13.0, 1.0), (0, 255, 0, 255), size=3, nib="square")
+    doc.end_stroke()
+    painted = doc.stack.active.pixels[1, 13].copy()
+    assert int(painted[1]) == 255
+
+    doc.begin_layer_move()
+    assert doc.stack.active.pixels[1, 13].tolist() == painted.tolist()
+
+
+def test_end_layer_move_is_a_no_op_with_nothing_open():
+    doc = _doc()
+    assert doc.end_layer_move() is False
+    assert not doc.history.can_undo
 
 
 def test_a_selection_does_not_scope_it():
