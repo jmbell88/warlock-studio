@@ -41,6 +41,30 @@ def _no_migration():
         os.environ["WARLOCK_NO_MIGRATE"] = previous
 
 
+@pytest.fixture(autouse=True)
+def _no_native_dialogs(monkeypatch):
+    """No test may block the suite on a real ``MessageBoxW``.
+
+    ``instance.alert`` and ``instance.alert_fatal`` raise genuine modal native
+    dialogs on Windows -- by design, for a user whose GL context is gone. A
+    test that drives the crash path (``test_splash.py`` and
+    ``test_studio_runtime.py`` both run ``App.run()`` into ``_report_crash``)
+    would park the whole suite on a box nobody is there to click; an unattended
+    run wedges at that test forever. Autouse for the same reason as
+    ``_no_migration``: one test file that forgets the stub is the whole
+    accident. A test that wants to assert the dialog's contents can still
+    monkeypatch over this with its own recorder.
+    """
+    from warlock import instance
+
+    shown: list[tuple] = []
+    monkeypatch.setattr(instance, "alert", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr(
+        instance, "alert_fatal", lambda *a, **k: (shown.append(a), False)[1]
+    )
+    return shown
+
+
 @pytest.fixture
 def store(tmp_path):
     s = JobStore(tmp_path / "jobs.sqlite")
