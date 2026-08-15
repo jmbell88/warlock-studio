@@ -1308,6 +1308,32 @@ def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab.doc.begin_transform():
         state.transforming = True
         state.clear_drag()
+        _warn_rotsprite(ctx, state, tab)
+    elif tab.doc.write_locked():
+        # The one refusal worth saying out loud from here: a transform lifts,
+        # and a lift is a cut. Every other way of reaching a locked layer goes
+        # through the canvas, which raises its own toast on the press.
+        ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+
+
+def _warn_rotsprite(ctx: Any, state: Any, tab: InkerDoc) -> None:
+    """Say once, at the start of the gesture, that RotSprite will not be used.
+
+    Once and here rather than at the engine's fallback, because the fallback is
+    reached on every mouse-move of a rotate drag: a toast per frame would be
+    the loudest bug in the editor. The engine falls back silently for exactly
+    that reason -- see ``transform.ROTSPRITE_MAX_PIXELS``.
+    """
+    from .inker import transform
+
+    buf = tab.doc.floating
+    if state.resample != "rotsprite" or buf is None:
+        return
+    if transform.rotsprite_fits(buf.size):
+        return
+    ctx.toast(
+        "Too big for RotSprite -- rotating with nearest neighbour instead.", "warn"
+    )
 
 
 def end_transform(ctx: Any, *, commit: bool) -> None:
@@ -1704,7 +1730,9 @@ def handle_key(ctx: Any, event: Any) -> bool:
 # ``e`` joins them because plain Ctrl+E now writes the document into the
 # library: it flattens the layer stack, which is the same read a save makes and
 # is just as wrong to take while one is in flight.
-_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e"})
+# ``j`` joins them for the ordinary reason: layer-from-selection adds a layer
+# (a track, on an animated document) and may cut pixels out of another.
+_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e", "j"})
 
 
 def _ctrl_key(
@@ -1746,7 +1774,18 @@ def _ctrl_key(
     elif name == "a":
         doc.select_all()
     elif name == "d":
-        doc.deselect()
+        # Ctrl+Shift+D brings back what Ctrl+D took away, the pair every other
+        # editor binds. It refuses a mask whose shape the canvas has outgrown.
+        doc.reselect() if shift else doc.deselect()
+    elif name == "j":
+        # Ctrl+J *copies* the selection onto a layer of its own and
+        # Ctrl+Shift+J *cuts* it, which is the way round Photoshop and every
+        # editor that followed it bind the pair: the plain chord is the
+        # non-destructive one. Worth stating, because the obvious reading is
+        # the opposite -- plain does the whole thing, Shift does less -- and
+        # the whole point of a shortcut is that it matches the hand that
+        # already knows it. Both are one Ctrl+Z.
+        doc.layer_from_selection(cut=shift)
     elif name == "c":
         doc.copy()
     elif name == "x":

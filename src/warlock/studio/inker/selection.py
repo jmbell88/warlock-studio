@@ -200,6 +200,30 @@ class SelectionMask:
             return SelectionMask(np.minimum(self.mask, other.mask))
         raise ValueError(f"unknown combine op {op!r}")
 
+    def translated(self, dx: int, dy: int) -> SelectionMask:
+        """The same mask slid by whole pixels, with zeros behind it.
+
+        Zero-filled rather than rolled. A selection is a statement about a
+        region of *this* canvas, so what leaves one edge has left -- wrapping it
+        round to the other side would put coverage where the user dragged a
+        selection away from, which is the one thing moving it is meant to
+        avoid. Whole pixels, because a fractional slide would have to resample
+        the mask and a hard-edged marquee would go soft the first time it was
+        nudged.
+        """
+        out = np.zeros_like(self.mask)
+        height, width = self.mask.shape
+        dx, dy = int(dx), int(dy)
+        sx, sy = max(0, -dx), max(0, -dy)
+        tx, ty = max(0, dx), max(0, dy)
+        copy_w = min(width - sx, width - tx)
+        copy_h = min(height - sy, height - ty)
+        if copy_w > 0 and copy_h > 0:
+            out[ty : ty + copy_h, tx : tx + copy_w] = self.mask[
+                sy : sy + copy_h, sx : sx + copy_w
+            ]
+        return SelectionMask(out)
+
     def inverted(self) -> SelectionMask:
         return SelectionMask((255 - self.mask).astype(np.uint8))
 
@@ -569,6 +593,10 @@ class FloatingBuffer:
     source_mask: np.ndarray | None = None
     angle: float = 0.0
     scale: tuple[float, float] = (1.0, 1.0)
+    #: Slant, in degrees per axis. Trailing and defaulted like the two above,
+    #: and re-rendered from ``source`` with them rather than compounded -- a
+    #: shear dragged back and forth is one shear, not a chain of them.
+    shear: tuple[float, float] = (0.0, 0.0)
 
     @property
     def lifted(self) -> bool:
@@ -586,20 +614,46 @@ class FloatingBuffer:
 
     @property
     def transformed(self) -> bool:
-        return abs(self.angle) > 1e-6 or self.scale != (1.0, 1.0)
+        return (
+            abs(self.angle) > 1e-6
+            or self.scale != (1.0, 1.0)
+            or self.shear != (0.0, 0.0)
+        )
+
+    @property
+    def base_size(self) -> tuple[int, int]:
+        """The lifted pixels' own size -- what ``scale`` is a factor *of*.
+
+        The numeric width and height fields need this: ``size`` is the size
+        after the transform, so deriving a scale factor from it would compound
+        every keystroke against the result of the last one.
+        """
+        source = self.pixels if self.source is None else self.source
+        return (source.shape[1], source.shape[0])
 
     def transform(
         self,
         *,
         angle: float | None = None,
         scale: tuple[float, float] | None = None,
+        shear: tuple[float, float] | None = None,
         resample: str = "smooth",
     ):
-        """Re-render from the lifted pixels at a new angle and scale.
+        """Re-render from the lifted pixels at a new angle, scale and slant.
 
         The centre is held fixed rather than the top-left: rotating about a
         corner sends the subject off across the canvas, which is not what
         grabbing a rotate handle means.
+
+        **Scale, then shear, then rotate**, and the order is part of the
+        contract because these do not commute -- shearing a turned rectangle
+        and turning a sheared one are different pictures, and the numbers in
+        the panel have to mean one of them. This order is the one that reads
+        the way the fields are written: the scale is a statement about the
+        lifted pixels, the shear slants that, and the rotation turns the whole
+        result. It is also the order that keeps each field independent, since a
+        rotate applied first would make the shear axes something other than the
+        page's.
 
         ``resample`` reaches the *mask* as well as the pixels, and that is not
         an oversight to tidy up later: a nearest-neighbour rotation whose mask
@@ -616,6 +670,8 @@ class FloatingBuffer:
             self.angle = float(angle)
         if scale is not None:
             self.scale = (max(0.01, float(scale[0])), max(0.01, float(scale[1])))
+        if shear is not None:
+            self.shear = (float(shear[0]), float(shear[1]))
 
         cx, cy = self.centre
         pixels, mask = self.source, self.source_mask
@@ -624,6 +680,9 @@ class FloatingBuffer:
         if target != (width, height):
             pixels = tf.scale(pixels, target, resample=resample)
             mask = tf.scale(mask, target, resample=resample)
+        if self.shear != (0.0, 0.0):
+            pixels = tf.shear(pixels, self.shear, resample=resample)
+            mask = tf.shear(mask, self.shear, resample=resample)
         if abs(self.angle) > 1e-6:
             pixels = tf.rotate(pixels, self.angle, expand=True, resample=resample)
             mask = tf.rotate(mask, self.angle, expand=True, resample=resample)

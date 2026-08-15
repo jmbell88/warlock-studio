@@ -263,6 +263,46 @@ transparency does not. It is how you recolour lineart or shade a shape without s
 and it makes the eraser a no-op on that layer, because erasing *is* changing transparency. The lock
 is saved with the document; other editors ignore it and open the layer as an ordinary one.
 
+**Lock layer** is the stronger one. A locked layer refuses every tool: no strokes, fills,
+gradients, filters, lifts or pastes land on it, and the canvas says so once per press rather than
+swallowing the click. What it deliberately does *not* stop is managing the layer — renaming,
+hiding, reordering and deleting all still work — or anything that is a statement about the whole
+document, so a rotate, a crop, a canvas resize and Flatten apply regardless. Undo also works
+underneath the lock: locking a layer after an edit does not wedge the history that already holds
+it. Like Lock alpha it is saved with the document and ignored by other editors.
+
+**Merge down** and **Flatten** work on an animated document too, across every frame at once. A
+merge is worked out per pair of cels, so two frames that shared a drawing go on sharing the merged
+one rather than each getting a copy — the links you have survive the merge. Flatten does the same
+for whole frames: frames whose layers were all the same drawings come back sharing one flattened
+cel. Frame durations and tags are untouched either way.
+
+### Groups
+
+**Group** wraps the active layer in a folder. Folders are for organising a stack that has grown
+past what you can read at a glance, and they fold three things down onto everything inside them:
+visibility (hidden folder, hidden contents), opacity (a folder at 50% holding a layer at 50% shows
+it at 25%) and the layer lock (locking a folder locks its layers).
+
+Drag a layer onto a folder's header to move it in, and use the layer's right-click menu to take it
+back out. A folder's own menu offers **Ungroup**, **Rename** and **Lock**; the button beside it
+folds it shut, which is a view setting and is neither saved nor undoable.
+
+Two rules are worth knowing because they are visible. **There are no empty folders** — a folder is
+made *around* layers that are already next to each other, and the last layer leaving one dissolves
+it. And a folder's layers stay together in the stack: grouping layers that are not adjacent is
+refused rather than silently reordering your drawing, and moving a layer into a folder moves it in
+the stack too, as one undo step.
+
+Folders composite **pass-through**: each layer inside still blends with everything beneath it,
+exactly as it did before you grouped them, with the folder's opacity and visibility folded in. What
+that means in practice is that a folder has no blend mode of its own — *isolated* group
+compositing, where the folder is rendered to its own buffer and blended once, is not implemented in
+this build.
+
+Folders are saved as OpenRaster's own nested stacks, so one made here opens as a group layer in
+Krita, and a Krita file's groups open as folders here.
+
 One rule about erasing is worth stating plainly, because it differs from some editors. **The eraser
 makes pixels transparent.** It does not paint the background colour. The background colour — the
 matte — is a property of the document, applied once when the image is flattened for export. So what
@@ -287,6 +327,15 @@ transform's scale and rotate as well. **Smooth** filters, which is right for a p
 generated reference. **Nearest** copies each source pixel whole, which is the only correct answer
 for a drawing whose pixels *are* the artwork — a filtered scale of a 32×32 sprite comes back
 blurred and with thousands of colours in it that were never drawn.
+
+**RotSprite** is the third, and it is about *rotation*. Nearest neighbour is right for scaling
+pixel art and wrong for turning it: a hard-edged diagonal turned by copying whole pixels comes out
+as a staircase with a different tread on every step. RotSprite upscales eight times with an
+edge-preserving filter, turns that with nearest neighbour, and samples the middle of each block
+back down — so the result is still made only of colours you drew, but the staircase is decided on a
+finer lattice. Nothing is interpolated at any stage. It only affects turning, so a scale asked for
+it behaves as Nearest, and above roughly 512×512 pixels a rotate falls back to Nearest and says so,
+because the eight-times upscale costs sixty-four times the memory on every frame of a drag.
 
 The 3×3 **anchor** grid says where the old image sits in the new canvas, and it belongs to Resize
 canvas only: scaling has no slack to put anywhere. Growing a canvas anchored centre adds room on
@@ -333,6 +382,23 @@ With a selection live, the **selection** section offers **All**, **None**, **Inv
 **Feather** radius slider up to 32 pixels with a **Feather** button, and **Crop to selection**. The
 same actions have keyboard shortcuts: `Ctrl+A`, `Ctrl+D` and `Ctrl+Shift+I`.
 
+**Reselect** (`Ctrl+Shift+D`) brings back the selection you last dismissed, which is the other half
+of `Ctrl+D` and saves redrawing a lasso you only meant to step outside of for a moment. A selection
+from before a resize or a crop cannot come back: it describes a canvas that no longer exists, and
+placing it somewhere would be a guess.
+
+Dragging *inside* an existing selection with a selection tool and no modifier moves its **edges**
+rather than replacing it — the marching ants follow the cursor and the pixels underneath do not
+move at all. That is the difference between this and the Move tool, which moves the pixels. Shift
+and Alt still start the add and subtract drags they always did, even when the drag starts inside
+the selection.
+
+**Layer from selection** promotes the selection onto a layer of its own, lined up with what it came
+from. `Ctrl+J` copies it and leaves the original where it was; `Ctrl+Shift+J` moves it, cutting it
+out of the layer it was on. Either way it is one undo step, a feathered selection makes a feathered
+layer rather than a hard-edged crop of one, and the new layer joins whatever folder the one it came
+from is in.
+
 **This layer** selects what is painted on the active layer, at the coverage it is painted at — a
 soft brush edge becomes a soft selection rather than a jagged one. It reads the layer's own pixels,
 so its opacity and blend mode do not enter into it.
@@ -357,9 +423,24 @@ Cancelling a lift — where the buffer was cut out of a layer — puts the pixel
 step from history entirely, rather than leaving it on the redo stack where `Ctrl+Y` could replay the
 cut with no buffer left to restore.
 
-**Free transform** (`Ctrl+T`, or the button in the tool options) rotates and scales the selection,
-or the whole layer when there is no selection. It is modal: while transforming, **Enter** applies
-and **Esc** cancels, and nothing else can change the tool out from under a half-finished transform.
+**Free transform** (`Ctrl+T`, or the button in the tool options) rotates, scales and slants the
+selection, or the whole layer when there is no selection. It is modal: while transforming, **Enter**
+applies and **Esc** cancels, and nothing else can change the tool out from under a half-finished
+transform.
+
+The box has eight grab points. The four corners scale both axes at once and the four edge midpoints
+scale one, so a sprite can be made taller without being made wider; hold **Shift** on any of them
+to keep the scale uniform. The arm above the box rotates, and Shift snaps that to 15°. The row
+above the canvas carries the same numbers — **Angle**, **Scale X** and **Scale Y** with a **Link**
+toggle — because a drag cannot express "exactly 90 degrees" and a rotation that is nearly square is
+worse than either.
+
+The tool options panel adds typed **X**, **Y**, **W**, **H**, **Angle** and **Slant** fields while
+a transform is running. Slant is an italic: two numbers in degrees, horizontal then vertical. It is
+applied after the scale and before the rotation, so the two slant axes are always the page's, and
+in this build it has numeric fields only — there are no slant handles on the box. Two large slants
+the same way fight each other — at 45° each they would squash the picture onto a line — so a pair
+that extreme comes back unslanted rather than as a sliver.
 
 ## Animation
 

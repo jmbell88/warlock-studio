@@ -13,8 +13,21 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from . import composite as cp
-from .anim_edits import TrackAddEdit, TrackMoveEdit, TrackPropsEdit, TrackRemoveEdit
+from . import groups as gp
+from .anim_edits import (
+    CelSetEdit,
+    TrackAddEdit,
+    TrackMoveEdit,
+    TrackPropsEdit,
+    TrackRemoveEdit,
+)
 from .animation import Track
+from .groups import (
+    GroupAddEdit,
+    GroupDissolveEdit,
+    GroupPropsEdit,
+    MembershipEdit,
+)
 from .layers import Layer, LayerStack, new_uid
 from .undo import (
     CompoundEdit,
@@ -32,6 +45,57 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class LayerOps:
     """Layer and track structure, mixed into :class:`~.document.Document`."""
 
+    # -- the content lock ---------------------------------------------------
+    #
+    # This is the one comment that owns where the line is drawn, because the
+    # lock is only worth anything if every door agrees on it.
+    #
+    # **What it guards is tool-level writes**, and the enforcement sits at the
+    # engine ops themselves -- ``begin_stroke``, ``write_colour`` (which is
+    # where fill and the shapes end up), ``gradient``, ``begin_filter``,
+    # ``lift``, ``paste``, ``layer_from_selection``'s cut half and
+    # ``merge_down`` -- each refusing *before* it mutates anything. Below those
+    # doors, undo writes raw pixels through ``PatchEdit``, and deliberately so:
+    # a lock switched on after an edit must not wedge the history that already
+    # holds it, and the alternative (a lock that silently swallows a Ctrl+Z) is
+    # much worse than one that lets a user undo work they locked afterwards.
+    #
+    # **``commit_floating`` is deliberately not refused.** A float outlives lock
+    # toggles -- it survives selecting another layer, another frame and the
+    # panel checkbox -- and every save, every geometry op and every structural
+    # op commits it first, so refusing here would not protect the pixels, it
+    # would wedge the document: the buffer could never land and never be saved.
+    #
+    # **Document-scope ops apply regardless**: geometry (flip, rotate, scale,
+    # crop, canvas resize), ``apply_matte``, the palette rewrites and
+    # ``flatten_layers``. Those are statements about the whole document rather
+    # than about a layer, and a single locked layer vetoing a canvas resize is a
+    # document that cannot be worked on at all. Property edits, rename, hide,
+    # reorder and delete stay legal for the same reason -- the lock is about
+    # what is *painted*, not about whether the layer may be managed.
+    #
+    # The engine's answer is a plain refusal (False / None): it is the panes
+    # that turn one press into one toast, because only they know what a press
+    # is and the engine is asked this sixty times a second while a stroke runs.
+
+    def write_locked(self: Document, layer: Layer | None = None) -> bool:
+        """Whether a tool-level write to this layer must be refused.
+
+        Defaults to the active layer, which is what every door but
+        ``merge_down`` is asking about. On an animated document the property is
+        the *track*'s and ``layers_for`` copies it down onto the materialised
+        cel, so reading it off the layer here is reading the track.
+        """
+        layer = self.stack.active if layer is None else layer
+        if bool(layer.locked):
+            return True
+        if not self.groups:
+            return False
+        # A group's lock folds down onto everything inside it (L3): locking a
+        # folder is how a user protects six layers at once, and a lock that
+        # stopped at the folder would be a checkbox that does nothing.
+        return gp.resolve(self.groups, self.group_of, self.member_uid_of(layer))[2]
+
     def add_layer(self: Document, name: str | None = None) -> Layer:
         """A new empty layer, or on an animated document a new empty *track*.
 
@@ -46,22 +110,69 @@ class LayerOps:
         stroke on any frame autovivifies exactly the one cel it needs.
         """
         self.commit_floating()
+        # The group the new row joins, read *before* the insert: a new layer
+        # goes above the active one, and one that stayed outside the group the
+        # active row is in would land in the middle of that group's span and
+        # break its contiguity. Inheriting is also what a user means -- "add a
+        # layer" while working inside a folder is a layer in that folder.
+        parent = self._parent_of_active()
         if self.anim is not None:
             index = self.stack.active_index + 1
             track = Track(name=name or f"Layer {len(self.anim.tracks) + 1}")
             self._put_track(index, track, {})
-            self.history.push(TrackAddEdit(index, track, {}, pinned=False))
+            self._push_with_inheritance(
+                TrackAddEdit(index, track, {}, pinned=False), parent
+            )
             return self.stack[self.stack.active_index]
         width, height = self.size
         layer = Layer.empty(width, height, name or f"Layer {len(self.stack) + 1}")
         index = self.stack.insert(self.stack.active_index + 1, layer)
-        self.history.push(LayerAddEdit(index, layer))
         self.invalidate_all()
+        self._push_with_inheritance(LayerAddEdit(index, layer), parent)
         return layer
+
+    def _parent_of_active(self: Document) -> int | None:
+        if not self.groups:
+            return None
+        order = self.member_uids()
+        index = self.stack.active_index
+        return self.group_of.get(order[index]) if 0 <= index < len(order) else None
+
+    def inherit_group_edits(self: Document, parent: int | None) -> list[Any]:
+        """Put the row that was *just added* into ``parent``, returning the step.
+
+        Every op that inserts a row above the active one has to do this, and
+        "the row that was just added" is unambiguous because all of them leave
+        it active: ``LayerStack.insert`` sets ``active_index`` and ``_put_track``
+        materialises with ``active=index``. Taking the member uid from
+        ``member_uids()[active_index]`` rather than from a parameter is what
+        makes this callable from ``_add_layer_edit``'s callers too, which is
+        where the inheritance was missing.
+
+        A row inserted into the middle of a group's span that did **not** join
+        it splits that span, and the contiguity invariant would be false with
+        nothing to say so -- which is exactly what a paste inside a folder used
+        to do.
+        """
+        if parent is None:
+            return []
+        member = self.member_uids()[self.stack.active_index]
+        self._set_membership(member, parent)
+        return [MembershipEdit(member, None, parent)]
+
+    def _push_with_inheritance(self: Document, edit: Any, parent: int | None) -> None:
+        """Push an add, with the membership the new row inherits folded in."""
+        edits = [edit, *self.inherit_group_edits(parent)]
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
 
     def duplicate_layer(self: Document, index: int | None = None) -> Layer:
         self.commit_floating()
         index = self.stack.active_index if index is None else index
+        # The source's own group, not the active row's: a duplicate belongs
+        # beside what it copies, and it is inserted directly above it.
+        parent = (
+            self.group_of.get(self.member_uids()[index]) if self.groups else None
+        )
         if self.anim is not None:
             track = self.anim.tracks[index]
             copy_track = Track(
@@ -69,6 +180,13 @@ class LayerOps:
                 opacity=track.opacity,
                 visible=track.visible,
                 blend=track.blend,
+                # The two locks as well. The still branch below copies every
+                # property (``Layer.copy`` does), and this list stopping at
+                # four made duplicating a layer quietly *unlock* it on an
+                # animated document and nowhere else -- the fifth place the
+                # track-property list has to agree with itself.
+                alpha_lock=track.alpha_lock,
+                locked=track.locked,
             )
             # Copies, not links -- *from* the original: duplicating a layer to
             # paint a variation on it and having every stroke land on the
@@ -91,11 +209,13 @@ class LayerOps:
                     copies[id(cel)] = copy
                 cels[frame.uid] = copy
             self._put_track(index + 1, copy_track, cels)
-            self.history.push(TrackAddEdit(index + 1, copy_track, cels, pinned=True))
+            self._push_with_inheritance(
+                TrackAddEdit(index + 1, copy_track, cels, pinned=True), parent
+            )
             return self.stack[self.stack.active_index]
         copy = self.stack.duplicate(index)
-        self.history.push(LayerAddEdit(index + 1, copy))
         self.invalidate_all()
+        self._push_with_inheritance(LayerAddEdit(index + 1, copy), parent)
         return copy
 
     def remove_layer(self: Document, index: int | None = None) -> bool:
@@ -103,6 +223,11 @@ class LayerOps:
             return False
         self.commit_floating()
         index = self.stack.active_index if index is None else index
+        # Taken out of the tree *before* the row goes, while the uid is still
+        # findable, and folded into the same step -- a delete that left a
+        # dangling membership behind would keep an empty group alive and the
+        # undo would put the row back outside it.
+        member = self.member_uids()[index] if self.groups else None
         if self.anim is not None:
             track = self.anim.tracks[index]
             cels = {
@@ -111,29 +236,52 @@ class LayerOps:
                 if (cel := self.anim.cels.get((track.uid, frame.uid))) is not None
             }
             self._drop_track(track)
-            self.history.push(
-                TrackRemoveEdit(index, track, cels, pinned=self._released(cels.values()))
+            edit: Any = TrackRemoveEdit(
+                index, track, cels, pinned=self._released(cels.values())
             )
-            return True
-        gone = self.stack.remove(index)
-        self.history.push(LayerRemoveEdit(index, gone))
-        self.invalidate_all()
+        else:
+            gone = self.stack.remove(index)
+            edit = LayerRemoveEdit(index, gone)
+            self.invalidate_all()
+        edits = [edit, *(self._forget_member(member) if member is not None else [])]
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
+
+    def _move_row_edit(self: Document, index: int, to: int) -> Any:
+        """Move a stack row and *return* the step rather than pushing it.
+
+        The body ``move_layer`` used to be, extracted so ``move_into_group``
+        can fold the same move into a compound with the membership change that
+        goes with it -- the ``_add_layer_edit`` refactor, one concern over.
+        """
+        if self.anim is not None:
+            uid = self.anim.tracks[index].uid
+            self._move_track(uid, to)
+            return TrackMoveEdit(uid, index, to)
+        uid = self.stack[index].uid
+        self.stack.move(index, to)
+        self.invalidate_all()
+        return LayerMoveEdit(uid, index, to)
 
     def move_layer(self: Document, index: int, to: int) -> bool:
         to = max(0, min(int(to), len(self.stack) - 1))
         if to == index:
             return False
         self.commit_floating()
-        if self.anim is not None:
-            uid = self.anim.tracks[index].uid
-            self._move_track(uid, to)
-            self.history.push(TrackMoveEdit(uid, index, to))
-            return True
-        uid = self.stack[index].uid
-        self.stack.move(index, to)
-        self.history.push(LayerMoveEdit(uid, index, to))
-        self.invalidate_all()
+        # A reorder can carry a row across a group boundary, and the tree has
+        # to follow or the span it lands in stops being contiguous. Both are
+        # one gesture and therefore one step.
+        edits: list[Any] = [self._move_row_edit(index, to)]
+        if self.groups:
+            order = self.member_uids()
+            member = order[to]
+            before = self.group_of.get(member)
+            after = self._group_for_position(to)
+            if before != after:
+                self._set_membership(member, after)
+                edits.append(MembershipEdit(member, before, after))
+                edits.extend(self._prune_group(before))
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
 
     def set_active_layer(self: Document, index: int) -> None:
@@ -175,29 +323,24 @@ class LayerOps:
         self.invalidate_all()
         return True
 
-    @property
-    def can_restructure(self: Document) -> bool:
-        """Whether merge-down and flatten are available.
-
-        They are not, on an animated document. Both are defined over *one*
-        stack, and an animated document has one per frame -- so the honest
-        versions are "merge these two tracks across every frame", which has to
-        decide what a merge of a linked cel with an unlinked one even means, and
-        "flatten this frame", which throws away every other frame's cels. Both
-        are real features and neither is v1. Refusing is the answer that cannot
-        silently destroy an animation; the layers panel reads this to disable
-        the buttons rather than letting the user find out by pressing them.
-        """
-        return self.anim is None
-
     def merge_down(self: Document, index: int | None = None) -> bool:
         """Flatten a layer into the one beneath it, honouring its blend mode."""
-        if not self.can_restructure:
-            return False
         index = self.stack.active_index if index is None else index
         if index == 0:
             return False
+        # Either participant: the merge writes into the lower layer and takes
+        # the upper one away, so a lock on either is a refusal for the whole op
+        # rather than a merge of half of it.
+        if self.write_locked(self.stack[index]) or self.write_locked(self.stack[index - 1]):
+            return False
         self.commit_floating()
+        # The *upper* row stops existing, so its membership goes with it and
+        # may empty a group; the lower keeps its own, which is what "a merge
+        # across a boundary keeps the lower's membership" means -- the merged
+        # drawing stays where the layer it merged into was.
+        upper_member = self.member_uids()[index] if self.groups else None
+        if self.anim is not None:
+            return self._merge_tracks(index, upper_member)
         width, height = self.size
         upper = self.stack[index]
         lower = self.stack[index - 1]
@@ -225,6 +368,7 @@ class LayerOps:
         lower.opacity, lower.blend = 1.0, "normal"
         removed = self.stack.remove(index)
         self.stack.active_index = index - 1
+        self.invalidate_all()
         self.history.push(
             CompoundEdit(
                 [
@@ -233,15 +377,127 @@ class LayerOps:
                         lower.uid, props_before, {"opacity": 1.0, "blend": "normal"}
                     ),
                     LayerRemoveEdit(index, removed),
+                    *(
+                        self._forget_member(upper_member)
+                        if upper_member is not None
+                        else []
+                    ),
                 ]
             )
         )
-        self.invalidate_all()
+        return True
+
+    def _merge_tracks(self: Document, index: int, upper_member: int | None = None) -> bool:
+        """Merge-down across every frame at once, as one undo step.
+
+        The question this has to answer -- and the reason it was refused
+        outright for so long -- is what a merge of a linked cel with an unlinked
+        one means. The answer is the one the rest of the grid already gives: a
+        link is two slots holding one object, so the merge is **memoised on the
+        pair of cels it consumes**. Two frames whose lower and upper cels are
+        both the same objects are two frames whose merged result is the same
+        drawing, so they get one ``Layer`` and stay linked; a frame where the
+        upper differs gets its own. Nothing has to be told which slots were
+        linked -- the identity of the inputs decides it.
+
+        Three rules fall out of that and each of them was a bug waiting:
+
+        The lower's cels are **never mutated in place**, as the still branch
+        mutates its layer. A lower cel may be linked across frames where the
+        upper is not, so writing merged pixels into it would push one frame's
+        merge into another frame that never asked for it.
+
+        The merged layers are minted **once, here**, and the ``CelSetEdit``
+        holds them -- ``unlink_cel``'s rule. A redo that merged again would hand
+        back layers with new identities and strand every patch recorded above.
+
+        And a slot with **no upper cel at all** gets no edit: there is nothing
+        to merge into the lower, and minting a copy of it would break its links
+        and cost the grid a full plane per frame for no change.
+        """
+        anim = self.anim
+        assert anim is not None
+        width, height = self.size
+        upper_track, lower_track = anim.tracks[index], anim.tracks[index - 1]
+
+        merged_for: dict[tuple[int, int], Layer] = {}
+        upper_cels: dict[int, Layer] = {}
+        edits: list[Any] = []
+        for frame in anim.frames:
+            upper = anim.cels.get((upper_track.uid, frame.uid))
+            if upper is not None:
+                upper_cels[frame.uid] = upper
+            lower = anim.cels.get((lower_track.uid, frame.uid))
+            if upper is None:
+                continue
+            key = (id(lower), id(upper))
+            layer = merged_for.get(key)
+            fresh = layer is None
+            if layer is None:
+                entries = []
+                if lower is not None:
+                    entries.append((lower.pixels, lower_track.opacity, lower_track.blend))
+                if upper_track.visible:
+                    entries.append((upper.pixels, upper_track.opacity, upper_track.blend))
+                layer = Layer(
+                    pixels=cp.to_uint8(cp.stack_region(entries, (0, 0, width, height))),
+                    name=lower_track.name,
+                )
+                merged_for[key] = layer
+            # Written straight into the grid rather than through ``_set_cel``:
+            # that helper ends in ``_anim_changed``, and a forty-frame clip
+            # would rebuild the whole view and recomposite forty times for one
+            # click. The single ``_anim_changed`` at the end is the same answer.
+            anim.cels[(lower_track.uid, frame.uid)] = layer
+            # Charged only where this edit is the first to introduce the pair.
+            # A repeated pair means both the ``before`` and the ``after`` were
+            # counted by an earlier step, and counting them again would spend
+            # the budget on memory that exists once.
+            pinned: Any = frozenset()
+            if fresh:
+                pinned = frozenset(
+                    [id(layer)] + ([] if lower is None else [id(lower)])
+                )
+            edits.append(
+                CelSetEdit(lower_track.uid, frame.uid, lower, layer, pinned=pinned)
+            )
+
+        if not edits:
+            # Nothing anywhere in the upper row: the merge is the removal, and
+            # the still branch's props bake would be a step that changes
+            # nothing. ``remove_layer`` takes the membership with it.
+            return self.remove_layer(index)
+
+        props_before = {"opacity": lower_track.opacity, "blend": lower_track.blend}
+        after = {"opacity": 1.0, "blend": "normal"}
+        # The same argument the still branch makes: the merged pixels already
+        # carry the lower's opacity, and its blend has nothing left to blend
+        # against. Set on the track directly, for the reason the cels above are.
+        lower_track.opacity, lower_track.blend = 1.0, "normal"
+        edits.append(TrackPropsEdit(lower_track.uid, props_before, after))
+
+        self._drop_track(upper_track)
+        edits.append(
+            TrackRemoveEdit(
+                index,
+                upper_track,
+                upper_cels,
+                pinned=self._released(upper_cels.values()),
+            )
+        )
+        if upper_member is not None:
+            edits.extend(self._forget_member(upper_member))
+        self.history.push(CompoundEdit(edits))
+        self._stamp_all()
+        self._anim_changed(active=index - 1)
         return True
 
     def flatten_layers(self: Document) -> None:
         """Collapse the stack to one layer. Undoable as a canvas-level op."""
-        if len(self.stack) == 1 or not self.can_restructure:
+        if self.anim is not None:
+            self._flatten_grid()
+            return
+        if len(self.stack) == 1:
             return
         self.commit_floating()
         # Replay must be a pure function of the document, and minting a uid is
@@ -250,6 +506,71 @@ class LayerOps:
         # is drawn once and closed over, so every replay lands on the same one.
         uid = new_uid()
         self._replay(lambda: self._do_flatten(uid))
+
+    def _flatten_grid(self: Document) -> None:
+        """Collapse an animated document to one track, frame by frame.
+
+        Through ``_replay`` rather than a compound of grid edits, for the reason
+        the still branch takes that path: every cel in the document is thrown
+        away and one per frame appears, so a snapshot is not the expensive
+        answer here, it is the only truthful one.
+
+        **The link partition is computed structurally, at op time.** Two frames
+        whose whole stacks are the same objects flatten to the same picture, so
+        they share one ``Layer`` and stay linked -- and the grouping is worked
+        out *once*, here, then closed over, because replay has to be a pure
+        function of the document and the ``id()``s it is computed from will not
+        survive the snapshot restore that precedes a redo. The uids go the same
+        way and for ``flatten_layers``' own reason: one per group plus one for
+        the track, drawn here and reused by every replay.
+
+        Durations, tags and the layout are untouched. Flatten is a statement
+        about the layers, and a timeline that came back at 10 fps because its
+        rows were merged would be a different kind of edit.
+        """
+        anim = self.anim
+        assert anim is not None
+        if len(anim.tracks) <= 1:
+            return
+        self.commit_floating()
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for i, frame in enumerate(anim.frames):
+            key = tuple(
+                id(anim.cels.get((track.uid, frame.uid))) for track in anim.tracks
+            )
+            groups.setdefault(key, []).append(i)
+        partition = list(groups.values())
+        uids = [new_uid() for _ in partition]
+        track_uid = new_uid()
+        self._replay(lambda: self._do_flatten_grid(partition, uids, track_uid))
+
+    def _do_flatten_grid(
+        self: Document, partition: list[list[int]], uids: list[int], track_uid: int
+    ) -> None:
+        anim = self.anim
+        assert anim is not None
+        size = self.size
+        track = Track(name="Flattened", uid=track_uid)
+        cels: dict[tuple[int, int], Layer] = {}
+        for indices, uid in zip(partition, uids, strict=True):
+            frame = anim.frames[indices[0]]
+            # ``frame_stack``, not a bare one: the flatten has to see the group
+            # fold, or a hidden folder's layers reappear in the flattened cel.
+            # Necessarily *before* the tree is cleared below.
+            flat = self.frame_stack(frame).flatten()
+            layer = Layer(pixels=flat, name=track.name, uid=uid)
+            for i in indices:
+                cels[(track_uid, anim.frames[i].uid)] = layer
+        anim.tracks = [track]
+        anim.cels = cels
+        # One track is nothing for a group to hold, as in ``_do_flatten``.
+        # Idempotent, which replay requires; ``ReplayEdit`` carries the tree it
+        # replaced and puts it back.
+        self.groups, self.group_of = {}, {}
+        # Every frame's flatten really did change, which ``invalidate_all``
+        # deliberately does not assume.
+        self._stamp_all()
+        self.stack = LayerStack(anim.layers_for(anim.frame, size), 0)
 
     def apply_matte(self: Document, alpha: np.ndarray) -> bool:
         """Fold a cutout into the document's alpha, as one undoable step.
@@ -313,3 +634,264 @@ class LayerOps:
     def _do_flatten(self: Document, uid: int) -> None:
         flat = self.stack.flatten()
         self.stack = LayerStack([Layer(pixels=flat, name="Flattened", uid=uid)], 0)
+        # One layer is nothing for a group to hold, so the tree goes with them.
+        # Idempotent, which replay requires; ``ReplayEdit`` carries the tree it
+        # replaced and puts it back.
+        self.groups, self.group_of = {}, {}
+
+    # -- layer groups -------------------------------------------------------
+    #
+    # A parallel tree over the flat stack; ``groups.py`` argues for the shape
+    # and owns the invariant (a group's leaves are contiguous, spans nest,
+    # groups are never empty). What is here is the ops that *maintain* it, and
+    # every one of them is a dictionary edit plus, where it has to be, the
+    # stack move that keeps the contiguity true.
+
+    def _put_group(
+        self: Document, node: Any, members: tuple[int, ...], parent: int | None
+    ) -> None:
+        """Raw hook for ``GroupAddEdit.redo`` / ``GroupDissolveEdit.undo``."""
+        self.groups[node.uid] = node
+        if parent is None:
+            self.group_of.pop(node.uid, None)
+        else:
+            self.group_of[node.uid] = parent
+        for uid in members:
+            self.group_of[uid] = node.uid
+        self._groups_changed()
+
+    def _drop_group(self: Document, group_uid: int) -> None:
+        """Raw hook for the inverse.
+
+        Members are reparented to the group's own parent rather than orphaned,
+        which is what makes dissolving a *nested* group put its layers into the
+        group it was inside rather than at the root -- and is why this is not
+        simply a ``del``.
+        """
+        parent = self.group_of.get(group_uid)
+        for uid, at in list(self.group_of.items()):
+            if at != group_uid:
+                continue
+            if parent is None:
+                del self.group_of[uid]
+            else:
+                self.group_of[uid] = parent
+        self.group_of.pop(group_uid, None)
+        self.groups.pop(group_uid, None)
+        self._groups_changed()
+
+    def _set_group_props(self: Document, group_uid: int, props: dict) -> None:
+        node = self.groups.get(group_uid)
+        if node is None:
+            return
+        for key, value in props.items():
+            setattr(node, key, value)
+        self._groups_changed()
+
+    def _set_membership(self: Document, member_uid: int, parent: int | None) -> None:
+        if parent is None:
+            self.group_of.pop(member_uid, None)
+        else:
+            self.group_of[member_uid] = parent
+        self._groups_changed()
+
+    def _groups_changed(self: Document) -> None:
+        """What every group edit ends with.
+
+        ``invalidate_all`` refreshes the fold and recomposites; ``_stamp_all``
+        is the animated half, for ``_anim_changed``'s reason -- a group is
+        authoritative over every frame its tracks appear in, so hiding one
+        really does alter every cached flatten in the document.
+        """
+        self._stamp_all()
+        self.invalidate_all()
+
+    def _prune_group(self: Document, group_uid: int | None) -> list[Any]:
+        """Dissolve ``group_uid`` if nothing is left in it, and its parents too.
+
+        Empty groups are disallowed rather than tolerated, because an empty one
+        has no span: it is neither contiguous nor not, it composites nothing,
+        and it would sit in the panel as a folder that cannot be refilled
+        without a drop target it does not have. So the last member leaving
+        takes the group with it, upwards.
+        """
+        edits: list[Any] = []
+        while group_uid is not None and group_uid in self.groups:
+            if gp.leaves_of(self.group_of, self.member_uids(), group_uid):
+                break
+            node = self.groups[group_uid]
+            parent = self.group_of.get(group_uid)
+            self._drop_group(group_uid)
+            edits.append(GroupDissolveEdit(node, (), parent))
+            group_uid = parent
+        return edits
+
+    def _forget_member(self: Document, member_uid: int) -> list[Any]:
+        """Take a row out of the tree, returning the steps that did it.
+
+        Called by the ops that make a row stop existing -- a delete, and the
+        upper half of a merge. Split out because both have to answer the same
+        two questions: what was this row's parent, and did taking it away leave
+        an empty group behind.
+        """
+        parent = self.group_of.get(member_uid)
+        if parent is None:
+            return []
+        self._set_membership(member_uid, None)
+        return [MembershipEdit(member_uid, parent, None), *self._prune_group(parent)]
+
+    def _group_for_position(self: Document, index: int) -> int | None:
+        """Which group a row at ``index`` belongs in to keep spans contiguous.
+
+        The deepest group that contains *both* neighbours, or the one neighbour
+        there is at the ends of the stack. That is the only answer that cannot
+        split a span: a row dropped between two members of one group must join
+        it, and a row dropped between two different groups must be in neither.
+        """
+        order = self.member_uids()
+        below = gp.ancestry(self.group_of, order[index - 1]) if index > 0 else None
+        above = (
+            gp.ancestry(self.group_of, order[index + 1])
+            if index + 1 < len(order)
+            else None
+        )
+        if below is None:
+            return above[0] if above else None
+        if above is None:
+            return below[0] if below else None
+        for guid in below:  # innermost first
+            if guid in above:
+                return guid
+        return None
+
+    def group_layers(
+        self: Document, indices: list[int] | None = None, name: str = "Group"
+    ) -> Any:
+        """Wrap a contiguous run of layers in a new group. Returns it, or None.
+
+        Created *around* rows that already exist rather than as an empty folder
+        to drag things into, which is the same decision "empty groups are
+        disallowed" makes from the other side -- and it means the contiguity
+        invariant holds by construction at the moment of creation rather than
+        being restored afterwards.
+
+        A run that is not contiguous is refused rather than gathered up. Moving
+        layers is a visible change to the painter's order, and a grouping
+        gesture that silently reordered somebody's stack would be much worse
+        than one that says no; the panel offers the run it can see.
+        """
+        if indices is None:
+            indices = [self.stack.active_index]
+        rows = sorted({max(0, min(int(i), len(self.stack) - 1)) for i in indices})
+        if not rows or rows != list(range(rows[0], rows[-1] + 1)):
+            return None
+        order = self.member_uids()
+        members = tuple(order[i] for i in rows)
+        # The new group goes *inside* whatever already contains the run, which
+        # is how nesting happens without a second entry point. Taken from the
+        # first member, and the others must agree -- otherwise the run straddles
+        # a boundary and grouping it would cut a span in half.
+        parent = self.group_of.get(members[0])
+        if any(self.group_of.get(uid) != parent for uid in members[1:]):
+            return None
+        self.commit_floating()
+        node = gp.GroupNode(name=name)
+        self._put_group(node, members, parent)
+        self.history.push(GroupAddEdit(node, members, parent))
+        return node
+
+    def ungroup(self: Document, group_uid: int) -> bool:
+        """Dissolve a group, leaving its members where they are in the stack."""
+        node = self.groups.get(group_uid)
+        if node is None:
+            return False
+        self.commit_floating()
+        members = tuple(uid for uid, at in self.group_of.items() if at == group_uid)
+        parent = self.group_of.get(group_uid)
+        self._drop_group(group_uid)
+        self.history.push(GroupDissolveEdit(node, members, parent))
+        return True
+
+    def set_group_props(self: Document, group_uid: int, **props: Any) -> bool:
+        """Name, visibility, opacity, lock. One undo step, or none if nothing
+        changed -- the rule ``set_layer_props`` follows one level down."""
+        node = self.groups.get(group_uid)
+        if node is None:
+            return False
+        before = {key: getattr(node, key) for key in props}
+        if before == props:
+            return False
+        self._set_group_props(group_uid, dict(props))
+        self.history.push(GroupPropsEdit(group_uid, before, dict(props)))
+        return True
+
+    def move_into_group(
+        self: Document, index: int, group_uid: int | None, *, at_top: bool = True
+    ) -> bool:
+        """Move the layer at ``index`` into ``group_uid`` (or out to the root).
+
+        One ``CompoundEdit`` of the membership change and the stack move that
+        keeps the group contiguous, because the two are one gesture: a
+        membership edit undone without its move would leave a group whose
+        leaves are scattered through the stack, and the invariant everything
+        else leans on would be false with nothing to say so.
+
+        A group may not be moved into its own subtree, and the refusal is by
+        name (``groups.descends_from``) rather than by letting ``ancestry``
+        quietly stop at the repeat -- a group inside itself is not a state any
+        op should be able to reach. (v1 moves stack rows; a *group* is moved by
+        dissolving it and grouping again, which is what the panel offers.)
+        """
+        if not 0 <= index < len(self.stack):
+            return False
+        order = self.member_uids()
+        member = order[index]
+        if group_uid is not None:
+            if group_uid not in self.groups:
+                return False
+            if gp.descends_from(self.group_of, group_uid, member):
+                return False
+        before = self.group_of.get(member)
+        if before == group_uid:
+            return False
+        self.commit_floating()
+
+        # Where the row has to end up for every span to stay contiguous, worked
+        # out *before* the membership changes, against the stack as it stands.
+        to = index
+        if group_uid is not None:
+            leaves = [
+                order.index(uid)
+                for uid in gp.leaves_of(self.group_of, order, group_uid)
+            ]
+            if leaves:
+                # Landing at the top of the span keeps it contiguous whichever
+                # side the layer came from: an index above the span's top is
+                # adjacent to it, and one below it is inside it already.
+                to = max(leaves) if at_top else min(leaves)
+        elif before is not None:
+            # Going to the root, and the harder direction: a row taken out of
+            # the *middle* of a span leaves that span in two halves, so it has
+            # to move out of the way as well. To the top of the outermost group
+            # it is leaving, which -- because removing it closes the gap behind
+            # it -- lands it directly above everything that stays. A row
+            # already at either end of the span is out of the way where it is.
+            chain = gp.ancestry(self.group_of, member)
+            outer = chain[-1] if chain else before
+            span = [
+                order.index(uid)
+                for uid in gp.leaves_of(self.group_of, order, outer)
+                if uid != member
+            ]
+            if span and min(span) < index < max(span):
+                to = max(span)
+        edits: list[Any] = [MembershipEdit(member, before, group_uid)]
+        self._set_membership(member, group_uid)
+        if to != index:
+            # Through ``_move_row_edit`` rather than ``move_layer``: the public
+            # one pushes a step of its own and would also re-derive the
+            # membership from the destination, undoing the line above.
+            edits.append(self._move_row_edit(index, to))
+        edits.extend(self._prune_group(before))
+        self.history.push(CompoundEdit(edits) if len(edits) > 1 else edits[0])
+        return True

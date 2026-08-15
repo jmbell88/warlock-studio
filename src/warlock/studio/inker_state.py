@@ -429,6 +429,14 @@ class InkerDoc:
     # remembering that it already finished once.
     play_cycles: int = 0
 
+    # Which layer groups are folded shut in the panel, by group uid. **View
+    # state, and deliberately on the tab rather than on the document**: whether
+    # a folder is open says nothing about the picture, so it is neither
+    # persisted into the ``.ora`` nor undoable -- for the reason the playhead is
+    # neither. A document that asked to be saved because somebody collapsed a
+    # folder would make ``dirty`` a lie.
+    collapsed_groups: set[int] = field(default_factory=set)
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.
@@ -659,8 +667,16 @@ class InkerState:
     # the tool list beside brush and fill.
     transforming: bool = False
     # What the handle was grabbed at, so a drag is measured against the press
-    # rather than against the previous frame.
-    transform_ref: tuple[float, float, float, float] | None = None
+    # rather than against the previous frame. Widened past four entries when
+    # the scale became per-axis; ``inker_canvas._transform_input`` names them.
+    transform_ref: tuple[float, ...] | None = None
+    # Which grab point the drag started on -- ``inker_canvas.HANDLE_AXES`` maps
+    # it to the axes it scales. A name rather than a second ``drag_kind``
+    # spelling, because every one of them is the same *kind* of drag.
+    transform_grab: str = ""
+    # Whether the numeric Scale X and Scale Y fields move together. A view
+    # preference, remembered across documents like every other tool setting.
+    transform_link: bool = True
 
     # -- the timeline's range selection ------------------------------------
     #
@@ -815,6 +831,7 @@ class InkerState:
         self.drag_button = 0
         self.tile_offset = (0.0, 0.0)
         self.spray_carry = 0.0
+        self.transform_grab = ""
 
     # -- colours ------------------------------------------------------------
 

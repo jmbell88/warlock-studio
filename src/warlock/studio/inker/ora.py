@@ -154,16 +154,75 @@ def _png(pixels: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
+def _group_nester(doc, container):
+    """A ``member uid -> element`` function that opens a ``<stack>`` per group.
+
+    ORA has no membership list: a group *is* a nested element, so writing the
+    tree means opening and closing elements as the walk moves through the
+    stack. That is sound for exactly the reason the tree has an invariant --
+    a group's leaves are contiguous, so each group is opened once and closed
+    once, and the walk never has to come back to it.
+
+    On a document with no groups every uid answers ``container`` and no element
+    is ever created, so the XML is byte-identical to what this writer produced
+    before groups existed. That is the negative control, and it is a property
+    of this function rather than of a branch at the call site.
+    """
+    from . import groups as gp
+
+    open_uids: list[int] = []
+    open_els = [container]
+
+    def element_for(member_uid: int):
+        chain = list(reversed(gp.ancestry(doc.group_of, member_uid)))
+        shared = 0
+        while (
+            shared < len(open_uids)
+            and shared < len(chain)
+            and open_uids[shared] == chain[shared]
+        ):
+            shared += 1
+        del open_uids[shared:]
+        del open_els[shared + 1 :]
+        for guid in chain[shared:]:
+            node = doc.groups.get(guid)
+            if node is None:  # pragma: no cover - a dangling parent
+                continue
+            element = ElementTree.SubElement(
+                open_els[-1],
+                "stack",
+                {
+                    "name": node.name,
+                    "opacity": f"{float(node.opacity):.6f}",
+                    "visibility": "visible" if node.visible else "hidden",
+                    # ``auto`` is ORA's spelling of pass-through, which is what
+                    # this build composites -- see ``inker/groups.py``. Saying
+                    # so explicitly is what stops Krita opening the file as an
+                    # *isolated* group and rendering it differently.
+                    "isolation": "auto",
+                    **_lock_attr(False, node.locked),
+                },
+            )
+            open_uids.append(guid)
+            open_els.append(element)
+        return open_els[-1]
+
+    return element_for
+
+
 def _stack_xml(doc) -> bytes:
     width, height = doc.size
     root = ElementTree.Element(
         "image", {"version": "0.0.3", "w": str(width), "h": str(height)}
     )
     stack = ElementTree.SubElement(root, "stack")
-    # Top first: ORA's document order is the painter's, reversed.
+    parent_for = _group_nester(doc, stack)
+    # Top first: ORA's document order is the painter's, reversed. Reversing
+    # keeps each group's members adjacent, because contiguity is a property of
+    # the order and not of its direction.
     for index, layer in enumerate(reversed(list(doc.stack))):
         ElementTree.SubElement(
-            stack,
+            parent_for(layer.uid),
             "layer",
             {
                 "name": layer.name,
@@ -173,7 +232,7 @@ def _stack_xml(doc) -> bytes:
                 "opacity": f"{float(layer.opacity):.6f}",
                 "visibility": "visible" if layer.visible else "hidden",
                 "composite-op": cp.ORA_OPS.get(layer.blend, "svg:src-over"),
-                **_lock_attr(layer.alpha_lock),
+                **_lock_attr(layer.alpha_lock, layer.locked),
             },
         )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -192,9 +251,37 @@ def _stack_xml(doc) -> bytes:
 # entire file, this one included.
 LOCK_ATTR = "warlock-alpha-lock"
 
+#: The content lock, on the same terms and for the same reasons. A separate
+#: attribute rather than a value on the first, because the two locks are
+#: independent -- a layer can preserve transparency, refuse writes, both or
+#: neither -- and because a reader that only knows the older one must go on
+#: reading it correctly.
+CONTENT_LOCK_ATTR = "warlock-content-lock"
 
-def _lock_attr(locked: bool) -> dict[str, str]:
-    return {LOCK_ATTR: "1"} if locked else {}
+
+def _lock_attr(alpha_lock: bool, locked: bool = False) -> dict[str, str]:
+    """The lock attributes, written only where they are set.
+
+    Absent rather than ``"0"``, so a document nobody has locked anything in
+    produces byte-identical XML to the one this build wrote before either
+    attribute existed -- which is what the determinism pin is measuring.
+    """
+    out: dict[str, str] = {}
+    if alpha_lock:
+        out[LOCK_ATTR] = "1"
+    if locked:
+        out[CONTENT_LOCK_ATTR] = "1"
+    return out
+
+
+#: Attributes this writer puts on a group's ``<stack>``, and therefore the ones
+#: its reader knows how to put back. Anything else a foreign file carries on one
+#: -- Krita's ``composite-op``, a selection or an alpha-inheritance flag -- is
+#: dropped with a log line rather than guessed at, which is the same bargain the
+#: layer reader makes with a composite-op it cannot reproduce.
+GROUP_ATTRS = frozenset(
+    {"name", "opacity", "visibility", "isolation", LOCK_ATTR, CONTENT_LOCK_ATTR}
+)
 
 
 def _cel_names(anim) -> dict[int, str]:
@@ -228,12 +315,18 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
         # Top first inside each group, as in the still writer. The properties
         # come off the *track*, which is authoritative; a cel's own copy is a
         # materialisation detail and may be stale.
+        #
+        # A fresh nester per frame: the layer groups are nested *inside* each
+        # frame's group, because the XML is the picture a foreign editor gets
+        # and that picture is one frame with its folders in it. The record --
+        # where the grouping survives a round trip -- is ``animation.json``.
+        parent_for = _group_nester(doc, group)
         for track in reversed(anim.tracks):
             layer = anim.cels.get((track.uid, frame.uid))
             if layer is None:
                 continue
             ElementTree.SubElement(
-                group,
+                parent_for(track.uid),
                 "layer",
                 {
                     "name": track.name,
@@ -246,7 +339,7 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
                     # show every frame at once.
                     "visibility": "visible" if track.visible and not hidden else "hidden",
                     "composite-op": cp.ORA_OPS.get(track.blend, "svg:src-over"),
-                    **_lock_attr(track.alpha_lock),
+                    **_lock_attr(track.alpha_lock, track.locked),
                 },
             )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -304,6 +397,14 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
         # grid is derived, so there is no second number here to disagree with
         # the reader's.
         payload["layout"] = {"kind": anim.layout.kind}
+    grouping = _groups_payload(doc, tracks)
+    if grouping is not None:
+        # Additive and the version stays 1, for ``layout``'s reason: the reader
+        # is guarded on its own and a build that does not know the key opens the
+        # file as a flat grid, which is exactly the document it was before
+        # groups existed. Written only when there is a group, so an ungrouped
+        # document's ``animation.json`` is byte-identical to what it was.
+        payload["groups"] = grouping
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
@@ -386,6 +487,49 @@ def _warlock_json(doc) -> bytes:
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
+def _groups_payload(doc, tracks: dict[int, int]) -> dict | None:
+    """The layer-group tree as indices, or None when there is no tree.
+
+    Indices, not uids, for ``_animation_json``'s reason -- uids are minted per
+    process and mean nothing in a file. Groups are numbered by the order they
+    are first opened walking the tracks bottom-first, which is deterministic
+    and is also the order the nested ``<stack>`` elements come out in.
+    """
+    from . import groups as gp
+
+    if not getattr(doc, "groups", None):
+        return None
+    order: list[int] = []
+    for track_uid in tracks:
+        for guid in reversed(gp.ancestry(doc.group_of, track_uid)):
+            if guid in doc.groups and guid not in order:
+                order.append(guid)
+    if not order:
+        return None
+    index_of = {guid: i for i, guid in enumerate(order)}
+    return {
+        "nodes": [
+            {
+                "name": doc.groups[guid].name,
+                "visible": bool(doc.groups[guid].visible),
+                "opacity": float(doc.groups[guid].opacity),
+                "locked": bool(doc.groups[guid].locked),
+            }
+            for guid in order
+        ],
+        "tracks": [
+            {"track": tracks[uid], "group": index_of[doc.group_of[uid]]}
+            for uid in tracks
+            if doc.group_of.get(uid) in index_of
+        ],
+        "nesting": [
+            {"group": index_of[guid], "parent": index_of[doc.group_of[guid]]}
+            for guid in order
+            if doc.group_of.get(guid) in index_of
+        ],
+    }
+
+
 def _frame_flatten(doc, frame) -> np.ndarray:
     """Frame 1's pixels, whatever the playhead is on.
 
@@ -393,8 +537,10 @@ def _frame_flatten(doc, frame) -> np.ndarray:
     the user happened to be looking, or saving the same file twice produces two
     different files.
     """
-    layers = doc.anim.layers_for(frame, doc.size)
-    return cp.flatten_onto(LayerStack(list(layers), 0).flatten(), doc.matte)
+    # ``frame_stack``, not a bare ``LayerStack``: it carries the layer-group
+    # fold, without which a hidden group would be hidden on screen and visible
+    # in ``mergedimage.png``.
+    return cp.flatten_onto(doc.frame_stack(frame).flatten(), doc.matte)
 
 
 def write_ora(doc, path: Path) -> None:
@@ -455,16 +601,92 @@ def ora_bytes(doc) -> bytes:
 # --- reading ----------------------------------------------------------------
 
 
-def _layer_elements(node) -> list:
-    """Depth-first, flattening nested stacks -- we have no group layers, and
-    dropping a group's contents would silently lose most of a Krita file."""
-    found = []
+def _layer_elements(node, tree=None, parent=None) -> list:
+    """Depth-first, flattening nested stacks *and* recording them as groups.
+
+    The flattening is unchanged and still load-bearing: the flat stack is
+    authoritative for paint order, so a nested file has always come out as one
+    list and always will. What is new is that the nesting is no longer thrown
+    away -- ``tree`` collects ``(groups, group_of)`` on the way through, so a
+    Krita file's folders survive a round trip instead of being silently lost.
+
+    Each layer comes back as ``(element, parent group uid or None)``. Depth-
+    first order is what makes the result satisfy the contiguity invariant for
+    free: a group's layers are exactly the run this walk emits while it is
+    inside that group's element.
+
+    An **empty** ``<stack>`` records no group. Empty groups are disallowed in
+    the model, and a foreign file is entitled to contain one -- as is one of
+    ours whose layer PNGs went missing.
+
+    ``tree`` of ``None`` flattens without recording anything, which is exactly
+    what this function did before groups existed. :func:`read_ora` passes None
+    for the frame-projection case; see :func:`has_frame_groups`.
+    """
+    from .groups import GroupNode
+
+    found: list = []
     for child in node:
         if child.tag == "layer":
-            found.append(child)
+            found.append((child, parent))
         elif child.tag == "stack":
-            found.extend(_layer_elements(child))
+            if tree is None:
+                found.extend(_layer_elements(child, None, parent))
+                continue
+            groups, group_of = tree
+            node_group = GroupNode(
+                name=child.get("name") or f"Group {len(groups) + 1}",
+                visible=child.get("visibility", "visible") != "hidden",
+                opacity=float(child.get("opacity") or 1.0),
+                locked=child.get(CONTENT_LOCK_ATTR) == "1",
+            )
+            inner = _layer_elements(child, tree, node_group.uid)
+            if not inner:
+                continue
+            unmodelled = set(child.attrib) - GROUP_ATTRS
+            if unmodelled:
+                log.debug(
+                    "dropping unmodelled group attributes on %r: %s",
+                    node_group.name,
+                    ", ".join(sorted(unmodelled)),
+                )
+            groups[node_group.uid] = node_group
+            if parent is not None:
+                group_of[node_group.uid] = parent
+            found.extend(inner)
     return found
+
+
+#: What ``_stack_xml_animated`` names each frame's ``<stack>``: ``frame:0001``
+#: and up. It is a *projection* marker rather than a folder, so the reader has
+#: to recognise it.
+FRAME_GROUP_PREFIX = "frame:"
+
+
+def has_frame_groups(node) -> bool:
+    """Whether this root stack is one of our animated frame projections.
+
+    It matters only on the **flat fallback** -- when ``animation.json`` is
+    missing or would not parse and the grid could not be rebuilt. The XML still
+    says what it always said: one nested ``<stack>`` per frame. Those are frames,
+    never folders, so reading them as layer groups turned a degraded path into a
+    noisy one, handing back N folders called ``frame:0001`` where the same file
+    previously opened flat.
+
+    Group construction is suppressed for the whole read rather than per element,
+    and that is the point: each frame group carries its *own* copy of the
+    document's real folders, so recognising the frames alone would still give a
+    forty-frame clip forty folders called "Ink". The pixels are all present
+    either way, which is the bargain this whole reader makes.
+
+    A foreign file with a top-level group genuinely called ``frame:0001`` loses
+    its folders here. That is the accepted cost, and it is bounded: the layers,
+    their order and their properties are unaffected.
+    """
+    return any(
+        child.tag == "stack" and (child.get("name") or "").startswith(FRAME_GROUP_PREFIX)
+        for child in node
+    )
 
 
 def _place(pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int]) -> np.ndarray:
@@ -509,8 +731,14 @@ def _known_blend(name: object, zf: zipfile.ZipFile) -> str:
     return "normal"
 
 
-def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | None:
-    """Rebuild the grid from ``animation.json``, or return None to fall back.
+def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]):
+    """The grid and the payload it came from, or None to fall back to flat.
+
+    The payload rides back out because the *grouping* is read from it too, and
+    it has to be read after the ``Document`` exists -- membership is keyed on
+    track uids, which the tracks only have once they are built. Re-reading the
+    member to get at it would parse the same JSON twice and give two chances
+    for the two readers to disagree about what it said.
 
     Every way of being wrong ends the same way -- a log line and the flat read
     -- because the alternative is refusing to open a file whose pixels are all
@@ -542,6 +770,10 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 visible=bool(entry.get("visible", True)),
                 blend=_known_blend(entry.get("blend", "normal"), zf),
                 alpha_lock=bool(entry.get("alpha_lock", False)),
+                # ``.get``-based like every other key here, so a file written
+                # before the content lock existed reads as unlocked rather than
+                # failing the whole grid. That is why the version stays 1.
+                locked=bool(entry.get("locked", False)),
             )
             for i, entry in enumerate(payload["tracks"])
         ]
@@ -568,6 +800,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                     visible=track.visible,
                     blend=track.blend,
                     alpha_lock=track.alpha_lock,
+                    locked=track.locked,
                 )
                 planes[src] = layer
             cels[(tracks[ti].uid, frames[fi].uid)] = layer
@@ -611,7 +844,50 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
 
     return Animation(
         tracks=tracks, frames=frames, cels=cels, tags=tags, current=0, layout=layout
-    )
+    ), payload
+
+
+def _read_groups(doc, payload: dict) -> None:
+    """Rebuild the layer-group tree from ``animation.json``, or leave it empty.
+
+    Guarded exactly like ``layout`` and for the same reason, one level up: a
+    grouping is metadata *about* a grid whose pixels are all present and
+    correct, so a malformed one must cost the document its folders and never
+    its timeline. Anything wrong -- a track index outside the grid, a parent
+    that is not a group, a "groups" that is not a mapping -- logs and leaves
+    the document flat.
+    """
+    from .groups import GroupNode
+
+    raw = payload.get("groups")
+    if raw is None:
+        return
+    try:
+        nodes = [
+            GroupNode(
+                name=entry.get("name") or f"Group {i + 1}",
+                visible=bool(entry.get("visible", True)),
+                opacity=float(entry.get("opacity", 1.0)),
+                locked=bool(entry.get("locked", False)),
+            )
+            for i, entry in enumerate(raw["nodes"])
+        ]
+        tracks = doc.anim.tracks
+        group_of: dict[int, int] = {}
+        for entry in raw.get("tracks", []):
+            ti, gi = int(entry["track"]), int(entry["group"])
+            if not (0 <= ti < len(tracks) and 0 <= gi < len(nodes)):
+                raise ValueError(f"track {ti} names group {gi}")
+            group_of[tracks[ti].uid] = nodes[gi].uid
+        for entry in raw.get("nesting", []):
+            gi, pi = int(entry["group"]), int(entry["parent"])
+            if not (0 <= gi < len(nodes) and 0 <= pi < len(nodes)) or gi == pi:
+                raise ValueError(f"group {gi} names parent {pi}")
+            group_of[nodes[gi].uid] = nodes[pi].uid
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        log.warning("ignoring animation.json groups: %s", exc)
+        return
+    _install_groups(doc, ({node.uid: node for node in nodes}, {}), group_of)
 
 
 def _read_palette(zf) -> list | None:
@@ -714,6 +990,29 @@ def _read_slices(zf: zipfile.ZipFile, anim: Animation | None) -> list:
     return out
 
 
+def _install_groups(doc, tree: tuple[dict, dict], parents: dict[int, int]) -> None:
+    """Put a read tree onto the document, dropping whatever is now empty.
+
+    A group whose layers were all skipped -- a missing ``src``, a PNG the
+    archive does not hold -- must not survive as an empty folder, and neither
+    must its ancestors. Pruning here rather than refusing the file is the whole
+    of this reader's bargain: a file that opens slightly wrong is a file the
+    user still has.
+    """
+    from . import groups as gp
+
+    nodes, nesting = tree
+    if not nodes:
+        return
+    doc.groups = dict(nodes)
+    doc.group_of = {**nesting, **parents}
+    order = doc.member_uids()
+    for guid in list(doc.groups):
+        if not gp.leaves_of(doc.group_of, order, guid):
+            doc._drop_group(guid)
+    doc.invalidate_all()
+
+
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
@@ -729,7 +1028,8 @@ def read_ora(path: Path, *, budget: int | None = None):
         # grid's cels are decoded against that size, and guessing it from the
         # first PNG would be guessing for every later one too.
         palette = _read_palette(zf)
-        anim = _read_animation(zf, (width, height)) if width and height else None
+        got = _read_animation(zf, (width, height)) if width and height else None
+        anim, grid_payload = got if got is not None else (None, None)
         # After the grid, and outside its guard: the keys are stored by frame
         # index, so they can only be resolved against the timeline that was
         # actually restored -- and a grid that fell back to the flat read has no
@@ -746,6 +1046,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                 anim=anim,
                 slices=found_slices,
             )
+            _read_groups(doc, grid_payload)
             doc.matte = matte_for(doc.composite)
             doc.file_format = "ora"
             doc.path = Path(path)
@@ -756,7 +1057,17 @@ def read_ora(path: Path, *, budget: int | None = None):
             return doc
 
         layers: list[Layer] = []
-        for element in _layer_elements(root):
+        tree: tuple[dict, dict] = ({}, {})
+        parents: dict[int, int] = {}
+        # From the document's own root ``<stack>``, not from ``<image>``: the
+        # outer stack is the document, and reading it as a group would wrap
+        # every file this reader opens in one folder called "Group 1".
+        outer = root.find("stack")
+        top = root if outer is None else outer
+        # Reaching here with frame groups present means the animated read fell
+        # back: no grid, and the nested stacks are frames rather than folders.
+        collect = None if has_frame_groups(top) else tree
+        for element, parent in _layer_elements(top, collect):
             src = element.get("src")
             if not src:
                 continue
@@ -780,8 +1091,17 @@ def read_ora(path: Path, *, budget: int | None = None):
                     visible=element.get("visibility", "visible") != "hidden",
                     blend=cp.OPS_ORA.get(element.get("composite-op", ""), "normal"),
                     alpha_lock=element.get(LOCK_ATTR) == "1",
+                    # A foreign file carries neither attribute, so every layer
+                    # in it opens unlocked -- which is the answer a Krita or
+                    # GIMP document should give, since neither writes ours.
+                    locked=element.get(CONTENT_LOCK_ATTR) == "1",
                 )
             )
+            if parent is not None:
+                # Recorded against the layer's uid only once the layer exists,
+                # which is what keeps a group whose PNGs are all missing from
+                # coming back as an empty one.
+                parents[layers[-1].uid] = parent
 
     if not layers:
         layers = [Layer.empty(max(1, width), max(1, height), "Background")]
@@ -791,6 +1111,7 @@ def read_ora(path: Path, *, budget: int | None = None):
         history=UndoStack(UNDO_BYTES if budget is None else budget),
         slices=found_slices,
     )
+    _install_groups(doc, tree, parents)
     doc.matte = matte_for(doc.composite)
     doc.file_format = "ora"
     doc.path = Path(path)

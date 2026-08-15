@@ -256,12 +256,34 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     imgui.set_next_item_width(sp(160))
     changed, angle = imgui.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
     if changed:
-        doc.transform_floating(angle=angle)
+        doc.transform_floating(angle=angle, resample=state.resample)
     imgui.same_line()
-    imgui.set_next_item_width(sp(160))
-    changed, factor = imgui.slider_float("Scale", buf.scale[0], 0.05, 8.0)
-    if changed:
-        doc.transform_floating(scale=(factor, factor))
+    # Two sliders and a link, rather than the one that used to drive both axes
+    # from ``scale[0]``: the engine has taken a per-axis scale all along and
+    # the panel was the thing that could not express it.
+    imgui.set_next_item_width(sp(110))
+    changed_x, fx = imgui.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(110))
+    changed_y, fy = imgui.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0)
+    imgui.same_line()
+    linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
+    if linked:
+        state.transform_link = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Scale both axes together. Shift does the same on a handle.")
+    if changed_x or changed_y:
+        if state.transform_link:
+            fx = fy = fx if changed_x else fy
+        doc.transform_floating(scale=(fx, fy), resample=state.resample)
+    if state.resample == "rotsprite":
+        from ..inker import transform
+
+        if not transform.rotsprite_fits(buf.size):
+            # The standing version of the toast Ctrl+T raised once: a drag
+            # re-renders every frame and cannot say this every time, but the
+            # user is looking at this row the whole while.
+            widgets.muted("Too big for RotSprite -- turning with nearest neighbour.")
     imgui.separator()
 
 
@@ -540,6 +562,17 @@ ROTATE_ARM = 28.0
 SYMMETRY_PIVOT_RADIUS = 7.0
 
 
+#: Which axes each grab point scales. The corners take both, the four edge
+#: handles take one -- which is the whole of what makes the scale non-uniform,
+#: and it is a table rather than a chain of ``if``s so a handle drawn by
+#: ``_transform_box`` cannot be one the drag code has no opinion about. The
+#: names are image-space compass points, as ``_handles`` builds them.
+HANDLE_AXES = {
+    "nw": "xy", "ne": "xy", "sw": "xy", "se": "xy",
+    "n": "y", "s": "y", "e": "x", "w": "x",
+}
+
+
 def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
     """Where the transform box's grab points are, in screen space."""
     buf = tab.doc.floating
@@ -551,6 +584,11 @@ def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
         "ne": (x + width, y),
         "sw": (x, y + height),
         "se": (x + width, y + height),
+        # The edge midpoints, which is what a per-axis scale is grabbed by.
+        "n": (x + width / 2.0, y),
+        "s": (x + width / 2.0, y + height),
+        "w": (x, y + height / 2.0),
+        "e": (x + width, y + height / 2.0),
     }
     out = {k: inker_state.to_screen(view, origin, *p) for k, p in corners.items()}
     # The arm points away from the box's top edge *in the image*, carried on to
@@ -582,11 +620,23 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         grab = min(handles, key=lambda k: math.dist(handles[k], (mouse.x, mouse.y)))
         near = math.dist(handles[grab], (mouse.x, mouse.y)) <= HANDLE * 2.5
         state.drag_anchor = point
+        state.transform_grab = grab
+        # Both axes' reference distances are in *image* space rather than
+        # screen space, and that is what makes a per-axis scale correct under a
+        # turned page: the view's rotation swaps which screen axis an image
+        # axis lands on, so measuring "how far across" on screen would scale
+        # the wrong one at 90 degrees. The screen distance stays beside them
+        # for the two gestures that are genuinely about the screen -- the
+        # uniform ratio and the rotate bearing.
+        cx, cy = buf.centre
         state.transform_ref = (
             buf.scale[0],
+            buf.scale[1],
             buf.angle,
             max(1.0, math.dist(centre, (mouse.x, mouse.y))),
             math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0])),
+            max(1e-3, abs(point[0] - cx)),
+            max(1e-3, abs(point[1] - cy)),
         )
         if near and grab == "rotate":
             state.drag_kind = "rotate"
@@ -606,11 +656,22 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         state.transform_ref = None
         return
 
-    scale0, angle0, dist0, bearing0 = state.transform_ref
+    scale0x, scale0y, angle0, dist0, bearing0, ref_x, ref_y = state.transform_ref
     if state.drag_kind == "scale":
-        ratio = math.dist(centre, (mouse.x, mouse.y)) / dist0
+        cx, cy = buf.centre
+        axes = HANDLE_AXES.get(state.transform_grab, "xy")
+        fx = abs(point[0] - cx) / ref_x if "x" in axes else 1.0
+        fy = abs(point[1] - cy) / ref_y if "y" in axes else 1.0
+        if imgui.get_io().key_shift:
+            # Shift constrains to uniform. For a corner that is the screen
+            # distance ratio (the same number the drag used to produce before
+            # there were two axes); for an edge handle there is only one live
+            # ratio, so it is simply applied to both.
+            fx = fy = (
+                math.dist(centre, (mouse.x, mouse.y)) / dist0 if axes == "xy" else fx * fy
+            )
         doc.transform_floating(
-            scale=(scale0 * ratio, scale0 * ratio), resample=state.resample
+            scale=(scale0x * fx, scale0y * fy), resample=state.resample
         )
     elif state.drag_kind == "rotate":
         bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))
@@ -676,6 +737,32 @@ def _combine_op() -> str:
     return "replace"
 
 
+# The tools that read the document rather than write to it, so a content lock
+# has nothing to say about them: the eyedropper samples, and the four selection
+# tools build a mask that lives on the document rather than in a layer.
+_READ_ONLY_TOOLS = frozenset({"eyedropper"}) | SELECT_TOOLS
+
+
+def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
+    """One toast per press when the active layer refuses tool-level writes.
+
+    The toast lives here rather than at the engine's doors for the reason the
+    engine refuses silently: ``write_colour`` is asked once per dab and once per
+    preview frame, and this is the only place that knows a press is a press.
+    """
+    doc = tab.doc
+    if state.tool in _READ_ONLY_TOOLS or not doc.write_locked():
+        return False
+    # Nudging a buffer that is already floating writes to no layer -- the hole
+    # it came out of was cut before the lock went on, and ``commit_floating``
+    # is deliberately not refused either.
+    if state.tool == "move" and doc.floating is not None:
+        return False
+    ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+    state.drag_kind = ""
+    return True
+
+
 def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     doc = tab.doc
     tool = state.tool
@@ -721,6 +808,10 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # Inert rather than a second meaning; see ``BG_BUTTON_TOOLS``.
         state.drag_kind = ""
         return
+    # After the right-button check above, so a press that is inert anyway does
+    # not toast about a lock it was never going to reach.
+    if _locked_out(ctx, state, tab):
+        return
     colour = state.bg if state.drag_button == 1 else state.fg
     if tool == "fill":
         doc.commit_floating()
@@ -760,6 +851,16 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         return
     if tool in SELECT_TOOLS:
         doc.commit_floating()
+        # An unmodified drag starting *inside* the selection moves its edges
+        # rather than replacing them -- the marquee's own version of grabbing
+        # what you can see. The modifier check comes first, so Shift and Alt
+        # still start the combine drags they have always started: a user
+        # Shift-dragging to add a second region routinely starts inside the
+        # first one, and reading the modifiers second would have taken that
+        # gesture away.
+        if state.combine == "replace" and doc.mask is not None and doc.mask.contains(ipoint):
+            state.drag_kind = "mask-move"
+            return
         state.drag_kind = "lasso" if tool == "lasso" else "marquee"
         state.lasso = [point]
         return
@@ -1204,6 +1305,13 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             # is what every other editor does and what stops a stray click
             # leaving a one-pixel selection nothing can be painted outside.
             doc.deselect()
+    elif kind == "mask-move":
+        # One step for the whole drag: the live offset was drawn by shifting
+        # the ants and touched nothing, so this is the first and only thing the
+        # gesture pushes.
+        dx, dy = _mask_shift(state, point)
+        if (dx or dy) and doc.mask is not None:
+            doc.select(doc.mask.translated(dx, dy))
     elif kind == "lasso":
         if len(state.lasso) >= 3:
             doc.select(SelectionMask.from_polygon(doc.size, state.lasso), state.combine)
@@ -1327,7 +1435,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         _grid(state, draw_list, view, origin, doc.size, top_left, bottom_right)
     if state.symmetry != "none":
         _symmetry(state, draw_list, view, origin, doc.size)
-    _ants(ctx, tab, draw_list, origin)
+    _ants(ctx, tab, draw_list, origin, state)
     if slices_visible(state):
         _slices(state, tab, draw_list, origin)
     if state.transforming:
@@ -1484,6 +1592,25 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
         )
 
 
+def _mask_shift(state: Any, point: Any = None) -> tuple[int, int]:
+    """Whole pixels a mask-move drag has travelled, or ``(0, 0)``.
+
+    One function for the preview and for the release, so what the ants show
+    while the drag runs and what ``select`` is handed when it ends cannot
+    disagree by a pixel. Measured against the *press* rather than accumulated
+    per frame, which is the rule the transform handles already follow.
+    """
+    if state.drag_kind != "mask-move" or state.drag_anchor is None:
+        return (0, 0)
+    tip = point if point is not None else state.last_point
+    if tip is None:
+        return (0, 0)
+    return (
+        int(round(tip[0] - state.drag_anchor[0])),
+        int(round(tip[1] - state.drag_anchor[1])),
+    )
+
+
 def _contours(ctx: Any, tab: Any):
     """The selection outline, recomputed only when the mask object changes.
 
@@ -1510,15 +1637,21 @@ def _contours(ctx: Any, tab: Any):
     return loops
 
 
-def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
+def _ants(ctx: Any, tab: Any, draw_list: Any, origin, state: Any = None) -> None:
     loops = _contours(ctx, tab)
     if not loops:
         return
     view = tab.view
+    # A mask-move drag previews by sliding the *drawn* outline and nothing
+    # else: the mask itself is untouched until the release, so the preview
+    # costs no recompute of the contours and pushes no history. Expressed as an
+    # image-space origin rather than a screen delta, so it goes through the
+    # view's turn with everything else.
+    shift = (0, 0) if state is None else _mask_shift(state)
     # Canvas (0, 0) on screen, from the same function every other overlay uses:
     # ``to_screen`` is a uniform scale plus this offset, and a second spelling
     # of it is how the ants end up one pixel off the mask they describe.
-    offset = inker_state.to_screen(view, origin, 0.0, 0.0)
+    offset = inker_state.to_screen(view, origin, float(shift[0]), float(shift[1]))
     phase = (time.monotonic() * ants.ANT_SPEED) % (ants.DASH * 2)
     light, dark = _u32(theme.TEXT), _u32(theme.BG)
     # The visible window, for the two culls below (B23): a whole loop whose
@@ -1537,7 +1670,7 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
         # which scaled the box's own coordinates, silently culled every loop the
         # moment the page was turned.
         corners = [
-            inker_state.to_screen(view, origin, x, y)
+            inker_state.to_screen(view, origin, x + shift[0], y + shift[1])
             for x in (box[0], box[2])
             for y in (box[1], box[3])
         ]

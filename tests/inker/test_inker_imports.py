@@ -186,6 +186,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         gifout,
         gpl,
         gradient,
+        groups,
         indexed,
         layers,
         ora,

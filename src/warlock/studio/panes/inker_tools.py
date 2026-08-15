@@ -13,7 +13,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
-from ..inker import brush
+from ..inker import brush, transform
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -450,10 +450,82 @@ def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
     widgets.section("transform")
     if state.transforming:
         widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
+        _transform_numbers(state, doc)
         return
     if imgui.button("Free transform (Ctrl+T)", (-1, 0)):
         inker_mode.begin_transform(ctx)
-    widgets.muted("Rotates and scales the selection, or the whole layer.")
+    widgets.muted("Rotates, scales and slants the selection, or the whole layer.")
+
+
+def _transform_numbers(state: Any, doc: Any) -> None:
+    """Typed values for what the handles do by feel.
+
+    A drag cannot express "exactly 128 wide" or "exactly 15 degrees", and near
+    misses are worse than either -- a sprite one pixel off the grid it was
+    drawn on, an italic that is nearly the same slant as the last one. These
+    are the same four numbers the handles produce, so nothing new can be
+    expressed here; what is new is being able to say them exactly.
+
+    Width and height are converted against ``base_size`` -- the *lifted*
+    pixels' size -- rather than against the buffer's current size. Deriving a
+    factor from the transformed result would compound every keystroke against
+    the last one, which is the anti-compounding rule the drag handles follow
+    from the other side.
+    """
+    buf = doc.floating
+    if buf is None:
+        return
+    base_w, base_h = buf.base_size
+    width, height = buf.size
+
+    imgui.set_next_item_width(sp(70))
+    changed_x, x = imgui.input_int("X##inkxfx", int(buf.offset[0]), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(70))
+    changed_y, y = imgui.input_int("Y##inkxfy", int(buf.offset[1]), 0)
+    if changed_x or changed_y:
+        # Through ``move_floating``'s delta rather than by writing ``offset``:
+        # one owner for where a buffer sits, and it bumps ``rev`` for the pane.
+        doc.move_floating(int(x) - buf.offset[0], int(y) - buf.offset[1])
+
+    imgui.set_next_item_width(sp(70))
+    changed_w, new_w = imgui.input_int("W##inkxfw", int(width), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(70))
+    changed_h, new_h = imgui.input_int("H##inkxfh", int(height), 0)
+    if changed_w or changed_h:
+        fx = max(1, int(new_w)) / base_w if changed_w else buf.scale[0]
+        fy = max(1, int(new_h)) / base_h if changed_h else buf.scale[1]
+        if state.transform_link:
+            fx = fy = fx if changed_w else fy
+        doc.transform_floating(scale=(fx, fy), resample=state.resample)
+
+    imgui.set_next_item_width(sp(150))
+    changed, angle = imgui.input_float("Angle##inkxfa", float(buf.angle), 0.0, 0.0, "%.2f")
+    if changed:
+        doc.transform_floating(angle=angle, resample=state.resample)
+
+    limit = transform.SHEAR_MAX
+    imgui.set_next_item_width(sp(150))
+    changed, values = imgui.input_float2(
+        "Slant##inkxfs", [float(buf.shear[0]), float(buf.shear[1])], "%.1f"
+    )
+    if changed:
+        doc.transform_floating(
+            shear=(
+                max(-limit, min(float(values[0]), limit)),
+                max(-limit, min(float(values[1]), limit)),
+            ),
+            resample=state.resample,
+        )
+    widgets.help_marker(
+        "Slant in degrees, horizontal then vertical -- an italic, or a shadow "
+        "cast along the ground. Numbers only for now; there are no slant "
+        "handles on the box. Applied after the scale and before the rotation, "
+        "so the two axes stay the page's. Two large slants the same way fight "
+        "each other and would squash the picture to a sliver, so a pair that "
+        "extreme comes back unslanted."
+    )
 
 
 def _selection_actions(state: Any, doc: Any) -> None:
@@ -467,6 +539,28 @@ def _selection_actions(state: Any, doc: Any) -> None:
     imgui.same_line()
     if imgui.button("Invert"):
         doc.invert_selection()
+    imgui.same_line()
+    # Enabled off the *memory* rather than off "there is no selection": the
+    # useful case is exactly re-selecting after something else was selected,
+    # and a mask the canvas has outgrown is refused by the engine.
+    if widgets.disabled_button("Reselect", doc._last_mask is not None):
+        doc.reselect()
+    widgets.help_marker(
+        "Brings back the selection you last dismissed (Ctrl+Shift+D). A "
+        "selection from before a resize or a crop cannot come back -- it "
+        "describes a canvas that no longer exists."
+    )
+    if widgets.disabled_button("Copy to layer", doc.mask is not None):
+        doc.layer_from_selection(cut=False)
+    imgui.same_line()
+    if widgets.disabled_button("Move to layer", doc.mask is not None):
+        doc.layer_from_selection(cut=True)
+    widgets.help_marker(
+        "Ctrl+J copies the selection onto a layer of its own and leaves the "
+        "original where it was; Ctrl+Shift+J moves it, cutting it out of the "
+        "layer it came from. Either way it is one undo step, and the new layer "
+        "lines up with what it came from."
+    )
     if imgui.button("This layer"):
         doc.select_layer_alpha()
     widgets.help_marker(

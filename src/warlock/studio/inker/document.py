@@ -124,6 +124,15 @@ class Document(
     #: them too (a nine-slice button is one PNG), and the per-frame overrides
     #: live inside each slice. See :mod:`.slices`.
     slices: list[Slice] = field(default_factory=list)
+    #: The layer-group tree, kept *beside* the stack rather than replacing it.
+    #: ``groups`` is uid -> node; ``group_of`` is member uid -> the group it is
+    #: in, with an absent key meaning the root. Members are stack rows (by track
+    #: uid on an animated document -- see :meth:`member_uids`) and other groups.
+    #: Empty on every document until somebody makes a group, which is what keeps
+    #: the whole feature out of the ordinary composite path. See
+    #: :mod:`.groups`.
+    groups: dict[int, Any] = field(default_factory=dict)
+    group_of: dict[int, int] = field(default_factory=dict)
 
     _composite: np.ndarray = field(init=False, repr=False)
     #: Per-frame change counters, keyed by frame uid, for the flatten cache.
@@ -157,6 +166,13 @@ class Document(
         init=False, default=None, repr=False
     )
     _full: bool = field(init=False, default=True, repr=False)
+    #: The mask ``deselect`` took away, for :meth:`reselect`. A plain field and
+    #: deliberately so: it is neither persisted nor replayed nor undoable, in
+    #: the way the playhead and the active layer are not. Reselect is a
+    #: *convenience* -- it re-runs an ordinary ``select`` and pushes an ordinary
+    #: step -- so making the memory itself part of the document's state would
+    #: mean an undo could change what Ctrl+Shift+D is about to give you.
+    _last_mask: np.ndarray | None = field(init=False, default=None, repr=False)
     #: Cels autovivified by writes that have not yet been committed. They ride
     #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
     #: frame is one Ctrl+Z rather than two. A *list* rather than one slot: the
@@ -358,6 +374,12 @@ class Document(
         # over the lower layers on every structural change -- for a cache the
         # next *stroke* rebuilds lazily anyway (see ``invalidate``).
         self._below = None
+        # The group fold is refreshed *here* rather than at each op, because
+        # this is what every structural change already ends with -- and every
+        # path that replaces ``self.stack`` (``_materialize_frame``,
+        # ``restore_snapshot``, ``_map_planes``) is one of them. A document with
+        # no groups pays one truthiness test.
+        self.stack.group_fold = self.group_fold()
         width, height = self.size
         if self._composite.shape[:2] != (height, width):
             self._composite = np.zeros((height, width, 4), dtype=np.uint8)
@@ -391,6 +413,76 @@ class Document(
             return None
         rect, self._dirty = self._dirty, None
         return rect
+
+    # -- the group tree -----------------------------------------------------
+
+    def member_uids(self) -> list[int]:
+        """What the group tree knows each stack row by, bottom-first.
+
+        **The placeholder trap, and it is the reason this is a method rather
+        than a comprehension at three call sites.** On an animated document a
+        materialised *empty* slot is a placeholder ``Layer`` carrying a
+        per-slot uid of its own, not the track's -- so keying group membership
+        on ``layer.uid`` would silently un-group every empty cel: hiding a group
+        would leave its empty rows ungrouped (invisible either way, so nothing
+        looks wrong) right up until somebody drew on one, at which point a
+        drawing would appear inside a hidden group.
+
+        Membership is a property of the *track*, exactly as name, opacity,
+        visibility, blend and the two locks are, so the track's uid is what the
+        tree is keyed on and what this returns.
+        """
+        if self.anim is None:
+            return [layer.uid for layer in self.stack]
+        return [track.uid for track in self.anim.tracks]
+
+    def group_fold(self) -> list[tuple[bool, float]] | None:
+        """``(visible, opacity)`` per stack row from the groups above it.
+
+        None -- not a list of neutral pairs -- on a document with no groups, so
+        ``LayerStack._entries`` can take its original path by identity rather
+        than multiplying by 1.0 once per layer per composite.
+        """
+        if not self.groups:
+            return None
+        from . import groups as gp
+
+        return [
+            gp.resolve(self.groups, self.group_of, uid)[:2] for uid in self.member_uids()
+        ]
+
+    def member_uid_of(self, layer: Any) -> int:
+        """The tree's name for a layer that is in the current stack.
+
+        Falls back to the layer's own uid for anything the stack does not hold
+        -- an off-frame cel reached through ``layer_by_uid``, say. Such a layer
+        is not being composited or written to through a door, so the answer is
+        only ever "no group", which is the honest one.
+        """
+        if self.anim is None:
+            return layer.uid
+        try:
+            index = self.stack.index_of(layer.uid)
+        except KeyError:
+            return layer.uid
+        tracks = self.anim.tracks
+        return tracks[index].uid if index < len(tracks) else layer.uid
+
+    def restore_groups(self, state: Any) -> None:
+        """Undo hook for a whole-canvas op that rewrote the tree.
+
+        Only ``flatten_layers`` does -- it replaces every layer in the document
+        with one, so there is nothing left for a group to hold -- but the
+        snapshot is taken unconditionally by ``_replay`` for the reason every
+        snapshot in this file is unconditional: a rotate that quietly kept a
+        tree describing layers it had just replaced is a much harder bug than a
+        dictionary copy is a cost.
+        """
+        if state is None:
+            return
+        nodes, membership = state
+        self.groups = dict(nodes)
+        self.group_of = dict(membership)
 
     # -- the animation grid -------------------------------------------------
 
@@ -448,13 +540,27 @@ class Document(
             self._frame_order.remove(frame_uid)
             self._frame_order.append(frame_uid)
             return hit[1]
-        flat = LayerStack(anim.layers_for(frame, self.size), 0).flatten()
+        flat = self.frame_stack(frame).flatten()
         self._frame_cache[frame_uid] = (stamp, flat)
         if frame_uid in self._frame_order:
             self._frame_order.remove(frame_uid)
         self._frame_order.append(frame_uid)
         self._evict_frames()
         return flat
+
+    def frame_stack(self, frame: Any) -> LayerStack:
+        """One frame's layers as an ordinary stack, with the group fold on it.
+
+        Every place that flattens a frame that is *not* the current one goes
+        through here -- the onion-skin and playback cache, the animated
+        flatten, the ORA writer's ``mergedimage`` -- because each of them built
+        its own bare ``LayerStack`` and each would otherwise show a hidden group
+        as visible in exactly one of onion skinning, playback and the saved
+        file.
+        """
+        stack = LayerStack(self.anim.layers_for(frame, self.size), 0)
+        stack.group_fold = self.group_fold()
+        return stack
 
     def _evict_frames(self) -> None:
         # Never the entry just stored, however big it is: a single frame over
@@ -572,14 +678,16 @@ class Document(
             return
         track, frame = anim.tracks[index], anim.frame
         width, height = self.size
-        # Every one of the five track properties, not four: ``alpha_lock`` was
+        # Every one of the six track properties, not four: ``alpha_lock`` was
         # the one left out, and the write that autovivified the cel is normally
         # one line away from reading it back off the layer -- ``begin_stroke``
         # samples ``layer.alpha_lock`` immediately after ``_ensure_active_cel``
         # -- so a missing lock did not merely mislabel the cel, it painted
         # through "preserve transparency" on the first stroke of every fresh
-        # frame. ``placeholder`` and ``layers_for`` both copy all five; this is
-        # the third copy of that list and it has to agree with them.
+        # frame. ``locked`` (the content lock) joined the list for the same
+        # reason and would fail the same way, one door further out.
+        # ``placeholder`` and ``layers_for`` both copy all six; this is the
+        # third copy of that list and it has to agree with them.
         real = Layer(
             pixels=cp.empty(width, height),
             name=track.name,
@@ -587,6 +695,7 @@ class Document(
             visible=track.visible,
             blend=track.blend,
             alpha_lock=track.alpha_lock,
+            locked=track.locked,
             uid=placeholder.uid,
         )
         anim.cels[(track.uid, frame.uid)] = real
@@ -691,13 +800,17 @@ class Document(
         # on the stack, so a later drag must not write into them, and every
         # slice edit already pushed names its slice by the uid it has now.
         slices = [entry.copy() for entry in self.slices]
+
+        from . import groups as gp
+
+        tree = gp.copy_tree(self.groups, self.group_of)
         run()
 
         def replay(doc: Any) -> None:
             run()
             doc.invalidate_all()
 
-        self.history.push(ReplayEdit(snapshot, size, active, replay, mask, grid, slices))
+        self.history.push(ReplayEdit(snapshot, size, active, replay, mask, grid, slices, tree))
         self.invalidate_all()
 
     def _grid_snapshot(self) -> dict[str, Any] | None:

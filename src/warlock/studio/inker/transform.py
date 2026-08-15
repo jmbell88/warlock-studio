@@ -70,13 +70,23 @@ def _unpremultiplied(pixels: np.ndarray) -> np.ndarray:
 #: filter over a pixel-art *rotation* is worse again. Offered as a choice rather
 #: than inferred from the canvas size, because "small" is not what makes a
 #: document pixel art.
-RESAMPLES = ("smooth", "nearest")
+#:
+#: ``rotsprite`` is the third and it is about *rotation* alone -- see
+#: :func:`rotsprite`. A scale or a shear asked for it gets nearest, which is
+#: the honest answer: the algorithm has nothing to say about either, and
+#: silently smoothing a pixel-art scale because the user picked the pixel-art
+#: rotation would be exactly backwards.
+RESAMPLES = ("smooth", "nearest", "rotsprite")
 
 
 def _filter(resample: str, smooth: int) -> int:
     from PIL import Image
 
-    return Image.NEAREST if resample == "nearest" else smooth
+    # Anything that is not ``smooth`` copies a source pixel whole. Written this
+    # way round rather than as ``== "nearest"``, because a third pixel-art mode
+    # arriving and quietly getting Lanczos is the failure this spelling
+    # prevents.
+    return smooth if resample == "smooth" else Image.NEAREST
 
 
 def _resample(pixels: np.ndarray, run, *, straight: bool = False) -> np.ndarray:
@@ -115,7 +125,7 @@ def scale(
     return _resample(
         pixels,
         lambda im: im.resize((width, height), how),
-        straight=resample == "nearest",
+        straight=resample != "smooth",
     )
 
 
@@ -124,6 +134,11 @@ def rotate(
 ) -> np.ndarray:
     from PIL import Image
 
+    if resample == "rotsprite":
+        if rotsprite_fits((pixels.shape[1], pixels.shape[0])):
+            return rotsprite(pixels, degrees, expand=expand)
+        # Silently, here; the pane says so out loud. See ``ROTSPRITE_MAX_PIXELS``.
+        resample = "nearest"
     how = _filter(resample, Image.BICUBIC)
     return _resample(
         pixels,
@@ -136,7 +151,226 @@ def rotate(
             expand=expand,
             fillcolor=0 if im.mode == "L" else (0, 0, 0, 0),
         ),
-        straight=resample == "nearest",
+        straight=resample != "smooth",
+    )
+
+
+# --- RotSprite --------------------------------------------------------------
+#
+# Nearest-neighbour is the right answer for scaling pixel art and the wrong one
+# for *turning* it: a hard-edged diagonal rotated by copying whole pixels comes
+# out as a staircase with a different tread on every step, and every antialiased
+# alternative invents colours the palette does not have. RotSprite is the
+# standard way out -- upscale with an edge-preserving filter, turn the big
+# image with nearest neighbour, and sample the middle of each block back down.
+# Nothing is interpolated at any stage, so the result is drawn entirely from
+# colours the source already had, and the staircase is decided by an 8x lattice
+# rather than a 1x one.
+
+#: Doublings before the turn. Three is the published figure and the one every
+#: implementation uses: two leaves visible chunking on shallow angles and four
+#: quadruples the memory for a difference that does not show.
+ROTSPRITE_ROUNDS = 3
+ROTSPRITE_SCALE = 2**ROTSPRITE_ROUNDS
+
+#: Source pixels above which the turn falls back to plain nearest neighbour.
+#: The upscale is 64x in *area*, so this ceiling is already 16.7 M pixels and
+#: 67 MB in the intermediate RGBA plane alone, with the rotation making more --
+#: and it is a free-transform drag, so the whole thing runs again on every
+#: mouse-move. Above it the honest answer is the cheaper filter and a word to
+#: the user rather than a frozen editor. Pixel art is small by definition, so
+#: this is not a limit anybody drawing a sprite will meet.
+ROTSPRITE_MAX_PIXELS = 512 * 512
+
+
+def rotsprite_fits(size: tuple[int, int]) -> bool:
+    """Whether a plane this size may be turned with RotSprite."""
+    return int(size[0]) * int(size[1]) <= ROTSPRITE_MAX_PIXELS
+
+
+def _packed(plane: np.ndarray) -> np.ndarray:
+    """One integer per pixel, for **exact** equality.
+
+    EPX's whole decision is "are these two pixels the same colour", and a
+    per-channel comparison folded down with ``all`` costs four passes and a
+    reduction to answer what one integer comparison answers. Packing RGBA into
+    a uint32 is exact -- no arithmetic, only shifts -- so two pixels compare
+    equal here if and only if all four of their bytes match.
+    """
+    if plane.ndim == 2:
+        return plane.astype(np.uint32)
+    p = plane.astype(np.uint32)
+    return (p[..., 0] << 24) | (p[..., 1] << 16) | (p[..., 2] << 8) | p[..., 3]
+
+
+def _neighbours(plane: np.ndarray) -> tuple[np.ndarray, ...]:
+    """``(up, right, left, down)``, with the border pixels repeating themselves.
+
+    Edge replication rather than a transparent pad: EPX only ever *interpolates
+    a corner between two equal neighbours*, and a pad would make the border's
+    neighbour a colour that is not in the drawing, rounding off every shape
+    that touches the edge of its own cel.
+    """
+    return (
+        np.concatenate((plane[:1], plane[:-1]), axis=0),
+        np.concatenate((plane[:, 1:], plane[:, -1:]), axis=1),
+        np.concatenate((plane[:, :1], plane[:, :-1]), axis=1),
+        np.concatenate((plane[1:], plane[-1:]), axis=0),
+    )
+
+
+def epx(plane: np.ndarray) -> np.ndarray:
+    """One EPX / Scale2x round: every pixel becomes four, vectorised.
+
+    Each output quadrant takes the neighbour it points at *only* when that
+    neighbour agrees with the one beside it and disagrees with the two across
+    from it -- which is the whole of the algorithm and the reason it rounds a
+    staircase without touching a flat area::
+
+        1 2      1 = A if C == A and C != D and A != B
+        3 4      2 = B if A == B and A != C and B != D
+                 3 = C if D == C and D != B and C != A
+                 4 = D if B == D and B != A and D != C
+
+    with ``A`` above, ``B`` right, ``C`` left and ``D`` below, and every
+    quadrant otherwise the pixel itself. Works on an ``(H, W, 4)`` plane and on
+    an ``(H, W)`` mask alike, because the comparison goes through
+    :func:`_packed` and the copy goes through fancy indexing.
+    """
+    up, right, left, down = _neighbours(plane)
+    a, b, c, d = (_packed(x) for x in (up, right, left, down))
+    out = np.repeat(np.repeat(plane, 2, axis=0), 2, axis=1)
+    # ``out[0::2, 0::2]`` is a strided *view*, so the masked assignment writes
+    # straight through into ``out`` -- no scatter and no second buffer.
+    m = (c == a) & (c != d) & (a != b)
+    out[0::2, 0::2][m] = up[m]
+    m = (a == b) & (a != c) & (b != d)
+    out[0::2, 1::2][m] = right[m]
+    m = (d == c) & (d != b) & (c != a)
+    out[1::2, 0::2][m] = left[m]
+    m = (b == d) & (b != a) & (d != c)
+    out[1::2, 1::2][m] = down[m]
+    return out
+
+
+def rotsprite(pixels: np.ndarray, degrees: float, *, expand: bool = False) -> np.ndarray:
+    """Turn a plane the pixel-art way: upscale, turn, sample back down.
+
+    The downsample takes ``[4::8, 4::8]`` -- the *middle* of each 8x8 block
+    rather than its corner. A corner sample sits on the boundary between two
+    source pixels and rounds one way at one angle and the other way at the
+    next, so a slow rotate drag shimmers; the centre is the only offset with no
+    tie to break.
+
+    Deterministic by construction: every step is an integer copy, so the same
+    plane and the same angle give the same bytes every time. That matters more
+    than usual here, because a free transform re-renders from the lifted pixels
+    on every mouse-move and a wobbling result would look like a bug in the
+    drag rather than in the filter.
+    """
+    big = pixels
+    for _ in range(ROTSPRITE_ROUNDS):
+        big = epx(big)
+    turned = rotate(big, degrees, expand=True, resample="nearest")
+    half = ROTSPRITE_SCALE // 2
+    small = np.ascontiguousarray(turned[half::ROTSPRITE_SCALE, half::ROTSPRITE_SCALE])
+    if expand:
+        return small
+    # ``expand=False`` means "the same frame as it went in", which for a turn
+    # is the centre of the grown one -- the same answer Pillow's own
+    # ``expand=False`` gives, reached with the module's own two helpers.
+    size = (pixels.shape[1], pixels.shape[0])
+    return resize_canvas(
+        small,
+        size,
+        anchor_offset((small.shape[1], small.shape[0]), size, "centre"),
+    )
+
+
+#: How far a shear may be pushed **per axis**, in degrees. A bound on each
+#: number the panel can send, and nothing more -- 60 degrees is already further
+#: than anybody italicises a sprite, and past it the tangent grows fast enough
+#: that the output plane is mostly empty.
+#:
+#: It is deliberately *not* what keeps the transform invertible. See
+#: :data:`SHEAR_MIN_DET`, which is the guard that actually does, because the
+#: degenerate case is a property of the **pair** and sits well inside this
+#: bound.
+SHEAR_MAX = 60.0
+
+#: The smallest area factor a shear may have. A shear matrix is
+#: ``[[1, tan sx], [tan sy, 1]]``, so its determinant -- which is exactly the
+#: factor the plane's area is multiplied by -- is ``1 - tan(sx)tan(sy)``. Two
+#: *equal-signed* slants therefore fight each other, and the pair (45, 45) is
+#: singular: the plane collapses onto a line and there is no inverse to sample
+#: through. That pair is nowhere near :data:`SHEAR_MAX`, so the per-axis clamp
+#: never came close to preventing it.
+#:
+#: A tenth rather than an epsilon, because "not quite singular" is not a state
+#: worth rendering: at (44, 44) the determinant is 0.067, so a sprite comes back
+#: as a sliver of a fifteenth its area, and every pixel of it is a nearest
+#: sample of a plane that has been squeezed flat. The pair is refused outright
+#: instead -- the plane comes back unslanted -- which is the same answer this
+#: function already gave for a pair of zeros, and it is reached only from the
+#: numeric Slant fields, deliberately, and never from a handle.
+SHEAR_MIN_DET = 0.1
+
+
+def shear(
+    pixels: np.ndarray, degrees: tuple[float, float], *, resample: str = "smooth"
+) -> np.ndarray:
+    """Slant a plane: ``x' = x + tan(sx) y``, ``y' = tan(sy) x + y``.
+
+    Degrees rather than the tangents themselves, because that is what a user
+    means by "italic 15 degrees" and what the numeric field shows. The output
+    grows to hold the slanted rectangle -- a shear of a canvas-sized plane
+    would otherwise lose exactly the corners the shear created.
+
+    Pillow's ``AFFINE`` takes the *inverse* map (it walks the destination and
+    asks where each pixel came from), so the matrix below is inverted here
+    rather than at the call site: writing the forward matrix and handing it
+    over unchanged shears the picture the other way, which is a bug that looks
+    like a sign error in the UI.
+
+    It goes through ``_resample`` like every other filtered path here, so it
+    premultiplies and unpremultiplies around the interpolation -- a bilinear
+    mix with a fully transparent pixel drags that pixel's colour into the edge.
+
+    **A degenerate pair comes back unslanted**, which is a refusal and not an
+    approximation: see :data:`SHEAR_MIN_DET`. Each axis is clamped to
+    :data:`SHEAR_MAX` first, but that clamp is a bound on the numbers and does
+    not reach the pair -- (45, 45) is singular and sits well inside it.
+    """
+    from PIL import Image
+
+    sx = max(-SHEAR_MAX, min(float(degrees[0]), SHEAR_MAX))
+    sy = max(-SHEAR_MAX, min(float(degrees[1]), SHEAR_MAX))
+    kx, ky = math.tan(math.radians(sx)), math.tan(math.radians(sy))
+    det = 1.0 - kx * ky
+    height, width = pixels.shape[:2]
+    if abs(det) < SHEAR_MIN_DET or (abs(kx) < 1e-9 and abs(ky) < 1e-9):
+        return pixels.copy()
+
+    xs = [x + kx * y for x, y in ((0, 0), (width, 0), (0, height), (width, height))]
+    ys = [ky * x + y for x, y in ((0, 0), (width, 0), (0, height), (width, height))]
+    min_x, min_y = min(xs), min(ys)
+    new_w = max(1, int(round(max(xs) - min_x)))
+    new_h = max(1, int(round(max(ys) - min_y)))
+
+    a, b = 1.0 / det, -kx / det
+    d, e = -ky / det, 1.0 / det
+    coeffs = (a, b, a * min_x + b * min_y, d, e, d * min_x + e * min_y)
+    how = _filter(resample, Image.BICUBIC)
+    return _resample(
+        pixels,
+        lambda im: im.transform(
+            (new_w, new_h),
+            Image.AFFINE,
+            coeffs,
+            how,
+            fillcolor=0 if im.mode == "L" else (0, 0, 0, 0),
+        ),
+        straight=resample != "smooth",
     )
 
 

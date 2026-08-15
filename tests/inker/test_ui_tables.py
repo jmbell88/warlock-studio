@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from warlock.studio import inker_state
+from warlock.studio import inker, inker_state
 from warlock.studio.inker import animation, brush, selection, transform
 from warlock.studio.panes import inker_canvas, inker_timeline, inker_tools
 
@@ -147,10 +147,16 @@ def test_the_modifiers_cover_the_engines_whole_vocabulary():
     assert reachable == set(selection.COMBINE_OPS)
 
 
-def test_the_resize_popup_offers_both_resamples():
+def test_the_resize_popup_offers_every_resample():
     """Derived from ``transform.RESAMPLES`` at the call site rather than written
-    out, so this asserts the tuple is the one thing there is to offer."""
-    assert transform.RESAMPLES == ("smooth", "nearest")
+    out, so this asserts the tuple is the one thing there is to offer.
+
+    ``rotsprite`` is in it and is deliberately offered to the resize popup too,
+    even though a *scale* asked for it falls through to nearest: the setting is
+    a statement about the kind of art being made rather than about one
+    operation, and hiding it from one control would make it look like two
+    settings."""
+    assert transform.RESAMPLES == ("smooth", "nearest", "rotsprite")
 
 
 # --- the timeline's cell hit test --------------------------------------------
@@ -203,3 +209,43 @@ def test_a_point_between_or_beyond_the_cells_is_nothing(point):
 
 def test_an_empty_grid_has_no_cells_to_hit():
     assert inker_timeline.cell_index((100.0, 50.0), **{**GRID, "frames": 0}) is None
+
+
+# --- the transform box's handles ---------------------------------------------
+
+
+def test_every_transform_handle_has_axes_declared_for_it():
+    """The table beside the thing it describes, in both directions. A handle
+    ``_handles`` draws that ``HANDLE_AXES`` does not know about is one the drag
+    code silently scales in both axes; an entry with no handle is a scale
+    nothing can grab."""
+    doc = inker.Document.blank(16, 16)
+    doc.select(selection.SelectionMask.from_rect(doc.size, (2, 2, 10, 10)))
+    assert doc.lift()
+    tab = SimpleNamespace(
+        doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0))
+    )
+    drawn = set(inker_canvas._handles(tab, (0.0, 0.0)))
+    assert drawn - {"rotate"} == set(inker_canvas.HANDLE_AXES)
+
+
+def test_the_edge_handles_sit_on_the_edge_midpoints():
+    doc = inker.Document.blank(16, 16)
+    doc.select(selection.SelectionMask.from_rect(doc.size, (2, 2, 10, 10)))
+    assert doc.lift()
+    tab = SimpleNamespace(
+        doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0))
+    )
+    handles = inker_canvas._handles(tab, (0.0, 0.0))
+    assert handles["n"] == (6.0, 2.0)
+    assert handles["s"] == (6.0, 10.0)
+    assert handles["w"] == (2.0, 6.0)
+    assert handles["e"] == (10.0, 6.0)
+
+
+def test_the_resample_combo_offers_every_mode_the_engine_implements():
+    """Same pin as the symmetry combo above, for the setting that decides what
+    a rotate and a scale do to a pixel-art drawing."""
+    from warlock.studio.panes import inker_bridge
+
+    assert inker_bridge.transform.RESAMPLES == transform.RESAMPLES

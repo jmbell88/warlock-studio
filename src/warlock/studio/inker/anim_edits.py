@@ -310,6 +310,11 @@ class CelSetEdit(Edit):
     #: must be charged once across all of them, not once per slot. A bool is
     #: wrong whichever way it is set, and setting it True per slot would charge
     #: a 50-frame linked background fifty times and evict the whole history.
+    #: An animated merge-down is the same shape from the other direction: it
+    #: pushes one of these per affected slot and several of them legitimately
+    #: name *one* merged cel (that is how the link is preserved), so charging
+    #: every one of them would evict real history to make room for a number
+    #: describing pixels that were counted already.
     pinned: Any = True
 
     def __post_init__(self) -> None:
