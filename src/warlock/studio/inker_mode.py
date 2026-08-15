@@ -37,6 +37,16 @@ GIF_FILTER = ["Animated GIF (*.gif)", "*.gif"]
 OPENABLE = (".ora", *filetypes.IMAGE_SUFFIXES)
 OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 
+# Deliberately **not** in ``OPENABLE``. That tuple is what the app can open
+# *and write back*, and this reader can only read -- so an Aseprite file
+# arrives through an import door of its own, as an unsaved ORA document whose
+# first Ctrl+S is a Save As. Routing it through ``Document.load`` instead would
+# leave a tab pointing at a file the app cannot write, and one Ctrl+S would put
+# ORA bytes over it. Two suffixes, one format: Aseprite's older releases wrote
+# ``.ase``.
+ASEPRITE_SUFFIXES = (".aseprite", ".ase")
+ASEPRITE_FILTER = ["Aseprite files", filetypes.pattern(ASEPRITE_SUFFIXES)]
+
 NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 
 # The largest canvas the New dialog will make. Not a limit of the engine, which
@@ -191,6 +201,15 @@ def open_path(ctx: Any, path: Path) -> None:
         # Focus rather than fork: two tabs over one file would race on save.
         state.activate(existing.uid)
         return
+    if path.suffix.lower() in ASEPRITE_SUFFIXES:
+        # Before the ``OPENABLE`` check rather than inside it: a drop of an
+        # Aseprite file is an import, and refusing it with "Inker opens images
+        # and .ora files" would be telling the user the app cannot do something
+        # it can. Nothing is remembered for it -- the tab owns no file, so a
+        # recent entry would offer to reopen a document that is never *this*
+        # document again.
+        import_aseprite_path(ctx, path)
+        return
     if path.suffix.lower() not in OPENABLE:
         ctx.toast("Inker opens images and .ora files.", "error")
         return
@@ -293,6 +312,75 @@ def import_sheet(ctx: Any) -> bool:
     _adopt(ctx, state, doc, path=None, title=title, file_format="ora")
     set_mode(ctx.state, "inker")
     return True
+
+
+def ask_import_aseprite(ctx: Any) -> None:
+    """Pick an ``.aseprite`` off disk and open what it holds.
+
+    One step where the sheet import is two, and for the reason that one is
+    two: a sheet has to be told how to cut, and an Aseprite file already says
+    where every layer, cel, frame and tag is. So there is nothing to ask, and
+    the result goes straight down the ``inker-open`` road with no routing of
+    its own.
+    """
+    ensure(ctx)
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.open_file("Import Aseprite file", ASEPRITE_FILTER)
+        return None if path is None else _load_aseprite(Path(path))
+
+    ctx.submit("inker-open:aseprite", run)
+
+
+def import_aseprite_path(ctx: Any, path: Path) -> None:
+    """The same import for a path already in hand -- a drop onto the window."""
+    ensure(ctx)
+    set_mode(ctx.state, "inker")
+    ctx.submit(
+        f"inker-open:aseprite:{abs(hash(str(path)))}", _load_aseprite, Path(path)
+    )
+
+
+def _load_aseprite(path: Path) -> dict[str, Any]:
+    """Blocking; task thread only.
+
+    ``path=None`` in the result, and that is the whole read-only guarantee
+    rather than a detail: this app reads the format and cannot write it, so the
+    tab must not point at the file it came from. The document is an unsaved ORA
+    -- the format that *can* hold layers, a timeline, links and slices -- and
+    the first Ctrl+S asks where to put it.
+    """
+    from .inker import asein
+
+    path = Path(path)
+    doc, warnings = asein.document_from_aseprite(path.read_bytes())
+    return {
+        "doc": doc,
+        "path": None,
+        "format": "ora",
+        "title": path.stem,
+        "warnings": warnings,
+    }
+
+
+def _report_import_warnings(ctx: Any, warnings: Any) -> None:
+    """Say what an import dropped: one toast, every line in the log.
+
+    A toast per warning would be a stack of them for one file, and the reader
+    only ever wanted to know *whether* something was lost and roughly what --
+    so the first line goes on screen with a count beside it and ``action="log"``
+    puts the rest one click away. Silence is the wrong alternative: an Aseprite
+    file that quietly lost its per-cel opacities is one the user finds out
+    about by noticing the drawing looks wrong.
+    """
+    lines = [str(line) for line in (warnings or [])]
+    if not lines:
+        return
+    for line in lines:
+        log.warning("aseprite import: %s", line)
+    head = lines[0].rstrip(".")
+    text = head if len(lines) == 1 else f"{head} (+{len(lines) - 1} more)"
+    ctx.toast(f"Imported: {text}.", "warn", action="log")
 
 
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
@@ -1155,6 +1243,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
                     "warn",
                     action="log",
                 )
+            _report_import_warnings(ctx, result.get("warnings"))
         return
 
     if name == "inker-sheetin":

@@ -461,6 +461,26 @@ def _sheet_import(ctx: Any) -> None:
         state.sheet_import_open = True
         imgui.open_popup(SHEET_IMPORT_POPUP)
     _sheet_import_popup(ctx, state)
+    _aseprite_import(ctx)
+
+
+def _aseprite_import(ctx: Any) -> None:
+    """The other import, and no popup at all.
+
+    Beside the sheet import because the two answer the same question -- "this
+    drawing was made somewhere else" -- and it needs no popup for the reason
+    that one does: a sheet has to be told how to cut and an Aseprite file
+    already says where everything is.
+    """
+    if imgui.button("Import Aseprite file...", (-1, 0)):
+        inker_mode.ask_import_aseprite(ctx)
+    widgets.help_marker(
+        "Reads an .aseprite or .ase file: layers, groups, the timeline, tags,"
+        " slices, and cels shared between frames as shared cels here too."
+        " Reading only -- the import opens as an unsaved document, so saving it"
+        " writes an .ora and never back over the file it came from. Anything"
+        " dropped on the way in is named in a message."
+    )
 
 
 def _pair(label: str, value: tuple[int, int], low: int = 0) -> tuple[int, int]:
