@@ -191,6 +191,29 @@ def test_the_pose_stage_is_reached_by_a_saved_pose_and_not_by_the_rig():
     assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "pose"
 
 
+def test_an_unfinished_asset_blocks_the_export_stage_in_the_grids_own_words():
+    assert create_stages.available("export", job(status="running")) == "not finished yet"
+    assert create_stages.available("export", job()) is None
+
+
+def test_the_export_stage_needs_something_selected():
+    reason = create_stages.available("export", None)
+    assert reason is not None and "export" in reason
+
+
+def test_everything_exports_so_the_last_segment_never_moves_the_selection():
+    for row in (job(), job(stage="reference", files=["input.png"]), job(stage="tile")):
+        assert create_stages.shows("export", row) is True
+
+
+def test_export_is_never_reached():
+    """It leaves nothing behind in the app -- ``save_artifact`` copies a file
+    somewhere the job row never hears about -- so a check beside it would be
+    the one tick on the rail that meant nothing."""
+    assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "pose"
+    assert create_stages.STAGES[-1] == "export"
+
+
 def test_an_unknown_stage_is_a_programming_error():
     with pytest.raises(ValueError):
         create_stages.available("texture", job())

@@ -3272,6 +3272,23 @@ def test_the_create_pane_builds_at_every_stage(app_ctx, imgui_ctx):
         assert app_ctx.state.create_stage == stage, "the rail moved on its own"
 
 
+def test_the_inspector_builds_at_every_stage(app_ctx, imgui_ctx):
+    """The other half of the merged mode. The inspector carries no tabs in
+    Create -- the rail is the tab bar -- so a stage with no ``_STAGE_SECTIONS``
+    entry silently shows a header and nothing else, and only a build of all
+    five says so."""
+    from warlock.studio import create_stages
+    from warlock.studio.panes import inspector
+
+    _seeded(app_ctx)
+    app_ctx.rigging_available = True
+    app_ctx.state.mode = create_stages.MODE
+    for stage in create_stages.STAGES:
+        assert stage in inspector._STAGE_SECTIONS, stage
+        app_ctx.state.create_stage = stage
+        _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
+
+
 def test_the_create_pane_builds_at_every_stage_with_nothing_selected(app_ctx, imgui_ctx):
     """The empty case, which is the one a first run sees: no selection, and
     four stages of which three are about an asset that does not exist."""

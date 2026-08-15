@@ -432,6 +432,11 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
         "No rig on screen",
         "Rig the mesh first, then press Edit pose.",
     ),
+    "create/export": (
+        icons.DOWNLOAD,
+        "Nothing to export",
+        "Pick a finished asset; its files are listed on the left.",
+    ),
     "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
     "poser": (

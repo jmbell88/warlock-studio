@@ -74,6 +74,10 @@ _STAGE_SECTIONS: dict[str, tuple[str, ...]] = {
     "rig": ("_weighting", "_bones", "_deform_qa", "retarget", "retexture"),
     # Posing produces poses, and the thing made *of* poses is a sprite sheet.
     "pose": ("sheet",),
+    # The grid itself is the stage's *column*; this side answers the question
+    # a person actually has in front of it -- is this the right asset, and
+    # what was it made from.
+    "export": ("_reference", "_settings"),
 }
 
 
@@ -98,11 +102,6 @@ def _stage_body(ctx: Any, job: Any) -> None:
     }
     for name in _STAGE_SECTIONS.get(ctx.state.create_stage, ()):
         named[name]()
-    # Until the Export stage lands (5.4) the downloads grid has no stage of its
-    # own, and dropping the tab bar without it would take every export off the
-    # screen. Last, so it reads as the end of the column rather than as part of
-    # whichever evidence is above it.
-    _downloads(ctx, job)
 
 
 def draw(ctx: Any) -> None:
@@ -152,7 +151,7 @@ def draw(ctx: Any) -> None:
     tabs: list[tuple[str, Any]] = [("Details", lambda: _details_tab(ctx, job))]
     if "model.glb" in (job.get("files") or []):
         tabs.append(("Rig && Pose", lambda: _rig_tab(ctx, job)))
-    tabs.append(("Export", lambda: _downloads(ctx, job)))
+    tabs.append(("Export", lambda: downloads(ctx, job)))
     widgets.tab_bar("inspector-tabs", tabs)
 
 
@@ -1128,8 +1127,14 @@ def _verdict(ctx: Any, job: Any) -> None:
         toggle_tag(ctx.state, job_id, tag)
 
 
-def _downloads(ctx: Any, job: Any) -> None:
-    """The Export tab: a two-column grid of artifacts.
+def downloads(ctx: Any, job: Any) -> None:
+    """The Export stage's grid of artifacts, two columns wide.
+
+    Public since REDESIGN.md wave 5.4, because it is drawn from two places
+    now: the Export stage's own column, and the inspector's Export *tab* in
+    every host that still has tabs. One function, because "what you can take
+    away from this asset" has exactly one right answer and a second grid would
+    be a second place for an artifact to be forgotten.
 
     A blocked artifact keeps its button and explains itself in a tooltip --
     the old layout wrote the reason as an indented line under each of eight

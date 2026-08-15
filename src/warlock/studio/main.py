@@ -239,7 +239,7 @@ def _stage_pane(ctx: Any) -> None:
     stage that says something with nothing selected at all.
     """
     from . import icons, widgets
-    from .panes import pose_panel, settings_2d, settings_3d, stage_rig
+    from .panes import inspector, pose_panel, settings_2d, settings_3d, stage_rig
 
     stage = ctx.state.create_stage
     if stage == "mesh":
@@ -254,6 +254,17 @@ def _stage_pane(ctx: Any) -> None:
             )
         else:
             pose_panel.draw(ctx, job, hosted=True)
+    elif stage == "export":
+        job = ctx.job()
+        if job is None:
+            widgets.empty_state(
+                icons.DOWNLOAD, "Nothing selected.", "Pick an asset to take files from it."
+            )
+        else:
+            # The inspector's own grid, called rather than copied: it is the
+            # one answer to "what can I take away from this", and a second
+            # version of it is a second place for an artifact to be missed.
+            inspector.downloads(ctx, job)
     else:
         settings_2d.draw(ctx)
 

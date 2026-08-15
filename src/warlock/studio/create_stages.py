@@ -39,7 +39,7 @@ from . import icons
 # shipping a rail with two segments while the rig and pose panels are still
 # inspector tabs is honest, and shipping five segments of which three are dead
 # is not.
-STAGES: tuple[str, ...] = ("reference", "mesh", "rig", "pose")
+STAGES: tuple[str, ...] = ("reference", "mesh", "rig", "pose", "export")
 
 # What each segment is called. Sentence case, one word each: the rail is a
 # breadcrumb across the top of a settings column and has room for exactly that.
@@ -48,6 +48,7 @@ LABELS: dict[str, str] = {
     "mesh": "Mesh",
     "rig": "Rig",
     "pose": "Pose",
+    "export": "Export",
 }
 
 # The compact face of each segment, for the rail's all-or-nothing fallback at
@@ -63,6 +64,7 @@ ICONS: dict[str, str] = {
     # in a stance is what both are about, and two pictures for one idea is how
     # a user comes to believe they are two.
     "pose": icons.PERSON_STANDING,
+    "export": icons.DOWNLOAD,
 }
 
 # The job-row ``stage`` values the Reference stage is *about*. Not a synonym
@@ -91,6 +93,16 @@ def _reached_rig(job: Any, rig_meta: Any, poses: Any) -> bool:
     return "rig.glb" in ((job or {}).get("files") or []) or rig_meta is not None
 
 
+def _reached_export(job: Any, rig_meta: Any, poses: Any) -> bool:
+    """**Never.** Export is the one stage that leaves nothing behind in the
+    app: ``save_artifact`` copies a file to a directory of the user's choosing
+    and the job row records none of it. So there is no honest way to say a
+    user has finished exporting, and a check drawn on a guess would be the one
+    tick on the rail that meant nothing. Ticking it off "an artifact has been
+    derived" was the near miss -- a derivation is a cache, not a delivery."""
+    return False
+
+
 def _reached_pose(job: Any, rig_meta: Any, poses: Any) -> bool:
     """A *saved* pose, not the ability to make one.
 
@@ -114,6 +126,7 @@ _REACHED: dict[str, Any] = {
     "mesh": _reached_mesh,
     "rig": _reached_rig,
     "pose": _reached_pose,
+    "export": _reached_export,
 }
 
 
@@ -157,6 +170,11 @@ def shows(stage: str, job: Any) -> bool:
         return False
     if stage == "reference":
         return "input.png" in (job.get("files") or [])
+    if stage == "export":
+        # Everything exports: a reference has its cutouts and its palette, a
+        # tile has the wrapped view, a mesh has the eight mesh artifacts. So
+        # the last segment never moves the selection either.
+        return True
     # Mesh, Rig and Pose are all *about the model job*: the rig and its poses
     # are written beside the ``model.glb`` they were fitted to, because the rig
     # belongs to the mesh. So one answer for the three, and the rail walks the
@@ -215,6 +233,14 @@ def available(stage: str, job: Any, ctx: Any = None) -> str | None:
             # ``service.rig.save_joints``'s refusal, verbatim. The Rig segment
             # beside it is open, which is where this sends you.
             return "job is not rigged"
+        return None
+    if stage == "export":
+        if job is None:
+            return "Nothing is selected to export."
+        if job.get("status") in ("queued", "running"):
+            # The downloads grid's own words for the same fact, so the segment
+            # and the buttons behind it do not offer two accounts of it.
+            return "not finished yet"
         return None
     return None
 
