@@ -293,3 +293,42 @@ def test_an_explicit_offset_still_wins_over_the_anchor():
     doc.stack.active.pixels[:, :] = RED
     doc.resize_canvas((8, 8), (0, 0), anchor="centre")
     assert tuple(doc.stack.active.pixels[0, 0]) == RED
+
+
+# --- whole-number magnification (C13a) ---------------------------------------
+
+
+def test_upscale_repeats_every_pixel_exactly():
+    """Not a resize with a nearest filter: Pillow picks a source pixel per
+    destination pixel by rounding a ratio, which puts a one-pixel jitter into
+    the block edges. ``np.repeat`` places every block exactly."""
+    pixels = np.array(
+        [[[1, 2, 3, 255], [4, 5, 6, 255]]], dtype=np.uint8
+    )
+    out = tf.upscale(pixels, 3)
+    assert out.shape == (3, 6, 4)
+    assert np.array_equal(out[0, 0], pixels[0, 0])
+    assert np.array_equal(out[2, 2], pixels[0, 0])
+    assert np.array_equal(out[0, 3], pixels[0, 1])
+    # Every block is uniform, i.e. nothing was blended anywhere.
+    assert len(np.unique(out.reshape(-1, 4), axis=0)) == 2
+
+
+def test_upscale_by_one_is_the_untouched_path():
+    pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    assert tf.upscale(pixels, 1) is pixels
+
+
+def test_upscale_floors_at_one_rather_than_emptying_the_image():
+    pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    assert tf.upscale(pixels, 0).shape == (2, 2, 4)
+    assert tf.upscale(pixels, -4).shape == (2, 2, 4)
+
+
+def test_upscale_preserves_alpha_untouched():
+    """No premultiply round trip anywhere: nothing is mixed, so dividing a
+    rounded product back out would move colours for no reason at all."""
+    pixels = np.array([[[200, 100, 50, 3]]], dtype=np.uint8)
+    out = tf.upscale(pixels, 4)
+    assert set(np.unique(out[..., 3]).tolist()) == {3}
+    assert np.array_equal(out[2, 2], pixels[0, 0])

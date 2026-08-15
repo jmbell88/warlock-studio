@@ -2794,6 +2794,7 @@ class App:
             inker_canvas,
             inker_colors,
             inker_layers,
+            inker_preview,
             inker_timeline,
             inker_tools,
         )
@@ -2839,6 +2840,18 @@ class App:
 
         imgui.same_line()
         imgui.begin_group()
+        # Above the layer panel and only for an animated document, so a still
+        # document's right column is byte-for-byte what it always was -- the
+        # same rule the timeline strip follows on the other side. A fixed
+        # height rather than a share of the column: it is a picture of the
+        # canvas, and a preview that grew with the window would push the layer
+        # list off the bottom on a short screen.
+        if animated:
+            if layout_mod.pane_child(
+                "inker-preview", (0, sp(inker_preview.PREVIEW_H))
+            ):
+                inker_preview.draw(ctx)
+            imgui.end_child()
         layers_height = imgui.get_content_region_avail().y * lay.settings_share
         if layout_mod.pane_child("inker-layers", (0, layers_height)):
             inker_layers.draw(ctx)

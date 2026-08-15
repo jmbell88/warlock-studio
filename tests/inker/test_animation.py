@@ -988,7 +988,13 @@ def test_an_index_outside_the_span_is_clamped_to_the_nearest_end():
 
 
 def test_advance_on_an_empty_timeline_stops():
-    assert animation.advance([], 0, 0.0, 100.0, (0, -1, True)) == (0, 0.0, False, True)
+    assert animation.advance([], 0, 0.0, 100.0, (0, -1, True)) == (
+        0,
+        0.0,
+        False,
+        True,
+        0,
+    )
 
 
 def test_a_negative_delta_time_does_not_run_the_clip_backwards():
@@ -1005,7 +1011,7 @@ def _walk(durations, span, direction, steps, index=None, forward=True):
     index = start if index is None else index
     out = []
     for _ in range(steps):
-        nxt, _accum, playing, forward = animation.advance(
+        nxt, _accum, playing, forward, _cycles = animation.advance(
             durations, index, 0.0, durations[index], span,
             direction=direction, forward=forward,
         )
@@ -1046,11 +1052,11 @@ def test_a_ping_pongs_leg_survives_between_ticks():
     """The returned ``forward`` is the whole of that state, and a caller that
     dropped it would make every tick an outward one -- so the clip would reach
     the end and stay there, stepping between the last two frames forever."""
-    index, _accum, _playing, forward = animation.advance(
+    index, _accum, _playing, forward, _cycles = animation.advance(
         [10] * 3, 2, 0.0, 10.0, (0, 2, True), direction="pingpong"
     )
     assert (index, forward) == (1, False)
-    index, _accum, _playing, forward = animation.advance(
+    index, _accum, _playing, forward, _cycles = animation.advance(
         [10] * 3, index, 0.0, 10.0, (0, 2, True), direction="pingpong", forward=forward
     )
     assert (index, forward) == (0, False)
@@ -1398,3 +1404,156 @@ def test_a_layout_survives_a_whole_canvas_undo():
     doc.undo()
     assert len(doc.anim.frames) == before
     assert doc.anim.layout == animation.DirectionalLayout("turnaround")
+
+
+# --- tag repeat counts (C7) --------------------------------------------------
+
+
+def test_a_repeat_of_zero_is_exactly_todays_behaviour():
+    """The default has to be a no-op, because every document already on disk
+    reads back with it -- a repeat that changed how an old file played would be
+    a migration wearing a trailing field's clothes."""
+    assert Tag(name="t", start=0, end=2).repeat == 0
+    plain = animation.advance([10] * 3, 2, 0.0, 10.0, (0, 2, True))
+    counted = animation.advance([10] * 3, 2, 0.0, 10.0, (0, 2, True), repeat=0)
+    assert plain[:4] == counted[:4]
+
+
+def test_a_nonsense_repeat_is_coerced_rather_than_refused():
+    assert Tag(name="t", repeat=-3).repeat == 0
+    assert Tag(name="t", repeat="nope").repeat == 0  # type: ignore[arg-type]
+
+
+def test_a_forward_span_counts_one_cycle_each_time_it_reaches_its_end():
+    _index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, True)
+    )
+    assert (playing, cycles) == (True, 1)
+
+
+def test_a_finite_repeat_stops_at_the_end_of_its_last_pass():
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, True), repeat=1
+    )
+    # At the *end* frame, not wrapped round to the start: a clip that has
+    # finished should be showing its last drawing.
+    assert (index, playing, cycles) == (2, False, 1)
+
+
+def test_a_finite_repeat_keeps_playing_until_the_count_runs_out():
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, True), repeat=3, cycles=1
+    )
+    assert (index, playing, cycles) == (0, True, 2)
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, True), repeat=3, cycles=cycles
+    )
+    assert (index, playing, cycles) == (2, False, 3)
+
+
+def test_a_reverse_span_counts_a_cycle_at_its_start():
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 0, 0.0, 10.0, (0, 2, True), direction="reverse", repeat=1
+    )
+    assert (index, playing, cycles) == (0, False, 1)
+
+
+def test_a_ping_pong_cycle_is_one_out_and_back():
+    """Turning round at the far end is half a swing, and counting it would make
+    "play three times" mean one and a half."""
+    span = (0, 2, True)
+    walked = []
+    index, forward, cycles = 0, True, 0
+    for _ in range(6):
+        index, _accum, playing, forward, cycles = animation.advance(
+            [10] * 3, index, 0.0, 10.0, span,
+            direction="pingpong", forward=forward, cycles=cycles,
+        )
+        walked.append((index, cycles))
+        if not playing:
+            break
+    # 1, 2 (out), 1, 0 (back), then the step that *restarts* the swing is the
+    # one that counts it -- the same point a forward span counts at, which is
+    # the step that puts the playhead back where the span begins.
+    assert walked == [(1, 0), (2, 0), (1, 0), (0, 0), (1, 1), (2, 1)]
+
+
+def test_a_ping_pong_played_once_stops_where_it_started():
+    span = (0, 2, True)
+    index, forward, cycles, playing = 0, True, 0, True
+    for _ in range(8):
+        index, _accum, playing, forward, cycles = animation.advance(
+            [10] * 3, index, 0.0, 10.0, span,
+            direction="pingpong", forward=forward, repeat=1, cycles=cycles,
+        )
+        if not playing:
+            break
+    assert (index, playing, cycles) == (0, False, 1)
+
+
+def test_a_finite_repeat_overrides_a_tag_already_set_to_play_once():
+    """``loop_range`` hands back ``tag.loop`` verbatim, so a tag set to "once"
+    and *then* given a count of three used to stop on its first wrap -- the
+    flag deciding a question the count is the more specific answer to. Worse,
+    ``export_tag`` writes the count into the GIF, so the file played three
+    times while the editor played one."""
+    span = (0, 2, False)
+    index, forward, cycles = 0, True, 0
+    seen = []
+    for _ in range(12):
+        index, _accum, playing, forward, cycles = animation.advance(
+            [10] * 3, index, 0.0, 10.0, span, forward=forward, repeat=3, cycles=cycles
+        )
+        seen.append((index, playing, cycles))
+        if not playing:
+            break
+    assert seen[-1] == (2, False, 3)
+    assert len(seen) == 9  # three whole passes of three frames, not one
+
+
+def test_a_repeat_that_is_already_used_up_plays_no_further_pass():
+    """Only reachable when the count is *lowered* under a clip that has passed
+    it. Stepping on would play one whole extra pass before the wrap check
+    below noticed."""
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 1, 0.0, 10.0, (0, 2, True), repeat=2, cycles=5
+    )
+    assert (index, playing, cycles) == (1, False, 5)
+
+
+def test_clearing_a_repeat_gives_the_loop_flag_its_answer_back():
+    """The count *overrides* the flag rather than rewriting it, so a "once" tag
+    is still a "once" tag once the count is cleared."""
+    index, _accum, playing, _forward, _cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, False), repeat=0
+    )
+    assert (index, playing) == (2, False)
+
+
+def test_a_repeat_does_not_fall_through_past_its_span():
+    """The documented divergence from Aseprite: a finite repeat stops inside
+    the tag rather than carrying on into the frames after it."""
+    index, _accum, playing, _forward, _cycles = animation.advance(
+        [10] * 5, 2, 0.0, 10.0, (1, 2, True), repeat=1
+    )
+    assert (index, playing) == (2, False)
+
+
+def test_the_repeat_in_force_comes_from_the_tag_under_the_playhead():
+    anim = Animation(
+        tracks=[Track()],
+        frames=[Frame(), Frame(), Frame()],
+        tags=[Tag(name="hit", start=1, end=2, repeat=4)],
+    )
+    assert anim.play_repeat(0) == 0
+    assert anim.play_repeat(2) == 4
+
+
+def test_a_repeat_survives_a_tag_edit_and_is_clamped_at_zero():
+    doc = _doc()
+    _add_frame(doc)
+    assert doc.add_tag("walk", 0, 1)
+    assert doc.set_tag(0, repeat=3)
+    assert doc.anim.tags[0].repeat == 3
+    assert doc.set_tag(0, repeat=-2)
+    assert doc.anim.tags[0].repeat == 0

@@ -87,6 +87,34 @@ def test_the_pivot_is_the_first_slice_that_has_one():
     assert sheetout.slices_snapshot(doc)[0]["pivot"] == (9.0, 10.0)
 
 
+def test_a_span_snapshot_holds_only_that_span_s_frames():
+    """The block downstream is keyed by *cell* index, so a snapshot of the whole
+    timeline handed to a two-cell export would hang frame 0's rectangles on the
+    cell holding frame 1. Sliced by the same span as the frames, or not at all."""
+    doc = _animated()
+    entry = doc.add_slice((0, 0, 4, 4))
+    doc.set_slice_key(entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(6, 6, 10, 10)))
+    assert [meta["slices"][0]["x"] for meta in sheetout.slices_snapshot(doc, (1, 2))] == [6, 0]
+    assert sheetout.slices_snapshot(doc, None) == sheetout.slices_snapshot(doc)
+
+
+def test_slice_geometry_follows_an_upscaled_export():
+    """An export written at 4x with a sidecar describing the canvas names the
+    wrong pixels. Exact, because it is an integer count times an integer."""
+    doc = _animated()
+    doc.add_slice((2, 3, 10, 9), name="body", pivot=(4.0, 6.0), center=(2, 2, 6, 4))
+    snap = sheetout.slices_snapshot(doc)
+    scaled = sheetout.scale_slices(snap, 4)
+
+    assert sheetout.scale_slices(snap, 1) == snap
+    assert scaled[0]["pivot"] == (24.0, 36.0)
+    one = scaled[0]["slices"][0]
+    assert (one["x"], one["y"], one["w"], one["h"]) == (8, 12, 32, 24)
+    assert one["pivot"] == (24.0, 36.0)
+    assert one["center"] == (16, 20, 16, 8)
+    assert one["name"] == "body"
+
+
 def test_a_still_document_has_no_sheet_to_snapshot():
     doc = Document.blank(8, 8)
     doc.add_slice((0, 0, 4, 4))

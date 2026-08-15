@@ -43,6 +43,7 @@ __all__ = [
     "FrameAddEdit",
     "FrameDurationEdit",
     "FrameMoveEdit",
+    "FrameOrderEdit",
     "FrameRemoveEdit",
     "TagsEdit",
     "TrackAddEdit",
@@ -145,6 +146,35 @@ class FrameMoveEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._move_frame(self.frame_uid, self.to)
+
+
+@dataclass
+class FrameOrderEdit(Edit):
+    """The whole frame order, before and after, as uid sequences.
+
+    A reorder of a *range* is expressible as a chain of ``FrameMoveEdit``s and
+    that is what it must not be. Each of those ends in ``_move_frame``, which
+    ends in ``_anim_changed``, which stamps every frame and recomposites the
+    canvas -- so reversing a fifty-frame clip would rebuild the view fifty
+    times for one gesture, and a partial failure halfway through would leave an
+    order the user never asked for on screen.
+
+    Uids rather than indices, for the reason the module docstring gives: the
+    positions are what is being restored, but the *things* being positioned
+    have to survive an unrelated insert or delete underneath this step. Cost is
+    zero because a permutation moves no pixels at all -- the cels are keyed by
+    frame uid, so links survive a reorder without anything being said about
+    them.
+    """
+
+    before: list[int]
+    after: list[int]
+
+    def undo(self, doc: Any) -> None:
+        doc._set_frame_order(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_frame_order(self.after)
 
 
 @dataclass
@@ -271,14 +301,23 @@ class CelSetEdit(Edit):
     frame_uid: int
     before: Any
     after: Any
-    pinned: bool = True
+    #: True or False when both sides are in the same case, and a *collection of
+    #: ``id()``s* when they are not -- the same three-valued spelling the
+    #: removals use, and for the same reason one step up. A range op sets many
+    #: slots at once and routinely mixes the cases inside one gesture: unlinking
+    #: a span mints a fresh copy per slot (each of which the history alone will
+    #: hold once undone) while the *original* they came from is one object that
+    #: must be charged once across all of them, not once per slot. A bool is
+    #: wrong whichever way it is set, and setting it True per slot would charge
+    #: a 50-frame linked background fifty times and evict the whole history.
+    pinned: Any = True
 
     def __post_init__(self) -> None:
         # Only the direction that can be *left holding* pixels is charged for.
         # Undoing a set restores ``before``, so what the history pins while the
         # step is on the done stack is ``after``, and vice versa -- but the two
         # stacks together are what ``UndoStack.bytes`` sums, so charge both.
-        self.cost = pixel_bytes([self.before, self.after]) if self.pinned else 0
+        self.cost = charged([self.before, self.after], self.pinned)
 
     def _put(self, doc: Any, layer: Any) -> None:
         doc._set_cel(self.track_uid, self.frame_uid, layer)

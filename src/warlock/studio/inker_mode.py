@@ -232,6 +232,69 @@ def open_pixels(ctx: Any, pixels: Any, *, title: str = "Untitled") -> None:
     ctx.submit(f"inker-open:pixels:{title}", run)
 
 
+def ask_import_sheet(ctx: Any) -> None:
+    """Pick a sprite sheet off disk. The grid is asked for afterwards.
+
+    Two steps rather than one, and in this order deliberately: the popup that
+    asks for the cell size shows how many frames those numbers actually
+    produce, which it can only do once the image's size is known. Asking first
+    and opening second would mean typing a grid blind and finding out by
+    looking at the result.
+    """
+    ensure(ctx)
+
+    def run() -> dict[str, Any] | None:
+        import numpy as np
+        from PIL import Image
+
+        path = dialogs.open_file("Import sprite sheet", OPEN_FILTER)
+        if path is None:
+            return None
+        with Image.open(path) as opened:
+            opened.load()
+            atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        return {"atlas": atlas, "title": Path(path).stem}
+
+    ctx.submit("inker-sheetin", run)
+
+
+def import_sheet(ctx: Any) -> bool:
+    """Slice the pending atlas on the typed grid and open it. Frame thread.
+
+    Cheap enough to stay here: it is a handful of array copies, and every
+    refusal is a message the user has to see beside the fields that caused it
+    rather than a toast arriving from a task some frames later.
+
+    Returns whether a document was opened, so the popup can stay up on a
+    refusal. Closing it either way would strand the atlas: the popup only
+    reopens when a *new* file is picked, so a rejected grid would mean choosing
+    the same file again to correct one number.
+    """
+    from .inker import sheetin
+
+    state = ensure(ctx)
+    pending = state.sheet_import
+    if pending is None:
+        return False
+    atlas, title = pending
+    try:
+        doc = sheetin.document_from_grid(
+            atlas,
+            state.sheet_cell,
+            state.sheet_offset,
+            state.sheet_padding,
+            state.sheet_count or None,
+        )
+    except ValueError as exc:
+        ctx.toast(f"Cannot import: {exc}.", "warn")
+        return False
+    state.sheet_import = None
+    state.sheet_import_open = False
+    _adopt(ctx, state, doc, path=None, title=title, file_format="ora")
+    set_mode(ctx.state, "inker")
+    return True
+
+
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
     """Open one candidate of a sprite draft as an editable animation.
 
@@ -449,6 +512,8 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     # export would otherwise be missing pixels the user is looking at.
     doc.commit_floating()
     suggested = tab.path.stem if tab.path else "untitled"
+    state = ctx.state.inker
+    scale = max(1, int(getattr(state, "export_scale", 1) or 1))
 
     def run() -> dict[str, Any] | None:
         dest = dialogs.save_file("Export flattened PNG", f"{suggested}.png", PNG_FILTER)
@@ -456,7 +521,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        dest.write_bytes(doc.png_bytes())
+        dest.write_bytes(doc.png_bytes(scale=scale))
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
@@ -506,6 +571,17 @@ def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
     _begin_export(ctx, tab, "gif")
 
 
+def export_pngs(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Every frame as its own numbered PNG, through the same stepper.
+
+    The plainest export there is, and the one an engine with its own importer
+    asks for: no atlas to slice, no sidecar to parse. The spread is untouched --
+    the frames are read exactly as the sheet and the GIF read them, and only
+    the write differs.
+    """
+    _begin_export(ctx, tab, "pngs")
+
+
 @dataclass
 class _Export:
     """One export's frame-by-frame read of the document.
@@ -517,10 +593,18 @@ class _Export:
     """
 
     tab: InkerDoc
-    kind: str  # "sheet" | "gif"
+    kind: str  # "sheet" | "gif" | "pngs"
     suggested: str
     uids: list[str]
     frames: list[Any] = field(default_factory=list)
+    #: The inclusive frame range being exported, or None for the whole
+    #: timeline. Sliced **at begin**, and ``timing`` is sliced at submit with
+    #: this same pair -- safe because the tab has been locked (``saving``) for
+    #: the whole spread, so the frame count cannot have moved between them.
+    span: tuple[int, int] | None = None
+    #: What a GIF's loop block should say: True forever, False once, or a
+    #: repeat count. See ``gifout.loop_option``.
+    loop: bool | int = True
 
     @property
     def done(self) -> bool:
@@ -531,7 +615,52 @@ class _Export:
         return len(self.uids)
 
 
-def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
+def export_range(
+    ctx: Any,
+    tab: InkerDoc | None,
+    kind: str,
+    span: tuple[int, int],
+    *,
+    loop: bool | int = True,
+) -> None:
+    """Export part of the timeline -- a tag, or a marquee'd range.
+
+    The same three exports over fewer frames, so it is the same entry point
+    with a span rather than a second pipeline: the frames are read by the same
+    stepper, the durations and tags by the same ``timing``, and the sheet is
+    written by the same ``sheet.sidecar``. What a span changes is only which
+    frames go in, that the tags come back renumbered, and that a directional
+    layout is dropped -- all of which ``sheetout`` decides, not this.
+    """
+    _begin_export(ctx, tab, kind, span=span, loop=loop)
+
+
+def export_tag(ctx: Any, tab: InkerDoc | None, kind: str, index: int) -> None:
+    """One tag, as a sheet or a GIF, with its own looping honoured.
+
+    ``tag.repeat or tag.loop`` is the whole of the difference from a range
+    export: a repeat count is the more specific answer to "how many times does
+    this play", and 0 means the flag decides -- exactly the rule playback
+    follows, spelled once here so the file and the editor cannot disagree.
+    """
+    tab = tab or active(ctx)
+    anim = None if tab is None else tab.doc.anim
+    if tab is None or anim is None or not 0 <= index < len(anim.tags):
+        return
+    tag = anim.tags[index]
+    last = len(anim.frames) - 1
+    span = (max(0, min(int(tag.start), last)), max(0, min(int(tag.end), last)))
+    _begin_export(ctx, tab, kind, span=span, loop=tag.repeat or tag.loop)
+
+
+def _begin_export(
+    ctx: Any,
+    tab: InkerDoc | None,
+    kind: str,
+    *,
+    span: tuple[int, int] | None = None,
+    loop: bool | int = True,
+) -> None:
     """Lock the tab and park the stepper. The click-frame half of an export."""
     from .inker import sheetout
 
@@ -543,7 +672,7 @@ def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
         return
     tab.doc.commit_floating()
     try:
-        uids = sheetout.frame_uids(tab.doc)
+        uids = sheetout.frame_uids(tab.doc, span)
     except ValueError as exc:
         ctx.toast(f"Cannot export: {exc}.", "warn")
         return
@@ -553,7 +682,12 @@ def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
     # sheet. ``saving`` is the flag ``busy`` already refuses mutation on.
     tab.saving = True
     state.export = _Export(
-        tab=tab, kind=kind, suggested=tab.path.stem if tab.path else "untitled", uids=uids
+        tab=tab,
+        kind=kind,
+        suggested=tab.path.stem if tab.path else "untitled",
+        uids=uids,
+        span=span,
+        loop=loop,
     )
 
 
@@ -593,14 +727,25 @@ def pump_export(ctx: Any) -> None:
 def _submit_export(ctx: Any, export: _Export) -> None:
     """The work list is read; hand it to a task. Frame thread."""
     from .inker import gifout, sheetout
+    from .inker.transform import upscale
 
     tab, frames, suggested = export.tab, export.frames, export.suggested
     doc = tab.doc
-    durations, tags, layout = sheetout.timing(doc)
+    state = ctx.state.inker
+    # Read here, on the frame thread, with the frames: an app-level setting the
+    # user could change while the encode is in flight would otherwise decide
+    # the file's size halfway through writing it.
+    scale = max(1, int(getattr(state, "export_scale", 1) or 1))
+    durations, tags, layout = sheetout.timing(doc, export.span)
     # Read here, with the timing, and for its reason: it walks the document, so
     # it belongs on the frame thread beside the flatten rather than inside the
     # task. Cheap -- a handful of rectangles -- so there is nothing to spread.
-    slices = sheetout.slices_snapshot(doc)
+    #
+    # Sliced by the *same* span as the frames and the timing, because
+    # ``slices_block`` keys by cell index: a span export's third cell is the
+    # third frame of the span, and a whole-timeline snapshot here would hang
+    # frame 0's rectangles on it.
+    slices = sheetout.slices_snapshot(doc, export.span)
     if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
         # Refused on the frame thread, before the file dialog: the engine raises
         # the same ValueError as a backstop, but by then the user has picked a
@@ -623,8 +768,21 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
+        # Upscaled *before* ``compose``, so the plan is built on the scaled
+        # frame size and the cells, the trims and the sidecar all describe the
+        # atlas that is actually written. Scaling the finished atlas instead
+        # would leave every rectangle in the sidecar naming the wrong pixels.
+        # ``sheet.py`` stays the sole writer of the format; none of this is new
+        # code in it.
         image, plan, extra = sheetout.compose(
-            frames, durations, tags, layout, slices, name=suggested
+            [upscale(plane, scale) for plane in frames],
+            durations,
+            tags,
+            layout,
+            # The slice geometry through the same magnification, or the sidecar
+            # describes a canvas that is not the atlas beside it.
+            sheetout.scale_slices(slices, scale),
+            name=suggested,
         )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -658,17 +816,45 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        gifout.write_gif(dest, frames, durations, palette=palette)
+        # Upscaled before the quantiser, not after: a GIF holds palette
+        # indices, so there is no "after" -- magnifying the indexed image would
+        # be magnifying a palette lookup rather than a picture.
+        gifout.write_gif(
+            dest,
+            [upscale(plane, scale) for plane in frames],
+            durations,
+            loop=export.loop,
+            palette=palette,
+        )
         return {"exported": dest}
 
+    def run_pngs() -> dict[str, Any] | None:
+        """One PNG per frame, numbered. The plainest thing an engine can eat.
+
+        Numbered from the chosen filename's stem rather than asking for a
+        directory: every tool that consumes a sequence wants ``name_0000.png``
+        beside its siblings, and a save dialog is the one place a user is
+        already picking both the folder and the name.
+        """
+        from PIL import Image
+
+        dest = dialogs.save_file("Export PNG sequence", f"{suggested}.png", PNG_FILTER)
+        if dest is None:
+            return None
+        stem = dest.stem
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        first = dest
+        for index, plane in enumerate(frames):
+            out = dest.parent / f"{stem}_{index:04d}.png"
+            Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
+            if index == 0:
+                first = out
+        return {"exported": first}
+
+    runners = {"sheet": run_sheet, "gif": run_gif, "pngs": run_pngs}
     # ``start_save`` rather than a bare submit, so a refused key clears the lock
     # this function did not set -- the tab has been locked since the click.
-    _start(
-        ctx,
-        tab,
-        f"inker-export:{tab.uid}",
-        run_sheet if export.kind == "sheet" else run_gif,
-    )
+    _start(ctx, tab, f"inker-export:{tab.uid}", runners.get(export.kind, run_gif))
 
 
 def _submit_write(ctx: Any, tab: InkerDoc, key: str, path: Path, file_format: str) -> None:
@@ -920,6 +1106,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
                     "warn",
                     action="log",
                 )
+        return
+
+    if name == "inker-sheetin":
+        # The picture only. The grid comes from the popup the bridge panel
+        # opens on the next frame, which is why nothing is adopted here.
+        if isinstance(result, dict):
+            state.sheet_import = (result["atlas"], result.get("title") or "Sheet")
+            state.sheet_import_open = False
+            set_mode(ctx.state, "inker")
         return
 
     if name == "inker-recover":
@@ -1250,6 +1445,11 @@ def toggle_play(ctx: Any, tab: InkerDoc | None = None) -> None:
     # resumed would otherwise carry on inwards from wherever it was, which reads
     # as the clip playing backwards for no reason anyone watching can see.
     tab.play_forward = True
+    # Every play starts the repeat count over. A tag set to play three times
+    # and stopped halfway must play three times again when it is started, not
+    # remember that it already finished once -- the same argument
+    # ``play_forward`` above makes about a ping-pong's leg.
+    tab.play_cycles = 0
 
 
 def stop_play(tab: InkerDoc) -> None:
@@ -1274,7 +1474,7 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     if not tab.playing or anim is None:
         return
     durations = [frame.duration_ms for frame in anim.frames]
-    index, accum, playing, forward = animation.advance(
+    index, accum, playing, forward, cycles = animation.advance(
         durations,
         tab.play_index,
         tab.play_accum_ms,
@@ -1282,10 +1482,93 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
         anim.loop_range(tab.play_index),
         direction=anim.play_direction(tab.play_index),
         forward=tab.play_forward,
+        repeat=anim.play_repeat(tab.play_index),
+        cycles=tab.play_cycles,
     )
     tab.play_index, tab.play_accum_ms, tab.play_forward = index, accum, forward
+    tab.play_cycles = cycles
     if not playing:
         stop_play(tab)
+
+
+# --- the preview pane's second playhead --------------------------------------
+
+#: Bounds on the preview's speed multiplier. A ceiling because past ×4 a clip
+#: is a flicker rather than a preview, and a floor because a multiplier that
+#: reaches zero is a stopped clip pretending to play.
+MIN_PREVIEW_SPEED = 0.25
+MAX_PREVIEW_SPEED = 4.0
+
+#: What the preview can play: the whole timeline, or the tag under its own
+#: index. Per-tab preview state rather than a document playback mode -- see the
+#: divergence list.
+PREVIEW_SCOPES = ("clip", "tag")
+
+
+def toggle_preview(tab: InkerDoc) -> None:
+    """Start or stop the preview. Refused for nothing at all.
+
+    Deliberately not gated on ``busy``: the preview neither edits the document
+    nor moves its playhead, so there is nothing for a save or for canvas
+    playback to be protected from -- and being able to watch the clip while
+    drawing on it is the whole feature.
+    """
+    if tab.doc.anim is None:
+        return
+    if tab.preview_playing:
+        tab.preview_playing = False
+        return
+    tab.preview_playing = True
+    tab.preview_accum_ms = 0.0
+    tab.preview_forward = True
+    tab.preview_cycles = 0
+
+
+def tick_preview(tab: InkerDoc, dt_ms: float) -> None:
+    """One frame's worth of time for the *preview*'s playhead.
+
+    A clone of :func:`tick_playback` rather than a share, and the difference is
+    the point: this one **never touches ``tab.playing`` or ``tab.saving``** and
+    never calls ``set_current_frame``. It reads ``anim`` and writes four fields
+    on the tab, so a preview running while the user paints needs no gating
+    change anywhere -- the canvas draws the document, the preview draws
+    ``frame_flat``, which is the same read onion skinning already makes and is
+    safe even during a save (``sheetout.snapshot``'s argument).
+
+    The speed multiplier scales time **after** the stall clamp, so a two-second
+    hitch is still treated as a stall at ×4 rather than as eight seconds of
+    animation.
+    """
+    anim = tab.doc.anim
+    if not tab.preview_playing or anim is None or not anim.frames:
+        return
+    last = len(anim.frames) - 1
+    index = max(0, min(int(tab.preview_index), last))
+    if tab.preview_scope == "tag":
+        span = anim.loop_range(index)
+        direction = anim.play_direction(index)
+        repeat = anim.play_repeat(index)
+    else:
+        # The whole clip, looping, whatever tags happen to cover it. A preview
+        # scoped to the clip that stopped at a non-looping tag's end would be
+        # answering a question the scope switch just said no to.
+        span, direction, repeat = (0, last, True), "forward", 0
+    speed = max(MIN_PREVIEW_SPEED, min(float(tab.preview_speed), MAX_PREVIEW_SPEED))
+    index, accum, playing, forward, cycles = animation.advance(
+        [frame.duration_ms for frame in anim.frames],
+        index,
+        tab.preview_accum_ms,
+        min(float(dt_ms), MAX_TICK_MS) * speed,
+        span,
+        direction=direction,
+        forward=tab.preview_forward,
+        repeat=repeat,
+        cycles=tab.preview_cycles,
+    )
+    tab.preview_index, tab.preview_accum_ms = index, accum
+    tab.preview_forward, tab.preview_cycles = forward, cycles
+    if not playing:
+        tab.preview_playing = False
 
 
 def step_frame(ctx: Any, delta: int, tab: InkerDoc | None = None) -> None:

@@ -200,6 +200,28 @@ def resize_canvas(
     return out
 
 
+def upscale(pixels: np.ndarray, factor: int) -> np.ndarray:
+    """Magnify by a whole number, exactly: one source pixel, ``n`` x ``n`` out.
+
+    Not ``scale`` with ``resample="nearest"``, and the difference is that this
+    one cannot be approximate. Pillow's nearest resize picks a source pixel per
+    destination pixel by rounding a ratio, which is right for an arbitrary size
+    and puts a one-pixel jitter into the block edges at an integer one --
+    ``np.repeat`` places every block exactly, so an 8x magnification of pixel
+    art is the artwork with each pixel drawn eight times and nothing else.
+
+    A factor of 1 hands the array straight back rather than copying it: this is
+    an *export* path and every caller reads the result, so the off path is
+    byte-identical and costs nothing at all.
+    """
+    factor = max(1, int(factor))
+    if factor == 1:
+        return pixels
+    return np.ascontiguousarray(
+        np.repeat(np.repeat(pixels, factor, axis=0), factor, axis=1)
+    )
+
+
 # --- carrying a rectangle through the same geometry --------------------------
 #
 # A slice is metadata *about* the canvas rather than a plane on it, so every

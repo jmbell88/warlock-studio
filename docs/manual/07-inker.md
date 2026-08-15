@@ -411,9 +411,55 @@ worth having — a torch flicker or an idle breath drawn as frames costs the who
 cels, every one of them a duplicate of a drawing already in the file, and every edit to the middle
 of the swing then has to be made twice.
 
+A tag can also **repeat** a fixed number of times. Set **repeat** in the tag's menu to 3 and the
+span plays three times and stops; leave it at 0 — the default, and what every document written
+before this carries — and the Loop tick decides as it always has. While a count is set the Loop
+tick is disabled, because the count is the more specific answer to the same question — a tag that
+was set to play *once* and is then given a count of three plays three times, and clearing the count
+back to 0 gives it its "once" back. When the
+count runs out playback **stops inside the tag**, on the frame the span ends at; it does not fall
+through into the frames after it, which is where Aseprite would carry on. A ping-pong counts one
+out-and-back as one play. Repeats are saved with the document and written into a sprite sheet's
+sidecar, and a tag exported on its own as a GIF carries its count into the file.
+
+**Ranges.** Drag across the grid to select a rectangle of cells — press, drag, release; `Shift`+click
+extends the selection from where you last pressed, and `Esc` clears it. The selection is drawn as
+one accent outline and is not part of the document: it pushes no undo step and is not saved.
+Right-clicking any cell opens the **Range** section of the cell menu, which acts on the whole
+selection: copy and paste cels (the clipboard is shared between tabs, and a link inside the copied
+block survives the paste as one drawing again), clear, link, unlink, duplicate the frames copied or
+linked, reverse them, delete them, and set every frame's duration at once. Every one of them is a
+single `Ctrl+Z`, and each is refused rather than half-applied — deleting *every* frame is the one
+range delete that is not allowed, because a timeline keeps at least one frame.
+
+**Cel thumbnails.** The **Thumbs** switch on the second row of the timeline draws each cel's picture
+in its cell and grows the cells to fit. Linked cels share one thumbnail, so a link looks like the
+same drawing standing in several columns.
+
+**Exporting part of a clip.** The Range section ends with **Export range → sheet** and **→ GIF**,
+which write only the selected frames. A tag's own menu has **Export tag → sheet** and **→ GIF**,
+which use that tag's span and its looping — a tag with a repeat count writes a GIF that plays that
+many times. In a partial export the tags are renumbered against the exported frames, tags that fall
+entirely outside it are dropped, and a directional layout is not carried over: half a walk sheet is
+a clip, not a smaller walk sheet.
+
+**Filters over a range.** With a range selected, the filter popup gains **Apply to range**: the
+filter runs over every cel in the selection as one undo step. A linked cel is filtered *once*
+however many frames it appears on, an empty cel stays empty rather than becoming a filtered blank,
+and the selection on the canvas is honoured as a weight exactly as it is for a single layer — so a
+feathered selection fades the filter in on every frame at once.
+
 Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.
+
+**Import sprite sheet** in the document panel goes the other way: pick any image and give it a cell
+size, an offset, the padding between cells and how many frames to take, and it becomes one frame per
+cell, read row by row. The popup counts the frames your numbers produce as you type them, and says
+what is wrong rather than importing a short sheet — the last column and the last row carry no
+trailing padding, which is the arithmetic that otherwise quietly drops a frame. An imported sheet is
+an ordinary animation with no directions and no tags: a *layout* is something the generator knows
+about its own output, not something a cell size can imply.
 
 A document opened from a generated sprite sheet carries a **directional layout** as well: its frames
 are that sheet's cells in order, four directions with one or four frames each, and a walk sheet
@@ -459,6 +505,20 @@ exactly as it always was, and an `.ora` from any other program opens here with n
 
 **Show with other tools** keeps the overlay up while you paint; the slice tool turns it on for you.
 
+## Preview
+
+While a document is animated, a **Preview** pane sits at the top of the right column and plays the
+clip in a corner of the screen. It is a second playhead, not the timeline's: pressing Play here does
+not lock the document, does not move the frame you are drawing on, and does not stop when you paint.
+That is the whole point — an animator runs the cycle and keeps working, and the frame under the
+brush updates in the preview within a quarter of a second of each stroke.
+
+The transport is Play/Stop, a frame counter, a **speed** multiplier from 0.25x to 4x, and a **scope**:
+*Whole clip* runs the entire timeline round and round, *Active tag* follows the tag under the
+preview's own frame — its direction, its looping and its repeat count. The preview always draws the
+picture upright, ignoring any rotation or mirroring you have put on the canvas view, because those
+are aids for drawing and this is a check on the result.
+
 ## Saving
 
 Inker saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that both Krita and GIMP read
@@ -497,6 +557,15 @@ cells, because the engine playing it back knows nothing about links. And the cel
 transparency rather than being flattened onto the document's matte, which is what a sheet wants
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
 composited over whatever is behind it in the game.
+
+**Export PNGs** writes one numbered PNG per frame — `name_0000.png`, `name_0001.png` and so on,
+beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine
+with its own importer wants.
+
+The **scale** box on the timeline's second row magnifies every export by a whole number, nearest
+neighbour: each pixel is drawn N times and nothing is resampled, so a 32×32 sprite at 8× is the
+artwork at 256×256 rather than a blurred version of it. A sheet's sidecar is built on the scaled
+size, so its cells and trims describe the file that is actually written.
 
 **Export GIF** writes the same clip as an animated GIF, looping. That one is for showing the
 animation to a person rather than to an engine: it plays anywhere, on its own, with nothing needed

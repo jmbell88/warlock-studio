@@ -42,6 +42,10 @@ def draw(ctx: Any) -> None:
     tab = state.active
     widgets.section("document")
     manual_render.help_button(ctx, "inker-bridge")
+    # Above the tab check: importing a sheet *makes* a document, so it has to
+    # be reachable when there is none open, which is exactly the moment a user
+    # is most likely to want it.
+    _sheet_import(ctx)
     if tab is None:
         widgets.muted("Nothing open.")
         return
@@ -395,10 +399,135 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
+    _apply_to_range(ctx, tab)
+    imgui.same_line()
     # Never disabled: a save starting while this is open must not leave a modal
     # the user cannot dismiss -- the trap the params popup in Clay documents.
     if imgui.button("Cancel", (sp(90), 0)):
         tab.doc.cancel_filter()
         state.filter_open = False
+        imgui.close_current_popup()
+    imgui.end_popup()
+
+
+def _apply_to_range(ctx: Any, tab: Any) -> None:
+    """Run the filter over every cel of the timeline's range, in one step.
+
+    **Cancels the preview session first**, which is the whole of what makes
+    this safe beside Apply: the session has already written its preview into
+    the cel on screen, and running the range filter over that cel would filter
+    an already-filtered plane -- the compounding ``preview_filter`` exists to
+    avoid, arriving by a different door. Cancelling puts the pixels back, and
+    ``filter_range`` then reads every cel including this one exactly once.
+
+    Disabled with no range rather than hidden, the rule the timeline's own menu
+    follows: a button that appears and disappears is one the user has to
+    rediscover.
+    """
+    state = inker_mode.ensure(ctx)
+    rect = tab.range_sel
+    imgui.begin_disabled(tab.busy or rect is None or tab.doc.anim is None)
+    if imgui.button("Apply to range", (sp(120), 0)):
+        values = dict(_filter_values(state, state.filter_name))
+        tab.doc.cancel_filter()
+        state.filter_open = False
+        tab.doc.filter_range(state.filter_name, values, *rect)
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    if rect is None:
+        widgets.help_marker(
+            "Drag across the timeline to select a range of cels first. Every"
+            " distinct cel in it is filtered once, so a linked cel is filtered"
+            " once however many frames it appears on."
+        )
+
+
+# --- importing a sprite sheet -----------------------------------------------
+
+SHEET_IMPORT_POPUP = "inker-sheet-import"
+
+
+def _sheet_import(ctx: Any) -> None:
+    """The Import sheet button, and the grid popup once a file is chosen."""
+    state = inker_mode.ensure(ctx)
+    if imgui.button("Import sprite sheet...", (-1, 0)):
+        inker_mode.ask_import_sheet(ctx)
+    widgets.help_marker(
+        "Slices any image into one frame per cell, row by row. For a sheet this"
+        " app generated, opening the draft from the library carries its"
+        " directions and tags as well; this is for a sheet from anywhere else."
+    )
+    if state.sheet_import is not None and not state.sheet_import_open:
+        state.sheet_import_open = True
+        imgui.open_popup(SHEET_IMPORT_POPUP)
+    _sheet_import_popup(ctx, state)
+
+
+def _pair(label: str, value: tuple[int, int], low: int = 0) -> tuple[int, int]:
+    """Two small integer fields on one row. -> the pair, floored at ``low``."""
+    imgui.set_next_item_width(sp(70))
+    _changed_x, x = imgui.input_int(f"##{label}x", int(value[0]), 1, 8)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(70))
+    _changed_y, y = imgui.input_int(f"##{label}y", int(value[1]), 1, 8)
+    imgui.same_line()
+    widgets.muted(label)
+    return (max(low, int(x)), max(low, int(y)))
+
+
+def _sheet_import_popup(ctx: Any, state: Any) -> None:
+    from ..inker import sheetin
+
+    if not imgui.begin_popup(SHEET_IMPORT_POPUP):
+        # imgui closes a popup on a click outside, and the picture is a
+        # megabyte or two: dropping it here is what keeps a cancelled import
+        # from pinning the atlas for the rest of the session.
+        if state.sheet_import_open:
+            state.sheet_import_open = False
+            state.sheet_import = None
+        return
+    if state.sheet_import is None:
+        imgui.end_popup()
+        return
+    atlas, title = state.sheet_import
+    height, width = atlas.shape[:2]
+    widgets.muted(f"{title} - {width} x {height}")
+
+    state.sheet_cell = _pair("cell", state.sheet_cell, low=1)
+    state.sheet_offset = _pair("offset", state.sheet_offset)
+    state.sheet_padding = _pair("padding", state.sheet_padding)
+    imgui.set_next_item_width(sp(70))
+    _changed, count = imgui.input_int("frames (0 = all)", int(state.sheet_count), 1, 8)
+    state.sheet_count = max(0, int(count))
+
+    # The count the numbers above actually produce, computed every frame from
+    # the same function the import runs -- so what the popup promises and what
+    # the import does cannot disagree, and a mistyped cell size says so here
+    # rather than in a document twenty frames long.
+    try:
+        rects = sheetin.grid_rects(
+            (int(width), int(height)),
+            state.sheet_cell,
+            state.sheet_offset,
+            state.sheet_padding,
+            state.sheet_count or None,
+        )
+        problem = ""
+    except ValueError as exc:
+        rects, problem = [], str(exc)
+    if problem:
+        widgets.text_colored(theme.WARN, problem)
+    else:
+        widgets.muted(f"{len(rects)} frames")
+
+    imgui.dummy((0, 4))
+    imgui.begin_disabled(not rects)
+    if imgui.button("Import", (sp(90), 0)) and inker_mode.import_sheet(ctx):
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    if imgui.button("Cancel##sheetin", (sp(90), 0)):
+        state.sheet_import = None
+        state.sheet_import_open = False
         imgui.close_current_popup()
     imgui.end_popup()

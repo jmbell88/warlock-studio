@@ -25,6 +25,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.
     "inker-colors": ("07-inker", "colour"),
+    "inker-preview": ("07-inker", "preview"),
     "candidates": ("04-generating-meshes", "candidates"),
     "clay-tools": ("08-clay", "transforming"),
     "clay-props": ("08-clay", "materials"),

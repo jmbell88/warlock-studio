@@ -396,6 +396,39 @@ class InkerDoc:
     # stays stateless about the UI.
     tiled: str = "off"
 
+    # The timeline's range selection, as an inclusive cell rect
+    # ``(t0, t1, f0, f1)`` of **indices**, or None for "nothing selected".
+    #
+    # View state on the tab, like the playhead and for the same reason: it
+    # pushes no undo step and is in no file. Indices rather than uids is the
+    # choice ``Tag`` already makes -- a range names a region of the timeline,
+    # so a frame inserted inside it should widen it -- and it is **clamped at
+    # use, never at store** (Plotter's selection rule): trimming it on every
+    # delete would silently shrink it under the user, and the engine clamps
+    # every op it is handed anyway.
+    range_sel: tuple[int, int, int, int] | None = None
+
+    # Preview-pane playback. A second, independent playhead: it never touches
+    # ``playing``, ``play_index`` or the document's ``anim.current``, which is
+    # the whole reason the preview can run while the canvas is being drawn on.
+    preview_playing: bool = False
+    preview_index: int = 0
+    preview_accum_ms: float = 0.0
+    preview_forward: bool = True
+    preview_cycles: int = 0
+    #: dt multiplier, 0.25 .. 4.0. A preview option rather than a document
+    #: playback mode -- see the divergence list.
+    preview_speed: float = 1.0
+    #: "clip" plays the whole timeline; "tag" plays the tag under the preview's
+    #: own index, honouring its direction, loop flag and repeat count.
+    preview_scope: str = "clip"
+
+    # How many times the *document* playhead has been round its span since play
+    # started, for a tag with a finite repeat count. Reset on every play, so a
+    # clip stopped and started again plays its full count rather than
+    # remembering that it already finished once.
+    play_cycles: int = 0
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.
@@ -628,6 +661,44 @@ class InkerState:
     # What the handle was grabbed at, so a drag is measured against the press
     # rather than against the previous frame.
     transform_ref: tuple[float, float, float, float] | None = None
+
+    # -- the timeline's range selection ------------------------------------
+    #
+    # The rect itself is per tab (``InkerDoc.range_sel``); what is app-level is
+    # the *gesture*: where a drag or a Shift+click measures from, and the
+    # clipboard a range copy fills. The clipboard is here rather than on the
+    # document precisely so a range copied in one tab pastes into another --
+    # which is the only reason to reach for it over Duplicate.
+    timeline_anchor: tuple[int, int] | None = None
+    cel_clip: Any = None
+    # The duration the timeline's range menu applies, in ms. A setting rather
+    # than a prompt: retiming a span is something a user does repeatedly with
+    # the same number.
+    range_ms: int = 100
+    # Cel thumbnails in the timeline cells. App-level like every other view
+    # preference, and off by default: the cells are 20px without it and the
+    # off path draws exactly what it always did.
+    timeline_thumbs: bool = False
+    # Nearest-neighbour multiplier applied to sheet, GIF and PNG exports.
+    export_scale: int = 1
+
+    # -- importing a sprite sheet ------------------------------------------
+    #
+    # ``sheet_import`` is ``(atlas array, title)`` once a file has been chosen
+    # and decoded off-thread, and None the rest of the time. The picture is
+    # read *before* the grid is asked for, so the popup can say how many frames
+    # the numbers actually produce -- which is the one thing that stops a
+    # mistyped cell size becoming a document the user edits for ten minutes
+    # before noticing. ``sheet_import_open`` is what notices imgui closing the
+    # popup on a click outside, the ``filter_open`` idiom.
+    sheet_import: Any = None
+    sheet_import_open: bool = False
+    sheet_cell: tuple[int, int] = (32, 32)
+    sheet_offset: tuple[int, int] = (0, 0)
+    sheet_padding: tuple[int, int] = (0, 0)
+    #: 0 means "as many as the grid holds", so a user who never touches the
+    #: field gets the whole sheet rather than one frame.
+    sheet_count: int = 0
 
     # -- per-tool options ---------------------------------------------------
     #

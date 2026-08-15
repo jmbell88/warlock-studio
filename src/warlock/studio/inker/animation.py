@@ -243,6 +243,21 @@ class Tag:
     end: int = 0
     loop: bool = True
     direction: str = "forward"
+    #: How many times the span plays before stopping. **0 is "the loop flag
+    #: decides"** -- today's semantics exactly, which is what makes this a
+    #: trailing field with no migration behind it: every document ever written
+    #: reads back as 0 and plays as it always did. N > 0 plays the span N times
+    #: and stops, and ``loop`` is deliberately *not* folded into it, because
+    #: folding would have to invent an answer for the files already on disk.
+    #:
+    #: A ping-pong counts one out-and-back as one, which is what "play it three
+    #: times" means about a swing.
+    #:
+    #: **A finite repeat does not fall through past its span** -- playback is
+    #: confined to ``loop_range``, so the clip stops at the tag's end rather
+    #: than carrying on into the frames after it. That is a deliberate
+    #: divergence from Aseprite and the manual says so.
+    repeat: int = 0
 
     def __post_init__(self) -> None:
         # Coerced rather than refused: a tag arrives from a file as often as
@@ -250,6 +265,15 @@ class Tag:
         # should still play, forwards, rather than a document that will not open.
         if self.direction not in DIRECTIONS:
             self.direction = "forward"
+        # Coerced for ``direction``'s reason: a repeat count arrives from a
+        # file as often as from the menu, and a negative or unparseable one is
+        # a tag that should still play rather than a document that will not
+        # open. Zero is the "loop flag decides" default, so it is also the
+        # right answer for nonsense.
+        try:
+            self.repeat = max(0, int(self.repeat))
+        except (TypeError, ValueError):
+            self.repeat = 0
 
 
 def clamp_duration(ms: object) -> int:
@@ -501,11 +525,28 @@ class Animation:
         tag = self.active_tag(index)
         return "forward" if tag is None else tag.direction
 
+    def play_repeat(self, index: int) -> int:
+        """How many times the tag containing a frame plays, or 0 outside one.
+
+        A third lookup beside ``play_direction`` rather than a fourth element
+        of ``loop_range``, for exactly the reason that one gives: the tuple is
+        passed straight into ``advance`` as its *span*, and this is not part of
+        a span.
+        """
+        tag = self.active_tag(index)
+        return 0 if tag is None else int(tag.repeat)
+
 
 def _step(
     index: int, forward: bool, start: int, end: int, loop: bool, direction: str
-) -> tuple[int, bool, bool]:
-    """One frame onward. Returns ``(index, forward, playing)``.
+) -> tuple[int, bool, bool, bool]:
+    """One frame onward. Returns ``(index, forward, playing, wrapped)``.
+
+    ``wrapped`` is True at the three points where the span has just been played
+    through once -- the end of a forward pass, the start of a reverse one, and
+    the *return* to the start of a ping-pong, because one cycle of a swing is
+    out **and** back. It is reported whether or not the span loops, so a caller
+    counting cycles does not have to know which case it is in.
 
     Split out of ``advance`` because it is the whole of what a direction means
     and the rest of that function is timekeeping: the two were readable together
@@ -517,23 +558,32 @@ def _step(
     """
     if direction == "reverse":
         if index <= start:
-            return (end, forward, True) if loop else (start, forward, False)
-        return index - 1, forward, True
+            return (end, forward, True, True) if loop else (start, forward, False, True)
+        return index - 1, forward, True, False
     if direction == "pingpong":
         if start == end:
-            # A one-frame swing has nowhere to turn around; it is a still.
-            return start, forward, loop
+            # A one-frame swing has nowhere to turn around; it is a still --
+            # and each held frame-time is one whole pass through the span.
+            return start, forward, loop, True
         if forward:
             # Turning around costs no frame time: the end frame was just held
             # for its own duration, so resuming *at* it would hold it twice and
-            # put a visible hitch at each extreme of the swing.
-            return (end - 1, False, True) if index >= end else (index + 1, True, True)
+            # put a visible hitch at each extreme of the swing. Not a wrap: the
+            # swing is halfway through, and counting it would make "play three
+            # times" mean one and a half.
+            return (
+                (end - 1, False, True, False)
+                if index >= end
+                else (index + 1, True, True, False)
+            )
         if index <= start:
-            return (start + 1, True, True) if loop else (start, False, False)
-        return index - 1, False, True
+            return (
+                (start + 1, True, True, True) if loop else (start, False, False, True)
+            )
+        return index - 1, False, True, False
     if index >= end:
-        return (start, forward, True) if loop else (end, forward, False)
-    return index + 1, forward, True
+        return (start, forward, True, True) if loop else (end, forward, False, True)
+    return index + 1, forward, True, False
 
 
 def advance(
@@ -545,12 +595,15 @@ def advance(
     *,
     direction: str = "forward",
     forward: bool = True,
-) -> tuple[int, float, bool, bool]:
+    repeat: int = 0,
+    cycles: int = 0,
+) -> tuple[int, float, bool, bool, int]:
     """Where the playhead is ``dt_ms`` later. Pure, so it is testable at speed.
 
-    Returns ``(index, accumulator, playing, forward)``. Time is *accumulated*
-    rather than the index being derived from a wall clock, because a frame's
-    duration is per-frame: a 40 ms frame followed by a 400 ms one is not a rate.
+    Returns ``(index, accumulator, playing, forward, cycles)``. Time is
+    *accumulated* rather than the index being derived from a wall clock,
+    because a frame's duration is per-frame: a 40 ms frame followed by a 400 ms
+    one is not a rate.
 
     The loop is a ``while`` and not an ``if`` for the case that actually bites
     -- a 10 ms frame with a dropped-frame ``dt`` of 200 ms behind it, where
@@ -558,19 +611,54 @@ def advance(
     was busy. ``dt_ms`` is clamped by the caller; a pathological one still
     terminates here because every duration is at least ``MIN_DURATION_MS``.
 
-    ``playing`` comes back False only for a non-looping span that has reached
-    its end, which is the one case where the animation stops itself. ``forward``
-    is carried in and back out rather than kept here, because this function has
-    no state and a ping-pong's leg has to survive between ticks.
+    ``playing`` comes back False for a non-looping span that has reached its
+    end, and for a span with a finite ``repeat`` that has been round it that
+    many times -- the two cases where the animation stops itself. ``forward``
+    and ``cycles`` are carried in and back out rather than kept here, because
+    this function has no state and both a ping-pong's leg and a repeat count
+    have to survive between ticks.
+
+    ``repeat`` of 0 means "the ``loop`` flag decides", which is the behaviour
+    this function had before the parameter existed. A count above zero decides
+    instead -- the span wraps until the count runs out whatever the flag says --
+    and when it does run out the step is taken **again with ``loop`` forced
+    off**, so the playhead lands where a non-looping span would have left it:
+    at the end of a forward pass rather than back at its start, which is the
+    frame the user expects to be looking at when a clip stops.
     """
     start, end, loop = span
     if not durations or start > end:
-        return index, 0.0, False, forward
+        return index, 0.0, False, forward, cycles
+    # **A finite count overrides the flag.** ``loop_range`` hands back
+    # ``tag.loop`` verbatim, so a tag already set to "once" and then given a
+    # count of three would stop on its *first* wrap -- the flag deciding a
+    # question the count is the more specific answer to. The exhaustion path
+    # below re-steps with looping forced off, so the clip still stops on the
+    # span's last frame; what this restores is the three passes before it.
+    #
+    # The alternative -- writing ``loop`` True when a count is set -- was
+    # rejected: it destroys the flag the user chose, so clearing the count
+    # would silently leave a "once" tag looping forever.
+    if repeat > 0:
+        loop = True
     index = max(start, min(index, end))
+    if repeat > 0 and cycles >= repeat:
+        # Already played out. Only reachable when the count was *lowered* under
+        # a clip that had passed it; stepping on would play one whole extra
+        # pass before the check below noticed.
+        return index, 0.0, False, forward, cycles
     accum_ms += max(0.0, dt_ms)
     while accum_ms >= durations[index]:
         accum_ms -= durations[index]
-        index, forward, playing = _step(index, forward, start, end, loop, direction)
+        nxt, leg, playing, wrapped = _step(index, forward, start, end, loop, direction)
+        if wrapped:
+            cycles += 1
+            if repeat > 0 and cycles >= repeat:
+                nxt, leg, _stopped, _ = _step(
+                    index, forward, start, end, False, direction
+                )
+                return nxt, 0.0, False, leg, cycles
+        index, forward = nxt, leg
         if not playing:
-            return index, 0.0, False, forward
-    return index, accum_ms, True, forward
+            return index, 0.0, False, forward, cycles
+    return index, accum_ms, True, forward, cycles

@@ -42,6 +42,7 @@ from ._doc_history import HistoryOps
 from ._doc_indexed import IndexedOps
 from ._doc_layers import LayerOps
 from ._doc_paint import SHAPES, PaintOps, normalise_rect
+from ._doc_ranges import RangeOps
 from ._doc_selection import SelectionOps
 from ._doc_slices import SliceOps
 from .anim_edits import CelSetEdit
@@ -99,6 +100,7 @@ def matte_for(pixels: np.ndarray) -> RGBA | None:
 class Document(
     AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps,
     SliceOps,
+    RangeOps,
 ):
     stack: LayerStack
     matte: RGBA | None = None
@@ -181,6 +183,17 @@ class Document(
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.
     _dropped_frames: list[int] = field(default_factory=list, repr=False)
+    #: Per-*layer* change counters, keyed by layer uid, beside the per-frame
+    #: ones above and for a different consumer: a cel thumbnail is a picture of
+    #: one cel, and a frame stamp moves whenever any track on that frame does.
+    #: Keying a thumbnail on the frame stamp would re-shrink every cel in a
+    #: column each time one of them was drawn on -- ten uploads for one dab.
+    #:
+    #: Bumped where a *write* is announced (``_stamp_layer``) and by the
+    #: whole-grid paths, and deliberately **not** by ``invalidate_all``: that
+    #: is the composite's cache and most of what reaches it changes no pixels
+    #: at all, which is the same "stamps no frame" lesson stated there.
+    _layer_stamps: dict[int, int] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.stack.size
@@ -254,14 +267,24 @@ class Document(
     def flatten(self, *, matte: bool = True) -> np.ndarray:
         return cp.flatten_onto(self._composite.copy(), self.matte if matte else None)
 
-    def png_bytes(self) -> bytes:
-        """The flattened document as a PNG. Blocking; callers go off-thread."""
+    def png_bytes(self, *, scale: int = 1) -> bytes:
+        """The flattened document as a PNG. Blocking; callers go off-thread.
+
+        ``scale`` is a whole-number nearest-neighbour magnification, applied
+        after the flatten -- which is the only order that is exact: magnifying
+        each layer first and compositing the results would blend at the
+        magnified resolution and put half-covered pixels along every block
+        edge. The default is 1 and takes the untouched path, so every existing
+        caller writes the bytes it always did.
+        """
         import io
 
         from PIL import Image
 
+        from .transform import upscale
+
         buf = io.BytesIO()
-        Image.fromarray(self.flatten(), "RGBA").save(buf, "PNG")
+        Image.fromarray(upscale(self.flatten(), scale), "RGBA").save(buf, "PNG")
         return buf.getvalue()
 
     # -- the composite cache -----------------------------------------------
@@ -493,6 +516,7 @@ class Document(
         with nothing, and a caller that has just written to the visible canvas
         must not be told its flatten is unchanged.
         """
+        self._layer_stamps[layer_uid] = self._layer_stamps.get(layer_uid, 0) + 1
         if self.anim is None:
             return
         uids = self.anim.frame_uids_of_layer(layer_uid)
@@ -501,8 +525,19 @@ class Document(
         self._stamp(uids)
 
     def _stamp_all(self) -> None:
-        if self.anim is not None:
-            self._stamp([frame.uid for frame in self.anim.frames])
+        if self.anim is None:
+            return
+        self._stamp([frame.uid for frame in self.anim.frames])
+        # Every distinct cel, not every slot: a whole-grid change (a track
+        # property, a geometry op, a snapshot restore) really does alter what
+        # each cel's thumbnail should show, and walking the slots would bump a
+        # linked cel once per frame it appears on for no gain.
+        for layer in self.anim.unique_cel_layers():
+            self._layer_stamps[layer.uid] = self._layer_stamps.get(layer.uid, 0) + 1
+
+    def layer_stamp(self, layer_uid: int) -> int:
+        """How many writes this layer has been told about. See ``_layer_stamps``."""
+        return self._layer_stamps.get(layer_uid, 0)
 
     # -- autovivify ---------------------------------------------------------
 
