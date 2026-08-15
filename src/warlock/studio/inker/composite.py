@@ -496,9 +496,21 @@ def over(
     mixed = blend(cb, cs, mode) if mode != "normal" else cs
     num = a_s * (1.0 - ab) * cs + a_s * ab * mixed + (1.0 - a_s) * ab * cb
 
+    # The denominator is *replaced* where it is zero rather than the divide
+    # being masked past it, and that is a correctness fix rather than a style
+    # one: ``where=`` is not a promise that the masked lanes go unevaluated.
+    # numpy is free to compute a whole SIMD vector and blend the result
+    # afterwards, and whether it does depends on the arrays' alignment -- so a
+    # lane with ``ao == 0`` (num is 0 there too) still ran 0/0, still raised
+    # the invalid flag, and ``test_a_new_mode_composites_a_real_stack_without
+    # _warning_or_nan`` failed for a *third* of full-suite runs and never once
+    # on its own. Dividing by one and then selecting is bit-identical
+    # everywhere the old form defined a value, and defines the rest as the same
+    # zero it already wrote.
+    shown = ao > 0.0
     out = np.empty_like(backdrop)
-    np.divide(num, ao, out=out[..., :3], where=ao > 0.0)
-    out[..., :3] = np.where(ao > 0.0, out[..., :3], 0.0)
+    np.divide(num, np.where(shown, ao, 1.0), out=out[..., :3])
+    out[..., :3] = np.where(shown, out[..., :3], 0.0)
     out[..., 3:4] = ao
     return out
 
