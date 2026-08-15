@@ -102,6 +102,13 @@ with three of them can fade out in the middle and back in. **Use fg / bg** goes 
 which is a live reading of the two colours rather than a copy — so `X` still changes the next
 gradient you draw.
 
+**Dither** on the gradient throws the blend away. Instead of mixing between two stops it gives every
+pixel one of them, chosen against an ordered 2×2, 4×4 or 8×8 matrix — so the ramp lands on exactly
+the colours you chose and nothing in between, which is what makes it usable on an indexed document
+and on pixel art generally. It is off by default, because on a painted reference it is noise. A
+selection's soft edge is *not* dithered: feathering means one thing across every tool here, and a
+soft edge chopped into a chequer is not that thing.
+
 The painting tools also have **Smoothing** and **Taper**. Smoothing makes the brush follow the
 cursor at a distance instead of exactly, which turns a shaky line into a smooth one; it catches up
 when you stop moving, so a stroke still ends where you left it. Taper thins a fast stroke, for a
@@ -136,10 +143,12 @@ Below them is a row of **swatches**. Clicking one makes it the foreground; the r
 your settings rather than reset each session, because a project has a palette and retyping it every
 time is the kind of small friction that makes a tool feel unfinished.
 
-**Import .gpl** and **Export .gpl** move that row in and out as a GIMP palette, which is the format
-GIMP, Krita, Aseprite and Inkscape all read. Two things about it: the format has no alpha channel,
-so exported swatches are written opaque, and an import **adds** to the row rather than replacing it
-— unwanted colours are a right-click each, where a palette silently wiped has no way back.
+**Import palette** and **Export palette** move that row in and out as a GIMP `.gpl` — the format
+GIMP, Krita, Aseprite and Inkscape all read — or a JASC `.pal`, which Paint Shop Pro, GraphicsGale
+and most pixel-art palette sites write. The format follows the suffix you save under, and an import
+reads whichever it was handed. Two things about both: neither has an alpha channel, so exported
+swatches are written opaque, and an import **adds** to the row rather than replacing it — unwanted
+colours are a right-click each, where a palette silently wiped has no way back.
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
@@ -147,16 +156,57 @@ The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
 Under the swatch row is the **palette** section, and it is a different thing from the swatches above
 it. A swatch is a colour you keep reaching for this session; a palette slot is a colour *this file
-is made of*. **Index to the swatches** or **Index to a .gpl...** turns the mode on, and from then on
-every write — a stroke, a fill, a shape, a gradient, a filter, a paste — lands on the nearest colour
-in the table. Alpha is never snapped, so a soft brush still fades; it just bands, which is what the
-mode is for.
+is made of*. **Index to the swatches**, **Index to a palette file...**, **Palette from an image...**
+or **Convert...** turns the mode on, and from then on every write — a stroke, a fill, a shape, a
+gradient, a filter, a paste — lands on the nearest colour in the table. Alpha is never snapped, so a
+soft brush still fades; it just bands, which is what the mode is for.
 
 The pixels stay full-colour RGBA underneath. "Indexed" here means the writes are constrained, not
 that the document stores palette indices — so nothing about layers, blending or export changes shape,
 and turning the mode off leaves every pixel exactly where it is.
 
-Select a slot by clicking it, then:
+### Converting a drawing onto a palette
+
+**Convert...** is the entry point when the drawing came from somewhere else — a photo, a render, a
+sketch with a thousand near-identical greys in it. It builds a palette out of the drawing's own
+colours (a **Colours** slider decides how many, 2 to 64) and shows you the result before you commit
+to anything. On a document that is already indexed the button reads **Re-convert...** and keeps the
+table you have, so what you are choosing is only how the pixels reach it.
+
+That choice is the **Dither**:
+
+- **nearest** puts every pixel on the closest swatch. Clean, and it bands — a smooth sky becomes
+  three stripes.
+- **floyd-steinberg** scatters each pixel's error into its neighbours, which keeps the average tone
+  a nearest conversion loses. Best on photographic input; on a sprite at 4× zoom the scattered noise
+  reads as dirt.
+- **bayer2**, **bayer4** and **bayer8** threshold against an ordered matrix of that size. The noise
+  is *regular*, which at pixel-art sizes reads as texture, and it is what every palette-first editor
+  since Deluxe Paint has offered. A smaller matrix is a coarser, more visible weave.
+
+The preview covers the frame you are on, because converting forty frames to show you one is a wait
+for nothing. **Apply** converts the whole document — every layer and every frame — as one undo step,
+and clicking away from the popup cancels rather than applies: a preview you did not answer is not a
+yes.
+
+A conversion **ignores any selection**, and that is deliberate. Indexing is a change of mode rather
+than a write: the table it installs constrains every write afterwards, everywhere, so converting
+only the marquee would leave the pixels outside it off the palette they are now declared to be on.
+Aseprite does the same.
+
+**Palette from an image...** is the other half of the same idea: point it at any image and its
+colours become this document's table. An image with more than 256 distinct colours is reduced to 256
+rather than refused — a photograph would fail every time otherwise — and a toast tells you what it
+came down from.
+
+### Editing the table
+
+Click a slot to select it and load it into the foreground. **Ctrl-click** adds a slot to the
+selection or takes it out again, and **Shift-click** selects the range from the last plain click to
+where you clicked. The outlined slot is the *anchor*: every single-slot control below acts on it,
+and **Sort** and **Insert** act on the whole selection.
+
+With a slot selected:
 
 - the **Slot** picker edits it — which repaints every pixel painted in that colour, across every
   layer and every frame, as **one** undo step;
@@ -169,10 +219,27 @@ Select a slot by clicking it, then:
   showing zero is one you can delete without losing anything. It is a button rather than a live
   figure because counting is a pass over every pixel of every frame.
 
+**Sort** reorders the table by hue, saturation, brightness, red, green, blue, alpha or usage, and
+**Down** reverses the direction. With slots selected it sorts *those slots in place* — they keep the
+positions they occupy and only which colour sits in each of them changes — so you can straighten out
+one ramp in the middle of a hand-arranged table without the rest of it moving. Sorting by usage uses
+the last **Count usage** figures, and takes them itself if you have not asked for any.
+
+**Insert** fills the gap between two selected slots with an interpolated run, as many colours as the
+slider beside it says. Colours already in the table are skipped rather than added twice. Select the
+two ends with Ctrl-click or Shift-click first.
+
+Neither sorting nor inserting is an undo step, and neither changes a pixel. Order is presentation in
+an indexed document — it is what an exported palette and an exported GIF colour table carry — and a
+new swatch is a colour you *may* paint with rather than a claim about what is already on the canvas.
+Editing or removing a slot does repaint, and those are one Ctrl+Z each, table and pixels together.
+
 The table is saved inside the `.ora` as a `palette.gpl` member, so it comes back when the file does;
 an editor that does not know about it opens the file as an ordinary image, which is exactly what the
-pixels already are. **Export animated GIF** on an indexed document writes your table verbatim
-instead of quantising each frame, so slot *n* is the same colour in every frame of the clip.
+pixels already are. **Export palette** writes it out as a GIMP `.gpl` or a JASC `.pal`, whichever
+suffix you give the file; both are plain text and neither has an alpha channel, so exported swatches
+are opaque. **Export animated GIF** on an indexed document writes your table verbatim instead of
+quantising each frame, so slot *n* is the same colour in every frame of the clip.
 
 ## Layers
 

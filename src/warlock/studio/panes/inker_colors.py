@@ -304,15 +304,16 @@ def _palette_files(ctx: Any, state: Any) -> None:
     save in this app is -- serialising after an unbounded modal would write
     whatever the user changed while it was open.
     """
-    if imgui.small_button("Import .gpl"):
+    if imgui.small_button("Import palette"):
         inker_mode.import_palette(ctx)
     imgui.same_line()
-    if widgets.disabled_button("Export .gpl", bool(state.swatches)):
+    if widgets.disabled_button("Export palette", bool(state.swatches)):
         inker_mode.export_palette(ctx)
     widgets.help_marker(
-        "The GIMP palette format, which Krita, Aseprite and Inkscape all read. "
-        "It has no alpha channel, so exported swatches are written opaque. An "
-        "import adds to the row rather than replacing it."
+        "GIMP .gpl, which Krita, Aseprite and Inkscape all read, or JASC .pal. "
+        "The format follows the suffix you save under; neither has an alpha "
+        "channel, so exported swatches are written opaque. An import adds to "
+        "the row rather than replacing it."
     )
 
 
