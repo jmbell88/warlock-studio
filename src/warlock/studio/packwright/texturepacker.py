@@ -12,9 +12,18 @@ else. ``rotated`` is always ``false`` because :mod:`.maxrects` does not rotate,
 and it is emitted anyway because a consumer reads the key and a missing one is a
 schema question rather than an answer.
 
-``pivot`` is a constant 0.5/0.5. A per-sprite pivot is a real feature and this
-is not the place to invent one: the value would have nowhere to come from, and
-a made-up number is worse than a documented centre.
+``pivot`` is normalized against the **trimmed** frame rectangle, exactly as
+``spriteSourceSize`` is, because that is the rectangle a loader has: the sprite
+in the atlas is the trimmed one, and a fraction of the untrimmed canvas would
+place it wrong by however much was cut off. A sprite that carries no pivot gets
+0.5/0.5 -- the documented centre this format has always emitted -- so the key is
+always present and the schema never shifts under a consumer.
+
+A ninth key, ``slices``, appears on a frame that has named rectangles and on no
+other, so an atlas of ordinary sprites is byte-for-byte what it was. Those
+rectangles are in **source-image** space and have no trim interaction: they
+describe the picture the artist drew, and a consumer that wants them against the
+trimmed frame already has ``spriteSourceSize`` to subtract.
 """
 
 from __future__ import annotations
@@ -29,8 +38,46 @@ APP = "Warlock Packwright"
 SCHEMA_VERSION = "1.0"
 
 
-def _frame_entry(frame: Any) -> dict[str, Any]:
+def _rect(x: Any, y: Any, w: Any, h: Any) -> dict[str, int]:
+    return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
+
+def _pivot(frame: Any) -> dict[str, float]:
+    """The pivot as a fraction of the trimmed frame, or the documented centre.
+
+    The division is safe without a guard: a fully transparent sprite trims to a
+    1x1 rectangle rather than to nothing (``trim.EMPTY_SIZE``, and for this
+    reason among others), so ``frame.w`` and ``frame.h`` are at least one for
+    every sprite that reaches here. Pinned rather than asserted, because an
+    assertion here would turn a packing decision made two modules away into a
+    crash in a sidecar writer.
+    """
+    if frame.pivot is None:
+        return {"x": 0.5, "y": 0.5}
     return {
+        "x": (float(frame.pivot[0]) - frame.trim[0]) / frame.w,
+        "y": (float(frame.pivot[1]) - frame.trim[1]) / frame.h,
+    }
+
+
+def _slices(frame: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": one.name,
+            "bounds": _rect(one.x, one.y, one.w, one.h),
+            "pivot": (
+                None
+                if one.pivot is None
+                else {"x": float(one.pivot[0]), "y": float(one.pivot[1])}
+            ),
+            "center": None if one.center is None else _rect(*one.center),
+        }
+        for one in frame.slices
+    ]
+
+
+def _frame_entry(frame: Any) -> dict[str, Any]:
+    entry: dict[str, Any] = {
         # The sprite's own name, with a .png suffix: loaders key on it, and
         # every one of them expects a filename because TexturePacker's input
         # is a directory of files.
@@ -48,8 +95,13 @@ def _frame_entry(frame: Any) -> dict[str, Any]:
             "h": frame.h,
         },
         "sourceSize": {"w": frame.source_w, "h": frame.source_h},
-        "pivot": {"x": 0.5, "y": 0.5},
+        "pivot": _pivot(frame),
     }
+    # Only when there is one, so an atlas of ordinary sprites keeps exactly the
+    # eight keys it has always had.
+    if frame.slices:
+        entry["slices"] = _slices(frame)
+    return entry
 
 
 def tp_json(layout: Layout, *, image_name: str, scale: float = 1.0) -> dict[str, Any]:

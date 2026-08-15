@@ -184,12 +184,20 @@ class PackDoc:
         The rename is applied *here* rather than stored on the sprite, which is
         what keeps ``key`` -- and therefore the pack order and the whole
         determinism contract -- independent of what anything is called.
+
+        ``meta`` is copied through, and this is the one place it could quietly
+        not be: the rebuild names its fields, so a sprite that had a pivot lost
+        it the moment the user renamed it -- a bug with no symptom until the
+        export. A test pins it.
         """
         return [
             entry.sprite
             if not entry.name_override
             else Sprite(
-                key=entry.sprite.key, name=entry.name_override, pixels=entry.sprite.pixels
+                key=entry.sprite.key,
+                name=entry.name_override,
+                pixels=entry.sprite.pixels,
+                meta=entry.sprite.meta,
             )
             for entry in sorted(self.sources, key=lambda e: e.key)
         ]

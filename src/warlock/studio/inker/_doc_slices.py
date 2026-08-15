@@ -307,14 +307,18 @@ class SliceOps:
                         if key.pivot is None
                         else (x0 + key.pivot[0], y0 + key.pivot[1])
                     ),
+                    # ``(x, y, w, h)`` like the bounds beside it, not the
+                    # ``x0 y0 x1 y1`` the model stores: one spelling across the
+                    # boundary means the three consumers downstream convert
+                    # nothing and cannot disagree about which they were handed.
                     "center": (
                         None
                         if key.center is None
                         else (
                             x0 + key.center[0],
                             y0 + key.center[1],
-                            x0 + key.center[2],
-                            y0 + key.center[3],
+                            key.center[2] - key.center[0],
+                            key.center[3] - key.center[1],
                         )
                     ),
                 }

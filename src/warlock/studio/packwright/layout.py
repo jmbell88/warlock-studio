@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from ...pipelines import sheet as sheetlib
 from .maxrects import order, pack
@@ -111,6 +112,12 @@ class Frame:
     source_w: int
     source_h: int
     empty: bool = False
+    #: The sprite's metadata, carried through so a sidecar writer reads one
+    #: object. Trailing and defaulted, and neither is read by any packer: the
+    #: layout is decided by rectangles alone, so determinism is untouched by
+    #: what a sprite happens to be called or where its pivot is.
+    pivot: tuple[float, float] | None = None
+    slices: tuple[Any, ...] = ()
 
     @property
     def trimmed(self) -> bool:
@@ -196,6 +203,8 @@ def _frame(entry: _Measured, x: int, y: int) -> Frame:
         source_w=entry.sprite.width,
         source_h=entry.sprite.height,
         empty=entry.empty,
+        pivot=entry.sprite.meta.pivot,
+        slices=entry.sprite.meta.slices,
     )
 
 

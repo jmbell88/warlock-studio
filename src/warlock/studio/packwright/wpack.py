@@ -30,7 +30,7 @@ import numpy as np
 from ..plotter.pngio import png_bytes
 from .document import PackDoc, Source, new_uid
 from .layout import PackSettings
-from .sources import Sprite
+from .sources import EMPTY_META, SliceSpec, Sprite, SpriteMeta
 
 VERSION = 1
 MANIFEST = "pack.json"
@@ -57,6 +57,39 @@ MAX_DECOMPRESSED_BYTES = 1 << 30
 MAX_SOURCE_PIXELS = 16_000_000
 
 
+def _rect(rect: Any) -> dict[str, int]:
+    return {"x": int(rect[0]), "y": int(rect[1]), "w": int(rect[2]), "h": int(rect[3])}
+
+
+def _meta_json(meta: SpriteMeta) -> dict[str, Any]:
+    """A sprite's pivot and slices, written **only when it has them**.
+
+    The version stays 1 for the reason ``animation.json``'s does: every read of
+    this section is ``.get``-based, so a build that has never heard of these
+    keys opens the file and gets the document it always got -- and a document
+    whose sprites carry none produces the same bytes it did before they existed,
+    which is what the byte-identity test pins.
+    """
+    out: dict[str, Any] = {}
+    if meta.pivot is not None:
+        out["pivot"] = {"x": float(meta.pivot[0]), "y": float(meta.pivot[1])}
+    if meta.slices:
+        out["slices"] = [
+            {
+                "name": one.name,
+                "bounds": _rect((one.x, one.y, one.w, one.h)),
+                **(
+                    {"pivot": {"x": float(one.pivot[0]), "y": float(one.pivot[1])}}
+                    if one.pivot is not None
+                    else {}
+                ),
+                **({"center": _rect(one.center)} if one.center is not None else {}),
+            }
+            for one in meta.slices
+        ]
+    return out
+
+
 def manifest_json(doc: PackDoc) -> str:
     settings = doc.settings
     payload = {
@@ -75,6 +108,7 @@ def manifest_json(doc: PackDoc) -> str:
                 "name": source.sprite.name,
                 "name_override": source.name_override,
                 "image": f"{SOURCE_DIR}/{index}.png",
+                **_meta_json(source.sprite.meta),
             }
             for index, source in enumerate(doc.sources)
         ],
@@ -189,6 +223,7 @@ def read_wpack(data: bytes) -> PackDoc:
                         key=key,
                         name=str(entry.get("name", key)),
                         pixels=_pixels_from(raw, name),
+                        meta=_meta_from(entry, key),
                     ),
                     name_override=str(entry.get("name_override", "")),
                 )
@@ -197,6 +232,55 @@ def read_wpack(data: bytes) -> PackDoc:
     doc = PackDoc(sources=sources, settings=settings)
     doc.mark_saved()
     return doc
+
+
+def _read_point(raw: Any) -> tuple[float, float] | None:
+    return None if raw is None else (float(raw["x"]), float(raw["y"]))
+
+
+def _read_rect(raw: Any) -> tuple[int, int, int, int] | None:
+    return (
+        None
+        if raw is None
+        else (int(raw["x"]), int(raw["y"]), int(raw["w"]), int(raw["h"]))
+    )
+
+
+def _meta_from(entry: dict, key: str) -> SpriteMeta:
+    """One source's pivot and slices, or a refusal naming the source.
+
+    ``.get``-based, so a manifest written before these keys existed reads clean
+    -- but **refused** when a key is present and malformed, which is the rule
+    ``.wpack`` is written under throughout: this format is ours and versioned,
+    and a file that is wrong about itself is a file to say so about rather than
+    one to silently open with a pivot missing. That is the opposite of
+    ``sources.sprite_meta``'s tolerance, which reads *somebody else's* data.
+
+    The refusal names the source, because a manifest with forty sprites in it
+    and a message that says only "malformed" is a message that cannot be acted
+    on.
+    """
+    if "pivot" not in entry and "slices" not in entry:
+        return EMPTY_META
+    try:
+        slices = []
+        for one in entry.get("slices") or ():
+            bounds = _read_rect(one["bounds"])
+            if bounds is None:
+                raise ValueError("a slice with no bounds")
+            slices.append(
+                SliceSpec(
+                    str(one.get("name", "")),
+                    *bounds,
+                    pivot=_read_point(one.get("pivot")),
+                    center=_read_rect(one.get("center")),
+                )
+            )
+        return SpriteMeta(pivot=_read_point(entry.get("pivot")), slices=tuple(slices))
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"this atlas document's metadata for {key!r} is malformed"
+        ) from exc
 
 
 def _pixels_from(raw: bytes, name: str) -> np.ndarray:

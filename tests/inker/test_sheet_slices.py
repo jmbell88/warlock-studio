@@ -62,7 +62,7 @@ def test_the_snapshot_is_plain_data_in_canvas_coordinates():
                 # Absolute, not relative to the bounds: the boundary converts
                 # once so no consumer has to.
                 "pivot": (6.0, 9.0),
-                "center": (4, 5, 8, 7),
+                "center": (4, 5, 4, 2),
             }
         ],
     }

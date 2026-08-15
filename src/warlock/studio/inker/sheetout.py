@@ -265,14 +265,7 @@ def _slice_entry(entry: dict[str, Any]) -> dict[str, Any]:
         ),
         "pivot": None if pivot is None else {"x": float(pivot[0]), "y": float(pivot[1])},
         "center": (
-            None
-            if center is None
-            else _rect_json(
-                int(center[0]),
-                int(center[1]),
-                int(center[2]) - int(center[0]),
-                int(center[3]) - int(center[1]),
-            )
+            None if center is None else _rect_json(*(int(v) for v in center))
         ),
     }
 
