@@ -254,6 +254,67 @@ def test_color_is_luminosity_with_the_operands_swapped():
     )
 
 
+def _scalar_reference(cb: list[float], cs: list[float], mode: str) -> list[float]:
+    """The W3C pseudo-code transcribed one pixel at a time, as literally as
+    Python allows -- ``for`` loops, ``min``/``max``, no numpy.
+
+    This is the second implementation the vectorised one is checked against, and
+    it earns its keep because the two are wrong in different ways: the argsort
+    form of SetSat and the ``np.where``-guarded ClipColor are exactly where a
+    plausible mistake hides, and neither shape exists here.
+    """
+
+    def lum(c):
+        return 0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+
+    def clip(c):
+        light, low, high = lum(c), min(c), max(c)
+        if low < 0.0:
+            c = [light + (v - light) * light / (light - low) for v in c]
+        if high > 1.0:
+            c = [light + (v - light) * (1.0 - light) / (high - light) for v in c]
+        return c
+
+    def set_lum(c, light):
+        delta = light - lum(c)
+        return clip([v + delta for v in c])
+
+    def sat(c):
+        return max(c) - min(c)
+
+    def set_sat(c, target):
+        low, mid, high = sorted(range(3), key=lambda i: c[i])
+        out = [0.0, 0.0, 0.0]
+        if c[high] > c[low]:
+            out[mid] = (c[mid] - c[low]) * target / (c[high] - c[low])
+            out[high] = target
+        return out
+
+    if mode == "hue":
+        return set_lum(set_sat(cs, sat(cb)), lum(cb))
+    if mode == "saturation":
+        return set_lum(set_sat(cb, sat(cs)), lum(cb))
+    if mode == "color":
+        return set_lum(cs, lum(cb))
+    return set_lum(cb, lum(cs))
+
+
+@pytest.mark.parametrize("mode", NON_SEPARABLE)
+def test_the_vectorised_form_agrees_with_the_pseudo_code_pixel_by_pixel(mode):
+    """Five hundred random pairs, against the loop above. Not bit-identity --
+    the weights are float32 here and Python floats there, so the bar is the
+    float32 epsilon rather than equality; the kernels' identity rule is about a
+    kernel and its reference, and both sides of this are the reference.
+    """
+    rng = np.random.default_rng(12)
+    for _ in range(500):
+        cb = rng.random(3)
+        cs = rng.random(3)
+        got = cp.blend(cb.reshape(1, 1, 3), cs.reshape(1, 1, 3), mode)[0, 0]
+        want = _scalar_reference(list(cb), list(cs), mode)
+        assert np.allclose(got, want, atol=1e-6), (mode, cb, cs)
+
+
 # --- through ``over`` -------------------------------------------------------
 
 
