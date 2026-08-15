@@ -375,6 +375,25 @@ def _decode(data: bytes, size: tuple[int, int]) -> np.ndarray:
     return pixels
 
 
+def _known_blend(name: object, zf: zipfile.ZipFile) -> str:
+    """A track's blend mode, or ``normal`` and a log line for one we lack.
+
+    The same tolerance the ``stack.xml`` reader has always had, which
+    ``animation.json`` did not: ``Layer.__post_init__`` refuses an unknown mode,
+    that refusal happens while the grid is being built, and the ``except`` around
+    it drops the **whole timeline** back to a flat read. So a file written by a
+    build that carries one more mode than this one cost a user every frame of
+    their animation over a string. A mode is how a layer composites, not what it
+    contains -- ``Tag.direction``'s rule, for the same reason.
+    """
+    if isinstance(name, str) and name in cp.BLEND_MODES:
+        return name
+    log.warning(
+        "unknown blend mode %r in %s; using normal", name, getattr(zf, "filename", "?")
+    )
+    return "normal"
+
+
 def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | None:
     """Rebuild the grid from ``animation.json``, or return None to fall back.
 
@@ -406,7 +425,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 name=entry.get("name") or f"Layer {i + 1}",
                 opacity=float(entry.get("opacity", 1.0)),
                 visible=bool(entry.get("visible", True)),
-                blend=entry.get("blend", "normal"),
+                blend=_known_blend(entry.get("blend", "normal"), zf),
                 alpha_lock=bool(entry.get("alpha_lock", False)),
             )
             for i, entry in enumerate(payload["tracks"])

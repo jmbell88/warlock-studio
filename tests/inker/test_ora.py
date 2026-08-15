@@ -187,15 +187,15 @@ def _foreign(path: Path, layers: str, *, w=8, h=8, extra=None) -> None:
 def test_a_composite_op_we_cannot_reproduce_becomes_normal(tmp_path: Path):
     """A file that opens slightly wrong is a file the user still has.
 
-    ``svg:hue`` is one of the four *non-separable* modes -- they mix the three
-    channels rather than acting on each independently, which is a different
-    shape of formula from everything ``blend`` holds. The separable ones are
-    all implemented now, so the example here has to be a mode we genuinely
-    cannot reproduce or the test would be asserting the fallback of something
-    that no longer falls back.
+    The example has to be a mode we genuinely cannot reproduce, or this asserts
+    the fallback of something that no longer falls back -- which is what
+    happened to the previous one: ``svg:hue`` stood here until the four
+    non-separable modes were implemented. ``krita:dissolve`` is not a blend of
+    two colours at all (it is a per-pixel coin toss on alpha), so it is a
+    genuinely absent mode rather than one nobody has got to yet.
     """
     path = tmp_path / "foreign.ora"
-    _foreign(path, '<layer name="L" src="data/a.png" composite-op="svg:hue"/>')
+    _foreign(path, '<layer name="L" src="data/a.png" composite-op="krita:dissolve"/>')
     assert inker.Document.load(path).stack[0].blend == "normal"
 
 

@@ -20,6 +20,7 @@ from .. import inker_mode, theme, widgets
 from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_colors
 
 
 def _busy_why(tab: Any) -> str:
@@ -273,14 +274,85 @@ def _open_filter(ctx: Any, tab: Any) -> None:
     imgui.open_popup(FILTER_POPUP)
 
 
-def _filter_values(state: Any, name: str) -> dict[str, float]:
+def _filter_values(state: Any, name: str) -> dict[str, Any]:
     from ..inker import filters
 
     got = state.filter_params.get(name)
     if got is None:
-        got = dict(filters.FILTERS[name][0])
+        got = filters.popup_values(name)
         state.filter_params[name] = got
     return got
+
+
+# A parameter whose *name* is not what to call it on screen. ``replace colour``
+# takes ``old`` and ``new`` because ``from`` is a keyword and cannot be a keyword
+# argument -- which is a fact about Python and not something a user should have
+# to read the source to translate. The manual says From and To, so the popup
+# does too.
+_PARAM_LABELS = {"old": "From", "new": "To"}
+
+
+def _param_label(key: str) -> str:
+    return _PARAM_LABELS.get(key, key)
+
+
+def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
+    """One parameter row, drawn by the kind the registry says it is.
+
+    Four kinds rather than a slider and a special case, because the FX staples
+    brought parameters a slider cannot hold: a colour, an on/off, and a choice
+    between two numbers that has nothing in between. Which kind a name is lives
+    in ``filters`` beside the filter that declares it -- see ``COLOUR_PARAMS``.
+
+    Every id carries the *parameter* name rather than the label, so what a
+    control is called and what it is are free to differ. (The choice combos go
+    through ``labeled_combo``, whose id is its label -- which is the same string
+    for both of them, neither being relabelled.)
+    """
+    from ..inker import filters
+
+    label = _param_label(key)
+    if key in filters.COLOUR_PARAMS:
+        # ``inker_colors``' own conversions rather than a second pair here: the
+        # rounding between imgui's floats and the 8-bit tuple the engine writes
+        # with is a rule, and two copies of a rule are one disagreement waiting.
+        changed, value = imgui.color_edit4(
+            f"{label}##{key}", inker_colors._vec(tuple(values[key])), inker_colors.FLAGS
+        )
+        if changed:
+            values[key] = inker_colors._to_rgba(value)
+        imgui.same_line()
+        # The colour a user wants is nearly always the one they are painting
+        # with, and picking it twice in two widgets is the friction this button
+        # exists to remove.
+        if imgui.button(f"use FG##fg{key}"):
+            values[key] = tuple(state.fg)
+        return
+    if key in filters.TOGGLE_PARAMS:
+        # Stored as 0.0/1.0, not as a bool: the registry holds one kind of value
+        # and ``apply_named`` passes it straight through.
+        changed, on = imgui.checkbox(f"{label}##{key}", bool(values[key]))
+        if changed:
+            values[key] = 1.0 if on else 0.0
+        return
+    choices = filters.CHOICE_PARAMS.get(key)
+    if choices is not None:
+        # ``labeled_combo`` and not ``combo``: imgui draws a combo's label to its
+        # *right* and the default width is -1, so a named combo puts its name
+        # past the content region, where same_line clips rather than wraps and
+        # the name is simply not drawn. ``widgets.combo``'s docstring is where
+        # that rule is written down.
+        picked = widgets.labeled_combo(
+            label, str(values[key]), [(str(choice), str(choice)) for choice in choices]
+        )
+        if picked != str(values[key]):
+            values[key] = next(c for c in choices if str(c) == picked)
+        return
+    low, high = filters.RANGES.get(key, (0.0, 1.0))
+    imgui.set_next_item_width(sp(160))
+    changed, value = imgui.slider_float(f"{label}##{key}", float(values[key]), low, high)
+    if changed:
+        values[key] = float(value)
 
 
 def _filter_popup(ctx: Any, tab: Any) -> None:
@@ -303,15 +375,12 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         state.filter_name = name
     values = _filter_values(state, state.filter_name)
     for key in filters.FILTERS[state.filter_name][0]:
-        low, high = filters.RANGES.get(key, (0.0, 1.0))
-        imgui.set_next_item_width(sp(160))
-        changed, value = imgui.slider_float(key, float(values[key]), low, high)
-        if changed:
-            values[key] = float(value)
+        _filter_control(state, values, key)
     if imgui.button("Reset##filterreset"):
-        state.filter_params[state.filter_name] = dict(
-            filters.FILTERS[state.filter_name][0]
-        )
+        # Back to what opening the popup gave, not to the identity defaults --
+        # Reset on Invert that unticked all three channels would be a button
+        # that turns the filter off.
+        state.filter_params[state.filter_name] = filters.popup_values(state.filter_name)
 
     # Every frame, not only on a change: the combo above can switch filters,
     # and a preview that only ran on a slider move would leave the last

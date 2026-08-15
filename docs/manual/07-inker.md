@@ -183,8 +183,8 @@ mode. Above the list are **Add**, **Copy**, **Delete**, **Merge down** and **Fla
 opacity slider previews live but records a single undo step when you let go, rather than one step
 per pixel of drag.
 
-The blend modes are the twelve separable ones, listed in the order every editor groups them —
-darkening, then lightening, then contrast, then comparison:
+There are nineteen blend modes, listed in the order every editor groups them — darkening, then
+lightening, then contrast, then comparison, then the arithmetic and colour ones:
 
 | | |
 |---|---|
@@ -192,12 +192,16 @@ darkening, then lightening, then contrast, then comparison:
 | `darken`, `multiply`, `color-burn` | can only darken the backdrop |
 | `lighten`, `screen`, `color-dodge`, `add` | can only lighten it |
 | `overlay`, `hard-light`, `soft-light` | darken the dark half and lighten the light half |
-| `difference` | the distance between the two colours |
+| `difference`, `exclusion` | the distance between the two colours; exclusion is the softer of them |
+| `subtract`, `divide` | arithmetic, clamped at black and at white rather than wrapping |
+| `hue`, `saturation`, `color`, `luminosity` | take one attribute from the layer and the rest from underneath |
 
 These are the W3C formulas, which is what OpenRaster's composite operators are defined against — so
 a document saved here and reopened in Krita or GIMP composites identically rather than approximately.
-The four *non-separable* modes (hue, saturation, colour, luminosity) are not implemented; a file
-that arrives using one opens with that layer set to `normal` rather than being refused.
+The last four are the *non-separable* ones: `color` paints over a drawing without changing how light
+or dark it is, and `luminosity` is that trade the other way round. `subtract` and `divide` are the
+two the W3C set has no name for, so they go into the file under Krita's names — a mode that arrives
+from another editor and has no equivalent here still opens, with that layer set to `normal`.
 
 **Lock alpha** paints inside what is already on a layer and never past its edge: colours change,
 transparency does not. It is how you recolour lineart or shade a shape without selecting it first —
@@ -236,19 +240,33 @@ there was a grid. Shrinking works the same way and crops from the opposite sides
 
 ## Filters
 
-**Filter…** in the document panel opens five whole-layer adjustments: brightness/contrast,
-hue/saturation, levels, blur and sharpen. Every one previews live on the canvas as you drag, and
-the whole session — however many sliders you moved and however many times — records as a single
-undo step when you press Apply. Cancel, or clicking away from the popup, puts the pixels back and
-records nothing at all.
+**Filter…** in the document panel opens nine whole-layer adjustments: brightness/contrast,
+hue/saturation, levels, blur, sharpen, invert, replace colour, outline and despeckle. Every one
+previews live on the canvas as you drag, and the whole session — however many sliders you moved and
+however many times — records as a single undo step when you press Apply. Cancel, or clicking away
+from the popup, puts the pixels back and records nothing at all.
+
+The last four are the pixel-art staples. **Invert** has a checkbox per channel, all three on when
+the popup opens. **Replace colour** takes a From and a To colour — the **use FG** button beside
+each fills in the colour you are painting with — and a tolerance, which is a distance in colour
+space rather than a per-channel slack; at zero it replaces exactly the colour you named, which is
+the same set of pixels that editing a palette slot would recolour. **Outline** draws a ring along
+the edge of whatever is painted: choose its colour and thickness, whether it goes outside or inside
+the shape, whether corners are rounded (4) or square (8), and **wrap** if the drawing is a tile, so
+the outline carries across the seam instead of stopping at the border. **Despeckle** is a median
+filter — it deletes stray pixels outright and leaves hard lines hard, which is what a blur cannot
+do; its **speck** slider is how big a stray thing it removes, and it stops at 4 because past that a
+median takes out detail rather than specks — and takes long enough doing it to stall the preview.
 
 Three things about what they do to a layer. They apply to the **selection** if there is one, faded
 by a feathered edge exactly as a brush would be, and to the whole layer if there is not. The colour
-filters never change transparency; blur does, because blurring a layer's edge is most of the reason
-to blur one. And a layer with **Lock alpha** on keeps its transparency under all five.
+filters never change transparency; blur and despeckle do, because softening a layer's edge is most
+of the reason to blur one, and an outline placed *outside* does, because it draws where the drawing
+is not. And a layer with **Lock alpha** on keeps its transparency under all of them.
 
-Every filter opens at settings that change nothing, so the preview is safe to start immediately —
-the picture only moves once you move a slider.
+Every filter opens at settings that change nothing — except Invert, whose three channel boxes open
+ticked, because inverting no channels is not a thing anybody wants. So the preview is safe to start
+immediately, and the picture only moves once you move a slider.
 
 ## Selections and transform
 
