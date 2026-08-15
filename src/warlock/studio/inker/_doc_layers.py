@@ -53,9 +53,10 @@ class LayerOps:
     # **What it guards is tool-level writes**, and the enforcement sits at the
     # engine ops themselves -- ``begin_stroke``, ``write_colour`` (which is
     # where fill and the shapes end up), ``gradient``, ``begin_filter``,
-    # ``lift``, ``paste``, ``layer_from_selection``'s cut half and
-    # ``merge_down`` -- each refusing *before* it mutates anything. Below those
-    # doors, undo writes raw pixels through ``PatchEdit``, and deliberately so:
+    # ``lift``, ``paste``, ``layer_from_selection``'s cut half,
+    # ``begin_layer_move`` and ``merge_down`` -- each refusing *before* it
+    # mutates anything. Below those doors, undo writes raw pixels through
+    # ``PatchEdit``, and deliberately so:
     # a lock switched on after an edit must not wedge the history that already
     # holds it, and the alternative (a lock that silently swallows a Ctrl+Z) is
     # much worse than one that lets a user undo work they locked afterwards.

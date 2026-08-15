@@ -489,18 +489,16 @@ class PaintOps:
     def begin_layer_move(self: Document) -> bool:
         """Open a move session on the active layer. -> whether it opened.
 
-        Refused on a content-locked layer, which is the same door every other
-        write goes through. Read with ``getattr`` because the flag is a layer
-        property landing beside this work rather than under it, and a move that
-        silently ignored a lock is worse than one that reads a default of False
-        until the flag exists.
+        Refused on a content-locked layer (or one inside a locked group),
+        through ``write_locked`` -- the same door every other write goes
+        through.
         """
         self.end_layer_move()
         # The lock is read *before* the float is committed: a refusal must
         # leave the document exactly as it found it, and committing first would
         # land a floating buffer as the side effect of a move that never
         # happened.
-        if getattr(self.stack.active, "content_lock", False):
+        if self.write_locked():
             return False
         self.commit_floating()
         self._ensure_active_cel()

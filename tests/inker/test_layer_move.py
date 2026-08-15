@@ -128,19 +128,36 @@ def test_the_patch_covers_erased_pixels_that_still_carry_colour():
 
 
 def test_a_content_locked_layer_refuses_to_open_a_session():
-    """The lock is read with ``getattr`` because the flag lands beside this
-    work rather than under it -- but the door is here now, so a move cannot be
-    the one write that walks through it."""
+    """The lock is ``Layer.locked`` and the door is ``write_locked`` -- the same
+    one every other write goes through, so a move cannot be the one write that
+    walks past it."""
     doc = _doc()
-    doc.stack.active.content_lock = True
+    # Lifted while unlocked -- locking is the one thing that changes before
+    # the move is attempted, since ``lift`` is itself a content-lock door and
+    # a layer locked first would never get a float to test the refusal against.
     doc.select(inker.SelectionMask.from_rect(SIZE, (4, 4, 8, 8)))
     doc.lift()
+    doc.stack.active.locked = True
     assert not doc.begin_layer_move()
     assert doc.preview_layer_move(4, 4) is False
     # A refusal leaves the document as it found it: the float is still
     # floating, rather than landed as the side effect of a move that did not
     # happen.
     assert doc.floating is not None
+
+
+def test_a_layer_inside_a_locked_group_also_refuses_to_open_a_session():
+    """``write_locked``'s group fold (L3): a folder lock protects a move the
+    same way it protects a stroke, so grouping a layer and locking the group
+    is enough on its own -- the layer's own ``locked`` stays False."""
+    doc = _doc()
+    doc.add_layer("above")
+    doc.stack.active_index = 0
+    node = doc.group_layers([0])
+    doc.set_group_props(node.uid, locked=True)
+    assert doc.stack.active.locked is False
+    assert doc.write_locked() is True
+    assert not doc.begin_layer_move()
 
 
 def test_beginning_twice_commits_the_first_session_rather_than_reverting_it():
