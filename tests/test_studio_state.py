@@ -512,8 +512,8 @@ def test_the_rail_groups_are_the_modes_in_order():
 
     ``RAIL_GROUPS`` is hand-written (REDESIGN.md wave 3) -- the reversal of the
     derived ``GROUP_BREAKS`` it replaced, because the first group is a claim no
-    predicate over ``WORK_MODES`` can make: Home, 2D, 3D, Library and Review are
-    the asset pipeline, and three of those five are work modes while two are
+    predicate over ``WORK_MODES`` can make: Home, Create, Library and Review
+    are the asset pipeline, and two of those four are work modes while two are
     not. A rule that cannot state the grouping is not a better version of
     stating it -- but a hand-written list *can* drift from ``MODES``, so the
     flattening is asserted instead.

@@ -268,12 +268,20 @@ def test_a_missing_thumbnail_says_what_kind_of_thing_is_coming():
 
 
 def test_every_mode_that_draws_the_viewport_has_its_own_placeholder():
-    """Inker had none and fell through to the 3D sentence, so an empty canvas
-    pane advised picking a finished reference (H74)."""
-    from warlock.studio import modes
+    """Inker had none and fell through to the mesh sentence, so an empty canvas
+    pane advised picking a finished reference (H74).
+
+    Create is keyed per *stage* (wave 5): one mode with two viewports has two
+    empty states, and answering both with one sentence is the same defect this
+    test was written for."""
+    from warlock.studio import create_stages, modes
     from warlock.studio.panes import overlay
 
     for key in modes.WORK_MODES:
+        if key == create_stages.MODE:
+            for stage in create_stages.STAGES:
+                assert f"{key}/{stage}" in overlay.PLACEHOLDERS, stage
+            continue
         assert key in overlay.PLACEHOLDERS, key
     for icon, title, hint in overlay.PLACEHOLDERS.values():
         assert icon and title and hint

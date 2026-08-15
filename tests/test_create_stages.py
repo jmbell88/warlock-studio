@@ -69,8 +69,11 @@ def test_every_stage_has_a_label_and_a_reached_predicate():
 # --- reached ----------------------------------------------------------------
 
 
-def test_nothing_selected_stands_at_the_first_stage():
-    assert create_stages.reached(None) == "reference"
+def test_nothing_selected_has_reached_no_stage_at_all():
+    """Not "reference": the rail ticks its segments off against this, and an
+    empty Create mode used to show a check beside Reference on a screen where
+    nothing had been generated."""
+    assert create_stages.reached(None) is None
 
 
 def test_a_reference_has_reached_the_reference_stage():
@@ -158,14 +161,17 @@ def test_go_is_the_only_thing_that_writes_the_stage():
     switch has obligations (move the selection, guard an unsaved pose) that a
     bare assignment silently skips."""
     import pathlib
+    import re
 
+    # An *assignment*, so a comparison (``!=``, ``==``) is not mistaken for one.
+    write = re.compile(r"\.create_stage\s*=(?!=)")
     root = pathlib.Path(create_stages.__file__).resolve().parent
     offenders = []
     for path in sorted(root.rglob("*.py")):
         if path.name == "create_stages.py":
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "create_stage" in line and "=" in line.split("create_stage")[1][:3]:
+            if write.search(line):
                 offenders.append(f"{path.name}:{number}")
     assert offenders == []
 
@@ -180,7 +186,7 @@ def test_go_switches_the_mode_and_leaves_escape_a_way_back():
     ctx = FakeCtx()
     ctx.state.mode = "home"
     create_stages.go(ctx, "reference")
-    assert ctx.state.mode == create_stages._MODE_OF["reference"]
+    assert ctx.state.mode == create_stages.MODE
     assert ctx.state.previous_mode == "home"
 
 
@@ -230,6 +236,44 @@ def test_walking_forward_with_no_mesh_yet_leaves_the_selection_alone():
 def test_go_refuses_a_stage_that_does_not_exist():
     with pytest.raises(ValueError):
         create_stages.go(FakeCtx(), "texture")
+
+
+def test_a_stage_is_only_the_thing_on_screen_while_create_is_the_mode():
+    """``create_stage`` is not cleared on the way out -- coming back to Create
+    from Inker should land where you left. So the panes' gate has to ask both
+    halves, or the inspector in Poser grows the Mesh stage's quality section."""
+    state = AppState()
+    state.mode = create_stages.MODE
+    state.create_stage = "mesh"
+    assert create_stages.at(state, "mesh") is True
+    assert create_stages.in_create(state) is True
+
+    state.mode = "poser"
+    assert create_stages.at(state, "mesh") is False
+    assert create_stages.in_create(state) is False
+
+
+def test_follow_false_leaves_the_selection_where_it_was():
+    """The two arrivals that are about to *make* something -- a dropped image
+    and a promotion -- carry their own source. Walking onto a mesh this
+    reference already has would describe the wrong asset."""
+    ref = job(id="aaaaaaaaaaaa", stage="reference", files=["input.png"])
+    mesh = job(id="bbbbbbbbbbbb", parent_id="aaaaaaaaaaaa")
+    ctx = FakeCtx([ref, mesh], selected="aaaaaaaaaaaa")
+    create_stages.go(ctx, "mesh", follow=False)
+    assert ctx.state.selected == "aaaaaaaaaaaa"
+    assert ctx.state.create_stage == "mesh"
+
+
+def test_a_ctx_with_no_job_cache_can_still_switch_stage():
+    """The palette and the profile sheet both call ``go`` with whatever ctx
+    they were handed, and a stage switch is not the place to require a cache."""
+    from types import SimpleNamespace
+
+    state = AppState()
+    create_stages.go(SimpleNamespace(state=state), "mesh")
+    assert state.mode == create_stages.MODE
+    assert state.create_stage == "mesh"
 
 
 # --- the vocabulary boundary ------------------------------------------------

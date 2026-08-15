@@ -94,7 +94,7 @@ def test_an_unknown_kind_is_refused_rather_than_stored():
     """The kinds are the four document modes. A row under a fifth would be a
     Resume entry Home has no way to open."""
     s = FakeSettings({recents.SETTING: []})
-    recents.remember(s, "3d", "job", when=1.0)
+    recents.remember(s, "create", "job", when=1.0)
     assert recents.entries(s) == []
 
 

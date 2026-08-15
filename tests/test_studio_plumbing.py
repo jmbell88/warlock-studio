@@ -452,7 +452,14 @@ def _copy_ctx():
     from warlock.studio.state import default_form_2d
 
     return SimpleNamespace(
-        state=SimpleNamespace(form_2d=default_form_2d(), mode="3d"),
+        state=SimpleNamespace(
+            form_2d=default_form_2d(),
+            mode="create",
+            previous_mode="create",
+            mode_observed="create",
+            create_stage="mesh",
+            selected=None,
+        ),
         toast=lambda _text: None,
     )
 
@@ -469,7 +476,7 @@ def test_copying_a_tiles_settings_keeps_it_a_tile():
     ctx = _copy_ctx()
     library._copy_settings(ctx, {"stage": "tile", "params": {"prompt": "cobblestone"}})
     assert ctx.state.form_2d["output"] == "tile"
-    assert ctx.state.mode == "2d"
+    assert ctx.state.create_stage == "reference"
 
 
 def test_copying_a_references_settings_makes_an_object():

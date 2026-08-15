@@ -411,12 +411,14 @@ def commands(ctx: Any) -> list[Command]:
         manual_render.open_at(ctx, (ctx.state.manual.chapter, None))
 
     def profiles(ctx: Any) -> None:
-        # Replaces the derived ``go:profiles``: the manager is a sheet over the
-        # 2D pane now rather than a mode, and it is *about* that pane's form,
-        # so opening it from anywhere else means going there first.
+        # Replaces the derived ``go:profiles``: the manager is a sheet over
+        # the Reference stage's pane now rather than a mode, and it is *about*
+        # that pane's form, so opening it from anywhere else means going there
+        # first.
+        from . import create_stages
         from .panes import profiles_panel
 
-        state.set_mode(ctx.state, "2d")
+        create_stages.go(ctx, "reference")
         profiles_panel.open_sheet(ctx)
 
     def diagnostics(ctx: Any) -> None:

@@ -85,7 +85,8 @@ def test_closing_the_sheet_over_a_draft_asks_first(ctx):
 
 def test_a_recovered_draft_comes_back_with_the_pane_it_belongs_to(ctx, tmp_path):
     """The sheet is not a destination, so putting the reader back means
-    restoring both halves: the 2D pane, and the manager over it."""
+    restoring both halves: the Reference stage's pane, and the manager over
+    it."""
     import json
 
     path = tmp_path / "draft.profile.json"
@@ -94,7 +95,8 @@ def test_a_recovered_draft_comes_back_with_the_pane_it_belongs_to(ctx, tmp_path)
         encoding="utf-8",
     )
     assert profiles_panel._journal_adopt(ctx, path, {}) is True
-    assert ctx.state.mode == "2d"
+    assert ctx.state.mode == "create"
+    assert ctx.state.create_stage == "reference"
     assert ctx.state.profiles_open is True
     assert ctx.state.profile_draft_name == "Brass"
 

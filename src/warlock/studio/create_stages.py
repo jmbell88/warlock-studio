@@ -89,8 +89,8 @@ def _stage_of(job: Any) -> str | None:
     return job.get("stage") if isinstance(job, dict) else None
 
 
-def reached(job: Any, rig_meta: Any = None) -> str:
-    """The furthest stage ``job`` has got to. -> a key of :data:`STAGES`.
+def reached(job: Any, rig_meta: Any = None) -> str | None:
+    """The furthest stage ``job`` has got to, or None. -> a key of :data:`STAGES`.
 
     ``rig_meta`` is the selected asset's ``rig.json`` as
     :func:`panes.inspector.rig_meta` returns it (None when there is none). It is
@@ -98,10 +98,13 @@ def reached(job: Any, rig_meta: Any = None) -> str:
     today, so 5.3's rig stage is a row in :data:`_REACHED` and not a signature
     change at four call sites.
 
-    With no job at all this is the first stage: an empty Create mode is a form
-    waiting for a prompt, which is exactly what Reference is.
+    **None with no job**, rather than the first stage. This is the value the
+    rail ticks its segments off against, and an empty Create mode had a check
+    beside Reference -- claiming a step was finished on a screen where nothing
+    had been generated at all. Standing at a stage and having completed it are
+    different facts; ``state.create_stage`` is the first one.
     """
-    out = STAGES[0]
+    out: str | None = None
     for stage in STAGES:
         if not _REACHED[stage](job, rig_meta):
             break
@@ -170,9 +173,8 @@ def stage_for(job: Any) -> str:
 
     The routing every "open this asset" surface applies -- Home's Resume list,
     the library's Open, a card dropped on the window. One function because
-    there were four copies of ``"2d" if job["stage"] in ("reference", "tile")
-    else "3d"``, and four copies of a rule is four places for it to be wrong
-    about a tile.
+    there were four copies of the mode ternary it replaces, and four copies of
+    a rule is four places for it to be wrong about a tile.
     """
     return "reference" if _stage_of(job) in IMAGE_STAGES else "mesh"
 
@@ -180,26 +182,25 @@ def stage_for(job: Any) -> str:
 def in_create(state: Any) -> bool:
     """Whether the app is in Create mode at all.
 
-    The indirection REDESIGN.md wave 5.2a exists for: every ``mode == "2d" or
-    mode == "3d"`` read in the panes asks this, and asking it through a
-    function is what lets 5.2b change the answer's *implementation* in one
-    place instead of hunting a string through nine files.
+    The indirection REDESIGN.md wave 5.2a existed for: every ``mode == "2d" or
+    mode == "3d"`` read in the panes was rewritten to ask this, and 5.2b then
+    changed the answer *here* rather than hunting a string through nine files.
     """
-    return state.mode in ("2d", "3d")
+    return state.mode == MODE
 
 
 def at(state: Any, stage: str) -> bool:
     """Whether the user is standing at ``stage`` right now.
 
-    Reads the mode rather than ``state.create_stage`` at this step, and that is
-    deliberate: 5.2a is a pure refactor, so the *body* stays the old question
-    while the call sites become the new one. 5.2b swaps the body and nothing
-    above it moves.
+    Two questions, and both halves matter: the panes ask this to decide what to
+    draw, and a stage is only the thing being drawn while Create is the mode.
+    Without the mode half, the inspector in Poser would grow the mesh stage's
+    quality section because ``create_stage`` still said ``mesh``.
     """
-    return state.mode == _MODE_OF.get(stage)
+    return state.mode == MODE and state.create_stage == stage
 
 
-def go(ctx: Any, stage: str, *, select: str | None = None) -> None:
+def go(ctx: Any, stage: str, *, select: str | None = None, follow: bool = True) -> None:
     """**The one stage switch.** Every path into Create mode comes through here.
 
     One function rather than a ``state.create_stage = ...`` at each call site,
@@ -215,6 +216,11 @@ def go(ctx: Any, stage: str, *, select: str | None = None) -> None:
     exactly where it is *unless* the target stage could not show it, which is
     the only case where standing still would put a panel and a viewport on
     screen describing different objects.
+
+    ``follow=False`` turns that walk off, for the two arrivals that are about
+    to *make* something: a dropped image and a promotion both carry their own
+    source, and jumping the selection onto a mesh this reference already has
+    would describe the wrong asset while the form builds another.
     """
     from . import state as state_mod
     from .panes import library
@@ -223,24 +229,20 @@ def go(ctx: Any, stage: str, *, select: str | None = None) -> None:
         raise ValueError(f"stage must be one of {list(STAGES)}")
     if select is not None:
         library.select(ctx, select)
-    elif not shows(stage, ctx.job()):
+    elif follow and not shows(stage, _current(ctx)):
         target = _along_lineage(ctx, stage)
         if target is not None:
             library.select(ctx, target)
     ctx.state.create_stage = stage
-    state_mod.set_mode(ctx.state, _MODE_OF[stage])
+    state_mod.set_mode(ctx.state, MODE)
 
 
-# Stage -> the ``AppState.mode`` that draws it. **This table is temporary**:
-# wave 5.2b collapses ``2d`` and ``3d`` into one ``create`` mode, at which
-# point every value here becomes ``"create"`` and the dispatch moves onto the
-# stage itself. It exists at this step so that ``go`` is already the only
-# switch before the modes are the thing that changes -- the flip then has one
-# table to rewrite instead of a dozen call sites to find.
-_MODE_OF: dict[str, str] = {
-    "reference": "2d",
-    "mesh": "3d",
-}
+# The ``AppState.mode`` every stage is drawn in. One value since wave 5.2b --
+# that is the merge. It is a named constant rather than a literal at the four
+# places that need it because "which mode is Create" and "which stage am I on"
+# are two facts, and the flip was survivable precisely because only one of them
+# was ever spelled out.
+MODE = "create"
 
 
 def _along_lineage(ctx: Any, stage: str) -> str | None:
@@ -256,7 +258,7 @@ def _along_lineage(ctx: Any, stage: str) -> str | None:
     mesh; the walk is only ever asked for in the forward direction, and returns
     None when there is nothing there rather than inventing a selection.
     """
-    job = ctx.job()
+    job = _current(ctx)
     if job is None or stage != "mesh":
         return None
     parent = job["id"]
@@ -267,3 +269,14 @@ def _along_lineage(ctx: Any, stage: str) -> str | None:
         if best is None or str(row.get("created_at") or "") >= str(best.get("created_at") or ""):
             best = row
     return None if best is None else str(best["id"])
+
+
+def _current(ctx: Any) -> Any:
+    """The selected job, from a ctx that may not have one.
+
+    The palette and the profile sheet both call :func:`go` with the app ctx,
+    and their tests hand it a stub carrying a state and nothing else. A stage
+    switch is not the place to require a job cache.
+    """
+    getter = getattr(ctx, "job", None)
+    return getter() if callable(getter) else None

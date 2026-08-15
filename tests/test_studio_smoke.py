@@ -372,7 +372,8 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
     from warlock.studio.tokens import sp
 
     job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     app_ctx.rigging_available = True
     app_ctx.state.form_3d["rig"] = True
     job = app_ctx.cache.get(job_id)
@@ -446,7 +447,8 @@ def test_the_inspector_builds_for_every_status(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))  # nothing selected
     job_id = _seeded(app_ctx, mesh_report={"verdict": "good", "reasons": []})
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     _frame(imgui_ctx, lambda: inspector.draw(app_ctx))
     app_ctx.svc.store.set_status(job_id, "error", "it broke")
     app_ctx.cache.invalidate()
@@ -461,7 +463,8 @@ def test_the_candidate_picker_builds_running_and_finished(app_ctx, imgui_ctx):
     them."""
     from warlock.studio.panes import inspector
 
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     ids = []
     for index in range(2):
         job_id = app_ctx.svc.store.create(
@@ -501,7 +504,8 @@ def test_the_retarget_panel_builds_with_and_without_a_reconstruction(
     from warlock.studio.panes import retarget_panel
 
     job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     job = app_ctx.cache.get(job_id)
     # No source.glb: there is nothing to rebuild from and the section hides.
     _frame(imgui_ctx, lambda: retarget_panel.draw(app_ctx, job))
@@ -768,7 +772,8 @@ def test_the_profile_sheet_builds_over_a_mode(app_ctx, imgui_ctx):
         imgui.render()
         renderer.render(imgui.get_draw_data())
 
-    app_ctx.state.mode = "2d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "reference"
     frame()
     profiles_panel.open_sheet(app_ctx)
     frame()
@@ -1500,7 +1505,8 @@ def test_a_finished_mesh_is_not_offered_paint(app_ctx, imgui_ctx):
     from warlock.studio import inker_mode
 
     job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "2d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "reference"
     assert not inker_mode.can_edit_job(app_ctx, app_ctx.cache.get(job_id))
 
 
@@ -2139,7 +2145,8 @@ def test_the_inspector_builds_its_verdict_section_with_and_without_staged_tags(
 ):
     from warlock.studio.panes import inspector
 
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     job_id = _seeded(app_ctx)
     app_ctx.svc.store.set_stage(job_id, "model")
     app_ctx.cache.invalidate()
@@ -2749,7 +2756,8 @@ def test_the_3d_source_slot_builds_while_a_drag_is_in_flight(app_ctx, imgui_ctx)
     from warlock.studio.panes import settings_3d
 
     job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     app_ctx.state.dragging_job = job_id
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
     app_ctx.state.dragging_job = None
@@ -2791,7 +2799,8 @@ def test_a_card_with_no_thumbnail_builds_its_placeholder(app_ctx, imgui_ctx):
 
     job_id = _seeded(app_ctx)
     # No thumb.png was written, so every card takes the placeholder path.
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     _frame(imgui_ctx, lambda: library.draw(app_ctx))
     assert "thumb.png" not in (app_ctx.cache.get(job_id).get("files") or [])
 
@@ -2804,7 +2813,8 @@ def test_the_library_builds_in_every_view_and_density(app_ctx, imgui_ctx):
     from warlock.studio.state import SORTS
 
     job_id = _seeded(app_ctx)
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     for key, _label in SORTS:
         app_ctx.state.filters.sort = key
         for descending in (True, False):
@@ -2867,8 +2877,8 @@ def test_the_whole_frame_builds_under_the_light_palette(app_ctx, imgui_ctx):
         theme.apply(imgui)
         for mode, draw in (
             ("home", lambda: landing.draw(app_ctx)),
-            ("3d", lambda: library.draw(app_ctx)),
-            ("3d", lambda: inspector.draw(app_ctx)),
+            ("create", lambda: library.draw(app_ctx)),
+            ("create", lambda: inspector.draw(app_ctx)),
             ("settings", lambda: app_settings.draw(app_ctx)),
         ):
             app_ctx.state.mode = mode
@@ -2898,7 +2908,8 @@ def test_the_3d_form_builds_with_a_custom_budget(app_ctx, imgui_ctx, monkeypatch
     widget, which the shipped tier list never reaches."""
     from warlock.studio.panes import settings_3d
 
-    app_ctx.state.mode = "3d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "mesh"
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
     monkeypatch.setattr(
         settings_3d, "PROFILES", [("raw", "Raw"), ("custom", "Custom...")]
@@ -3238,6 +3249,31 @@ def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
     )
 
 
+def test_the_create_pane_builds_at_every_stage(app_ctx, imgui_ctx):
+    """The merged mode, through the real dispatch: the rail plus whichever
+    settings panel the stage names. Both stages in one test because the whole
+    claim of wave 5 is that they are one pane with a breadcrumb, and a stage
+    that built alone but not from the rail's own call would be a broken step."""
+    from warlock.studio import create_stages, main
+    from warlock.studio.panes import settings_2d, settings_3d
+
+    _seeded(app_ctx)
+    app_ctx.state.mode = create_stages.MODE
+    app = SimpleNamespace(app_ctx=app_ctx)
+    for stage in create_stages.STAGES:
+        app_ctx.state.create_stage = stage
+
+        def build(stage=stage):
+            main.App._stage_rail(app, app_ctx)
+            if create_stages.at(app_ctx.state, "mesh"):
+                settings_3d.draw(app_ctx)
+            else:
+                settings_2d.draw(app_ctx)
+
+        _frame(imgui_ctx, build)
+        assert app_ctx.state.create_stage == stage, "the rail moved on its own"
+
+
 def _stage_items(blocked=()):
     from warlock.studio import create_stages
 
@@ -3526,13 +3562,14 @@ def test_requesting_an_install_ticks_the_rows_and_opens_settings(app_ctx):
     ``state.mode`` write -- ``tests/test_mode_writes.py`` scans for the other."""
     from warlock.studio.panes import model_gate
 
-    app_ctx.state.mode = "2d"
+    app_ctx.state.mode = "create"
+    app_ctx.state.create_stage = "reference"
     app_ctx.model_picks.add("metric:dinov2")
     model_gate.request_install(app_ctx, ("lora:pixelxl", "control:canny"))
     assert app_ctx.state.mode == "settings"
     assert app_ctx.model_picks == {"metric:dinov2", "lora:pixelxl", "control:canny"}
     # set_mode's bookkeeping, which a direct write skips.
-    assert app_ctx.state.previous_mode == "2d"
+    assert app_ctx.state.previous_mode == "create"
 
 
 def test_the_sprite_form_locks_its_submit_while_weights_are_missing(app_ctx, imgui_ctx):

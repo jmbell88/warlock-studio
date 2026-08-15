@@ -336,7 +336,7 @@ def test_the_files_cache_never_outgrows_the_page(svc):
 # --- loading the selected mesh ------------------------------------------------
 
 
-def _viewer_app(svc, *, mode="3d", job=None, accept=True):
+def _viewer_app(svc, *, mode="create", stage="mesh", job=None, accept=True):
     """An App stand-in with just enough for ``_sync_viewer``/``_adopt_model``."""
     from types import SimpleNamespace
 
@@ -351,6 +351,15 @@ def _viewer_app(svc, *, mode="3d", job=None, accept=True):
             self.pose_mode = False
             self.adopted: list[Any] = []
             self.parsed: list[Any] = []
+            self.reference = None
+
+        def clear(self) -> None:
+            self.reference = None
+
+        def load_reference(self, path):
+            # The reference path is taken inline (it is a PNG, not a mesh),
+            # which is the branch the Reference stage takes.
+            self.reference = path
 
         def parse_model(self, path):
             self.parsed.append(path)
@@ -362,6 +371,7 @@ def _viewer_app(svc, *, mode="3d", job=None, accept=True):
 
     state = AppState()
     state.mode = mode
+    state.create_stage = stage
 
     class FakeApp:
         def __init__(self) -> None:
@@ -459,6 +469,35 @@ def test_a_refused_dispatch_leaves_nothing_pending(svc):
     main.App._sync_viewer(app)
 
     assert app.viewer.pending is None
+
+
+def test_the_stage_decides_which_file_the_viewport_wants(svc):
+    """The merge's half of ``_sync_viewer``. Reference and Mesh are one mode
+    now, so "which file" is a question about the *stage* -- and a viewer that
+    still asked the mode would show the same thing at both."""
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb", "input.png"]}
+    app = _viewer_app(svc, job=job, stage="reference")
+    main.App._sync_viewer(app)
+    assert app.viewer.path == svc.job_dir(job["id"]) / "input.png"
+
+    app.app_ctx.state.create_stage = "mesh"
+    main.App._sync_viewer(app)
+    assert app.viewer.pending == svc.job_dir(job["id"]) / "model.glb"
+
+
+def test_a_stage_change_is_watched_as_a_mode_change_used_to_be():
+    """Stepping Reference -> Mesh moves no mode at all since wave 5, and what
+    the viewport should be showing changed anyway. Before the stage was
+    watched, the mesh appeared on the next 3 s cache tick."""
+    import inspect
+
+    from warlock.studio import main
+
+    source = inspect.getsource(main.App._build_ui)
+    assert "self._last_stage" in source
+    assert "stage_moved" in source
 
 
 def test_the_blocking_measurement_says_so():

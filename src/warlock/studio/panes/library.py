@@ -20,7 +20,7 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, QUERY_FIELDS, SORTS, primary_action, set_mode
+from ..state import ACTIONS, QUERY_FIELDS, SORTS, primary_action
 from ..tokens import sp
 from . import thumbs
 
@@ -958,16 +958,16 @@ def open_selected(ctx: Any) -> None:
 
     Opens the selected asset in the mode that shows it -- the same routing
     Home's Resume list applies to an asset row, so the two lists cannot
-    disagree about where an asset opens. Through ``state.set_mode`` rather
+    disagree about where an asset opens. Through ``create_stages.go`` rather
     than assignment, so Esc still knows it came from the library. Silently
     nothing with no selection: Enter with no cursor has nothing it could mean.
     """
-    from ..state import set_mode
+    from .. import create_stages
 
     job = ctx.cache.get(ctx.state.selected)
     if job is None:
         return
-    set_mode(ctx.state, "2d" if job.get("stage") in ("reference", "tile") else "3d")
+    create_stages.go(ctx, create_stages.stage_for(job), select=job["id"])
 
 
 def _copy_settings(ctx: Any, job: Any) -> None:
@@ -987,8 +987,10 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     # of a texture. The whole job row is in hand here; form_from_params is not
     # given it, because it is the params allowlist and must stay one.
     form["output"] = "tile" if job.get("stage") == "tile" else "reference"
+    from .. import create_stages
+
     ctx.state.form_2d = form
-    set_mode(ctx.state, "2d")
+    create_stages.go(ctx, "reference")
     ctx.toast("Settings copied to the form.")
 
 
@@ -1025,19 +1027,26 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         mode = "remesh" if _remeshable(job) else "reroll"
         ctx.submit(f"retry:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode=mode)
     elif action == "promote":
+        from .. import create_stages
+
         ctx.state.source_job = job_id
-        set_mode(ctx.state, "3d")
+        # ``follow=False``: the source is named on the line above, and walking
+        # the selection onto a mesh this reference has *already* produced would
+        # put a finished asset in the inspector beside a form about to make a
+        # different one.
+        create_stages.go(ctx, "mesh", follow=False)
     elif action == "rig":
         ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id, template=_skeleton(ctx))
     elif action == "open":
-        select(ctx, job_id)
-        # A job that stops at an image opens in the pane that made it. A tile
-        # has no mesh at all, so opening it in 3D would show an empty viewport.
-        # Through ``set_mode`` and not a bare assignment, which is what the
+        from .. import create_stages
+
+        # A job that stops at an image opens at the stage that made it. A tile
+        # has no mesh at all, so opening it at Mesh would show an empty
+        # viewport. Through ``go`` and not a bare assignment, which is what the
         # landing page's identical "open this asset" already does: the two are
         # the same act reached from two surfaces, and only one of them used to
         # leave Esc a way back to where the user came from.
-        set_mode(ctx.state, "2d" if job.get("stage") in ("reference", "tile") else "3d")
+        create_stages.go(ctx, create_stages.stage_for(job), select=job_id)
 
 
 COMPARE_KEY = "compare-parse"

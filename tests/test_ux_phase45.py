@@ -78,12 +78,17 @@ def test_resuming_selects_what_it_opens_and_lands_in_the_right_pane():
         selected=None,
         home_index=0,
         mode="home",
+        previous_mode="home",
+        mode_observed="home",
+        create_stage="reference",
+        source_job=None,
         select=picked.append,
     )
     ctx = _ctx(cache=_cache([_job("ref", stage="reference")]), state=state)
     landing.activate(ctx, 0)
     assert picked == ["ref"]
-    assert state.mode == "2d"
+    assert state.mode == "create"
+    assert state.create_stage == "reference"
 
 
 def test_a_queued_job_is_not_offered_and_a_bare_ctx_is_not_a_crash():

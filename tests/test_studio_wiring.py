@@ -181,11 +181,11 @@ def test_choosing_the_mode_you_are_already_in_keeps_the_history():
     answers with Home. Esc out of a pass-through mode is documented as going
     back to the mode it came from."""
     ctx = _palette_ctx("settings")
-    ctx.state.previous_mode = "3d"
+    ctx.state.previous_mode = "create"
     next(c for c in palette.commands(ctx) if c.key == "go:settings").run(ctx)
 
     assert ctx.state.mode == "settings"
-    assert ctx.state.previous_mode == "3d"
+    assert ctx.state.previous_mode == "create"
 
 
 def test_the_palette_and_the_shortcut_agree_on_every_mode():
@@ -199,12 +199,12 @@ def test_the_palette_and_the_shortcut_agree_on_every_mode():
     for start in modes.KEYS:
         for target in modes.KEYS:
             by_palette = _palette_ctx(start)
-            by_palette.state.previous_mode = "3d"
+            by_palette.state.previous_mode = "create"
             palette._go(target)(by_palette)
 
             app = main.App.__new__(main.App)
             app.app_ctx = _palette_ctx(start)
-            app.app_ctx.state.previous_mode = "3d"
+            app.app_ctx.state.previous_mode = "create"
             app._set_mode(target)
 
             assert vars(by_palette.state) == vars(app.app_ctx.state), f"{start} -> {target}"

@@ -165,9 +165,7 @@ def open_row(ctx: Any, row: Row) -> None:
         # off-thread parse, and a shortcut past it reproduces two of those three
         # and gets the last one wrong.
         job = ctx.cache.get(row.key) if getattr(ctx, "cache", None) else None
-        ctx.state.select(row.key)
-        stage = (job or {}).get("stage")
-        set_mode(ctx.state, "2d" if stage in ("reference", "tile") else "3d")
+        create_stages.go(ctx, create_stages.stage_for(job), select=row.key)
         return
     path = Path(row.key)
     if not path.exists():
@@ -737,20 +735,26 @@ def _resume_cell(
 
 
 def start_2d(ctx: Any) -> None:
-    """A clean 2D form, wearing the active profile.
+    """A clean prompt form at the Reference stage, wearing the active profile.
 
     ``default_form_2d`` rolls its own seed, so this is genuinely a fresh start
     rather than last session's form with the prompt cleared.
     """
     ctx.state.form_2d = profiles.apply(default_form_2d(), profiles.active_fields(ctx.settings))
     ctx.state.select(None)
-    set_mode(ctx.state, "2d")
+    create_stages.go(ctx, "reference")
 
 
 def start_3d(ctx: Any) -> None:
+    """A clean mesh form at the Mesh stage.
+
+    Still a separate entry on the New... menu even though the two stages are
+    one mode: "I have an image and I want a mesh of it" is a different errand
+    from "I want a picture of a barrel", and the menu is a list of errands.
+    """
     ctx.state.form_3d = dict(DEFAULT_FORM_3D)
     ctx.state.select(None)
-    set_mode(ctx.state, "3d")
+    create_stages.go(ctx, "mesh")
 
 
 def start_inker(ctx: Any) -> None:
@@ -798,12 +802,13 @@ def start_packwright(ctx: Any) -> None:
 #: modelling workspace (UX-23). Named for what they do instead: the mode is the
 #: noun a user can act on.
 #:
-#: Below the functions rather than above them, because it names them: wave 5
-#: retargets the first two entries at ``create_stages.go`` and nothing else on
-#: this pane has to know.
+#: Below the functions rather than above them, because it names them. The keys
+#: are the menu's own ids and nothing else -- the first two stopped being mode
+#: keys in wave 5, and are spelled for the stages they open so that a reader
+#: cannot take them for modes that no longer exist.
 NEW_ITEMS: tuple[tuple[str, str, str, object], ...] = (
-    ("2d", "New 2D image", icons.IMAGE, start_2d),
-    ("3d", "New 3D model", icons.BOX, start_3d),
+    ("create-reference", "New 2D image", icons.IMAGE, start_2d),
+    ("create-mesh", "New 3D model", icons.BOX, start_3d),
     ("inker", "New drawing", icons.PEN_TOOL, start_inker),
     ("clay", "New Clay model", icons.RULER, start_clay),
     ("plotter", "New tile map", icons.GRID, start_plotter),

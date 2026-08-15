@@ -28,7 +28,12 @@ def _job(job_id: str, **over: Any) -> dict[str, Any]:
     return row
 
 
-def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None = None) -> Any:
+def _ctx(
+    mode: str = "create",
+    jobs: list[Any] | None = None,
+    selected: str | None = None,
+    stage: str = "mesh",
+) -> Any:
     from warlock.studio.state import ManualState
 
     rows = jobs or []
@@ -38,6 +43,7 @@ def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None =
             mode=mode,
             previous_mode=mode,
             mode_observed=mode,
+            create_stage=stage,
             selected=selected,
             source_job=None,
             wireframe=False,
@@ -122,24 +128,24 @@ def test_a_go_to_command_advertises_no_key():
 def test_going_somewhere_records_where_it_came_from():
     """Otherwise Esc out of the mode the palette put you in goes two steps
     back -- the palette is a mode switch like any other."""
-    ctx = _ctx("3d")
+    ctx = _ctx("create")
     command = next(c for c in palette.commands(ctx) if c.key == "go:settings")
     command.run(ctx)
     assert ctx.state.mode == "settings"
-    assert ctx.state.previous_mode == "3d"
+    assert ctx.state.previous_mode == "create"
 
 
 def test_the_manual_is_a_command_rather_than_a_destination():
     """It stopped being a mode in REDESIGN.md wave 3, so ``_mode_commands`` no
     longer derives an entry -- and a reference reachable only by a function key
     is one most people never find."""
-    ctx = _ctx("3d")
+    ctx = _ctx("create")
     command = next(c for c in palette.commands(ctx) if c.key == "manual")
     assert command.hint == "F1"
     command.run(ctx)
     assert ctx.state.manual.open
     # Over the mode it was asked from, not instead of it.
-    assert ctx.state.mode == "3d"
+    assert ctx.state.mode == "create"
 
 
 def test_the_library_is_reachable_as_a_mode():
@@ -153,14 +159,15 @@ def test_the_library_is_reachable_as_a_mode():
 
 def test_the_profile_manager_is_a_command_and_goes_where_it_belongs():
     """It stopped being a mode in REDESIGN.md wave 3, so there is no
-    ``go:profiles`` to derive. The manager is *about* the 2D form, so the
-    command opens that pane under it rather than raising a sheet over whatever
-    happened to be on screen."""
+    ``go:profiles`` to derive. The manager is *about* the prompt form, so the
+    command opens the Reference stage under it rather than raising a sheet over
+    whatever happened to be on screen."""
     ctx = _ctx("clay")
     keys = {c.key for c in palette.commands(ctx)}
     assert "go:profiles" not in keys
     next(c for c in palette.commands(ctx) if c.key == "profiles").run(ctx)
-    assert ctx.state.mode == "2d"
+    assert ctx.state.mode == "create"
+    assert ctx.state.create_stage == "reference"
     assert ctx.state.profiles_open
 
 
@@ -171,13 +178,13 @@ def test_the_viewport_commands_are_disabled_outside_a_viewport_mode(key):
     row that is there."""
     command = next(c for c in palette.commands(_ctx("home")) if c.key == key)
     assert command.enabled(_ctx("home")) is False
-    assert command.enabled(_ctx("3d")) is True
+    assert command.enabled(_ctx("create")) is True
 
 
 def test_generate_is_disabled_outside_the_generate_modes():
     command = next(c for c in palette.commands(_ctx()) if c.key == "generate")
-    assert command.enabled(_ctx("2d")) is True
-    assert command.enabled(_ctx("3d")) is True
+    assert command.enabled(_ctx("create", stage="reference")) is True
+    assert command.enabled(_ctx("create", stage="mesh")) is True
     assert command.enabled(_ctx("inker")) is False
 
 
@@ -296,11 +303,11 @@ def test_the_command_exists(key: str):
 
 @pytest.mark.parametrize("key", ["save", "save-as", "export", "undo", "redo"])
 def test_the_document_commands_are_shut_outside_a_document_mode(key: str):
-    """They act on "whichever document mode is in front", so in 3D there is no
-    document and the answer is a greyed row with a sentence -- not a command
+    """They act on "whichever document mode is in front", so in Create there is
+    no document and the answer is a greyed row with a sentence -- not a command
     that runs against a tab from a mode the user left."""
-    command = next(c for c in palette.commands(_ctx(mode="3d")) if c.key == key)
-    assert command.enabled(_ctx(mode="3d")) is False
+    command = next(c for c in palette.commands(_ctx(mode="create")) if c.key == key)
+    assert command.enabled(_ctx(mode="create")) is False
     assert command.why
 
 

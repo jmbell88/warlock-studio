@@ -31,11 +31,21 @@ from . import icons
 # ``manual.render.draw_overlay`` now, raised by F1 and by every
 # ``help_button``) and ``profiles`` (a shelf of saved settings in the top-level
 # navigation beside six creative workspaces said that "manage my styles" is a
-# place you travel to -- it is ``profiles_panel.draw_sheet`` over the 2D pane).
+# place you travel to -- it is ``profiles_panel.draw_sheet`` over the Reference
+# stage's pane).
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
-    ("2d", "2D", icons.IMAGE),
-    ("3d", "3D", icons.BOX),
+    # **One mode, not two** (REDESIGN.md wave 5). "2D" and "3D" were the two
+    # halves of a single journey -- you write a prompt, you get a picture, you
+    # turn the picture into a mesh -- presented as two destinations you had to
+    # know to travel between. Worse, the names described the *artifact* rather
+    # than the act: a user who wants a barrel does not first decide to do some
+    # 2D. The halves are stages of Create now (``create_stages.STAGES``), drawn
+    # as a rail above the settings column, and which one you are on is a
+    # property of the asset in front of you rather than a place in the
+    # navigation. The glyph is neither of the two it replaces, deliberately:
+    # IMAGE and BOX went with the stages that kept their meanings.
+    ("create", "Create", icons.SPARKLES),
     # Real modes rather than sub-views of Home. They were tiles on the chooser
     # and a ``state.landing_view`` enum behind it, which is what a destination
     # looks like when there is nowhere to put it; Home stopped being a tile
@@ -57,15 +67,15 @@ MODES: list[tuple[str, str, str]] = [
 # of what ``GROUP_BREAKS`` used to be: deriving the gaps from "is this a work
 # mode" was right while the only claim being made was *workspaces are not
 # places*, and it is wrong now, because the first group is a claim the
-# predicate cannot make. Home, 2D, 3D, Library and Review are the *asset*
-# pipeline -- start something, generate a reference, make a mesh, find it
-# again, judge it -- and three of those five are work modes while two are not.
+# predicate cannot make. Home, Create, Library and Review are the *asset*
+# pipeline -- start something, take it through its stages, find it again, judge
+# it -- and two of those four are work modes while two are not.
 # A rule that cannot state the grouping is not a better version of stating it.
 #
 # The last group is the rail's *footer*, drawn against the bottom edge beside
 # the health badge and the expand toggle rather than in the column above.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("home", "2d", "3d", "library", "review"),
+    ("home", "create", "library", "review"),
     ("inker", "clay", "poser", "plotter", "packwright"),
     ("settings",),
 )
@@ -75,17 +85,23 @@ RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
 WORK_MODES = frozenset(
-    {"2d", "3d", "inker", "clay", "poser", "review", "plotter", "packwright"}
+    {"create", "inker", "clay", "poser", "review", "plotter", "packwright"}
 )
 
 # The subset that draws the *asset* viewport, and therefore the only modes
-# whose selection is worth loading a mesh for. Inker and Clay each own their
+# whose selection is worth loading a mesh for. One member since wave 5, and
+# still a set rather than an ``== "create"``: it is the *question* "does this
+# mode frame the selected asset" and the answer has been one, two and one
+# again. Which of Create's stages a viewport shows is a second question, asked
+# of ``create_stages`` -- see ``_sync_viewer``.
+#
+# Inker and Clay each own their
 # own centre pane -- Clay's draws a live document rather than a file, so
 # ``_sync_viewer`` has nothing to do for it and returns early. Review is not
 # here either, and deliberately: it *borrows* the shared viewer, but for a
 # sweep unit's mesh rather than for the library selection, so leaving it out is
 # what stops ``_sync_viewer`` reloading the selected asset over it.
-VIEWPORT_MODES = frozenset({"2d", "3d"})
+VIEWPORT_MODES = frozenset({"create"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
 # its own three-column workspace. Inker, Clay, Poser, Review, Plotter and

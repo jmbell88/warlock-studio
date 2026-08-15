@@ -255,6 +255,11 @@ class App:
         # mode can resync the viewer -- a mode change is not something the
         # job cache announces.
         self._last_mode: str | None = None
+        # The Create stage the last frame was built in, for ``_last_mode``'s
+        # reason and because the merge removed the mode change that used to
+        # stand in for it: Reference -> Mesh is now one mode with a different
+        # file under the viewport.
+        self._last_stage: str | None = None
         # What the viewport was last asked to show. A selection change is not
         # announced by the cache, so without this the viewer only caught up on
         # the 3 s idle reread and the inspector described one asset while the
@@ -2174,8 +2179,10 @@ class App:
             ctx.toast(f"Using {path.name} as the reference.", "success")
             return
         # A drop is a start: it would otherwise land behind the chooser, with
-        # nothing on screen saying anything had happened.
-        self._set_mode("3d")
+        # nothing on screen saying anything had happened. ``follow=False``:
+        # the file being dropped is the source, so walking the selection onto
+        # a mesh the current one already has would describe the wrong asset.
+        create_stages.go(ctx, "mesh", follow=False)
         self._flash_drop("3d-source")
         settings_3d.upload(ctx, path)
 
@@ -2320,7 +2327,16 @@ class App:
         # Arriving in a viewport mode is a change the cache will not announce:
         # the job list has not changed, so nothing else would ask the viewer
         # to show what was just picked.
-        if ctx.state.mode != self._last_mode and ctx.state.mode in modes.VIEWPORT_MODES:
+        #
+        # A *stage* change is the same event since wave 5, and has to be
+        # watched separately: Reference and Mesh are one mode now, so stepping
+        # between them moves no mode at all -- and what the viewport should be
+        # showing (``input.png`` against ``model.glb``) changed anyway.
+        stage_moved = ctx.state.create_stage != self._last_stage
+        self._last_stage = ctx.state.create_stage
+        if (
+            ctx.state.mode != self._last_mode or stage_moved
+        ) and ctx.state.mode in modes.VIEWPORT_MODES:
             self._sync_viewer()
         # And on a *selection* change, which is the trigger UX-03 found missing.
         # ``_sync_viewer`` was driven off the cache reread (a 3 s idle timer)
@@ -2437,10 +2453,14 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
         if layout_mod.pane_child("settings", (sidebar_w, 0)):
-            if create_stages.at(ctx.state, "reference"):
-                settings_2d.draw(ctx)
-            else:
+            # The rail first, above the panel it switches: it is a breadcrumb
+            # for the column under it, and one drawn at the bottom would be a
+            # tab strip that had lost its tabs.
+            self._stage_rail(ctx)
+            if create_stages.at(ctx.state, "mesh"):
                 settings_3d.draw(ctx)
+            else:
+                settings_2d.draw(ctx)
         imgui.end_child()
 
         imgui.same_line()
@@ -2454,6 +2474,39 @@ class App:
         imgui.end_child()
         imgui.end()
         self._overlays(viewport)
+
+    def _stage_rail(self, ctx: Any) -> None:
+        """Create's breadcrumb, over the settings column.
+
+        The pane dispatch that follows it reads ``state.create_stage``, and
+        this is the only control that writes one -- through
+        ``create_stages.go``, which is what makes "switching stage may move the
+        selection" a rule rather than a thing this happens to remember.
+        """
+        from imgui_bundle import imgui
+
+        from . import create_stages, tokens, widgets
+
+        job = ctx.job()
+        items = [
+            (
+                stage,
+                create_stages.LABELS[stage],
+                create_stages.ICONS[stage],
+                create_stages.available(stage, job, ctx),
+            )
+            for stage in create_stages.STAGES
+        ]
+        picked = widgets.stage_rail(
+            "create-stages",
+            items,
+            ctx.state.create_stage,
+            done=create_stages.reached(job),
+            max_width=imgui.get_content_region_avail().x,
+        )
+        if picked != ctx.state.create_stage:
+            create_stages.go(ctx, picked)
+        imgui.dummy((0, tokens.sp(tokens.SP_2)))
 
     def _ensure_build_view(self) -> Any:
         """Clay's viewport, built on first use -- and mirrored onto the ctx,
@@ -3708,14 +3761,19 @@ class App:
         if name == "log":
             ctx.open_log()
         elif name == "show" and arg:
+            from . import create_stages
             from .panes import library
 
             # Through the library's own selector, so the promotion source
             # follows the selection exactly as a click on the card would.
-            library.select(ctx, arg)
             job = ctx.cache.get(arg)
             if job is not None:
-                self._set_mode("2d" if job.get("stage") in ("reference", "tile") else "3d")
+                # Through ``go`` with the id in hand, which *is* the library's
+                # own selector plus the stage: one call, so the promotion
+                # source follows exactly as a click on the card would.
+                create_stages.go(ctx, create_stages.stage_for(job), select=arg)
+            else:
+                library.select(ctx, arg)
             ctx.state.library_scroll_to = arg
         elif name == "undo" and arg:
             from .panes import library

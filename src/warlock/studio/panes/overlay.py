@@ -404,11 +404,24 @@ def doctor_banner(ctx: Any) -> None:
 # What an empty viewport says, per mode: icon, title, and what to do about it
 # (H74). Upgraded from one muted sentence to the icon+title+hint form every
 # other empty list in the app uses, and given the ``inker`` entry it never had
-# -- Inker fell through to the 3D sentence, so an empty canvas pane advised
+# -- Inker fell through to the mesh sentence, so an empty canvas pane advised
 # picking a finished reference.
+#
+# Create is keyed ``create/{stage}`` rather than on the mode alone: one mode
+# with two viewports would otherwise have to pick one of the two sentences and
+# be wrong half the time. The slash is not a path -- it is there so a mode key
+# and a stage key can never collide in one table.
 PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
-    "2d": (icons.IMAGE, "Nothing generated yet", "Describe something and press Generate."),
-    "3d": (icons.BOX, "No mesh on screen", "Pick a finished reference, or open an image."),
+    "create/reference": (
+        icons.IMAGE,
+        "Nothing generated yet",
+        "Describe something and press Generate.",
+    ),
+    "create/mesh": (
+        icons.BOX,
+        "No mesh on screen",
+        "Pick a finished reference, or open an image.",
+    ),
     "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
     "poser": (
@@ -428,9 +441,15 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
 
 def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
+    from .. import create_stages
     from ..tokens import sp
 
-    icon, title, hint = PLACEHOLDERS.get(ctx.state.mode, PLACEHOLDERS["3d"])
+    key = (
+        f"{create_stages.MODE}/{ctx.state.create_stage}"
+        if create_stages.in_create(ctx.state)
+        else ctx.state.mode
+    )
+    icon, title, hint = PLACEHOLDERS.get(key, PLACEHOLDERS["create/mesh"])
     avail = imgui.get_content_region_avail()
     # Centred vertically by hand, as before: ``empty_state`` centres its own
     # text horizontally but knows nothing about the height it is sitting in.

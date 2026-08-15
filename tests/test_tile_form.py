@@ -236,21 +236,23 @@ def test_editing_a_tile_re_measures_its_seam_rather_than_its_composition(svc):
     assert "reference_report" not in params
 
 
-def test_the_tiled_toggle_is_offered_for_a_tile_in_2d_and_nowhere_else():
+def test_the_tiled_toggle_is_offered_for_a_tile_at_the_reference_stage_only():
     from types import SimpleNamespace
 
     from warlock.studio.panes import overlay
 
-    def ctx(mode):
-        return SimpleNamespace(state=SimpleNamespace(mode=mode))
+    def ctx(stage, mode="create"):
+        return SimpleNamespace(state=SimpleNamespace(mode=mode, create_stage=stage))
 
     done_tile = {"stage": "tile", "status": "done"}
-    assert overlay.shows_tiled(ctx("2d"), done_tile)
-    # Not in 3D: the thing on screen there is a mesh.
-    assert not overlay.shows_tiled(ctx("3d"), done_tile)
-    assert not overlay.shows_tiled(ctx("2d"), {"stage": "reference", "status": "done"})
-    assert not overlay.shows_tiled(ctx("2d"), {"stage": "tile", "status": "running"})
-    assert not overlay.shows_tiled(ctx("2d"), None)
+    assert overlay.shows_tiled(ctx("reference"), done_tile)
+    # Not at the Mesh stage: the thing on screen there is a mesh.
+    assert not overlay.shows_tiled(ctx("mesh"), done_tile)
+    # Nor in a mode that is not Create at all, whatever stage was last left.
+    assert not overlay.shows_tiled(ctx("reference", mode="inker"), done_tile)
+    assert not overlay.shows_tiled(ctx("reference"), {"stage": "reference", "status": "done"})
+    assert not overlay.shows_tiled(ctx("reference"), {"stage": "tile", "status": "running"})
+    assert not overlay.shows_tiled(ctx("reference"), None)
 
 
 def test_the_tiled_preview_is_off_by_default():

@@ -141,10 +141,10 @@ def test_every_row_draws_in_the_default_atlas_range():
         assert all(ord(c) < 0x100 for c in row.name)
 
 
-def test_activating_an_asset_row_lands_in_the_pane_that_made_it():
+def test_activating_an_asset_row_lands_at_the_stage_that_made_it():
     """The same reference/tile/model split the library filter uses -- and
-    through ``state.select`` plus a mode, never ``viewer.load_model``, which
-    would bypass the pose guard and the off-thread parse."""
+    through ``create_stages.go``, never ``viewer.load_model``, which would
+    bypass the pose guard and the off-thread parse."""
     ctx = _ctx(
         jobs=[
             {"id": "ref", "status": "done", "stage": "reference", "created_at": 2.0},
@@ -152,9 +152,10 @@ def test_activating_an_asset_row_lands_in_the_pane_that_made_it():
         ]
     )
     landing.activate(ctx, 0)
-    assert (ctx.state.selected, ctx.state.mode) == ("ref", "2d")
+    assert (ctx.state.selected, ctx.state.create_stage) == ("ref", "reference")
+    assert ctx.state.mode == "create"
     landing.activate(ctx, 1)
-    assert (ctx.state.selected, ctx.state.mode) == ("mesh", "3d")
+    assert (ctx.state.selected, ctx.state.create_stage) == ("mesh", "mesh")
 
 
 def test_a_row_whose_file_is_gone_is_dropped_rather_than_failing_silently(tmp_path):

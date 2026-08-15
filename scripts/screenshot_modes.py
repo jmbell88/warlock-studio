@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # written out. A hand-kept tuple claiming to be every mode is the drift this
 # script's own docstring warns about, and it had already happened once: two
 # modes were added and the list still said eight.
+from warlock.studio import create_stages  # noqa: E402
 from warlock.studio import modes as _modes  # noqa: E402
 
 MODES = _modes.KEYS
@@ -279,6 +280,15 @@ def main() -> int:
             print(f"{name}:", flush=True)
             for mode in MODES:
                 app.app_ctx.state.mode = mode
+                if mode == create_stages.MODE:
+                    # One mode, several viewports (REDESIGN.md wave 5): a
+                    # single capture would show whichever stage happened to be
+                    # current and silently leave the rest of the pipeline
+                    # unlooked-at, which is the gap --seed closed for Inker.
+                    for stage in create_stages.STAGES:
+                        app.app_ctx.state.create_stage = stage
+                        _capture(app, args.out / f"{name}-{mode}-{stage}.png")
+                    continue
                 if args.review and mode == "review":
                     # *After* the switch, because entering a mode starts a
                     # rescan and a scan landing re-opens the bucket -- which
@@ -292,11 +302,12 @@ def main() -> int:
                 from warlock.studio.panes import profiles_panel
 
                 state = app.app_ctx.state
-                state.mode = "3d"
+                state.mode = create_stages.MODE
+                state.create_stage = "mesh"
                 manual_render.open_at(app.app_ctx, ("01-overview", None))
                 _capture(app, args.out / f"{name}-manual.png")
                 manual_render.close(app.app_ctx)
-                state.mode = "2d"
+                state.create_stage = "reference"
                 profiles_panel.open_sheet(app.app_ctx)
                 _capture(app, args.out / f"{name}-profiles.png")
                 state.profiles_open = False
@@ -307,13 +318,15 @@ def main() -> int:
                 _capture(app, args.out / f"{name}-rail-expanded.png")
                 app.layout.set_rail("icons")
             if args.floating:
-                # Over 3D rather than over Home: the backdrop is what is being
-                # looked at, and a viewport with a mesh in it is the one screen
-                # where "is this a blur or a flat fill" cannot be argued about.
+                # Over the Mesh stage rather than over Home: the backdrop is
+                # what is being looked at, and a viewport with a mesh in it is
+                # the one screen where "is this a blur or a flat fill" cannot
+                # be argued about.
                 from warlock.studio.panes import palette as palette_pane
 
-                app.app_ctx.state.mode = "3d"
-                _capture(app, args.out / f"{name}-3d-clean.png")
+                app.app_ctx.state.mode = create_stages.MODE
+                app.app_ctx.state.create_stage = "mesh"
+                _capture(app, args.out / f"{name}-mesh-clean.png")
                 palette_pane.toggle(app.app_ctx)
                 _capture(app, args.out / f"{name}-palette.png")
                 palette_pane.close(app.app_ctx)

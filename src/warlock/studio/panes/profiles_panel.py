@@ -15,9 +15,8 @@ from imgui_bundle import imgui
 
 from ...service import validation
 from ...service.validation import MAX_UPLOAD_BYTES
-from .. import dialogs, icons, journal, profiles, theme, widgets
+from .. import create_stages, dialogs, icons, journal, profiles, theme, widgets
 from ..manual import render as manual_render
-from ..state import set_mode
 from ..tokens import sp
 from . import settings_2d
 
@@ -578,10 +577,10 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
     ctx.state.profile_draft_name = str(data.get("name") or "")
     ctx.state.profile_draft_origin = str(data.get("origin") or "")
     ctx.state.profile_journal_name = Path(path).name
-    # The 2D pane with the manager over it, which is where the draft was being
-    # typed: the sheet is not a destination, so "put the reader back" means
-    # putting back both halves.
-    set_mode(ctx.state, "2d")
+    # The Reference stage with the manager over it, which is where the draft
+    # was being typed: the sheet is not a destination, so "put the reader back"
+    # means putting back both halves.
+    create_stages.go(ctx, "reference")
     ctx.state.profiles_open = True
     return True
 

@@ -756,7 +756,7 @@ def test_adopting_while_already_in_clay_keeps_the_escape_history(tmp_path: Path)
     ``clay`` itself and Esc's history is gone."""
     ctx = FakeCtx()
     ctx.state.mode = "clay"
-    ctx.state.previous_mode = "3d"
+    ctx.state.previous_mode = "create"
     ctx.state.mode_observed = "clay"
     path = tmp_path / "thing.glb"
     path.write_bytes(_glb_bytes())
@@ -764,7 +764,7 @@ def test_adopting_while_already_in_clay_keeps_the_escape_history(tmp_path: Path)
     clay_mode.on_task_done(ctx, _Done("clay-import:1", ctx.result))
 
     assert ctx.state.mode == "clay"
-    assert ctx.state.previous_mode == "3d"
+    assert ctx.state.previous_mode == "create"
 
 
 # --- the way in -------------------------------------------------------------

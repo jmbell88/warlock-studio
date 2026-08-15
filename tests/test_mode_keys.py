@@ -20,7 +20,7 @@ from warlock.studio.state import AppState
 # --- I75: Alt+1..8 -----------------------------------------------------------
 
 
-def _app(mode: str = "3d") -> SimpleNamespace:
+def _app(mode: str = "create") -> SimpleNamespace:
     """The smallest thing ``_shortcut`` needs to route a key.
 
     The mode helpers are bound off the real class rather than stubbed: they are
@@ -71,9 +71,9 @@ def test_no_digit_is_a_mode_switch(alt, no_mods):
     modes and Review binds 1-5 to reject reasons; those keys are theirs again,
     with or without Alt."""
     for key in (pygame.K_1, pygame.K_4, pygame.K_9, pygame.K_0, pygame.K_KP3, pygame.K_KP0):
-        app = _app("3d")
+        app = _app("create")
         _press(app, key)
-        assert app.app_ctx.state.mode == "3d"
+        assert app.app_ctx.state.mode == "create"
 
 
 def test_the_digit_helpers_are_gone_rather_than_left_unused():
@@ -96,12 +96,12 @@ def test_the_palette_is_checked_before_the_workspace_handlers():
 
 
 def test_esc_returns_to_the_mode_you_came_from(no_mods):
-    app = _app("3d")
+    app = _app("create")
     state = app.app_ctx.state
     app._set_mode("settings")
     assert state.mode == "settings"
     _press(app, pygame.K_ESCAPE)
-    assert state.mode == "3d"
+    assert state.mode == "create"
 
 
 # --- REDESIGN wave 3: the Manual is an overlay, not a mode -------------------
@@ -110,16 +110,16 @@ def test_esc_returns_to_the_mode_you_came_from(no_mods):
 def test_f1_raises_the_manual_over_the_mode_you_are_in(no_mods):
     """It used to *replace* it, which is the defect: the (?) beside a control
     answered the question by taking the control away."""
-    app = _app("3d")
+    app = _app("create")
     state = app.app_ctx.state
     _press(app, pygame.K_F1)
     assert state.manual.open
-    assert state.mode == "3d"
+    assert state.mode == "create"
 
 
 def test_f1_puts_it_away_again(no_mods):
     """The key that raises a reference is the key that closes it."""
-    app = _app("3d")
+    app = _app("create")
     _press(app, pygame.K_F1)
     _press(app, pygame.K_F1)
     assert not app.app_ctx.state.manual.open
@@ -138,18 +138,18 @@ def test_esc_closes_the_manual_before_the_mode_sees_it(no_mods):
 
 
 def test_esc_closes_the_profile_sheet_before_the_mode_sees_it(no_mods):
-    app = _app("2d")
+    app = _app("create")
     state = app.app_ctx.state
     state.profiles_open = True
     _press(app, pygame.K_ESCAPE)
     assert not state.profiles_open
-    assert state.mode == "2d"
+    assert state.mode == "create"
 
 
 def test_the_manual_closes_before_the_sheet_it_was_raised_over(no_mods):
     """Both up at once is an ordinary state: the manager's own (?) opens the
     Manual about it. The topmost surface is the one an Esc is about."""
-    app = _app("2d")
+    app = _app("create")
     state = app.app_ctx.state
     state.profiles_open = True
     _press(app, pygame.K_F1)
@@ -161,12 +161,12 @@ def test_the_manual_closes_before_the_sheet_it_was_raised_over(no_mods):
 def test_esc_still_leaves_a_mode_once_the_manual_is_closed(no_mods):
     app = _app("settings")
     state = app.app_ctx.state
-    state.previous_mode = "3d"
+    state.previous_mode = "create"
     _press(app, pygame.K_F1)
     _press(app, pygame.K_ESCAPE)
     assert state.mode == "settings"
     _press(app, pygame.K_ESCAPE)
-    assert state.mode == "3d"
+    assert state.mode == "create"
 
 
 def test_esc_falls_back_to_home_when_there_is_nowhere_to_go(no_mods):
@@ -182,7 +182,7 @@ def test_esc_falls_back_to_home_when_there_is_nowhere_to_go(no_mods):
 def test_esc_on_home_does_nothing(no_mods):
     """Home is the floor, not a place you escape from."""
     app = _app("home")
-    app.app_ctx.state.previous_mode = "3d"
+    app.app_ctx.state.previous_mode = "create"
     _press(app, pygame.K_ESCAPE)
     assert app.app_ctx.state.mode == "home"
 
@@ -191,21 +191,21 @@ def test_previous_mode_is_sampled_per_key_event_not_per_frame(no_mods):
     """F1 changes the mode from inside ``_shortcut``, so a sample taken once at
     the top of the frame would still hold the mode from before it and Esc would
     go two steps back."""
-    app = _app("2d")
+    app = _app("create")
     state = app.app_ctx.state
-    state.mode = "3d"  # a landing tile clicked since the last keypress
+    state.mode = "library"  # a Home row clicked since the last keypress
     _press(app, pygame.K_F1)
     _press(app, pygame.K_ESCAPE)
-    assert state.mode == "3d"
+    assert state.mode == "library"
 
 
 def test_esc_in_a_work_mode_is_still_the_pane_s(no_mods):
     """Esc means "drop what I am doing" in a mode that has something to drop --
     a comparison, a pose edit. It must not leave the mode as well."""
-    app = _app("3d")
+    app = _app("create")
     app.app_ctx.state.comparing = "job-1"
     _press(app, pygame.K_ESCAPE)
-    assert app.app_ctx.state.mode == "3d"
+    assert app.app_ctx.state.mode == "create"
     assert app.app_ctx.state.comparing is None
 
 
@@ -375,25 +375,28 @@ def test_the_library_arrows_move_the_selection(no_mods):
 
 def test_enter_opens_the_selected_asset_in_the_mode_that_shows_it(no_mods):
     """The same routing Home's Resume list applies to an asset row: a
-    reference or a tile is the 2D pane's, everything else the 3D pane's."""
+    reference or a tile opens at the Reference stage, everything else at
+    Mesh."""
     jobs = [
         {"id": "aaa", "stage": "reference", "status": "done"},
         {"id": "bbb", "stage": "model", "status": "done"},
     ]
     app = _library_app(jobs, selected="bbb")
     _press(app, pygame.K_RETURN)
-    assert app.app_ctx.state.mode == "3d"
+    assert app.app_ctx.state.mode == "create"
+    assert app.app_ctx.state.create_stage == "mesh"
     # Through set_mode, so Esc still knows it came from the library.
     assert app.app_ctx.state.previous_mode == "library"
 
     app = _library_app(jobs, selected="aaa")
     _press(app, pygame.K_RETURN)
-    assert app.app_ctx.state.mode == "2d"
+    assert app.app_ctx.state.mode == "create"
+    assert app.app_ctx.state.create_stage == "reference"
 
 
 def test_enter_with_no_selection_stays_in_the_library(no_mods):
     """Enter with no cursor has nothing it could mean, and bouncing to an
-    empty 3D pane would read as the library losing the user's place."""
+    empty Create pane would read as the library losing the user's place."""
     app = _library_app([], selected=None)
     _press(app, pygame.K_RETURN)
     assert app.app_ctx.state.mode == "library"
