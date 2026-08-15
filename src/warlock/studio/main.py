@@ -1439,7 +1439,7 @@ class App:
         Driven off the cache rather than off the click so a job that finishes
         while it is selected starts showing its mesh without another click.
         """
-        from . import modes
+        from . import create_stages, modes
 
         ctx = self.app_ctx
         if ctx.state.mode not in modes.VIEWPORT_MODES:
@@ -1459,9 +1459,9 @@ class App:
         job_dir = ctx.job_dir(job["id"])
         files = job.get("files") or []
         wanted = None
-        if ctx.state.mode == "3d" and "model.glb" in files:
+        if create_stages.at(ctx.state, "mesh") and "model.glb" in files:
             wanted = job_dir / "model.glb"
-        elif ctx.state.mode == "2d" and "input.png" in files:
+        elif create_stages.at(ctx.state, "reference") and "input.png" in files:
             wanted = job_dir / "input.png"
         if wanted is None or self.viewer.path == wanted or self.viewer.pending == wanted:
             return
@@ -2001,9 +2001,10 @@ class App:
         if docmodes.pose_undo_key(self.viewer, event):
             return
         if event.key == pygame.K_RETURN and mods & pygame.KMOD_CTRL:
+            from . import create_stages
             from .panes import settings_2d, settings_3d
 
-            if ctx.state.mode == "2d":
+            if create_stages.at(ctx.state, "reference"):
                 settings_2d.generate(ctx, ctx.state.form_2d)
             else:
                 settings_3d.promote(ctx, ctx.cache.get(ctx.state.source_job), ctx.state.form_3d)
@@ -2095,6 +2096,7 @@ class App:
         return tokens.SCALE
 
     def _on_drop(self, path: Path) -> None:
+        from . import create_stages
         from .panes import settings_3d
 
         ctx = self.app_ctx
@@ -2152,12 +2154,12 @@ class App:
             # accept the same file types.
             ctx.toast(
                 "Drop an image to condition this generation on it."
-                if ctx.state.mode == "2d"
+                if create_stages.at(ctx.state, "reference")
                 else "Drop an image to start a mesh from it.",
                 "error",
             )
             return
-        if ctx.state.mode == "2d":
+        if create_stages.at(ctx.state, "reference"):
             # In the 2D pane a dropped image is a *conditioning reference*, not
             # a mesh to build -- forcing the mode switch here would throw away
             # the prompt the user is composing. One branch, and it is what
@@ -2280,8 +2282,8 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
+        from . import create_stages, modes, rail, tokens
         from . import layout as layout_mod
-        from . import modes, rail, tokens
         from .panes import (
             app_settings,
             inspector,
@@ -2435,7 +2437,7 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
         if layout_mod.pane_child("settings", (sidebar_w, 0)):
-            if ctx.state.mode == "2d":
+            if create_stages.at(ctx.state, "reference"):
                 settings_2d.draw(ctx)
             else:
                 settings_3d.draw(ctx)
@@ -4107,6 +4109,7 @@ class App:
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
 
+        from . import create_stages
         from . import layout as layout_mod
         from .panes import overlay
 
@@ -4122,9 +4125,9 @@ class App:
             image_pos = imgui.get_cursor_screen_pos()
             avail = imgui.get_content_region_avail()
             height = max(avail.y, 64)
-            if ctx.state.mode == "3d" and self.viewer.has_model:
+            if create_stages.at(ctx.state, "mesh") and self.viewer.has_model:
                 self._draw_viewport_image(image_pos, width, height)
-            elif ctx.state.mode == "2d" and self.viewer.reference is not None:
+            elif create_stages.at(ctx.state, "reference") and self.viewer.reference is not None:
                 self._draw_reference(width, height)
             else:
                 overlay.placeholder(ctx)

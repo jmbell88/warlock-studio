@@ -145,16 +145,19 @@ def _go(key: str) -> Callable[[Any], None]:
 
 
 def _generate(ctx: Any) -> None:
+    from . import create_stages
     from .panes import settings_2d, settings_3d
 
-    if ctx.state.mode == "2d":
+    if create_stages.at(ctx.state, "reference"):
         settings_2d.generate(ctx, ctx.state.form_2d)
     else:
         settings_3d.promote(ctx, ctx.cache.get(ctx.state.source_job), ctx.state.form_3d)
 
 
 def _in_generate_mode(ctx: Any) -> bool:
-    return ctx.state.mode in ("2d", "3d")
+    from . import create_stages
+
+    return create_stages.in_create(ctx.state)
 
 
 def _viewport(ctx: Any) -> bool:

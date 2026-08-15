@@ -30,7 +30,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import changelog
-from .. import fonts, icons, modes, profiles, recents, theme, tokens, widgets
+from .. import create_stages, fonts, icons, modes, profiles, recents, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes, set_mode
 from ..tokens import sp
@@ -106,14 +106,14 @@ def _asset_rows(ctx: Any) -> list[Row]:
             continue
         name = str(job.get("name") or job.get("prompt") or job.get("id") or "asset")
         # The same reference/tile/model split the library filter uses: a job
-        # that stops at an image belongs to the pane that made it.
-        mode = "2d" if job.get("stage") in ("reference", "tile") else "3d"
+        # that stops at an image belongs to the stage that made it.
+        stage = create_stages.stage_for(job)
         when = job.get("created_at")
         out.append(
             Row(
                 kind="asset",
                 key=str(job.get("id") or ""),
-                icon=_MODE_ICONS.get(mode, icons.IMAGE),
+                icon=create_stages.ICONS.get(stage, icons.IMAGE),
                 name=name,
                 when=float(when) if isinstance(when, int | float) else None,
             )

@@ -18,7 +18,7 @@ from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from .. import fonts, theme, widgets
+from .. import create_stages, fonts, theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
@@ -50,7 +50,7 @@ REFERENCE_MAX_THUMBS = 3
 def draw(ctx: Any) -> None:
     from .. import icons
 
-    if ctx.state.mode == "3d":
+    if create_stages.at(ctx.state, "mesh"):
         # Above the header, and above the "select an asset" empty state, on
         # purpose: an undecided candidate group is a question being asked, and
         # its rows are hidden from the library -- so this is the only way back
@@ -81,7 +81,7 @@ def draw(ctx: Any) -> None:
     if job.get("status") == "error":
         _error(ctx, job)
 
-    if ctx.state.mode == "3d":
+    if create_stages.at(ctx.state, "mesh"):
         widgets.tab_bar(
             "inspector-tabs",
             [
@@ -169,7 +169,7 @@ def _details_tab(ctx: Any, job: Any) -> None:
     _pixel(ctx, job)
     sprite_panel.draw(ctx, job)
     _seam(ctx, job)
-    if ctx.state.mode == "3d":
+    if create_stages.at(ctx.state, "mesh"):
         _quality(ctx, job)
         _verdict(ctx, job)
 
@@ -458,7 +458,7 @@ def _meta(ctx: Any, job: Any) -> None:
     widgets.muted(f"{job['id']} - {job.get('kind')} - {job.get('stage')}")
     if job.get("created_at"):
         widgets.muted(str(job["created_at"]))
-    if ctx.viewer is not None and ctx.viewer.has_model and ctx.state.mode == "3d":
+    if ctx.viewer is not None and ctx.viewer.has_model and create_stages.at(ctx.state, "mesh"):
         stats = ctx.viewer.stats()
         if stats:
             size = stats["size"]

@@ -28,9 +28,9 @@ def offers_inker(ctx: Any, job: Any) -> bool:
     button edits. Two spellings of "is it 2D" is how that guarantee would rot
     back into two buttons; see ``inspector.offers_inker``.
     """
-    from .. import inker_mode
+    from .. import create_stages, inker_mode
 
-    return ctx.state.mode == "2d" and inker_mode.can_edit_job(ctx, job)
+    return create_stages.at(ctx.state, "reference") and inker_mode.can_edit_job(ctx, job)
 
 
 # How many times across and down the tiled preview repeats. Two: enough to put
@@ -47,8 +47,10 @@ def shows_tiled(ctx: Any, job: Any) -> bool:
     tile on screen in 2D" is how a toggle comes to be shown for something it
     does not affect -- or, worse, to affect something that does not show it.
     """
+    from .. import create_stages
+
     return (
-        ctx.state.mode == "2d"
+        create_stages.at(ctx.state, "reference")
         and bool(job)
         and job.get("stage") == "tile"
         and job.get("status") == "done"

@@ -165,6 +165,40 @@ def available(stage: str, job: Any, ctx: Any = None) -> str | None:
     return None
 
 
+def stage_for(job: Any) -> str:
+    """Which stage opens ``job``. -> a key of :data:`STAGES`.
+
+    The routing every "open this asset" surface applies -- Home's Resume list,
+    the library's Open, a card dropped on the window. One function because
+    there were four copies of ``"2d" if job["stage"] in ("reference", "tile")
+    else "3d"``, and four copies of a rule is four places for it to be wrong
+    about a tile.
+    """
+    return "reference" if _stage_of(job) in IMAGE_STAGES else "mesh"
+
+
+def in_create(state: Any) -> bool:
+    """Whether the app is in Create mode at all.
+
+    The indirection REDESIGN.md wave 5.2a exists for: every ``mode == "2d" or
+    mode == "3d"`` read in the panes asks this, and asking it through a
+    function is what lets 5.2b change the answer's *implementation* in one
+    place instead of hunting a string through nine files.
+    """
+    return state.mode in ("2d", "3d")
+
+
+def at(state: Any, stage: str) -> bool:
+    """Whether the user is standing at ``stage`` right now.
+
+    Reads the mode rather than ``state.create_stage`` at this step, and that is
+    deliberate: 5.2a is a pure refactor, so the *body* stays the old question
+    while the call sites become the new one. 5.2b swaps the body and nothing
+    above it moves.
+    """
+    return state.mode == _MODE_OF.get(stage)
+
+
 def go(ctx: Any, stage: str, *, select: str | None = None) -> None:
     """**The one stage switch.** Every path into Create mode comes through here.
 
