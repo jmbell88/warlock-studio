@@ -334,7 +334,9 @@ of the swing then has to be made twice.
 A tag can also **repeat** a fixed number of times. Set **repeat** in the tag's menu to 3 and the
 span plays three times and stops; leave it at 0 — the default, and what every document written
 before this carries — and the Loop tick decides as it always has. While a count is set the Loop
-tick is disabled, because the count is the more specific answer to the same question. When the
+tick is disabled, because the count is the more specific answer to the same question — a tag that
+was set to play *once* and is then given a count of three plays three times, and clearing the count
+back to 0 gives it its "once" back. When the
 count runs out playback **stops inside the tag**, on the frame the span ends at; it does not fall
 through into the frames after it, which is where Aseprite would carry on. A ping-pong counts one
 out-and-back as one play. Repeats are saved with the document and written into a sprite sheet's

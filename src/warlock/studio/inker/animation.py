@@ -619,16 +619,34 @@ def advance(
     have to survive between ticks.
 
     ``repeat`` of 0 means "the ``loop`` flag decides", which is the behaviour
-    this function had before the parameter existed. When a finite count runs
-    out the step is taken **again with ``loop`` forced off**, so the playhead
-    lands where a non-looping span would have left it -- at the end of a
-    forward pass rather than back at its start, which is the frame the user
-    expects to be looking at when a clip stops.
+    this function had before the parameter existed. A count above zero decides
+    instead -- the span wraps until the count runs out whatever the flag says --
+    and when it does run out the step is taken **again with ``loop`` forced
+    off**, so the playhead lands where a non-looping span would have left it:
+    at the end of a forward pass rather than back at its start, which is the
+    frame the user expects to be looking at when a clip stops.
     """
     start, end, loop = span
     if not durations or start > end:
         return index, 0.0, False, forward, cycles
+    # **A finite count overrides the flag.** ``loop_range`` hands back
+    # ``tag.loop`` verbatim, so a tag already set to "once" and then given a
+    # count of three would stop on its *first* wrap -- the flag deciding a
+    # question the count is the more specific answer to. The exhaustion path
+    # below re-steps with looping forced off, so the clip still stops on the
+    # span's last frame; what this restores is the three passes before it.
+    #
+    # The alternative -- writing ``loop`` True when a count is set -- was
+    # rejected: it destroys the flag the user chose, so clearing the count
+    # would silently leave a "once" tag looping forever.
+    if repeat > 0:
+        loop = True
     index = max(start, min(index, end))
+    if repeat > 0 and cycles >= repeat:
+        # Already played out. Only reachable when the count was *lowered* under
+        # a clip that had passed it; stepping on would play one whole extra
+        # pass before the check below noticed.
+        return index, 0.0, False, forward, cycles
     accum_ms += max(0.0, dt_ms)
     while accum_ms >= durations[index]:
         accum_ms -= durations[index]

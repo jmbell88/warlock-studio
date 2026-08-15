@@ -141,6 +141,36 @@ def test_a_range_filter_stamps_the_cels_it_wrote_and_not_the_rest():
     assert doc.layer_stamp(watched.uid) == stamps[2]
 
 
+def test_a_range_filter_commits_a_float_before_it_reads_the_cels():
+    """Clamp -> ``commit_floating`` -> mutate, the order every op here follows.
+    A floating buffer is pixels the user can see that no layer holds, so
+    filtering around it filters a picture that is not the one on screen -- and
+    the cel its commit conjures has to be in the target set, not missed by it.
+    """
+    from warlock.studio.inker.selection import FloatingBuffer
+
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 1, 1)  # frame 1 is empty
+    doc.set_current_frame(1)
+    plane = np.zeros((4, 4, 4), dtype=np.uint8)
+    plane[:] = GREY
+    doc.floating = FloatingBuffer(
+        pixels=plane,
+        mask=np.full((4, 4), 255, dtype=np.uint8),
+        offset=(0, 0),
+        layer_uid=doc.stack.active.uid,
+    )
+    doc.history.clear()
+
+    assert doc.filter_range("brightness / contrast", BRIGHTER, 0, 0, 0, 1)
+    assert doc.floating is None
+    landed = _cel(doc, 0, 1)
+    assert landed is not None
+    # Brightened, i.e. the cel the commit conjured was filtered with the rest
+    # rather than left as the only unfiltered frame in the range.
+    assert int(landed.pixels[0, 0, 0]) > GREY[0]
+
+
 def test_a_still_document_has_no_range_to_filter():
     doc = Document.blank(4, 4)
     _paint(doc)

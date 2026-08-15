@@ -16,6 +16,7 @@ import numpy as np
 
 from warlock.studio.inker._doc_ranges import clamp_span
 from warlock.studio.inker.document import Document
+from warlock.studio.inker.selection import FloatingBuffer
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
@@ -443,6 +444,63 @@ def test_copying_a_rect_off_the_grid_is_none_and_pasting_nothing_is_refused():
     doc = _clip(2)
     assert doc.copy_cels(0, 0, 9, 12) is None
     assert not doc.paste_cels(None, 0, 0)
+
+
+# --- the commit-first rule ---------------------------------------------------
+
+
+def _float_over(doc: Document) -> None:
+    """A floating buffer sitting over the current frame's active slot.
+
+    Built by hand rather than through ``paste``: what matters is only that a
+    commit is pending and that committing it will *autovivify* the cel under
+    it, which is exactly what a paste onto an empty frame does.
+    """
+    pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    pixels[:] = (0, 255, 0, 255)
+    doc.floating = FloatingBuffer(
+        pixels=pixels,
+        mask=np.full((2, 2), 255, dtype=np.uint8),
+        offset=(0, 0),
+        layer_uid=doc.stack.active.uid,
+    )
+
+
+def test_clearing_a_range_commits_a_float_before_it_reads_the_slots():
+    """Every op here is clamp -> commit_floating -> mutate, and this is the
+    order that matters: committing autovivifies the cel it lands in, so a slot
+    set read *first* misses it and leaves a cel behind in a cleared rect."""
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 1, 1)  # frame 1 is now empty
+    doc.set_current_frame(1)
+    _float_over(doc)
+
+    assert doc.clear_range(0, 0, 0, 1)
+    assert doc.floating is None
+    assert _cel(doc, 0, 0) is None
+    assert _cel(doc, 0, 1) is None
+
+
+def test_linking_a_range_commits_a_float_before_it_picks_the_earliest_cel():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 0, 0)  # frame 0 is now empty
+    doc.set_current_frame(0)
+    _float_over(doc)
+
+    assert doc.link_range(0, 0, 0, 1)
+    assert doc.floating is None
+    # The cel the commit conjured is the earliest occupied one, so it is the
+    # one shared across the span -- reading the slots first would have picked
+    # frame 1's instead and thrown the new pixels away.
+    assert _cel(doc, 0, 0) is _cel(doc, 0, 1)
+    assert int(_cel(doc, 0, 0).pixels[0, 0, 1]) == 255
+
+
+def test_setting_a_range_duration_commits_a_float_like_every_other_op():
+    doc = _clip(2)
+    _float_over(doc)
+    assert doc.set_range_duration(0, 1, 250)
+    assert doc.floating is None
 
 
 def test_a_still_document_refuses_every_range_op():

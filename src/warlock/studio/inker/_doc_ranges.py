@@ -362,6 +362,11 @@ class RangeOps:
         if anim is None or span is None:
             return False
         f0, f1 = span
+        # Nothing here can be *affected* by a floating buffer -- a duration is
+        # not pixels -- but the pattern is the pattern: every op in this module
+        # commits before it mutates, and one exception is how the next reader
+        # learns that some of them do not have to.
+        self.commit_floating()
         after = clamp_duration(ms)
         edits: list[Any] = []
         for frame in anim.frames[f0 : f1 + 1]:
@@ -396,6 +401,12 @@ class RangeOps:
         rect = self._range(t0, t1, f0, f1)
         if anim is None or rect is None:
             return False
+        # Committed *before* the slots are read, which is the order the whole
+        # module follows and the one that matters here: committing a floating
+        # buffer autovivifies the cel it lands in, so a set read first would
+        # miss a slot that became occupied a line later and leave a cel behind
+        # in the middle of a cleared rect.
+        self.commit_floating()
         occupied = [
             (track, frame, anim.cels[(track.uid, frame.uid)])
             for track, frame in self._slots_in(rect)
@@ -403,7 +414,6 @@ class RangeOps:
         ]
         if not occupied:
             return False
-        self.commit_floating()
         for track, frame, _layer in occupied:
             self._set_cel(track.uid, frame.uid, None)
         return self._push_range(
@@ -466,6 +476,11 @@ class RangeOps:
         rect = self._range(t0, t1, f0, f1)
         if anim is None or rect is None:
             return False
+        # Before the grid is read, as everywhere else here: a floating buffer
+        # committing into an empty slot inside the rect autovivifies a cel, and
+        # a "which slot holds the earliest drawing" answer taken beforehand
+        # would be one drawing out of date.
+        self.commit_floating()
         t0, t1, f0, f1 = rect
         frames = anim.frames[f0 : f1 + 1]
         changes: list[tuple[Any, Any, Any, Any]] = []
@@ -487,7 +502,6 @@ class RangeOps:
                 changes.append((track, frame, before, source))
         if not changes:
             return False
-        self.commit_floating()
         for track, frame, _before, after in changes:
             self._set_cel(track.uid, frame.uid, after)
         return self._push_range(self._cel_edits(changes))
@@ -504,9 +518,12 @@ class RangeOps:
         rect = self._range(t0, t1, f0, f1)
         if anim is None or rect is None:
             return False
-        # Which slots are shared is read before anything is written: unlinking
-        # the first slot of a two-slot link makes the second stop reporting as
-        # linked, and it still wants its own copy.
+        # The float goes down first, so a cel it just brought into existence is
+        # in the set below rather than missed by it.
+        self.commit_floating()
+        # Which slots are shared is then read before anything *this op* writes:
+        # unlinking the first slot of a two-slot link makes the second stop
+        # reporting as linked, and it still wants its own copy.
         shared = [
             (track, frame, anim.cels[(track.uid, frame.uid)])
             for track, frame in self._slots_in(rect)
@@ -514,7 +531,6 @@ class RangeOps:
         ]
         if not shared:
             return False
-        self.commit_floating()
         changes: list[tuple[Any, Any, Any, Any]] = []
         for track, frame, before in shared:
             copy = before.copy(name=before.name)
@@ -656,6 +672,11 @@ class RangeOps:
         rect = self._range(t0, t1, f0, f1)
         if anim is None or rect is None:
             return False
+        # Before the mask, the box and the cels are read: a floating buffer is
+        # pixels the user can see and no layer holds, so filtering around it
+        # would filter a picture that is not the one on screen -- and the cel
+        # its commit conjures has to be in the target set, not missed by it.
+        self.commit_floating()
         width, height = self.size
         bounds = self.mask.bounds if self.mask is not None else None
         box = self.clip(bounds or (0, 0, width, height))
@@ -673,7 +694,6 @@ class RangeOps:
             targets.append(cel)
         if not targets:
             return False
-        self.commit_floating()
         edits: list[Any] = []
         for layer in targets:
             before = layer.pixels[y0:y1, x0:x1].copy()

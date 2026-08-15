@@ -1491,6 +1491,45 @@ def test_a_ping_pong_played_once_stops_where_it_started():
     assert (index, playing, cycles) == (0, False, 1)
 
 
+def test_a_finite_repeat_overrides_a_tag_already_set_to_play_once():
+    """``loop_range`` hands back ``tag.loop`` verbatim, so a tag set to "once"
+    and *then* given a count of three used to stop on its first wrap -- the
+    flag deciding a question the count is the more specific answer to. Worse,
+    ``export_tag`` writes the count into the GIF, so the file played three
+    times while the editor played one."""
+    span = (0, 2, False)
+    index, forward, cycles = 0, True, 0
+    seen = []
+    for _ in range(12):
+        index, _accum, playing, forward, cycles = animation.advance(
+            [10] * 3, index, 0.0, 10.0, span, forward=forward, repeat=3, cycles=cycles
+        )
+        seen.append((index, playing, cycles))
+        if not playing:
+            break
+    assert seen[-1] == (2, False, 3)
+    assert len(seen) == 9  # three whole passes of three frames, not one
+
+
+def test_a_repeat_that_is_already_used_up_plays_no_further_pass():
+    """Only reachable when the count is *lowered* under a clip that has passed
+    it. Stepping on would play one whole extra pass before the wrap check
+    below noticed."""
+    index, _accum, playing, _forward, cycles = animation.advance(
+        [10] * 3, 1, 0.0, 10.0, (0, 2, True), repeat=2, cycles=5
+    )
+    assert (index, playing, cycles) == (1, False, 5)
+
+
+def test_clearing_a_repeat_gives_the_loop_flag_its_answer_back():
+    """The count *overrides* the flag rather than rewriting it, so a "once" tag
+    is still a "once" tag once the count is cleared."""
+    index, _accum, playing, _forward, _cycles = animation.advance(
+        [10] * 3, 2, 0.0, 10.0, (0, 2, False), repeat=0
+    )
+    assert (index, playing) == (2, False)
+
+
 def test_a_repeat_does_not_fall_through_past_its_span():
     """The documented divergence from Aseprite: a finite repeat stops inside
     the tag rather than carrying on into the frames after it."""
