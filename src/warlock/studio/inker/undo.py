@@ -61,6 +61,7 @@ __all__ = [
     "LayerMoveEdit",
     "LayerPropsEdit",
     "LayerRemoveEdit",
+    "PaletteEdit",
     "PatchEdit",
     "ReplayEdit",
     "SelectionEdit",
@@ -197,6 +198,55 @@ class LayerPropsEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         self._apply(doc, self.after)
+
+
+@dataclass
+class PaletteEdit(Edit):
+    """The document's colour *table*, before and after. A few dozen tuples.
+
+    The pixels a palette op rewrites are already covered by the ``ReplayEdit``
+    it is bundled with, and the table was covered by nothing at all: an undo put
+    the old colours back into a document still claiming the new palette, so the
+    very next stroke snapped them straight back to the table the user had just
+    undone. The two are one step because they are one act -- ``_doc_indexed``
+    pushes ``CompoundEdit([PaletteEdit, ReplayEdit])``, so the table is restored
+    after the pixels on the way back and assigned before them on the way
+    forward.
+
+    The list is copied on the way in and on the way out. It is the live
+    ``Document.palette`` object at both ends otherwise, and a later ``add_slot``
+    appending to it would edit the history's idea of what came before.
+    """
+
+    before: list[Any] | None
+    after: list[Any] | None
+
+    def __post_init__(self) -> None:
+        self.before = _copy_table(self.before)
+        self.after = _copy_table(self.after)
+        # Bytes, nominally: a 256-entry table of 4-tuples is a few kilobytes and
+        # the budget is in mebibytes, so this is bookkeeping rather than a
+        # figure eviction will ever act on. Counted anyway, because an edit that
+        # reports zero is one the budget cannot see at all.
+        self.cost = 16 * sum(len(t) for t in (self.before, self.after) if t)
+
+    def _apply(self, doc: Any, table: list[Any] | None) -> None:
+        doc.palette = _copy_table(table)
+        # The composite does not depend on the table, so there is nothing to
+        # recomposite -- but ``rev`` is what the palette pane's usage count is
+        # keyed on, and a count taken against the other table must not survive
+        # the swap looking current.
+        doc.rev += 1
+
+    def undo(self, doc: Any) -> None:
+        self._apply(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._apply(doc, self.after)
+
+
+def _copy_table(table: list[Any] | None) -> list[Any] | None:
+    return None if table is None else [tuple(colour) for colour in table]
 
 
 def _pack(mask: np.ndarray | None) -> tuple[bytes, tuple[int, int]] | None:

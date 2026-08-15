@@ -10,9 +10,10 @@ passes through.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import indexed as ix
+from .undo import CompoundEdit, PaletteEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import RGBA, Document
@@ -20,6 +21,27 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 class IndexedOps:
     """Palette state and palette edits, mixed into :class:`~.document.Document`."""
+
+    def _palette_step(self: Document, before: list[RGBA] | None, run: Any) -> None:
+        """Rewrite the pixels *and* record the table, as one undo step.
+
+        ``_replay`` records the pixels and pushes its own ``ReplayEdit``; the
+        table is not pixels and nothing else was putting it back. So the step it
+        pushed is taken straight back off (``drop`` -- it is reversed by nothing
+        and reversed by nobody, it has only just been made) and re-pushed inside
+        a compound with a :class:`~.undo.PaletteEdit` in front of it.
+
+        Every caller assigns ``self.palette`` *before* calling, for the reason
+        ``set_palette`` always did: ``run`` is the raw work and redo re-runs it,
+        so the table it snaps against has to be the document's by then.
+        """
+        after = self.palette
+        self._replay(run)
+        replayed = self.history.top
+        if replayed is None:  # pragma: no cover - the push was one line ago
+            return
+        self.history.drop()
+        self.history.push(CompoundEdit([PaletteEdit(before, after), replayed]))
 
     @property
     def is_indexed(self: Document) -> bool:
@@ -43,12 +65,17 @@ class IndexedOps:
         wanted = None if not colours else [tuple(c) for c in colours]
         if wanted == self.palette:
             return False
-        self.palette = wanted
+        before, self.palette = self.palette, wanted
         if wanted is None or not snap:
             self.rev += 1
             return True
         self.commit_floating()
-        self._replay(lambda: self._map_planes(lambda plane: ix.snap(plane, wanted)))
+        self._palette_step(
+            before,
+            lambda: self._map_planes(
+                lambda plane: ix.snap(plane, wanted), mask_fn=None
+            ),
+        )
         return True
 
     def add_slot(self: Document, colour: RGBA) -> bool:
@@ -80,8 +107,13 @@ class IndexedOps:
         table = [*self.palette]
         table[index] = new
         self.commit_floating()
-        self.palette = table
-        self._replay(lambda: self._map_planes(lambda plane: ix.remap(plane, old, new)))
+        before, self.palette = self.palette, table
+        self._palette_step(
+            before,
+            lambda: self._map_planes(
+                lambda plane: ix.remap(plane, old, new), mask_fn=None
+            ),
+        )
         return True
 
     def remove_slot(self: Document, index: int) -> bool:
@@ -99,9 +131,14 @@ class IndexedOps:
         gone = self.palette[index]
         table = [c for i, c in enumerate(self.palette) if i != index]
         self.commit_floating()
-        self.palette = table
+        before, self.palette = self.palette, table
         into = table[ix.nearest(gone, table)]
-        self._replay(lambda: self._map_planes(lambda plane: ix.remap(plane, gone, into)))
+        self._palette_step(
+            before,
+            lambda: self._map_planes(
+                lambda plane: ix.remap(plane, gone, into), mask_fn=None
+            ),
+        )
         return True
 
     def move_slot(self: Document, index: int, to: int) -> bool:

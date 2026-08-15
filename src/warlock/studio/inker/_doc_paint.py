@@ -438,6 +438,14 @@ class PaintOps:
         rgb = before[..., :3].astype(np.float32)
         out[..., :3] = rgb + (crop[..., :3] * 255.0 - rgb) * share[..., None]
         out[..., 3] = out_a * 255.0
+        if layer.alpha_lock:
+            # The one write in this class that was not honouring the lock.
+            # ``write_colour`` restores the channel after its formula and says
+            # why; a ramp is the same composite with the colour varying, so it
+            # is the same one line. Without it, "preserve transparency" held for
+            # every tool except the gradient, which filled the transparent part
+            # of the layer in.
+            out[..., 3] = before[..., 3]
         layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True

@@ -68,6 +68,12 @@ OPAQUE_WHITE: RGBA = (255, 255, 255, 255)
 #: other.
 FRAME_CACHE_BYTES = 128 * 1024 * 1024
 
+#: ``_map_planes``' default for ``mask_fn``: "whatever the pixels are getting".
+#: A sentinel rather than ``None`` because ``None`` is a meaningful answer there
+#: -- it is how a colour map says *leave the selection alone* -- and the two
+#: have to be tellable apart.
+_SAME_AS_PIXELS = object()
+
 __all__ = [
     "FRAME_CACHE_BYTES",
     "Document",
@@ -666,9 +672,26 @@ class Document(
             "current": anim.current,
         }
 
-    def _map_planes(self, fn: Any) -> None:
+    def _map_planes(self, fn: Any, *, mask_fn: Any = _SAME_AS_PIXELS) -> None:
+        """Apply *fn* to every distinct pixel plane, and *mask_fn* to the mask.
+
+        ``mask_fn`` defaults to ``fn`` because the first callers were geometry:
+        a rotate has to rotate the marquee with the pixels, or the selection
+        comes back describing a different part of the picture. A **colour** map
+        is the other kind of caller and passes ``mask_fn=None`` -- a palette is
+        a statement about colour, and a mask is 8-bit coverage with no colour
+        for it to say anything about.
+
+        Passing ``fn`` through unconditionally was a live bug rather than a
+        stylistic one: ``indexed.snap`` and ``indexed.remap`` both raise on a
+        2-D array, so ``set_palette``, ``recolour_slot`` and ``remove_slot``
+        every one of them refused outright -- out of the middle of the op, with
+        the table already assigned -- whenever a selection happened to be up.
+        """
         if self.mask is not None:
-            self.mask = SelectionMask(fn(self.mask.mask))
+            apply = fn if mask_fn is _SAME_AS_PIXELS else mask_fn
+            if apply is not None:
+                self.mask = SelectionMask(apply(self.mask.mask))
         anim = self.anim
         if anim is None:
             for layer in self.stack:
