@@ -21,26 +21,50 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class GeometryOps:
     """Canvas-level geometry, mixed into :class:`~.document.Document`."""
 
+    # Each ``run`` maps the *slices* first and the planes second, and the order
+    # is load-bearing rather than tidy: every slice mapper reads ``self.size``,
+    # which is the old canvas only until ``_map_planes`` rebuilds the stack. It
+    # holds on redo too, because redo replays this same closure over a document
+    # ``restore_snapshot`` has already put back.
+
     def flip(self: Document, axis: str) -> None:
         self.commit_floating()
-        self._replay(lambda: self._map_planes(lambda plane: tf.flip(plane, axis)))
+
+        def run() -> None:
+            self._slices_flip(axis)
+            self._map_planes(lambda plane: tf.flip(plane, axis))
+
+        self._replay(run)
 
     def rotate90(self: Document, quarters: int = 1) -> None:
         self.commit_floating()
-        self._replay(lambda: self._map_planes(lambda plane: tf.rotate90(plane, quarters)))
+
+        def run() -> None:
+            self._slices_rotate90(quarters)
+            self._map_planes(lambda plane: tf.rotate90(plane, quarters))
+
+        self._replay(run)
 
     def scale(self: Document, size: tuple[int, int], *, resample: str = "smooth") -> None:
         self.commit_floating()
-        self._replay(
-            lambda: self._map_planes(lambda plane: tf.scale(plane, size, resample=resample))
-        )
+
+        def run() -> None:
+            self._slices_scale(size)
+            self._map_planes(lambda plane: tf.scale(plane, size, resample=resample))
+
+        self._replay(run)
 
     def crop(self: Document, rect: tuple[int, int, int, int]) -> bool:
         box = self.clip(rect)
         if box is None:
             return False
         self.commit_floating()
-        self._replay(lambda: self._map_planes(lambda plane: tf.crop(plane, box)))
+
+        def run() -> None:
+            self._slices_offset((-box[0], -box[1]), (box[2] - box[0], box[3] - box[1]))
+            self._map_planes(lambda plane: tf.crop(plane, box))
+
+        self._replay(run)
         return True
 
     def crop_to_selection(self: Document) -> bool:
@@ -63,4 +87,10 @@ class GeometryOps:
         self.commit_floating()
         if offset is None:
             offset = tf.anchor_offset(self.size, size, anchor)
-        self._replay(lambda: self._map_planes(lambda plane: tf.resize_canvas(plane, size, offset)))
+        where = offset
+
+        def run() -> None:
+            self._slices_offset(where, size)
+            self._map_planes(lambda plane: tf.resize_canvas(plane, size, where))
+
+        self._replay(run)

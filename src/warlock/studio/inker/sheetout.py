@@ -37,6 +37,8 @@ __all__ = [
     "frame_uids",
     "from_document",
     "plan_frames",
+    "slices_block",
+    "slices_snapshot",
     "snapshot",
     "timing",
 ]
@@ -219,9 +221,88 @@ def build(
     return atlas, plan, trims
 
 
+def slices_snapshot(doc: Any) -> list[dict[str, Any]]:
+    """Each frame's slices, resolved and in canvas coordinates. Plain data.
+
+    ``Document.sprite_meta_for_frame`` does the resolving, which is the whole
+    point of it living there: keys, uids and the pivot-source rule are the
+    model's business, and what comes back here is dicts and tuples. Read on the
+    **frame thread**, with the frames -- it walks the document, and a task
+    thread doing that races the canvas.
+
+    A still document raises, like :func:`timing`: a sheet is an animation.
+    """
+    anim = getattr(doc, "anim", None)
+    if anim is None or not anim.frames:
+        raise ValueError("this document is not animated")
+    return [doc.sprite_meta_for_frame(frame.uid) for frame in anim.frames]
+
+
+def _rect_json(x: float, y: float, w: float, h: float) -> dict[str, Any]:
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def _slice_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """One slice in the sidecar's own spelling: ``{x, y, w, h}``, absolute.
+
+    Absolute -- source-image space, never relative to the slice's own origin --
+    because that is the one convention every consumer of this file already has,
+    and because it makes ``pixelsheet``'s rescale a single division rather than
+    a case per field. The model stores the pivot and the centre relative to the
+    bounds; ``sprite_meta_for_frame`` is the boundary that converts.
+
+    ``pivot`` and ``center`` are written as ``null`` when absent rather than
+    omitted, which is what ``trim`` beside them already does: a reader that
+    branches on presence and a reader that branches on null are two readers, and
+    this format has picked one.
+    """
+    center = entry.get("center")
+    pivot = entry.get("pivot")
+    return {
+        "name": entry.get("name", ""),
+        "bounds": _rect_json(
+            int(entry["x"]), int(entry["y"]), int(entry["w"]), int(entry["h"])
+        ),
+        "pivot": None if pivot is None else {"x": float(pivot[0]), "y": float(pivot[1])},
+        "center": (
+            None if center is None else _rect_json(*(int(v) for v in center))
+        ),
+    }
+
+
+def slices_block(
+    plan: sheetlib.Plan, snap: Sequence[dict[str, Any]]
+) -> dict[str, dict[int, Any]]:
+    """``{"pivots": ..., "slices": ...}``, both keyed by **cell index**.
+
+    ``cell.index`` and not ``cell.frame``: a directional sheet restarts
+    ``frame`` per row, so it is the row's own numbering, while ``index`` is the
+    timeline position in both branches of :func:`plan_frames` -- which is what
+    the snapshot is in order of.
+
+    Empty entries are left out rather than written as empties, so a document
+    with no slices contributes nothing at all and the sidecar is what it was.
+    """
+    pivots: dict[int, tuple[float, float]] = {}
+    blocks: dict[int, list[dict[str, Any]]] = {}
+    for cell in plan.cells:
+        if not 0 <= cell.index < len(snap):
+            continue
+        meta = snap[cell.index] or {}
+        pivot = meta.get("pivot")
+        if pivot is not None:
+            pivots[cell.index] = (float(pivot[0]), float(pivot[1]))
+        entries = [_slice_entry(entry) for entry in meta.get("slices") or ()]
+        if entries:
+            blocks[cell.index] = entries
+    return {"pivots": pivots, "slices": blocks}
+
+
 def snapshot(
     doc: Any,
-) -> tuple[list[np.ndarray], list[int], list[Any], DirectionalLayout | None]:
+) -> tuple[
+    list[np.ndarray], list[int], list[Any], DirectionalLayout | None, list[dict[str, Any]]
+]:
     """Everything an export needs, read off the document. **Frame thread only.**
 
     This is the whole of the export that touches the document, and it is split
@@ -250,7 +331,7 @@ def snapshot(
     """
     uids = frame_uids(doc)
     frames = [flatten_one(doc, uid) for uid in uids]
-    return (frames, *timing(doc))
+    return (frames, *timing(doc), slices_snapshot(doc))
 
 
 # The same read, one frame at a time. **Frame thread only**, for exactly the
@@ -310,22 +391,27 @@ def compose(
     durations_ms: Sequence[int],
     tags: Sequence[Any] = (),
     layout: DirectionalLayout | None = None,
+    slices: Sequence[dict[str, Any]] | None = None,
     *,
     name: str = "",
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread.
 
-    ``layout`` is positional rather than keyword-only so ``compose(*snapshot(
-    doc))`` still holds: the two are a pair, and a keyword-only fourth element
-    would have made that spelling drop the grid silently.
+    ``layout`` and ``slices`` are positional rather than keyword-only so
+    ``compose(*snapshot(doc))`` still holds: each is paired with the frames it
+    describes, and a keyword-only element would have made that spelling drop it
+    silently.
     """
     image, plan, trims = build(frames, durations_ms, tags, name=name, layout=layout)
+    block = slices_block(plan, slices or ())
     return (
         image,
         plan,
         {
             "trims": trims,
             "animation": animation_block(plan, durations_ms, tags, layout=layout),
+            "pivots": block["pivots"],
+            "slices": block["slices"],
         },
     )
 

@@ -65,6 +65,7 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Wand | `W` | Selects a region of similar colour. |
 | Move | `V` | Moves the floating selection. |
 | Pick | `I` | Samples a colour from the canvas. |
+| Slice | `C` | Names a rectangle on the canvas. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -363,6 +364,39 @@ it. See [From a single drawing](06-sprite-sheets.md#from-a-single-drawing).
 
 Moving the playhead is not an edit. It pushes no undo step and does not make the document unsaved —
 looking at another frame is looking, not drawing.
+
+## Slices
+
+The `C` **Slice** tool names a rectangle on the canvas. A slice carries no pixels — it is a note
+about the drawing that travels with it into an exported sprite sheet and into a Packwright atlas,
+where a game engine reads it.
+
+Drag on empty canvas to make one. Click a slice to select it, drag its middle to move it and drag a
+corner to resize it; each gesture is one `Ctrl+Z`. The tools panel lists what the document has and
+gives the selected one a name, two switches and a Delete.
+
+- **Pivot** is the point an engine places the sprite by — the one that stays put as a character
+  turns. Switch it on and it appears as a small crosshair you can drag. When a document has several
+  slices, the first one with a pivot is the one an exported sheet uses.
+- **Nine-slice** marks the stretchable middle of a panel: the four corners keep their own size and
+  the edges repeat, which is how a UI frame scales to any size. It draws as a dashed rectangle
+  inside the slice, with its own corner handles.
+
+On an animated document a slice is the same rectangle on every frame until you say otherwise.
+**Key this frame** gives the current frame its own rectangle, pivot and centre; every other frame
+goes on using the slice's own. Keys are always explicit — dragging a slice moves it everywhere,
+because a drag that silently keyed whichever frame you happened to be on is how a clip ends up with
+forty slightly different rectangles nobody meant.
+
+Slices survive everything the canvas does to them: a flip, a quarter turn, a scale, a crop and a
+canvas resize all carry them — and their pivots and centres — along, and undoing puts them back. A
+crop that misses a slice entirely leaves it as a single pixel rather than deleting it; its name and
+its settings are not something a crop should be able to throw away.
+
+They are saved in the `.ora`, in a member of their own. A file with no slices in it is written
+exactly as it always was, and an `.ora` from any other program opens here with none.
+
+**Show with other tools** keeps the overlay up while you paint; the slice tool turns it on for you.
 
 ## Saving
 

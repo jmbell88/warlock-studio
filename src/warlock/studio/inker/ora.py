@@ -39,6 +39,14 @@ is the XML being wrong about a document the JSON describes correctly, and
 throwing the grid away over it would lose the animation to fix the picture of
 it.
 
+A third member, ``warlock.json``, carries what this app knows about a document
+that ORA has nowhere for and that is not part of the grid -- today, its slices.
+It is written **only when there is something to write**, so an archive from a
+document with no slices is byte-for-byte what this writer produced before the
+member existed. It is separate from ``animation.json`` because slices live on
+still documents too, and because that member fails whole-grid on purpose while a
+malformed slice must never cost a document its timeline.
+
 The accepted cost, stated because it is not recoverable: an older build of this
 app opens an animated file (seeing frame 1) and saving it writes it back flat.
 That is inherent to forward compatibility with a format that has no version
@@ -86,6 +94,21 @@ ANIMATION_MEMBER = "animation.json"
 #: pull out of the zip. Alpha does not survive it and does not need to: a
 #: palette constrains colour and never opacity.
 PALETTE_MEMBER = "palette.gpl"
+
+#: Everything this app knows about a document that ORA has no place for and
+#: that is not part of the *grid*. Today that is slices; the version gate is
+#: here for the same reason ``animation.json`` has one and has stayed at 1 for
+#: the same reason -- every read below is ``.get``-based, so adding a key does
+#: not qualify.
+#:
+#: A member of its own rather than a key in ``animation.json``, and the two
+#: reasons are both about failure. Slices exist on a **still** document (a
+#: nine-slice button is one PNG), which has no ``animation.json`` at all; and
+#: ``animation.json`` fails whole-grid by design -- half a timeline is harder to
+#: notice than none of one -- where a slice going wrong must never cost the
+#: document its frames.
+WARLOCK_MEMBER = "warlock.json"
+WARLOCK_VERSION = 1
 
 # 1980-01-01, the earliest a zip can express, and the same constant the three
 # younger formats in this repo (``.wblk``, ``.wmap``, ``.wpack``) fix their
@@ -277,6 +300,85 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
+def _rect_json(rect) -> dict[str, int]:
+    """A rectangle as ``{x, y, w, h}``.
+
+    The sidecar's spelling, not this package's ``x0 y0 x1 y1``, and
+    deliberately: the ``.ora`` is a file other programs open, ``{x, y, w, h}``
+    is what every one of them already means by a rectangle, and the two
+    conversions live in this module's two functions rather than in a reader
+    somebody else writes.
+    """
+    x0, y0, x1, y1 = (int(v) for v in rect)
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
+def _rect_of(entry, key: str):
+    """``{x, y, w, h}`` back into exclusive bounds, or None when it is absent.
+
+    Raises for a rectangle that is present and malformed, which is what makes
+    the reader's "an entry failing on its own terms drops the member" rule
+    reachable: a missing key is a file written before the field, and a key
+    holding a string is a file that is wrong about itself.
+    """
+    raw = entry.get(key)
+    if raw is None:
+        return None
+    x, y = int(raw["x"]), int(raw["y"])
+    return (x, y, x + int(raw["w"]), y + int(raw["h"]))
+
+
+def _slice_json(entry, frames: dict[int, int]) -> dict:
+    """One slice, with only the fields it actually carries.
+
+    ``pivot``, ``center`` and ``keys`` are written **only when set**, which is
+    what keeps this member small and, more usefully, keeps a document whose
+    slices are plain rectangles producing the same bytes it did before pivots
+    existed.
+
+    Keys are stored by frame **index**, the ``cels`` precedent: a uid is minted
+    per process and means nothing in a file. A key whose frame has left the grid
+    is skipped rather than failing the save -- the same accepted leak
+    ``_placeholder_uids`` takes, and the alternative is refusing to write a
+    document over metadata for a frame that no longer exists.
+    """
+    out: dict = {"name": entry.name, "bounds": _rect_json(entry.bounds)}
+    if entry.pivot is not None:
+        out["pivot"] = {"x": float(entry.pivot[0]), "y": float(entry.pivot[1])}
+    if entry.center is not None:
+        out["center"] = _rect_json(entry.center)
+    keys = []
+    for frame_uid, key in entry.keys.items():
+        index = frames.get(frame_uid)
+        if index is None:
+            continue
+        record: dict = {"frame": index, "bounds": _rect_json(key.bounds)}
+        if key.pivot is not None:
+            record["pivot"] = {"x": float(key.pivot[0]), "y": float(key.pivot[1])}
+        if key.center is not None:
+            record["center"] = _rect_json(key.center)
+        keys.append(record)
+    if keys:
+        # Sorted, so two saves of an unchanged document are byte-identical
+        # however the dictionary happened to be built -- the same property
+        # ``_animation_json`` sorts its cels for.
+        keys.sort(key=lambda record: record["frame"])
+        out["keys"] = keys
+    return out
+
+
+def _warlock_json(doc) -> bytes:
+    anim = getattr(doc, "anim", None)
+    frames = (
+        {} if anim is None else {frame.uid: i for i, frame in enumerate(anim.frames)}
+    )
+    payload = {
+        "version": WARLOCK_VERSION,
+        "slices": [_slice_json(entry, frames) for entry in doc.slices],
+    }
+    return json.dumps(payload, indent=2).encode("utf-8")
+
+
 def _frame_flatten(doc, frame) -> np.ndarray:
     """Frame 1's pixels, whatever the playhead is on.
 
@@ -322,6 +424,12 @@ def write_ora(doc, path: Path) -> None:
             zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
         if getattr(doc, "palette", None):
             zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
+        # Only when there are slices. A document with none produces an archive
+        # byte-identical to the one this build wrote before the member existed,
+        # which is what the determinism suite pins and what makes this addition
+        # invisible to every reader that has never heard of it.
+        if getattr(doc, "slices", None):
+            zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
         zf.writestr(_member("mergedimage.png"), _png(merged))
         zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
     tmp.replace(path)
@@ -515,6 +623,86 @@ def _read_palette(zf) -> list | None:
         return None
 
 
+def _read_slices(zf: zipfile.ZipFile, anim: Animation | None) -> list:
+    """Rebuild ``doc.slices`` from ``warlock.json``, or answer with none.
+
+    All-or-nothing *within the member*, and never beyond it. A wrong version, a
+    payload that is not the shape it claims, or any single entry failing on its
+    own terms drops the whole member and the file opens as a drawing with no
+    slices on it -- which is what every ORA in the world already is. Half a
+    slice list is the outcome worth avoiding: a nine-slice panel missing its
+    centre still exports, silently, and stretches wrong in the game.
+
+    Keys are read by frame index and resolved against the grid. When there is no
+    grid -- either a still document or, more importantly, an
+    ``animation.json`` the reader has already rejected -- the keys are dropped
+    with a line in the log rather than guessed at: an index into a timeline that
+    was not restored names nothing.
+    """
+    from .slices import Slice, SliceKey
+
+    try:
+        raw = zf.read(WARLOCK_MEMBER)
+    except KeyError:
+        return []
+    frames = [] if anim is None else anim.frames
+    dropped = 0
+    try:
+        payload = json.loads(raw)
+        if int(payload.get("version", 0)) != WARLOCK_VERSION:
+            raise ValueError(f"{WARLOCK_MEMBER} version {payload.get('version')!r}")
+        out = []
+        for entry in payload.get("slices", []):
+            bounds = _rect_of(entry, "bounds")
+            if bounds is None:
+                raise ValueError("a slice with no bounds")
+            pivot = entry.get("pivot")
+            keys: dict[int, SliceKey] = {}
+            for record in entry.get("keys", []):
+                index = int(record["frame"])
+                if not 0 <= index < len(frames):
+                    dropped += 1
+                    continue
+                key_bounds = _rect_of(record, "bounds")
+                if key_bounds is None:
+                    raise ValueError("a slice key with no bounds")
+                key_pivot = record.get("pivot")
+                keys[frames[index].uid] = SliceKey(
+                    bounds=key_bounds,
+                    pivot=(
+                        None
+                        if key_pivot is None
+                        else (float(key_pivot["x"]), float(key_pivot["y"]))
+                    ),
+                    center=_rect_of(record, "center"),
+                )
+            out.append(
+                Slice(
+                    name=str(entry.get("name") or f"Slice {len(out) + 1}"),
+                    bounds=bounds,
+                    pivot=(
+                        None if pivot is None else (float(pivot["x"]), float(pivot["y"]))
+                    ),
+                    center=_rect_of(entry, "center"),
+                    keys=keys,
+                )
+            )
+    except (AttributeError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        # ``AttributeError`` as well as the four ``_read_animation`` catches:
+        # a ``"slices"`` that is a *string* iterates into characters, and the
+        # first ``.get`` on one is the shape check this member would otherwise
+        # be missing.
+        log.warning("ignoring %s in %s: %s", WARLOCK_MEMBER, getattr(zf, "filename", "?"), exc)
+        return []
+    if dropped:
+        log.warning(
+            "dropped %d slice key(s) in %s: no such frame",
+            dropped,
+            getattr(zf, "filename", "?"),
+        )
+    return out
+
+
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
@@ -531,6 +719,11 @@ def read_ora(path: Path, *, budget: int | None = None):
         # first PNG would be guessing for every later one too.
         palette = _read_palette(zf)
         anim = _read_animation(zf, (width, height)) if width and height else None
+        # After the grid, and outside its guard: the keys are stored by frame
+        # index, so they can only be resolved against the timeline that was
+        # actually restored -- and a grid that fell back to the flat read has no
+        # timeline to resolve them against.
+        found_slices = _read_slices(zf, anim)
         if anim is not None:
             stack = LayerStack(
                 anim.layers_for(anim.frames[0], (width, height)),
@@ -540,6 +733,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                 stack=stack,
                 history=UndoStack(UNDO_BYTES if budget is None else budget),
                 anim=anim,
+                slices=found_slices,
             )
             doc.matte = matte_for(doc.composite)
             doc.file_format = "ora"
@@ -584,6 +778,7 @@ def read_ora(path: Path, *, budget: int | None = None):
     doc = Document(
         stack=LayerStack(layers, len(layers) - 1),
         history=UndoStack(UNDO_BYTES if budget is None else budget),
+        slices=found_slices,
     )
     doc.matte = matte_for(doc.composite)
     doc.file_format = "ora"

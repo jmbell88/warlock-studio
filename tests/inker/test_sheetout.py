@@ -255,7 +255,7 @@ def test_a_snapshot_survives_the_document_recompositing_underneath_it():
     entries rather than writing into them, so a later flatten on the frame
     thread cannot rewrite a sheet that is halfway to disk."""
     doc = _animated()
-    frames, _durations, _tags, _layout = sheetout.snapshot(doc)
+    frames, _durations, _tags, _layout, _slices = sheetout.snapshot(doc)
     taken = [plane.copy() for plane in frames]
 
     doc.set_current_frame(1)

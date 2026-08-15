@@ -43,6 +43,7 @@ class HistoryOps:
         size: tuple[int, int],
         active: int,
         grid: dict[str, Any] | None = None,
+        slices: list[Any] | None = None,
     ) -> None:
         """Undo hook for a whole-canvas operation.
 
@@ -54,6 +55,12 @@ class HistoryOps:
         ``grid`` is the animated form of the same argument one level up. The
         copies are made once and shared back into the slots by index, so two
         frames that held one object hold one object again.
+
+        ``slices`` is the same idea for the document's named rectangles, and it
+        is copied here for the same reason the layers are: the step stays on the
+        stack and a later drag must not write into what it restores. None means
+        "this step predates slices", which is every step a still ``ReplayEdit``
+        constructed positionally still produces.
 
         A snapshot that carries a grid onto a document that is no longer
         animated is **refused**, not silently flattened. The two are unreachable
@@ -71,6 +78,8 @@ class HistoryOps:
                 f"one is {'still' if self.anim is None else 'animated'}"
             )
         copies = [layer.copy(uid=layer.uid) for layer in layers]
+        if slices is not None:
+            self.slices = [entry.copy() for entry in slices]
         width, height = size
         if grid is None:
             self.stack = LayerStack(copies, active)

@@ -36,8 +36,9 @@ class FakeDoc:
     def set_selection_mask(self, mask):
         self.selection = mask
 
-    def restore_snapshot(self, layers, size, active, grid=None):
+    def restore_snapshot(self, layers, size, active, grid=None, slices=None):
         self.stack = LayerStack(list(layers), active)
+        self.slices = [] if slices is None else [entry.copy() for entry in slices]
 
 
 def _doc(n=2, size=(8, 8)):

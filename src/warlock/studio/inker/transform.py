@@ -13,6 +13,9 @@ is confined to these few lines.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
+
 import numpy as np
 
 from . import composite
@@ -195,3 +198,150 @@ def resize_canvas(
             sy0 : sy0 + copy_h, sx0 : sx0 + copy_w
         ]
     return out
+
+
+# --- carrying a rectangle through the same geometry --------------------------
+#
+# A slice is metadata *about* the canvas rather than a plane on it, so every
+# whole-plane op above needs a partner that puts a rectangle through the
+# identical transform. They are separate functions rather than a mode on the
+# ones above because there is nothing here to resample: a flip and a quarter
+# turn are exact, and the one thing that can go wrong -- a rectangle left
+# describing pixels that have moved -- is invisible in the image and only shows
+# up in an export somebody else reads.
+#
+# What is here is a *point* mapper per operation plus one :func:`map_rect` that
+# carries a rectangle through any of them, which is the same argument
+# ``panes/inker_canvas._corners`` makes about drawing: mapping the two corners
+# and re-ordering them is right for all eight orientations, where mapping x and
+# y independently is right only at rotation 0.
+#
+# Bounds are ``x0 y0 x1 y1`` with the far edge **exclusive**, as everywhere else
+# in this package. That is what makes mirroring exact rather than off by one:
+# ``[x0, x1)`` reflects to ``[w - x1, w - x0)`` with no rounding anywhere.
+
+
+def flip_point(
+    point: tuple[float, float], size: tuple[int, int], axis: str
+) -> tuple[float, float]:
+    """One canvas point through :func:`flip`. Validated against ``FLIPS``, so a
+    third axis cannot be accepted here and refused there."""
+    if axis not in _FLIP_AXIS:
+        raise ValueError(f"unknown flip axis {axis!r}")
+    x, y = float(point[0]), float(point[1])
+    width, height = float(size[0]), float(size[1])
+    return (width - x, y) if axis == "horizontal" else (x, height - y)
+
+
+def rotate90_point(
+    point: tuple[float, float], size: tuple[int, int], quarters: int = 1
+) -> tuple[float, float]:
+    """One canvas point through :func:`rotate90`, i.e. ``np.rot90``.
+
+    ``np.rot90`` sends the element at ``(row y, column x)`` of a ``w`` wide
+    plane to ``(row w - 1 - x, column y)``. In the continuous coordinates a
+    rectangle's exclusive edge lives in, that is ``(x, y) -> (y, w - x)``, and
+    applying it ``quarters`` times -- swapping the size each turn -- is the
+    whole of the mapping.
+    """
+    x, y = float(point[0]), float(point[1])
+    width, height = float(size[0]), float(size[1])
+    for _ in range(int(quarters) % 4):
+        x, y, width, height = y, width - x, height, width
+    return (x, y)
+
+
+def rotate90_size(size: tuple[int, int], quarters: int = 1) -> tuple[int, int]:
+    """The canvas size after ``quarters`` turns. An odd number transposes it."""
+    width, height = int(size[0]), int(size[1])
+    return (height, width) if int(quarters) % 2 else (width, height)
+
+
+def scale_point(
+    point: tuple[float, float], old: tuple[int, int], new: tuple[int, int]
+) -> tuple[float, float]:
+    """One canvas point through :func:`scale`. A ratio, not a resample."""
+    ox, oy = max(1, int(old[0])), max(1, int(old[1]))
+    return (
+        float(point[0]) * float(max(1, int(new[0]))) / float(ox),
+        float(point[1]) * float(max(1, int(new[1]))) / float(oy),
+    )
+
+
+def offset_point(
+    point: tuple[float, float], offset: tuple[int, int]
+) -> tuple[float, float]:
+    """One canvas point through a crop or a canvas resize -- both are a
+    translation, and a crop's is the negated box origin."""
+    return (float(point[0]) + float(offset[0]), float(point[1]) + float(offset[1]))
+
+
+def rect_from_points(
+    a: tuple[float, float], b: tuple[float, float]
+) -> tuple[int, int, int, int]:
+    """Two mapped corners back into an ordered integer rectangle.
+
+    The origin floors and the far edge ceils, which is ``pixelsheet``'s trim
+    rule and for its reason: a rectangle that rounded inward would clip a pixel
+    off the thing it exists to describe. Ordering happens *before* rounding, or
+    an identical mapping rounds outward one way round and inward the other.
+    """
+    x0, x1 = sorted((float(a[0]), float(b[0])))
+    y0, y1 = sorted((float(a[1]), float(b[1])))
+    return (
+        int(math.floor(x0)),
+        int(math.floor(y0)),
+        int(math.ceil(x1)),
+        int(math.ceil(y1)),
+    )
+
+
+def clamp_rect(
+    rect: tuple[int, int, int, int], size: tuple[int, int]
+) -> tuple[int, int, int, int]:
+    """A rectangle brought inside the canvas, never emptied.
+
+    The floor is 1x1 rather than nothing, deliberately. A slice is a named
+    thing with an exported identity, and a crop that happened to miss it must
+    cost it its rectangle rather than its existence -- deleting it would take
+    the name, the pivot and the nine-slice centre with it, none of which can be
+    recovered by undoing the crop's *pixels*.
+    """
+    width, height = max(1, int(size[0])), max(1, int(size[1]))
+    x0, y0, x1, y1 = (int(v) for v in rect)
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if y1 < y0:
+        y0, y1 = y1, y0
+    x0 = max(0, min(x0, width - 1))
+    y0 = max(0, min(y0, height - 1))
+    x1 = max(x0 + 1, min(x1, width))
+    y1 = max(y0 + 1, min(y1, height))
+    return (x0, y0, x1, y1)
+
+
+def map_rect(
+    rect: tuple[int, int, int, int],
+    point: Callable[[float, float], tuple[float, float]],
+    box: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    """A rectangle through a point mapper: map both corners, order, round, clamp.
+
+    **One function rather than one per operation.** There were five -- a
+    ``flip_rect`` beside ``scale_rect`` beside ``offset_rect`` -- and each was
+    the same three lines with a different point mapper substituted, which is a
+    composition and not five behaviours. Worse, the caller that actually maps
+    slices takes the point mapper as an argument (it has to: the pivot and the
+    nine-slice centre go through the *same* mapper as the bounds, so a per-op
+    rect function could not have served it) and so spelled the composition
+    inline. That left the five as untested duplicates of the real path, which is
+    exactly the shape two spellings drift from.
+
+    ``box`` is what the result is clamped into, and it is a parameter rather
+    than derived because it is not always the canvas: a nine-slice centre is
+    clamped into *its own slice*, which is the same composition against a
+    different box.
+    """
+    a = point(float(rect[0]), float(rect[1]))
+    b = point(float(rect[2]), float(rect[3]))
+    return clamp_rect(rect_from_points(a, b), box)

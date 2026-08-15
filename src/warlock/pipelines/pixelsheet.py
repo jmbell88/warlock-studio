@@ -256,6 +256,19 @@ def pixel_sidecar(
     def scaled(value: Any) -> Any:
         return None if value is None else (float(value) / factor)
 
+    def reduced(rect: Any) -> dict[str, int] | None:
+        """A pixel rectangle at the smaller size. Floor the origin and ceil the
+        extent: a rectangle that rounded inward would clip a pixel off the thing
+        it exists to describe."""
+        if not rect:
+            return None
+        return {
+            "x": int(rect["x"]) // factor,
+            "y": int(rect["y"]) // factor,
+            "w": -(-int(rect["w"]) // factor),
+            "h": -(-int(rect["h"]) // factor),
+        }
+
     cells = []
     for cell in meta.get("cells") or []:
         entry = dict(cell)
@@ -264,20 +277,32 @@ def pixel_sidecar(
         entry["w"] = entry["h"] = int(logical_size)
         entry["pivot_x"] = scaled(cell.get("pivot_x"))
         entry["pivot_y"] = scaled(cell.get("pivot_y"))
-        trim = cell.get("trim")
-        entry["trim"] = (
-            None
-            if not trim
-            else {
-                # Floor the origin and ceil the extent: a trim rectangle that
-                # rounded inward would clip a pixel off the silhouette it
-                # exists to describe.
-                "x": int(trim["x"]) // factor,
-                "y": int(trim["y"]) // factor,
-                "w": -(-int(trim["w"]) // factor),
-                "h": -(-int(trim["h"]) // factor),
-            }
-        )
+        entry["trim"] = reduced(cell.get("trim"))
+        # The slice block, at the smaller size and by the same two rules.
+        # Present only when the render's own sidecar carried one, so a sheet
+        # with no slices produces a pixel sidecar with none -- rather than an
+        # empty list, which is a different statement.
+        block = cell.get("slices")
+        if block:
+            entry["slices"] = [
+                {
+                    "name": one.get("name", ""),
+                    "bounds": reduced(one.get("bounds")),
+                    # A pivot is a *point*, so it divides rather than rounding:
+                    # a nine-slice panel placed half a pixel out is visible, and
+                    # the sidecar has always carried ``pivot_x`` as a float.
+                    "pivot": (
+                        None
+                        if not one.get("pivot")
+                        else {
+                            "x": float(one["pivot"]["x"]) / factor,
+                            "y": float(one["pivot"]["y"]) / factor,
+                        }
+                    ),
+                    "center": reduced(one.get("center")),
+                }
+                for one in block
+            ]
         cells.append(entry)
     return {
         "version": PIXEL_SHEET_VERSION,

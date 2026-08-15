@@ -40,6 +40,7 @@ TOOL_ICONS = {
     "wand": icons.WAND,
     "move": icons.MOVE,
     "eyedropper": icons.PIPETTE,
+    "slice": icons.CROP,
 }
 
 # One entry per mode ``brush.SYMMETRY`` carries, and that is checked rather
@@ -195,6 +196,9 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             state.gradient_to_transparent = value
         _gradient_stops(state)
 
+    if tool == "slice":
+        _slices(ctx, state, tab)
+
     if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
         state.reset_tool_options(tool)
 
@@ -208,6 +212,109 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
     imgui.end_disabled()
+
+
+#: The pane's own ceiling on a slice name. A slice's name lands in a sprite
+#: sheet's sidecar and in a TexturePacker atlas, so it is a name other programs
+#: read -- ``packwright.document.MAX_NAME_LEN``'s reason, one editor over.
+MAX_SLICE_NAME = 64
+
+
+def _slices(ctx: Any, state: Any, tab: Any) -> None:
+    """The slice list and what can be done to the selected one.
+
+    A section in this panel rather than a pane of its own: slices are a *tool's*
+    subject, they are drawn on the canvas beside the drawing, and a fourth
+    sidebar would cost the canvas its width to hold a list that is usually two
+    rows long. It also means no new help anchor -- the chapter this rides is the
+    one about the toolbox.
+
+    The overlay checkbox sits *outside* the busy gate on purpose, for the same
+    reason the view-rotation buttons on the file row do: it changes nothing
+    about the document, and refusing to let the user look at their slices while
+    a file is being written would be an editor arguing with them.
+    """
+    doc = tab.doc
+    widgets.section("slices")
+    widgets.muted("Drag on the canvas to add one; drag a corner to resize.")
+    changed, value = imgui.checkbox("Show with other tools", state.show_slices)
+    if changed:
+        state.show_slices = value
+
+    imgui.begin_disabled(tab.busy)
+    if not doc.slices:
+        widgets.muted("No slices yet.")
+    for entry in list(doc.slices):
+        selected = entry.uid == state.slice_uid
+        # The uid in the id, not the index: two slices may share a name, and an
+        # index moves the moment one above it is deleted.
+        if imgui.selectable(f"{entry.name}##slice{entry.uid}", selected)[0]:
+            state.slice_uid = entry.uid
+    chosen = doc.slice_by_uid(state.slice_uid)
+    if chosen is not None:
+        _slice_options(ctx, state, tab, chosen)
+    imgui.end_disabled()
+
+
+def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
+    doc = tab.doc
+    imgui.set_next_item_width(sp(140))
+    # Committed when the field is let go of, not on every keystroke -- the same
+    # rule the layer opacity slider beside it follows, and for the same reason:
+    # typing "hitbox" is one rename, not six undo steps.
+    _changed, name = imgui.input_text(f"Name##slice{entry.uid}", entry.name)
+    if imgui.is_item_deactivated_after_edit() and name.strip():
+        doc.set_slice(entry.uid, name=name.strip()[:MAX_SLICE_NAME])
+
+    frame_uid = tab.frame_uid
+    key = entry.at(frame_uid)
+    x0, y0, x1, y1 = key.bounds
+    widgets.muted(f"{x0}, {y0}  {x1 - x0} x {y1 - y0}")
+
+    changed, value = imgui.checkbox(f"Pivot##slice{entry.uid}", key.pivot is not None)
+    if changed:
+        # The centre of the slice when it is switched on, which is a defensible
+        # answer a user can then drag -- rather than the origin, which looks
+        # like the feature did nothing.
+        doc.set_slice(
+            entry.uid,
+            pivot=None if not value else ((x1 - x0) / 2.0, float(y1 - y0)),
+        )
+    widgets.help_marker(
+        "Where an engine places this sprite -- the point that stays put as the "
+        "character turns. The first slice with one decides the sheet's pivot."
+    )
+
+    changed, value = imgui.checkbox(f"Nine-slice##slice{entry.uid}", key.center is not None)
+    if changed:
+        # A third in from each edge: the conventional starting nine-patch, and
+        # the one shape that is obviously editable rather than degenerate.
+        doc.set_slice(
+            entry.uid,
+            center=None
+            if not value
+            else (
+                max(1, (x1 - x0) // 3),
+                max(1, (y1 - y0) // 3),
+                max(2, (x1 - x0) - (x1 - x0) // 3),
+                max(2, (y1 - y0) - (y1 - y0) // 3),
+            ),
+        )
+    widgets.help_marker(
+        "The stretchable middle of a panel. The four corners stay their own "
+        "size and the edges repeat, which is how a UI frame scales."
+    )
+
+    if frame_uid is not None:
+        keyed = frame_uid in entry.keys
+        if imgui.button("Unkey this frame" if keyed else "Key this frame", (-1, 0)):
+            doc.set_slice_key(entry.uid, frame_uid, clear=keyed)
+        widgets.help_marker(
+            "Keys are always explicit. Dragging a slice moves it on every "
+            "frame; a key is how one frame is allowed to differ."
+        )
+    if imgui.button(f"Delete##slice{entry.uid}", (-1, 0)):
+        doc.remove_slice(entry.uid)
 
 
 def _gradient_stops(state: Any) -> None:

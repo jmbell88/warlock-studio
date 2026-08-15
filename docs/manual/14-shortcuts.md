@@ -180,6 +180,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `W` | Wand |
 | `V` | Move |
 | `I` | Pick a colour from the canvas |
+| `C` | Slice |
 | `X` | Swap the two colours |
 | `[` / `]` | Brush size (with Shift, hardness) |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |

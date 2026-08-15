@@ -48,6 +48,7 @@ TOOLS = (
     ("wand", "Wand", "W"),
     ("move", "Move", "V"),
     ("eyedropper", "Pick", "I"),
+    ("slice", "Slice", "C"),
 )
 
 # Tools whose drag paints into the layer.
@@ -374,6 +375,18 @@ class InkerDoc:
         return self.doc.history.head != self.saved_head
 
     @property
+    def frame_uid(self) -> int | None:
+        """The frame the playhead is on, or None on a still document.
+
+        Here rather than in either pane because two of them ask -- the canvas
+        resolves a slice's per-frame key to draw it and the tools panel resolves
+        the same one to describe it -- and two spellings of "which frame is the
+        user looking at" is one of them being wrong during playback.
+        """
+        anim = self.doc.anim
+        return None if anim is None or not anim.frames else anim.frame.uid
+
+    @property
     def linked(self) -> bool:
         return bool(self.job_id)
 
@@ -497,6 +510,30 @@ class InkerState:
     swatches: list[tuple[int, int, int, int]] = field(
         default_factory=lambda: list(DEFAULT_SWATCHES)
     )
+
+    # -- slices, all of it view state --------------------------------------
+    #
+    # The slices themselves live on the *document* (``Document.slices``): they
+    # are saved with the file and read by an export. What is here is which one
+    # the user has selected and whether the overlay is on, neither of which is
+    # picture data and neither of which may push an undo step.
+    #
+    # ``slice_uid`` is 0 for "none", and a stale one is tolerated rather than
+    # policed: an undone add leaves the selection naming a slice that is not in
+    # the document, every reader of it is a ``slice_by_uid`` that answers None,
+    # and hunting the value down on every history move would be a second place
+    # for the selection to be wrong.
+    slice_uid: int = 0
+    #: Whether the overlay draws while another tool is in hand. The slice tool
+    #: forces it on -- see ``inker_canvas.slices_visible`` -- so this is only
+    #: ever the answer to "keep showing them while I paint".
+    show_slices: bool = False
+    #: ``(properties at the press, which handle)`` for the drag in flight.
+    #: The properties are what ``set_slice(was=...)`` records as the "before":
+    #: the drag mutates the live slice every frame so the overlay follows the
+    #: cursor, and reading the before at *release* would undo the gesture to
+    #: itself.
+    slice_drag: Any = None
 
     # -- indexed colour, all of it view state ------------------------------
     #
@@ -649,6 +686,7 @@ class InkerState:
         self.last_point = None
         self.lasso = []
         self.transform_ref = None
+        self.slice_drag = None
 
     # -- colours ------------------------------------------------------------
 
