@@ -15,6 +15,7 @@ from imgui_bundle import imgui
 from .. import inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
+from . import inker_bridge
 
 # One swatch, in *design* pixels -- see ``_swatches``.
 SWATCH = 20.0
@@ -74,6 +75,14 @@ def draw(ctx: Any) -> None:
     _palette_files(ctx, state)
     imgui.dummy((0, 6))
     _indexed(ctx, state)
+    # Unconditionally, and at *this* level rather than inside ``_indexed``: a
+    # popup is matched by an id computed off the id stack that opened it, which
+    # is this one, and a conversion session's only per-frame hook is this call.
+    # ``_indexed`` returns early when there is no active tab -- and "there is no
+    # active tab any more" is one of the ways a session gets stranded, so it has
+    # to be a frame this still runs on. It takes the tab or None and settles the
+    # session against whichever document actually owns it.
+    inker_bridge.convert_popup(ctx, inker_mode.active(ctx))
 
 
 # --- indexed colour ---------------------------------------------------------
@@ -117,14 +126,23 @@ def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
         reason="The swatch row above is empty.",
     ):
         inker_mode.index_to(ctx, tab, list(state.swatches))
-    if imgui.button("Index to a .gpl..."):
+    if imgui.button("Index to a palette file..."):
         inker_mode.import_document_palette(ctx)
+    if imgui.button("Palette from an image..."):
+        inker_mode.palette_from_image(ctx)
+    if imgui.button("Convert..."):
+        inker_bridge.open_convert(ctx, tab)
+    widgets.help_marker(
+        "Convert builds a palette out of this drawing's own colours and shows "
+        "the result before you commit to it -- including the dither, which is "
+        "the setting nobody can predict on their own picture."
+    )
 
 
 def _slots(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
     palette = list(doc.palette)
-    state.palette_slot = max(0, min(state.palette_slot, len(palette) - 1))
+    state.clamp_slots(len(palette))
     counts = _usage(state, doc, len(palette))
 
     avail = imgui.get_content_region_avail().x
@@ -133,24 +151,31 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     per_row = max(1, int((avail + gap) // (side + gap)))
     for index, colour in enumerate(palette):
         imgui.push_id(f"slot{index}")
+        # The anchor is outlined in the accent and the rest of a multi-slot
+        # selection in the text colour: two of these are routinely the same
+        # colour at a glance, and the single-slot controls below act on the
+        # anchor alone while Sort and Ramp act on the whole selection.
         chosen = index == state.palette_slot
-        if chosen:
-            # The selected slot is outlined rather than merely remembered: two
-            # of these are routinely the same colour at a glance, and every
-            # button below acts on this one.
-            imgui.push_style_color(imgui.Col_.border.value, imgui.ImVec4(*theme.rgba(theme.ACCENT)))
+        member = index in state.palette_slots and not chosen
+        if chosen or member:
+            tint = theme.ACCENT if chosen else theme.TEXT
+            imgui.push_style_color(imgui.Col_.border.value, imgui.ImVec4(*theme.rgba(tint)))
             imgui.push_style_var(imgui.StyleVar_.frame_border_size.value, sp(2.0))
         if imgui.color_button("##slot", _vec(colour), 0, (side, side)):
-            state.palette_slot = index
-            # Painting with it as well as selecting it: the reason to click a
-            # palette slot is almost always to use it.
-            state.fg = colour
-        if chosen:
+            io = imgui.get_io()
+            state.select_slot(index, ctrl=io.key_ctrl, shift=io.key_shift)
+            if not (io.key_ctrl or io.key_shift):
+                # Painting with it as well as selecting it: the reason to click
+                # a palette slot is almost always to use it. Only on a plain
+                # click -- a Ctrl+click that *deselects* a slot must not leave
+                # the brush loaded with it.
+                state.fg = colour
+        if chosen or member:
             imgui.pop_style_var()
             imgui.pop_style_color()
         if imgui.is_item_hovered():
             used = "" if counts is None else f"  -  {counts[index]} px"
-            imgui.set_tooltip(f"{colour}{used}")
+            imgui.set_tooltip(f"{colour}{used}\nCtrl-click to add, Shift-click for a range")
         imgui.pop_id()
         if index % per_row != per_row - 1:
             imgui.same_line()
@@ -181,14 +206,84 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     imgui.same_line()
     widgets.muted(f"{slot + 1} of {len(palette)}")
 
+    _sort_and_ramp(ctx, state, doc, counts)
+
     if imgui.small_button("Count usage"):
         state.palette_usage = (doc.rev, doc.palette_usage())
     imgui.same_line()
-    if imgui.small_button("Export .gpl"):
+    if imgui.small_button("Export palette"):
         inker_mode.export_document_palette(ctx)
     imgui.same_line()
     if imgui.small_button("Not indexed"):
         inker_mode.index_to(ctx, tab, None)
+    if imgui.small_button("Re-convert..."):
+        inker_bridge.open_convert(ctx, tab)
+    imgui.same_line()
+    widgets.muted("try a dither")
+
+
+#: The sort keys, labelled. Two-way against ``inker.PALETTE_SORT_KEYS``: a key
+#: the pane offers and the engine does not fails on the first click, and one the
+#: engine has and the pane does not is a feature nobody can reach.
+SORT_LABELS: tuple[tuple[str, str], ...] = (
+    ("hue", "Hue"),
+    ("saturation", "Saturation"),
+    ("luma", "Brightness"),
+    ("red", "Red"),
+    ("green", "Green"),
+    ("blue", "Blue"),
+    ("alpha", "Alpha"),
+    ("usage", "Usage"),
+)
+
+
+def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> None:
+    """Reorder the table, and fill the gap between two slots.
+
+    Neither pushes an undo step and neither moves a pixel -- order is
+    presentation in an indexed document, and a new swatch is a colour you *may*
+    paint with. The engine states the rule; this is only where it is reached.
+    """
+    selection = list(state.palette_slots)
+    widgets.field_label("sort")
+    state.palette_sort = widgets.combo(
+        "##palsort", state.palette_sort, list(SORT_LABELS), sp(110)
+    )
+    imgui.same_line()
+    if imgui.small_button("Sort"):
+        if state.palette_sort == "usage" and counts is None:
+            # Counting is a walk over every pixel of every cel, so it is asked
+            # for rather than kept live -- and a sort by a figure nobody has
+            # taken yet has to take it, once, rather than sort by zeros.
+            counts = doc.palette_usage()
+            state.palette_usage = (doc.rev, counts)
+        if doc.sort_palette(
+            state.palette_sort,
+            indices=selection or None,
+            counts=counts,
+            descending=state.palette_sort_desc,
+        ):
+            state.palette_usage = None
+    imgui.same_line()
+    changed, value = imgui.checkbox("Down##palsortdir", state.palette_sort_desc)
+    if changed:
+        state.palette_sort_desc = value
+    if selection:
+        widgets.muted(f"{len(selection)} slot(s) selected; sorting them in place")
+
+    widgets.field_label("ramp")
+    imgui.set_next_item_width(sp(70))
+    changed, value = imgui.slider_int("##palramp", int(state.palette_ramp), 1, 16)
+    if changed:
+        state.palette_ramp = int(value)
+    imgui.same_line()
+    if widgets.disabled_button(
+        "Insert",
+        len(selection) >= 2,
+        reason="Ctrl-click or Shift-click two slots to ramp between them.",
+        tooltip="Interpolated colours between the two, inserted between them.",
+    ) and not doc.insert_ramp(min(selection), max(selection), state.palette_ramp):
+        ctx.toast("That ramp is already in the palette.")
 
 
 def _usage(state: Any, doc: Any, slots: int) -> list[int] | None:
@@ -217,15 +312,16 @@ def _palette_files(ctx: Any, state: Any) -> None:
     save in this app is -- serialising after an unbounded modal would write
     whatever the user changed while it was open.
     """
-    if imgui.small_button("Import .gpl"):
+    if imgui.small_button("Import palette"):
         inker_mode.import_palette(ctx)
     imgui.same_line()
-    if widgets.disabled_button("Export .gpl", bool(state.swatches)):
+    if widgets.disabled_button("Export palette", bool(state.swatches)):
         inker_mode.export_palette(ctx)
     widgets.help_marker(
-        "The GIMP palette format, which Krita, Aseprite and Inkscape all read. "
-        "It has no alpha channel, so exported swatches are written opaque. An "
-        "import adds to the row rather than replacing it."
+        "GIMP .gpl, which Krita, Aseprite and Inkscape all read, or JASC .pal. "
+        "The format follows the suffix you save under; neither has an alpha "
+        "channel, so exported swatches are written opaque. An import adds to "
+        "the row rather than replacing it."
     )
 
 

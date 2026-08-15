@@ -120,6 +120,10 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # Dabs a second, for the spray tool. A rate rather than a per-frame count,
     # so a spray lays down the same cloud on a slow machine as on a fast one.
     "spray_rate": 90,
+    # ``"none"`` or one of ``dither.ORDERED``. Per tool like everything else
+    # here, and defaulted off because a dithered gradient is a pixel-art
+    # decision rather than a better gradient -- on a photograph it is noise.
+    "gradient_dither": "none",
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -626,6 +630,41 @@ class InkerState:
     # so doing it per frame would cost a 40-frame clip's worth of scanning
     # sixty times a second to keep a number that changes on one dab.
     palette_usage: tuple[int, list[int]] | None = None
+    #: The slots the user has selected, in the order they picked them, with
+    #: ``palette_slot`` as the anchor a Shift+click ranges from. A *list* rather
+    #: than a set: "sort these five" and "ramp from this one to that one" are
+    #: both about the order, and a set would have to invent one.
+    palette_slots: list[int] = field(default_factory=list)
+    #: The sort the palette panel would apply, and its direction, and how many
+    #: colours "Insert ramp" would put between two slots. Remembered across
+    #: documents like every other tool setting, and persisted like none of them:
+    #: they describe a gesture, not a file.
+    palette_sort: str = "luma"
+    palette_sort_desc: bool = False
+    palette_ramp: int = 3
+    #: The open conversion session: **which tab owns it**, which method it is
+    #: previewing, how many colours a built table may have, and the table
+    #: itself. View state, none of it persisted -- the *document* keeps the
+    #: table a conversion produces, and this is only what is being tried.
+    #:
+    #: ``convert_uid`` is a tab uid and not a bool, and that is the whole of the
+    #: difference between this and the filter popup it was cloned from. A
+    #: conversion session lives on one ``Document`` (``Document._convert``) while
+    #: this state is one object shared by every tab, and the pane draws whichever
+    #: tab is *active* -- so a plain "the popup is up" flag meant that switching
+    #: tabs with it open cancelled the conversion on the wrong document and left
+    #: the right one holding a preview nobody would ever answer. Holding the uid
+    #: makes both halves address the same document by name; see
+    #: ``inker_mode.end_convert_session``. Empty means no session.
+    convert_uid: str = ""
+    convert_method: str = "nearest"
+    convert_max: int = 16
+    #: ``convert_table`` is held rather than recomputed per frame because
+    #: building one is a pass over every plane of the document, and because the
+    #: preview moves ``doc.rev`` every frame -- so there is no cache key made of
+    #: document state that would not thrash. It is rebuilt when the slider that
+    #: decides it moves, and at no other time.
+    convert_table: list[tuple[int, int, int, int]] = field(default_factory=list)
 
     # Drag state, decided on press because several tools start the same way.
     drag_kind: str = ""  # "" | paint | spray | shape | marquee | lasso | move |
@@ -738,6 +777,7 @@ class InkerState:
     pixel_perfect = _tool_option("pixel_perfect")
     paint_ink = _tool_option("paint_ink")
     spray_rate = _tool_option("spray_rate")
+    gradient_dither = _tool_option("gradient_dither")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.
@@ -844,6 +884,61 @@ class InkerState:
             return
         self.swatches.append(colour)
         del self.swatches[:-MAX_SWATCHES]
+
+    # -- palette slots ------------------------------------------------------
+
+    def select_slot(self, index: int, *, ctrl: bool = False, shift: bool = False) -> None:
+        """Click, Ctrl+click and Shift+click on a palette slot, in one place.
+
+        The three-way gesture every list in every editor uses, and it lives on
+        the state rather than in the pane so it can be asserted without a
+        window. ``palette_slot`` stays the **anchor** throughout -- it is what a
+        Shift+click ranges from, and what every single-slot control (the Slot
+        picker, Remove, the reorder arrows) acts on -- and ``palette_slots``
+        carries the selection.
+
+        Ctrl+click toggling the anchor's own slot leaves the anchor where it is:
+        the anchor is not a member of the selection, it is where the next range
+        starts, and moving it on a *deselect* would make the next Shift+click
+        range from a slot the user had just taken out.
+        """
+        index = max(0, int(index))
+        if shift:
+            # Anchored on ``palette_slot`` and *replacing* the selection, not
+            # adding to it: a range is a statement about two endpoints, and the
+            # editors that add instead make a stray Shift+click impossible to
+            # take back without starting over.
+            low, high = sorted((self.palette_slot, index))
+            self.palette_slots = list(range(low, high + 1))
+        elif ctrl:
+            if index in self.palette_slots:
+                self.palette_slots.remove(index)
+            else:
+                self.palette_slots.append(index)
+                self.palette_slot = index
+        else:
+            self.palette_slots = [index]
+            self.palette_slot = index
+
+    def clamp_slots(self, count: int) -> None:
+        """Drop selected slots the palette no longer has.
+
+        Called wherever the table is drawn, because every op that shortens it --
+        Remove, an undo, a whole reconversion -- can leave a selection pointing
+        past the end, and every consumer of ``palette_slots`` indexes with it.
+        """
+        self.palette_slot = max(0, min(self.palette_slot, count - 1))
+        self.palette_slots = [i for i in self.palette_slots if 0 <= i < count]
+
+    @property
+    def selected_slots(self) -> list[int]:
+        """The selection, or the anchor alone when there is none.
+
+        What every multi-slot op takes, so "sort" with nothing selected sorts
+        the whole table rather than one slot -- see the call sites, which pass
+        ``None`` for that case; this is for the ops that need at least one.
+        """
+        return list(self.palette_slots) if self.palette_slots else [self.palette_slot]
 
 
 

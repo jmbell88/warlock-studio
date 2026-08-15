@@ -465,6 +465,55 @@ def _cut_matte(svc: Any, job_id: str, doc: Any) -> bool:
 # --- saving -----------------------------------------------------------------
 
 
+def end_convert_session(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Close an open palette-conversion preview, on the document that owns it.
+
+    **Resolved by uid, never through ``active``.** The session lives on one
+    ``Document``; ``InkerState`` is one object shared by every tab; and the
+    palette pane draws whichever tab is in front. Reaching for ``active`` here
+    is exactly how a tab switch came to cancel the conversion on the wrong
+    document -- restoring planes that were never previewed while the previewed
+    ones kept a dither nobody had approved, with no hook left to take it back.
+
+    With *tab*, this is "settle **this** document if the session is its own",
+    and another tab's session is left alone. Without one, it is "settle whatever
+    is open", which is what a pane that has stopped drawing the popup needs.
+
+    A uid that names no tab any more -- it was closed under the popup -- clears
+    the flag and ends nothing: the document went with it.
+    """
+    state = ctx.state.inker
+    if state is None or not state.convert_uid:
+        return
+    owner = state.get(state.convert_uid)
+    if tab is not None and owner is not None and owner.uid != tab.uid:
+        return
+    if owner is not None:
+        owner.doc.end_convert()
+    state.convert_uid = ""
+
+
+def _settle(ctx: Any, tab: InkerDoc) -> None:
+    """Fold what the canvas is showing into what the document is holding.
+
+    At the top of every save and every export, and it is two calls rather than
+    one because there are two transient states a serialise could catch -- and
+    they are opposite mistakes.
+
+    A **floating buffer** lives in no layer, so the encoders would omit pixels
+    the user can see, and ``mark_saved`` would then call the document clean:
+    which is how a paste came to be discarded with no prompt. It is *committed*.
+
+    A **conversion preview** is the other way round: the planes are already
+    carrying pixels the user has not said yes to, so the file would hold a
+    dither nobody asked for and the tab would go clean against it. It is
+    *cancelled*, for ``end_filter``'s reason -- an unanswered question is not a
+    yes.
+    """
+    end_convert_session(ctx, tab)
+    tab.doc.commit_floating()
+
+
 def save(ctx: Any, tab: InkerDoc | None = None) -> None:
     """Ctrl+S. Save As when the document has never been written anywhere."""
     tab = tab or active(ctx)
@@ -484,7 +533,7 @@ def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab is None or tab.saving:
         return
     doc = tab.doc
-    doc.commit_floating()  # before the head is read; see _save_linked
+    _settle(ctx, tab)  # before the head is read; see _save_linked
     rev = doc.history.head
     suggested = tab.path.stem if tab.path else "untitled"
 
@@ -510,7 +559,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     # Not a save, but the same rule about what is on the canvas: the composite
     # a floating buffer draws into is the pane's, not the document's, so an
     # export would otherwise be missing pixels the user is looking at.
-    doc.commit_floating()
+    _settle(ctx, tab)
     suggested = tab.path.stem if tab.path else "untitled"
     state = ctx.state.inker
     scale = max(1, int(getattr(state, "export_scale", 1) or 1))
@@ -670,7 +719,7 @@ def _begin_export(
         return
     if state.export is not None:
         return
-    tab.doc.commit_floating()
+    _settle(ctx, tab)
     try:
         uids = sheetout.frame_uids(tab.doc, span)
     except ValueError as exc:
@@ -863,7 +912,7 @@ def _submit_write(ctx: Any, tab: InkerDoc, key: str, path: Path, file_format: st
     # stack -- so without this the file omits the pasted pixels while the
     # canvas still shows them, and ``mark_saved`` then calls the document
     # clean. Closing the tab discarded the paste with no prompt.
-    doc.commit_floating()
+    _settle(ctx, tab)
     rev = doc.history.head
 
     def run() -> dict[str, Any]:
@@ -919,7 +968,7 @@ def _save_linked(ctx: Any, tab: InkerDoc) -> None:
     # so recording the head first saves a document against a head one behind
     # it -- and dirty, being a comparison against that head, then stays true
     # forever however many times the user saves.
-    doc.commit_floating()
+    _settle(ctx, tab)
     rev = doc.history.head
 
     def run() -> dict[str, Any]:
@@ -943,7 +992,7 @@ def save_as_reference(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab is None or tab.saving or tab.linked:
         return
     doc, title = tab.doc, tab.title
-    doc.commit_floating()  # before the head is read; see _save_linked
+    _settle(ctx, tab)  # before the head is read; see _save_linked
     rev = doc.history.head
 
     def run() -> dict[str, Any]:
@@ -978,7 +1027,7 @@ def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab is None or tab.saving:
         return
     doc = tab.doc
-    doc.commit_floating()
+    _settle(ctx, tab)
     if tab.linked:
         if tab.dirty:
             ctx.toast("Save first, so the mesh is made from what you see.", "error")
@@ -1158,6 +1207,22 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # file's pixels.
         if result:
             index_to(ctx, state.get(key.split(":", 1)[1]), result)
+        return
+
+    if name == "inker-palimg":
+        # A palette read out of an image. Resolved through the uid for
+        # ``inker-index``'s reason, and a key of its own because the *count*
+        # comes back with it: a median cut is a loss, and one that happened
+        # silently is one the user finds out about by noticing their drawing
+        # looks wrong.
+        if isinstance(result, dict) and result.get("colours"):
+            colours = result["colours"]
+            if index_to(ctx, state.get(key.split(":", 1)[1]), colours):
+                distinct = int(result.get("distinct", 0))
+                if distinct > len(colours):
+                    ctx.toast(
+                        f"{distinct} colours reduced to {len(colours)}.", "warn"
+                    )
         return
 
     if name in ("inker-send", "inker-promote"):
@@ -1836,6 +1901,44 @@ def release_all(ctx: Any) -> None:
 
 GPL_FILTER = ["GIMP palette (*.gpl)", "*.gpl"]
 
+# Both text palette formats behind one filter, the combined pattern first so the
+# picker opens on it. ``.pal`` is JASC's text form only -- see ``gpl.parse_jasc``
+# for why the other two things called ``.pal`` are refused rather than guessed.
+PALETTE_FILTER = [
+    "Palettes (*.gpl *.pal)",
+    "*.gpl *.pal",
+    "GIMP palette (*.gpl)",
+    "*.gpl",
+    "JASC palette (*.pal)",
+    "*.pal",
+]
+
+
+def _write_palette(path: Any, colours: list[tuple[int, int, int, int]], name: str) -> None:
+    """Write *colours* in the format the chosen filename asks for.
+
+    The suffix decides, and a name with no suffix at all gets ``.gpl`` -- the
+    picker's filter list does not tell us which entry was selected, and the
+    filename is the only thing the user actually said.
+
+    ``newline=""`` is load-bearing on Windows, not tidiness. Python's text mode
+    defaults to ``newline=None``, which rewrites every line feed it is handed as
+    ``os.linesep`` -- so ``dumps_jasc``'s already-correct CRLF reached the disk
+    as CR CR LF. Our own ``parse_jasc`` reads that file back perfectly, because
+    ``splitlines`` shrugs at anything, which is precisely the trap: the only
+    reason to write this format at all is the strict third-party readers that
+    will not. Line endings are the serialiser's decision and are made once, in
+    ``gpl``; this call writes exactly what it was handed.
+    """
+    from .inker import gpl
+
+    dest = Path(path)
+    if dest.suffix.lower() not in (".gpl", ".pal"):
+        dest = dest.with_suffix(".gpl")
+    dest.write_text(
+        gpl.dumps_for(dest.suffix, colours, name), encoding="utf-8", newline=""
+    )
+
 
 def import_palette(ctx: Any) -> None:
     from .inker import gpl
@@ -1843,24 +1946,22 @@ def import_palette(ctx: Any) -> None:
     ensure(ctx)
 
     def run() -> list[tuple[int, int, int, int]] | None:
-        path = dialogs.open_file("Import a palette", GPL_FILTER)
+        path = dialogs.open_file("Import a palette", PALETTE_FILTER)
         if path is None:
             return None
-        return gpl.parse(path.read_text(encoding="utf-8", errors="replace"))
+        return gpl.parse_any(path.read_text(encoding="utf-8", errors="replace"))
 
     ctx.submit("inker-palette", run)
 
 
 def export_palette(ctx: Any) -> None:
-    from .inker import gpl
-
     state = ensure(ctx)
-    text = gpl.dumps(list(state.swatches))
+    colours = list(state.swatches)
 
     def run() -> None:
-        path = dialogs.save_file("Export the palette", "palette.gpl", GPL_FILTER)
+        path = dialogs.save_file("Export the palette", "palette.gpl", PALETTE_FILTER)
         if path is not None:
-            path.with_suffix(".gpl").write_text(text, encoding="utf-8")
+            _write_palette(path, colours, "Warlock")
 
     ctx.submit("inker-palette-export", run)
 
@@ -1888,6 +1989,7 @@ def index_to(ctx: Any, tab: Any, colours: Any) -> bool:
     if not tab.doc.set_palette(colours):
         return False
     state.palette_slot = 0
+    state.palette_slots = []
     state.palette_usage = None
     if colours:
         ctx.toast(f"Indexed to {len(list(colours))} colour(s).", "success")
@@ -1914,28 +2016,79 @@ def import_document_palette(ctx: Any) -> None:
         return
 
     def run() -> list[tuple[int, int, int, int]] | None:
-        path = dialogs.open_file("Index to a palette", GPL_FILTER)
+        path = dialogs.open_file("Index to a palette", PALETTE_FILTER)
         if path is None:
             return None
-        return gpl.parse(path.read_text(encoding="utf-8", errors="replace"))
+        return gpl.parse_any(path.read_text(encoding="utf-8", errors="replace"))
 
     ctx.submit(f"inker-index:{tab.uid}", run)
 
 
+#: The ceiling on a palette read out of an image. The GIF colour table's own
+#: limit and the largest number of swatches any of this is useful at -- a
+#: photograph has tens of thousands of distinct colours, so an image import
+#: *always* median-cuts unless it was pixel art already.
+IMAGE_PALETTE_MAX = 256
+
+
+def palette_from_image(ctx: Any) -> None:
+    """Read a palette out of any image and index the active document to it.
+
+    Never refuses on colour count: an image with more colours than the ceiling
+    is median-cut down to it and the toast says so. Refusing would mean the
+    command works on pixel art and fails on every photograph, which is the half
+    of its input the user is least able to predict.
+
+    The decode is on the task thread with the picker, for the reason every
+    dialog in this module is: a native picker is modal to the OS, and a JPEG the
+    size of a phone photo is not a frame's worth of work either.
+    """
+    from .inker import dither
+
+    ensure(ctx)
+    tab = active(ctx)
+    if tab is None or tab.busy:
+        return
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.open_file("Palette from an image", OPEN_FILTER)
+        if path is None:
+            return None
+        import numpy as np
+        from PIL import Image
+
+        with Image.open(path) as image:
+            pixels = np.asarray(image.convert("RGBA"))
+        # Counted through ``np.unique`` on a packed uint32 rather than through a
+        # set of tuples: a phone photo is twelve million pixels, and the set
+        # costs a gigabyte to answer one number.
+        rgb = pixels[..., :3][pixels[..., 3] > 0]
+        packed = (
+            rgb[:, 0].astype(np.uint32) << 16 | rgb[:, 1].astype(np.uint32) << 8 | rgb[:, 2]
+        )
+        distinct = int(np.unique(packed).size)
+        return {
+            "colours": dither.build_palette([pixels], IMAGE_PALETTE_MAX),
+            "distinct": distinct,
+        }
+
+    ctx.submit(f"inker-palimg:{tab.uid}", run)
+
+
 def export_document_palette(ctx: Any) -> None:
-    """Write the *document's* table out as a ``.gpl``."""
+    """Write the *document's* table out as a ``.gpl`` or a JASC ``.pal``."""
     tab = active(ctx)
     if tab is None or not tab.doc.palette:
         return
-    from .inker import gpl
-
-    text = gpl.dumps(list(tab.doc.palette))
-    name = f"{tab.path.stem}.gpl" if tab.path else "palette.gpl"
+    colours = [tuple(c) for c in tab.doc.palette]
+    stem = tab.path.stem if tab.path else "palette"
 
     def run() -> None:
-        path = dialogs.save_file("Export the document palette", name, GPL_FILTER)
+        path = dialogs.save_file(
+            "Export the document palette", f"{stem}.gpl", PALETTE_FILTER
+        )
         if path is not None:
-            path.with_suffix(".gpl").write_text(text, encoding="utf-8")
+            _write_palette(path, colours, stem)
 
     ctx.submit("inker-palette-export", run)
 

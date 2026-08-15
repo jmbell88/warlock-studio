@@ -71,6 +71,12 @@ OPAQUE_WHITE: RGBA = (255, 255, 255, 255)
 #: other.
 FRAME_CACHE_BYTES = 128 * 1024 * 1024
 
+#: ``_map_planes``' default for ``mask_fn``: "whatever the pixels are getting".
+#: A sentinel rather than ``None`` because ``None`` is a meaningful answer there
+#: -- it is how a colour map says *leave the selection alone* -- and the two
+#: have to be tellable apart.
+_SAME_AS_PIXELS = object()
+
 __all__ = [
     "FRAME_CACHE_BYTES",
     "Document",
@@ -210,6 +216,22 @@ class Document(
     #: is the composite's cache and most of what reaches it changes no pixels
     #: at all, which is the same "stamps no frame" lesson stated there.
     _layer_stamps: dict[int, int] = field(default_factory=dict, repr=False)
+    #: An open palette-conversion session: ``(layer uid, pixels as they were)``
+    #: for every real cel on the frame the popup was opened over. The filter
+    #: session's shape one dimension wider -- a conversion is whole-*document*,
+    #: so there is no rectangle and there is more than one layer -- and it
+    #: addresses each of them by uid for the same reason ``_filter`` does. See
+    #: :meth:`~._doc_paint.PaintOps.begin_convert`.
+    _convert: list[tuple[int, np.ndarray]] | None = field(
+        init=False, default=None, repr=False
+    )
+    #: The last ``(table, method) -> converted planes`` a preview computed, for
+    #: the life of one conversion session. Floyd-Steinberg is a Python loop over
+    #: every pixel, so this is not an optimisation but the difference between a
+    #: live preview and none.
+    _convert_memo: tuple[tuple[Any, ...], list[np.ndarray]] | None = field(
+        init=False, default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         width, height = self.stack.size
@@ -834,9 +856,26 @@ class Document(
             "current": anim.current,
         }
 
-    def _map_planes(self, fn: Any) -> None:
+    def _map_planes(self, fn: Any, *, mask_fn: Any = _SAME_AS_PIXELS) -> None:
+        """Apply *fn* to every distinct pixel plane, and *mask_fn* to the mask.
+
+        ``mask_fn`` defaults to ``fn`` because the first callers were geometry:
+        a rotate has to rotate the marquee with the pixels, or the selection
+        comes back describing a different part of the picture. A **colour** map
+        is the other kind of caller and passes ``mask_fn=None`` -- a palette is
+        a statement about colour, and a mask is 8-bit coverage with no colour
+        for it to say anything about.
+
+        Passing ``fn`` through unconditionally was a live bug rather than a
+        stylistic one: ``indexed.snap`` and ``indexed.remap`` both raise on a
+        2-D array, so ``set_palette``, ``recolour_slot`` and ``remove_slot``
+        every one of them refused outright -- out of the middle of the op, with
+        the table already assigned -- whenever a selection happened to be up.
+        """
         if self.mask is not None:
-            self.mask = SelectionMask(fn(self.mask.mask))
+            apply = fn if mask_fn is _SAME_AS_PIXELS else mask_fn
+            if apply is not None:
+                self.mask = SelectionMask(apply(self.mask.mask))
         anim = self.anim
         if anim is None:
             for layer in self.stack:

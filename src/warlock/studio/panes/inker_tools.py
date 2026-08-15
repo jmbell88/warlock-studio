@@ -226,6 +226,18 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         changed, value = imgui.checkbox("To transparent", state.gradient_to_transparent)
         if changed:
             state.gradient_to_transparent = value
+        # Derived from the engine's own tuple rather than written out, so the
+        # combo cannot offer a matrix ``dither`` does not have.
+        state.gradient_dither = widgets.combo(
+            "Dither",
+            state.gradient_dither,
+            [("none", "none"), *((k, k) for k in inker.DITHER_ORDERED)],
+        )
+        widgets.help_marker(
+            "Throws away the blend between stops and thresholds each pixel onto "
+            "one of them instead, so the ramp lands on exactly the colours you "
+            "chose. A selection's soft edge is not dithered."
+        )
         _gradient_stops(state)
 
     if tool == "slice":

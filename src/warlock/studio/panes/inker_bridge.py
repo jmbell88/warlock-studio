@@ -531,3 +531,137 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
         state.sheet_import_open = False
         imgui.close_current_popup()
     imgui.end_popup()
+
+
+# --- palette conversion -----------------------------------------------------
+#
+# The filter popup's mechanism against a different session, and for the same
+# reason: nobody can predict what Floyd-Steinberg does to *their* drawing on
+# *their* palette, and a conversion you have to undo to judge is one you stop
+# trying. The document owns the session, so nothing here holds pixels, and
+# committing is the ordinary one-undo ``convert_to_palette``.
+#
+# Opened and drawn from ``panes/inker_colors`` rather than from ``_canvas_ops``
+# below, even though it is written here beside its twin: an imgui popup is
+# matched by an id computed off the current id stack, and the colours pane and
+# this one are different child windows -- ``open_popup`` here and
+# ``begin_popup`` there would never meet. The palette section is where the
+# controls belong anyway.
+
+CONVERT_POPUP = "inker-convert"
+
+
+def _convert_table(state: Any, doc: Any) -> list[tuple[int, int, int, int]]:
+    """The table the conversion would use: the document's own, or a built one.
+
+    No third choice and no source selector. A document that *has* a palette is
+    being re-dithered onto the palette it has -- offering to replace it here
+    would put "change my colours" and "change how my pixels reach them" behind
+    one button. A document that has none has nothing else to convert to but its
+    own pixels, and the swatch row is a session's favourites rather than a
+    statement about this file (see ``inker_colors._indexed``).
+    """
+    if doc.palette:
+        return [tuple(c) for c in doc.palette]
+    return doc.built_palette(state.convert_max)
+
+
+def open_convert(ctx: Any, tab: Any) -> None:
+    from ..inker import dither
+
+    state = inker_mode.ensure(ctx)
+    if tab.busy:
+        return
+    if state.convert_method not in dither.METHODS:
+        state.convert_method = dither.METHODS[0]
+    if not tab.doc.begin_convert():
+        ctx.toast("There is nothing to convert.", "warn")
+        return
+    # After ``begin_convert``, which is what makes the built table read the
+    # session's snapshot rather than a preview of itself.
+    state.convert_table = _convert_table(state, tab.doc)
+    state.convert_uid = tab.uid
+    imgui.open_popup(CONVERT_POPUP)
+
+
+def convert_popup(ctx: Any, tab: Any) -> None:
+    """Draw the open session's popup, or settle a session nothing will answer.
+
+    Called unconditionally from ``inker_colors.draw`` -- including with no tab
+    at all -- because this is the only per-frame hook the session has, and every
+    way it can be stranded is a frame where the popup does not get drawn.
+
+    Two of those ways are handled below and neither may act on ``tab``:
+
+    * ``begin_popup`` says no. The user clicked outside, or the pane stopped
+      being submitted (leaving Inker mode), and imgui closed the popup. An
+      unanswered question is not a yes, so the session is cancelled.
+    * the popup is up but this pane is drawing a *different* document. The user
+      switched tabs. The session belongs to the tab it was opened on and nothing
+      about the new one has anything to do with it.
+
+    In both, ``end_convert_session`` resolves the owner by uid. Reaching for
+    ``tab`` here -- which the filter popup this was cloned from does -- is
+    exactly how a tab switch came to restore planes that were never previewed
+    while the previewed document kept a dither nobody approved, with no hook
+    left to take it back.
+    """
+    from ..inker import dither
+
+    state = inker_mode.ensure(ctx)
+    owner = state.get(state.convert_uid) if state.convert_uid else None
+    if not imgui.begin_popup(CONVERT_POPUP):
+        inker_mode.end_convert_session(ctx)
+        return
+    if owner is None or tab is None or owner.uid != tab.uid:
+        inker_mode.end_convert_session(ctx)
+        imgui.close_current_popup()
+        imgui.end_popup()
+        return
+
+    state.convert_method = widgets.combo(
+        "Dither", state.convert_method, [(key, key) for key in dither.METHODS]
+    )
+    if not tab.doc.palette:
+        imgui.set_next_item_width(sp(160))
+        changed, value = imgui.slider_int("Colours", int(state.convert_max), 2, 64)
+        if changed:
+            state.convert_max = int(value)
+        if imgui.is_item_deactivated_after_edit():
+            # On release, not on every frame of the drag: building a table is a
+            # pass over every plane in the document followed by a median cut,
+            # and a slider dragged across its range would ask for sixty of them.
+            # This is the only control that changes what the table would be.
+            state.convert_table = _convert_table(state, tab.doc)
+    widgets.muted(f"{len(state.convert_table)} colour(s); this frame is previewed")
+    widgets.help_marker(
+        "The preview shows the current frame. Applying converts the whole "
+        "document -- every layer and every frame -- as one undo step, because "
+        "the palette it installs constrains every write afterwards."
+    )
+
+    # Every frame, not only on a change: the combo and the slider can both move
+    # the answer, and a preview that only ran on a change would leave the last
+    # method's pixels under the new method's controls.
+    tab.doc.preview_convert(state.convert_table, state.convert_method)
+
+    imgui.dummy((0, 4))
+    imgui.begin_disabled(tab.busy)
+    if imgui.button("Apply##convert", (sp(90), 0)):
+        table = list(state.convert_table)
+        if tab.doc.commit_convert(table, state.convert_method):
+            state.palette_slot = 0
+            state.palette_slots = []
+            state.palette_usage = None
+            ctx.toast(f"Converted to {len(table)} colour(s).", "success")
+        state.convert_uid = ""
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    # Never disabled: a save starting while this is open must not leave a modal
+    # the user cannot dismiss.
+    if imgui.button("Cancel##convert", (sp(90), 0)):
+        tab.doc.cancel_convert()
+        state.convert_uid = ""
+        imgui.close_current_popup()
+    imgui.end_popup()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from types import SimpleNamespace
 from typing import Any
 
 from PIL import Image
@@ -36,10 +37,17 @@ def _reference(svc) -> str:
 
 class FakeCtx:
     """Runs the submitted callable inline, so the test sees what the task
-    thread would have done without needing one."""
+    thread would have done without needing one.
+
+    Carries a ``state`` because saving settles the canvas first
+    (``inker_mode._settle``), and settling reads ``ctx.state.inker`` to find an
+    open palette-conversion session. ``None`` is the honest value here: these
+    tabs are built by hand and never went through ``inker_mode.ensure``.
+    """
 
     def __init__(self, svc: Any) -> None:
         self.svc = svc
+        self.state = SimpleNamespace(inker=None)
         self.submitted: list[str] = []
 
     def submit(self, key: str, run: Any) -> bool:

@@ -1332,6 +1332,10 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             # reading of the two colours rather than a copy of them -- so
             # swapping with X changes the next gradient, as it always has.
             stops=state.gradient_stops or None,
+            # "none" is the tool option's spelling and None is the engine's:
+            # the engine's is a *path*, not a value, and keeping the two apart
+            # is what makes the undithered arithmetic byte-identical.
+            dither=None if state.gradient_dither == "none" else state.gradient_dither,
         )
     state.clear_drag()
 

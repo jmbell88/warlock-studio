@@ -147,6 +147,44 @@ def test_the_modifiers_cover_the_engines_whole_vocabulary():
     assert reachable == set(selection.COMBINE_OPS)
 
 
+def test_the_palette_sort_combo_offers_every_key_the_engine_implements():
+    """Both directions, which is the whole point: a key the pane offers and the
+    engine does not fails on the first click, and one the engine has and the
+    pane does not is a feature no user can reach."""
+    from warlock.studio import inker
+    from warlock.studio.panes import inker_colors
+
+    keys = tuple(key for key, _label in inker_colors.SORT_LABELS)
+    assert keys == inker.PALETTE_SORT_KEYS
+
+
+def test_every_sort_key_is_labelled_and_no_label_is_repeated():
+    from warlock.studio.panes import inker_colors
+
+    labels = [label for _key, label in inker_colors.SORT_LABELS]
+    assert all(labels)
+    assert len(set(labels)) == len(labels)
+
+
+def test_the_convert_popup_offers_every_method_the_engine_implements():
+    """The dither combo is built from ``dither.METHODS`` at the call site rather
+    than written out, so this asserts the tuple is the one thing there is to
+    offer -- and that the default is one of them."""
+    from warlock.studio import inker
+    from warlock.studio.inker import dither
+
+    assert inker.DITHER_METHODS == dither.METHODS
+    assert dither.METHODS[0] == "nearest"
+    assert inker_state.InkerState().convert_method in dither.METHODS
+
+
+def test_the_gradient_dither_option_defaults_to_off_and_names_a_real_matrix():
+    from warlock.studio.inker import dither
+
+    assert inker_state.TOOL_OPTION_DEFAULTS["gradient_dither"] == "none"
+    assert set(dither.ORDERED) <= set(dither.METHODS)
+
+
 def test_the_resize_popup_offers_every_resample():
     """Derived from ``transform.RESAMPLES`` at the call site rather than written
     out, so this asserts the tuple is the one thing there is to offer.
