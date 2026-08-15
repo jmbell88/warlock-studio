@@ -121,7 +121,7 @@ def apply(imgui: Any) -> None:
     # child, so a 1 px EDGE hairline on each one drew the whole layout as a set
     # of boxes: a screen of five panes was five outlined rectangles before it
     # was anything else, which is precisely the "bordered boxes everywhere"
-    # register REDESIGN.md is undoing. Panes separate *tonally* instead --
+    # register the UI redesign is undoing. Panes separate *tonally* instead --
     # PANEL on BG, which is a step of the same ramp a card lifts by.
     #
     # The two borders that stay are the two that are not decoration. A popup
@@ -143,7 +143,9 @@ def apply(imgui: Any) -> None:
     # now -- SP_4 out here, SP_3 inside a pane -- so the two gutters are one
     # rhythm rather than two arbitrary numbers.
     style.window_padding = (sp(tokens.SP_4), sp(tokens.SP_4))
-    style.frame_padding = (sp(9), sp(6))
+    # 14 px body type plus 8 px above and below is the 30 dp regular control
+    # token. Compact controls temporarily push 6 px in ``controls.button``.
+    style.frame_padding = (sp(9), sp(8))
     style.item_spacing = (sp(tokens.SP_2), sp(tokens.SP_2))
     style.item_inner_spacing = (sp(6), sp(5))
     style.cell_padding = (sp(tokens.SP_1), sp(3))
@@ -172,7 +174,7 @@ def apply(imgui: Any) -> None:
     set_color(c.title_bg_collapsed.value, rgba(tokens.colour("PANEL"), 0.7))
     set_color(c.menu_bar_bg.value, rgba(tokens.colour("PANEL")))
 
-    # **Accent is the press flash, not the hover** (REDESIGN.md wave 1). Every
+    # **Accent is the press flash, not the hover** (the UI redesign, wave 1). Every
     # secondary button in the app used to light up in full indigo under the
     # pointer, so the one colour that is supposed to mean "this is the thing
     # that matters" was spent on whatever the mouse happened to be crossing --

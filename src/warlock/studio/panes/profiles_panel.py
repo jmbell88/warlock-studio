@@ -15,7 +15,7 @@ from imgui_bundle import imgui
 
 from ...service import validation
 from ...service.validation import MAX_UPLOAD_BYTES
-from .. import create_stages, dialogs, icons, journal, profiles, theme, widgets
+from .. import controls, create_stages, dialogs, forms, icons, journal, profiles, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import settings_2d
@@ -141,7 +141,7 @@ def _list(ctx: Any) -> None:
     # ``stage_rig.draw`` both carry a comment about, found here by the wave 6
     # screenshot pass. On the button it also reads better: it says what the
     # thing you are about to make remembers.
-    if imgui.button("New profile"):
+    if controls.button("New profile"):
         _open_draft(ctx, "", profiles.capture(ctx.state.form_2d))
     widgets.help_marker(
         "A profile remembers the model, the LoRA, the negative prompt and the "
@@ -175,19 +175,19 @@ def _list(ctx: Any) -> None:
         else:
             imgui.text(name)
         widgets.muted(_summary(ctx, saved[name]))
-        if name != active and imgui.small_button("Set active"):
+        if name != active and controls.small_button("Set active"):
             profiles.set_active(ctx.settings, name)
         if name != active:
             imgui.same_line()
-        if imgui.small_button("Edit"):
+        if controls.small_button("Edit"):
             _open_draft(ctx, name, saved[name])
         imgui.same_line()
-        if imgui.small_button("Apply to form"):
+        if controls.small_button("Apply to form"):
             profiles.apply(ctx.state.form_2d, saved[name])
             profiles.set_active(ctx.settings, name)
             ctx.toast(f"Applied {name}.")
         imgui.same_line()
-        if imgui.small_button("Delete"):
+        if controls.small_button("Delete"):
             ctx.confirms.ask(
                 dialogs.Confirm(
                     title="Delete this profile?",
@@ -241,27 +241,48 @@ def _blank() -> dict[str, Any]:
 
 
 def _editor(ctx: Any) -> None:
+    with forms.Form("profile-editor") as form_ui:
+        def negative_prompt(*, enabled: bool, reason: str) -> tuple[bool, str]:
+            return form_ui.multiline(
+                "negative_prompt",
+                "Negative prompt",
+                ctx.state.profile_draft.get("negative_prompt", ""),
+                validation.MAX_PROMPT,
+                height=54,
+                enabled=enabled,
+                reason=reason,
+            )
+
+        _editor_form(ctx, form_ui, negative_prompt)
+
+
+def _editor_form(ctx: Any, form_ui: forms.Form, negative_prompt: Any) -> None:
     draft = ctx.state.profile_draft
     name = ctx.state.profile_draft_name
     imgui.text("New profile" if not name else f"Editing {name}")
-    ctx.state.profile_draft_name = widgets.input_text(
-        "Name", ctx.state.profile_draft_name, max_length=60
+    _changed, ctx.state.profile_draft_name = form_ui.text(
+        "name", "Name", ctx.state.profile_draft_name, max_length=60
     )
 
     widgets.section("Model")
-    draft["base_model"] = widgets.labeled_combo(
-        "Model", draft.get("base_model", ""), ctx.base_models
+    _changed, draft["base_model"] = form_ui.combo(
+        "base_model", "Model", draft.get("base_model", ""), ctx.base_models
     )
     # The same pairing question the generate pane asks, and the same answer:
     # only the adapters fitted to the drafted base, plus a stale selection kept
     # visible and marked so it cannot become the value the user cannot see.
     # The *summary* above deliberately still reads the full ctx.style_loras --
     # it must be able to name a selection the draft's base does not take.
-    draft["style_lora"] = widgets.labeled_combo(
-        "Style LoRA", draft.get("style_lora", ""), settings_2d.lora_options(ctx, draft)
+    _changed, draft["style_lora"] = form_ui.combo(
+        "style_lora",
+        "Style LoRA",
+        draft.get("style_lora", ""),
+        settings_2d.lora_options(ctx, draft),
     )
     if draft["style_lora"]:
-        changed, value = imgui.slider_float("Strength", float(draft["lora_weight"]), 0.0, 1.5)
+        changed, value = form_ui.slider(
+            "lora_weight", "Strength", float(draft["lora_weight"]), 0.0, 1.5
+        )
         if changed:
             draft["lora_weight"] = value
     # The same cap the service enforces. Accepting twice as much here only
@@ -270,8 +291,9 @@ def _editor(ctx: Any) -> None:
     inert = settings_2d.negative_prompt_note(ctx, draft)
     if inert is not None:
         imgui.begin_disabled()
-    draft["negative_prompt"] = widgets.multiline(
-        "Negative", draft.get("negative_prompt", ""), 54, validation.MAX_PROMPT
+    _changed, draft["negative_prompt"] = negative_prompt(
+        enabled=inert is None,
+        reason=inert or "",
     )
     if inert is not None:
         imgui.end_disabled()
@@ -290,9 +312,11 @@ def _editor(ctx: Any) -> None:
             continue
         widgets.section(title)
         for field in shown:
-            imgui.text(settings_2d.field_label(field))
-            draft[field] = widgets.combo(
-                f"##p_{field}", draft.get(field, ""), settings_2d._field_options(ctx, field)
+            _changed, draft[field] = form_ui.combo(
+                field,
+                settings_2d.field_label(field),
+                draft.get(field, ""),
+                settings_2d._field_options(ctx, field),
             )
     # Anything the registry has that the groups do not mention, so adding a
     # taxonomy cannot silently drop it off this pane.
@@ -301,29 +325,35 @@ def _editor(ctx: Any) -> None:
     if rest:
         widgets.section("Other")
         for field in rest:
-            imgui.text(settings_2d.field_label(field))
-            draft[field] = widgets.combo(
-                f"##p_{field}", draft.get(field, ""), settings_2d._field_options(ctx, field)
+            _changed, draft[field] = form_ui.combo(
+                field,
+                settings_2d.field_label(field),
+                draft.get(field, ""),
+                settings_2d._field_options(ctx, field),
             )
     widgets.section("Platform")
-    imgui.text(settings_2d.field_label("platform"))
-    draft["platform"] = widgets.combo(
-        "##p_platform", draft.get("platform", ""), settings_2d._field_options(ctx, "platform")
+    _changed, draft["platform"] = form_ui.combo(
+        "platform",
+        settings_2d.field_label("platform"),
+        draft.get("platform", ""),
+        settings_2d._field_options(ctx, "platform"),
     )
 
     _anchor(ctx, name)
 
-    imgui.dummy((0, 8))
-    imgui.separator()
     saveable = bool(ctx.state.profile_draft_name.strip())
-    if widgets.disabled_button("Save", saveable, (sp(150), 0)):
-        _save(ctx)
-    imgui.same_line()
-    if imgui.button("Cancel", (sp(150), 0)):
-        # Guarded, like every other document mode's close. Cancel used to
-        # discard an edited profile outright with no question at all -- nine
-        # fields and an anchor image, gone on one click (UX-17).
-        guard(ctx, "cancel", lambda: _close(ctx))
+    # The former imgui.button("Cancel" route is the cancel slot below; it still
+    # goes through the same dirty-draft guard, now with the shared footer owning
+    # placement and visual role.
+    form_ui.footer(
+        ("Save", lambda: _save(ctx)),
+        cancel=(
+            "Cancel",
+            lambda: guard(ctx, "cancel", lambda: _close(ctx)),
+        ),
+        enabled=saveable,
+        reason="Enter a profile name before saving.",
+    )
 
 
 def _anchor(ctx: Any, name: str) -> None:
@@ -345,14 +375,14 @@ def _anchor(ctx: Any, name: str) -> None:
             texture = ctx.textures.get(f"anchor:{name}", path)
             if texture is not None:
                 imgui.image(widgets.texture_ref(texture), (sp(96), sp(96)))
-        changed, value = imgui.slider_float(
+        changed, value = controls.slider_float(
             "Strength##anchor", float(fields.get("anchor_scale") or 0.6), 0.0, 1.5
         )
         if changed:
             profiles.save_profile(
                 ctx.settings, name, {**fields, "anchor_scale": float(value)}
             )
-        if imgui.small_button("Remove anchor"):
+        if controls.small_button("Remove anchor"):
             profiles.clear_anchor(ctx.settings, ctx.svc.config, name)
         imgui.same_line()
     busy = ctx.busy("anchor-pick")

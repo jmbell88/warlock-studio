@@ -25,7 +25,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, icons, theme, widgets
+from .. import clay_mode, controls, icons, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -164,16 +164,16 @@ def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
         return
     if obj.uid not in doc.selection:
         doc.select([obj.uid])
-    if imgui.menu_item(f"{icons.PENCIL} Rename", "", False)[0]:
+    if controls.menu_item(f"{icons.PENCIL} Rename", "", False)[0]:
         state.renaming = obj.uid
-    if imgui.menu_item(f"{icons.COPY} Duplicate", "Ctrl+D", False)[0]:
+    if controls.menu_item(f"{icons.COPY} Duplicate", "Ctrl+D", False)[0]:
         from .. import clay_mode
 
         clay_mode._duplicate_selection(ctx, state, doc)
-    if imgui.menu_item(f"{icons.EYE} Solo", "", False)[0]:
+    if controls.menu_item(f"{icons.EYE} Solo", "", False)[0]:
         doc.isolate([obj.uid])
     imgui.separator()
-    if imgui.menu_item(f"{icons.TRASH} Delete", "Del", False)[0]:
+    if controls.menu_item(f"{icons.TRASH} Delete", "Del", False)[0]:
         doc.remove_object(obj.uid)
     imgui.end_popup()
 
@@ -183,7 +183,7 @@ def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool
     imgui.push_id(str(obj.uid))
 
     eye = icons.EYE if obj.visible else icons.EYE_OFF
-    if imgui.button(f"{eye}##vis", (sp(28), sp(ROW_HEIGHT))):
+    if controls.button(f"{eye}##vis", (sp(28), sp(ROW_HEIGHT))):
         doc.set_props(obj.uid, visible=not obj.visible)
     if imgui.is_item_hovered():
         imgui.set_tooltip("Hidden objects do not render, export or pick.")
@@ -212,7 +212,9 @@ def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool
         hidden = not obj.visible
         if hidden:
             imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED)))
-        if imgui.selectable(f"{label}##row", selected, imgui.SelectableFlags_.none, (width, 0))[0]:
+        if controls.selectable(
+            f"{label}##row", selected, imgui.SelectableFlags_.none, (width, 0)
+        )[0]:
             _click(state, doc, obj)
         if hidden:
             imgui.pop_style_color()
@@ -225,6 +227,6 @@ def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool
             state.renaming = obj.uid
 
     imgui.same_line()
-    if imgui.button(f"{icons.TRASH}##del", (sp(28), sp(ROW_HEIGHT))):
+    if controls.button(f"{icons.TRASH}##del", (sp(28), sp(ROW_HEIGHT))):
         doc.remove_object(obj.uid)
     imgui.pop_id()

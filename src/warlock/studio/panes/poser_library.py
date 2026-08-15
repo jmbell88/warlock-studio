@@ -12,7 +12,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import rigging
-from .. import icons, poser_mode, theme, widgets
+from .. import controls, icons, poser_mode, theme, widgets
 from ..manual import render as manual_render
 
 
@@ -39,7 +39,7 @@ def draw(ctx: Any) -> None:
         poser_mode.set_template(ctx, chosen)
 
     imgui.dummy((0, 4))
-    if imgui.button("New pose", (-1, 0)):
+    if controls.button("New pose", (-1, 0)):
         poser_mode.new_pose(ctx)
 
     _library(ctx, state)
@@ -77,16 +77,16 @@ def _library(ctx: Any, state: Any) -> None:
         # so the only way to remove a pose from the shared library was to
         # rename it shorter first.
         widgets.same_line_or_wrap(widgets.button_width("Apply"))
-        if imgui.small_button("Apply"):
+        if controls.small_button("Apply"):
             poser_mode.apply_pose(ctx, pose_id)
         widgets.same_line_or_wrap(widgets.button_width("Rename"))
-        if imgui.small_button("Rename"):
+        if controls.small_button("Rename"):
             poser_mode.rename(ctx, pose_id)
         widgets.same_line_or_wrap(widgets.button_width("Duplicate"))
-        if imgui.small_button("Duplicate"):
+        if controls.small_button("Duplicate"):
             poser_mode.duplicate(ctx, pose_id)
         widgets.same_line_or_wrap(widgets.button_width("Delete"))
-        if imgui.small_button("Delete"):
+        if controls.small_button("Delete"):
             poser_mode.delete(ctx, pose_id)
         imgui.pop_id()
     widgets.no_matches(needle, shown)
@@ -99,11 +99,21 @@ def _presets(ctx: Any, state: Any) -> None:
     # Read-only by design: a preset is a starting point, and apply-then-Save-as
     # is the promotion path into the library.
     widgets.muted("Apply one, adjust it, then Save as to keep your version.")
-    for preset in state.presets:
-        name = str(preset.get("name") or "")
-        imgui.push_id(f"preset-{name}")
-        imgui.text(name)
-        imgui.same_line()
-        if imgui.small_button("Apply"):
-            poser_mode.apply_preset(ctx, preset)
-        imgui.pop_id()
+    selected = str(ctx.state.preview.get("poser_preset") or "")
+    if imgui.begin_table("poser-presets", 2):
+        for preset in state.presets:
+            name = str(preset.get("name") or "")
+            imgui.push_id(f"preset-{name}")
+            imgui.table_next_column()
+            if controls.selectable_row(
+                f"preset-{name}", name, selected=name == selected
+            ):
+                selected = name
+                ctx.state.preview["poser_preset"] = name
+            imgui.table_next_column()
+            if controls.small_button("Apply", role=controls.ButtonRole.GHOST):
+                poser_mode.apply_preset(ctx, preset)
+                selected = name
+                ctx.state.preview["poser_preset"] = name
+            imgui.pop_id()
+        imgui.end_table()

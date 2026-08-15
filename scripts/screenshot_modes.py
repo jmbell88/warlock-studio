@@ -24,6 +24,7 @@ Run:  uv run python scripts/screenshot_modes.py --out <dir>
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -89,11 +90,11 @@ def _seed(app) -> None:
     timeline strip is drawn only for a document with an ``anim``, so a plain
     new canvas left the app's densest row -- the transport, the frame
     operations, the exports and their controls -- out of every capture this
-    harness has ever taken. That row was rewritten in REDESIGN.md wave 4.2
+    harness has ever taken. That row was rewritten in the UI redesign, wave 4.2
     precisely because it was clipping at 150 %, which is the defect class the
     scale pass exists to find.
 
-    And a map and an atlas, for the same reason one wave later (REDESIGN.md
+    And a map and an atlas, for the same reason one wave later (the UI redesign,
     wave 6). Plotter and Packwright are four panes each, all four of which
     answer "Open or start a map first" with nothing open -- so the sentence-case
     sweep over their eleven headings, the tool grids, the layer tree and the
@@ -298,11 +299,16 @@ def main() -> int:
         action="store_true",
         help=(
             "also capture the two surfaces that stopped being modes in "
-            "REDESIGN.md wave 3 -- the manual and the profile sheet -- plus the "
+            "the UI redesign, wave 3 -- the manual and the profile sheet -- plus the "
             "expanded navigation rail. The mode pass is derived from "
             "modes.KEYS, so none of the three is reachable by it: a screen that "
             "is not a mode is a screen nobody would look at."
         ),
+    )
+    ap.add_argument(
+        "--components",
+        action="store_true",
+        help="also capture the developer component gallery",
     )
     ap.add_argument(
         "--scale",
@@ -316,6 +322,8 @@ def main() -> int:
     )
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.components:
+        os.environ["WARLOCK_DEV_COMPONENTS"] = "1"
 
     from imgui_bundle import imgui
 
@@ -341,7 +349,7 @@ def main() -> int:
     app.setup_runtime()
     app.setup_context()
     # A modal drawn over every capture is the harness lying by *commission*
-    # (REDESIGN.md wave 6): the journal lives in the user's home, not under
+    # (the UI redesign, wave 6): the journal lives in the user's home, not under
     # WARLOCK_DATA_DIR, so a real crashed session on the machine running this
     # put "Recover unsaved work?" across the middle of all thirty-four
     # pictures. Never *offered* rather than dismissed after the fact -- the
@@ -367,7 +375,7 @@ def main() -> int:
             for mode in MODES:
                 app.app_ctx.state.mode = mode
                 if mode == create_stages.MODE:
-                    # One mode, several viewports (REDESIGN.md wave 5): a
+                    # One mode, several viewports (the UI redesign, wave 5): a
                     # single capture would show whichever stage happened to be
                     # current and silently leave the rest of the pipeline
                     # unlooked-at, which is the gap --seed closed for Inker.
@@ -433,6 +441,13 @@ def main() -> int:
                 palette_pane.toggle(app.app_ctx)
                 _capture(app, args.out / f"{name}-palette.png")
                 palette_pane.close(app.app_ctx)
+            if args.components:
+                from warlock.studio import component_gallery
+
+                app.app_ctx.state.mode = "settings"
+                component_gallery.request()
+                _capture(app, args.out / f"{name}-components.png")
+                imgui.internal.close_popups_except_modals()
     finally:
         app.teardown()
     return 0

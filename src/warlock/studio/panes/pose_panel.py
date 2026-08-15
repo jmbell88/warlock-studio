@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import rig as svc_rig
-from .. import dialogs, docmodes, icons, theme, widgets
+from .. import controls, dialogs, docmodes, forms, icons, theme, widgets
 from ..manual import render as manual_render
 
 log = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
     """The pose editor. ``hosted`` when this pane *is* the column.
 
-    Two hosts since REDESIGN.md wave 5: the Pose stage's settings column, where
+    Two hosts since the UI redesign, wave 5: the Pose stage's settings column, where
     it is the whole of what is on screen, and the inspector's Rig & Pose tab in
     every other mode, where it is one collapsing section among six. The
     collapsing header belongs to the second -- a section that can be folded
@@ -65,7 +65,7 @@ def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
     viewer = ctx.viewer
     editing = viewer is not None and viewer.pose_mode
     if not editing:
-        if imgui.button("Edit pose", (-1, 0)):
+        if controls.button("Edit pose", (-1, 0)):
             _enter(ctx, job)
         _saved_list(ctx, job)
         _poser_link(ctx, job)
@@ -75,10 +75,11 @@ def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
         return
 
     _banner(ctx, viewer)
-    if viewer.editor.mode == "joints":
-        _joints(ctx, job, viewer)
-    else:
-        _pose(ctx, job, viewer)
+    with forms.Form("pose-controls"):
+        if viewer.editor.mode == "joints":
+            _joints(ctx, job, viewer)
+        else:
+            _pose(ctx, job, viewer)
     _saved_list(ctx, job)
     _poser_link(ctx, job)
 
@@ -113,10 +114,10 @@ def _elsewhere(ctx: Any, viewer: Any) -> None:
         "The pose editor is open on the asset in the viewport, not this one. "
         "Select it again to carry on, or leave the editor."
     )
-    if imgui.button("Leave pose mode"):
+    if controls.button("Leave pose mode"):
         guard(ctx, "leave edit mode", lambda: leave(ctx))
     imgui.same_line()
-    if imgui.button("Show the asset being posed"):
+    if controls.button("Show the asset being posed"):
         # No guard: nothing is discarded by looking at the rig again.
         ctx.state.select(viewer.pose_job_id)
 
@@ -240,7 +241,7 @@ def _banner(ctx: Any, viewer: Any) -> None:
     if viewer.editor.has_unsaved_edits():
         label += " - unsaved changes"
     widgets.text_colored(theme.ACCENT, label)
-    if imgui.button("Done"):
+    if controls.button("Done"):
         guard(ctx, "leave edit mode", lambda: leave(ctx))
 
 
@@ -252,7 +253,7 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
     ):
         viewer.reset_bone()
     imgui.same_line()
-    if imgui.button("Reset all"):
+    if controls.button("Reset all"):
         # Every rotation at once, and there is no undo behind it: the same
         # discard the preset-apply path already asks about, so it takes the
         # same guard rather than being the one bare route to the same loss.
@@ -261,7 +262,7 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
         # Hidden for a serpent or a fish: a skeleton with no mirror pairs has
         # nothing to mirror, and a button that can only no-op is worse than none.
         imgui.same_line()
-        if imgui.button("Mirror"):
+        if controls.button("Mirror"):
             # Reset all's reason again: mirroring rewrites every rotation and
             # nothing here has an undo, so it takes the same confirm rather
             # than being the one bare route to the same loss.
@@ -287,9 +288,9 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
         widgets.text_colored(
             theme.WARN, "Saving under the same name replaces that pose and its saved GLB."
         )
-    if imgui.button("Save pose...", (-1, 0)):
+    if controls.button("Save pose...", (-1, 0)):
         _save(ctx, job, viewer)
-    if viewer.editor.fitted and imgui.button("Adjust joints", (-1, 0)):
+    if viewer.editor.fitted and controls.button("Adjust joints", (-1, 0)):
         # A rotation left over from posing would put the markers where the
         # posed bones are, and a correction is against the rest skeleton.
         guard(ctx, "move joints", viewer.enter_joints_mode)
@@ -343,7 +344,7 @@ def _joints(ctx: Any, job: Any, viewer: Any) -> None:
         # Throws away every marker the user dragged, unlabelled and one row
         # under "Apply joint positions"; guarded for the same reason.
         guard(ctx, "revert the joints", viewer.editor.revert_joints)
-    if imgui.button("Back to posing", (-1, 0)):
+    if controls.button("Back to posing", (-1, 0)):
         guard(ctx, "return to pose editing", viewer.exit_joints_mode)
 
 
@@ -432,7 +433,7 @@ def _saved_list(ctx: Any, job: Any) -> None:
         # wants three controls, one of which reads "Save GLB...". A long name
         # pushed Delete past the content edge where imgui clips it.
         widgets.same_line_or_wrap(widgets.button_width("Apply"))
-        if imgui.small_button("Apply") and ctx.viewer is not None:
+        if controls.small_button("Apply") and ctx.viewer is not None:
             # Overwrites the editor's rotations and clears dirty, so it is an
             # exit route like Done/Escape and takes the same confirm.
             def _apply(pose=pose, pose_id=pose_id):
@@ -448,7 +449,7 @@ def _saved_list(ctx: Any, job: Any) -> None:
         ):
             _bake(ctx, job_id, pose_id)
         widgets.same_line_or_wrap(widgets.button_width("Delete"))
-        if imgui.small_button("Delete"):
+        if controls.small_button("Delete"):
             _ask_delete(ctx, job_id, pose_id, pose.get("name") or pose_id)
         imgui.pop_id()
     widgets.no_matches(needle, shown)

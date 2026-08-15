@@ -401,7 +401,7 @@ def commands(ctx: Any) -> list[Command]:
         )
 
     def manual(ctx: Any) -> None:
-        # The Manual stopped being a mode in REDESIGN.md wave 3, so
+        # The Manual stopped being a mode in the UI redesign, wave 3, so
         # ``_mode_commands`` no longer derives an entry for it -- and a
         # reference reachable only by a function key is a reference most people
         # do not know exists. This is that door, kept in the palette where
@@ -578,7 +578,7 @@ def commands(ctx: Any) -> list[Command]:
         ),
         Command(
             key="diagnostics",
-            label="Diagnostics",
+            label="Issues",
             group="Application",
             run=diagnostics,
         ),

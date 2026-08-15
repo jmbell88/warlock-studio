@@ -136,7 +136,7 @@ def test_both_panes_delegate_rather_than_keeping_a_copy():
         assert "dialogs.Confirm" not in source
 
 
-# --- the way across to the Poser (REDESIGN.md wave 5.5) -----------------------
+# --- the way across to the Poser (the UI redesign, wave 5.5) -----------------------
 
 
 def _cross_ctx(*, dirty: bool):

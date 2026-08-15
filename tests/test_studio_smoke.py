@@ -750,7 +750,7 @@ def test_the_library_builds_as_its_own_mode(app_ctx, imgui_ctx):
 
 
 def test_the_profile_sheet_builds_over_a_mode(app_ctx, imgui_ctx):
-    """Profiles stopped being a mode in REDESIGN.md wave 3: it is a window of
+    """Profiles stopped being a mode in the UI redesign, wave 3: it is a window of
     its own over the 2D pane, so like the Manual overlay it is drawn outside
     the host and cannot be smoked by the pane pass.
 
@@ -802,7 +802,7 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
 
 
 def test_the_manual_overlay_builds_over_a_mode(app_ctx, imgui_ctx):
-    """Its own window now (REDESIGN.md wave 3), which is a begin/end to get
+    """Its own window now (the UI redesign, wave 3), which is a begin/end to get
     wrong -- and it is drawn *outside* the host, so it cannot be smoked by the
     pane pass that covers everything else.
 
@@ -952,7 +952,7 @@ def test_the_settings_pane_help_button_stays_inside_the_pane(app_ctx, imgui_ctx,
 
 
 def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monkeypatch):
-    """REDESIGN.md 4.1. Four categories, and exactly one body per frame.
+    """The UI redesign, wave 4.1. Four categories, and exactly one body per frame.
 
     The pane used to draw all four stacked, which is the shape the segmented
     control replaced -- so the assertion worth making is not that the switch
@@ -1015,7 +1015,7 @@ def test_the_settings_column_is_bounded_and_centred(app_ctx, imgui_ctx):
 
 
 def test_the_bulk_deletes_left_the_library_footer_for_settings(app_ctx, imgui_ctx):
-    """REDESIGN.md 4.1: the confirms stay in ``library``, the buttons do not.
+    """The UI redesign, wave 4.1: the confirms stay in ``library``, the buttons do not.
 
     Under a scrolling list of assets, "Clean library..." reads as an action on
     the assets you can see; and that footer is the narrowest row in the app's
@@ -1568,7 +1568,7 @@ def test_the_widget_kit_builds_every_new_widget(app_ctx, imgui_ctx):
 
 
 def test_the_quiet_registers_build(app_ctx, imgui_ctx):
-    """REDESIGN.md wave 2's three additions: a button with no resting fill, a
+    """The UI redesign wave 2's three additions: a button with no resting fill, a
     borderless glyph, a primary that has stopped being accent-coloured because
     it cannot be pressed, and the shared "nothing open" screen."""
     from warlock.studio import icons, widgets
@@ -2198,7 +2198,7 @@ def test_the_bulk_bar_says_how_much_of_the_selection_is_off_screen(app_ctx, imgu
 @pytest.mark.parametrize("scale", [1.0, 1.5, 1.75])
 def test_the_rail_fits_the_resize_floor_at_every_scale(app_ctx, imgui_ctx, scale):
     """What the header's three tests were about, asked of the control that
-    replaced it (REDESIGN.md wave 3).
+    replaced it (the UI redesign, wave 3).
 
     Those three pinned a right-aligned strip whose width had to be *measured*
     rather than reserved, because ``same_line`` past the content region clips
@@ -2682,7 +2682,7 @@ def test_arrow_keys_with_nothing_selected_enter_from_the_near_end(app_ctx):
 def test_the_full_window_library_builds_in_every_column_arrangement(
     app_ctx, imgui_ctx
 ):
-    """REDESIGN.md wave 4.4. Four states, because the middle column's width is
+    """The UI redesign, wave 4.4. Four states, because the middle column's width is
     a function of whether the inspector is there and the grid is a function of
     which pile it is drawing."""
     from warlock.studio.panes import library_full
@@ -3199,7 +3199,7 @@ def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
     ``compact`` labelling and takes it all-or-nothing.
 
     This used to be asked of the *mode switch*, which was thirteen segments and
-    the app's whole navigation; the rail replaced it in REDESIGN.md wave 3 and
+    the app's whole navigation; the rail replaced it in the UI redesign, wave 3 and
     the rail's own fit is pinned above. What survives is the widget's rule,
     asked of a control wide enough to need it -- and it survives because the
     control does: wave 4 gives it the Settings pane's categories.
@@ -3673,7 +3673,7 @@ def test_a_present_row_with_nothing_to_free_draws_no_trash_button(app_ctx, imgui
     assert app_ctx.confirms.pending is not None
 
 
-# --- REDESIGN.md wave 4.2: the rows rewritten onto ``toolbar`` ---------------
+# --- the UI redesign, wave 4.2: the rows rewritten onto ``toolbar`` ---------------
 #
 # The rows wave 4.2 rewrote onto ``toolbar``, measured rather than eyeballed.
 #

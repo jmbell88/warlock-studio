@@ -46,7 +46,7 @@ def draw(ctx: Any) -> None:
     widgets.section("Skeleton")
     # On the first *real* row rather than under the heading: ``section`` ends
     # in a spacer, so a right-aligned (?) called straight after a title floats
-    # alone on an empty line (REDESIGN.md wave 4).
+    # alone on an empty line (the UI redesign, wave 4).
     manual_render.help_button(ctx, "settings-rig")
     if job is None:
         widgets.empty_state(

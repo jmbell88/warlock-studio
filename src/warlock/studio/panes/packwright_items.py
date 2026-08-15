@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, packwright_mode, theme, widgets
+from .. import controls, icons, packwright_mode, theme, widgets
 from ..manual import render as manual_render
 
 
@@ -65,7 +65,7 @@ def draw(ctx: Any) -> None:
         uid = source.uid if source is not None else None
         selected = uid is not None and state.selected == uid
         imgui.push_id(frame.key)
-        if imgui.selectable(f"{frame.name}##item", selected)[0] and uid is not None:
+        if controls.selectable(f"{frame.name}##item", selected)[0] and uid is not None:
             state.selected = None if selected else uid
         if imgui.is_item_hovered():
             trimmed = " (trimmed)" if frame.trimmed else ""

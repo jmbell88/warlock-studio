@@ -23,7 +23,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, widgets
+from .. import clay_mode, clay_ops, controls, widgets
 
 POPUP = "clay-context"
 PARAM_POPUP = "clay-op-params"
@@ -60,7 +60,7 @@ def _rows(ctx: Any, state: Any, tab: Any, doc: Any) -> None:
     for op in clay_ops.menu(doc.element_mode):
         if op.separator_before:
             imgui.separator()
-        clicked, _ = imgui.menu_item(op.label, op.key, False, op.enabled(doc) and not tab.saving)
+        clicked, _ = controls.menu_item(op.label, op.key, False, op.enabled(doc) and not tab.saving)
         if not clicked:
             continue
         if op.params:
@@ -112,9 +112,9 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
             # integer parameter and it was drawn as a float field, so it
             # accepted 1.5 and the op then truncated it -- a number the user
             # typed, silently becoming a different one.
-            changed, value = imgui.input_int(label, int(values.get(param.name, param.default)))
+            changed, value = controls.input_int(label, int(values.get(param.name, param.default)))
         else:
-            changed, value = imgui.input_float(
+            changed, value = controls.input_float(
                 label,
                 float(values.get(param.name, param.default)),
                 param.step,
@@ -133,7 +133,7 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
         state.pending_op = ""
         imgui.close_current_popup()
     imgui.same_line()
-    if imgui.button(f"Cancel##{op.name}"):
+    if controls.button(f"Cancel##{op.name}"):
         state.pending_op = ""
         imgui.close_current_popup()
     imgui.end_popup()

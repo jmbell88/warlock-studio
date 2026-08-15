@@ -35,7 +35,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker_mode, theme, widgets
+from .. import controls, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_textures
@@ -83,7 +83,7 @@ def _transport(ctx: Any, tab: Any) -> None:
     # Never disabled, not even mid-save: nothing here writes to the document,
     # and a preview that stopped being playable because a file was being
     # written would be refusing the one thing it is safe to do.
-    if imgui.button("Stop" if tab.preview_playing else "Play", (sp(48), 0)):
+    if controls.button("Stop" if tab.preview_playing else "Play", (sp(48), 0)):
         inker_mode.toggle_preview(tab)
     imgui.same_line()
     imgui.text(f"{index + 1}/{len(anim.frames)}")

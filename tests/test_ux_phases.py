@@ -426,7 +426,7 @@ def test_the_manual_calls_them_what_the_app_calls_them():
 
 def test_the_navigation_control_carries_navigation_and_nothing_else():
     """Phase 2 took Quit out of the switch and put it in a header strip beside
-    a resource readout and a shortcuts button. REDESIGN.md wave 3 took the whole
+    a resource readout and a shortcuts button. The UI redesign, wave 3 took the whole
     header: the readout was developer chrome on screen permanently (F10 still
     raises the meter, which was always the real tool), and a destructive control
     in the shell was only less bad in the corner than it had been in the switch.

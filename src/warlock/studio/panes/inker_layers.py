@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker, inker_mode, theme, widgets
+from .. import controls, icons, inker, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_textures
@@ -112,12 +112,12 @@ def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
     if depth:
         imgui.indent(INDENT * depth)
     folded = node.uid in tab.collapsed_groups
-    if imgui.small_button("+" if folded else "-"):
+    if controls.small_button("+" if folded else "-"):
         tab.collapsed_groups.discard(node.uid) if folded else tab.collapsed_groups.add(
             node.uid
         )
     imgui.same_line()
-    changed, visible = imgui.checkbox("##groupvis", node.visible)
+    changed, visible = controls.checkbox("##groupvis", node.visible)
     if changed:
         doc.set_group_props(node.uid, visible=visible)
     imgui.same_line()
@@ -126,18 +126,18 @@ def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
         label += f"  {node.opacity * 100:.0f}%"
     if node.locked:
         label += "  locked"
-    imgui.selectable(f"{label}##grouphead", False)
+    controls.selectable(f"{label}##grouphead", False)
     _drop_onto_group(doc, node.uid)
     if imgui.begin_popup_context_item("group-menu"):
-        if imgui.selectable("Ungroup", False)[0]:
+        if controls.selectable("Ungroup", False)[0]:
             doc.ungroup(node.uid)
-        if imgui.selectable("Rename", False)[0]:
+        if controls.selectable("Rename", False)[0]:
             _ask_group_rename(ctx, doc, node)
-        if imgui.selectable("Lock", False)[0]:
+        if controls.selectable("Lock", False)[0]:
             doc.set_group_props(node.uid, locked=not node.locked)
         imgui.end_popup()
     imgui.set_next_item_width(sp(90))
-    changed, value = imgui.slider_float(
+    changed, value = controls.slider_float(
         "##groupopacity", float(node.opacity), 0.0, 1.0, "%.2f"
     )
     if changed:
@@ -190,10 +190,10 @@ def _can_merge(doc: Any) -> bool:
 
 
 def _actions(ctx: Any, doc: Any) -> None:
-    if imgui.button("Add"):
+    if controls.button("Add"):
         doc.add_layer()
     imgui.same_line()
-    if imgui.button("Copy"):
+    if controls.button("Copy"):
         doc.duplicate_layer()
     imgui.same_line()
     if widgets.disabled_button("Delete", len(doc.stack) > 1):
@@ -243,7 +243,7 @@ def _actions(ctx: Any, doc: Any) -> None:
     )
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)
-    changed, locked = imgui.checkbox("Lock alpha", layer.alpha_lock)
+    changed, locked = controls.checkbox("Lock alpha", layer.alpha_lock)
     widgets.help_marker(
         "Paints inside what is already on this layer and never past its edge: "
         "colours change, transparency does not. The eraser does nothing on a "
@@ -251,7 +251,7 @@ def _actions(ctx: Any, doc: Any) -> None:
     )
     if changed:
         doc.set_layer_props(alpha_lock=locked)
-    changed, content = imgui.checkbox("Lock layer", layer.locked)
+    changed, content = controls.checkbox("Lock layer", layer.locked)
     widgets.help_marker(
         "Refuses every tool: no strokes, fills, gradients, filters, lifts or "
         "pastes land on it. Renaming, hiding, reordering and deleting still "
@@ -269,7 +269,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
         imgui.indent(INDENT * depth)
     active = index == doc.stack.active_index
 
-    changed, visible = imgui.checkbox("##visible", layer.visible)
+    changed, visible = controls.checkbox("##visible", layer.visible)
     if changed:
         doc.set_layer_props(index, visible=visible)
     imgui.same_line()
@@ -281,7 +281,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
 
     imgui.begin_group()
     label = layer.name if layer.visible else f"{layer.name} (hidden)"
-    if imgui.selectable(f"{label}##pick", active, 0, (0, THUMB * 0.5))[0]:
+    if controls.selectable(f"{label}##pick", active, 0, (0, THUMB * 0.5))[0]:
         doc.set_active_layer(index)
     _reorder(doc, index)
     imgui.text_colored(
@@ -293,16 +293,16 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     imgui.end_group()
 
     if imgui.begin_popup_context_item("layer-menu"):
-        if imgui.selectable("Rename", False)[0]:
+        if controls.selectable("Rename", False)[0]:
             _ask_rename(ctx, doc, index)
-        if imgui.selectable("Move up", False)[0]:
+        if controls.selectable("Move up", False)[0]:
             doc.move_layer(index, index + 1)
-        if imgui.selectable("Move down", False)[0]:
+        if controls.selectable("Move down", False)[0]:
             doc.move_layer(index, index - 1)
         imgui.separator()
-        if imgui.selectable("Group", False)[0]:
+        if controls.selectable("Group", False)[0]:
             doc.group_layers([index])
-        if doc.group_of.get(_member_uid(doc, index)) is not None and imgui.selectable(
+        if doc.group_of.get(_member_uid(doc, index)) is not None and controls.selectable(
             "Take out of group", False
         )[0]:
             doc.move_into_group(index, None)

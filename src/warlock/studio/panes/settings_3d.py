@@ -19,7 +19,7 @@ from ...bench import findings as findings_lib
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
-from .. import dialogs, focus, matte_preview, theme, widgets
+from .. import controls, dialogs, focus, forms, matte_preview, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -49,6 +49,17 @@ PROFILES = [("raw", "Raw (no decimation)")]
 
 
 def draw(ctx: Any) -> None:
+    """Draw the mesh form, including its "Mesh resolution" choice."""
+
+    # Form.errors replaces field_error(ctx.state, "platform") and keeps the
+    # service's field key attached to the shared control's ring and error copy.
+    with forms.Form("create-3d", errors=ctx.state.field_errors) as form_ui:
+        _draw_form(ctx, form_ui, "Mesh resolution")
+
+
+def _draw_form(
+    ctx: Any, form_ui: forms.Form, mesh_resolution_label: str
+) -> None:
     state = ctx.state
     form = state.form_3d
 
@@ -77,17 +88,19 @@ def draw(ctx: Any) -> None:
     # below keeps only the half that is still worth saying.
     before = form["platform"]
     with focus.item(ctx.state, FOCUS_PANE, "platform"):
-        form["platform"] = widgets.labeled_combo(
-            "Mesh resolution", form["platform"], _platform_options(ctx)
+        _changed, form["platform"] = form_ui.combo(
+            "platform",
+            mesh_resolution_label,
+            form["platform"],
+            _platform_options(ctx),
+            help_text=(
+                "How much geometry trellis is asked for. Higher costs more GPU "
+                "and more triangles."
+            ),
         )
-    widgets.field_error(ctx.state, "platform")
     if form["platform"] != before:
         ctx.state.clear_field_error("platform")
     _hint(ctx, "platform", form["platform"])
-    widgets.help_marker(
-        "How much geometry trellis is asked for. Higher costs more GPU and "
-        "more triangles."
-    )
     _budget(ctx, form)
 
     _size(form)
@@ -97,30 +110,39 @@ def draw(ctx: Any) -> None:
     widgets.help_marker("0 keeps whatever the reference recorded.")
 
     with focus.item(ctx.state, FOCUS_PANE, "bg_removal"):
-        form["bg_removal"] = widgets.labeled_combo(
-            "Background", form["bg_removal"], _bg_options(ctx)
+        _changed, form["bg_removal"] = form_ui.combo(
+            "bg_removal",
+            "Background",
+            form["bg_removal"],
+            _bg_options(ctx),
         )
-    widgets.field_error(ctx.state, "bg_removal")
     _hint(ctx, "bg_removal", form["bg_removal"])
 
-    imgui.set_next_item_width(sp(120))
     with focus.item(ctx.state, FOCUS_PANE, "mesh_seed"):
-        changed, seed = imgui.input_int("Mesh seed", int(form["mesh_seed"]), 0, 0)
+        changed, seed = form_ui.number(
+            "mesh_seed", "Mesh seed", int(form["mesh_seed"])
+        )
     if changed:
         form["mesh_seed"] = max(0, seed)
-    imgui.same_line()
-    if imgui.button("Reroll##mesh"):
+    if controls.button("Reroll##mesh", role=controls.ButtonRole.GHOST):
         form["mesh_seed"] = random_seed()
 
-    changed, prep = imgui.checkbox("Normalise the reference", bool(form["reference_prep"]))
+    changed, prep = form_ui.switch(
+        "reference_prep",
+        "Normalise the reference",
+        bool(form["reference_prep"]),
+        help_text=(
+            "Recentre the subject and scale it to fill the frame before the mesh "
+            "engine sees it."
+        ),
+        helper=(
+            "Off by default: the engine does its own cropping, and whether doing "
+            "it twice helps has not been measured."
+        ),
+    )
     if changed:
         form["reference_prep"] = prep
     _hint(ctx, "reference_prep", form["reference_prep"])
-    widgets.help_marker(
-        "Recentre the subject and scale it to fill the frame before the mesh "
-        "engine sees it. Off by default: the engine does its own cropping, and "
-        "whether doing it twice helps has not been measured."
-    )
 
     _rig(ctx, form)
     _submit(ctx, form)
@@ -184,7 +206,7 @@ def _size(form: dict[str, Any]) -> None:
     """
     value = float(form["size_m"])
     fmt = "unset - keeps the reference's" if value <= 0.0 else "%.2f m"
-    changed, size = imgui.drag_float("Size", value, SIZE_DRAG_SPEED, *SIZE_NO_BOUND, fmt)
+    changed, size = controls.drag_float("Size", value, SIZE_DRAG_SPEED, *SIZE_NO_BOUND, fmt)
     if changed:
         # Floored here rather than by the widget: unbounded means unbounded in
         # both directions, and a negative size is not a smaller asset.
@@ -221,7 +243,7 @@ def _budget(ctx: Any, form: dict[str, Any]) -> None:
         # had: the field was submitted, validated and recorded with no way to
         # set it, which is a form field that exists only for the API.
         imgui.set_next_item_width(sp(140))
-        changed, value = imgui.input_int("Triangles", int(form["custom_triangles"]), 0, 0)
+        changed, value = controls.input_int("Triangles", int(form["custom_triangles"]), 0, 0)
         if changed:
             form["custom_triangles"] = max(0, value)
 
@@ -256,7 +278,7 @@ def _source(ctx: Any) -> None:
     if source is not None:
         imgui.text_wrapped(source.get("name") or source.get("prompt") or source["id"])
         widgets.muted(f"reference - {source['id']}")
-        if imgui.button("Clear"):
+        if controls.button("Clear"):
             state.source_job = None
     elif dragging is not None:
         # The invitation replaces the instruction only while something is in
@@ -307,7 +329,7 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
         # and a greyed control implies it could be turned on from here.
         return
     widgets.section("Rig")
-    changed, rig = imgui.checkbox("Rig when the mesh lands", bool(form["rig"]))
+    changed, rig = controls.checkbox("Rig when the mesh lands", bool(form["rig"]))
     if changed:
         form["rig"] = rig
     if form["rig"]:
@@ -383,7 +405,7 @@ def _candidates(form: dict[str, Any]) -> None:
         # Never drawn past the panel edge: three 40 px buttons and two spacings
         # fit inside the 300 px sidebar with room to spare, and the guard in
         # tests/test_studio_smoke.py measures rather than trusts that.
-        if imgui.radio_button(f"{count}##candidates", current == count):
+        if controls.radio_button(f"{count}##candidates", current == count):
             form["candidates"] = count
     widgets.help_marker(
         "Reconstruct the same reference more than once and keep the best. The "
@@ -578,7 +600,7 @@ def _matte_body(ctx: Any, state: Any) -> None:
         matte_preview.fix(ctx)
         return
     imgui.same_line()
-    if imgui.button("Cancel", (sp(100), 0)):
+    if controls.button("Cancel", (sp(100), 0)):
         imgui.close_current_popup()
         state._open = False
         matte_preview.close(ctx)

@@ -44,18 +44,19 @@ width rather than eyeballed at one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from typing import Any
 
 from imgui_bundle import imgui
 
-from . import fonts, icons, widgets
+from . import controls, fonts, icons, widgets
 
 # The three ways one item can be drawn. Strings rather than an enum because
 # they are compared in tests by name and read in a failure message by a person.
 FULL = "full"
 ICON = "icon"
 MENU = "menu"
+ButtonRole = controls.ButtonRole
 
 
 @dataclass(frozen=True)
@@ -75,18 +76,24 @@ class Item:
     tooltip: str = ""
     enabled: bool = True
     reason: str = ""
-    danger: bool = False
-    # The one thing this row is *for*, drawn in the accent (REDESIGN.md wave
-    # 4.2). At most one per row, and it should almost always be pinned as well:
-    # a row's answer moving into an overflow menu is the collapse doing the
-    # opposite of its job. Ignored when ``danger`` is set -- red already says
-    # "this is the consequential one", and an accent-filled destructive button
-    # says two things at once.
-    primary: bool = False
+    role: controls.ButtonRole = controls.ButtonRole.SECONDARY
+    # Explicit because selected is persistent state, not hover. Tool modes and
+    # view toggles use the same wash/boundary as selectable rows.
+    selected: bool = False
+    # Constructor-only migration shims. Studio call sites use ``role``; these
+    # keep older extensions and serialized test fixtures source-compatible.
+    primary: InitVar[bool] = False
+    danger: InitVar[bool] = False
     # Higher collapses first. 0 is the row's reason for existing.
     priority: int = 0
     # Never hidden in the overflow menu; see the module docstring.
     pinned: bool = False
+
+    def __post_init__(self, primary: bool, danger: bool) -> None:
+        if danger:
+            object.__setattr__(self, "role", controls.ButtonRole.DESTRUCTIVE)
+        elif primary:
+            object.__setattr__(self, "role", controls.ButtonRole.PRIMARY)
 
 
 def plan(
@@ -202,22 +209,48 @@ def toolbar(
             # with no name is the accessible-name failure ``icon_button``'s
             # required tooltip exists to prevent, and a compacted button is
             # exactly where it would come back.
-            hit = widgets.icon_button(
-                f"{item.icon}{ident}",
-                item.tooltip or item.label,
-                danger=item.danger,
-                # A compacted primary keeps its frame where the others lose
-                # theirs: borderless is what makes a row of glyphs read as
-                # content rather than as boxes, and the one glyph that is the
-                # answer still has to be findable among them.
+            if item.selected:
+                role = (
+                    item.role
+                    if item.role
+                    in (
+                        controls.ButtonRole.PRIMARY,
+                        controls.ButtonRole.DESTRUCTIVE,
+                    )
+                    else controls.ButtonRole.ICON
+                )
+                hit = controls.button(
+                    f"{item.icon}{ident}",
+                    (overflow_w, 0),
+                    role=role,
+                    control_size=controls.ControlSize.COMPACT,
+                    selected=True,
+                    enabled=item.enabled,
+                    reason=item.reason,
+                    tooltip=item.tooltip or item.label,
+                )
+            else:
+                hit = widgets.icon_button(
+                    f"{item.icon}{ident}",
+                    item.tooltip or item.label,
+                    danger=item.role is controls.ButtonRole.DESTRUCTIVE,
+                    enabled=item.enabled,
+                    borderless=item.role is not controls.ButtonRole.PRIMARY,
+                )
+        elif item.selected:
+            hit = controls.button(
+                f"{item.label}{ident}",
+                role=item.role,
+                selected=True,
                 enabled=item.enabled,
-                borderless=not item.primary,
+                reason=item.reason,
+                tooltip=item.tooltip,
             )
-        elif item.danger:
+        elif item.role is controls.ButtonRole.DESTRUCTIVE:
             hit = widgets.destructive_button(
                 f"{item.label}{ident}", enabled=item.enabled
             )
-        elif item.primary:
+        elif item.role is controls.ButtonRole.PRIMARY:
             hit = widgets.primary_button(
                 f"{item.label}{ident}",
                 enabled=item.enabled,
@@ -243,7 +276,7 @@ def toolbar(
             for item, tier in zip(items, tiers, strict=True):
                 if tier != MENU:
                     continue
-                if imgui.menu_item(
+                if controls.menu_item(
                     f"{item.label}##{bar_id}/menu/{item.key}", "", False, item.enabled
                 )[0]:
                     clicked = item.key

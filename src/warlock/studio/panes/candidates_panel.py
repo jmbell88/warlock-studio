@@ -29,7 +29,7 @@ from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
 from .. import candidates as candidates_mod
-from .. import dialogs, widgets
+from .. import controls, dialogs, widgets
 from ..manual import render as manual_render
 from . import library
 
@@ -60,7 +60,7 @@ def _member(ctx: Any, group: Any, member: dict[str, Any], current: bool) -> None
     if current:
         if widgets.primary_button(f"{label}##candidate-{job_id}", (44, 0)):
             select(ctx, job_id)
-    elif imgui.button(f"{label}##candidate-{job_id}", (44, 0)):
+    elif controls.button(f"{label}##candidate-{job_id}", (44, 0)):
         select(ctx, job_id)
     # Safe against the pane edge: a 44 px button plus one item spacing inside a
     # 300 px sidebar leaves most of the line. The smoke-test guard measures it.

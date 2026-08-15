@@ -34,7 +34,7 @@ from . import icons
 # later stage genuinely implies every earlier one. Every entry so far does --
 # there is no mesh without a reference and no rig without a mesh.
 #
-# The tuple *grows* across REDESIGN.md wave 5's steps (reference/mesh at 5.2b,
+# The tuple *grows* across the UI redesign wave 5's steps (reference/mesh at 5.2b,
 # +rig/pose at 5.3, +export at 5.4) and a test pins that it only ever grows:
 # shipping a rail with two segments while the rig and pose panels are still
 # inspector tabs is honest, and shipping five segments of which three are dead
@@ -259,7 +259,7 @@ def stage_for(job: Any) -> str:
 def in_create(state: Any) -> bool:
     """Whether the app is in Create mode at all.
 
-    The indirection REDESIGN.md wave 5.2a existed for: every ``mode == "2d" or
+    The indirection wave 5.2a of the UI redesign existed for: every ``mode == "2d" or
     mode == "3d"`` read in the panes was rewritten to ask this, and 5.2b then
     changed the answer *here* rather than hunting a string through nine files.
     """

@@ -16,7 +16,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker_mode, theme, widgets
+from .. import controls, icons, inker_mode, theme, widgets
 from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -90,9 +90,9 @@ def _file_why(state: Any, tab: Any) -> str:
 
 
 def _file(ctx: Any, state: Any, tab: Any) -> None:
-    """New/Open/Save/Save as/Export PNG, and the recent list.
+    """New/Open/Save/Save As/Export PNG, and the recent list.
 
-    Moved here from the canvas's own row in REDESIGN.md wave 4.2, and shaped
+    Moved here from the canvas's own row in the UI redesign, wave 4.2, and shaped
     like ``plotter_bridge``'s file block on purpose: Inker was the one document
     mode whose file actions did not live in its bridge panel, and the row they
     were on was the app's worst clipping case -- eight labelled buttons plus a
@@ -105,10 +105,10 @@ def _file(ctx: Any, state: Any, tab: Any) -> None:
     from . import inker_canvas
 
     width = widgets.grid_width(2)
-    if imgui.button(f"{icons.PLUS} New", (width, 0)):
+    if controls.button(f"{icons.PLUS} New", (width, 0)):
         imgui.open_popup("new-canvas")
     imgui.same_line()
-    if imgui.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
+    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         inker_mode.ask_open(ctx)
     # This pane's own registration of the shared popup: a popup belongs to the
     # window that begins it, so the canvas's copy is not reachable from here.
@@ -123,7 +123,7 @@ def _file(ctx: Any, state: Any, tab: Any) -> None:
         ):
             inker_mode.save(ctx, tab)
         imgui.same_line()
-        if widgets.disabled_button("Save as...", ready, (width, 0), reason=why):
+        if widgets.disabled_button("Save As...", ready, (width, 0), reason=why):
             inker_mode.save_as(ctx, tab)
         if widgets.disabled_button(
             f"{icons.UPLOAD} Export PNG", ready, (-1, 0), reason=why
@@ -201,20 +201,20 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     # The canvas, the layers panel and the keyboard path all gate on this
     # flag; this panel was the hole.
     imgui.begin_disabled(tab.busy)
-    if imgui.button("Flip H"):
+    if controls.button("Flip H"):
         doc.flip("horizontal")
     imgui.same_line()
-    if imgui.button("Flip V"):
+    if controls.button("Flip V"):
         doc.flip("vertical")
     imgui.same_line()
-    if imgui.button("Rotate"):
+    if controls.button("Rotate"):
         doc.rotate90()
-    if imgui.button("Resize..."):
+    if controls.button("Resize..."):
         imgui.open_popup("inker-resize")
     imgui.same_line()
-    if imgui.button("Fit view"):
+    if controls.button("Fit view"):
         tab.view.fitted = False
-    if imgui.button("Filter..."):
+    if controls.button("Filter..."):
         _open_filter(ctx, tab)
 
     imgui.dummy((0, 6))
@@ -245,10 +245,10 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     key = f"inker_resize:{tab.uid}"
     width, height = ctx.state.preview.get(key) or tab.doc.size
     imgui.set_next_item_width(sp(90))
-    changed_w, width = imgui.input_int("W", int(width), 0)
+    changed_w, width = controls.input_int("W", int(width), 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(90))
-    changed_h, height = imgui.input_int("H", int(height), 0)
+    changed_h, height = controls.input_int("H", int(height), 0)
     if changed_w or changed_h:
         ctx.state.preview[key] = (max(1, width), max(1, height))
     state = inker_mode.ensure(ctx)
@@ -263,14 +263,14 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     anchor = _anchor_grid(ctx, tab)
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
-    if imgui.button("Scale image", (sp(180), 0)):
+    if controls.button("Scale image", (sp(180), 0)):
         tab.doc.scale((max(1, width), max(1, height)), resample=state.resample)
         tab.view.fitted = False
         imgui.close_current_popup()
     # Two different operations that a single "resize" would conflate: one
     # resamples the picture, the other changes how much room it has. The anchor
     # belongs to the second: scaling has nowhere to put slack.
-    if imgui.button("Resize canvas", (sp(180), 0)):
+    if controls.button("Resize canvas", (sp(180), 0)):
         tab.doc.resize_canvas((max(1, width), max(1, height)), anchor=anchor)
         tab.view.fitted = False
         imgui.close_current_popup()
@@ -309,7 +309,7 @@ def _anchor_grid(ctx: Any, tab: Any) -> str:
                     imgui.Col_.button.value,
                     imgui.get_style().color_(imgui.Col_.button_active.value),
                 )
-            if imgui.button(f" ##anchor{name}", (sp(28), sp(24))):
+            if controls.button(f" ##anchor{name}", (sp(28), sp(24))):
                 ctx.state.preview[key] = name
                 current = name
             if selected:
@@ -400,13 +400,13 @@ def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
         # The colour a user wants is nearly always the one they are painting
         # with, and picking it twice in two widgets is the friction this button
         # exists to remove.
-        if imgui.button(f"use FG##fg{key}"):
+        if controls.button(f"use FG##fg{key}"):
             values[key] = tuple(state.fg)
         return
     if key in filters.TOGGLE_PARAMS:
         # Stored as 0.0/1.0, not as a bool: the registry holds one kind of value
         # and ``apply_named`` passes it straight through.
-        changed, on = imgui.checkbox(f"{label}##{key}", bool(values[key]))
+        changed, on = controls.checkbox(f"{label}##{key}", bool(values[key]))
         if changed:
             values[key] = 1.0 if on else 0.0
         return
@@ -425,7 +425,7 @@ def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
         return
     low, high = filters.RANGES.get(key, (0.0, 1.0))
     imgui.set_next_item_width(sp(160))
-    changed, value = imgui.slider_float(f"{label}##{key}", float(values[key]), low, high)
+    changed, value = controls.slider_float(f"{label}##{key}", float(values[key]), low, high)
     if changed:
         values[key] = float(value)
 
@@ -451,7 +451,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
     values = _filter_values(state, state.filter_name)
     for key in filters.FILTERS[state.filter_name][0]:
         _filter_control(state, values, key)
-    if imgui.button("Reset##filterreset"):
+    if controls.button("Reset##filterreset"):
         # Back to what opening the popup gave, not to the identity defaults --
         # Reset on Invert that unticked all three channels would be a button
         # that turns the filter off.
@@ -464,7 +464,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
 
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
-    if imgui.button("Apply", (sp(90), 0)):
+    if controls.button("Apply", (sp(90), 0)):
         tab.doc.commit_filter()
         state.filter_open = False
         imgui.close_current_popup()
@@ -474,7 +474,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     # Never disabled: a save starting while this is open must not leave a modal
     # the user cannot dismiss -- the trap the params popup in Clay documents.
-    if imgui.button("Cancel", (sp(90), 0)):
+    if controls.button("Cancel", (sp(90), 0)):
         tab.doc.cancel_filter()
         state.filter_open = False
         imgui.close_current_popup()
@@ -498,7 +498,7 @@ def _apply_to_range(ctx: Any, tab: Any) -> None:
     state = inker_mode.ensure(ctx)
     rect = tab.range_sel
     imgui.begin_disabled(tab.busy or rect is None or tab.doc.anim is None)
-    if imgui.button("Apply to range", (sp(120), 0)):
+    if controls.button("Apply to range", (sp(120), 0)):
         values = dict(_filter_values(state, state.filter_name))
         tab.doc.cancel_filter()
         state.filter_open = False
@@ -521,7 +521,7 @@ SHEET_IMPORT_POPUP = "inker-sheet-import"
 def _sheet_import(ctx: Any) -> None:
     """The Import sheet button, and the grid popup once a file is chosen."""
     state = inker_mode.ensure(ctx)
-    if imgui.button("Import sprite sheet...", (-1, 0)):
+    if controls.button("Import sprite sheet...", (-1, 0)):
         inker_mode.ask_import_sheet(ctx)
     widgets.help_marker(
         "Slices any image into one frame per cell, row by row. For a sheet this"
@@ -543,7 +543,7 @@ def _aseprite_import(ctx: Any) -> None:
     that one does: a sheet has to be told how to cut and an Aseprite file
     already says where everything is.
     """
-    if imgui.button("Import Aseprite file...", (-1, 0)):
+    if controls.button("Import Aseprite file...", (-1, 0)):
         inker_mode.ask_import_aseprite(ctx)
     widgets.help_marker(
         "Reads an .aseprite or .ase file: layers, groups, the timeline, tags,"
@@ -557,10 +557,10 @@ def _aseprite_import(ctx: Any) -> None:
 def _pair(label: str, value: tuple[int, int], low: int = 0) -> tuple[int, int]:
     """Two small integer fields on one row. -> the pair, floored at ``low``."""
     imgui.set_next_item_width(sp(70))
-    _changed_x, x = imgui.input_int(f"##{label}x", int(value[0]), 1, 8)
+    _changed_x, x = controls.input_int(f"##{label}x", int(value[0]), 1, 8)
     imgui.same_line()
     imgui.set_next_item_width(sp(70))
-    _changed_y, y = imgui.input_int(f"##{label}y", int(value[1]), 1, 8)
+    _changed_y, y = controls.input_int(f"##{label}y", int(value[1]), 1, 8)
     imgui.same_line()
     widgets.muted(label)
     return (max(low, int(x)), max(low, int(y)))
@@ -588,7 +588,7 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
     state.sheet_offset = _pair("offset", state.sheet_offset)
     state.sheet_padding = _pair("padding", state.sheet_padding)
     imgui.set_next_item_width(sp(70))
-    _changed, count = imgui.input_int("frames (0 = all)", int(state.sheet_count), 1, 8)
+    _changed, count = controls.input_int("frames (0 = all)", int(state.sheet_count), 1, 8)
     state.sheet_count = max(0, int(count))
 
     # The count the numbers above actually produce, computed every frame from
@@ -613,11 +613,11 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
 
     imgui.dummy((0, 4))
     imgui.begin_disabled(not rects)
-    if imgui.button("Import", (sp(90), 0)) and inker_mode.import_sheet(ctx):
+    if controls.button("Import", (sp(90), 0)) and inker_mode.import_sheet(ctx):
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
-    if imgui.button("Cancel##sheetin", (sp(90), 0)):
+    if controls.button("Cancel##sheetin", (sp(90), 0)):
         state.sheet_import = None
         state.sheet_import_open = False
         imgui.close_current_popup()
@@ -715,7 +715,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     )
     if not tab.doc.palette:
         imgui.set_next_item_width(sp(160))
-        changed, value = imgui.slider_int("Colours", int(state.convert_max), 2, 64)
+        changed, value = controls.slider_int("Colours", int(state.convert_max), 2, 64)
         if changed:
             state.convert_max = int(value)
         if imgui.is_item_deactivated_after_edit():
@@ -738,7 +738,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
 
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
-    if imgui.button("Apply##convert", (sp(90), 0)):
+    if controls.button("Apply##convert", (sp(90), 0)):
         table = list(state.convert_table)
         if tab.doc.commit_convert(table, state.convert_method):
             state.palette_slot = 0
@@ -751,7 +751,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     imgui.same_line()
     # Never disabled: a save starting while this is open must not leave a modal
     # the user cannot dismiss.
-    if imgui.button("Cancel##convert", (sp(90), 0)):
+    if controls.button("Cancel##convert", (sp(90), 0)):
         tab.doc.cancel_convert()
         state.convert_uid = ""
         imgui.close_current_popup()

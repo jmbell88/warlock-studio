@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..plotter.props import CONTAINER_TYPES, PROPERTY_TYPES, Prop
 from ..plotter.tilemap import GroupLayer, ImageLayer, MapObject, ObjectLayer, TileLayer, new_uid
@@ -100,17 +100,17 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
     imgui.same_line()
     kind = _KIND_ICONS.get(type(layer), icons.LAYERS)
     active = doc.active_layer == layer.uid
-    if imgui.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
+    if controls.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
         doc.set_active_layer(layer.uid)
         state.selected_object = None
     if imgui.begin_popup_context_item(f"layer-menu-{layer.uid}"):
         imgui.begin_disabled(not editable)
-        if imgui.menu_item_simple("Move up"):
+        if controls.menu_item_simple("Move up"):
             doc.move_layer(layer.uid, doc.index_of(layer.uid) + 1)
-        if imgui.menu_item_simple("Move down"):
+        if controls.menu_item_simple("Move down"):
             doc.move_layer(layer.uid, doc.index_of(layer.uid) - 1)
         imgui.separator()
-        if imgui.menu_item_simple("Delete"):
+        if controls.menu_item_simple("Delete"):
             _delete_layer(ctx, doc, layer)
         imgui.end_disabled()
         imgui.end_popup()
@@ -325,15 +325,15 @@ def _value_editor(prop: Prop) -> Any:
 
     imgui.set_next_item_width(sp(110))
     if prop.type == "bool":
-        changed, value = imgui.checkbox("##v", bool(prop.value))
+        changed, value = controls.checkbox("##v", bool(prop.value))
         return value if changed else None
     if prop.type in ("int", "object"):
         # An ``object`` property is a Tiled object id and zero means none, so
         # the int row is the honest control until an object *picker* exists.
-        changed, value = imgui.input_int("##v", int(prop.value or 0))
+        changed, value = controls.input_int("##v", int(prop.value or 0))
         return value if changed else None
     if prop.type == "float":
-        changed, value = imgui.input_float("##v", float(prop.value or 0.0))
+        changed, value = controls.input_float("##v", float(prop.value or 0.0))
         return value if changed else None
     if prop.type in CONTAINER_TYPES:
         # Read-only, and shown rather than hidden: editing a class member or a

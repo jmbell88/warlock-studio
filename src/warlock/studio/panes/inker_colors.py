@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker_mode, theme, widgets
+from .. import controls, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_bridge
@@ -62,10 +62,10 @@ def draw(ctx: Any) -> None:
     if changed:
         state.bg = _to_rgba(value)
 
-    if imgui.button("Swap (X)"):
+    if controls.button("Swap (X)"):
         state.swap_colours()
     imgui.same_line()
-    if imgui.button("+ swatch"):
+    if controls.button("+ swatch"):
         state.add_swatch(state.fg)
         inker_mode.persist(ctx)
 
@@ -126,11 +126,11 @@ def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
         reason="The swatch row above is empty.",
     ):
         inker_mode.index_to(ctx, tab, list(state.swatches))
-    if imgui.button("Index to a palette file..."):
+    if controls.button("Index to a palette file..."):
         inker_mode.import_document_palette(ctx)
-    if imgui.button("Palette from an image..."):
+    if controls.button("Palette from an image..."):
         inker_mode.palette_from_image(ctx)
-    if imgui.button("Convert..."):
+    if controls.button("Convert..."):
         inker_bridge.open_convert(ctx, tab)
     widgets.help_marker(
         "Convert builds a palette out of this drawing's own colours and shows "
@@ -185,7 +185,7 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     changed, value = imgui.color_edit4("Slot", _vec(palette[slot]), FLAGS)
     if changed and doc.recolour_slot(slot, _to_rgba(value)):
         state.palette_usage = None
-    if imgui.button("+ from colour") and doc.add_slot(state.fg):
+    if controls.button("+ from colour") and doc.add_slot(state.fg):
         state.palette_slot = len(doc.palette) - 1
         state.palette_usage = None
     imgui.same_line()
@@ -208,15 +208,15 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
 
     _sort_and_ramp(ctx, state, doc, counts)
 
-    if imgui.small_button("Count usage"):
+    if controls.small_button("Count usage"):
         state.palette_usage = (doc.rev, doc.palette_usage())
     imgui.same_line()
-    if imgui.small_button("Export palette"):
+    if controls.small_button("Export palette"):
         inker_mode.export_document_palette(ctx)
     imgui.same_line()
-    if imgui.small_button("Not indexed"):
+    if controls.small_button("Not indexed"):
         inker_mode.index_to(ctx, tab, None)
-    if imgui.small_button("Re-convert..."):
+    if controls.small_button("Re-convert..."):
         inker_bridge.open_convert(ctx, tab)
     imgui.same_line()
     widgets.muted("try a dither")
@@ -250,7 +250,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
         "##palsort", state.palette_sort, list(SORT_LABELS), sp(110)
     )
     imgui.same_line()
-    if imgui.small_button("Sort"):
+    if controls.small_button("Sort"):
         if state.palette_sort == "usage" and counts is None:
             # Counting is a walk over every pixel of every cel, so it is asked
             # for rather than kept live -- and a sort by a figure nobody has
@@ -265,7 +265,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
         ):
             state.palette_usage = None
     imgui.same_line()
-    changed, value = imgui.checkbox("Down##palsortdir", state.palette_sort_desc)
+    changed, value = controls.checkbox("Down##palsortdir", state.palette_sort_desc)
     if changed:
         state.palette_sort_desc = value
     if selection:
@@ -273,7 +273,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
 
     widgets.field_label("ramp")
     imgui.set_next_item_width(sp(70))
-    changed, value = imgui.slider_int("##palramp", int(state.palette_ramp), 1, 16)
+    changed, value = controls.slider_int("##palramp", int(state.palette_ramp), 1, 16)
     if changed:
         state.palette_ramp = int(value)
     imgui.same_line()
@@ -312,7 +312,7 @@ def _palette_files(ctx: Any, state: Any) -> None:
     save in this app is -- serialising after an unbounded modal would write
     whatever the user changed while it was open.
     """
-    if imgui.small_button("Import palette"):
+    if controls.small_button("Import palette"):
         inker_mode.import_palette(ctx)
     imgui.same_line()
     if widgets.disabled_button("Export palette", bool(state.swatches)):

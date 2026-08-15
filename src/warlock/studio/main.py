@@ -87,7 +87,7 @@ IDLE_FPS = 12
 # on ``_build_ui``'s dispatch.
 #
 # The Manual and the profile manager both left this tuple when they stopped
-# being modes (REDESIGN.md wave 3): each is drawn from ``_overlays`` now, so
+# being modes (the UI redesign, wave 3): each is drawn from ``_overlays`` now, so
 # neither has a dispatch branch to be reached by.
 _SINGLE_PANE_MODES = ("home", "settings", "library")
 
@@ -210,9 +210,14 @@ def _right_column(
     imgui.begin_group()
     avail_y = imgui.get_content_region_avail().y
     inspector_height = avail_y * lay.settings_share
-    if layout_mod.pane_child("inspector", (0, inspector_height)):
-        inspector_draw(ctx)
-    imgui.end_child()
+    with layout_mod.pane(
+        "inspector",
+        (0, inspector_height),
+        layout_mod.PaneRole.INSPECTOR,
+        edge=layout_mod.PaneEdge.LEFT,
+    ) as visible:
+        if visible:
+            inspector_draw(ctx)
     drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
     if drag and avail_y > 0:
         lay.settings_share = min(
@@ -220,9 +225,11 @@ def _right_column(
             layout_mod.SHARE_MAX,
         )
         lay.save()
-    if layout_mod.pane_child("library", (0, 0)):
-        library_draw(ctx)
-    imgui.end_child()
+    with layout_mod.pane(
+        "library", (0, 0), layout_mod.PaneRole.SIDEBAR, edge=layout_mod.PaneEdge.LEFT
+    ) as visible:
+        if visible:
+            library_draw(ctx)
     imgui.end_group()
 
 
@@ -1659,7 +1666,7 @@ class App:
         io = imgui.get_io()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                # Through the *preflight* (REDESIGN.md wave 3). This went
+                # Through the *preflight* (the UI redesign, wave 3). This went
                 # straight to ``_request_quit``, which walks the per-document
                 # guards and asks nothing about a run in flight -- survivable
                 # only while the header's power icon existed to carry
@@ -2441,6 +2448,11 @@ class App:
         if rail.take("diagnostics"):
             imgui.open_popup("diagnostics")
         self._diagnostics_popup(list(getattr(ctx.runtime, "checks", []) or []))
+        # Kept behind an explicit developer environment flag; normal installs
+        # never gain a design-system destination in their navigation.
+        from . import component_gallery
+
+        component_gallery.draw()
         # Ctrl+/ and the palette's "Keyboard shortcuts" both set this flag,
         # because neither a key handler nor a palette command is inside the
         # window the popup is registered in. It was consumed by the header's
@@ -2466,7 +2478,7 @@ class App:
             elif mode == "settings":
                 app_settings.draw(ctx)
             elif mode == "library":
-                # The full-window composition (REDESIGN.md wave 4.4), not a
+                # The full-window composition (the UI redesign, wave 4.4), not a
                 # second card list: ``library_full`` draws the *same* filters,
                 # the same cards' actions and the same inspector, arranged for
                 # a window rather than for a 300 px sidebar. The library itself
@@ -2499,13 +2511,18 @@ class App:
 
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
-        if layout_mod.pane_child("settings", (sidebar_w, 0)):
+        with layout_mod.pane(
+            "settings",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
             # The rail first, above the panel it switches: it is a breadcrumb
             # for the column under it, and one drawn at the bottom would be a
             # tab strip that had lost its tabs.
-            self._stage_rail(ctx)
-            _stage_pane(ctx)
-        imgui.end_child()
+            if visible:
+                self._stage_rail(ctx)
+                _stage_pane(ctx)
 
         imgui.same_line()
         self._viewport_pane()
@@ -2586,21 +2603,36 @@ class App:
 
         ctx = self.app_ctx
         sidebar_w = layout_mod.sidebar_width()
-        if layout_mod.pane_child("poser-library", (sidebar_w, 0)):
-            poser_library.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "poser-library",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                poser_library.draw(ctx)
 
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("poser-centre", (width, 0), flags):
-            self._poser_viewport(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "poser-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                self._poser_viewport(ctx)
 
         imgui.same_line()
-        if layout_mod.pane_child("poser-controls", (0, 0)):
-            poser_controls.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "poser-controls",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                poser_controls.draw(ctx)
 
     def _poser_viewport(self, ctx: Any) -> None:
         from imgui_bundle import imgui
@@ -2766,30 +2798,55 @@ class App:
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("clay-tools", (sidebar_w, tools_height)):
-            clay_tools.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("clay-props", (sidebar_w, 0)):
-            clay_props.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "clay-tools",
+            (sidebar_w, tools_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                clay_tools.draw(ctx)
+        with layout_mod.pane(
+            "clay-props",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                clay_props.draw(ctx)
         imgui.end_group()
 
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("clay-centre", (width, 0), flags):
-            self._clay_viewport(ctx, clay_mode, widgets)
-        imgui.end_child()
+        with layout_mod.pane(
+            "clay-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                self._clay_viewport(ctx, clay_mode, widgets)
 
         imgui.same_line()
         imgui.begin_group()
         outliner_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("clay-outliner", (0, outliner_height)):
-            clay_outliner.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("clay-bridge", (0, 0)):
-            clay_bridge.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "clay-outliner",
+            (0, outliner_height),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                clay_outliner.draw(ctx)
+        with layout_mod.pane(
+            "clay-bridge",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                clay_bridge.draw(ctx)
         imgui.end_group()
 
     def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
@@ -2883,7 +2940,7 @@ class App:
         # dropped the ``sp()`` scaling, so at 150 % the raster editor's empty
         # state grew with the text while Clay's kept 240-*physical*-pixel
         # buttons under 1.5x labels -- which is where a label stops fitting its
-        # button. Both are one function now (REDESIGN.md wave 2), which is the
+        # button. Both are one function now (the UI redesign, wave 2), which is the
         # only fix that also holds for the next copy.
         widgets.nothing_open(
             "Start a model, open a document, or drop a .wblk on the window.",
@@ -2968,12 +3025,22 @@ class App:
         animated = tab is not None and tab.doc.anim is not None
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("inker-tools", (sidebar_w, tools_height)):
-            inker_tools.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("inker-colors", (sidebar_w, 0)):
-            inker_colors.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "inker-tools",
+            (sidebar_w, tools_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                inker_tools.draw(ctx)
+        with layout_mod.pane(
+            "inker-colors",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                inker_colors.draw(ctx)
         imgui.end_group()
 
         imgui.same_line()
@@ -2990,13 +3057,23 @@ class App:
         if animated:
             strip = sp(inker_timeline.STRIP_H)
             centre_h = max(imgui.get_content_region_avail().y - strip, sp(120))
-        if layout_mod.pane_child("inker-centre", (width, centre_h), flags):
-            inker_canvas.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "inker-centre",
+            (width, centre_h),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                inker_canvas.draw(ctx)
         if animated:
-            if layout_mod.pane_child("inker-timeline", (width, 0)):
-                inker_timeline.draw(ctx)
-            imgui.end_child()
+            with layout_mod.pane(
+                "inker-timeline",
+                (width, 0),
+                layout_mod.PaneRole.SHEET,
+                edge=layout_mod.PaneEdge.TOP,
+            ) as visible:
+                if visible:
+                    inker_timeline.draw(ctx)
         imgui.end_group()
 
         imgui.same_line()
@@ -3008,18 +3085,31 @@ class App:
         # canvas, and a preview that grew with the window would push the layer
         # list off the bottom on a short screen.
         if animated:
-            if layout_mod.pane_child(
-                "inker-preview", (0, sp(inker_preview.PREVIEW_H))
-            ):
-                inker_preview.draw(ctx)
-            imgui.end_child()
+            with layout_mod.pane(
+                "inker-preview",
+                (0, sp(inker_preview.PREVIEW_H)),
+                layout_mod.PaneRole.INSPECTOR,
+                edge=layout_mod.PaneEdge.LEFT,
+            ) as visible:
+                if visible:
+                    inker_preview.draw(ctx)
         layers_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("inker-layers", (0, layers_height)):
-            inker_layers.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("inker-bridge", (0, 0)):
-            inker_bridge.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "inker-layers",
+            (0, layers_height),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                inker_layers.draw(ctx)
+        with layout_mod.pane(
+            "inker-bridge",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                inker_bridge.draw(ctx)
         imgui.end_group()
 
     def _plotter_workspace(self) -> None:
@@ -3048,30 +3138,55 @@ class App:
 
         imgui.begin_group()
         tools_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("plotter-tools", (sidebar_w, tools_height)):
-            plotter_tools.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("plotter-tileset", (sidebar_w, 0)):
-            plotter_tileset.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "plotter-tools",
+            (sidebar_w, tools_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                plotter_tools.draw(ctx)
+        with layout_mod.pane(
+            "plotter-tileset",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                plotter_tileset.draw(ctx)
         imgui.end_group()
 
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("plotter-centre", (width, 0), flags):
-            plotter_canvas.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "plotter-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                plotter_canvas.draw(ctx)
 
         imgui.same_line()
         imgui.begin_group()
         layers_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("plotter-layers", (0, layers_height)):
-            plotter_layers.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("plotter-bridge", (0, 0)):
-            plotter_bridge.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "plotter-layers",
+            (0, layers_height),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                plotter_layers.draw(ctx)
+        with layout_mod.pane(
+            "plotter-bridge",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                plotter_bridge.draw(ctx)
         imgui.end_group()
 
     def _packwright_workspace(self) -> None:
@@ -3100,30 +3215,55 @@ class App:
 
         imgui.begin_group()
         sources_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("packwright-sources", (sidebar_w, sources_height)):
-            packwright_sources.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("packwright-settings", (sidebar_w, 0)):
-            packwright_settings.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "packwright-sources",
+            (sidebar_w, sources_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                packwright_sources.draw(ctx)
+        with layout_mod.pane(
+            "packwright-settings",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                packwright_settings.draw(ctx)
         imgui.end_group()
 
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("packwright-centre", (width, 0), flags):
-            packwright_preview.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "packwright-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                packwright_preview.draw(ctx)
 
         imgui.same_line()
         imgui.begin_group()
         items_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("packwright-items", (0, items_height)):
-            packwright_items.draw(ctx)
-        imgui.end_child()
-        if layout_mod.pane_child("packwright-bridge", (0, 0)):
-            packwright_bridge.draw(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "packwright-items",
+            (0, items_height),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                packwright_items.draw(ctx)
+        with layout_mod.pane(
+            "packwright-bridge",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                packwright_bridge.draw(ctx)
         imgui.end_group()
 
     def _review_workspace(self) -> None:
@@ -3150,12 +3290,22 @@ class App:
 
         imgui.begin_group()
         runs_height = imgui.get_content_region_avail().y * lay.settings_share
-        if layout_mod.pane_child("review-runs", (sidebar_w, runs_height)):
-            self._review_runs(ctx, state, review_mode)
-        imgui.end_child()
-        if layout_mod.pane_child("review-units", (sidebar_w, 0)):
-            self._review_units(state, review_mode)
-        imgui.end_child()
+        with layout_mod.pane(
+            "review-runs",
+            (sidebar_w, runs_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                self._review_runs(ctx, state, review_mode)
+        with layout_mod.pane(
+            "review-units",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                self._review_units(state, review_mode)
         imgui.end_group()
 
         imgui.same_line()
@@ -3166,20 +3316,30 @@ class App:
         # not inherit the viewport's no-scroll flag.
         labelling = state.labels is not None
         flags = 0 if labelling else imgui.WindowFlags_.no_scroll_with_mouse.value
-        if layout_mod.pane_child("review-centre", (width, 0), flags):
-            if labelling:
-                self._review_labels(ctx, state, review_mode)
-            else:
-                self._review_viewport(state, review_mode, width)
-        imgui.end_child()
+        with layout_mod.pane(
+            "review-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                if labelling:
+                    self._review_labels(ctx, state, review_mode)
+                else:
+                    self._review_viewport(state, review_mode, width)
 
         imgui.same_line()
-        if layout_mod.pane_child("review-verdict", (0, 0)):
-            if labelling:
-                self._review_label_panel(ctx, state, review_mode)
-            else:
-                self._review_verdict(ctx, state, review_mode)
-        imgui.end_child()
+        with layout_mod.pane(
+            "review-verdict",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                if labelling:
+                    self._review_label_panel(ctx, state, review_mode)
+                else:
+                    self._review_verdict(ctx, state, review_mode)
 
     # How wide a labelling cell is, in design px. Big enough to judge a
     # composition by -- which is the whole question -- and small enough that a
@@ -3566,7 +3726,7 @@ class App:
     def _review_verdict(self, ctx: Any, state: Any, review_mode: Any) -> None:
         from imgui_bundle import imgui
 
-        from . import widgets
+        from . import forms, widgets
 
         unit = review_mode.current(state)
         if unit is None:
@@ -3609,22 +3769,30 @@ class App:
                 theme.WARN, "Negative armed: the next digit files a minus. Esc drops it."
             )
 
-        grade = widgets.grade_buttons("review", enabled)
-        if grade is not None:
-            review_mode.record(ctx, grade, state.pending_tags)
-        widgets.muted_wrapped(
-            "+5 ships as-is, +3 usable, -5 unusable. Tags are optional. "
-            "Keys: a digit grades, R first makes it negative, S skips."
-        )
+        with forms.Form("review-verdict") as form_ui:
+            with form_ui.field(
+                "grade",
+                "Grade",
+                help_text="A digit grades; press R first for a negative grade.",
+                helper="+5 ships as-is, +3 is usable, and -5 is unusable.",
+            ):
+                grade = widgets.grade_buttons("review", enabled)
+            if grade is not None:
+                review_mode.record(ctx, grade, state.pending_tags)
 
-        tag = widgets.tag_toggles("review", state.pending_tags, enabled)
-        if tag is not None:
-            review_mode.toggle_tag(state, tag)
+            with form_ui.field(
+                "tags", "Tags", helper="Optional; S skips without filing a grade."
+            ):
+                tag = widgets.tag_toggles("review", state.pending_tags, enabled)
+            if tag is not None:
+                review_mode.toggle_tag(state, tag)
 
-        if widgets.disabled_button(
-            "Skip (S)", enabled, reason="A scan is running; the queue is being rebuilt."
-        ):
-            review_mode.advance(state)
+            if widgets.disabled_button(
+                "Skip (S)",
+                enabled,
+                reason="A scan is running; the queue is being rebuilt.",
+            ):
+                review_mode.advance(state)
 
         if unit["verdict"]:
             # ``grade_text`` rather than the verdict word: the word is the
@@ -3741,7 +3909,7 @@ class App:
         # Before the confirms, because it is the same kind of thing and the
         # earlier one wins the single modal slot imgui gives a frame.
         settings_3d.matte_modal(ctx)
-        # The Manual, over whatever ran above (REDESIGN.md wave 3). Before the
+        # The Manual, over whatever ran above (the UI redesign, wave 3). Before the
         # palette on purpose: Ctrl+K is how you leave anywhere, this included,
         # so it has to float above the reference rather than under it.
         from .manual import render as manual_render
@@ -3891,7 +4059,7 @@ class App:
                 ("F10", "Toggle the frame-rate readout"),
             ],
         )
-        # One heading, because there is one mode (REDESIGN.md wave 5). The
+        # One heading, because there is one mode (the UI redesign, wave 5). The
         # rows that used to be split "2D" from "3D" are the same keys either
         # way -- what changed is which stage of Create you are standing on,
         # and the stage rail is a click rather than a shortcut, so there is
@@ -4064,7 +4232,7 @@ class App:
     def _diagnostics_popup(self, checks: list[Any]) -> None:
         from imgui_bundle import imgui
 
-        from . import icons, theme, widgets
+        from . import controls, icons, theme, widgets
         from .tokens import sp
 
         ctx = self.app_ctx
@@ -4085,7 +4253,7 @@ class App:
             widgets.window_backdrop(radius=rounding)
         if rise > 0.0:
             imgui.dummy((0, rise))
-        widgets.section("Diagnostics")
+        widgets.section("Issues")
         for check in checks:
             colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
             # Lucide, as the status pills now are (UX.md Phase 2): "o" and "x"
@@ -4118,7 +4286,7 @@ class App:
                 imgui.same_line()
                 imgui.text_wrapped(message)
         imgui.separator()
-        if imgui.button("Copy details"):
+        if controls.button("Copy details", role=controls.ButtonRole.GHOST):
             imgui.set_clipboard_text(
                 "\n".join(
                     f"{'ok' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in checks
@@ -4129,7 +4297,7 @@ class App:
         # recomputed on ``force``, which is what makes this button worth having
         # at all: having just installed the missing weights the popup names,
         # nothing short of a restart would otherwise change its mind.
-        if imgui.button("Run checks again"):
+        if controls.button("Run checks again", role=controls.ButtonRole.GHOST):
             from ..service import system as svc_system
 
             ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
@@ -4149,6 +4317,14 @@ class App:
 
         if manual_render.troubleshooting_button(ctx):
             imgui.close_current_popup()
+        from . import component_gallery
+
+        if component_gallery.enabled():
+            imgui.same_line()
+            if controls.button(
+                "Component gallery", role=controls.ButtonRole.GHOST
+            ):
+                component_gallery.request()
         imgui.end_popup()
         imgui.pop_style_var()
 
@@ -4167,14 +4343,16 @@ class App:
         """
         from imgui_bundle import imgui
 
-        from . import theme, widgets
+        from . import controls, theme, widgets
         from .tokens import sp
 
         log = ctx.state.toast_log
         if not log:
             return
         imgui.separator()
-        if not imgui.collapsing_header(f"Notifications ({len(log)})##toast-history"):
+        if not controls.collapsing_header(
+            f"Notifications ({len(log)})##toast-history"
+        ):
             return
         now = time.monotonic()
         if imgui.begin_child("toast-history", (0, sp(160))):
@@ -4194,7 +4372,9 @@ class App:
                 imgui.text_wrapped(entry.text)
                 imgui.pop_style_color()
         imgui.end_child()
-        if imgui.small_button("Copy notifications"):
+        if controls.small_button(
+            "Copy notifications", role=controls.ButtonRole.GHOST
+        ):
             imgui.set_clipboard_text(
                 "\n".join(f"{e.level}: {e.text}" for e in reversed(log))
             )
@@ -4212,11 +4392,11 @@ class App:
         of building the data source once: the copy a user pastes into an issue
         and the list they read on screen are the same answer.
         """
-        from imgui_bundle import imgui
 
+        from . import controls
         from .panes import app_settings
 
-        if not imgui.collapsing_header("Effective configuration"):
+        if not controls.collapsing_header("Effective configuration"):
             return
         # The table itself lives in the app-Settings pane (K100), which is
         # where a user looking for configuration goes. It is drawn from here
@@ -4238,21 +4418,24 @@ class App:
         # now, so the full height is the image's.
         width = layout_mod.centre_width()
         # no_scroll_with_mouse: over the viewport the wheel can only mean dolly.
-        if layout_mod.pane_child(
-            "viewport", (width, 0), imgui.WindowFlags_.no_scroll_with_mouse.value
-        ):
-            overlay.toolbar(ctx)
-            image_pos = imgui.get_cursor_screen_pos()
-            avail = imgui.get_content_region_avail()
-            height = max(avail.y, 64)
-            reference_stage = create_stages.at(ctx.state, "reference")
-            if not reference_stage and self.viewer.has_model:
-                self._draw_viewport_image(image_pos, width, height)
-            elif reference_stage and self.viewer.reference is not None:
-                self._draw_reference(width, height)
-            else:
-                overlay.placeholder(ctx)
-        imgui.end_child()
+        with layout_mod.pane(
+            "viewport",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=imgui.WindowFlags_.no_scroll_with_mouse.value,
+        ) as visible:
+            if visible:
+                overlay.toolbar(ctx)
+                image_pos = imgui.get_cursor_screen_pos()
+                avail = imgui.get_content_region_avail()
+                height = max(avail.y, 64)
+                reference_stage = create_stages.at(ctx.state, "reference")
+                if not reference_stage and self.viewer.has_model:
+                    self._draw_viewport_image(image_pos, width, height)
+                elif reference_stage and self.viewer.reference is not None:
+                    self._draw_reference(width, height)
+                else:
+                    overlay.placeholder(ctx)
 
     def _draw_viewport_image(self, pos: Any, width: float, height: float) -> None:
         from imgui_bundle import imgui

@@ -45,7 +45,7 @@ to go is clickable.
 
 | Line | What it says | Where it goes |
 |---|---|---|
-| Diagnostics | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. | [App settings](17-app-settings.md), where the model list and its Download buttons are. |
+| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](17-app-settings.md), where the model list and its Download buttons are. |
 | Queue | What is running or queued, with a percentage when the worker is reporting one, or "Queue idle". | — |
 | Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](13-review.md). |
 
@@ -53,8 +53,8 @@ There used to be a **Library** line here too, counting assets and disk. It went 
 grid of those same assets: a count of the thing you are looking at is not news, and the Library is
 one click away in the rail.
 
-The diagnostics line is a different destination from the health dot in the top-right corner, which
-opens the read-only diagnostics popup: the dot answers "what is wrong right now", and this line
+The Issues line is a different destination from the health dot in the top-right corner, which
+opens the read-only Issues popup: the dot answers "what is wrong right now", and this line
 answers "how do I fix it". It exists because a fresh install reaches Home with no weights
 downloaded, presses New 2D, and is refused at the door with a download command in the message. That
 refusal is correct, but Home offered every way to start work and no way to find out first whether
@@ -89,7 +89,7 @@ failing silently. A recent list that keeps offering a moved file is worse than a
 
 If a startup check failed fatally, or the GPU worker died, the message appears in red under the
 title as well as in the banner across the top of every mode. Dismissing the banner does not destroy
-the text: it moves into the diagnostics popup under a **Dismissed** heading, which is the only copy
+the text: it moves into the Issues popup under a **Dismissed** heading, which is the only copy
 there is.
 
 See [Troubleshooting](18-troubleshooting.md) for what the individual checks mean.

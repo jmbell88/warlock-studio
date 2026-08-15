@@ -1,4 +1,4 @@
-"""REDESIGN.md wave 6: headings are sentence case, and a full window says what it is.
+"""The UI redesign, wave 6: headings are sentence case, and a full window says what it is.
 
 Wave 2 rebuilt :func:`widgets.section` to draw its label as sentence-case
 Medium at body size, and ``tests/test_ux_phases.py`` pins that *implementation*
@@ -88,5 +88,5 @@ def test_no_call_site_lowercases_a_heading_on_the_way_in() -> None:
 
 def test_the_library_full_view_says_what_it_is() -> None:
     """The one full-window pane that was named only by the navigation chrome
-    outside it (REDESIGN.md wave 6)."""
+    outside it (the UI redesign, wave 6)."""
     assert 'pane_title("Library")' in inspect.getsource(library_full)

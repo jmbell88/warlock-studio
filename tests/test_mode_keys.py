@@ -104,7 +104,7 @@ def test_esc_returns_to_the_mode_you_came_from(no_mods):
     assert state.mode == "create"
 
 
-# --- REDESIGN wave 3: the Manual is an overlay, not a mode -------------------
+# --- the UI redesign, wave 3: the Manual is an overlay, not a mode -------------------
 
 
 def test_f1_raises_the_manual_over_the_mode_you_are_in(no_mods):

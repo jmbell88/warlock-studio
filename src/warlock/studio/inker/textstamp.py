@@ -1,16 +1,16 @@
 """Text, rasterised into pixels and then forgotten.
 
 **There are no text objects and no text layers**, and that is a decision rather
-than a first instalment (INKER_UPDATE divergence 17). A live text object is not
-a drawing feature, it is a second document model: the glyphs have to survive a
-save, a crop, a scale, a flip and an undo, every filter has to decide whether it
-applies to them, the exporters have to flatten them, and the font a file was
-authored with has to still exist on the machine that opens it. What a pixel
-editor is actually asked for is "put this word on the canvas so I can paint
-around it", and that is a stamp -- one array of pixels, delivered through the
-floating buffer (``_doc_selection.float_pixels``), positioned and committed by
-the machinery a paste already uses. Re-editing text is retyping it, which is
-also how the eraser, the brush and every other tool here work.
+than a first instalment (``docs/INVARIANTS.md``, Aseprite divergence 17). A live
+text object is not a drawing feature, it is a second document model: the glyphs
+have to survive a save, a crop, a scale, a flip and an undo, every filter has to
+decide whether it applies to them, the exporters have to flatten them, and the
+font a file was authored with has to still exist on the machine that opens it.
+What a pixel editor is actually asked for is "put this word on the canvas so I
+can paint around it", and that is a stamp -- one array of pixels, delivered
+through the floating buffer (``_doc_selection.float_pixels``), positioned and
+committed by the machinery a paste already uses. Re-editing text is retyping it,
+which is also how the eraser, the brush and every other tool here work.
 
 So this module is a pure function and holds no state at all. It takes a plain
 font *path* rather than anything from ``studio.fonts`` -- the engine may not

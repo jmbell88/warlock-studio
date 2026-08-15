@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
-from .. import fonts, icons, theme, widgets
+from .. import controls, fonts, icons, rail, theme, tokens, widgets
 from ..state import format_duration
 
 
@@ -79,7 +79,7 @@ def toolbar(ctx: Any) -> None:
     if offers_inker(ctx, job):
         # First, and only in 2D: the reference is the thing on screen, and the
         # camera controls beside it do not apply to it at all.
-        if imgui.button(f"{icons.BRUSH} Open in Inker"):
+        if controls.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
         _wrap(f"Tiled {TILE_REPEAT}x{TILE_REPEAT}")
     if shows_tiled(ctx, job):
@@ -116,7 +116,7 @@ def toolbar(ctx: Any) -> None:
             viewer.camera.dolly(-1)
     if state.comparing:
         _wrap(f"{icons.X} Exit comparison")
-        if imgui.button(f"{icons.X} Exit comparison"):
+        if controls.button(f"{icons.X} Exit comparison"):
             state.comparing = None
             viewer.exit_compare()
     _texture_losses(viewer)
@@ -366,37 +366,40 @@ def progress_card(ctx: Any, eta: Any) -> None:
     imgui.pop_style_color()
 
 
-def doctor_banner(ctx: Any) -> None:
-    """Only the checks that failed, and only until they are dismissed.
+def doctor_summary(errors: list[str]) -> tuple[str, str]:
+    """Compact issue count and the leading action/detail for the shell strip."""
 
-    Drawn from the top strip so it is visible in every mode -- it used to live
-    inside the viewport child, which made a dead worker invisible from Paint.
-    Each failure gets its own wrapped line, because they are separate
-    conditions with separate remedies: a held trellis port and a dead worker
-    read as one confused sentence when joined, and the slot this replaced
-    showed only whichever was reported last.
-    """
+    count = len(errors)
+    noun = "issue" if count == 1 else "issues"
+    first = " ".join(str(errors[0]).split()) if errors else ""
+    return f"{count} setup {noun}", first
+
+
+def doctor_banner(ctx: Any) -> None:
+    """One quiet shell summary; full commands and details stay in Issues."""
+
     if not ctx.state.errors:
         return
-    from ..manual import render as manual_render
-
-    imgui.push_style_color(imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(theme.ERR, 0.25)))
-    flags = imgui.ChildFlags_.borders.value | imgui.ChildFlags_.auto_resize_y.value
+    title, leading = doctor_summary(ctx.state.errors)
+    imgui.push_style_color(
+        imgui.Col_.child_bg.value,
+        imgui.ImVec4(*theme.rgba(theme.WARN, tokens.ERROR_WASH_ALPHA)),
+    )
+    flags = imgui.ChildFlags_.auto_resize_y.value
     if imgui.begin_child("doctor", (-1, 0), flags):
-        if imgui.small_button("Dismiss"):
+        widgets.text_colored(theme.WARN, f"{icons.TRIANGLE_ALERT} {title}")
+        imgui.same_line()
+        # Reserve the two trailing actions before trimming the leading detail.
+        action_width = widgets.button_width("Review") + widgets.button_width("Dismiss")
+        action_width += imgui.get_style().item_spacing.x * 2
+        detail_width = max(imgui.get_content_region_avail().x - action_width, 0)
+        widgets.muted(widgets.fit_text(leading, detail_width))
+        imgui.same_line()
+        if controls.small_button("Review", role=controls.ButtonRole.GHOST):
+            rail.request("diagnostics")
+        imgui.same_line()
+        if controls.small_button("Dismiss", role=controls.ButtonRole.GHOST):
             ctx.state.dismiss_errors()
-        imgui.same_line()
-        if imgui.small_button("Copy details"):
-            imgui.set_clipboard_text(ctx.state.error_text)
-        imgui.same_line()
-        # The banner names conditions and, since F54, their remedies -- but
-        # neither says what to do when the remedy does not take. Chapter 12 is
-        # where that lives, and before this the banner was a dead end (F57).
-        manual_render.troubleshooting_button(ctx)
-        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-        for message in ctx.state.errors:
-            imgui.text_wrapped(message)
-        imgui.pop_style_color()
     imgui.end_child()
     imgui.pop_style_color()
 

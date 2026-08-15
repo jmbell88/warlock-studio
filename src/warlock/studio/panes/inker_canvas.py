@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui
 
-from .. import ants, icons, inker_mode, inker_state, theme, toolbar, widgets
+from .. import ants, controls, icons, inker_mode, inker_state, theme, toolbar, widgets
 from ..inker import textstamp
 from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
@@ -143,7 +143,7 @@ def draw(ctx: Any) -> None:
 # --- the canvas's own row ----------------------------------------------------
 #
 # New/Open/Save/Save as/Export PNG used to be here, and moved to
-# ``inker_bridge`` in REDESIGN.md wave 4.2. That row was the worst clipping case
+# ``inker_bridge`` in the UI redesign, wave 4.2. That row was the worst clipping case
 # in the app -- eight labelled buttons plus a combo plus a status word, chained
 # with ``same_line``, losing "Export PNG" off the right edge at 150 % -- and it
 # was also the one document mode whose file actions did *not* live in its bridge
@@ -301,7 +301,13 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
         toolbar.Item("flipv", "Flip V", priority=1),
         toolbar.Item("ccw", "-90", priority=1),
         toolbar.Item("cw", "+90", icons.ROTATE_CW, priority=1),
-        toolbar.Item("apply", "Apply", icons.CHECK, primary=True, pinned=True),
+        toolbar.Item(
+            "apply",
+            "Apply",
+            icons.CHECK,
+            role=toolbar.ButtonRole.PRIMARY,
+            pinned=True,
+        ),
         toolbar.Item("cancel", "Cancel", icons.X, pinned=True),
     ]
     toolbar.toolbar(
@@ -363,7 +369,7 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
 
     def draw_it() -> None:
         imgui.set_next_item_width(sp(160))
-        changed, angle = imgui.slider_float(
+        changed, angle = controls.slider_float(
             "Angle", buf.angle, -180.0, 180.0, "%.1f deg"
         )
         if changed:
@@ -376,16 +382,16 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
         # and reads as one with the unit attached, where a bare ``1.000``
         # beside an angle in degrees is a number with no stated dimension.
         imgui.set_next_item_width(sp(110))
-        changed_x, fx = imgui.slider_float(
+        changed_x, fx = controls.slider_float(
             "X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx"
         )
         imgui.same_line()
         imgui.set_next_item_width(sp(110))
-        changed_y, fy = imgui.slider_float(
+        changed_y, fy = controls.slider_float(
             "Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx"
         )
         imgui.same_line()
-        linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
+        linked, value = controls.checkbox("Link##inkscalelink", state.transform_link)
         if linked:
             state.transform_link = value
         if imgui.is_item_hovered():
@@ -413,7 +419,7 @@ def new_popup(ctx: Any) -> None:
     dialog after a mistake should offer the number that was nearly right.
 
     **Public, and drawn by two panes.** A popup belongs to the window that
-    begins it, so the bridge panel's New button (REDESIGN.md wave 4.2) cannot
+    begins it, so the bridge panel's New button (the UI redesign, wave 4.2) cannot
     open one registered here: each pane registers its own and opens that one.
     The body is shared rather than copied, which is the whole reason this is
     not a private helper.
@@ -422,7 +428,7 @@ def new_popup(ctx: Any) -> None:
         return
     imgui.text("New canvas")
     for width, height in inker_mode.NEW_PRESETS:
-        if imgui.button(f"{width} x {height}", (sp(160), 0)):
+        if controls.button(f"{width} x {height}", (sp(160), 0)):
             inker_mode.new_document(ctx, width, height)
             imgui.close_current_popup()
 
@@ -430,16 +436,16 @@ def new_popup(ctx: Any) -> None:
     key = "inker_new_size"
     width, height = ctx.state.preview.get(key) or inker_mode.NEW_PRESETS[1]
     imgui.set_next_item_width(sp(72))
-    changed_w, width = imgui.input_int("W##newcanvas", int(width), 0)
+    changed_w, width = controls.input_int("W##newcanvas", int(width), 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(72))
-    changed_h, height = imgui.input_int("H##newcanvas", int(height), 0)
+    changed_h, height = controls.input_int("H##newcanvas", int(height), 0)
     if changed_w or changed_h:
         # Clamped on the way *into* the field as well as on the way out, or the
         # box goes on showing a number that is not what the button would make.
         ctx.state.preview[key] = inker_mode.clamp_canvas(width, height)
     width, height = inker_mode.clamp_canvas(width, height)
-    if imgui.button(f"Create {width} x {height}", (sp(160), 0)):
+    if controls.button(f"Create {width} x {height}", (sp(160), 0)):
         inker_mode.new_document(ctx, width, height)
         imgui.close_current_popup()
     widgets.muted(f"up to {inker_mode.NEW_MAX} px a side")
@@ -1387,7 +1393,7 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     )
     if changed:
         state.text_size = int(value)
-    changed, value = imgui.checkbox("Antialias", bool(state.aa))
+    changed, value = controls.checkbox("Antialias", bool(state.aa), _imgui=imgui)
     if changed:
         state.aa = bool(value)
         # The user has an opinion now, so ``_open_text`` stops forming one --
@@ -1407,13 +1413,13 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     widgets.muted("the foreground colour")
 
     imgui.dummy((0, 4))
-    if imgui.button("OK##inkertext", (sp(90), 0)):
+    if controls.button("OK##inkertext", (sp(90), 0), _imgui=imgui):
         # The tool becomes Move on success (``stamp_text``), so the popup must
         # close either way: a refusal has already toasted why.
         inker_mode.stamp_text(ctx, state, tab)
         imgui.close_current_popup()
     imgui.same_line()
-    if imgui.button("Cancel##inkertext", (sp(90), 0)):
+    if controls.button("Cancel##inkertext", (sp(90), 0), _imgui=imgui):
         imgui.close_current_popup()
     imgui.end_popup()
 

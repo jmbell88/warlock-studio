@@ -94,9 +94,9 @@ def request(name: str) -> None:
 
     Public because the rail's footer is not the only door: the health badge is
     drawn *only* when a check is failing, so on a healthy install the
-    diagnostics list would be unreachable -- and "everything is fine" is
+    Issues list would be unreachable -- and "everything is fine" is
     exactly the claim somebody occasionally wants to see the evidence for. The
-    palette's Diagnostics command comes through here.
+    palette's Issues command comes through here.
     """
     _wants[name] = True
 

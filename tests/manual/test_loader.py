@@ -59,7 +59,7 @@ def test_dev_checkout_fallback_finds_repo_docs():
 def test_manual_state_open_at():
     """Navigation only: ``open_at`` says *where*, never *whether*.
 
-    The visibility flag beside it is new (REDESIGN.md wave 3) and this test is
+    The visibility flag beside it is new (the UI redesign, wave 3) and this test is
     the record of the inversion: while the Manual was a mode, a flag here would
     have been a second answer to a question ``state.mode`` already answered.
     There is no mode to disagree with now, and ``open_at`` still leaves it

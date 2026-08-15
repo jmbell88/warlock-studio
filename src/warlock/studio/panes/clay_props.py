@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, icons, widgets
+from .. import clay_mode, controls, icons, widgets
 from ..clay import primitives as bp
 from ..manual import render as manual_render
 
@@ -113,11 +113,11 @@ def _transform(doc: Any, obj: Any) -> None:
     widgets.field_label("transform")
     was = tuple(v.copy() for v in obj.trs())
     changed = False
-    edited, translation = imgui.input_float3("position##bt", list(obj.translation))
+    edited, translation = controls.input_float3("position##bt", list(obj.translation))
     changed |= edited
-    edited, scale = imgui.input_float3("scale##bs", list(obj.scale))
+    edited, scale = controls.input_float3("scale##bs", list(obj.scale))
     changed |= edited
-    edited, rotation = imgui.input_float4("rotation##br", list(obj.rotation))
+    edited, rotation = controls.input_float4("rotation##br", list(obj.rotation))
     widgets.help_marker(
         "A quaternion, XYZW -- the same order the viewer and the pose files "
         "use. Typing one is for a value you already have; the gizmo is the "
@@ -210,19 +210,19 @@ def _widget(key: str, value: Any, default: Any) -> tuple[Any, bool]:
     """One widget for one parameter, chosen from the default's type."""
     label = f"{key.replace('_', ' ')}##gen{key}"
     if isinstance(default, bool):
-        return imgui.checkbox(label, bool(value))[::-1]
+        return controls.checkbox(label, bool(value))[::-1]
     if isinstance(default, int):
-        changed, out = imgui.input_int(label, int(value), _STEP.get(key, 1))
+        changed, out = controls.input_int(label, int(value), _STEP.get(key, 1))
         return out, changed
     if isinstance(default, float):
-        changed, out = imgui.input_float(label, float(value), 0.05)
+        changed, out = controls.input_float(label, float(value), 0.05)
         return out, changed
     if isinstance(default, (tuple, list)):
         values = list(value) + [0.0] * (len(default) - len(value))
         if len(default) == 2:
-            changed, out = imgui.input_float2(label, values[:2])
+            changed, out = controls.input_float2(label, values[:2])
         else:
-            changed, out = imgui.input_float3(label, values[:3])
+            changed, out = controls.input_float3(label, values[:3])
         return tuple(float(v) for v in out), changed
     # A parameter type nobody has added yet: shown, not editable, rather than
     # silently dropped from the panel.
@@ -253,7 +253,7 @@ def _diagnostics(state: Any, doc: Any, obj: Any) -> None:
     if measured is not obj.mesh:
         if measured is not None:
             widgets.muted("edited since the last check")
-        if imgui.button(f"{icons.ACTIVITY} Check mesh##claycheck"):
+        if controls.button(f"{icons.ACTIVITY} Check mesh##claycheck"):
             state.manifold[obj.uid] = (obj.mesh, diagnose.findings(obj.mesh))
         widgets.help_marker(
             "Looks for holes, non-manifold edges, inconsistently wound faces, "
@@ -267,7 +267,7 @@ def _diagnostics(state: Any, doc: Any, obj: Any) -> None:
         widgets.muted(f"{icons.CIRCLE_CHECK} closed, consistent, nothing unused")
         return
     for row in rows:
-        if imgui.button(f"{icons.TRIANGLE_ALERT} {row.label}##claydiag{row.kind}"):
+        if controls.button(f"{icons.TRIANGLE_ALERT} {row.label}##claydiag{row.kind}"):
             _select_finding(doc, obj, row)
         if imgui.is_item_hovered():
             imgui.set_tooltip("Select them")
@@ -306,10 +306,10 @@ def _material(doc: Any, obj: Any) -> None:
     material = doc.materials[index]
     _texture_chip(material)
     changed, colour = imgui.color_edit4("base colour##bm", list(material.base_color_factor))
-    metal_changed, metallic = imgui.slider_float(
+    metal_changed, metallic = controls.slider_float(
         "metallic##bm", float(material.metallic_factor), 0.0, 1.0
     )
-    rough_changed, roughness = imgui.slider_float(
+    rough_changed, roughness = controls.slider_float(
         "roughness##bm", float(material.roughness_factor), 0.0, 1.0
     )
     if changed or metal_changed or rough_changed:
@@ -345,7 +345,7 @@ def _palette_row(doc: Any, obj: Any) -> None:
     """
     index = min(max(int(obj.material), 0), len(doc.materials) - 1)
     users = doc.material_users(index)
-    if imgui.small_button(f"{icons.PLUS} Add##matadd"):
+    if controls.small_button(f"{icons.PLUS} Add##matadd"):
         doc.set_props(obj.uid, material=doc.add_material())
     imgui.same_line()
     removable = users == 0 and len(doc.materials) > 1

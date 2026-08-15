@@ -5,7 +5,7 @@ primary-action ladder, the bulk bar, the storage figure and every action a card
 offers, and it goes on drawing the *compact* list in the right-hand sidebar of
 the two generate modes -- unchanged, same API, same call sites. What this module
 adds is a second **composition** of those parts for the one place there is room
-for a better one (REDESIGN.md wave 4.4).
+for a better one (the UI redesign, wave 4.4).
 
 The sidebar list is a good answer to "which of these am I picking while I look
 at something else". It is a poor answer to "where is that chest I made on
@@ -32,7 +32,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, layout, theme, tokens, widgets
+from .. import controls, icons, layout, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inspector, library, thumbs
@@ -59,21 +59,33 @@ def draw(ctx: Any) -> None:
     # what decides how wide the middle one is.
     selected = ctx.cache.get(ctx.state.selected)
 
-    if layout.pane_child("library-full/rail", (sp(RAIL_W), 0)):
-        _rail(ctx, jobs)
-    imgui.end_child()
+    with layout.pane(
+        "library-full/rail",
+        (sp(RAIL_W), 0),
+        layout.PaneRole.SIDEBAR,
+        edge=layout.PaneEdge.RIGHT,
+    ) as visible:
+        if visible:
+            _rail(ctx, jobs)
     imgui.same_line()
 
     width = -(sp(INSPECTOR_W) + spacing) if selected is not None else 0.0
-    if layout.pane_child("library-full/grid", (width, 0)):
-        _grid(ctx, jobs)
-    imgui.end_child()
+    with layout.pane(
+        "library-full/grid", (width, 0), layout.PaneRole.CONTENT
+    ) as visible:
+        if visible:
+            _grid(ctx, jobs)
 
     if selected is not None:
         imgui.same_line()
-        if layout.pane_child("library-full/inspector", (0, 0)):
-            inspector.draw(ctx)
-        imgui.end_child()
+        with layout.pane(
+            "library-full/inspector",
+            (0, 0),
+            layout.PaneRole.INSPECTOR,
+            edge=layout.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                inspector.draw(ctx)
 
 
 # --- the rail ---------------------------------------------------------------
@@ -90,7 +102,7 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
     never loses a filter.
     """
     filters = ctx.state.filters
-    # The mode's one loud thing (REDESIGN.md wave 6). ``app_settings`` argues
+    # The mode's one loud thing (the UI redesign, wave 6). ``app_settings`` argues
     # that a three-column workspace is named by the lit rail item and needs no
     # title of its own; this is not one of those. Clay, Inker and Review put a
     # *document* in the middle column, and the window is about the thing you
@@ -100,7 +112,9 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
     # rail rather than across the window: the columns are laid out before this
     # runs, so a full-width banner would mean a fourth region, and a heading
     # above the narrowing controls is where the eye starts anyway.
-    widgets.pane_title("Library")
+    # The former pane_title("Library") contract is now the shared pane header:
+    # the title remains, with its contextual help anchored in the same row.
+    widgets.pane_header("Library", help_text="Browse, filter, select, and export your assets.")
     widgets.section("Find")
     manual_render.help_button(ctx, "library")
     imgui.set_next_item_width(-1)
@@ -162,7 +176,7 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
 
 def _entry(key: str, label: str, selected: bool) -> bool:
     """One collection row. -> whether it was clicked this frame."""
-    return bool(imgui.selectable(f"{label}##library-full-{key}", selected)[0])
+    return bool(controls.selectable(f"{label}##library-full-{key}", selected)[0])
 
 
 def _toggle(label: str, icon: str, lit: bool, colour: int) -> bool:
@@ -174,7 +188,7 @@ def _toggle(label: str, icon: str, lit: bool, colour: int) -> bool:
     """
     if lit:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(colour)))
-    clicked = imgui.selectable(f"{icon}  {label}##library-full-{label}", lit)[0]
+    clicked = controls.selectable(f"{icon}  {label}##library-full-{label}", lit)[0]
     if lit:
         imgui.pop_style_color()
     return bool(clicked)

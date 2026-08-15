@@ -90,7 +90,7 @@ def test_a_save_writes_no_width_key_at_all():
     assert settings.store["layout"] == {
         "settings_share": 0.4,
         "sidebar": "default",
-        # The navigation rail's labels-or-icons preference (REDESIGN.md wave 3).
+        # The navigation rail's labels-or-icons preference (the UI redesign, wave 3).
         # It has to be written here every time for the reason the whole test
         # exists: the dict is replaced, so a key ``save`` forgets is a
         # preference that silently resets the next time the other one changes.

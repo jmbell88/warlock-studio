@@ -14,6 +14,8 @@ keep meaning "a sidebar this wide" on a 150% monitor rather than drifting.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from enum import StrEnum
 from typing import Any
 
 from imgui_bundle import imgui
@@ -103,7 +105,7 @@ SIDEBAR_MIN = 200.0
 SIDEBAR_FIT: float | None = None
 
 # What the navigation rail has taken out of the window this frame, in physical
-# px (REDESIGN.md wave 3). Module state set by ``rail.tick`` immediately before
+# px (the UI redesign, wave 3). Module state set by ``rail.tick`` immediately before
 # :func:`tick`, for the reason ``SIDEBAR_W`` is: the sidebars are measured from
 # what is left after the rail, and a number threaded through would be the same
 # figure in two places.
@@ -234,19 +236,108 @@ class Layout:
         )
 
 
-def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -> bool:
-    """A bordered pane child with ``PANE_PADDING`` between its edge and content.
+class PaneRole(StrEnum):
+    """Semantic surface role for a major region of a workspace."""
 
-    The padding is pushed and popped around ``begin_child`` alone: window
-    padding latches at begin, so a popup or tooltip opened *inside* the pane
-    keeps the theme's own padding rather than inheriting this one. Pushing it
-    globally in theme.py would shrink every modal in the app.
+    SIDEBAR = "sidebar"
+    CONTENT = "content"
+    PRIMARY = "content"  # the plan's prose name; CONTENT reads better at calls
+    INSPECTOR = "inspector"
+    SHEET = "sheet"
+    OVERLAY = "overlay"
+
+
+class PaneEdge(StrEnum):
+    """The single major boundary a pane owns, if any."""
+
+    NONE = "none"
+    LEFT = "left"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
+
+
+def _pane_fill(role: PaneRole) -> int:
+    if role in (PaneRole.SIDEBAR, PaneRole.INSPECTOR, PaneRole.SHEET):
+        return theme.PANEL
+    if role is PaneRole.OVERLAY:
+        return theme.ELEV_2
+    return theme.BG
+
+
+def _divider(edge: PaneEdge) -> None:
+    if edge is PaneEdge.NONE:
+        return
+    low, high = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    if edge is PaneEdge.LEFT:
+        start, end = (low.x, low.y), (low.x, high.y)
+    elif edge is PaneEdge.RIGHT:
+        start, end = (high.x, low.y), (high.x, high.y)
+    elif edge is PaneEdge.TOP:
+        start, end = (low.x, low.y), (high.x, low.y)
+    else:
+        start, end = (low.x, high.y), (high.x, high.y)
+    imgui.get_window_draw_list().add_line(
+        start,
+        end,
+        imgui.get_color_u32(theme.rgba(theme.DIVIDER)),
+        sp(tokens.DIVIDER_WIDTH),
+    )
+
+
+@contextmanager
+def pane(
+    pane_id: str,
+    size: tuple[float, float],
+    role: PaneRole | str = PaneRole.CONTENT,
+    *,
+    edge: PaneEdge | str = PaneEdge.NONE,
+    window_flags: int = 0,
+):
+    """Begin a role-aware major pane and close it reliably.
+
+    Child borders stay disabled.  A caller names at most the one edge that
+    separates this pane from another major region, which avoids turning every
+    stacked child into a bordered card.
     """
+
+    try:
+        resolved_role = role if isinstance(role, PaneRole) else PaneRole(role)
+    except ValueError:
+        resolved_role = PaneRole.CONTENT
+    try:
+        resolved_edge = edge if isinstance(edge, PaneEdge) else PaneEdge(edge)
+    except ValueError:
+        resolved_edge = PaneEdge.NONE
     pad = sp(PANE_PADDING)
     imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
-    open_ = imgui.begin_child(pane_id, size, imgui.ChildFlags_.borders.value, window_flags)
+    imgui.push_style_color(
+        imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(_pane_fill(resolved_role)))
+    )
+    visible = imgui.begin_child(pane_id, size, 0, window_flags)
+    imgui.pop_style_color()
     imgui.pop_style_var()
-    return open_
+    try:
+        yield visible
+    finally:
+        imgui.end_child()
+        _divider(resolved_edge)
+
+
+def pane_child(
+    pane_id: str, size: tuple[float, float], window_flags: int = 0
+) -> bool:
+    """Compatibility entry point for third-party panes and older tests.
+
+    Studio code uses :func:`pane`; this retains the old begin/end shape for
+    callers outside the migration boundary. It is intentionally borderless.
+    """
+
+    pad = sp(PANE_PADDING)
+    imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
+    visible = imgui.begin_child(pane_id, size, 0, window_flags)
+    imgui.pop_style_var()
+    return visible
 
 
 def sidebar_width() -> float:

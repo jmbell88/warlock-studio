@@ -177,7 +177,7 @@ The two log files answer different questions. `warlock.log` is ordinary Python l
 5 MB with three backups. `crash.log` is written by `faulthandler` from a signal handler, and it
 exists for the failures logging cannot catch — a hard crash inside torch, CUDA or the allocator
 never unwinds to a Python `except`, so without it such a crash leaves no in-app record at all. Both
-sit in the data directory, and the diagnostics popup has an **Open the log** button.
+sit in the data directory, and the Issues popup has an **Open the log** button.
 
 If the data directory is read-only or missing, file logging is skipped with a warning rather than
 refusing to start; the console handler is always there.

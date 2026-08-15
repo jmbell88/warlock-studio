@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker, inker_mode, inker_state, theme, widgets
+from .. import controls, icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker import brush, transform
 from ..inker_state import (
     OPEN_SHAPE_TOOLS,
@@ -150,7 +150,7 @@ def _grid(state: Any, doc: Any = None) -> None:
         icon = TOOL_ICONS.get(key) or label[:1]
         if reason:
             imgui.begin_disabled()
-        clicked = imgui.button(f"{icon}##tool{key}", (width, sp(30)))
+        clicked = controls.button(f"{icon}##tool{key}", (width, sp(30)))
         if reason:
             imgui.end_disabled()
         if clicked and not reason:
@@ -192,7 +192,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             # canvas forces it off there -- a ticked box that does nothing is
             # worse than no box.
             if tool != "spray":
-                changed, value = imgui.checkbox("Pixel perfect", state.pixel_perfect)
+                changed, value = controls.checkbox("Pixel perfect", state.pixel_perfect)
                 if changed:
                     state.pixel_perfect = value
                 widgets.help_marker(
@@ -268,7 +268,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             state.speed_taper = value
         widgets.help_marker("How much a fast stroke thins, for a pen-like flick.")
     if tool in SHAPE_TOOLS and tool not in OPEN_SHAPE_TOOLS:
-        changed, filled = imgui.checkbox("Filled", state.shape_filled)
+        changed, filled = controls.checkbox("Filled", state.shape_filled)
         if changed:
             state.shape_filled = filled
 
@@ -278,7 +278,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         changed, value = widgets.labeled_slider_int("Tolerance", state.wand_tolerance, 0, 255)
         if changed:
             state.wand_tolerance = value
-        changed, value = imgui.checkbox("Contiguous", state.wand_contiguous)
+        changed, value = controls.checkbox("Contiguous", state.wand_contiguous)
         if changed:
             state.wand_contiguous = value
         widgets.help_marker(
@@ -287,7 +287,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if tool == "eyedropper":
         widgets.section("Sample")
-        changed, value = imgui.checkbox("This layer only", state.sample_layer)
+        changed, value = controls.checkbox("This layer only", state.sample_layer)
         if changed:
             state.sample_layer = value
         widgets.help_marker(
@@ -303,7 +303,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             state.gradient_kind,
             [(k, k) for k in inker.GRADIENT_KINDS],
         )
-        changed, value = imgui.checkbox("To transparent", state.gradient_to_transparent)
+        changed, value = controls.checkbox("To transparent", state.gradient_to_transparent)
         if changed:
             state.gradient_to_transparent = value
         # Derived from the engine's own tuple rather than written out, so the
@@ -337,7 +337,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "text object, so re-editing it is retyping it."
         )
 
-    if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
+    if _has_options(tool) and controls.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
         state.reset_tool_options(tool)
 
     if _has_options(tool):
@@ -378,7 +378,7 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
     widgets.section("Slices")
     widgets.muted("Drag on the canvas to add one; drag a corner to resize.")
-    changed, value = imgui.checkbox("Show with other tools", state.show_slices)
+    changed, value = controls.checkbox("Show with other tools", state.show_slices)
     if changed:
         state.show_slices = value
 
@@ -389,9 +389,9 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
         selected = entry.uid == state.slice_uid
         # The uid in the id, not the index: two slices may share a name, and an
         # index moves the moment one above it is deleted.
-        if imgui.selectable(f"{entry.name}##slice{entry.uid}", selected)[0]:
+        if controls.selectable(f"{entry.name}##slice{entry.uid}", selected)[0]:
             state.slice_uid = entry.uid
-    if doc.slices and imgui.button("Export slices as PNGs", (-1, 0)):
+    if doc.slices and controls.button("Export slices as PNGs", (-1, 0)):
         inker_mode.export_slices(ctx, tab)
     chosen = doc.slice_by_uid(state.slice_uid)
     if chosen is not None:
@@ -405,7 +405,7 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
     # Committed when the field is let go of, not on every keystroke -- the same
     # rule the layer opacity slider beside it follows, and for the same reason:
     # typing "hitbox" is one rename, not six undo steps.
-    _changed, name = imgui.input_text(f"Name##slice{entry.uid}", entry.name)
+    _changed, name = controls.input_text(f"Name##slice{entry.uid}", entry.name)
     if imgui.is_item_deactivated_after_edit() and name.strip():
         doc.set_slice(entry.uid, name=name.strip()[:MAX_SLICE_NAME])
 
@@ -414,7 +414,7 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
     x0, y0, x1, y1 = key.bounds
     widgets.muted(f"{x0}, {y0}  {x1 - x0} x {y1 - y0}")
 
-    changed, value = imgui.checkbox(f"Pivot##slice{entry.uid}", key.pivot is not None)
+    changed, value = controls.checkbox(f"Pivot##slice{entry.uid}", key.pivot is not None)
     if changed:
         # The centre of the slice when it is switched on, which is a defensible
         # answer a user can then drag -- rather than the origin, which looks
@@ -428,7 +428,7 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
         "character turns. The first slice with one decides the sheet's pivot."
     )
 
-    changed, value = imgui.checkbox(f"Nine-slice##slice{entry.uid}", key.center is not None)
+    changed, value = controls.checkbox(f"Nine-slice##slice{entry.uid}", key.center is not None)
     if changed:
         # A third in from each edge: the conventional starting nine-patch, and
         # the one shape that is obviously editable rather than degenerate.
@@ -450,13 +450,13 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
 
     if frame_uid is not None:
         keyed = frame_uid in entry.keys
-        if imgui.button("Unkey this frame" if keyed else "Key this frame", (-1, 0)):
+        if controls.button("Unkey this frame" if keyed else "Key this frame", (-1, 0)):
             doc.set_slice_key(entry.uid, frame_uid, clear=keyed)
         widgets.help_marker(
             "Keys are always explicit. Dragging a slice moves it on every "
             "frame; a key is how one frame is allowed to differ."
         )
-    if imgui.button(f"Delete##slice{entry.uid}", (-1, 0)):
+    if controls.button(f"Delete##slice{entry.uid}", (-1, 0)):
         doc.remove_slice(entry.uid)
 
 
@@ -471,7 +471,7 @@ def _ink(state: Any) -> None:
     for index, (key, label) in enumerate(INK_LABELS):
         if index:
             imgui.same_line()
-        if imgui.radio_button(f"{label}##ink{key}", state.paint_ink == key):
+        if controls.radio_button(f"{label}##ink{key}", state.paint_ink == key):
             state.paint_ink = key
     widgets.help_marker(
         "Blend composites the colour over what is already there. Replace "
@@ -498,7 +498,7 @@ def _shading(state: Any, doc: Any) -> None:
     for index, (value, label) in enumerate(SHADE_LABELS):
         if index:
             imgui.same_line()
-        if imgui.radio_button(f"{label}##shadedir{value}", int(state.shade_dir) == value):
+        if controls.radio_button(f"{label}##shadedir{value}", int(state.shade_dir) == value):
             state.shade_dir = value
     widgets.help_marker(
         "Forward moves each pixel one swatch toward the end of the ramp, Back "
@@ -530,7 +530,7 @@ def _gradient_stops(state: Any) -> None:
     widgets.field_label("stops")
     if not state.gradient_stops:
         widgets.muted("foreground to background")
-        if imgui.small_button("Add stops##gradstops"):
+        if controls.small_button("Add stops##gradstops"):
             state.gradient_stops = [(0.0, tuple(state.fg)), (1.0, tuple(state.bg))]
         return
 
@@ -538,7 +538,7 @@ def _gradient_stops(state: Any) -> None:
     for index, (position, colour) in enumerate(list(state.gradient_stops)):
         imgui.push_id(f"gradstop{index}")
         imgui.set_next_item_width(sp(70))
-        changed, value = imgui.slider_float("##pos", float(position), 0.0, 1.0, "%.2f")
+        changed, value = controls.slider_float("##pos", float(position), 0.0, 1.0, "%.2f")
         if changed:
             state.gradient_stops[index] = (float(value), colour)
         imgui.same_line()
@@ -561,10 +561,10 @@ def _gradient_stops(state: Any) -> None:
         imgui.pop_id()
     if remove >= 0:
         del state.gradient_stops[remove]
-    if imgui.small_button("Add##gradadd"):
+    if controls.small_button("Add##gradadd"):
         state.gradient_stops.append((0.5, tuple(state.fg)))
     imgui.same_line()
-    if imgui.small_button("Use fg / bg##gradreset"):
+    if controls.small_button("Use fg / bg##gradreset"):
         state.gradient_stops = []
 
 
@@ -592,21 +592,21 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
         widgets.muted("Nothing captured yet.")
         return
 
-    changed, value = imgui.checkbox("Use image brush", state.use_stamp)
+    changed, value = controls.checkbox("Use image brush", state.use_stamp)
     if changed:
         state.use_stamp = value
     width, height = stamp.size
     widgets.muted(f"{width} x {height} px, turned {stamp.rotation}")
-    if imgui.small_button("Rotate##inkstamprot"):
+    if controls.small_button("Rotate##inkstamprot"):
         state.stamp = stamp.rotated()
     imgui.same_line()
-    if imgui.small_button("Flip H##inkstampfx"):
+    if controls.small_button("Flip H##inkstampfx"):
         state.stamp = stamp.flipped("x")
     imgui.same_line()
-    if imgui.small_button("Flip V##inkstampfy"):
+    if controls.small_button("Flip V##inkstampfy"):
         state.stamp = stamp.flipped("y")
     imgui.same_line()
-    if imgui.small_button("Forget##inkstampclear"):
+    if controls.small_button("Forget##inkstampclear"):
         inker_mode.clear_brush(ctx)
         return
     state.stamp_align = widgets.labeled_combo(
@@ -632,7 +632,7 @@ def _presets(ctx: Any, state: Any) -> None:
     """
     widgets.section("Presets")
     imgui.set_next_item_width(-sp(56))
-    _changed, name = imgui.input_text("##inkpresetname", state.preset_name)
+    _changed, name = controls.input_text("##inkpresetname", state.preset_name)
     state.preset_name = name[: inker_state.MAX_PRESET_NAME]
     imgui.same_line()
     if widgets.disabled_button("Save##inkpresetsave", bool(state.preset_name.strip())):
@@ -650,11 +650,11 @@ def _presets(ctx: Any, state: Any) -> None:
     remove = ""
     for saved_name, saved in list(state.presets.items()):
         imgui.push_id(f"inkpreset{saved_name}")
-        if imgui.small_button("x"):
+        if controls.small_button("x"):
             remove = saved_name
         imgui.same_line()
         label = saved["tool"].replace("_", " ")
-        if imgui.selectable(f"{saved_name}  ({label})", False)[0]:
+        if controls.selectable(f"{saved_name}  ({label})", False)[0]:
             state.apply_preset(saved_name)
         imgui.pop_id()
     if remove:
@@ -702,7 +702,7 @@ def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
         widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
         _transform_numbers(state, doc)
         return
-    if imgui.button("Free transform (Ctrl+T)", (-1, 0)):
+    if controls.button("Free transform (Ctrl+T)", (-1, 0)):
         inker_mode.begin_transform(ctx)
     widgets.muted("Rotates, scales and slants the selection, or the whole layer.")
 
@@ -729,20 +729,20 @@ def _transform_numbers(state: Any, doc: Any) -> None:
     width, height = buf.size
 
     imgui.set_next_item_width(sp(70))
-    changed_x, x = imgui.input_int("X##inkxfx", int(buf.offset[0]), 0)
+    changed_x, x = controls.input_int("X##inkxfx", int(buf.offset[0]), 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(70))
-    changed_y, y = imgui.input_int("Y##inkxfy", int(buf.offset[1]), 0)
+    changed_y, y = controls.input_int("Y##inkxfy", int(buf.offset[1]), 0)
     if changed_x or changed_y:
         # Through ``move_floating``'s delta rather than by writing ``offset``:
         # one owner for where a buffer sits, and it bumps ``rev`` for the pane.
         doc.move_floating(int(x) - buf.offset[0], int(y) - buf.offset[1])
 
     imgui.set_next_item_width(sp(70))
-    changed_w, new_w = imgui.input_int("W##inkxfw", int(width), 0)
+    changed_w, new_w = controls.input_int("W##inkxfw", int(width), 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(70))
-    changed_h, new_h = imgui.input_int("H##inkxfh", int(height), 0)
+    changed_h, new_h = controls.input_int("H##inkxfh", int(height), 0)
     if changed_w or changed_h:
         fx = max(1, int(new_w)) / base_w if changed_w else buf.scale[0]
         fy = max(1, int(new_h)) / base_h if changed_h else buf.scale[1]
@@ -751,13 +751,13 @@ def _transform_numbers(state: Any, doc: Any) -> None:
         doc.transform_floating(scale=(fx, fy), resample=state.resample)
 
     imgui.set_next_item_width(sp(150))
-    changed, angle = imgui.input_float("Angle##inkxfa", float(buf.angle), 0.0, 0.0, "%.2f")
+    changed, angle = controls.input_float("Angle##inkxfa", float(buf.angle), 0.0, 0.0, "%.2f")
     if changed:
         doc.transform_floating(angle=angle, resample=state.resample)
 
     limit = transform.SHEAR_MAX
     imgui.set_next_item_width(sp(150))
-    changed, values = imgui.input_float2(
+    changed, values = controls.input_float2(
         "Slant##inkxfs", [float(buf.shear[0]), float(buf.shear[1])], "%.1f"
     )
     if changed:
@@ -781,13 +781,13 @@ def _transform_numbers(state: Any, doc: Any) -> None:
 def _selection_actions(state: Any, doc: Any) -> None:
     widgets.section("Selection")
     widgets.muted("Shift adds, Alt subtracts.")
-    if imgui.button("All"):
+    if controls.button("All"):
         doc.select_all()
     imgui.same_line()
     if widgets.disabled_button("None", doc.mask is not None):
         doc.deselect()
     imgui.same_line()
-    if imgui.button("Invert"):
+    if controls.button("Invert"):
         doc.invert_selection()
     imgui.same_line()
     # Enabled off the *memory* rather than off "there is no selection": the
@@ -811,7 +811,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
         "layer it came from. Either way it is one undo step, and the new layer "
         "lines up with what it came from."
     )
-    if imgui.button("This layer"):
+    if controls.button("This layer"):
         doc.select_layer_alpha()
     widgets.help_marker(
         "Selects what is painted on the active layer, at the coverage it is "
@@ -819,7 +819,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
     )
 
     imgui.set_next_item_width(-sp(80))
-    changed, value = imgui.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
+    changed, value = controls.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
     if changed:
         state.feather_radius = value
     imgui.same_line()
@@ -830,7 +830,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
     # *move* it, and one slider serving both would have to pick a unit that is
     # wrong for one of them.
     imgui.set_next_item_width(-sp(80))
-    changed, steps = imgui.slider_int("##selgrow", int(state.select_steps), 1, 32, "%d px")
+    changed, steps = controls.slider_int("##selgrow", int(state.select_steps), 1, 32, "%d px")
     if changed:
         state.select_steps = int(steps)
     imgui.same_line()
@@ -858,23 +858,23 @@ def _canvas_options(state: Any) -> None:
     state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
         imgui.set_next_item_width(sp(90))
-        changed, count = imgui.slider_int(
+        changed, count = controls.slider_int(
             "Ways", int(state.radial_count), brush.MIN_RADIAL, brush.MAX_RADIAL
         )
         if changed:
             state.radial_count = int(count)
     if state.symmetry != "none":
         _symmetry_axis(state)
-    changed, value = imgui.checkbox("Grid", state.grid)
+    changed, value = controls.checkbox("Grid", state.grid)
     if changed:
         state.grid = value
     if state.grid:
         imgui.same_line()
         imgui.set_next_item_width(sp(80))
-        changed, size = imgui.input_int("##gridsize", state.grid_size, 0)
+        changed, size = controls.input_int("##gridsize", state.grid_size, 0)
         if changed:
             state.grid_size = max(2, min(512, size))
-        changed, value = imgui.checkbox("Snap to grid", state.grid_snap)
+        changed, value = controls.checkbox("Snap to grid", state.grid_snap)
         if changed:
             state.grid_snap = value
         widgets.help_marker(
@@ -894,7 +894,7 @@ def _symmetry_axis(state: Any) -> None:
     """
     axis = state.symmetry_axis
     imgui.set_next_item_width(sp(120))
-    changed, values = imgui.input_float2(
+    changed, values = controls.input_float2(
         "Axis##symaxis", list(axis or (0.0, 0.0)), "%.0f"
     )
     if changed:

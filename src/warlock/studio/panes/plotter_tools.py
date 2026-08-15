@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, plotter_mode, plotter_state, widgets
+from .. import controls, icons, plotter_mode, plotter_state, widgets
 from ..manual import render as manual_render
 from . import plotter_layers
 
@@ -44,7 +44,7 @@ def _tool_grid(state: Any) -> None:
             imgui.push_style_color(
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
-        if imgui.button(f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0)):
+        if controls.button(f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0)):
             state.tool = key
         if active:
             imgui.pop_style_color()
@@ -75,7 +75,7 @@ def _shape_picker(state: Any) -> None:
             imgui.push_style_color(
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
-        if imgui.button(f"{glyph}##shape-{key}", (width, 0)):
+        if controls.button(f"{glyph}##shape-{key}", (width, 0)):
             state.shape_mode = key
         if active:
             imgui.pop_style_color()
@@ -114,7 +114,7 @@ def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
             "This map has no terrain sets. Generate one under Tilesets, or add a "
             "tileset that carries one."
         )
-        if imgui.button("Open the generator", (-1, 0)):
+        if controls.button("Open the generator", (-1, 0)):
             widgets.request_open("plotter/generate")
         return
     if state.terrain is None:
@@ -133,7 +133,7 @@ def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
             imgui.Col_.text.value,
             imgui.get_color_u32((1.0, 1.0, 1.0, 1.0) if chosen else (0.0, 0.0, 0.0, 0.55)),
         )
-        if imgui.button(f"{spec.name}##terrain-{tileset_index}-{rank}", (width, 0)):
+        if controls.button(f"{spec.name}##terrain-{tileset_index}-{rank}", (width, 0)):
             state.terrain = (tileset_index, rank)
         imgui.pop_style_color(3)
         if imgui.is_item_hovered():

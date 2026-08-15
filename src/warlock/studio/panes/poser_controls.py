@@ -11,7 +11,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import poser_mode, theme, widgets
+from .. import controls, forms, poser_mode, theme, widgets
 from ..manual import render as manual_render
 
 
@@ -28,10 +28,11 @@ def draw(ctx: Any) -> None:
         widgets.muted("The skeleton preview is still loading.")
         return
 
-    _banner(state, viewer)
-    _joint(ctx, viewer)
-    _root(viewer)
-    _save(ctx, viewer)
+    with forms.Form("poser-controls"):
+        _banner(state, viewer)
+        _joint(ctx, viewer)
+        _root(viewer)
+        _save(ctx, viewer)
 
 
 def _banner(state: Any, viewer: Any) -> None:
@@ -55,13 +56,13 @@ def _joint(ctx: Any, viewer: Any) -> None:
     # was being authored. Bare, this was the one control in the mode that could
     # discard an unsaved pose with no way back, in the mode whose whole output
     # is the shared library every asset poses from.
-    if imgui.button("Reset all"):
+    if controls.button("Reset all"):
         poser_mode.guard(ctx, "reset every joint", viewer.reset_all)
     if viewer.editor.mirror_pairs:
         # Hidden for a serpent or a fish, the pose_panel rule: a skeleton with
         # no mirror pairs has nothing to mirror.
         imgui.same_line()
-        if imgui.button("Mirror"):
+        if controls.button("Mirror"):
             # Behind the guard for Reset all's reason: mirroring rewrites every
             # rotation, this mode has no undo at all, and it was the last bare
             # route to losing an unsaved pose. It does prompt mid-authoring --
@@ -78,7 +79,7 @@ def _root(viewer: Any) -> None:
         # Shown only while the root is selected: the toggle changes what the
         # gizmo on that joint does, and drawing it against any other joint
         # would claim a capability the selection does not have.
-        changed, value = imgui.checkbox("Move root", editor.root_translate)
+        changed, value = controls.checkbox("Move root", editor.root_translate)
         if changed:
             editor.root_translate = bool(value)
         if editor.root_translate:

@@ -1,6 +1,6 @@
 """The overflow toolbar's arithmetic, and the value formatting beside it.
 
-``toolbar.plan`` is pure on purpose (REDESIGN.md wave 2): the failure it exists
+``toolbar.plan`` is pure on purpose (the UI redesign, wave 2): the failure it exists
 to prevent -- a button clipped off the end of a row -- is invisible at UI scale
 1.0 in a wide window, which is the only configuration the GL smoke suite draws.
 Testing the tiering as numbers is what lets every width be checked instead of

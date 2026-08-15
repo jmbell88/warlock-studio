@@ -175,7 +175,7 @@ def cost_note(text: str) -> None:
     cost, none of them fits a 300 dp settings column on one line, and the Rig
     stage's was reaching the screen as "Rigging is queued like a generation: it
     runs Blender in a" with the rest past the pane edge and no scrollbar to it
-    (REDESIGN.md wave 6). That is the exact case ``muted_wrapped`` was written
+    (the UI redesign, wave 6). That is the exact case ``muted_wrapped`` was written
     for; ``cost_note`` had simply been pointed at the wrong one of the two.
     """
     muted_wrapped(text)
@@ -223,6 +223,46 @@ def pane_title(label: str) -> None:
     with fonts.heading(imgui):
         imgui.text(label)
     imgui.dummy((0, sp(tokens.SP_2)))
+
+
+def pane_header(
+    label: str,
+    *,
+    help_text: str = "",
+    actions: Any = (),
+) -> str | None:
+    """Standard pane title with anchored help and optional trailing actions.
+
+    ``actions`` contains ``(key, label, callback)`` tuples. They are ghost
+    actions by definition: a pane header navigates or exposes utilities; the
+    form/footer inside the pane owns its one primary action.
+    """
+
+    from . import controls
+
+    with fonts.heading(imgui):
+        imgui.text(label)
+    if help_text:
+        imgui.same_line()
+        text_colored(theme.MUTED, icons.INFO)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(help_text)
+    clicked: str | None = None
+    entries = list(actions)
+    if entries:
+        widths = [button_width(text) for _key, text, _callback in entries]
+        total = sum(widths) + imgui.get_style().item_spacing.x * (len(widths) - 1)
+        imgui.same_line(
+            max(imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - total, 0.0)
+        )
+        for index, (key, text, callback) in enumerate(entries):
+            if index:
+                imgui.same_line()
+            if controls.button(text, role=controls.ButtonRole.GHOST):
+                callback()
+                clicked = key
+    imgui.dummy((0, sp(tokens.SP_2)))
+    return clicked
 
 
 #: How many recent files a bridge pane offers. One screenful beside the Save
@@ -1803,7 +1843,7 @@ def _glyph_button(
     colour and the approach is what moves. The state is last frame's, which is
     the only order available: see :func:`_hover_amount`.
 
-    **Where it interpolates to** is REDESIGN.md wave 1's rule, arriving here in
+    **Where it interpolates to** is the UI redesign wave 1's rule, arriving here in
     wave 2 because this button pushes its own colours and so was not reached by
     the style edit: a hover is one step of the elevation ramp (ELEV_2 -> EDGE),
     not a fill of accent. Smoothing the approach fixed the *jump*; the toolbar
@@ -2004,7 +2044,7 @@ def primary_button(
     :func:`_glyph_button` for why ``button`` and ``button_hovered`` are pushed
     to one colour.
 
-    **A disabled primary is not an accent button** (REDESIGN.md wave 2). It used
+    **A disabled primary is not an accent button** (the UI redesign, wave 2). It used
     to keep the fill and let ``begin_disabled`` fade it, which draws a faded
     indigo slab -- still the loudest thing on the pane, still reading as the one
     thing to press, and now unpressable. Generate is disabled for most of the

@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, icons, widgets
+from .. import clay_mode, controls, icons, widgets
 from ..manual import render as manual_render
 
 
@@ -33,20 +33,12 @@ def draw(ctx: Any) -> None:
     tab = state.active
     widgets.section("Document")
     manual_render.help_button(ctx, "clay-bridge")
+    _files(ctx, tab)
     if tab is None:
         widgets.muted("Nothing open.")
-        # The Save/Open row below is hidden with no tab, so without these two
-        # the whole right-hand column offers no way to start one.
-        if imgui.button(f"{icons.PLUS} New model"):
-            clay_mode.new_document(ctx)
-        imgui.same_line()
-        if imgui.button(f"{icons.FOLDER_OPEN} Open"):
-            clay_mode.ask_open(ctx)
         return
 
     _facts(tab)
-    imgui.dummy((0, 8))
-    _files(ctx, tab)
     imgui.dummy((0, 8))
     _outputs(ctx, tab)
 
@@ -78,20 +70,25 @@ def _triangles(mesh: Any) -> int:
     return int(np.maximum(counts - 2, 0).sum()) if len(counts) else 0
 
 
-def _files(ctx: Any, tab: Any) -> None:
-    widgets.field_label("document")
+def _files(ctx: Any, tab: Any | None) -> None:
+    width = widgets.grid_width(2)
+    if controls.button(f"{icons.PLUS} New", (width, 0)):
+        clay_mode.new_document(ctx)
+    imgui.same_line()
+    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
+        clay_mode.ask_open(ctx)
+    if tab is None:
+        return
     imgui.begin_disabled(tab.saving)
-    if imgui.button(f"{icons.SAVE} Save"):
+    if controls.button(f"{icons.SAVE} Save (Ctrl+S)", (width, 0)):
         clay_mode.save(ctx, tab)
     imgui.same_line()
-    if imgui.button("Save as..."):
+    if controls.button("Save As...", (width, 0)):
         clay_mode.save_as(ctx, tab)
-    imgui.same_line()
-    if imgui.button(f"{icons.FOLDER_OPEN} Open"):
-        clay_mode.ask_open(ctx)
     imgui.end_disabled()
     if tab.path is not None:
         widgets.muted(str(tab.path))
+    imgui.dummy((0, 8))
 
 
 def _outputs(ctx: Any, tab: Any) -> None:

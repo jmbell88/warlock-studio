@@ -18,7 +18,7 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
+from .. import controls, dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
 from ..manual import render as manual_render
 from ..state import ACTIONS, QUERY_FIELDS, SORTS, primary_action
 from ..tokens import sp
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 # Both heights are a *stack of measured rows* held as one constant, which is
 # why they move when the type ramp does: 92/46 were fitted against a 13 px body
-# and the 14 px one (REDESIGN.md wave 1) adds roughly a pixel to every line and
+# and the 14 px one (the UI redesign, wave 1) adds roughly a pixel to every line and
 # to the padding around every control in them. Raised by 4 rather than by the
 # arithmetic exactly, because the slack is what stops a card clipping at the
 # scales the smoke pass runs at -- a card that fits at 1.0 and loses its last
@@ -140,7 +140,7 @@ def draw(ctx: Any) -> None:
 # when a tick is added or the view is switched, both of which redraw for many
 # frames afterwards. The seed is the old no-bulk-bar constant, so the very
 # first frame is exactly what it always was -- carried up by 2 with the type
-# ramp (REDESIGN.md wave 1), since the row it seeds is one line of text plus
+# ramp (the UI redesign, wave 1), since the row it seeds is one line of text plus
 # ``frame_padding`` and both grew.
 _footer_px = [36.0]
 
@@ -187,7 +187,7 @@ def date_group(created_at: Any, now: float | None = None) -> str:
     is browsed by roughly-when rather than by exactly-when.
 
     Sentence case because these are ``widgets.section`` headings and nothing
-    else (REDESIGN.md wave 6) -- the month rung already read as a proper label
+    else (the UI redesign, wave 6) -- the month rung already read as a proper label
     while the four words above it were lowercase, so one column of headings was
     drawn in two registers.
     """
@@ -221,7 +221,7 @@ def _read_error(ctx: Any) -> None:
         return
     widgets.text_colored(theme.ERR, "Could not read the job list.")
     widgets.muted(ctx.cache.error)
-    if imgui.small_button("Try again##library-retry"):
+    if controls.small_button("Try again##library-retry"):
         ctx.cache.invalidate()
 
 
@@ -260,7 +260,7 @@ def _load_more(ctx: Any) -> None:
     # O119. The window only ever grows, and after a few presses "newest N" is a
     # page nobody wants to scroll back through -- and the only way back was to
     # restart the app.
-    if ctx.cache.limit > jobs_cache.LIST_LIMIT and imgui.small_button(
+    if ctx.cache.limit > jobs_cache.LIST_LIMIT and controls.small_button(
         "Jump back to the newest##library-reset"
     ):
         ctx.cache.reset_window()
@@ -272,11 +272,11 @@ def _load_more(ctx: Any) -> None:
         # history.
         if ctx.cache.count_error and loaded >= ctx.cache.limit:
             widgets.muted(f"Showing the newest {loaded}; could not count the rest.")
-            if imgui.button("Load older##library-more", (-1, 0)):
+            if controls.button("Load older##library-more", (-1, 0)):
                 ctx.cache.load_more()
         return
     widgets.muted(f"Showing the newest {loaded} of {total}.")
-    if imgui.button("Load older##library-more", (-1, 0)):
+    if controls.button("Load older##library-more", (-1, 0)):
         ctx.cache.load_more()
 
 
@@ -322,7 +322,7 @@ def append_prefix(text: str, field: str) -> str:
 #:
 #: Module constants rather than literals inside ``_filters`` because the
 #: full-window library offers the same two sets as lists of selectables
-#: (REDESIGN.md wave 4.4). Two copies would be two vocabularies: a rail entry
+#: (the UI redesign, wave 4.4). Two copies would be two vocabularies: a rail entry
 #: naming a kind the combo does not have is a filter that can be set and not
 #: cleared.
 STATUS_OPTIONS = [
@@ -358,7 +358,7 @@ def prefix_chips(filters: Any, *, active: bool) -> None:
         label = f"{field}:"
         if index:
             widgets.same_line_or_wrap(imgui.calc_text_size(label).x + sp(tokens.SP_3))
-        if imgui.small_button(f"{label}##filter-prefix-{field}"):
+        if controls.small_button(f"{label}##filter-prefix-{field}"):
             filters.text = append_prefix(filters.text, field)
             _prefix_focus[0] = True
         hovered = hovered or imgui.is_item_hovered()
@@ -517,7 +517,7 @@ def _failures(ctx: Any) -> None:
         return
     label = "1 job failed" if count == 1 else f"{count} jobs failed"
     imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
-    clicked = imgui.small_button(f"{label} - show##library-failures")
+    clicked = controls.small_button(f"{label} - show##library-failures")
     imgui.pop_style_color()
     if clicked:
         filters.status = "error"
@@ -599,7 +599,7 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     imgui.pop_id()
 
 
-#: The placeholder glyph table moved to :mod:`.thumbs` in REDESIGN.md wave 4.3,
+#: The placeholder glyph table moved to :mod:`.thumbs` in the UI redesign, wave 4.3,
 #: when Home's Resume grid started drawing the same pictures. Re-exported under
 #: its old name because it is what the library means by "what does this job look
 #: like", and because a pane asking the library is asking the right module.
@@ -667,7 +667,7 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
         # on the badge row, and behind a status pill, a stage badge and a
         # quality badge there is nothing left of a 300 dp card -- it reached
         # the screen as "| from a refere", clipped at the card's edge with no
-        # scrollbar to the rest of it (REDESIGN.md wave 6).
+        # scrollbar to the rest of it (the UI redesign, wave 6).
         # And the leading pipe goes with the line: it is a separator from the
         # badges to its left, so on its own row it would be a stray glyph
         # against the card's edge.
@@ -717,14 +717,14 @@ def _card_context(ctx: Any, job: Any) -> None:
 
 def _card_actions(ctx: Any, job: Any) -> None:
     action = primary_action(job, rigging_available=ctx.rigging_available)
-    if action is not None and imgui.small_button(ACTIONS[action]):
+    if action is not None and controls.small_button(ACTIONS[action]):
         run_action(ctx, job, action)
     imgui.same_line()
     if widgets.small_icon_button(icons.ELLIPSIS, "More actions"):
         imgui.open_popup("more")
     imgui.same_line()
     checked = job["id"] in ctx.state.checked
-    changed, value = imgui.checkbox("##pick", checked)
+    changed, value = controls.checkbox("##pick", checked)
     if imgui.is_item_hovered():
         imgui.set_tooltip("Select for bulk actions")
     if changed and value != checked:
@@ -759,13 +759,13 @@ def _overflow(ctx: Any, job: Any) -> None:
         return
     # N115: the two "get me out of the app with this" actions, at the top
     # because they are the ones a user arrives at the menu already looking for.
-    if imgui.menu_item("Copy job id", "", False)[0]:
+    if controls.menu_item("Copy job id", "", False)[0]:
         imgui.set_clipboard_text(job_id)
         ctx.toast("Job id copied.", "success")
-    if imgui.menu_item("Open folder", "", False)[0]:
+    if controls.menu_item("Open folder", "", False)[0]:
         _open_folder(ctx, job_id)
     imgui.separator()
-    if imgui.menu_item("Rename...", "", False)[0]:
+    if controls.menu_item("Rename...", "", False)[0]:
         ctx.prompts.ask(
             dialogs.Prompt(
                 title="Rename",
@@ -776,16 +776,16 @@ def _overflow(ctx: Any, job: Any) -> None:
                 ),
             )
         )
-    if job.get("params") and imgui.menu_item("Copy settings to form", "", False)[0]:
+    if job.get("params") and controls.menu_item("Copy settings to form", "", False)[0]:
         _copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
         # A hand-made reference has no generator behind it, so there is nothing
         # a new seed could change; the service refuses it, and offering the
         # menu item anyway only buys the user an error toast.
         rerollable = not (job["kind"] == "image" and job.get("stage") == "reference")
-        if rerollable and imgui.menu_item("Reroll", "", False)[0]:
+        if rerollable and controls.menu_item("Reroll", "", False)[0]:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
-        if _remeshable(job) and imgui.menu_item("Remesh", "", False)[0]:
+        if _remeshable(job) and controls.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
     # The 2D half of the same pair as Edit in Clay, and gated the same way: on
     # a predicate the mode owns, answered from the cached row alone so the
@@ -795,7 +795,7 @@ def _overflow(ctx: Any, job: Any) -> None:
     # the same file.
     from .. import inker_mode
 
-    if inker_mode.can_edit_job(ctx, job) and imgui.menu_item("Open in Inker", "", False)[0]:
+    if inker_mode.can_edit_job(ctx, job) and controls.menu_item("Open in Inker", "", False)[0]:
         inker_mode.open_job_reference(ctx, job)
     _map_and_atlas_items(ctx, job, files)
     if "model.glb" in files:
@@ -803,7 +803,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         # here, and imports ``model.glb`` -- the optimized, grounded, served
         # mesh -- when it was not. Never ``source.glb``: that is the raw
         # reconstruction, and nothing downstream of the pipeline uses it.
-        if imgui.menu_item("Edit in Clay", "", False)[0]:
+        if controls.menu_item("Edit in Clay", "", False)[0]:
             from .. import clay_mode
 
             clay_mode.edit_asset_in_clay(ctx, job)
@@ -814,12 +814,12 @@ def _overflow(ctx: Any, job: Any) -> None:
         # ``state.selected`` is already this card: "Compare with selected"
         # compared a mesh with itself, and a later sync could make both sides
         # identical (UX-04). The label says which way round it goes.
-        if imgui.menu_item("Compare selected with this", "", False)[0]:
+        if controls.menu_item("Compare selected with this", "", False)[0]:
             compare(ctx, job_id)
-        if ctx.rigging_available and imgui.menu_item("Rig", "", False)[0]:
+        if ctx.rigging_available and controls.menu_item("Rig", "", False)[0]:
             run_action(ctx, job, "rig")
     imgui.separator()
-    if imgui.menu_item("Delete", "", False)[0]:
+    if controls.menu_item("Delete", "", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
         # one -- an undo the user can take an hour later beats a question they
         # answer in half a second while looking at something else. The
@@ -844,22 +844,22 @@ def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
     from .. import packwright_mode, plotter_mode
 
     authored = (job.get("params") or {}).get("authored")
-    if authored == "plotter" and imgui.menu_item("Edit in Plotter", "", False)[0]:
+    if authored == "plotter" and controls.menu_item("Edit in Plotter", "", False)[0]:
         plotter_mode.edit_asset_in_plotter(ctx, job)
-    if authored == "packwright" and imgui.menu_item("Edit in Packwright", "", False)[0]:
+    if authored == "packwright" and controls.menu_item("Edit in Packwright", "", False)[0]:
         packwright_mode.edit_asset_in_packwright(ctx, job)
     if "input.png" not in files:
         return
-    if imgui.menu_item("Use as a tileset in Plotter", "", False)[0]:
+    if controls.menu_item("Use as a tileset in Plotter", "", False)[0]:
         plotter_mode.use_as_tileset(ctx, job)
-    if imgui.menu_item("Add to a Packwright atlas", "", False)[0]:
+    if controls.menu_item("Add to a Packwright atlas", "", False)[0]:
         packwright_mode.add_job_source(ctx, job)
 
 
 def _trash_menu(ctx: Any, job_id: str) -> None:
-    if imgui.menu_item("Restore", "", False)[0]:
+    if controls.menu_item("Restore", "", False)[0]:
         restore_asset(ctx, job_id)
-    if imgui.menu_item("Delete permanently...", "", False)[0]:
+    if controls.menu_item("Delete permanently...", "", False)[0]:
         ctx.confirms.ask(
             dialogs.Confirm(
                 title="Delete permanently?",
@@ -955,7 +955,7 @@ def columns(ctx: Any) -> int:
 def select_grid(ctx: Any, dx: int, dy: int) -> None:
     """Arrow keys over the grid. Left/right by one, up/down by a row.
 
-    The extension of :func:`select_relative` the full window needs (REDESIGN.md
+    The extension of :func:`select_relative` the full window needs (the UI redesign,
     wave 4.4), and deliberately a second entry point rather than a flag on it:
     the same function is bound to Up/Down in the *sidebar*, where the list is
     one card wide and a row is one card. Which of the two a key means is a
@@ -1165,7 +1165,7 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
     job fell off the newest-N window or was deleted from somewhere else, and
     the honest word covers all three.
 
-    Laid out through :mod:`~warlock.studio.toolbar` (REDESIGN.md wave 4.2), and
+    Laid out through :mod:`~warlock.studio.toolbar` (the UI redesign, wave 4.2), and
     the count is drawn *before* it so the row's arithmetic sees the width the
     sentence actually left. **Clear and Delete are pinned**, which is the two
     halves of the pinning rule in one row: a destructive action behind ``...``
@@ -1193,7 +1193,11 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
         items += [
             toolbar.Item("restore", "Restore", icons.UNDO),
             toolbar.Item(
-                "purge", "Delete permanently...", icons.TRASH, danger=True, pinned=True
+                "purge",
+                "Delete permanently...",
+                icons.TRASH,
+                role=toolbar.ButtonRole.DESTRUCTIVE,
+                pinned=True,
             ),
         ]
     else:
@@ -1221,7 +1225,15 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
             items.append(
                 toolbar.Item("folder", "Save to project", icons.SAVE, priority=1)
             )
-        items.append(toolbar.Item("delete", "Delete", icons.TRASH, danger=True, pinned=True))
+        items.append(
+            toolbar.Item(
+                "delete",
+                "Delete",
+                icons.TRASH,
+                role=toolbar.ButtonRole.DESTRUCTIVE,
+                pinned=True,
+            )
+        )
     toolbar.toolbar(
         "library-bulk", items, lambda key: _bulk_action(ctx, key, picked, hidden)
     )
@@ -1310,7 +1322,7 @@ def _storage(ctx: Any, jobs: list[Any]) -> None:
 
         widgets.muted(f"{storage['job_dirs']} jobs - {format_bytes(storage['bytes'])}")
     # **Prune...** and **Clean library...** used to be here, and moved to
-    # Settings > Storage in REDESIGN.md wave 4.1. The figure stays because it
+    # Settings > Storage in the UI redesign, wave 4.1. The figure stays because it
     # describes the list above it; the two bulk deletes went because a footer
     # under a scrolling list is where "clean library" reads as an action on
     # what you can see. That also retires the layout hazard this function
@@ -1436,7 +1448,7 @@ def ask_prune(ctx: Any) -> None:
 
     def body() -> None:
         imgui.set_next_item_width(sp(120))
-        changed, value = imgui.input_int("Keep the newest", _prune_keep[0], 1, 10)
+        changed, value = controls.input_int("Keep the newest", _prune_keep[0], 1, 10)
         if changed:
             # Floored at zero because the service refuses a negative, and a
             # question that can be answered unanswerably is worse than one that

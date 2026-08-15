@@ -1,6 +1,6 @@
 """One picture of a job, at whatever size the caller has room for.
 
-Extracted in REDESIGN.md wave 4.3, when Home's Resume list became a grid of
+Extracted in the UI redesign, wave 4.3, when Home's Resume list became a grid of
 thumbnails and needed exactly what a library card had been doing since H72:
 find the job's ``thumb.png`` through the texture cache, draw it, and stand a
 framed glyph in its place when there is not one. Two copies of that would drift

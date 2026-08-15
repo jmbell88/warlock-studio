@@ -30,7 +30,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, inker_mode, theme, toolbar, widgets
+from .. import controls, icons, inker_mode, theme, toolbar, widgets
 from ..inker import animation
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -230,7 +230,7 @@ def _transport(ctx: Any, tab: Any) -> None:
             "remove", "Delete frame", icons.TRASH,
             enabled=not tab.busy and len(anim.frames) > 1,
             reason="A clip needs at least one frame.",
-            danger=True, pinned=True, priority=1,
+            role=toolbar.ButtonRole.DESTRUCTIVE, pinned=True, priority=1,
         ),
     ]
     toolbar.toolbar(
@@ -329,7 +329,7 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
         # land on a frame that is not the one on screen.
         imgui.set_next_item_width(sp(MS_W))
         imgui.begin_disabled(tab.busy)
-        changed, value = imgui.input_int("ms", anim.frames[index].duration_ms, 10, 50)
+        changed, value = controls.input_int("ms", anim.frames[index].duration_ms, 10, 50)
         if changed:
             tab.doc.set_frame_duration(index, value)
         imgui.end_disabled()
@@ -410,17 +410,17 @@ def _onion_controls(state: Any) -> None:
     if not state.onion:
         return
     imgui.set_next_item_width(sp(70))
-    changed, value = imgui.input_int("back", state.onion_before, 1, 1)
+    changed, value = controls.input_int("back", state.onion_before, 1, 1)
     if changed:
         state.onion_before = max(0, min(int(value), MAX_ONION))
     imgui.same_line()
     imgui.set_next_item_width(sp(70))
-    changed, value = imgui.input_int("ahead", state.onion_after, 1, 1)
+    changed, value = controls.input_int("ahead", state.onion_after, 1, 1)
     if changed:
         state.onion_after = max(0, min(int(value), MAX_ONION))
     imgui.same_line()
     imgui.set_next_item_width(sp(90))
-    changed, alpha = imgui.slider_float("fade", state.onion_alpha, 0.05, 1.0, "%.2f")
+    changed, alpha = controls.slider_float("fade", state.onion_alpha, 0.05, 1.0, "%.2f")
     if changed:
         state.onion_alpha = min(1.0, max(0.05, float(alpha)))
 
@@ -533,7 +533,7 @@ def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
         # 20px cell is a wall of digits, and a tick every ten is how a ruler
         # solves the same problem.
         label = str(index + 1) if index % 10 == 0 or current else "."
-        if imgui.button(label, (cell, cell)) and not tab.busy:
+        if controls.button(label, (cell, cell)) and not tab.busy:
             tab.doc.set_current_frame(index)
         if current:
             imgui.pop_style_color()
@@ -546,12 +546,12 @@ def _frame_menu(tab: Any, index: int) -> None:
     if not imgui.begin_popup_context_item(f"framemenu{index}"):
         return
     imgui.begin_disabled(tab.busy)
-    if imgui.menu_item_simple("Insert before"):
+    if controls.menu_item_simple("Insert before"):
         doc.add_frame(index)
-    if imgui.menu_item_simple("Duplicate (copied)"):
+    if controls.menu_item_simple("Duplicate (copied)"):
         doc.set_current_frame(index)
         doc.add_frame(index + 1, copy=True)
-    if imgui.menu_item_simple("Duplicate (linked)"):
+    if controls.menu_item_simple("Duplicate (linked)"):
         doc.set_current_frame(index)
         doc.add_frame(index + 1, link=True)
     imgui.separator()
@@ -559,22 +559,22 @@ def _frame_menu(tab: Any, index: int) -> None:
     # does nothing reads as a bug in the move, not as "there is nowhere to go".
     last = len(doc.anim.frames) - 1
     imgui.begin_disabled(index <= 0)
-    if imgui.menu_item_simple("Move left"):
+    if controls.menu_item_simple("Move left"):
         doc.move_frame(index, index - 1)
     imgui.end_disabled()
     imgui.begin_disabled(index >= last)
-    if imgui.menu_item_simple("Move right"):
+    if controls.menu_item_simple("Move right"):
         doc.move_frame(index, index + 1)
     imgui.end_disabled()
     imgui.separator()
-    if imgui.menu_item_simple("Delete"):
+    if controls.menu_item_simple("Delete"):
         doc.remove_frame(index)
     imgui.separator()
     # A one-frame span, renamed and stretched from the tag's own menu below.
     # The alternative -- a modal asking for a name and a range up front -- is
     # three answers for something the user is about to look at and adjust
     # anyway, and there is no frame-range selection for it to read.
-    if imgui.menu_item_simple("New tag here"):
+    if controls.menu_item_simple("New tag here"):
         doc.add_tag(f"tag {len(doc.anim.tags) + 1}", index)
     imgui.end_disabled()
     imgui.end_popup()
@@ -647,7 +647,7 @@ def _cell(
     else:
         label, colour, alpha = "*", theme.ACCENT, 0.9
     imgui.push_style_color(imgui.Col_.button.value, theme.rgba(colour, alpha))
-    if imgui.button(label, (cell, cell)) and not tab.busy:
+    if controls.button(label, (cell, cell)) and not tab.busy:
         doc.set_active_layer(ti)
         doc.set_current_frame(fi)
     imgui.pop_style_color()
@@ -729,12 +729,12 @@ def _cell_menu(
         return
     imgui.begin_disabled(tab.busy)
     imgui.begin_disabled(fi <= 0)
-    if imgui.menu_item_simple("Link to previous frame"):
+    if controls.menu_item_simple("Link to previous frame"):
         doc.link_cel(fi - 1, track_index=ti, frame_index=fi)
     imgui.end_disabled()
-    if linked and imgui.menu_item_simple("Unlink"):
+    if linked and controls.menu_item_simple("Unlink"):
         doc.unlink_cel(track_index=ti, frame_index=fi)
-    if has_cel and imgui.menu_item_simple("Clear"):
+    if has_cel and controls.menu_item_simple("Clear"):
         doc.clear_cel(track_index=ti, frame_index=fi)
     _range_menu(ctx, tab)
     imgui.end_disabled()
@@ -761,42 +761,42 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     # what it should mean.
     here = (doc.stack.active_index, doc.stack.active_index, doc.anim.current, doc.anim.current)
     t0, t1, f0, f1 = rect or here
-    if imgui.menu_item_simple("Copy cels"):
+    if controls.menu_item_simple("Copy cels"):
         state.cel_clip = doc.copy_cels(t0, t1, f0, f1)
     imgui.end_disabled()
     # Paste is the one item whose gate is the *clipboard* rather than the
     # selection: it lands at the range's corner, and with no range at all the
     # playhead and active track are the corner.
     imgui.begin_disabled(state.cel_clip is None)
-    if imgui.menu_item_simple("Paste cels"):
+    if controls.menu_item_simple("Paste cels"):
         doc.paste_cels(state.cel_clip, t0, f0)
     imgui.end_disabled()
 
     imgui.begin_disabled(rect is None)
     imgui.separator()
-    if imgui.menu_item_simple("Clear cels"):
+    if controls.menu_item_simple("Clear cels"):
         doc.clear_range(t0, t1, f0, f1)
-    if imgui.menu_item_simple("Link cels"):
+    if controls.menu_item_simple("Link cels"):
         doc.link_range(t0, t1, f0, f1)
-    if imgui.menu_item_simple("Unlink cels"):
+    if controls.menu_item_simple("Unlink cels"):
         doc.unlink_range(t0, t1, f0, f1)
 
     imgui.separator()
-    if imgui.menu_item_simple("Duplicate frames"):
+    if controls.menu_item_simple("Duplicate frames"):
         doc.duplicate_range(f0, f1)
-    if imgui.menu_item_simple("Duplicate frames (linked)"):
+    if controls.menu_item_simple("Duplicate frames (linked)"):
         doc.duplicate_range(f0, f1, link=True)
-    if imgui.menu_item_simple("Reverse frames"):
+    if controls.menu_item_simple("Reverse frames"):
         doc.reverse_range(f0, f1)
-    if imgui.menu_item_simple("Delete frames"):
+    if controls.menu_item_simple("Delete frames"):
         doc.remove_range(f0, f1)
 
     imgui.separator()
     imgui.set_next_item_width(sp(90))
-    changed, value = imgui.input_int("ms##rangems", state.range_ms, 10, 50)
+    changed, value = controls.input_int("ms##rangems", state.range_ms, 10, 50)
     if changed:
         state.range_ms = max(animation.MIN_DURATION_MS, int(value))
-    if imgui.menu_item_simple("Set frame durations"):
+    if controls.menu_item_simple("Set frame durations"):
         doc.set_range_duration(f0, f1, state.range_ms)
     _range_export_items(ctx, tab, f0, f1)
     imgui.end_disabled()
@@ -810,11 +810,11 @@ def _range_export_items(ctx: Any, tab: Any, f0: int, f1: int) -> None:
     thing the sidecar can describe.
     """
     imgui.separator()
-    if imgui.menu_item_simple("Export range → sheet"):
+    if controls.menu_item_simple("Export range → sheet"):
         inker_mode.export_range(ctx, tab, "sheet", (f0, f1))
-    if imgui.menu_item_simple("Export range → GIF"):
+    if controls.menu_item_simple("Export range → GIF"):
         inker_mode.export_range(ctx, tab, "gif", (f0, f1))
-    if imgui.menu_item_simple("Export range → PNG sequence"):
+    if controls.menu_item_simple("Export range → PNG sequence"):
         inker_mode.export_range(ctx, tab, "pngs", (f0, f1))
 
 
@@ -893,7 +893,7 @@ def _tag_rename(ctx: Any, tab: Any, index: int) -> None:
     # ``enter_returns_true`` makes the flag mean *Enter*, not *changed*, while
     # the returned string is the live buffer either way -- so the buffer is
     # stored unconditionally. See the same note in ``dialogs``.
-    entered, value = imgui.input_text(
+    entered, value = controls.input_text(
         "##tagname", state.tag_name, imgui.InputTextFlags_.enter_returns_true.value
     )
     state.tag_name = value
@@ -912,29 +912,29 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     if not imgui.begin_popup_context_item("tagmenu"):
         return
     imgui.begin_disabled(tab.busy)
-    if imgui.menu_item_simple("Rename"):
+    if controls.menu_item_simple("Rename"):
         state.tag_editing = index
         state.tag_name = tag.name
     # Both ends from the playhead, which is the frame the user just clicked to
     # get here: a tag is a span of the timeline and the timeline is what they
     # are looking at, so there is nothing to type.
-    if imgui.menu_item_simple(f"Start at frame {doc.anim.current + 1}"):
+    if controls.menu_item_simple(f"Start at frame {doc.anim.current + 1}"):
         doc.set_tag(index, start=doc.anim.current)
-    if imgui.menu_item_simple(f"End at frame {doc.anim.current + 1}"):
+    if controls.menu_item_simple(f"End at frame {doc.anim.current + 1}"):
         doc.set_tag(index, end=doc.anim.current)
     repeat = int(getattr(tag, "repeat", 0) or 0)
     # Disabled rather than hidden: a count is the more specific answer to "how
     # many times", so while one is set the flag has nothing left to decide --
     # and an enabled tick that changed nothing would read as a bug in the flag.
     imgui.begin_disabled(repeat > 0)
-    if imgui.menu_item_simple("Loop", "", tag.loop):
+    if controls.menu_item_simple("Loop", "", tag.loop):
         doc.set_tag(index, loop=not tag.loop)
     imgui.end_disabled()
     # Straight onto ``set_tag``, which snapshots the whole tag list into a
     # ``TagsEdit`` -- so a repeat count is undoable for free and needs no edit
     # type of its own. 0 hands the question back to the Loop flag above.
     imgui.set_next_item_width(sp(90))
-    changed, value = imgui.input_int("repeat", repeat, 1, 1)
+    changed, value = controls.input_int("repeat", repeat, 1, 1)
     if changed:
         doc.set_tag(index, repeat=max(0, int(value)))
     widgets.help_marker(
@@ -947,18 +947,18 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     # one go" without a hover. Straight off ``animation.DIRECTIONS`` -- a
     # hand-written list here would be a second table of the same three names.
     for key in animation.DIRECTIONS:
-        if imgui.menu_item_simple(key.capitalize(), "", tag.direction == key):
+        if controls.menu_item_simple(key.capitalize(), "", tag.direction == key):
             doc.set_tag(index, direction=key)
     imgui.separator()
     # The tag's own span, and its own looping: a tag is the one part of the
     # timeline that already says both which frames it covers and how many times
     # they play, so exporting one needs nothing typed.
-    if imgui.menu_item_simple("Export tag → sheet"):
+    if controls.menu_item_simple("Export tag → sheet"):
         inker_mode.export_tag(ctx, tab, "sheet", index)
-    if imgui.menu_item_simple("Export tag → GIF"):
+    if controls.menu_item_simple("Export tag → GIF"):
         inker_mode.export_tag(ctx, tab, "gif", index)
     imgui.separator()
-    if imgui.menu_item_simple("Delete tag"):
+    if controls.menu_item_simple("Delete tag"):
         doc.remove_tag(index)
         state.tag_editing = -1
     imgui.end_disabled()

@@ -136,7 +136,7 @@ def test_going_somewhere_records_where_it_came_from():
 
 
 def test_the_manual_is_a_command_rather_than_a_destination():
-    """It stopped being a mode in REDESIGN.md wave 3, so ``_mode_commands`` no
+    """It stopped being a mode in the UI redesign, wave 3, so ``_mode_commands`` no
     longer derives an entry -- and a reference reachable only by a function key
     is one most people never find."""
     ctx = _ctx("create")
@@ -158,7 +158,7 @@ def test_the_library_is_reachable_as_a_mode():
 
 
 def test_the_profile_manager_is_a_command_and_goes_where_it_belongs():
-    """It stopped being a mode in REDESIGN.md wave 3, so there is no
+    """It stopped being a mode in the UI redesign, wave 3, so there is no
     ``go:profiles`` to derive. The manager is *about* the prompt form, so the
     command opens the Reference stage under it rather than raising a sheet over
     whatever happened to be on screen."""

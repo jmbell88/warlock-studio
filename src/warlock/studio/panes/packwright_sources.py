@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, packwright_mode, widgets
+from .. import controls, icons, packwright_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -79,13 +79,13 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
 
     imgui.push_id(str(source.uid))
     selected = state.selected == source.uid
-    if imgui.selectable(f"{source.name}##src", selected)[0]:
+    if controls.selectable(f"{source.name}##src", selected)[0]:
         state.selected = None if selected else source.uid
     if imgui.is_item_hovered():
         sprite = source.sprite
         imgui.set_tooltip(f"{sprite.width} x {sprite.height}\n{sprite.key}")
     if imgui.begin_popup_context_item("src-menu"):
-        if imgui.menu_item_simple("Remove") and editable:
+        if controls.menu_item_simple("Remove") and editable:
             packwright_mode.remove_source(ctx, source.uid, tab)
         imgui.end_popup()
     if selected and editable:

@@ -78,7 +78,7 @@ def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
     """Raise the manual over the current screen, at ``target``.
 
     This used to be ``set_mode(ctx.state, "manual")``, and the change is the
-    point rather than a refactor of it (REDESIGN.md wave 3): help is consulted
+    point rather than a refactor of it (the UI redesign, wave 3): help is consulted
     *about the pane you are on*, and a mode switch took that pane away to show
     it. The reader then had the answer and no longer had the question -- which
     is worst exactly where the (?) is most useful, beside a control whose
@@ -203,7 +203,7 @@ def _overlay_header(ctx: Any) -> None:
 def draw_body(ctx: Any) -> None:
     """The manual's two children, filling whatever host is current.
 
-    Unchanged by the move off a mode and onto an overlay (REDESIGN.md wave 3):
+    Unchanged by the move off a mode and onto an overlay (the UI redesign, wave 3):
     it fills the region it is given, so the region being a window rather than
     the host is not its business. What *did* go is the claim in the old
     docstring that there is no visibility flag -- see :class:`state.ManualState`.

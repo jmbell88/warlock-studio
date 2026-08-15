@@ -46,3 +46,6 @@ imgui.ini
 # And the meshes, for the same reason and more so: a re-texture corpus is a
 # copy of the input GLB plus its re-textured output, which is 27 MB a pair.
 /docs/measurements/data/**/*.glb
+# Screenshot-harness output (`scripts/screenshot_modes.py --out`). Per-run,
+# regenerable, and photographed for one review -- never an input to anything.
+/.tmp-ui-audit/

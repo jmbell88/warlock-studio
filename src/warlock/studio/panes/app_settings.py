@@ -25,7 +25,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import fetch, vram
-from .. import app_ctx, dialogs, icons, theme, tokens, widgets
+from .. import app_ctx, controls, dialogs, forms, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -35,7 +35,7 @@ from ..tokens import sp
 #: checkbox on the left and four metres of nothing to its right -- the label and
 #: its control so far apart that reading a row meant tracking across the screen.
 #: Everything here is one column of short rows, so the column gets a measure and
-#: the window gets the rest (REDESIGN.md wave 4.1).
+#: the window gets the rest (the UI redesign, wave 4.1).
 CONTENT_W = 640
 
 #: How wide a labelled control in this pane gets. The column is 640 and the
@@ -86,8 +86,11 @@ def draw(ctx: Any) -> None:
             # This mode is one pane filling the window, so it is the one surface
             # in the app that has to say what it is out loud (UX.md Phase 2) --
             # the three-column modes are named by the rail item that is lit.
-            widgets.pane_title("Settings")
-            _category_body(ctx, _categories(ctx, width))
+            widgets.pane_header(
+                "Settings", help_text="Application appearance, models, storage, and layout."
+            )
+            with forms.Form("application-settings") as form_ui:
+                _category_body(ctx, _categories(ctx, width), form_ui)
         imgui.end_child()
     imgui.end_child()
 
@@ -130,7 +133,7 @@ def _categories(ctx: Any, width: float) -> str:
     return chosen
 
 
-def _category_body(ctx: Any, category: str) -> None:
+def _category_body(ctx: Any, category: str, form_ui: forms.Form) -> None:
     if category == "models":
         _models(ctx)
     elif category == "storage":
@@ -145,14 +148,20 @@ def _category_body(ctx: Any, category: str) -> None:
 # --- interface --------------------------------------------------------------
 
 
-def _interface(ctx: Any) -> None:
+def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
+    # Optional keeps the small source-level/unit probes able to call this piece
+    # directly while the real pane supplies the adaptive form context.
+    if form_ui is None:
+        with forms.Form("application-settings/interface") as nested:
+            _interface(ctx, nested)
+        return
     # No section heading: the lit segment above already says "Appearance", and a
     # heading repeating it is a second answer to a question nobody asked. The
     # categories that hold *more than one* group keep theirs.
     lo, hi = tokens.ui_scale_bounds(_base(ctx))
     stored = _scale_of(ctx)
     imgui.set_next_item_width(sp(FIELD_W))
-    changed, value = imgui.slider_float("UI scale", stored, lo, hi, "%.2fx")
+    changed, value = controls.slider_float("UI scale", stored, lo, hi, "%.2fx")
     widgets.help_marker(
         "On top of what the monitor already scales by, so 1.00x is the size "
         "Windows asked for rather than 96 dpi."
@@ -178,30 +187,32 @@ def _interface(ctx: Any) -> None:
     # ``theme.NAME``, so switching is this plus a re-``apply`` -- imgui's style
     # holds *copies* of the numbers, which is the one thing the live lookup
     # cannot do for it.
-    chosen = widgets.labeled_combo(
+    _changed, chosen = form_ui.combo(
+        "theme",
         "Theme",
         tokens.THEME,
         [(name, name) for name in tokens.PALETTES],
-        sp(FIELD_W),
-    )
-    widgets.help_marker(
-        "The whole palette, including the viewport background. It takes effect "
-        "at once and is remembered."
+        help_text="The whole palette, including the viewport background.",
+        helper="It takes effect at once and is remembered.",
     )
     if chosen != tokens.THEME:
         _apply_theme(ctx, chosen)
 
     show_fps = bool(ctx.state.show_fps)
-    changed, show_fps = imgui.checkbox("Show frame rate (F10)", show_fps)
+    changed, show_fps = form_ui.switch(
+        "show_fps", "Show frame rate (F10)", show_fps
+    )
     if changed:
         ctx.state.show_fps = show_fps
         ctx.settings.set("show_fps", show_fps)
 
     reduced = bool(ctx.state.reduce_motion)
-    changed, reduced = imgui.checkbox("Reduce motion", reduced)
-    widgets.help_marker(
-        "Turns off every animation in the app -- transitions, hover, the "
-        "sliding mode switch. Everything still changes, just without moving."
+    changed, reduced = form_ui.switch(
+        "reduce_motion",
+        "Reduce motion",
+        reduced,
+        help_text="Turns off transitions, hover motion, and sliding switches.",
+        helper="Everything still changes, just without moving.",
     )
     if changed:
         _apply_reduce_motion(ctx, reduced)
@@ -278,10 +289,10 @@ def _config(ctx: Any) -> None:
     every field, which is a settings pane that cannot change a setting.
     """
     widgets.section("Configuration")
-    if not imgui.collapsing_header("Effective configuration##app-settings"):
+    if not controls.collapsing_header("Effective configuration##app-settings"):
         return
     config_table(ctx)
-    if imgui.small_button("Copy as text"):
+    if controls.small_button("Copy as text"):
         from ...config import effective
 
         imgui.set_clipboard_text(
@@ -337,12 +348,12 @@ def _layout(ctx: Any) -> None:
     if lay is None:
         widgets.muted("No layout to reset.")
         return
-    if imgui.button("Reset pane sizes"):
+    if controls.button("Reset pane sizes"):
         lay.settings_share = 0.55
         lay.save()
         ctx.toast("Pane sizes reset.")
     imgui.same_line()
-    if imgui.button("Reset collapsed sections"):
+    if controls.button("Reset collapsed sections"):
         # The map, not the individual keys: every section falls back to its own
         # default-open when it finds nothing stored.
         ctx.settings.set("panels_open", {})
@@ -371,7 +382,7 @@ def _storage(ctx: Any) -> None:
     measurement of the same directories would be a second answer to one
     question, and the two would disagree for as long as one of them was stale.
 
-    The **buttons** moved here from the library's footer (REDESIGN.md wave
+    The **buttons** moved here from the library's footer (the UI redesign, wave
     4.1). Under a scrolling list of assets, "Clean library..." reads as an
     action on the assets you can see rather than on all of them; and that
     footer is the narrowest row in the app's narrowest column, which is how it
@@ -404,7 +415,7 @@ def _storage(ctx: Any) -> None:
     widgets.muted(f"In the trash: {summary}" if summary else "Measuring the trash...")
 
     widgets.section("Maintenance")
-    if imgui.button("Prune..."):
+    if controls.button("Prune..."):
         library.ask_prune(ctx)
     widgets.muted(
         "Deletes everything but the newest few assets from disk. Running jobs, "
@@ -600,7 +611,7 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
         return
 
     ticked = row_key in ctx.model_picks
-    changed, ticked = imgui.checkbox(f"##pick-{row_key}", ticked)
+    changed, ticked = controls.checkbox(f"##pick-{row_key}", ticked)
     if changed:
         # Only a missing row can be ticked, and the set is pruned as rows
         # arrive present, so it can never name something already on disk.
@@ -647,7 +658,7 @@ def _selection_progress(ctx: Any) -> None:
     imgui.same_line()
     from ... import winjob
 
-    if imgui.small_button(f"Cancel##cancel-{key}"):
+    if controls.small_button(f"Cancel##cancel-{key}"):
         stopped = winjob.terminate_tracked()
         ctx.toast(
             "Stopping the download..." if stopped else "Nothing left to stop."

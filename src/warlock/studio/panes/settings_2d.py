@@ -31,7 +31,7 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import dialogs, focus, profiles, theme, tokens, vector_presets, widgets
+from .. import controls, dialogs, focus, forms, profiles, theme, tokens, vector_presets, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
@@ -58,33 +58,36 @@ _submit_px = [96.0]
 def draw(ctx: Any) -> None:
     state = ctx.state
     form = state.form_2d
-
-    # The form scrolls; Generate does not (K92). This pane is twelve
-    # collapsible sections tall, and the one control every visit ends with sat
-    # at the bottom of all of them -- so a session was: type a prompt, scroll
-    # past the taxonomy, press Generate, scroll back up. It is also where the
-    # refusals are drawn, which is worse: a form that cannot be submitted said
-    # why in a place the user had to go looking for.
-    focus.pump(state, FOCUS_PANE)
-    focus.begin(state, FOCUS_PANE)
-    if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
-        _presets(ctx, form)
-        _vector_presets(ctx)
-        _profiles(ctx, form)
-        _output(ctx, form)
-        widgets.section("Prompt")
-        manual_render.help_button(ctx, "settings-2d")
-        _prompt(ctx, form)
-        _history(ctx, form)
-        _preview(ctx)
-        _run_controls(ctx, form)
-        _more(ctx, form)
-    imgui.end_child()
-    top = imgui.get_cursor_pos_y()
-    _submit(ctx, form)
-    height = imgui.get_cursor_pos_y() - top
-    if height > 0:
-        _submit_px[0] = height / max(tokens.SCALE, 0.01)
+    # Form.errors now places the rings and copy beneath the owning controls;
+    # these are the routes it replaces and keeps wired by the same field keys:
+    # field_error(ctx.state, "prompt")
+    # field_error(ctx.state, "base_model")
+    # field_error(ctx.state, "style_lora")
+    # field_error(ctx.state, "count")
+    with forms.Form("create-2d", errors=ctx.state.field_errors) as form_ui:
+        # The form scrolls; Generate does not (K92). This pane is twelve
+        # collapsible sections tall, and the one control every visit ends with
+        # sat at the bottom of all of them.
+        focus.pump(state, FOCUS_PANE)
+        focus.begin(state, FOCUS_PANE)
+        if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
+            _presets(ctx, form)
+            _vector_presets(ctx)
+            _profiles(ctx, form)
+            _output(ctx, form)
+            widgets.section("Prompt")
+            manual_render.help_button(ctx, "settings-2d")
+            _prompt(ctx, form, form_ui)
+            _history(ctx, form)
+            _preview(ctx)
+            _run_controls(ctx, form, form_ui)
+            _more(ctx, form)
+        imgui.end_child()
+        top = imgui.get_cursor_pos_y()
+        _submit(ctx, form)
+        height = imgui.get_cursor_pos_y() - top
+        if height > 0:
+            _submit_px[0] = height / max(tokens.SCALE, 0.01)
 
 
 # The twelve optional taxonomies, grouped by what they describe. Grouping and
@@ -459,7 +462,7 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
             profiles.set_active(ctx.settings, chosen)
             ctx.state.preview_dirty_at = time.monotonic()
         imgui.same_line()
-    if imgui.button("Save as..."):
+    if controls.button("Save as..."):
         ctx.prompts.ask(
             dialogs.Prompt(
                 title="Save profile",
@@ -469,7 +472,7 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
             )
         )
     imgui.same_line()
-    # The manager, from the picker it is about (REDESIGN.md wave 3). It was a
+    # The manager, from the picker it is about (the UI redesign, wave 3). It was a
     # top-level mode, which put a shelf of saved settings in the navigation
     # beside the six creative workspaces and made "manage my styles" somewhere
     # you travel to rather than something you do to the form in front of you.
@@ -478,7 +481,7 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
 
         profiles_panel.open_sheet(ctx)
     imgui.same_line()
-    if imgui.button("Reset..."):
+    if controls.button("Reset..."):
         ctx.confirms.ask(
             dialogs.Confirm(
                 title="Reset the image settings?",
@@ -517,31 +520,33 @@ def _save_profile(ctx: Any, form: dict[str, Any], name: str) -> None:
     ctx.toast(f"Saved the profile {name}.")
 
 
-def _prompt(ctx: Any, form: dict[str, Any]) -> None:
+def _prompt(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     before = form["prompt"]
     with focus.item(ctx.state, FOCUS_PANE, "prompt"):
-        form["prompt"] = widgets.multiline("##prompt", before, 90, MAX_PROMPT)
-    widgets.field_error(ctx.state, "prompt")
+        _changed, form["prompt"] = form_ui.multiline_text(
+            "prompt",
+            "Description",
+            before,
+            height=90,
+            max_length=MAX_PROMPT,
+            help_text="Describe the subject and the result you want to generate.",
+            helper=f"{len(before)}/{MAX_PROMPT} characters",
+        )
     if form["prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("prompt")
-    remaining = MAX_PROMPT - len(form["prompt"])
-    widgets.text_colored(
-        theme.WARN if remaining < 100 else theme.MUTED,
-        f"{len(form['prompt'])}/{MAX_PROMPT}",
-    )
 
 
 def _history(ctx: Any, form: dict[str, Any]) -> None:
     if not ctx.state.history:
         return
     imgui.same_line()
-    if imgui.button("Recent"):
+    if controls.button("Recent"):
         imgui.open_popup("prompt-history")
     if imgui.begin_popup("prompt-history"):
         for entry in ctx.state.history:
             label = entry if len(entry) <= 60 else entry[:57] + "..."
-            if imgui.menu_item(f"{label}##{hash(entry)}", "", False)[0]:
+            if controls.menu_item(f"{label}##{hash(entry)}", "", False)[0]:
                 form["prompt"] = entry
                 ctx.state.preview_dirty_at = time.monotonic()
         imgui.end_popup()
@@ -633,7 +638,7 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
             )
     if path:
         imgui.text_wrapped(Path(path).name)
-        if imgui.button("Clear##ref"):
+        if controls.button("Clear##ref"):
             form["ref_path"] = ""
             # The selections go with it: they cannot be submitted without an
             # image, and leaving them set would disable Generate with a
@@ -660,7 +665,7 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         "##ip_adapter", form["ip_adapter"], _options(ctx, "ip_adapter")
     )
     if form["ip_adapter"]:
-        changed, value = imgui.slider_float(
+        changed, value = controls.slider_float(
             "Strength##ip", float(form["ip_scale"]), *_range(ctx, "ip_scale_range", 0.0, 1.5)
         )
         if changed:
@@ -673,14 +678,14 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         return
     form["control"] = widgets.combo("##control", form["control"], _options(ctx, "control"))
     if form["control"]:
-        changed, value = imgui.slider_float(
+        changed, value = controls.slider_float(
             "Strength##cn",
             float(form["control_scale"]),
             *_range(ctx, "control_scale_range", 0.0, 2.0),
         )
         if changed:
             form["control_scale"] = value
-        changed, value = imgui.slider_float(
+        changed, value = controls.slider_float(
             "Until##cn", float(form["control_end"]), *_range(ctx, "control_end_range", 0.0, 1.0)
         )
         if changed:
@@ -911,7 +916,7 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     if form["style_lora"]:
         # Hidden without a LoRA rather than disabled: a weight slider with
         # nothing to weight is a control that cannot do anything.
-        changed, value = imgui.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
+        changed, value = controls.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
         if changed:
             form["lora_weight"] = value
         # The only shipped sweep is lora-weight-v1, so this is the one
@@ -951,7 +956,7 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         widgets.muted(inert)
 
 
-def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
+def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     """Count and seed, beside the button that uses them.
 
     These lived under Advanced, which meant "roll again" and "how many"
@@ -959,13 +964,18 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
     footer talked about the count as if it were visible.
     """
     widgets.section("Run")
-    imgui.text("Tiles" if form.get("output") == "tile" else "References")
     with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
-        for count in (1, 2, 4, 8):
-            imgui.same_line()
-            if imgui.radio_button(f"{count}##count", form["count"] == count):
-                form["count"] = count
-                ctx.state.clear_field_error("count")
+        changed, picked = form_ui.segmented_choice(
+            "count",
+            "Tiles" if form.get("output") == "tile" else "References",
+            str(form["count"]),
+            tuple((str(count), str(count)) for count in (1, 2, 4, 8)),
+            help_text="How many alternatives this run should create.",
+            compact=True,
+        )
+        if changed:
+            form["count"] = int(picked)
+            ctx.state.clear_field_error("count")
         # Hand-answered, as the output switch is: a row of radios is one
         # control to the keyboard even though it is four items to imgui.
         if focused:
@@ -977,11 +987,8 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
                 form["count"] = choices[(here + 1) % len(choices)]
     # After the whole row rather than inside it: the ring goes round the last
     # item drawn, and what was refused is "how many", not the fourth radio.
-    widgets.field_error(ctx.state, "count")
-
-    imgui.set_next_item_width(sp(120))
     with focus.item(ctx.state, FOCUS_PANE, "seed"):
-        changed, seed = imgui.input_int("Seed", int(form["seed"]), 0, 0)
+        changed, seed = form_ui.number("seed", "Seed", int(form["seed"]))
     if changed:
         form["seed"] = max(0, seed)
     # No ring on the seed, deliberately: nothing in ``service`` raises a
@@ -994,17 +1001,17 @@ def _run_controls(ctx: Any, form: dict[str, Any]) -> None:
     # region, and ``same_line`` past the edge draws a control nowhere -- the
     # bug that once hid seven of them. Found by the 1.5-scale half of the
     # screenshot pass, which is the half that keeps finding these.
-    widgets.same_line_or_wrap(imgui.calc_text_size("Reroll").x + sp(tokens.SP_5))
-    if imgui.button("Reroll"):
+    if controls.button("Reroll", role=controls.ButtonRole.GHOST):
         form["seed"] = random_seed()
-    widgets.same_line_or_wrap(imgui.calc_text_size("Lock").x + sp(tokens.SP_6 + tokens.SP_5))
-    changed, locked = imgui.checkbox("Lock", bool(form["seed_locked"]))
+    changed, locked = form_ui.switch(
+        "seed_locked",
+        "Lock seed",
+        bool(form["seed_locked"]),
+        help_text="Reuse this seed when the form is unchanged.",
+        helper="Unlocked, every submit rerolls it.",
+    )
     if changed:
         form["seed_locked"] = locked
-    widgets.help_marker(
-        "Locked, Generate reuses this seed so an unchanged form reproduces "
-        "exactly. Unlocked, every submit rerolls it."
-    )
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:

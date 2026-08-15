@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, packwright_mode, widgets
+from .. import controls, icons, packwright_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -27,10 +27,10 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "packwright-bridge")
 
     width = widgets.grid_width(2)
-    if imgui.button(f"{icons.PLUS} New", (width, 0)):
+    if controls.button(f"{icons.PLUS} New", (width, 0)):
         packwright_mode.new_document(ctx)
     imgui.same_line()
-    if imgui.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
+    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         packwright_mode.ask_open(ctx)
 
     if tab is None:
@@ -52,7 +52,7 @@ def draw(ctx: Any) -> None:
     ):
         packwright_mode.save(ctx, tab)
     imgui.same_line()
-    if widgets.disabled_button("Save as...", ready, (width, 0), reason=busy_why):
+    if widgets.disabled_button("Save As...", ready, (width, 0), reason=busy_why):
         packwright_mode.save_as(ctx, tab)
     if tab.busy:
         # What the two greyed buttons above mean. ``clay_bridge._facts`` is the

@@ -234,7 +234,7 @@ def test_the_status_block_reports_health_queue_and_library():
 
 
 def test_home_draws_the_actionable_rows_and_the_rail_still_gets_all_of_them():
-    """REDESIGN.md wave 4.3. ``status_rows`` stays the one source -- the rail's
+    """The UI redesign, wave 4.3. ``status_rows`` stays the one source -- the rail's
     health badge reads the same data, and a fork would be two answers to "is
     this install healthy". What narrowed is what *Home* draws: the library row
     counted assets on a screen whose lower half is now assets."""
@@ -310,7 +310,7 @@ def test_the_status_rows_are_computed_once_per_draw():
         assert "status_rows(" not in inspect.getsource(helper), helper.__name__
 
 
-# --- REDESIGN.md wave 4.3: the What's New card and the New... menu -----------
+# --- the UI redesign, wave 4.3: the What's New card and the New... menu -----------
 
 
 def _release(version: str = "0.0.22", bullets: tuple[str, ...] = ("a", "b")):

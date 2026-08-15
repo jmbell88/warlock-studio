@@ -18,7 +18,7 @@ from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
-from .. import create_stages, fonts, theme, widgets
+from .. import controls, create_stages, fonts, forms, theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
 from ..state import format_duration
@@ -48,7 +48,7 @@ REFERENCE_MAX_THUMBS = 3
 
 
 # What the inspector shows at each Create stage. **The stage rail is the tab
-# bar now** (REDESIGN.md wave 5): a stage switch and a tab click were two
+# bar now** (the UI redesign, wave 5): a stage switch and a tab click were two
 # controls doing one thing, sitting a foot apart, and the tab strip could
 # disagree with the rail about which step you were on. So in Create the
 # inspector carries no tabs at all and is *stage-scoped evidence* -- what this
@@ -218,14 +218,14 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     from .. import clay_mode, icons, inker_mode
 
     if offers_inker(ctx, job):
-        if imgui.button(f"{icons.BRUSH} Open in Inker"):
+        if controls.button(f"{icons.BRUSH} Open in Inker"):
             inker_mode.open_job_reference(ctx, job)
         widgets.hint_text("Paint over the reference; saving updates this asset.")
     # Independent, not an else: the two gates are disjoint today (a reference
     # has no mesh and a mesh has no editable reference), and an else would hide
     # one of them without saying so if that ever stopped being true.
     if can_edit_in_clay(job):
-        if imgui.button(f"{icons.BOX} Open in Clay"):
+        if controls.button(f"{icons.BOX} Open in Clay"):
             clay_mode.edit_asset_in_clay(ctx, job)
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
 
@@ -554,7 +554,7 @@ def _header(ctx: Any, job: Any) -> None:
     widgets.status_pill(job["status"])
     imgui.same_line()
     favourite = bool(job.get("favorite"))
-    if imgui.small_button("Unfavourite" if favourite else "Favourite"):
+    if controls.small_button("Unfavourite" if favourite else "Favourite"):
         ctx.submit(
             f"fav:{job_id}", svc_jobs.update_job, ctx.svc, job_id, {"favorite": not favourite}
         )
@@ -585,7 +585,7 @@ def _error(ctx: Any, job: Any) -> None:
     # be selected -- retyping a friendly() sentence and its job id was the whole
     # of "report this". The id goes with it because the message alone is not
     # enough to find the job's error.log or its row.
-    if imgui.small_button("Copy error"):
+    if controls.small_button("Copy error"):
         imgui.set_clipboard_text(f"job {job['id']}\n{message}")
     imgui.same_line()
     if not imgui.tree_node("Details"):
@@ -595,10 +595,10 @@ def _error(ctx: Any, job: Any) -> None:
         ctx.submit(key, svc_system.trellis_log, ctx.svc)
     log_text = ctx.state.preview.get("trellis_log") if ctx.state.preview else None
     if log_text:
-        imgui.input_text_multiline(
+        controls.input_text_multiline(
             "##log", log_text[-4000:], (-1, 160), imgui.InputTextFlags_.word_wrap.value
         )
-    if "error.log" in (job.get("files") or []) and imgui.button("Save error.log..."):
+    if "error.log" in (job.get("files") or []) and controls.button("Save error.log..."):
         ctx.save_artifact(job["id"], "error.log")
     imgui.tree_pop()
 
@@ -625,10 +625,11 @@ def _settings(ctx: Any, job: Any) -> None:
         ("background", params.get("bg_removal")),
         ("profile", params.get("profile")),
     ]
-    for label, value in rows:
-        if value in (None, ""):
-            continue
-        widgets.muted(f"{label}: {value}")
+    with forms.Form("generation-settings") as form_ui:
+        for label, value in rows:
+            if value in (None, ""):
+                continue
+            form_ui.readonly(label.replace(" ", "_"), label, value)
     composed = params.get("composed_prompt")
     if composed and imgui.tree_node("Prompt sent"):
         imgui.text_wrapped(str(composed))
@@ -946,7 +947,7 @@ def _pixel(ctx: Any, job: Any) -> None:
             ctx.settings.set("pixel_palette", chosen_palette or "")
             palette_name = submit_kwargs["pixel_palette"] = chosen_palette
         if palette_name:
-            toggled, dither = imgui.checkbox("Dither", dither)
+            toggled, dither = controls.checkbox("Dither", dither)
             if toggled:
                 ctx.settings.set("pixel_dither", dither)
                 submit_kwargs["pixel_dither"] = dither
@@ -986,7 +987,7 @@ def _pixel(ctx: Any, job: Any) -> None:
     )
     # The file on screen was cut under a different palette setting -- switching
     # sizes surfaces one derived before the knob changed.
-    if stale and imgui.button("Rebuild with these colours"):
+    if stale and controls.button("Rebuild with these colours"):
         ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
 
 
@@ -1181,7 +1182,7 @@ def _verdict(ctx: Any, job: Any) -> None:
 def downloads(ctx: Any, job: Any) -> None:
     """The Export stage's grid of artifacts, two columns wide.
 
-    Public since REDESIGN.md wave 5.4, because it is drawn from two places
+    Public since the UI redesign, wave 5.4, because it is drawn from two places
     now: the Export stage's own column, and the inspector's Export *tab* in
     every host that still has tabs. One function, because "what you can take
     away from this asset" has exactly one right answer and a second grid would

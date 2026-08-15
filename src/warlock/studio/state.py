@@ -650,7 +650,7 @@ class ManualState:
     **This flag is deliberately the inversion of what this docstring used to
     say.** The Manual was a mode, and the argument was that a second "am I
     visible" flag would be a way for the two to disagree -- which was right
-    while it *was* a mode. It is an overlay now (REDESIGN.md wave 3): help is
+    while it *was* a mode. It is an overlay now (the UI redesign, wave 3): help is
     something you consult *about the screen you are on*, and making it a
     destination meant clicking a (?) replaced the pane whose control you were
     asking about, so the answer arrived with the question gone. There is no
@@ -853,7 +853,7 @@ class AppState:
     tile_preview: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
     # Where the user is standing in Create mode, one of
-    # ``create_stages.STAGES`` (REDESIGN.md wave 5). **Volatile and never
+    # ``create_stages.STAGES`` (the UI redesign, wave 5). **Volatile and never
     # persisted**, which is the same rule ``mode`` follows and for a stronger
     # reason: a stage is a *derived* position over the selected asset, so a
     # remembered one would be restored against whatever happens to be selected
@@ -873,7 +873,7 @@ class AppState:
     # was a coloured dot. The diagnostics popup shows these, which is what makes
     # Dismiss "put it away" rather than "forget it".
     dismissed_errors: list[str] = field(default_factory=list)
-    # Whether the style-profile manager is up (REDESIGN.md wave 3). It was a
+    # Whether the style-profile manager is up (the UI redesign, wave 3). It was a
     # mode, which put a shelf of saved settings in the top-level navigation
     # beside the six creative workspaces -- and made "manage my styles" a place
     # you travel to rather than something you do to the form in front of you.

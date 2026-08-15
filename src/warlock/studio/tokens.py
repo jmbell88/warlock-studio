@@ -58,21 +58,18 @@ def sp(n: float) -> float:
 # two panes come to sit 24 and 20 apart for no stated reason -- SP_6, SP_10 and
 # RADIUS_L were exactly that and had no readers at all.
 #
-# The upper half (SP_5..SP_8) arrives with its readers, which is the same rule
-# read the other way round: the landing screen was inventing ``sp(20)``,
-# ``sp(40)`` and ``sp(48)`` inline because the scale stopped at 16, so the gaps
-# that carry the app's first screen were the only ones no module owned.
+# Larger steps arrive only with their readers, which is the same rule read the
+# other way round: named spacing that no layout uses is not part of the scale.
 SP_1 = 4
 SP_2 = 8
 SP_3 = 12
 SP_4 = 16
-SP_5 = 20
 SP_6 = 24
 
 # -- radii / strokes ---------------------------------------------------------
 
 RADIUS_S = 4.0
-# The *control* radius (REDESIGN.md wave 1). 6 was the number a control gets
+# The *control* radius (the UI redesign, wave 1). 6 was the number a control gets
 # when the ramp is read as "small, medium, large" rather than as two jobs: at
 # 6 a button, a field and a combo all read as *slightly* softened rects, which
 # is the register a developer tool draws in and not the one this program is
@@ -96,6 +93,31 @@ RADIUS_M = 8.0
 # the controls inside it inverts the depth story the elevation ramp tells.
 RADIUS_L = 12.0
 BORDER = 1.0
+
+# -- controls / interaction -------------------------------------------------
+
+# One vertical rhythm for every interactive control.  The regular height is
+# used by forms and primary toolbars; compact is for dense editor chrome and
+# table rows.  These are design pixels, like the spacing scale above, and are
+# converted with ``sp`` at the point of use.
+CONTROL_HEIGHT_REGULAR = 30.0
+CONTROL_HEIGHT_COMPACT = 26.0
+# Short names are useful when a caller is choosing a size rather than doing
+# arithmetic, and keep the public vocabulary aligned with ``ControlSize``.
+CONTROL_REGULAR = CONTROL_HEIGHT_REGULAR
+CONTROL_COMPACT = CONTROL_HEIGHT_COMPACT
+
+# Shared state treatment.  Hover is an elevation change; pressed is a short
+# accent acknowledgement; persistent selection is a quiet wash plus a hard
+# accent boundary; keyboard focus is a separate, unmissable ring.  Keeping the
+# alphas here prevents each hand-drawn control from inventing its own strength.
+DIVIDER_WIDTH = 1.0
+FOCUS_RING_WIDTH = 2.0
+SELECTION_BOUNDARY_WIDTH = 2.0
+SELECTION_WASH_ALPHA = 0.14
+HOVER_WASH_ALPHA = 0.10
+PRESSED_WASH_ALPHA = 0.24
+ERROR_WASH_ALPHA = 0.12
 # There is deliberately still no SP_8. UX.md Phase 0's list named it and Phase
 # 0's own note deferred it to "whatever gap turns out to want 32"; the section
 # rhythm this phase settled on is SP_6 above a heading and SP_4 inside a form,
@@ -111,7 +133,7 @@ BORDER = 1.0
 # somebody reads a *table* in, and 11 is below where secondary copy stays
 # comfortable at all -- which is why the muted-text contrast work (UX-18) was
 # fighting a legibility problem it could not win with colour alone. 12/14 is
-# the register the rest of the program is drawn in (REDESIGN.md wave 1); the
+# the register the rest of the program is drawn in (the UI redesign, wave 1); the
 # atlas is baked at ``TEXT_BODY`` (see :mod:`.fonts`), so this is the size the
 # default face loads at and every unpushed string comes out in.
 #
@@ -183,6 +205,7 @@ PALETTES: dict[str, dict[str, int]] = {
         "ELEV_1": 0x1D1F26,  # cards, fields on a panel
         "ELEV_2": 0x252833,  # hovered/raised elements, popups
         "EDGE": 0x2A2D38,  # the one hairline
+        "DIVIDER": 0x242630,  # major pane boundaries only
         "TEXT": 0xE8E8EE,
         "MUTED": 0x9A9DB0,
         "ACCENT": 0x7C6CF0,
@@ -196,6 +219,7 @@ PALETTES: dict[str, dict[str, int]] = {
         "ELEV_1": 0xEDEDF2,
         "ELEV_2": 0xE1E1EA,
         "EDGE": 0xD2D2DC,
+        "DIVIDER": 0xDADAE2,
         "TEXT": 0x1B1C22,
         "MUTED": 0x5F6272,
         "ACCENT": 0x5344C7,

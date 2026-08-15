@@ -16,7 +16,7 @@ from . import icons
 
 # (key, label, icon). The key is what lands in ``AppState.mode``.
 #
-# **The order is the rail's order** (REDESIGN.md wave 3): where you start and
+# **The order is the rail's order** (the UI redesign, wave 3): where you start and
 # what you look at, then the six creative workspaces, then Settings. It used to
 # be the *segmented control's* order, grouped by a predicate over
 # ``WORK_MODES`` -- a rule that rendered correctly and explained nothing, and
@@ -35,7 +35,7 @@ from . import icons
 # stage's pane).
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
-    # **One mode, not two** (REDESIGN.md wave 5). "2D" and "3D" were the two
+    # **One mode, not two** (the UI redesign, wave 5). "2D" and "3D" were the two
     # halves of a single journey -- you write a prompt, you get a picture, you
     # turn the picture into a mesh -- presented as two destinations you had to
     # know to travel between. Worse, the names described the *artifact* rather
@@ -147,7 +147,7 @@ KEYS = tuple(key for key, _label, _icon in MODES)
 #
 # The rail has no strip for it, so the ``QUIT`` tuple is gone with the header
 # that read it. The ways out are the window's own X -- which routes through
-# ``App._ask_quit`` (REDESIGN.md wave 3; it used to bypass the preflight
+# ``App._ask_quit`` (the UI redesign, wave 3; it used to bypass the preflight
 # summary and go straight to ``_request_quit``, which was survivable only while
 # the icon existed to carry it) -- and the palette's Quit command, which calls
 # the same guard. Both ask about unsaved work; neither is a button somebody's

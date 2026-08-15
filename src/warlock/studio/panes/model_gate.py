@@ -21,9 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from imgui_bundle import imgui
-
-from .. import widgets
+from .. import controls, widgets
 from ..state import set_mode
 
 
@@ -74,6 +72,6 @@ def draw(ctx: Any, row_keys: tuple[str, ...], *, what: str = "This") -> bool:
         f"{what} needs {len(rows)} {noun} you haven't downloaded "
         f"(about {total:.1f} GB)."
     )
-    if imgui.small_button("Install in Settings"):
+    if controls.small_button("Install in Settings"):
         request_install(ctx, row_keys)
     return True

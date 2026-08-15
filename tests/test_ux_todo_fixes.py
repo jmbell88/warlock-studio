@@ -29,6 +29,7 @@ from warlock.studio.state import TOAST_LEVELS
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "warlock"
 STUDIO = SRC / "studio"
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
 # --- the toast vocabulary is closed ------------------------------------------
@@ -92,6 +93,38 @@ def test_no_studio_module_cites_the_deleted_roadmap():
         for path in sorted(STUDIO.rglob("*.py"))
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if "TODO.md" in line
+    ]
+    assert offenders == []
+
+
+#: The plan files retired on 2026-08-15, named here so the scan below can look
+#: for them without this module's own prose becoming an offender -- which is
+#: also why the scan is scoped to ``src`` and ``scripts`` and never ``tests``.
+RETIRED_PLANS = ("REDESIGN" ".md", "INKER_UPDATE" ".md", "NEXT_SESSION" ".md")
+
+
+def test_no_module_cites_a_retired_plan_file():
+    """The sibling of the ratchet above, for the three plans deleted on 2026-08-15.
+
+    ``REDESIGN.md``, ``INKER_UPDATE.md`` and ``NEXT_SESSION.md`` described work
+    that is merged; ``docs/INVARIANTS.md`` records their retirement and carries
+    the one section worth keeping (the eighteen Aseprite divergences). Their
+    eighty-odd citations were rewritten to name the *programme* rather than the
+    file -- "the UI redesign, wave N" -- and unlike the ``TODO.md §N`` case
+    above that rewrite loses nothing, because a wave's outcome is described in
+    ``docs/INVARIANTS.md`` and the filename pointed only at a deleted plan.
+
+    This is a full sweep rather than a narrowed ratchet for exactly that
+    reason: there is no grandfathered site left to protect. Scoped to ``src``
+    and ``scripts`` because ``tests`` contains this docstring.
+    """
+    offenders = [
+        f"{path}:{n} -> {token}"
+        for root in (SRC, SCRIPTS)
+        for path in sorted(root.rglob("*.py"))
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for token in RETIRED_PLANS
+        if token in line
     ]
     assert offenders == []
 

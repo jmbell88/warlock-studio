@@ -24,9 +24,8 @@ from imgui_bundle import imgui
 
 from ...pipelines import optimize
 from ...service import jobs as svc_jobs
-from .. import theme, widgets
+from .. import forms, theme, widgets
 from ..manual import render as manual_render
-from ..tokens import sp
 
 
 def tier_label(key: str, budget: int | None) -> str:
@@ -76,22 +75,32 @@ def draw(ctx: Any, job: Any) -> None:
     if not available:
         form["profile"] = "raw"
         widgets.muted("Only full density is available: gltfpack is not installed.")
-    form["profile"] = widgets.labeled_combo("Budget", form["profile"], options)
-    widgets.help_marker(
-        "Rebuilds model.glb from the untouched source.glb, so a budget can be "
-        "retargeted any number of times without another reconstruction. It "
-        "does not re-run trellis."
-    )
+    # Form.help_text renders widgets.help_marker beside the owning label.
+    with forms.Form("retarget-settings") as form_ui:
+        _changed, form["profile"] = form_ui.combo(
+            "profile",
+            "Budget",
+            form["profile"],
+            options,
+            help_text="Rebuild model.glb from the untouched source.glb.",
+            helper=(
+                "You can retarget repeatedly without another reconstruction; "
+                "trellis does not run again."
+            ),
+        )
 
-    if form["profile"] == "custom":
-        imgui.set_next_item_width(sp(140))
-        changed, value = imgui.input_int("Triangles", int(form["custom_triangles"]), 0, 0)
-        if changed:
-            form["custom_triangles"] = value
-        widgets.muted(f"{optimize.CUSTOM_MIN:,} to {optimize.CUSTOM_MAX:,}")
+        if form["profile"] == "custom":
+            changed, value = form_ui.number(
+                "custom_triangles",
+                "Triangles",
+                int(form["custom_triangles"]),
+                helper=f"{optimize.CUSTOM_MIN:,} to {optimize.CUSTOM_MAX:,}",
+            )
+            if changed:
+                form["custom_triangles"] = value
 
-    _warn_stale(ctx, job)
-    _submit(ctx, job_id, form)
+        _warn_stale(ctx, job)
+        _submit(ctx, job_id, form)
 
 
 def _form(ctx: Any, job_id: str) -> dict[str, Any]:

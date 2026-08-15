@@ -24,7 +24,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, clay_state, icons, widgets
+from .. import clay_mode, clay_ops, clay_state, controls, icons, widgets
 from ..clay import document as bd
 from ..clay import ops
 from ..clay import primitives as bp
@@ -110,7 +110,7 @@ def _tool_grid(state: Any) -> None:
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
         icon = TOOL_ICONS.get(key) or label[:1]
-        if imgui.button(f"{icon}##buildtool{key}", (width, sp(30))):
+        if controls.button(f"{icon}##buildtool{key}", (width, sp(30))):
             state.tool = key
         if selected:
             imgui.pop_style_color()
@@ -138,7 +138,7 @@ def _mode_row(doc: Any) -> None:
                 imgui.Col_.button.value,
                 imgui.get_style().color_(imgui.Col_.button_active.value),
             )
-        if imgui.button(f"{label}##claymode{mode}", (width, sp(26))):
+        if controls.button(f"{label}##claymode{mode}", (width, sp(26))):
             doc.set_element_mode(mode)
         if selected:
             imgui.pop_style_color()
@@ -160,7 +160,7 @@ def _add(ctx: Any, state: Any, doc: Any) -> None:
     width = widgets.grid_width(COLUMNS)
     for index, name in enumerate(sorted(bp.GENERATORS)):
         icon = PRIMITIVE_ICONS.get(name, icons.BOX)
-        if imgui.button(f"{icon}##add{name}", (width, sp(28))):
+        if controls.button(f"{icon}##add{name}", (width, sp(28))):
             add_primitive(ctx, doc, name)
         if imgui.is_item_hovered():
             imgui.set_tooltip(name.replace("_", " "))
@@ -265,7 +265,7 @@ def _axis_views(ctx: Any) -> None:
         ("R", "right", "Right  (Ctrl+3, Shift for left)"),
         ("T", "top", "Top  (Ctrl+7, Shift for bottom)"),
     ):
-        if imgui.button(f"{label}##axis{name}", (width, sp(24))):
+        if controls.button(f"{label}##axis{name}", (width, sp(24))):
             view.camera.look_along(name)
         if imgui.is_item_hovered():
             imgui.set_tooltip(key)
@@ -275,7 +275,7 @@ def _axis_views(ctx: Any) -> None:
         imgui.push_style_color(
             imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
         )
-    if imgui.button("Ortho##axisortho", (width, sp(24))):
+    if controls.button("Ortho##axisortho", (width, sp(24))):
         view.camera.orthographic = not ortho
     if ortho:
         imgui.pop_style_color()
@@ -292,10 +292,10 @@ def _snapping(state: Any) -> None:
     imgui.begin_disabled(not state.snap)
     # "%.4f", because the grid steps by 1/16 m and imgui's default "%.3f" drew
     # that as 0.063 -- a field that disagrees with its own step button.
-    _, state.snap_translate = imgui.input_float(
+    _, state.snap_translate = controls.input_float(
         "grid (m)##snapt", state.snap_translate, 0.0625, 0.0, "%.4f"
     )
-    _, state.snap_rotate = imgui.input_float("angle (deg)##snapr", state.snap_rotate, 5.0, 0.0)
+    _, state.snap_rotate = controls.input_float("angle (deg)##snapr", state.snap_rotate, 5.0, 0.0)
     imgui.end_disabled()
     # Outside the disable, because it is a *separate* switch rather than a mode
     # of the grid: the two answer different questions -- "put it on round
@@ -325,7 +325,7 @@ def _proportional(state: Any) -> None:
         "selected vertex."
     )
     imgui.begin_disabled(not state.proportional)
-    _, state.proportional_radius = imgui.input_float(
+    _, state.proportional_radius = controls.input_float(
         "radius (m)##propr", state.proportional_radius, 0.05, 0.0, "%.3f"
     )
     imgui.end_disabled()

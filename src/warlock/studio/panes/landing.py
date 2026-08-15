@@ -13,7 +13,7 @@ what is the machine doing, and what was I working on -- in one column, in that
 order, with the answers weighted by how often they are the reason somebody is
 here. "What changed" is a card you dismiss once per release; "what is the
 machine doing" is one quiet line; "what was I working on" is the rest of the
-screen, as pictures (REDESIGN.md wave 4.3).
+screen, as pictures (the UI redesign, wave 4.3).
 
 Nothing here is persisted: ``AppState.mode`` defaults to ``"home"``, which is
 what makes this appear on every launch rather than only the first ever.
@@ -30,7 +30,18 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import changelog
-from .. import create_stages, fonts, icons, modes, profiles, recents, theme, tokens, widgets
+from .. import (
+    controls,
+    create_stages,
+    fonts,
+    icons,
+    modes,
+    profiles,
+    recents,
+    theme,
+    tokens,
+    widgets,
+)
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes, set_mode
 from ..tokens import sp
@@ -242,7 +253,7 @@ def _health_status(ctx: Any) -> Status:
     failing = [c for c in checks if not c.ok]
     fatal = [c for c in failing if c.fatal]
     if not checks:
-        return Status("health", icons.LOADER, "Diagnostics - still checking", theme.MUTED)
+        return Status("health", icons.LOADER, "Issues - still checking", theme.MUTED)
     if not failing:
         return Status(
             "health", icons.CIRCLE_CHECK, "Everything checks out", theme.MUTED, "settings"
@@ -322,6 +333,19 @@ def status_rows(ctx: Any) -> list[Status]:
     return found
 
 
+def visible_home_rows(
+    rows: list[Status], *, shell_issue_visible: bool
+) -> list[Status]:
+    """Home's quiet status line, without repeating the shell issue summary."""
+
+    return [
+        row
+        for row in rows
+        if row.key in HOME_STATUS
+        and not (shell_issue_visible and row.key == "health")
+    ]
+
+
 def _count_unreviewed(svc: Any) -> int:
     from ..review_mode import SOURCE
 
@@ -345,7 +369,7 @@ def pump(ctx: Any) -> None:
 
 # --- drawing ----------------------------------------------------------------
 #
-# One column (REDESIGN.md wave 4.3). It used to be two, news and status on the
+# One column (the UI redesign, wave 4.3). It used to be two, news and status on the
 # left and Resume on the right, which gave half of the app's first screen to a
 # changelog -- the thing a user reads once per release -- and left "what was I
 # working on" as a column of one-line selectables in the other half. The card
@@ -431,9 +455,6 @@ def _header(ctx: Any) -> None:
         # question the UI could not answer at all.
         widgets.muted(_version())
     manual_render.help_button(ctx, "home")
-    if ctx.state.errors:
-        for message in ctx.state.errors:
-            widgets.text_colored(theme.ERR, message)
     imgui.dummy((0, sp(tokens.SP_3)))
 
 
@@ -529,7 +550,7 @@ def _news_popup() -> None:
             headline = release.version + (f" - {release.date}" if release.date else "")
             opened = current is not None and release.version == current.version
             flags = imgui.TreeNodeFlags_.default_open.value if opened else 0
-            if imgui.collapsing_header(f"{headline}##news{index}", flags):
+            if controls.collapsing_header(f"{headline}##news{index}", flags):
                 for bullet in release.bullets:
                     with fonts.small(imgui):
                         widgets.muted_wrapped(f"- {bullet}")
@@ -549,7 +570,7 @@ def _start(ctx: Any) -> None:
         imgui.open_popup("landing-new")
     if imgui.begin_popup("landing-new"):
         for key, label, icon, action in NEW_ITEMS:
-            if imgui.menu_item(f"{icon}  {label}##landing-new-{key}", "", False)[0]:
+            if controls.menu_item(f"{icon}  {label}##landing-new-{key}", "", False)[0]:
                 action(ctx)
         imgui.end_popup()
     imgui.dummy((0, sp(tokens.SP_2)))
@@ -565,9 +586,9 @@ def _status(ctx: Any, status: list[Status]) -> None:
     """
     gap = imgui.get_style().item_spacing.x
     first = True
-    for row in status:
-        if row.key not in HOME_STATUS:
-            continue
+    for row in visible_home_rows(
+        status, shell_issue_visible=bool(ctx.state.errors)
+    ):
         width = (
             imgui.calc_text_size(row.icon).x
             + imgui.calc_text_size(row.text).x
@@ -593,7 +614,7 @@ def _status(ctx: Any, status: list[Status]) -> None:
                 imgui.Col_.button_hovered.value,
                 imgui.ImVec4(*theme.rgba(theme.ELEV_2)),
             )
-            clicked = imgui.small_button(f"{row.text}##landing-status-{row.key}")
+            clicked = controls.small_button(f"{row.text}##landing-status-{row.key}")
             imgui.pop_style_color(3)
             if imgui.is_item_hovered():
                 imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)

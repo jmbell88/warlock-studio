@@ -1,28 +1,27 @@
 # Troubleshooting
 
-Most things that go wrong here announce themselves: the health dot turns amber or red, a banner
-appears across the top of the window, and the diagnostics popup names the check that failed. This
+Most things that go wrong here announce themselves: the health dot turns amber or red, a compact
+summary appears across the top of the window, and the Issues popup names the check that failed. This
 chapter is the other half — what each of those means and what to do about it.
 
-The banner holds every outstanding failure, one line each, rather than only the most recent — a
-launch that both failed a check and lost its worker says so twice. **Copy details** copies all of
-them and **Troubleshooting** opens this chapter. Separately, a toast for a failure with no message
+The summary holds the issue count and the leading action on one line. **Review** opens Issues for
+the complete checks, copy actions and troubleshooting route. Separately, a toast for a failure with no message
 of its own carries an **Open log** button, so the log it tells you to read is one press away rather
-than inside the diagnostics popup.
+than inside the Issues popup.
 
 **Dismiss** takes the banner off the screen without destroying what it said. Each of the three
 things that write a banner message writes it exactly once — the startup check sweep and the two
 worker checks — so clearing the list would leave a coloured dot as the only surviving evidence. The
-text moves into the diagnostics popup under a **Dismissed** heading instead.
+text moves into the Issues popup under a **Dismissed** heading instead.
 
-## The health dot and the diagnostics popup
+## The health dot and Issues
 
 The dot at the top right is green when every check passed, amber when a non-fatal one failed, and
 red for a fatal one or a dead worker. When something is failing it also carries the word *Issue* or
 *Issues*, and hovering it lists the failing rows by name — enough to tell a missing style LoRA from
 a held engine port without opening anything.
 
-Clicking it opens the diagnostics popup, which holds four things:
+Clicking it opens Issues, which holds four things:
 
 - **Every check**, passing and failing, with its detail and its remedy.
 - **Effective configuration** — every setting this process is running on, with the ones that came
@@ -36,7 +35,7 @@ Clicking it opens the diagnostics popup, which holds four things:
 they cannot change without the disk changing — so having just installed something the popup says is
 missing, nothing short of a restart would otherwise change its mind. This button re-runs everything.
 
-A first run that has downloaded nothing yet is better served by the **Diagnostics / Set up models**
+A first run that has downloaded nothing yet is better served by the **Issues / Set up models**
 row on the [Home screen](02-home.md), which opens the model list and its Download buttons rather
 than this read-only list.
 
@@ -119,7 +118,7 @@ mid-session worker death was invisible outside the log file.
 pretending there might be.
 
 **Then find out why.** `warlock.log` has the run's logging, including the VRAM instrumentation, and
-`crash.log` has native tracebacks. The diagnostics popup's **Open the log** button opens the first
+`crash.log` has native tracebacks. The Issues popup's **Open the log** button opens the first
 of those directly.
 
 ## A port is already in use at startup

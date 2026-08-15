@@ -15,7 +15,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import icons, theme, widgets
+from .. import controls, icons, theme, widgets
 from .. import palette as palette_lib
 from ..tokens import sp
 
@@ -192,7 +192,7 @@ def _row(ctx: Any, kind: str, item: Any, current: bool) -> bool:
     if current:
         imgui.set_scroll_here_y(0.5)
     imgui.begin_disabled(not enabled)
-    clicked = imgui.selectable(f"{label}##{row_id}", current)[0]
+    clicked = controls.selectable(f"{label}##{row_id}", current)[0]
     imgui.end_disabled()
     # The row's own rectangle, read while ``LastItemData`` still describes the
     # row. It has to be taken before the tooltip below: SetTooltip renders its

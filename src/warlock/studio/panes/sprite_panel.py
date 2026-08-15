@@ -22,7 +22,7 @@ from imgui_bundle import imgui
 from ... import rigging
 from ...service import sprites as svc_sprites
 from ...service import validation
-from .. import widgets
+from .. import controls, forms, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import model_gate, stamps
@@ -56,8 +56,9 @@ def draw(ctx: Any, job: Any) -> None:
 
     job_id = job["id"]
     form = _form(ctx, job_id)
-    _controls(ctx, form)
-    _submit(ctx, job_id, form)
+    with forms.Form("sprite-settings") as form_ui:
+        _controls(ctx, form, form_ui)
+        _submit(ctx, job_id, form)
     _running(ctx, job_id)
     _drafts(ctx, job_id)
 
@@ -84,41 +85,43 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
     return form
 
 
-def _controls(ctx: Any, form: dict[str, Any]) -> None:
+def _controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     options = svc_sprites.sprite_options()
     types = options.get("sheet_types") or []
     labels = {
         entry["key"]: f"{entry['key']} ({entry['columns']}x{entry['rows']})"
         for entry in types
     }
-    form["sheet_type"] = widgets.labeled_combo(
+    _changed, form["sheet_type"] = form_ui.combo(
+        "sheet_type",
         "Type",
         form["sheet_type"],
         [(entry["key"], labels[entry["key"]]) for entry in types],
     )
-    form["logical_size"] = int(
-        widgets.labeled_combo(
-            "Cell size",
-            str(form["logical_size"]),
-            [(str(s), f"{s} px") for s in options.get("logical_sizes") or ()],
-        )
+    _changed, logical_size = form_ui.combo(
+        "logical_size",
+        "Cell size",
+        str(form["logical_size"]),
+        [(str(s), f"{s} px") for s in options.get("logical_sizes") or ()],
     )
-    form["colors"] = int(
-        widgets.labeled_combo(
-            "Palette",
-            str(form["colors"]),
-            [(str(n), f"{n} colours") for n in options.get("colors") or ()],
-        )
+    form["logical_size"] = int(logical_size)
+    _changed, colors = form_ui.combo(
+        "colors",
+        "Palette",
+        str(form["colors"]),
+        [(str(n), f"{n} colours") for n in options.get("colors") or ()],
     )
+    form["colors"] = int(colors)
     for field in ("seed_a", "seed_b"):
         imgui.push_id(field)
-        imgui.text(f"Seed {form[field]}")
+        changed, seed = form_ui.number(field, field, int(form[field]))
+        if changed:
+            form[field] = max(0, seed)
         # Asked rather than assumed, the rule the rest of the sidebar follows:
         # 300px is not enough for a long seed and a button on one line, and a
         # bare same_line() puts the button off the panel edge where it cannot
         # be clicked at all.
-        widgets.same_line_or_wrap(imgui.calc_text_size("Reroll").x)
-        if imgui.small_button("Reroll"):
+        if controls.small_button("Reroll", role=controls.ButtonRole.GHOST):
             form[field] = validation.random_seed()
         imgui.pop_id()
 
@@ -226,7 +229,7 @@ def _draft(ctx: Any, job_id: str, record: dict[str, Any]) -> None:
             record.get("candidates") or [], rigging.SPRITE_CANDIDATES, strict=False
         ):
             _candidate(ctx, job_id, draft_id, letter, candidate)
-        if imgui.small_button("Delete draft"):
+        if controls.small_button("Delete draft"):
             # No confirm, exactly as deleting a rendered sheet has none: a
             # draft is regenerable from the seed recorded beside it, and the
             # listing above refreshes off the directory stamp on its own.
@@ -272,7 +275,7 @@ def _candidate(
             widgets.muted_wrapped(
                 f"{warning.get('cell')}: {warning.get('detail')}"
             )
-        if imgui.small_button("Edit in Inker"):
+        if controls.small_button("Edit in Inker"):
             from .. import inker_mode
 
             inker_mode.open_sprite_draft(ctx, job_id, draft_id, letter)

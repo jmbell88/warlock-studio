@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import dialogs, icons, widgets
+from .. import controls, dialogs, forms, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 from . import model_gate, stamps
@@ -39,9 +39,11 @@ def draw(ctx: Any, job: Any) -> None:
 
     form = _form(ctx, job["id"])
     _preview(ctx, form)
-    _controls(ctx, job, form)
-    _summary(ctx, form)
-    _submit(ctx, job, form)
+    # Form.help_text renders widgets.help_marker beside the owning label.
+    with forms.Form("sheet-settings") as form_ui:
+        _controls(ctx, job, form, form_ui)
+        _summary(ctx, form)
+        _submit(ctx, job, form)
     _saved(ctx, job)
 
 
@@ -179,35 +181,59 @@ def _strip_texture(ctx: Any, strip: Any) -> Any:
     return cached
 
 
-def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
-    imgui.text("Directions")
-    for count in YAW_CHOICES:
-        imgui.same_line()
-        if imgui.radio_button(f"{count}##yaws", form["yaws"] == count):
-            form["yaws"] = count
+def _controls(
+    ctx: Any, job: Any, form: dict[str, Any], form_ui: forms.Form
+) -> None:
+    changed, picked = form_ui.segmented_choice(
+        "yaws",
+        "Directions",
+        str(form["yaws"]),
+        tuple((str(count), str(count)) for count in YAW_CHOICES),
+        help_text="The number of evenly spaced views around the model.",
+        compact=True,
+    )
+    if changed:
+        form["yaws"] = int(picked)
 
     options = ctx.sheet_options or {}
     sizes = [(str(s), f"{s} px") for s in (options.get("frame_sizes") or [64, 128, 256])]
-    picked = widgets.labeled_combo("Frame", str(form["frame_size"]), sizes)
-    widgets.help_marker(
-        "The size of one cell in the atlas, in pixels. The grid is worked out "
-        "from it and the number of directions, and wraps to stay inside a "
-        "texture an engine will accept."
+    _changed, picked = form_ui.combo(
+        "frame_size",
+        "Frame size",
+        str(form["frame_size"]),
+        sizes,
+        help_text="The size of one atlas cell in pixels.",
+        helper=(
+            "The grid follows the direction count and wraps to stay inside an "
+            "engine-sized texture."
+        ),
     )
     form["frame_size"] = int(picked)
-    form["lighting"] = widgets.labeled_combo(
+    _changed, form["lighting"] = form_ui.combo(
+        "lighting",
         "Lighting",
         form["lighting"],
         [(key, key) for key in (options.get("lighting") or ["flat", "lit"])],
     )
-    changed, elevation = imgui.slider_float("Elevation", form["elevation"], -60.0, 60.0, "%.0f deg")
+    changed, elevation = form_ui.slider(
+        "elevation",
+        "Elevation",
+        form["elevation"],
+        -60.0,
+        60.0,
+        fmt="%.0f deg",
+    )
     if changed:
         form["elevation"] = elevation
     # The service validates and stores this and the saved list displays it;
     # without an input there was no way to ever set it, so every sheet showed
     # its raw id.
-    form["name"] = widgets.input_text(
-        "##sheet-name", form["name"], max_length=rigging.MAX_SHEET_NAME, hint="Name (optional)"
+    _changed, form["name"] = form_ui.text(
+        "sheet-name",
+        "Name",
+        form["name"],
+        max_length=rigging.MAX_SHEET_NAME,
+        hint="Optional",
     )
 
     poses = (ctx.state.preview or {}).get("poses") or []
@@ -220,15 +246,17 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
             # The returned value is deliberately unread: the set *is* the
             # state, so the toggle is applied to it rather than copied out of
             # the widget.
-            hit, _value = imgui.checkbox(
-                f"{pose.get('name') or pose['id']}##row-{pose['id']}", checked
+            hit, _value = form_ui.checkbox(
+                f"pose_{pose['id']}", pose.get("name") or pose["id"], checked
             )
             if hit:
                 form["poses"].symmetric_difference_update({pose["id"]})
-        changed, clip = imgui.checkbox("Animated clip", form["clip"])
-        widgets.help_marker(
-            "Interpolates between two saved poses. Each frame becomes more "
-            "cells in the same atlas rather than a second file."
+        changed, clip = form_ui.switch(
+            "clip",
+            "Animated clip",
+            form["clip"],
+            help_text="Interpolate between two saved poses.",
+            helper="Each frame becomes more cells in this atlas, not a second file.",
         )
         if changed:
             form["clip"] = clip
@@ -237,9 +265,15 @@ def _controls(ctx: Any, job: Any, form: dict[str, Any]) -> None:
             # rows *are* the animation, and mixing static poses in would give
             # an importer no way to tell which rows loop.
             names = [(p["id"], p.get("name") or p["id"]) for p in poses]
-            form["clip_from"] = widgets.labeled_combo("From", form["clip_from"], names)
-            form["clip_to"] = widgets.labeled_combo("To", form["clip_to"], names)
-            changed, frames = imgui.slider_int("Frames", form["clip_frames"], 2, 32)
+            _changed, form["clip_from"] = form_ui.combo(
+                "clip_from", "From", form["clip_from"], names
+            )
+            _changed, form["clip_to"] = form_ui.combo(
+                "clip_to", "To", form["clip_to"], names
+            )
+            changed, frames = form_ui.slider(
+                "clip_frames", "Frames", form["clip_frames"], 2, 32
+            )
             if changed:
                 form["clip_frames"] = frames
     del job
@@ -338,13 +372,13 @@ def _saved(ctx: Any, job: Any) -> None:
         # Three buttons in a sidebar, two of them long. Chained with a bare
         # same_line they ran off the content edge on a narrow panel and Delete
         # was clipped away -- pose_panel's row, with the same fix.
-        if imgui.small_button("Save PNG..."):
+        if controls.small_button("Save PNG..."):
             _save(ctx, job_id, sheet_id)
         widgets.same_line_or_wrap(widgets.button_width("Save JSON..."))
-        if imgui.small_button("Save JSON..."):
+        if controls.small_button("Save JSON..."):
             _save_sidecar(ctx, job_id, sheet_id)
         widgets.same_line_or_wrap(widgets.button_width("Delete"))
-        if imgui.small_button("Delete"):
+        if controls.small_button("Delete"):
             _ask_delete(ctx, job_id, sheet)
         _pixelate(ctx, job_id, sheet)
         imgui.pop_id()
@@ -465,7 +499,7 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
                 [(str(n), f"{n} colours") for n in svc_sheets.PIXEL_COLOR_CHOICES],
             )
         )
-        changed, value = imgui.slider_float(
+        changed, value = controls.slider_float(
             "Strength",
             form["strength"],
             models.IMG2IMG_STRENGTH_MIN,
@@ -473,12 +507,12 @@ def _pixelate(ctx: Any, job_id: str, sheet: Any) -> None:
         )
         if changed:
             form["strength"] = float(value)
-        toggled, locked = imgui.checkbox("Lock silhouettes", form["structure_lock"])
+        toggled, locked = controls.checkbox("Lock silhouettes", form["structure_lock"])
         if toggled:
             form["structure_lock"] = bool(locked)
         imgui.text(f"Seed {form['seed']}")
         imgui.same_line()
-        if imgui.small_button("Reroll"):
+        if controls.small_button("Reroll"):
             form["seed"] = validation.random_seed()
 
         key = f"sheet-pixel:{job_id}:{sheet_id}"
@@ -559,10 +593,10 @@ def _pixel_result(ctx: Any, job_id: str, sheet_id: str) -> None:
         f"{record.get('frame_size')} px cells - "
         f"{len(record.get('palette') or [])} colours"
     )
-    if imgui.small_button("Save pixel PNG..."):
+    if controls.small_button("Save pixel PNG..."):
         _save_pixel(ctx, job_id, sheet_id)
     imgui.same_line()
-    if imgui.small_button("Save pixel JSON..."):
+    if controls.small_button("Save pixel JSON..."):
         _save_pixel_sidecar(ctx, job_id, sheet_id)
 
 

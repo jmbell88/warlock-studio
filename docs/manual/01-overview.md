@@ -134,5 +134,5 @@ There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortc
 palette, and it is reproduced in [Keyboard shortcuts](14-shortcuts.md). The **health badge** sits in
 the rail's footer and appears only when a startup check is failing — amber for a non-fatal one
 (missing optional weights, no gltfpack, no CUDA), red when something fatal failed or the worker
-died. Hovering it names the failing checks; clicking it opens the full diagnostics list, which is
-also **Diagnostics** in the palette when everything is passing and there is no badge to click.
+died. Hovering it names the failing checks; clicking it opens the full Issues list, which is also
+**Issues** in the palette when everything is passing and there is no badge to click.

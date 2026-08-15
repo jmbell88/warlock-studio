@@ -471,7 +471,7 @@ def test_every_mode_has_exactly_one_place_that_draws_it():
 
 
 def test_quit_is_never_a_mode_and_has_no_control_in_the_shell():
-    """Quitting is an action, not a place, and as of REDESIGN.md wave 3 it is
+    """Quitting is an action, not a place, and as of the UI redesign, wave 3 it is
     not a *button* either.
 
     It stayed out of ``MODES`` for the reasons it always did: it never lands in
@@ -510,7 +510,7 @@ def test_quit_is_never_a_mode_and_has_no_control_in_the_shell():
 def test_the_rail_groups_are_the_modes_in_order():
     """Two spellings of one fact, pinned to each other.
 
-    ``RAIL_GROUPS`` is hand-written (REDESIGN.md wave 3) -- the reversal of the
+    ``RAIL_GROUPS`` is hand-written (the UI redesign, wave 3) -- the reversal of the
     derived ``GROUP_BREAKS`` it replaced, because the first group is a claim no
     predicate over ``WORK_MODES`` can make: Home, Create, Library and Review
     are the asset pipeline, and two of those four are work modes while two are
