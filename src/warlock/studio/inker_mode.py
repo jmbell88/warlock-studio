@@ -1314,6 +1314,86 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
         stop_play(tab)
 
 
+# --- the preview pane's second playhead --------------------------------------
+
+#: Bounds on the preview's speed multiplier. A ceiling because past ×4 a clip
+#: is a flicker rather than a preview, and a floor because a multiplier that
+#: reaches zero is a stopped clip pretending to play.
+MIN_PREVIEW_SPEED = 0.25
+MAX_PREVIEW_SPEED = 4.0
+
+#: What the preview can play: the whole timeline, or the tag under its own
+#: index. Per-tab preview state rather than a document playback mode -- see the
+#: divergence list.
+PREVIEW_SCOPES = ("clip", "tag")
+
+
+def toggle_preview(tab: InkerDoc) -> None:
+    """Start or stop the preview. Refused for nothing at all.
+
+    Deliberately not gated on ``busy``: the preview neither edits the document
+    nor moves its playhead, so there is nothing for a save or for canvas
+    playback to be protected from -- and being able to watch the clip while
+    drawing on it is the whole feature.
+    """
+    if tab.doc.anim is None:
+        return
+    if tab.preview_playing:
+        tab.preview_playing = False
+        return
+    tab.preview_playing = True
+    tab.preview_accum_ms = 0.0
+    tab.preview_forward = True
+    tab.preview_cycles = 0
+
+
+def tick_preview(tab: InkerDoc, dt_ms: float) -> None:
+    """One frame's worth of time for the *preview*'s playhead.
+
+    A clone of :func:`tick_playback` rather than a share, and the difference is
+    the point: this one **never touches ``tab.playing`` or ``tab.saving``** and
+    never calls ``set_current_frame``. It reads ``anim`` and writes four fields
+    on the tab, so a preview running while the user paints needs no gating
+    change anywhere -- the canvas draws the document, the preview draws
+    ``frame_flat``, which is the same read onion skinning already makes and is
+    safe even during a save (``sheetout.snapshot``'s argument).
+
+    The speed multiplier scales time **after** the stall clamp, so a two-second
+    hitch is still treated as a stall at ×4 rather than as eight seconds of
+    animation.
+    """
+    anim = tab.doc.anim
+    if not tab.preview_playing or anim is None or not anim.frames:
+        return
+    last = len(anim.frames) - 1
+    index = max(0, min(int(tab.preview_index), last))
+    if tab.preview_scope == "tag":
+        span = anim.loop_range(index)
+        direction = anim.play_direction(index)
+        repeat = anim.play_repeat(index)
+    else:
+        # The whole clip, looping, whatever tags happen to cover it. A preview
+        # scoped to the clip that stopped at a non-looping tag's end would be
+        # answering a question the scope switch just said no to.
+        span, direction, repeat = (0, last, True), "forward", 0
+    speed = max(MIN_PREVIEW_SPEED, min(float(tab.preview_speed), MAX_PREVIEW_SPEED))
+    index, accum, playing, forward, cycles = animation.advance(
+        [frame.duration_ms for frame in anim.frames],
+        index,
+        tab.preview_accum_ms,
+        min(float(dt_ms), MAX_TICK_MS) * speed,
+        span,
+        direction=direction,
+        forward=tab.preview_forward,
+        repeat=repeat,
+        cycles=tab.preview_cycles,
+    )
+    tab.preview_index, tab.preview_accum_ms = index, accum
+    tab.preview_forward, tab.preview_cycles = forward, cycles
+    if not playing:
+        tab.preview_playing = False
+
+
 def step_frame(ctx: Any, delta: int, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.doc.anim is None or tab.busy:

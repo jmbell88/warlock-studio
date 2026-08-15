@@ -376,6 +376,20 @@ it. See [From a single drawing](06-sprite-sheets.md#from-a-single-drawing).
 Moving the playhead is not an edit. It pushes no undo step and does not make the document unsaved —
 looking at another frame is looking, not drawing.
 
+## Preview
+
+While a document is animated, a **Preview** pane sits at the top of the right column and plays the
+clip in a corner of the screen. It is a second playhead, not the timeline's: pressing Play here does
+not lock the document, does not move the frame you are drawing on, and does not stop when you paint.
+That is the whole point — an animator runs the cycle and keeps working, and the frame under the
+brush updates in the preview within a quarter of a second of each stroke.
+
+The transport is Play/Stop, a frame counter, a **speed** multiplier from 0.25x to 4x, and a **scope**:
+*Whole clip* runs the entire timeline round and round, *Active tag* follows the tag under the
+preview's own frame — its direction, its looping and its repeat count. The preview always draws the
+picture upright, ignoring any rotation or mirroring you have put on the canvas view, because those
+are aids for drawing and this is a check on the result.
+
 ## Saving
 
 Inker saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that both Krita and GIMP read
