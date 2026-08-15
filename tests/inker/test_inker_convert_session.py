@@ -231,6 +231,37 @@ def test_a_new_session_does_not_reuse_the_last_ones_pixels(monkeypatch):
     assert len(calls) == 4
 
 
+def test_ten_identical_previews_leave_what_one_leaves():
+    """The skip is a skip of *repeated identical work*, not of the write: the
+    pixels after ten frames of an unmoved popup are the pixels after one."""
+    once = _still()
+    once.begin_convert()
+    once.preview_convert(RAMP, "bayer4")
+    expected = [layer.pixels.copy() for layer in once.stack]
+
+    many = _still()
+    many.begin_convert()
+    for _ in range(10):
+        many.preview_convert(RAMP, "bayer4")
+
+    for layer, pixels in zip(many.stack, expected, strict=True):
+        assert np.array_equal(layer.pixels, pixels)
+
+
+def test_an_unchanged_preview_does_not_recomposite_the_whole_document():
+    """``invalidate_all`` is budgeted for a click, not for a frame -- its own
+    docstring says so. A popup that is only sitting there must not spend it."""
+    doc = _still()
+    doc.begin_convert()
+    doc.preview_convert(RAMP, "bayer4")
+    rev = doc.rev
+    for _ in range(5):
+        doc.preview_convert(RAMP, "bayer4")
+    assert doc.rev == rev
+    doc.preview_convert(RAMP, "bayer2")
+    assert doc.rev != rev
+
+
 def test_cancelling_drops_the_memo_too():
     doc = _still()
     doc.begin_convert()

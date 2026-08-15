@@ -108,6 +108,10 @@ def _indexed(ctx: Any, state: Any) -> None:
     else:
         _slots(ctx, state, tab)
     imgui.end_disabled()
+    # Outside the disabled scope, for the reason ``inker_bridge._canvas_ops``
+    # states: a popup is its own window, and imgui's disabled state is not meant
+    # to span a Begin/End pair. It carries its own ``busy`` gate on Apply.
+    inker_bridge.convert_popup(ctx, tab)
 
 
 def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
@@ -129,7 +133,6 @@ def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
         "the result before you commit to it -- including the dither, which is "
         "the setting nobody can predict on their own picture."
     )
-    inker_bridge.convert_popup(ctx, tab)
 
 
 def _slots(ctx: Any, state: Any, tab: Any) -> None:
@@ -213,7 +216,6 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
         inker_bridge.open_convert(ctx, tab)
     imgui.same_line()
     widgets.muted("try a dither")
-    inker_bridge.convert_popup(ctx, tab)
 
 
 #: The sort keys, labelled. Two-way against ``inker.PALETTE_SORT_KEYS``: a key
@@ -240,8 +242,9 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
     """
     selection = list(state.palette_slots)
     widgets.field_label("sort")
-    imgui.set_next_item_width(sp(110))
-    state.palette_sort = widgets.combo("##palsort", state.palette_sort, list(SORT_LABELS))
+    state.palette_sort = widgets.combo(
+        "##palsort", state.palette_sort, list(SORT_LABELS), sp(110)
+    )
     imgui.same_line()
     if imgui.small_button("Sort"):
         if state.palette_sort == "usage" and counts is None:
@@ -264,8 +267,9 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
     if selection:
         widgets.muted(f"{len(selection)} slot(s) selected; sorting them in place")
 
+    widgets.field_label("ramp")
     imgui.set_next_item_width(sp(70))
-    changed, value = imgui.slider_int("Ramp##palramp", int(state.palette_ramp), 1, 16)
+    changed, value = imgui.slider_int("##palramp", int(state.palette_ramp), 1, 16)
     if changed:
         state.palette_ramp = int(value)
     imgui.same_line()

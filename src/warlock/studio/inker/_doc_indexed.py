@@ -266,10 +266,11 @@ class IndexedOps:
         if indices is None:
             wanted = [table[i] for i in order]
         else:
-            places = sorted({i for i in indices if 0 <= i < len(table)})
-            if len(places) < 2:
+            wants = {i for i in indices if 0 <= i < len(table)}
+            if len(wants) < 2:
                 return False
-            chosen = [i for i in order if i in set(places)]
+            places = sorted(wants)
+            chosen = [i for i in order if i in wants]
             wanted = list(table)
             for place, source in zip(places, chosen, strict=True):
                 wanted[place] = table[source]

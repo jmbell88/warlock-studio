@@ -407,9 +407,11 @@ def convert_popup(ctx: Any, tab: Any) -> None:
         changed, value = imgui.slider_int("Colours", int(state.convert_max), 2, 64)
         if changed:
             state.convert_max = int(value)
-            # Rebuilt here and nowhere else: building a table is a pass over
-            # every plane in the document, and this is the only control that
-            # changes what it would be.
+        if imgui.is_item_deactivated_after_edit():
+            # On release, not on every frame of the drag: building a table is a
+            # pass over every plane in the document followed by a median cut,
+            # and a slider dragged across its range would ask for sixty of them.
+            # This is the only control that changes what the table would be.
             state.convert_table = _convert_table(state, tab.doc)
     widgets.muted(f"{len(state.convert_table)} colour(s); this frame is previewed")
     widgets.help_marker(

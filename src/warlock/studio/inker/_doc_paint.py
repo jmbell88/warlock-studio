@@ -319,11 +319,21 @@ class PaintOps:
     ) -> bool:
         """Show the conversion without recording it. Safe to call every frame.
 
-        Memoised per ``(table, method)`` for ``preview_filter``'s reason and
-        more so: ``inker_bridge`` calls this on every frame the popup is up
-        because the controls above it can change either, and Floyd-Steinberg is
-        a Python loop over every pixel of every layer. The snapshot never
-        changes, so the converted planes are a pure function of the two.
+        ``inker_bridge`` calls this on every frame the popup is up because the
+        controls above it can change either argument, and both halves are
+        memoised on ``(table, method)``: an unchanged key does nothing at all.
+
+        **That is one step further than ``preview_filter``, which recomputes its
+        write every frame, and the difference is measured rather than stylistic.**
+        A filter's write is one rectangle of one layer plus a matching
+        ``invalidate``; this one is every plane of the document plus
+        ``invalidate_all``, whose own docstring puts it at a fraction of a
+        second on a 2048-square ten-layer document and says in as many words
+        that it is affordable *because* it happens on a click and never on a
+        frame. Re-laying the same bytes sixty times a second to defend against a
+        write nothing can make -- the popup owns the frame, and anything that
+        does reach the planes cancels the session through ``_convert_target`` --
+        would spend exactly that budget for nothing.
         """
         if self._convert is None:
             return False
@@ -331,14 +341,12 @@ class PaintOps:
         if not wanted or method not in dither.METHODS:
             return False
         key = (tuple(wanted), method)
-        if self._convert_memo is None or self._convert_memo[0] != key:
-            self._convert_memo = (
-                key,
-                [
-                    dither.convert(before, wanted, method)
-                    for _uid, before in self._convert
-                ],
-            )
+        if self._convert_memo is not None and self._convert_memo[0] == key:
+            return True  # already on screen, and nothing about it has moved
+        self._convert_memo = (
+            key,
+            [dither.convert(before, wanted, method) for _uid, before in self._convert],
+        )
         for (uid, before), converted in zip(
             self._convert, self._convert_memo[1], strict=True
         ):

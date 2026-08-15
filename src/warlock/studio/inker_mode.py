@@ -1613,7 +1613,14 @@ def palette_from_image(ctx: Any) -> None:
 
         with Image.open(path) as image:
             pixels = np.asarray(image.convert("RGBA"))
-        distinct = len({tuple(px) for px in pixels[..., :3][pixels[..., 3] > 0]})
+        # Counted through ``np.unique`` on a packed uint32 rather than through a
+        # set of tuples: a phone photo is twelve million pixels, and the set
+        # costs a gigabyte to answer one number.
+        rgb = pixels[..., :3][pixels[..., 3] > 0]
+        packed = (
+            rgb[:, 0].astype(np.uint32) << 16 | rgb[:, 1].astype(np.uint32) << 8 | rgb[:, 2]
+        )
+        distinct = int(np.unique(packed).size)
         return {
             "colours": dither.build_palette([pixels], IMAGE_PALETTE_MAX),
             "distinct": distinct,

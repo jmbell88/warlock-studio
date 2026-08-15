@@ -985,6 +985,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     app_ctx.state.mode = "inker"
     state = inker_mode.ensure(app_ctx)
     wants_filter: list[int] = []
+    wants_convert: list[int] = []
 
     def build() -> None:
         """Three columns, as the app lays them out -- see the animated test.
@@ -997,6 +998,13 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         if imgui.begin_child("##paint-left", (sp(300), 0)):
             inker_tools.draw(app_ctx)
             inker_colors.draw(app_ctx)
+            # The conversion popup is opened *and* begun from the colours pane,
+            # so its opener belongs here rather than in the right column: imgui
+            # namespaces a popup id by the id stack that opened it, and the two
+            # panes are different child windows.
+            if wants_convert:
+                wants_convert.pop()
+                inker_bridge.open_convert(app_ctx, tab)
         imgui.end_child()
         imgui.same_line()
         if imgui.begin_child("##paint-centre", (sp(560), 0)):
@@ -1057,8 +1065,45 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     state.palette_usage = (tab.doc.rev, tab.doc.palette_usage())
     _frame(imgui_ctx, build)
+    # Multi-slot selection and the two table-only ops it feeds, drawn: the sort
+    # combo, the direction box, the ramp slider and the note under them.
+    state.select_slot(0)
+    state.select_slot(1, ctrl=True)
+    _frame(imgui_ctx, build)
+    assert tab.doc.insert_ramp(0, 1, 2)
+    _frame(imgui_ctx, build)
     assert inker_mode.index_to(app_ctx, tab, None)
     assert not tab.doc.is_indexed
+    _frame(imgui_ctx, build)
+
+    # The conversion popup: the filter popup's shape against a whole-document
+    # session, so the same three things are asserted -- the preview shows, it
+    # pushes nothing while it is only a preview, and a cancel puts the pixels
+    # back rather than committing them.
+    # A ramp first, so the document has colours to lose: indexing it above left
+    # it on two, where every conversion is the identity and the preview would
+    # be indistinguishable from nothing happening.
+    width, _height = tab.doc.size
+    tab.doc.gradient((0, 0), (width - 1, 0), (0, 0, 0, 255), (255, 255, 255, 255))
+    convert_before = tab.doc.stack.active.pixels.copy()
+    convert_head = tab.doc.history.head
+    wants_convert.append(1)
+    _frame(imgui_ctx, build)
+    assert state.convert_open and state.convert_table
+    # Two colours, which is what the Colours slider at its floor would build:
+    # the canvas here is small enough that a default-sized table is the exact
+    # set of colours already in it, and a conversion onto that is the identity.
+    state.convert_table = [(0, 0, 0, 255), (255, 255, 255, 255)]
+    state.convert_method = "bayer4"
+    _frame(imgui_ctx, build)  # the popup body, and one preview
+    assert not np.array_equal(tab.doc.stack.active.pixels, convert_before)
+    assert tab.doc.history.head == convert_head
+    assert tab.doc.palette is None, "a preview installs no table"
+
+    tab.doc.cancel_convert()
+    state.convert_open = False
+    assert np.array_equal(tab.doc.stack.active.pixels, convert_before)
+    assert tab.doc.history.head == convert_head
     _frame(imgui_ctx, build)
 
     # A second layer, a selection and a floating buffer: the other textures.
