@@ -249,6 +249,46 @@ def test_an_empty_grid_has_no_cells_to_hit():
     assert inker_timeline.cell_index((100.0, 50.0), **{**GRID, "frames": 0}) is None
 
 
+# --- the timeline's group-indent depth (L3 v1) --------------------------------
+#
+# v1 is indent only: no header row, no fold. ``_track_row`` only needs the
+# length of this to decide how far to shift a label, but the chain itself is
+# what proves the depth comes from ``groups.ancestry`` rather than from a
+# hand-rolled walk that could disagree with it.
+
+
+def test_an_ungrouped_track_has_no_indent_depth():
+    doc = inker.Document.blank(4, 4)
+    assert inker_timeline.track_depth(doc, doc.member_uids()[0]) == []
+
+
+def test_a_grouped_track_is_one_level_deep():
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    group = doc.group_layers([0, 1])
+    member = doc.member_uids()[0]
+    assert inker_timeline.track_depth(doc, member) == [group.uid]
+
+
+def test_nested_groups_stack_the_depth_innermost_first():
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    doc.add_layer()
+    outer = doc.group_layers([0, 1, 2], name="outer")
+    inner = doc.group_layers([0, 1], name="inner")
+    member = doc.member_uids()[0]
+    assert inker_timeline.track_depth(doc, member) == [inner.uid, outer.uid]
+
+
+def test_a_document_with_no_groups_at_all_never_walks_group_of():
+    """The short-circuit on ``doc.groups`` matters for a still document too --
+    it is why this is safe to call on a document that has never grown a group
+    tree, not just one that once had a group and dissolved it."""
+    doc = inker.Document.blank(4, 4)
+    assert doc.groups == {}
+    assert inker_timeline.track_depth(doc, doc.member_uids()[0]) == []
+
+
 # --- the transform box's handles ---------------------------------------------
 
 

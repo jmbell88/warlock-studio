@@ -46,6 +46,15 @@ THUMB_CELL = 36.0
 GUTTER = 2.0
 TRACK_LABEL_W = 96.0
 
+#: How far a track's label shifts per level of group nesting. v1 of the L3
+#: timeline half is indent only -- no header row, no fold arrow, unlike the
+#: layers panel's ``_group_row`` -- so this is the entire feature: a plain
+#: offset on the label of a track that ``doc.group_of`` says is inside one.
+#: Deliberately smaller than ``inker_layers.INDENT``: the label column here is
+#: a fixed ``TRACK_LABEL_W`` a name is already truncated to fit, where the
+#: layers panel's column grows with the window.
+GROUP_INDENT = 8.0
+
 #: The whole-number magnifications the export combo offers. Whole numbers only,
 #: because the point of the setting is that nothing is resampled -- x1.5 would
 #: have to invent a rule for which source pixel a destination one comes from,
@@ -55,6 +64,22 @@ EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x")
 
 def _u32(value: int, alpha: float = 1.0) -> int:
     return imgui.color_convert_float4_to_u32(theme.rgba(value, alpha))
+
+
+def track_depth(doc: Any, track_uid: int) -> list[int]:
+    """The chain of group uids above one track, innermost first -- ``[]`` at
+    root, exactly ``groups.ancestry``'s answer.
+
+    A thin, testable wrapper: ``_track_row`` only wants the length, to decide
+    how far to indent, but a pure function over ``(doc, uid)`` is what a test
+    can call without a window -- the same reason ``cell_index`` beside it is
+    pure.
+    """
+    if not doc.groups:
+        return []
+    from ..inker import groups as gp
+
+    return gp.ancestry(doc.group_of, track_uid)
 
 
 def cell_index(
@@ -438,12 +463,23 @@ def _track_row(
     active_track = track_index == doc.stack.active_index
 
     imgui.push_id(f"tr{track.uid}")
+    # Indent only (L3 v1): no header row and no fold, so a grouped track's row
+    # is exactly like an ungrouped one except that its label is shifted right
+    # by its nesting depth. ``same_line(sp(TRACK_LABEL_W))`` below is an
+    # *absolute* offset from the window's own left edge, not from wherever the
+    # indent left the cursor, so it puts the first cell at the same x either
+    # way -- the indent cannot move a cell, only the text before it.
+    depth = len(track_depth(doc, track.uid))
+    if depth:
+        imgui.indent(sp(GROUP_INDENT) * depth)
     if active_track:
         widgets.text_colored(theme.ACCENT, track.name[:14])
     elif not track.visible:
         widgets.muted(track.name[:14])
     else:
         imgui.text(track.name[:14])
+    if depth:
+        imgui.unindent(sp(GROUP_INDENT) * depth)
     imgui.same_line(sp(TRACK_LABEL_W))
 
     for frame_index, frame in enumerate(anim.frames):
