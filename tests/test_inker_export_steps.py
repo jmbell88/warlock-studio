@@ -85,9 +85,13 @@ def test_the_stepper_produces_exactly_what_the_one_shot_snapshot_did():
     byte for byte, because a composite that differs in one pixel is a sheet
     nobody would notice was wrong."""
     ctx, state, tab = _open(5)
-    expected_frames, expected_durations, expected_tags, expected_layout = (
-        sheetout.snapshot(tab.doc)
-    )
+    (
+        expected_frames,
+        expected_durations,
+        expected_tags,
+        expected_layout,
+        expected_slices,
+    ) = sheetout.snapshot(tab.doc)
     inker_mode.export_sheet(ctx, tab)
     _pump_until_done(ctx, state)
     # ``_submit_export`` closes over the frames it collected; the task was
@@ -102,6 +106,8 @@ def test_the_stepper_produces_exactly_what_the_one_shot_snapshot_did():
         expected_tags,
         expected_layout,
     )
+    # The fifth element rides the same read, so it is compared the same way.
+    assert sheetout.slices_snapshot(tab.doc) == expected_slices
 
 
 def test_one_frame_is_flattened_per_pump_and_not_one_clip():

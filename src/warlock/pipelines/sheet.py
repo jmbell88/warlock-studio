@@ -355,6 +355,8 @@ def sidecar(
     pivot: tuple[float, float] | None = None,
     trims: Mapping[int, dict[str, int] | None] | None = None,
     animation: Mapping[str, Any] | None = None,
+    pivots: Mapping[int, tuple[float, float]] | None = None,
+    slices: Mapping[int, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """The engine-neutral description of the atlas next to it.
 
@@ -367,6 +369,14 @@ def sidecar(
     ``{cell_index, duration_ms}``, and ``tags``. It is only ever built by the
     Inker exporter, and this stays the only writer of the format so ``version:
     1`` cannot come to mean two subtly different documents.
+
+    ``pivots`` and ``slices`` are that exporter's other two, keyed by cell index
+    and both **additive with no version bump**. A pivot overrides the constant
+    below for one cell, so a drawn clip whose pivot moves with the animation can
+    say so where a rendered sheet has one answer for every cell. ``slices``
+    lands as a per-cell ``"slices"`` list, emitted only where there is one --
+    which is what keeps every sheet this build wrote before them byte-identical,
+    and is pinned by the square-sidecar equality test.
 
     On a non-square plan ``frame_size`` is emitted as **0** and ``frame_w`` /
     ``frame_h`` carry the truth. Zero is a loud wrong answer rather than a quiet
@@ -384,9 +394,15 @@ def sidecar(
     cells = []
     for c in sheet.cells:
         entry = c.as_dict(sheet.cell_w, sheet.cell_h)
-        entry["pivot_x"] = px
-        entry["pivot_y"] = py
+        # Per cell where the caller has an answer for that cell, the constant
+        # otherwise -- so a sheet that carries none is the sheet it always was.
+        where = (pivots or {}).get(c.index)
+        entry["pivot_x"] = px if where is None else float(where[0])
+        entry["pivot_y"] = py if where is None else float(where[1])
         entry["trim"] = (trims or {}).get(c.index)
+        block = (slices or {}).get(c.index)
+        if block:
+            entry["slices"] = list(block)
         cells.append(entry)
     payload = {
         "version": SHEET_VERSION,

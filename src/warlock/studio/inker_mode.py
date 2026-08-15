@@ -597,6 +597,10 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     tab, frames, suggested = export.tab, export.frames, export.suggested
     doc = tab.doc
     durations, tags, layout = sheetout.timing(doc)
+    # Read here, with the timing, and for its reason: it walks the document, so
+    # it belongs on the frame thread beside the flatten rather than inside the
+    # task. Cheap -- a handful of rectangles -- so there is nothing to spread.
+    slices = sheetout.slices_snapshot(doc)
     if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
         # Refused on the frame thread, before the file dialog: the engine raises
         # the same ValueError as a backstop, but by then the user has picked a
@@ -620,7 +624,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
         image, plan, extra = sheetout.compose(
-            frames, durations, tags, layout, name=suggested
+            frames, durations, tags, layout, slices, name=suggested
         )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -636,6 +640,8 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             name=suggested,
             trims=extra["trims"],
             animation=extra["animation"],
+            pivots=extra["pivots"],
+            slices=extra["slices"],
         )
         dest.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return {"exported": dest}
