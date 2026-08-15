@@ -310,6 +310,34 @@ def test_unlinking_a_range_mints_its_copies_once_so_redo_returns_them():
     assert (_cel(doc, 0, 1), _cel(doc, 0, 2)) == minted
 
 
+def test_unlinking_charges_the_copies_it_minted_and_nothing_else():
+    """The copies are new memory an undo leaves the history alone holding, so
+    they are charged even though they are in the grid right now -- and the
+    original they came from is charged once, or not at all while a slot outside
+    the range is still pointing at it."""
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    plane = _cel(doc, 0, 0).pixels.nbytes
+
+    # Frames 1 and 2 copied; frame 0 keeps the original, so it is not released.
+    assert doc.unlink_range(0, 0, 1, 2)
+    assert doc.history.bytes == 2 * plane
+
+
+def test_unlinking_a_whole_link_also_charges_the_original_once():
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    plane = _cel(doc, 0, 0).pixels.nbytes
+
+    # Both slots copied, so nothing points at the original any more: two new
+    # planes plus the stranded one, charged once and not once per slot.
+    assert doc.unlink_range(0, 0, 0, 1)
+    assert doc.history.bytes == 3 * plane
+
+
 def test_unlinking_a_range_with_nothing_shared_pushes_nothing():
     doc = _clip(3)
     assert not doc.unlink_range(0, 0, 0, 2)

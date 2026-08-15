@@ -589,7 +589,11 @@ def _range_menu(ctx: Any, tab: Any) -> None:
     imgui.separator()
     widgets.muted("Range")
     imgui.begin_disabled(rect is None)
-    t0, t1, f0, f1 = rect or (0, 0, 0, 0)
+    # With no range, the corner is where the user is: the active track and the
+    # playhead. Only Paste can be reached in that state, and "put it here" is
+    # what it should mean.
+    here = (doc.stack.active_index, doc.stack.active_index, doc.anim.current, doc.anim.current)
+    t0, t1, f0, f1 = rect or here
     if imgui.menu_item_simple("Copy cels"):
         state.cel_clip = doc.copy_cels(t0, t1, f0, f1)
     imgui.end_disabled()

@@ -453,8 +453,7 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
 
     imgui.dummy((0, 4))
     imgui.begin_disabled(not rects)
-    if imgui.button("Import", (sp(90), 0)):
-        inker_mode.import_sheet(ctx)
+    if imgui.button("Import", (sp(90), 0)) and inker_mode.import_sheet(ctx):
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()

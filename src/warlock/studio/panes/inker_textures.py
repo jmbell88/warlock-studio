@@ -300,7 +300,7 @@ def checker(ctx: Any) -> Any:
 #: prefixes. Textures are the entries that must be *released*; these merely
 #: have to go, or a long session accumulates one marching-ants trace and one
 #: resize form per tab that was ever opened.
-_PER_TAB_KEYS = ("paint_ants:", "inker_resize:")
+_PER_TAB_KEYS = ("paint_ants:", "inker_resize:", "inker_preview:")
 
 
 def release_doc(ctx: Any, uid: str) -> None:

@@ -258,19 +258,24 @@ def ask_import_sheet(ctx: Any) -> None:
     ctx.submit("inker-sheetin", run)
 
 
-def import_sheet(ctx: Any) -> None:
+def import_sheet(ctx: Any) -> bool:
     """Slice the pending atlas on the typed grid and open it. Frame thread.
 
     Cheap enough to stay here: it is a handful of array copies, and every
     refusal is a message the user has to see beside the fields that caused it
     rather than a toast arriving from a task some frames later.
+
+    Returns whether a document was opened, so the popup can stay up on a
+    refusal. Closing it either way would strand the atlas: the popup only
+    reopens when a *new* file is picked, so a rejected grid would mean choosing
+    the same file again to correct one number.
     """
     from .inker import sheetin
 
     state = ensure(ctx)
     pending = state.sheet_import
     if pending is None:
-        return
+        return False
     atlas, title = pending
     try:
         doc = sheetin.document_from_grid(
@@ -282,11 +287,12 @@ def import_sheet(ctx: Any) -> None:
         )
     except ValueError as exc:
         ctx.toast(f"Cannot import: {exc}.", "warn")
-        return
+        return False
     state.sheet_import = None
     state.sheet_import_open = False
     _adopt(ctx, state, doc, path=None, title=title, file_format="ora")
     set_mode(ctx.state, "inker")
+    return True
 
 
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:

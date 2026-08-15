@@ -90,14 +90,25 @@ def masked_apply(
     The alpha lock is restored after the blend rather than folded into it, for
     ``write_colour``'s reason: "preserve transparency" is exactly *the alpha
     does not change*, so putting the channel back is the definition of it.
+
+    With no selection and no lock the filtered array is handed straight back
+    rather than copied. That is not a micro-optimisation: ``preview_filter``
+    calls this every frame the popup is up over a memoised array, and a copy
+    here would be a full-canvas one per frame on top of the write the caller
+    already makes -- exactly the cost the memo exists to remove. Nothing is
+    ever written into the argument, so the only obligation on a caller is not
+    to mutate what comes back, which is what "apply" means.
     """
     if weight is None:
-        out = filtered.copy()
+        out = filtered
     else:
         fade = weight.astype(np.float32)[..., None] / 255.0
         base = before.astype(np.float32)
         out = cp.to_uint8_255(base + (filtered.astype(np.float32) - base) * fade)
     if alpha_lock:
+        # Copy only if the array is still the caller's: the blended one above
+        # is ours to write into, the memoised one is not.
+        out = out.copy() if out is filtered else out
         out[..., 3] = before[..., 3]
     return out
 
@@ -174,11 +185,12 @@ class RangeOps:
         assert anim is not None
         by_uid = {frame.uid: frame for frame in anim.frames}
         current = anim.frames[max(0, min(anim.current, len(anim.frames) - 1))].uid
+        named = set(uids)
         ordered = [by_uid[uid] for uid in uids if uid in by_uid]
         # Anything the caller did not name keeps its place at the end, so a
         # stale order can never *drop* a frame -- the one outcome that would
         # lose pixels rather than merely arrange them oddly.
-        ordered += [frame for frame in anim.frames if frame.uid not in set(uids)]
+        ordered += [frame for frame in anim.frames if frame.uid not in named]
         anim.frames = ordered
         try:
             anim.current = anim.frame_index(current)
@@ -399,28 +411,47 @@ class RangeOps:
         )
 
     def _cel_edits(
-        self: Document, changes: list[tuple[Any, Any, Any, Any]]
+        self: Document,
+        changes: list[tuple[Any, Any, Any, Any]],
+        *,
+        minted: Any = (),
     ) -> list[Any]:
-        """``CelSetEdit``s for slots already mutated, charged once each.
+        """``CelSetEdit``s for slots already mutated, each object charged once.
 
-        Called *after* the mutation, deliberately: what the budget wants to
-        know is what the history would be left holding, and that is only
-        answerable once the grid has finished letting go. ``CelSetEdit.pinned``
-        is a bool, so the whole of a released object's bill lands on the first
-        slot that mentions it and every later slot pays nothing.
+        Two questions, and they are not the same one.
+
+        What a *displaced* cel costs is answered by ``_released``, and only
+        after the mutation: the history pins pixels exactly where nothing else
+        does, so a cel still linked into a frame outside the range costs
+        nothing however this step is undone.
+
+        What a *minted* one costs cannot be answered that way at all -- a fresh
+        copy or a pasted plane is in the grid the moment it is put there, so
+        ``_released`` says no; but undoing the step takes it back out and
+        leaves the edit holding it alone. So the caller names the objects it
+        created, and they are charged whatever the grid currently says.
+
+        Either way each object is charged to the **first** slot that mentions
+        it, which is what makes a shared cel cost one plane and not one per
+        slot.
         """
         released = self._released(
             [layer for _t, _f, before, after in changes for layer in (before, after)]
         )
+        new = set(minted)
         seen: set[int] = set()
         edits: list[Any] = []
         for track, frame, before, after in changes:
-            pinned = False
+            pinned: set[int] = set()
             for layer in (before, after):
-                if layer is not None and id(layer) in released and id(layer) not in seen:
+                if layer is None or id(layer) in seen:
+                    continue
+                if id(layer) in released or id(layer) in new:
                     seen.add(id(layer))
-                    pinned = True
-            edits.append(CelSetEdit(track.uid, frame.uid, before, after, pinned=pinned))
+                    pinned.add(id(layer))
+            edits.append(
+                CelSetEdit(track.uid, frame.uid, before, after, pinned=frozenset(pinned))
+            )
         return edits
 
     def link_range(self: Document, t0: int, t1: int, f0: int, f1: int) -> bool:
@@ -489,7 +520,12 @@ class RangeOps:
             copy = before.copy(name=before.name)
             self._set_cel(track.uid, frame.uid, copy)
             changes.append((track, frame, before, copy))
-        return self._push_range(self._cel_edits(changes))
+        # Every copy is new memory the history alone holds once this is undone,
+        # so each is charged; the original they came from is charged only if
+        # nothing else is left pointing at it.
+        return self._push_range(
+            self._cel_edits(changes, minted={id(after) for *_r, after in changes})
+        )
 
     # -- the cel clipboard --------------------------------------------------
 
@@ -567,7 +603,7 @@ class RangeOps:
         # are the whole reason it stores indices, and minting per slot here
         # would throw them away at the last step.
         fresh = {index: plane.copy(name=plane.name) for index, plane in enumerate(clip.planes)}
-        charged: set[int] = set()
+        changes: list[tuple[Any, Any, Any, Any]] = []
         for track_index, frame_index, index in landing:
             track = anim.tracks[track_index]
             frame = anim.frames[frame_index]
@@ -576,11 +612,12 @@ class RangeOps:
             if before is layer:
                 continue
             self._set_cel(track.uid, frame.uid, layer)
-            pinned = id(layer) not in charged
-            charged.add(id(layer))
-            edits.append(
-                CelSetEdit(track.uid, frame.uid, before, layer, pinned=pinned)
-            )
+            changes.append((track, frame, before, layer))
+        # The pasted planes are new memory; whatever they displaced is charged
+        # only where the grid has genuinely let go of it.
+        edits += self._cel_edits(
+            changes, minted={id(plane) for plane in fresh.values()}
+        )
         return self._push_range(edits)
 
     # -- filters ------------------------------------------------------------

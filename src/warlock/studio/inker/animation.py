@@ -601,9 +601,9 @@ def advance(
     """Where the playhead is ``dt_ms`` later. Pure, so it is testable at speed.
 
     Returns ``(index, accumulator, playing, forward, cycles)``. Time is
-    *accumulated*
-    rather than the index being derived from a wall clock, because a frame's
-    duration is per-frame: a 40 ms frame followed by a 400 ms one is not a rate.
+    *accumulated* rather than the index being derived from a wall clock,
+    because a frame's duration is per-frame: a 40 ms frame followed by a 400 ms
+    one is not a rate.
 
     The loop is a ``while`` and not an ``if`` for the case that actually bites
     -- a 10 ms frame with a dropped-frame ``dt`` of 200 ms behind it, where

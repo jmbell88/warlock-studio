@@ -23,6 +23,7 @@ grid is assertable without one; ``from_document`` is the adapter.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -54,8 +55,6 @@ def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:
     every surviving tag is **shifted** by ``f0``, because the exported sheet's
     first cell is index 0 whatever the document called it.
     """
-    from dataclasses import replace
-
     out = []
     for tag in tags:
         start, end = max(int(tag.start), f0), min(int(tag.end), f1)

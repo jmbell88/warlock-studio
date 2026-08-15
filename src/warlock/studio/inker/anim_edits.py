@@ -301,14 +301,23 @@ class CelSetEdit(Edit):
     frame_uid: int
     before: Any
     after: Any
-    pinned: bool = True
+    #: True or False when both sides are in the same case, and a *collection of
+    #: ``id()``s* when they are not -- the same three-valued spelling the
+    #: removals use, and for the same reason one step up. A range op sets many
+    #: slots at once and routinely mixes the cases inside one gesture: unlinking
+    #: a span mints a fresh copy per slot (each of which the history alone will
+    #: hold once undone) while the *original* they came from is one object that
+    #: must be charged once across all of them, not once per slot. A bool is
+    #: wrong whichever way it is set, and setting it True per slot would charge
+    #: a 50-frame linked background fifty times and evict the whole history.
+    pinned: Any = True
 
     def __post_init__(self) -> None:
         # Only the direction that can be *left holding* pixels is charged for.
         # Undoing a set restores ``before``, so what the history pins while the
         # step is on the done stack is ``after``, and vice versa -- but the two
         # stacks together are what ``UndoStack.bytes`` sums, so charge both.
-        self.cost = pixel_bytes([self.before, self.after]) if self.pinned else 0
+        self.cost = charged([self.before, self.after], self.pinned)
 
     def _put(self, doc: Any, layer: Any) -> None:
         doc._set_cel(self.track_uid, self.frame_uid, layer)
