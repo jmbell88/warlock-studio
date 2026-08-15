@@ -232,6 +232,17 @@ def test_the_status_block_reports_health_queue_and_library():
     assert found["library"].target == "library"
 
 
+def test_home_draws_the_actionable_rows_and_the_rail_still_gets_all_of_them():
+    """REDESIGN.md wave 4.3. ``status_rows`` stays the one source -- the rail's
+    health badge reads the same data, and a fork would be two answers to "is
+    this install healthy". What narrowed is what *Home* draws: the library row
+    counted assets on a screen whose lower half is now assets."""
+    assert "library" not in landing.HOME_STATUS
+    assert set(landing.HOME_STATUS) <= {r.key for r in landing.status_rows(_ctx())} | {
+        "review"
+    }
+
+
 def test_a_fatal_check_is_the_error_colour_and_a_warning_is_not():
     from warlock.studio import theme
 
@@ -294,8 +305,48 @@ def test_the_status_rows_are_computed_once_per_draw():
     import inspect
 
     assert inspect.getsource(landing.draw).count("status_rows(") == 1
-    for helper in (landing._news, landing._status, landing._status_height):
+    for helper in (landing._news, landing._status):
         assert "status_rows(" not in inspect.getsource(helper), helper.__name__
+
+
+# --- REDESIGN.md wave 4.3: the What's New card and the New... menu -----------
+
+
+def _release(version: str = "0.0.22", bullets: tuple[str, ...] = ("a", "b")):
+    from warlock.changelog import Release
+
+    return Release(version=version, date="2026-08-15", bullets=bullets)
+
+
+def test_the_news_card_shows_once_per_release_and_stays_dismissed():
+    assert landing.news_should_show(_release(), "")
+    assert landing.news_should_show(_release(), "0.0.21")
+    assert not landing.news_should_show(_release(), "0.0.22")
+
+
+def test_a_release_with_nothing_in_it_is_not_a_card():
+    """``changelog.current`` falls back to the newest entry when the running
+    version has no section of its own, so "there is a release" is not the same
+    question as "there is something to say about it"."""
+    assert not landing.news_should_show(None, "")
+    assert not landing.news_should_show(_release(bullets=()), "")
+
+
+def test_the_new_menu_offers_every_creation_type_exactly_once():
+    """The six start_* functions are the whole of what this app can begin from
+    nothing, and a menu that lost one would lose the only way into that mode
+    that is not "switch there and find its empty state"."""
+    keys = [key for key, _label, _icon, _action in landing.NEW_ITEMS]
+    assert len(keys) == len(set(keys))
+    actions = {action for _key, _label, _icon, action in landing.NEW_ITEMS}
+    assert actions == {
+        landing.start_2d,
+        landing.start_3d,
+        landing.start_inker,
+        landing.start_clay,
+        landing.start_plotter,
+        landing.start_packwright,
+    }
 
 
 def test_the_version_string_is_asked_for_once_per_process(monkeypatch):

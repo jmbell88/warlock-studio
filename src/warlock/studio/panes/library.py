@@ -20,8 +20,9 @@ from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
 from .. import dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
 from ..manual import render as manual_render
-from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action, set_mode
+from ..state import ACTIONS, QUERY_FIELDS, SORTS, primary_action, set_mode
 from ..tokens import sp
+from . import thumbs
 
 log = logging.getLogger(__name__)
 
@@ -591,40 +592,17 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     imgui.pop_id()
 
 
-def thumb_glyph(job: Any) -> str:
-    """The icon standing in for a missing thumbnail (H72).
-
-    Keyed on the job's *kind* as the library already computes it, so the
-    placeholder says what sort of thing is coming rather than only that
-    something is. A failed job gets the alert glyph regardless: its card is
-    about the failure, not about what it would have been.
-    """
-    if job.get("status") == "error":
-        return icons.CIRCLE_ALERT
-    return {
-        "reference": icons.IMAGE,
-        "tile": icons.GRID,
-        "model": icons.BOX,
-        "rig": icons.BONE,
-        "sheet": icons.FILM,
-        "sprite": icons.LAYERS,
-    }.get(card_kind(job), icons.IMAGE)
+#: The placeholder glyph table moved to :mod:`.thumbs` in REDESIGN.md wave 4.3,
+#: when Home's Resume grid started drawing the same pictures. Re-exported under
+#: its old name because it is what the library means by "what does this job look
+#: like", and because a pane asking the library is asking the right module.
+thumb_glyph = thumbs.thumb_glyph
 
 
 def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
     job_id = job["id"]
     compact = filters_compact(ctx)
-    thumb = sp(COMPACT_THUMB if compact else THUMB_SIZE)
-    texture = None
-    if ctx.textures is not None and "thumb.png" in (job.get("files") or []):
-        texture = ctx.textures.get(job_id, ctx.job_dir(job_id) / "thumb.png")
-    if texture is not None:
-        imgui.image(widgets.texture_ref(texture), (thumb, thumb))
-    else:
-        # A framed glyph rather than a hole (H72). Every queued job, every
-        # failure and every rig row lacks a thumbnail, and an empty square the
-        # size of one reads as a broken image instead of a pending one.
-        widgets.thumb_placeholder(thumb, thumb_glyph(job))
+    thumbs.job_thumb(ctx, job, sp(COMPACT_THUMB if compact else THUMB_SIZE))
     imgui.same_line()
 
     # begin_group returns nothing -- the pair is unconditional, and wrapping it

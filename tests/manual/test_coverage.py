@@ -47,6 +47,12 @@ NO_HELP_BUTTON = {
     # does is documented where the button lands -- `17-app-settings.md`, the
     # Models section.
     "model_gate",
+    # Not a pane: one job's picture, drawn *inside* whatever card or cell asked
+    # for it (REDESIGN.md wave 4.3). It has no section, no heading and no
+    # window of its own -- a (?) beside a thumbnail would be a help button on a
+    # square of pixels. Home's grid and the library's cards each carry their
+    # own, pointing at the chapters that describe them.
+    "thumbs",
 }
 
 

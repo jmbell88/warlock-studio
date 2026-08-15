@@ -9,8 +9,11 @@ wearing a tile because there was nowhere else to put them. They are modes now,
 and the grid is gone.
 
 What is left is the three questions nothing in the app answered: what changed,
-what is the machine doing, and what was I working on. Two columns -- news and
-status on one side, resume on the other.
+what is the machine doing, and what was I working on -- in one column, in that
+order, with the answers weighted by how often they are the reason somebody is
+here. "What changed" is a card you dismiss once per release; "what is the
+machine doing" is one quiet line; "what was I working on" is the rest of the
+screen, as pictures (REDESIGN.md wave 4.3).
 
 Nothing here is persisted: ``AppState.mode`` defaults to ``"home"``, which is
 what makes this appear on every launch rather than only the first ever.
@@ -27,10 +30,11 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import changelog
-from .. import fonts, icons, layout, modes, profiles, recents, theme, tokens, widgets
+from .. import fonts, icons, modes, profiles, recents, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import DEFAULT_FORM_3D, default_form_2d, format_bytes, set_mode
 from ..tokens import sp
+from . import thumbs
 
 log = logging.getLogger(__name__)
 
@@ -342,28 +346,80 @@ def pump(ctx: Any) -> None:
 
 
 # --- drawing ----------------------------------------------------------------
+#
+# One column (REDESIGN.md wave 4.3). It used to be two, news and status on the
+# left and Resume on the right, which gave half of the app's first screen to a
+# changelog -- the thing a user reads once per release -- and left "what was I
+# working on" as a column of one-line selectables in the other half. The card
+# now appears only when there is a release you have not dismissed, the six
+# start-something buttons collapse into one primary and a menu, and Resume gets
+# the room: a grid of pictures, because a thumbnail is how anybody recognises
+# their own work and a filename is not.
+
+
+#: Which status rows Home draws. ``status_rows`` still computes all of them --
+#: it is the shared source the rail's health badge reads, and forking it would
+#: be two answers to "is this install healthy" -- but the *library* row is not
+#: one of Home's questions any more: it counted assets on a screen whose whole
+#: lower half is now assets, and its destination is one click away in the rail.
+HOME_STATUS = ("health", "queue", "review")
+
+#: How many bullets the What's New card shows before "all release notes".
+#: Three is a summary; the eighth bullet of a release is a changelog, and a
+#: changelog is what the popup is for.
+NEWS_BULLETS = 3
+
+#: Where the dismissal is remembered. Keyed on the *version* rather than on a
+#: boolean, so the next release brings the card back on its own -- a "seen"
+#: flag would have to be cleared by whatever wrote the release, and nothing
+#: does.
+NEWS_SEEN_KEY = "news_seen_version"
+
+#: The Resume grid's thumbnail, in design pixels. The picture is the cell:
+#: everything else is one line of name and one of "4m ago" under it.
+RESUME_THUMB = 136.0
+
+
+def news_should_show(release: Any, seen: str) -> bool:
+    """Whether the What's New card is drawn this frame.
+
+    Pure, and taking the two values rather than a ``Ctx``, because the whole
+    question is an interaction between a file and a settings key: a card that
+    reappears after being dismissed, and one that never returns for the next
+    release, are both bugs with no pixels in them.
+
+    A release with no bullets is not shown. ``changelog.current`` falls back to
+    the newest entry when the running version has no section of its own, which
+    is right for "what changed recently" and would be wrong for a card that
+    names a version -- but the fallback still carries bullets, so the empty
+    case here is the genuinely empty one.
+    """
+    if release is None or not release.bullets:
+        return False
+    return seen != release.version
 
 
 def draw(ctx: Any) -> None:
     pump(ctx)
     _header(ctx)
-
-    avail = imgui.get_content_region_avail()
-    spacing = imgui.get_style().item_spacing.x
-    column = max((avail.x - spacing) * 0.5, sp(240))
-    height = max(avail.y - sp(tokens.SP_2), sp(200))
-
-    # Once per draw: ``_news`` measures what ``_status`` will occupy off the
-    # same rows ``_status`` then draws, and each recomputing the answer is two
-    # walks over the runtime checks and the queue for one column of sentences.
+    # Once per draw: ``_status`` is the only consumer now, but the rule stands
+    # for the reason it was written -- recomputing is two walks over the
+    # runtime checks and the queue for one line of sentences.
     status = status_rows(ctx)
-    if layout.pane_child("landing/news", (column, height)):
-        _news(ctx, status)
+    # A scroller, because the Resume grid is as tall as it needs to be and the
+    # window is not. Borderless -- this is the mode's whole surface, and a frame
+    # drawn around the only thing on screen is a frame around nothing -- but
+    # ``always_use_window_padding`` with it: a *borderless* child gets zero
+    # window padding by default, which put the heading's first letter and the
+    # first card's left edge hard against the window's.
+    if imgui.begin_child(
+        "landing/body", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
+    ):
+        _news(ctx)
+        _start(ctx)
         _status(ctx, status)
-    imgui.end_child()
-    imgui.same_line()
-    if layout.pane_child("landing/resume", (0, height)):
         _resume(ctx)
+        _news_footer(ctx)
     imgui.end_child()
 
 
@@ -399,24 +455,78 @@ def _version() -> str:
     return _VERSION
 
 
-def _news(ctx: Any, status: list[Status]) -> None:
-    widgets.section("what's new")
+def _news(ctx: Any) -> None:
+    """The dismissible What's New card, or nothing at all."""
+    release = changelog.current(_version())
+    seen = str(ctx.settings.get(NEWS_SEEN_KEY, "") or "")
+    if not news_should_show(release, seen):
+        return
+    bullets = tuple(release.bullets[:NEWS_BULLETS])
+    style = imgui.get_style()
+    pad = style.window_padding
+    avail = imgui.get_content_region_avail().x
+    # The width ``text_wrapped`` will actually use inside the card, because
+    # ``widgets.card`` has no scrollbar by design: a bullet measured against a
+    # different number than it is drawn at is a bullet clipped off the bottom.
+    # The dismiss button shortens only the *headline*'s line, which is measured
+    # unwrapped anyway.
+    wrap = max(avail - pad.x * 2, sp(120))
+    with fonts.label(imgui):
+        height = imgui.get_text_line_height() + style.item_spacing.y
+    with fonts.small(imgui):
+        for bullet in bullets:
+            # The second positional is ``text_end``, not the hide-after-##
+            # flag: the wrap width is the fourth argument, and passing it third
+            # measures an unwrapped line.
+            height += (
+                imgui.calc_text_size(f"- {bullet}", None, False, wrap).y
+                + style.item_spacing.y
+            )
+    height += pad.y * 2
+    with widgets.card("landing/news", (0, height)) as visible:
+        if visible:
+            _card_margin(pad)
+            with fonts.label(imgui):
+                imgui.text(f"What's new in {release.version}")
+            offset = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
+            imgui.same_line(max(offset - sp(24), 0.0))
+            if widgets.small_icon_button(
+                f"{icons.X}##landing-news-dismiss", "Dismiss", borderless=True
+            ):
+                ctx.settings.set(NEWS_SEEN_KEY, release.version)
+            for bullet in bullets:
+                with fonts.small(imgui):
+                    widgets.muted_wrapped(f"- {bullet}")
+            imgui.unindent(pad.x)
+    imgui.dummy((0, sp(tokens.SP_3)))
+
+
+def _news_footer(ctx: Any) -> None:
+    """The way back to every release, whether or not the card is showing.
+
+    A ghost at the foot of the screen rather than a section of its own: the
+    full changelog is a thing you go and look up, and it spent the whole of
+    this pane's first design taking half the width to be looked up in.
+    """
+    imgui.dummy((0, sp(tokens.SP_4)))
+    if widgets.ghost_button("All release notes..."):
+        imgui.open_popup("landing-news-all")
+    _news_popup()
+
+
+def _news_popup() -> None:
+    if not imgui.begin_popup("landing-news-all"):
+        return
     releases = changelog.entries()
     if not releases:
         widgets.muted("No changelog shipped with this build.")
-        imgui.dummy((0, sp(tokens.SP_4)))
+        imgui.end_popup()
         return
-    # The current release open and the rest collapsed: "what changed" is about
-    # this build, and the older ones are there so the answer has a context
-    # rather than so it has a scrollback.
     current = changelog.current(_version())
-    # The scroller takes everything the status block below it does not, measured
-    # off the rows that block will actually draw rather than a reserved literal:
-    # a fixed reservation is a gap on an install with nothing wrong and a
-    # clipped row on one with four things wrong, which is the wrong way round.
-    reserved = _status_height(status)
-    inner = max(imgui.get_content_region_avail().y - reserved, sp(120))
-    if imgui.begin_child("landing/news-scroll", (0, inner)):
+    if imgui.begin_child("landing/news-scroll", (sp(520), sp(420))):
+        # The current release open and the rest collapsed: "what changed" is
+        # about this build, and the older ones are there so the answer has a
+        # context rather than so it has a scrollback.
         for index, release in enumerate(releases):
             headline = release.version + (f" - {release.date}" if release.date else "")
             opened = current is not None and release.version == current.version
@@ -426,26 +536,67 @@ def _news(ctx: Any, status: list[Status]) -> None:
                     with fonts.small(imgui):
                         widgets.muted_wrapped(f"- {bullet}")
     imgui.end_child()
-    imgui.dummy((0, sp(tokens.SP_3)))
+    imgui.end_popup()
 
 
-def _status_height(status: list[Status]) -> float:
-    """What :func:`_status` will occupy, so the scroller above it can take the
-    rest. A clickable row is a frame tall and a plain one is a line."""
-    style = imgui.get_style()
-    line = imgui.get_frame_height_with_spacing()
-    return line * (len(status) + 1) + style.item_spacing.y + sp(tokens.SP_3)
+def _start(ctx: Any) -> None:
+    """One primary and a menu, where six equal buttons used to be.
+
+    The six were a 3-across grid of identically-weighted buttons -- a menu
+    claiming all of them matter equally, drawn at the loudest weight the pane
+    had, above the thing the user actually came back for. The menu says the
+    same six words; the button says there is one place to start.
+    """
+    if widgets.primary_button(f"{icons.PLUS}  New...", (sp(160), 0)):
+        imgui.open_popup("landing-new")
+    if imgui.begin_popup("landing-new"):
+        for key, label, icon, action in NEW_ITEMS:
+            if imgui.menu_item(f"{icon}  {label}##landing-new-{key}", "", False)[0]:
+                action(ctx)
+        imgui.end_popup()
+    imgui.dummy((0, sp(tokens.SP_2)))
 
 
 def _status(ctx: Any, status: list[Status]) -> None:
-    widgets.section("status")
+    """One quiet line: what is wrong, what is running, what is waiting.
+
+    Four stacked rows became one line because three of the four say "nothing to
+    report" on a healthy idle install -- a block of chrome saying so at the top
+    of every launch. What is left is only the rows that are *actionable*, and
+    each still carries its own destination.
+    """
+    gap = imgui.get_style().item_spacing.x
+    first = True
     for row in status:
+        if row.key not in HOME_STATUS:
+            continue
+        width = (
+            imgui.calc_text_size(row.icon).x
+            + imgui.calc_text_size(row.text).x
+            + gap * 3
+        )
+        if not first:
+            widgets.same_line_or_wrap(width)
+        first = False
         widgets.text_colored(row.colour, row.icon)
         imgui.same_line()
         if row.target:
-            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(row.colour)))
+            # A button with no fill until it is pointed at: this is a *line*,
+            # and three filled pills across the top of Home is three calls to
+            # action for "everything checks out". The ghost register, at
+            # small_button height so it sits on the line rather than raising it.
+            imgui.push_style_color(
+                imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(row.colour))
+            )
+            imgui.push_style_color(
+                imgui.Col_.button.value, imgui.ImVec4(0.0, 0.0, 0.0, 0.0)
+            )
+            imgui.push_style_color(
+                imgui.Col_.button_hovered.value,
+                imgui.ImVec4(*theme.rgba(theme.ELEV_2)),
+            )
             clicked = imgui.small_button(f"{row.text}##landing-status-{row.key}")
-            imgui.pop_style_color()
+            imgui.pop_style_color(3)
             if imgui.is_item_hovered():
                 imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
             if clicked:
@@ -455,78 +606,131 @@ def _status(ctx: Any, status: list[Status]) -> None:
 
 
 def _resume(ctx: Any) -> None:
-    widgets.section("start something")
-    _actions(ctx)
-    imgui.dummy((0, sp(tokens.SP_3)))
+    """What you were working on, as pictures.
+
+    A grid rather than a list, and the dominant thing on the screen rather than
+    half of one column. Recognising your own work is a visual act: the row that
+    said ``chest_of_drawers_v3.wmap - 2h ago`` was a filename and a clock, and
+    the picture that would have identified it in one glance was sitting in the
+    job directory the whole time.
+    """
     widgets.section("resume")
     drawn = rows(ctx)
     if not drawn:
         widgets.muted("Nothing yet. Start something above.")
         return
+    style = imgui.get_style()
+    pad = style.window_padding
+    gap = style.item_spacing.x
+    thumb = sp(RESUME_THUMB)
+    cell_w = thumb + pad.x * 2
+    cell_h = thumb + pad.y * 2 + imgui.get_text_line_height_with_spacing() * 2
+    avail = imgui.get_content_region_avail().x
+    columns = max(int((avail + gap) // (cell_w + gap)), 1)
     focus = ctx.state.home_index % len(drawn)
     for index, row in enumerate(drawn):
-        _resume_row(ctx, row, index, focused=index == focus)
+        if index % columns:
+            imgui.same_line()
+        _resume_cell(
+            ctx, row, index, (cell_w, cell_h), thumb, pad, focused=index == focus
+        )
 
 
-def _resume_row(ctx: Any, row: Row, index: int, *, focused: bool) -> None:
-    """One row: mode glyph, name, and how long ago.
+def _card_margin(pad: Any) -> None:
+    """Open a gutter inside a ``widgets.card``.
 
-    Everything the row *is* goes in the selectable's own label, and the
-    timestamp is drawn beside it against a width the selectable was told to
-    leave. Painting the text over the selectable with ``set_cursor_screen_pos``
-    is the tempting version and it is wrong: imgui grows a window's content
-    bounds from where the cursor has been, so putting it back afterwards makes
-    the pane's scroll extent disagree with what is in it, and imgui says so.
+    A card is a *borderless* child as far as imgui is concerned -- it draws its
+    own fill and its own border on the parent's list -- so it gets zero window
+    padding, and everything in one sat flush against its left edge. Indented
+    rather than pushed as a style var, because the push would have to reach
+    inside ``widgets.card``'s context manager to land before ``begin_child``.
 
-    The key is in the imgui id, not just the label: two documents can share a
-    basename and one imgui id between them is one row. ``focused`` rides the
-    selectable's own selected state rather than a ring drawn around it, so the
-    keyboard cursor is the same highlight the mouse gives.
+    The caller unindents; the pair is deliberately not a context manager,
+    because the cards here already sit inside one.
     """
-    stamp = ago(row.when)
-    avail = imgui.get_content_region_avail().x
-    with fonts.small(imgui):
-        stamp_w = imgui.calc_text_size(stamp).x if stamp else 0.0
-    gap = imgui.get_style().item_spacing.x
-    width = max(avail - (stamp_w + gap if stamp else 0.0), sp(120))
-    name = row.name if len(row.name) <= 34 else row.name[:33] + "-"
-    label = f"{row.icon}  {name}##landing-row-{row.kind}-{row.key}"
-    if imgui.selectable(label, focused, 0, (width, 0))[0]:
-        open_row(ctx, row)
+    imgui.dummy((0, pad.y - imgui.get_style().item_spacing.y))
+    imgui.indent(pad.x)
+
+
+def _fit(text: str, width: float) -> str:
+    """``text``, trimmed with a trailing dash until it fits ``width`` px.
+
+    Measured rather than counted. A character budget is what the Resume list
+    used, and it is wrong at every scale but the one it was fitted at: 22
+    characters fit a 136 dp cell at 1.0 and run a third of the way past it at
+    1.5, where the card has no scrollbar and simply cuts them off.
+    """
+    if imgui.calc_text_size(text).x <= width:
+        return text
+    trimmed = text
+    while trimmed and imgui.calc_text_size(trimmed + "-").x > width:
+        trimmed = trimmed[:-1]
+    return trimmed + "-"
+
+
+def _resume_cell(
+    ctx: Any,
+    row: Row,
+    index: int,
+    size: tuple[float, float],
+    thumb: float,
+    pad: Any,
+    *,
+    focused: bool,
+) -> None:
+    """One cell: the picture, the name, and how long ago.
+
+    The whole card is the affordance, as a library card's is -- the click test
+    follows ``end_child`` because the child window *is* the item, which is what
+    makes the hover lift work there too.
+
+    ``focused`` is drawn as a ring rather than as a fill, because the fill is
+    already spoken for by hover: a keyboard cursor that looked exactly like the
+    pointer being somewhere else is a cursor you cannot find.
+    """
+    imgui.push_id(f"landing-cell-{row.kind}-{row.key}")
+    origin = imgui.get_cursor_screen_pos()
+    with widgets.card(f"landing/cell/{index}", size) as visible:
+        if visible:
+            _card_margin(pad)
+            job = ctx.cache.get(row.key) if row.kind == "asset" else None
+            if job is not None:
+                thumbs.job_thumb(ctx, job, thumb)
+            else:
+                # A document has no rendered picture yet -- the mode glyph in a
+                # frame is what a library card draws for a job with no
+                # thumbnail, and the same placeholder here says "this is a
+                # drawing" rather than "this is broken".
+                widgets.thumb_placeholder(thumb, row.icon)
+            name = _fit(row.name, thumb)
+            imgui.text(name)
+            if name != row.name and imgui.is_item_hovered():
+                imgui.set_tooltip(row.name)
+            stamp = ago(row.when)
+            if stamp:
+                with fonts.small(imgui):
+                    widgets.muted(stamp)
+            imgui.unindent(pad.x)
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
         # Hovering moves the keyboard cursor too, so the two never disagree
-        # about which row Enter would take.
+        # about which cell Enter would take.
         ctx.state.home_index = index
         if row.kind != "asset":
             imgui.set_tooltip(row.key)
-    if stamp:
-        imgui.same_line()
-        with fonts.small(imgui):
-            widgets.muted(stamp)
-
-
-def _actions(ctx: Any) -> None:
-    """The "New ..." row. One per thing this app can start from nothing."""
-    # "New 3D model" and "New Model" sat side by side and the second one meant
-    # *Clay* -- two buttons whose labels differ by a word neither of them
-    # defines, one of which generates a mesh from a prompt and the other opens a
-    # modelling workspace (UX-23). Named for what they do instead: the mode is
-    # the noun a user can act on.
-    buttons: tuple[tuple[str, str, Any], ...] = (
-        ("2D image", icons.IMAGE, start_2d),
-        ("3D model", icons.BOX, start_3d),
-        ("Drawing", icons.PEN_TOOL, start_inker),
-        ("Clay model", icons.RULER, start_clay),
-        ("Tile map", icons.GRID, start_plotter),
-        ("Sprite atlas", icons.LAYERS, start_packwright),
-    )
-    width = widgets.grid_width(3)
-    for index, (label, icon, action) in enumerate(buttons):
-        if index % 3:
-            imgui.same_line()
-        if imgui.button(f"{icon}  New {label}##landing-new-{index}", (width, 0)):
-            action(ctx)
+    if imgui.is_item_clicked():
+        open_row(ctx, row)
+    if focused:
+        # ImVec2 and not a tuple: ``ring`` reads ``.x``/``.y``, which is the
+        # shape every other caller hands it (a rect min/max straight off imgui).
+        widgets.ring(
+            imgui.ImVec2(origin.x, origin.y),
+            imgui.ImVec2(origin.x + size[0], origin.y + size[1]),
+            theme.ACCENT,
+            1.0,
+            2.0,
+        )
+    imgui.pop_id()
 
 
 # --- the actions ------------------------------------------------------------
@@ -585,3 +789,23 @@ def start_packwright(ctx: Any) -> None:
     set_mode(ctx.state, "packwright")
     if not packwright_mode.ensure(ctx).docs:
         packwright_mode.new_document(ctx)
+
+
+#: The six things this app can start from nothing, in the order the menu offers
+#: them. "New 3D model" and "New Model" used to sit side by side and the second
+#: one meant *Clay* -- two buttons whose labels differ by a word neither of them
+#: defines, one of which generates a mesh from a prompt and the other opens a
+#: modelling workspace (UX-23). Named for what they do instead: the mode is the
+#: noun a user can act on.
+#:
+#: Below the functions rather than above them, because it names them: wave 5
+#: retargets the first two entries at ``create_stages.go`` and nothing else on
+#: this pane has to know.
+NEW_ITEMS: tuple[tuple[str, str, str, object], ...] = (
+    ("2d", "New 2D image", icons.IMAGE, start_2d),
+    ("3d", "New 3D model", icons.BOX, start_3d),
+    ("inker", "New drawing", icons.PEN_TOOL, start_inker),
+    ("clay", "New Clay model", icons.RULER, start_clay),
+    ("plotter", "New tile map", icons.GRID, start_plotter),
+    ("packwright", "New sprite atlas", icons.LAYERS, start_packwright),
+)
