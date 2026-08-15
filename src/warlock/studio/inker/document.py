@@ -172,6 +172,22 @@ class Document(
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.
     _dropped_frames: list[int] = field(default_factory=list, repr=False)
+    #: An open palette-conversion session: ``(layer uid, pixels as they were)``
+    #: for every real cel on the frame the popup was opened over. The filter
+    #: session's shape one dimension wider -- a conversion is whole-*document*,
+    #: so there is no rectangle and there is more than one layer -- and it
+    #: addresses each of them by uid for the same reason ``_filter`` does. See
+    #: :meth:`~._doc_paint.PaintOps.begin_convert`.
+    _convert: list[tuple[int, np.ndarray]] | None = field(
+        init=False, default=None, repr=False
+    )
+    #: The last ``(table, method) -> converted planes`` a preview computed, for
+    #: the life of one conversion session. Floyd-Steinberg is a Python loop over
+    #: every pixel, so this is not an optimisation but the difference between a
+    #: live preview and none.
+    _convert_memo: tuple[tuple[Any, ...], list[np.ndarray]] | None = field(
+        init=False, default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         width, height = self.stack.size

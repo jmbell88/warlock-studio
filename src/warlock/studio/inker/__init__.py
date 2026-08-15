@@ -69,6 +69,7 @@ from .document import (
 )
 from .filters import FILTERS
 from .gradient import KINDS as GRADIENT_KINDS
+from .indexed import SORT_KEYS as PALETTE_SORT_KEYS
 from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
 from .selection import COMBINE_OPS, Clipboard, FloatingBuffer, SelectionMask, magic_wand
@@ -97,6 +98,7 @@ __all__ = [
     "MODES",
     "NIBS",
     "OPAQUE_WHITE",
+    "PALETTE_SORT_KEYS",
     "PIXEL_NIBS",
     "RGBA",
     "SHAPES",

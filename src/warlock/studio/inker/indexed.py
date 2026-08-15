@@ -32,9 +32,30 @@ from collections.abc import Sequence
 
 import numpy as np
 
-__all__ = ["snap", "remap", "histogram", "nearest"]
+__all__ = [
+    "SORT_KEYS",
+    "histogram",
+    "nearest",
+    "ramp_between",
+    "remap",
+    "snap",
+    "sort_order",
+]
 
 RGBA = tuple[int, int, int, int]
+
+#: What a palette can be sorted by. Aseprite's full set, and the whole set is
+#: here rather than the two obvious ones because the *point* of sorting a
+#: palette is to find the ramp hiding in it -- hue groups the families,
+#: saturation separates the greys from the colours, luma orders a ramp, the
+#: three channels answer "which of these is the reddest", alpha finds the
+#: swatches carrying transparency, and usage puts the slots nothing is painted
+#: in at one end where they can be deleted.
+SORT_KEYS = ("hue", "saturation", "luma", "red", "green", "blue", "alpha", "usage")
+
+# Rec. 709. The same coefficients ``dither.luma`` uses, and deliberately: "sort
+# by brightness" and "the built palette's order" must mean one thing.
+_LUMA = (0.2126, 0.7152, 0.0722)
 
 
 def _table(palette: Sequence[RGBA]) -> np.ndarray:
@@ -116,6 +137,101 @@ def remap(pixels: np.ndarray, old: RGBA, new: RGBA) -> np.ndarray:
     hit = (out[..., :3] == want).all(axis=2) & (out[..., 3] > 0)
     if hit.any():
         out[..., :3][hit] = np.asarray(tuple(new)[:3], dtype=np.uint8)
+    return out
+
+
+def _hue_saturation(colour: Sequence[int]) -> tuple[float, float]:
+    """HSV hue and saturation of one colour, both 0..1.
+
+    Written out rather than taken from ``colorsys`` because that module works in
+    floats the caller has to scale on both sides, and because a grey has to
+    answer hue **0** rather than whatever falls out of a division by zero -- the
+    greys then group together at one end of a hue sort instead of scattering
+    through the colours, which is the only useful answer.
+    """
+    r, g, b = (int(c) / 255.0 for c in tuple(colour)[:3])
+    high, low = max(r, g, b), min(r, g, b)
+    spread = high - low
+    if spread <= 0.0:
+        return 0.0, 0.0
+    if high == r:
+        hue = ((g - b) / spread) % 6.0
+    elif high == g:
+        hue = (b - r) / spread + 2.0
+    else:
+        hue = (r - g) / spread + 4.0
+    return hue / 6.0, spread / high
+
+
+def _metric(colour: Sequence[int], key: str, count: int) -> float:
+    if key == "luma":
+        return sum(w * int(c) for w, c in zip(_LUMA, tuple(colour)[:3], strict=True))
+    if key == "red":
+        return float(colour[0])
+    if key == "green":
+        return float(colour[1])
+    if key == "blue":
+        return float(colour[2])
+    if key == "alpha":
+        return float(tuple(colour)[3]) if len(tuple(colour)) > 3 else 255.0
+    if key == "usage":
+        return float(count)
+    hue, saturation = _hue_saturation(colour)
+    return hue if key == "hue" else saturation
+
+
+def sort_order(
+    palette: Sequence[RGBA],
+    key: str,
+    *,
+    counts: Sequence[int] | None = None,
+    descending: bool = False,
+) -> list[int]:
+    """The permutation that puts *palette* in *key* order.
+
+    A permutation rather than a sorted table, because the caller may be sorting
+    a *subset* of the slots in place and needs to know where each one went.
+
+    Stable, and the tie-break is written down rather than left to the sort: two
+    identical colours keep their relative order ascending **and** descending,
+    which is why this negates the metric instead of passing ``reverse=True``.
+    A reversed sort flips ties too, so sorting descending and then ascending
+    would not give the original table back -- and the user would watch two
+    swatches swap places for no reason they can see.
+    """
+    if key not in SORT_KEYS:
+        raise ValueError(f"unknown palette sort key {key!r}")
+    if counts is None:
+        counts = [0] * len(palette)
+    if len(counts) != len(palette):
+        raise ValueError("a usage count per slot, or none at all")
+    metrics = [_metric(c, key, counts[i]) for i, c in enumerate(palette)]
+    sign = -1.0 if descending else 1.0
+    return sorted(range(len(palette)), key=lambda i: (sign * metrics[i], i))
+
+
+def ramp_between(start: RGBA, end: RGBA, steps: int) -> list[RGBA]:
+    """*steps* colours strictly between two swatches, straight RGB (and alpha).
+
+    Straight rather than premultiplied, and linear rather than perceptual, for
+    the reason this whole module works in straight RGB: the ramp has to land
+    where the user expects the midpoint of two swatches to be, and a perceptual
+    interpolation puts it somewhere they cannot predict from the two ends.
+
+    The endpoints are **not** included -- they are already in the table, and
+    returning them would have the caller inserting duplicates of the two slots
+    the ramp was drawn between.
+    """
+    if steps < 1:
+        return []
+    a = tuple(int(c) for c in tuple(start)[:4])
+    b = tuple(int(c) for c in tuple(end)[:4])
+    out: list[RGBA] = []
+    for step in range(1, steps + 1):
+        t = step / (steps + 1)
+        out.append(
+            tuple(int(np.floor(x + (y - x) * t + 0.5)) for x, y in zip(a, b, strict=True))  # type: ignore[arg-type]
+        )
     return out
 
 

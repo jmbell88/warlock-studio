@@ -125,8 +125,16 @@ class IndexedOps:
         :meth:`convert_to_palette` -- so the resulting document is
         indistinguishable from one indexed to a hand-authored table.
         """
-        colours = dither.build_palette(self._palette_planes(), max_colours)
-        return self.convert_to_palette(colours, method)
+        return self.convert_to_palette(self.built_palette(max_colours), method)
+
+    def built_palette(self: Document, max_colours: int = 32) -> list[RGBA]:
+        """The table :meth:`palette_from_document` would use, without converting.
+
+        Split out because the conversion *popup* needs it a control at a time:
+        the max-colours slider has to show the table it would produce before the
+        user commits to it.
+        """
+        return dither.build_palette(self._palette_planes(), max_colours)
 
     def _palette_planes(self: Document) -> list[Any]:
         """Every distinct pixel plane in the document, once each.
@@ -134,9 +142,16 @@ class IndexedOps:
         ``unique_cel_layers`` and not the stack: a background linked across
         three frames is one plane, and counting it three times would weight the
         median cut by how many frames a cel happens to appear on.
+
+        A plane currently showing a **conversion preview** contributes the
+        snapshot that preview was computed from, not what is on screen. Building
+        a palette out of an already-converted picture would collapse it onto
+        itself -- drag the slider from 32 down to 8 and back and the 32 would
+        never come back, because by then the drawing only has 8 colours in it.
         """
         layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
-        return [layer.pixels for layer in layers]
+        previewing = {uid: before for uid, before in (self._convert or ())}
+        return [previewing.get(layer.uid, layer.pixels) for layer in layers]
 
     def add_slot(self: Document, colour: RGBA) -> bool:
         """Append a colour to the palette. Nothing is repainted: a new swatch
@@ -212,6 +227,94 @@ class IndexedOps:
         table = [*self.palette]
         table.insert(to, table.pop(index))
         self.palette = table
+        self.rev += 1
+        return True
+
+    def sort_palette(
+        self: Document,
+        key: str,
+        *,
+        indices: Sequence[int] | None = None,
+        counts: Sequence[int] | None = None,
+        descending: bool = False,
+    ) -> bool:
+        """Reorder the table by *key*. No pixel changes, and no undo step.
+
+        ``move_slot``'s rule applied to the general case, and the reason it is
+        the rule: order is presentation here -- the exported ``.gpl`` and the
+        GIF colour table are what it decides, and not one pixel moves -- so a
+        sort has nothing to restore and spending a Ctrl+Z on it would make
+        undoing the *stroke* before it take two presses.
+
+        ``indices`` sorts a **subset in place**: the selected positions keep
+        their positions, and only which colour sits in each of them changes.
+        That is what makes "sort these five" a thing you can do to the middle of
+        a hand-arranged table without the rest of it moving.
+
+        ``counts`` is the per-slot usage for ``key="usage"``, which the caller
+        already has (the palette pane counts on demand and caches). It is asked
+        for rather than recomputed because counting is a pass over every pixel
+        of every cel, and doing it here would make an idle sort the most
+        expensive control on the panel.
+        """
+        if not self.palette:
+            return False
+        table = list(self.palette)
+        if key == "usage" and counts is None:
+            counts = self.palette_usage()
+        order = ix.sort_order(table, key, counts=counts, descending=descending)
+        if indices is None:
+            wanted = [table[i] for i in order]
+        else:
+            places = sorted({i for i in indices if 0 <= i < len(table)})
+            if len(places) < 2:
+                return False
+            chosen = [i for i in order if i in set(places)]
+            wanted = list(table)
+            for place, source in zip(places, chosen, strict=True):
+                wanted[place] = table[source]
+        if wanted == table:
+            return False
+        self.palette = wanted
+        self.rev += 1
+        return True
+
+    def insert_ramp(self: Document, a: int, b: int, steps: int) -> bool:
+        """Fill the gap between two slots with an interpolated run of colours.
+
+        The new colours go **between** the two in table order, running from the
+        lower position's colour to the higher's, which is what "make a ramp
+        between these two swatches" means in a palette that is read left to
+        right. Passing the two the other way round therefore produces the same
+        run -- the direction is the table's, not the click order's.
+
+        Colours already in the table are skipped rather than inserted twice: a
+        four-step ramp between two swatches three apart would otherwise plant
+        duplicates of colours the user can already see, and a duplicate slot is
+        one nothing distinguishes from its neighbour.
+
+        Table-only, like :meth:`sort_palette` and ``move_slot``: adding a swatch
+        repaints nothing, so there is no step to push.
+        """
+        if not self.palette or steps < 1:
+            return False
+        count = len(self.palette)
+        if not (0 <= a < count and 0 <= b < count) or a == b:
+            return False
+        low, high = sorted((a, b))
+        table = list(self.palette)
+        # Against a running set, not against ``table`` alone: a ramp of more
+        # steps than the two ends are apart repeats colours *within itself*, and
+        # a duplicate is a duplicate whichever side of the insert it came from.
+        seen = set(table)
+        fresh: list[RGBA] = []
+        for colour in ix.ramp_between(table[low], table[high], steps):
+            if colour not in seen:
+                seen.add(colour)
+                fresh.append(colour)
+        if not fresh:
+            return False
+        self.palette = [*table[: low + 1], *fresh, *table[low + 1 :]]
         self.rev += 1
         return True
 

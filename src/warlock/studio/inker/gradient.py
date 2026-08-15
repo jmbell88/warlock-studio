@@ -18,6 +18,11 @@ from collections.abc import Sequence
 
 import numpy as np
 
+# Aliased, because ``render`` takes a keyword called ``dither`` and a parameter
+# that shadows the module it needs is the sort of thing that works until
+# somebody adds one line inside the function.
+from . import dither as dith
+
 KINDS = ("linear", "radial")
 
 
@@ -79,6 +84,49 @@ def sample(stops: Sequence[Stop], t: np.ndarray) -> np.ndarray:
     )
 
 
+def dithered(stops: Sequence[Stop], t: np.ndarray, method: str) -> np.ndarray:
+    """:func:`sample` with the blend replaced by an ordered threshold.
+
+    Every pixel comes out as one of the two stops that bracket it, chosen by
+    where it falls between them against ``dither.bayer_matrix``. So a two-stop
+    black-to-white ramp lands entirely on black and white, which is what
+    dithering a gradient *is* -- and on an indexed document the snap in
+    ``_commit_patch`` is then a no-op, because both candidates are already
+    palette members whenever the stops are.
+
+    Kind-agnostic by construction: it takes the ramp parameter and knows nothing
+    about how it was computed, so linear and radial dither identically.
+
+    **Alpha dithers with its stop**, rather than being interpolated under a
+    thresholded colour. The alternative reads as a soft gradient with hard
+    colour banding on top -- two different gradients in one drag.
+
+    The matrix is anchored at the canvas origin, so a ramp drawn in two halves
+    interlocks with itself instead of showing a seam.
+    """
+    if method not in dith.BAYER_SIZES:
+        raise ValueError(f"unknown gradient dither {method!r}")
+    if not stops:
+        raise ValueError("a gradient needs at least one stop")
+    ordered = sorted(stops, key=lambda stop: float(stop[0]))
+    colours = np.array([c for _, c in ordered], dtype=np.float32) / 255.0
+    if len(ordered) == 1:
+        return np.broadcast_to(colours[0], (*t.shape, 4)).astype(np.float32)
+    positions = np.array([float(p) for p, _ in ordered], dtype=np.float32)
+
+    # ``side="right"`` then clamped into the segment range: a parameter sitting
+    # exactly on a stop belongs to the segment *after* it, which is what makes
+    # two stops at one position the hard edge ``sample`` already gives them.
+    low = np.clip(np.searchsorted(positions, t, side="right") - 1, 0, len(ordered) - 2)
+    span = positions[low + 1] - positions[low]
+    where = np.divide(
+        t - positions[low], span, out=np.ones_like(t), where=span > 0.0
+    )
+    where = np.clip(where, 0.0, 1.0)
+    threshold = dith.tile_matrix(dith.bayer_matrix(dith.BAYER_SIZES[method]), t.shape)
+    return colours[np.where(where > threshold, low + 1, low)]
+
+
 def render(
     size: tuple[int, int],
     p0: tuple[float, float],
@@ -88,6 +136,7 @@ def render(
     kind: str = "linear",
     *,
     stops: Sequence[Stop] | None = None,
+    dither: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """-> (rgba float32 straight 0..1, weight float32 0..1).
 
@@ -96,12 +145,19 @@ def render(
     fading to black: the colour stays the foreground everywhere and only the
     amount written changes. With three stops that is still true per stop, so a
     gradient can fade out in the middle and back in.
+
+    ``dither`` names one of the ordered matrices (``bayer2``/``4``/``8``) and
+    replaces the blend between adjacent stops with a threshold against it; see
+    :func:`dithered`. ``None`` is not merely the default but a separate path:
+    the undithered arithmetic below is untouched, byte for byte, so turning the
+    option on and off returns the exact pixels it always produced.
     """
     if stops is None:
         if start is None or end is None:
             raise ValueError("render needs either two colours or a stop list")
         stops = [(0.0, start), (1.0, end)]
-    mixed = sample(stops, ramp(size, p0, p1, kind))
+    t = ramp(size, p0, p1, kind)
+    mixed = sample(stops, t) if dither is None else dithered(stops, t, dither)
     rgba = np.empty(mixed.shape, dtype=np.float32)
     rgba[..., :3] = mixed[..., :3]
     rgba[..., 3] = 1.0

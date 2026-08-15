@@ -20,7 +20,7 @@ import numpy as np
 
 from . import brush as brush_mod
 from . import composite as cp
-from . import filters
+from . import dither, filters
 from . import gradient as grad
 from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
 from .layers import Layer
@@ -246,6 +246,144 @@ class PaintOps:
         """
         self.cancel_filter()
 
+    # -- palette conversion -------------------------------------------------
+    #
+    # The filter session's mechanism, generalised one dimension: a filter writes
+    # one rectangle of one layer, and a conversion rewrites every plane of the
+    # document. Everything else is deliberately the same -- the snapshot is
+    # taken once and every preview recomputes from it (never from the last
+    # preview, which would compound), each plane is addressed by uid, and
+    # committing is the ordinary one-undo op rather than anything the session
+    # knows how to push.
+    #
+    # **The preview covers the current frame only, and the commit covers the
+    # document.** Previewing forty frames would mean converting forty planes per
+    # parameter change to show one, and the frames the user cannot see are the
+    # ones they are not judging. The popup says so.
+
+    def begin_convert(self: Document) -> bool:
+        """Open a conversion preview over the current frame's real layers.
+
+        Nothing is pushed and nothing is changed: this only takes the copies
+        that :meth:`preview_convert` recomputes from and :meth:`cancel_convert`
+        restores.
+
+        **Empty cels are skipped rather than autovivified**, which is the one
+        place this deliberately parts company with ``begin_filter``. A filter is
+        a write to the layer you have selected, so bringing that cel into
+        existence is what the user asked for. A conversion is a document-wide
+        mode change that nobody would expect to *populate* the timeline -- and
+        the cels it would create are exactly the empty ones, where a conversion
+        has nothing to do anyway.
+        """
+        self.end_convert()
+        anim = self.anim
+        planes = [
+            layer
+            for layer in self.stack
+            if anim is None or not anim.is_placeholder(layer)
+        ]
+        if not planes:
+            return False
+        self._convert = [(layer.uid, layer.pixels.copy()) for layer in planes]
+        self._convert_memo = None
+        return True
+
+    def _convert_target(self: Document, uid: int, before: np.ndarray) -> Layer | None:
+        """The layer one recorded plane belongs to, or None to skip it.
+
+        Three answers are None, and all three mean "this plane is not ours to
+        write any more" rather than "cancel the session": the uid names nothing
+        (a layer or a whole track deleted under the popup), it names a
+        *placeholder* (a cel undone under the popup -- placeholder uids are
+        stable per slot, and the plane behind one is the shared read-only
+        blank), or the plane has been resized under the popup and the pixels no
+        longer describe it.
+
+        Skipping rather than abandoning is the difference from ``_filter``,
+        which has exactly one layer and nothing left to do when it goes. Here
+        the other planes are still previewing and still have to be put back.
+        """
+        try:
+            layer = self.layer_by_uid(uid)
+        except KeyError:
+            return None
+        if self.anim is not None and self.anim.is_placeholder(layer):
+            return None
+        if layer.pixels.shape != before.shape:
+            return None
+        return layer
+
+    def preview_convert(
+        self: Document, colours: Any, method: str = "nearest"
+    ) -> bool:
+        """Show the conversion without recording it. Safe to call every frame.
+
+        Memoised per ``(table, method)`` for ``preview_filter``'s reason and
+        more so: ``inker_bridge`` calls this on every frame the popup is up
+        because the controls above it can change either, and Floyd-Steinberg is
+        a Python loop over every pixel of every layer. The snapshot never
+        changes, so the converted planes are a pure function of the two.
+        """
+        if self._convert is None:
+            return False
+        wanted = [tuple(c) for c in colours]
+        if not wanted or method not in dither.METHODS:
+            return False
+        key = (tuple(wanted), method)
+        if self._convert_memo is None or self._convert_memo[0] != key:
+            self._convert_memo = (
+                key,
+                [
+                    dither.convert(before, wanted, method)
+                    for _uid, before in self._convert
+                ],
+            )
+        for (uid, before), converted in zip(
+            self._convert, self._convert_memo[1], strict=True
+        ):
+            layer = self._convert_target(uid, before)
+            if layer is not None:
+                layer.pixels[:, :] = converted
+        self.invalidate_all()
+        return True
+
+    def commit_convert(self: Document, colours: Any, method: str = "nearest") -> bool:
+        """Put the preview back, then convert for real as one undo step.
+
+        The restore is not wasted work and not belt-and-braces: the preview has
+        already written the converted pixels onto the current frame, so without
+        it ``convert_to_palette``'s snapshot would record *those* as the state
+        to undo to -- and one Ctrl+Z would land on a document that was never
+        the user's.
+        """
+        if self._convert is None:
+            return False
+        self._restore_convert()
+        return self.convert_to_palette(colours, method)
+
+    def cancel_convert(self: Document) -> bool:
+        """Put the pixels back. Nothing was ever pushed, so nothing is undone."""
+        if self._convert is None:
+            return False
+        self._restore_convert()
+        return True
+
+    def _restore_convert(self: Document) -> None:
+        """Undo the preview and close the session, writing no history."""
+        recorded, self._convert = self._convert, None
+        self._convert_memo = None
+        for uid, before in recorded or ():
+            layer = self._convert_target(uid, before)
+            if layer is not None:
+                layer.pixels[:, :] = before
+        self.invalidate_all()
+
+    def end_convert(self: Document) -> None:
+        """Abandon a session left open by a pane that went away. Cancels rather
+        than commits, for :meth:`end_filter`'s reason."""
+        self.cancel_convert()
+
     # -- strokes ------------------------------------------------------------
 
     def begin_stroke(
@@ -409,18 +547,32 @@ class PaintOps:
         *,
         kind: str = "linear",
         stops: Any = None,
+        dither: str | None = None,
     ) -> bool:
         """Fill the selection (or the whole layer) with a ramp.
 
         ``stops`` is the general form; ``start``/``end`` is the two-stop
         shorthand every existing caller uses. Both go through one interpolator.
+
+        ``dither`` thresholds the ramp onto its own stops instead of blending
+        between them -- see :func:`gradient.dithered`. It is applied inside the
+        render, never afterwards: dithering the *result* would be quantising a
+        blend that has already been made, which is a different picture and one
+        that no longer lands on the stop colours exactly.
+
+        The **selection weight is never dithered**, which is why it comes back
+        from the render separately and is multiplied in below. A feathered
+        selection means one thing across every tool in this class, and a soft
+        edge chopped into a chequer is not that thing.
         """
         width, height = self.size
         rect = self.mask.bounds if self.mask is not None else None
         box = self.clip(rect or (0, 0, width, height))
         if box is None:
             return False
-        rgba, weight = grad.render((width, height), p0, p1, start, end, kind, stops=stops)
+        rgba, weight = grad.render(
+            (width, height), p0, p1, start, end, kind, stops=stops, dither=dither
+        )
         x0, y0, x1, y1 = box
         self._ensure_active_cel()
         layer = self.stack.active
