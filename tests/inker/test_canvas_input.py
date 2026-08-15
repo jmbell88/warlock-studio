@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from warlock.studio import inker, inker_state
+from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker import brush, tiling
 from warlock.studio.panes import inker_canvas, inker_tools
 
@@ -288,3 +288,48 @@ def test_a_selection_still_takes_priority_over_the_layer(scene):
     _press(state, tab, (6.0, 6.0))
     assert state.drag_kind == "move"
     assert tab.doc.floating is not None
+
+
+def test_arrow_nudge_moves_the_layer_under_the_move_tool(scene):
+    state, tab = scene
+    tab.doc.stack.active.pixels[4:8, 4:8] = FG
+    tab.doc.invalidate_all()
+    state.tool = "move"
+    assert inker_mode.nudge(state, tab, 1, 0)
+    _ys, xs = tab.doc.stack.active.pixels[..., 3].nonzero()
+    assert int(xs.min()) == 5
+    # One step per press, so a nudge is one Ctrl+Z rather than a session left
+    # open waiting for a release that never comes.
+    assert tab.doc.history.can_undo
+    tab.doc.undo()
+    assert not tab.doc.history.can_undo
+
+
+def test_arrow_nudge_moves_a_floating_buffer_first(scene):
+    state, tab = scene
+    tab.doc.stack.active.pixels[4:8, 4:8] = FG
+    tab.doc.invalidate_all()
+    tab.doc.select(inker.SelectionMask.from_rect(SIZE, (4, 4, 8, 8)))
+    tab.doc.lift()
+    state.tool = "brush"  # a float is nudged whatever tool is in hand
+    assert inker_mode.nudge(state, tab, 0, 2)
+    assert tab.doc.floating.offset == (4, 6)
+
+
+def test_arrow_nudge_is_gated_on_the_move_tool(scene):
+    """The arrows are the last keys a document pane has to give away, and
+    quietly translating a layer because somebody pressed Right with the brush
+    selected is not a trade worth making."""
+    state, tab = scene
+    tab.doc.stack.active.pixels[4:8, 4:8] = FG
+    tab.doc.invalidate_all()
+    state.tool = "brush"
+    assert not inker_mode.nudge(state, tab, 1, 0)
+    assert not tab.doc.history.can_undo
+
+
+def test_cancelling_a_move_that_is_not_open_falls_through(scene):
+    """What the Escape chain leans on: no session means "not handled", so Esc
+    goes on to cancel the float or drop the selection as it always did."""
+    _state, tab = scene
+    assert tab.doc.cancel_layer_move() is False

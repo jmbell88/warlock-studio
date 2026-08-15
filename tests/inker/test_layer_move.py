@@ -110,15 +110,37 @@ def test_the_patch_is_the_union_of_where_the_pixels_were_and_are():
     assert doc.history.top.rect == (4, 4, 11, 10)
 
 
+def test_the_patch_covers_erased_pixels_that_still_carry_colour():
+    """The eraser cuts alpha and leaves RGB, so an erased region is
+    ``(r, g, b, 0)``: invisible, outside any alpha-only box, and zeroed by the
+    translate. A patch measured on alpha alone would not record it and the
+    colours would be unrecoverable -- silently, because nothing on screen
+    changed."""
+    doc = _doc()
+    ghost = doc.stack.active.pixels
+    ghost[12:14, 12:14] = (7, 8, 9, 0)  # erased: colour kept, alpha gone
+    before = ghost.copy()
+    doc.begin_layer_move()
+    doc.preview_layer_move(1, 0)
+    doc.commit_layer_move()
+    doc.undo()
+    assert np.array_equal(doc.stack.active.pixels, before)
+
+
 def test_a_content_locked_layer_refuses_to_open_a_session():
     """The lock is read with ``getattr`` because the flag lands beside this
     work rather than under it -- but the door is here now, so a move cannot be
     the one write that walks through it."""
     doc = _doc()
     doc.stack.active.content_lock = True
+    doc.select(inker.SelectionMask.from_rect(SIZE, (4, 4, 8, 8)))
+    doc.lift()
     assert not doc.begin_layer_move()
     assert doc.preview_layer_move(4, 4) is False
-    assert _box(doc.stack.active.pixels) == (4, 4, 8, 8)
+    # A refusal leaves the document as it found it: the float is still
+    # floating, rather than landed as the side effect of a move that did not
+    # happen.
+    assert doc.floating is not None
 
 
 def test_beginning_twice_cancels_the_first_session_rather_than_stacking_them():

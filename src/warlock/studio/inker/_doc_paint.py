@@ -56,11 +56,18 @@ def _translated(pixels: np.ndarray, dx: int, dy: int) -> np.ndarray:
     return out
 
 
-def _alpha_box(pixels: np.ndarray) -> tuple[int, int, int, int] | None:
-    """The half-open bbox of everything with non-zero alpha, or None."""
-    alpha = pixels[..., 3]
-    rows = np.flatnonzero(alpha.any(axis=1))
-    cols = np.flatnonzero(alpha.any(axis=0))
+def _content_box(pixels: np.ndarray) -> tuple[int, int, int, int] | None:
+    """The half-open bbox of every pixel that is not all zeros, or None.
+
+    Any channel, not alpha alone -- and that is the difference between an undo
+    that restores the layer and one that nearly does. The eraser cuts alpha and
+    leaves RGB where it was, so an erased region is ``(r, g, b, 0)``: invisible,
+    outside any alpha-only box, and *zeroed* by the translate below. A patch
+    measured on alpha would not record that, and the colours would be gone with
+    no step to bring them back -- silently, because nothing on screen changed.
+    """
+    rows = np.flatnonzero(pixels.any(axis=(1, 2)))
+    cols = np.flatnonzero(pixels.any(axis=(0, 2)))
     if rows.size == 0:
         return None
     return (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
@@ -309,9 +316,13 @@ class PaintOps:
         until the flag exists.
         """
         self.cancel_layer_move()
-        self.commit_floating()
+        # The lock is read *before* the float is committed: a refusal must
+        # leave the document exactly as it found it, and committing first would
+        # land a floating buffer as the side effect of a move that never
+        # happened.
         if getattr(self.stack.active, "content_lock", False):
             return False
+        self.commit_floating()
         self._ensure_active_cel()
         layer = self.stack.active
         self._move = (layer.pixels.copy(), layer.uid)
@@ -364,10 +375,11 @@ class PaintOps:
     def commit_layer_move(self: Document) -> bool:
         """Turn whatever is previewed into exactly one undo step.
 
-        The patch covers the union of where the pixels *were* and where they
-        *are*, measured by non-zero alpha rather than by the whole canvas: a
-        16-pixel nudge of a sprite on a 2048 square would otherwise cost 32 MiB
-        of history for a change that touches a few thousand pixels.
+        The patch covers the union of where the content *was* and where it
+        *is*, rather than the whole canvas: a 16-pixel nudge of a sprite on a
+        2048 square would otherwise cost 32 MiB of history for a change that
+        touches a few thousand pixels. See :func:`_content_box` for why "the
+        content" is not "the non-transparent pixels".
         """
         if self._move is None:
             return False
@@ -376,7 +388,7 @@ class PaintOps:
             return self._abandon_move()
         source, _uid = self._move
         self._move = None
-        box = _union(_alpha_box(source), _alpha_box(layer.pixels))
+        box = _union(_content_box(source), _content_box(layer.pixels))
         if box is None:
             # Both empty: an empty layer was moved, which changed nothing.
             self._discard_pending_cel()

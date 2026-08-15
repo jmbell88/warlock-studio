@@ -1383,9 +1383,15 @@ def handle_key(ctx: Any, event: Any) -> bool:
         if tab.playing:
             stop_play(tab)
         elif not tab.saving:
-            if doc.floating is not None:
+            # The move session first, and unconditionally: it is the one open
+            # gesture that has already *written* previewed pixels into the
+            # layer with no undo step behind them, so clearing the drag without
+            # it would leave the layer moved, clean and unrecoverable. Every
+            # other Esc case below only drops something that is still floating.
+            moved = doc.cancel_layer_move()
+            if not moved and doc.floating is not None:
                 doc.cancel_floating()
-            elif doc.mask is not None:
+            elif not moved and doc.mask is not None:
                 doc.deselect()
         # Always: abandoning a half-finished drag is safe mid-save, because it
         # touches the pane's own state and never the document.
