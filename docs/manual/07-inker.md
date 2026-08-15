@@ -361,6 +361,12 @@ many times. In a partial export the tags are renumbered against the exported fra
 entirely outside it are dropped, and a directional layout is not carried over: half a walk sheet is
 a clip, not a smaller walk sheet.
 
+**Filters over a range.** With a range selected, the filter popup gains **Apply to range**: the
+filter runs over every cel in the selection as one undo step. A linked cel is filtered *once*
+however many frames it appears on, an empty cel stays empty rather than becoming a filtered blank,
+and the selection on the canvas is honoured as a weight exactly as it is for a single layer — so a
+feathered selection fades the filter in on every frame at once.
+
 Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.

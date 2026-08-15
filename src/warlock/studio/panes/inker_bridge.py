@@ -326,6 +326,8 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
+    _apply_to_range(ctx, tab)
+    imgui.same_line()
     # Never disabled: a save starting while this is open must not leave a modal
     # the user cannot dismiss -- the trap the params popup in Clay documents.
     if imgui.button("Cancel", (sp(90), 0)):
@@ -333,3 +335,35 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         state.filter_open = False
         imgui.close_current_popup()
     imgui.end_popup()
+
+
+def _apply_to_range(ctx: Any, tab: Any) -> None:
+    """Run the filter over every cel of the timeline's range, in one step.
+
+    **Cancels the preview session first**, which is the whole of what makes
+    this safe beside Apply: the session has already written its preview into
+    the cel on screen, and running the range filter over that cel would filter
+    an already-filtered plane -- the compounding ``preview_filter`` exists to
+    avoid, arriving by a different door. Cancelling puts the pixels back, and
+    ``filter_range`` then reads every cel including this one exactly once.
+
+    Disabled with no range rather than hidden, the rule the timeline's own menu
+    follows: a button that appears and disappears is one the user has to
+    rediscover.
+    """
+    state = inker_mode.ensure(ctx)
+    rect = tab.range_sel
+    imgui.begin_disabled(tab.busy or rect is None or tab.doc.anim is None)
+    if imgui.button("Apply to range", (sp(120), 0)):
+        values = dict(_filter_values(state, state.filter_name))
+        tab.doc.cancel_filter()
+        state.filter_open = False
+        tab.doc.filter_range(state.filter_name, values, *rect)
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    if rect is None:
+        widgets.help_marker(
+            "Drag across the timeline to select a range of cels first. Every"
+            " distinct cel in it is filtered once, so a linked cel is filtered"
+            " once however many frames it appears on."
+        )
