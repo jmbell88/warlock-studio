@@ -14,6 +14,7 @@ from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, theme, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 from . import inker_textures
 
 THUMB = 40.0
@@ -48,13 +49,132 @@ def draw(ctx: Any) -> None:
     needle = widgets.list_filter(ctx, "inker-layers", len(doc.stack))
     # Reversed: the engine's list is painter's order, the panel is not.
     shown = 0
+    open_groups: list[int] = []
     for index in range(len(doc.stack) - 1, -1, -1):
+        # The group headers are emitted *between* rows rather than as a nested
+        # widget tree: the flat stack is authoritative, so the panel walks it
+        # exactly as it always did and the folders are punctuation. That is what
+        # keeps the filter, the drag reorder and the row ids unchanged.
+        hidden = _headers(ctx, tab, doc, index, open_groups)
+        if hidden:
+            continue
         if needle and needle not in (doc.stack[index].name or "").lower():
             continue
         shown += 1
-        _row(ctx, tab, doc, index)
+        _row(ctx, tab, doc, index, len(open_groups))
     widgets.no_matches(needle, shown)
     imgui.end_disabled()
+
+
+INDENT = 14.0
+
+
+def _headers(ctx: Any, tab: Any, doc: Any, index: int, open_groups: list[int]) -> bool:
+    """Open and close the group headers around row ``index``. Collapsed?
+
+    Called once per row on the way down the panel (top-first), and it keeps
+    ``open_groups`` as the outermost-first chain the row sits in -- which is
+    both the indent depth and the answer to "is this row inside something the
+    user has folded shut".
+
+    A header is drawn the first time a group appears, which given the
+    contiguity invariant is exactly once: a group's rows are a run, so the run
+    begins at one row and the header belongs above it.
+    """
+    from ..inker import groups as gp
+
+    if not doc.groups:
+        return False
+    chain = list(reversed(gp.ancestry(doc.group_of, doc.member_uids()[index])))
+    shared = 0
+    while (
+        shared < len(open_groups)
+        and shared < len(chain)
+        and open_groups[shared] == chain[shared]
+    ):
+        shared += 1
+    del open_groups[shared:]
+    collapsed = False
+    for depth, guid in enumerate(chain[shared:], start=shared):
+        node = doc.groups.get(guid)
+        if node is None:
+            continue
+        if not collapsed:
+            _group_row(ctx, tab, doc, node, depth)
+        open_groups.append(guid)
+        collapsed = collapsed or guid in tab.collapsed_groups
+    return collapsed or any(guid in tab.collapsed_groups for guid in open_groups)
+
+
+def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
+    """One folder: a fold arrow, an eye, a name, and a drop target."""
+    imgui.push_id(f"group{node.uid}")
+    if depth:
+        imgui.indent(INDENT * depth)
+    folded = node.uid in tab.collapsed_groups
+    if imgui.small_button("+" if folded else "-"):
+        tab.collapsed_groups.discard(node.uid) if folded else tab.collapsed_groups.add(
+            node.uid
+        )
+    imgui.same_line()
+    changed, visible = imgui.checkbox("##groupvis", node.visible)
+    if changed:
+        doc.set_group_props(node.uid, visible=visible)
+    imgui.same_line()
+    label = f"{icons.LAYERS}  {node.name}"
+    if node.opacity < 1.0:
+        label += f"  {node.opacity * 100:.0f}%"
+    if node.locked:
+        label += "  locked"
+    imgui.selectable(f"{label}##grouphead", False)
+    _drop_onto_group(doc, node.uid)
+    if imgui.begin_popup_context_item("group-menu"):
+        if imgui.selectable("Ungroup", False)[0]:
+            doc.ungroup(node.uid)
+        if imgui.selectable("Rename", False)[0]:
+            _ask_group_rename(ctx, doc, node)
+        if imgui.selectable("Lock", False)[0]:
+            doc.set_group_props(node.uid, locked=not node.locked)
+        imgui.end_popup()
+    imgui.set_next_item_width(sp(90))
+    changed, value = imgui.slider_float(
+        "##groupopacity", float(node.opacity), 0.0, 1.0, "%.2f"
+    )
+    if changed:
+        doc.set_group_props(node.uid, opacity=value)
+    if depth:
+        imgui.unindent(INDENT * depth)
+    imgui.pop_id()
+
+
+def _drop_onto_group(doc: Any, group_uid: int | None) -> None:
+    """Accept a dragged layer onto a header, moving it into that group.
+
+    The same payload the row-to-row reorder uses, so one drag can be dropped on
+    either -- and the engine's ``move_into_group`` does the stack move that
+    keeps the group contiguous, in the same undo step as the membership.
+    """
+    if not imgui.begin_drag_drop_target():
+        return
+    payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
+    if payload is not None:
+        source = int(payload.data_id)
+        if 0 <= source < len(doc.stack):
+            doc.move_into_group(source, group_uid)
+    imgui.end_drag_drop_target()
+
+
+def _ask_group_rename(ctx: Any, doc: Any, node: Any) -> None:
+    from .. import dialogs
+
+    ctx.prompts.ask(
+        dialogs.Prompt(
+            title="Rename group",
+            label="Name",
+            value=node.name,
+            on_accept=lambda text: doc.set_group_props(node.uid, name=text[:60]),
+        )
+    )
 
 
 def _can_merge(doc: Any) -> bool:
@@ -86,6 +206,14 @@ def _actions(ctx: Any, doc: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Flatten", len(doc.stack) > 1):
         doc.flatten_layers()
+    if widgets.disabled_button("Group", len(doc.stack) > 0):
+        doc.group_layers()
+    widgets.help_marker(
+        "Wraps the active layer in a folder. Folders fold visibility, opacity "
+        "and the lock down onto what is inside them, and drag a layer onto a "
+        "folder's header to move it in. A folder is made around layers that "
+        "are already next to each other -- there are no empty ones."
+    )
     if doc.anim is not None:
         widgets.muted("Merge and flatten apply to every frame.")
 
@@ -134,9 +262,11 @@ def _actions(ctx: Any, doc: Any) -> None:
         doc.set_layer_props(locked=content)
 
 
-def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
+def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     layer = doc.stack[index]
     imgui.push_id(f"layer{layer.uid}")
+    if depth:
+        imgui.indent(INDENT * depth)
     active = index == doc.stack.active_index
 
     changed, visible = imgui.checkbox("##visible", layer.visible)
@@ -169,8 +299,25 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
             doc.move_layer(index, index + 1)
         if imgui.selectable("Move down", False)[0]:
             doc.move_layer(index, index - 1)
+        imgui.separator()
+        if imgui.selectable("Group", False)[0]:
+            doc.group_layers([index])
+        if doc.group_of.get(_member_uid(doc, index)) is not None and imgui.selectable(
+            "Take out of group", False
+        )[0]:
+            doc.move_into_group(index, None)
         imgui.end_popup()
+    if depth:
+        imgui.unindent(INDENT * depth)
     imgui.pop_id()
+
+
+def _member_uid(doc: Any, index: int) -> int:
+    """What the group tree knows this row by -- the *track* uid on an animated
+    document, because a materialised empty cel carries a placeholder uid of its
+    own. ``Document.member_uids`` owns the argument."""
+    order = doc.member_uids()
+    return order[index] if 0 <= index < len(order) else -1
 
 
 def _reorder(doc: Any, index: int) -> None:

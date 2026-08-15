@@ -358,6 +358,14 @@ class InkerDoc:
     journal_head: int | None = None
     journal_at: float = 0.0
 
+    # Which layer groups are folded shut in the panel, by group uid. **View
+    # state, and deliberately on the tab rather than on the document**: whether
+    # a folder is open says nothing about the picture, so it is neither
+    # persisted into the ``.ora`` nor undoable -- for the reason the playhead is
+    # neither. A document that asked to be saved because somebody collapsed a
+    # folder would make ``dirty`` a lie.
+    collapsed_groups: set[int] = field(default_factory=set)
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.

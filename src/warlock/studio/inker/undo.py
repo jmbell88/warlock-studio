@@ -255,12 +255,26 @@ class ReplayEdit(Edit):
     #: equal copies where the document had one shared object and silently
     #: break every link in it.
     grid: Any = None
+    #: The layer-group tree as it stood, as ``(nodes, membership)``. Trailing
+    #: and defaulted like ``grid`` above, and taken unconditionally rather than
+    #: only by the one op that rewrites it (``flatten_layers`` replaces every
+    #: layer in the document, so nothing is left for a group to hold): a rotate
+    #: that quietly kept a tree describing layers it had just replaced is a much
+    #: harder bug than a dictionary copy is a cost.
+    groups: Any = None
 
     def __post_init__(self) -> None:
         self.selection = _pack(self.selection)
         self.cost = sum(int(layer.pixels.nbytes) for layer in self.snapshot)
 
     def undo(self, doc: Any) -> None:
+        # Before the snapshot, so the ``invalidate_all`` that ends
+        # ``restore_snapshot`` folds the tree that is coming back rather than
+        # the one being replaced. Skipped outright when no tree was recorded,
+        # which keeps a step built without one -- there is no such caller in
+        # the app, but there is in the tests -- from needing the hook at all.
+        if self.groups is not None:
+            doc.restore_groups(self.groups)
         doc.restore_snapshot(self.snapshot, self.size, self.active, self.grid)
         doc.set_selection_mask(_unpack(self.selection))
 

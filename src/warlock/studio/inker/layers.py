@@ -96,6 +96,20 @@ class LayerStack:
             raise ValueError("a document has at least one layer")
         self.layers = layers
         self.active_index = max(0, min(int(active), len(layers) - 1))
+        #: Per-row ``(visible, opacity)`` inherited from the layer groups above
+        #: it, or None on a document with no groups -- which is every document
+        #: until somebody makes one, so the ordinary path allocates nothing and
+        #: compares one reference.
+        #:
+        #: It lives on the *stack* rather than on the layers because it is not a
+        #: property of a layer: the same cel can be in a group on one frame's
+        #: view and be a placeholder on another's, and writing the folded value
+        #: onto the layer would make a hidden group's cel look hidden to
+        #: everything that reads ``layer.visible`` -- including the panel's own
+        #: eye checkbox, which must go on showing what the *layer* is set to.
+        #: The document refreshes it in ``invalidate_all``, which is what every
+        #: structural change ends with. See ``inker/groups.py``.
+        self.group_fold: list[tuple[bool, float]] | None = None
 
     def __len__(self) -> int:
         return len(self.layers)
@@ -170,11 +184,32 @@ class LayerStack:
     # -- compositing -------------------------------------------------------
 
     def _entries(self, lo: int, hi: int) -> list[tuple[np.ndarray, float, str]]:
-        return [
-            (layer.pixels, layer.opacity, layer.blend)
-            for layer in self.layers[lo:hi]
-            if layer.visible and layer.opacity > 0.0
-        ]
+        """The rows a composite of ``[lo, hi)`` actually blends.
+
+        The group fold is applied *here* and only here, which is what keeps the
+        feature out of the compositor entirely: by the time
+        ``composite.stack_region`` sees a row it is an ordinary
+        ``(pixels, opacity, blend)`` triple and knows nothing about a tree.
+        Pass-through, so each layer still blends against everything beneath it
+        -- see ``inker/groups.py`` for why isolated compositing is a v1 gap.
+        """
+        fold = self.group_fold
+        if fold is None:
+            return [
+                (layer.pixels, layer.opacity, layer.blend)
+                for layer in self.layers[lo:hi]
+                if layer.visible and layer.opacity > 0.0
+            ]
+        out: list[tuple[np.ndarray, float, str]] = []
+        for index in range(lo, hi):
+            layer = self.layers[index]
+            # A fold shorter than the stack is a rebuild caught midway; treat
+            # the missing rows as ungrouped rather than raising out of a draw.
+            shown, opacity = fold[index] if index < len(fold) else (True, 1.0)
+            opacity *= layer.opacity
+            if layer.visible and shown and opacity > 0.0:
+                out.append((layer.pixels, opacity, layer.blend))
+        return out
 
     def composite_region(
         self, rect: tuple[int, int, int, int], *, below: np.ndarray | None = None
