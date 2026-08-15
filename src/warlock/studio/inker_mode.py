@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, docmodes, filetypes, inker_state, journal, recents
+from . import dialogs, docmodes, filetypes, fonts, inker_state, journal, recents
 from .inker import animation
 from .inker_state import InkerDoc, InkerState
 from .state import set_mode
@@ -1502,6 +1502,114 @@ def commit_gesture(state: InkerState, tab: InkerDoc) -> bool:
     return polygon_select(tab.doc, points, op)
 
 
+# --- the text tool ----------------------------------------------------------
+#
+# The controller half of C14: which fonts there are, and turning what the popup
+# holds into a floating buffer. The rasteriser is ``inker/textstamp.py`` and
+# knows nothing about any of this -- it takes a path.
+
+#: Where Windows keeps its faces. A literal rather than a lookup through
+#: ``%WINDIR%`` because it is a *fallback list*, not a resource the app needs:
+#: on a machine where this directory is not there (a test box, another OS) the
+#: scan comes back with the vendored face alone and the tool still works.
+SYSTEM_FONT_DIR = Path("C:/Windows/Fonts")
+
+#: What the scan will offer. ``.ttc`` collections are included and loaded at
+#: face 0, which is the regular weight in every collection Windows ships.
+FONT_SUFFIXES = (".ttf", ".otf", ".ttc")
+
+#: The scan's answer, or None before the first one. Cached because the
+#: directory holds several hundred files and the popup that reads it is drawn
+#: every frame it is up; refreshed only when a caller asks, since a font
+#: installed mid-session is rare and a stale list costs one restart.
+_font_choices: list[tuple[str, str]] | None = None
+
+
+def font_choices(*, refresh: bool = False) -> list[tuple[str, str]]:
+    """``(path, label)`` for every font the text popup offers.
+
+    The vendored Inter face is first and is the default, so the tool works
+    identically on a machine with no fonts installed and on one with four
+    hundred -- and so the *documented* default is a file that ships in the
+    wheel rather than whatever a directory listing happens to sort first. It is
+    checked for rather than assumed: it is a vendored asset and a missing one
+    should degrade to the system list, not to a traceback.
+    """
+    global _font_choices
+    if _font_choices is not None and not refresh:
+        return _font_choices
+    found: list[tuple[str, str]] = []
+    vendored = fonts.FONT_DIR / "Inter-Regular.ttf"
+    if vendored.exists():
+        found.append((str(vendored), "Inter (vendored)"))
+    try:
+        system = sorted(
+            (
+                (str(path), path.stem)
+                for path in SYSTEM_FONT_DIR.iterdir()
+                if path.suffix.lower() in FONT_SUFFIXES
+            ),
+            key=lambda entry: entry[1].lower(),
+        )
+    except OSError:
+        # No such directory, or no permission to read it. Either way the
+        # vendored face is still there and the tool is still usable.
+        system = []
+    found.extend(system)
+    _font_choices = found
+    return found
+
+
+def font_path(state: Any) -> str:
+    """The path the stamp will be rendered from. Empty means the default.
+
+    The stored option is a path and not an index, because an index into a
+    directory listing means something different the day a font is installed.
+    """
+    if state.font:
+        return str(state.font)
+    choices = font_choices()
+    return choices[0][0] if choices else ""
+
+
+def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
+    """Rasterise what the popup holds and float it. -> whether it landed.
+
+    Two refusals, each with its own sentence, because they are different
+    problems: nothing came out of the rasteriser (empty text, a font file the
+    system lists but Pillow cannot read, a size the face has no outline at), or
+    the layer is locked. The second is the canvas's own wording, because it is
+    the same lock and a user should not have to learn that two messages mean
+    one thing.
+
+    On success the tool becomes Move -- the Ctrl+V precedent. A stamp arrives
+    floating, and the first thing anybody does with a word they have just
+    placed is drag it into position; leaving the text tool in hand would mean
+    that drag opens a second popup.
+    """
+    from .inker import textstamp
+
+    if tab.busy:
+        return False
+    pixels = textstamp.text_stamp(
+        state.text_buffer,
+        font_path(state),
+        int(state.text_size),
+        state.fg,
+        antialias=bool(state.aa),
+    )
+    if pixels is None:
+        ctx.toast("Nothing to stamp -- check the text and the font.", "warn")
+        return False
+    if not tab.doc.float_pixels(pixels, state.text_at):
+        ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+        return False
+    # Through ``set_tool``: the one door, so the stamp cannot leave a
+    # half-drawn poly-lasso gesture open behind the Move tool (C4).
+    state.set_tool("move")
+    return True
+
+
 # --- keys -------------------------------------------------------------------
 
 # Aseprite's letters where they exist, because that is the muscle memory a user
@@ -1530,6 +1638,9 @@ TOOL_KEYS = {
     # between them; a letter of its own is one press rather than one-or-two, and
     # "d" was free (Ctrl+D is deselect, on a different branch).
     "d": "lasso_poly",
+    # Aseprite's letter for its text tool, and free here for the reason "c"
+    # was: a plain "t" was bound to nothing.
+    "t": "text",
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather

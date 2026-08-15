@@ -51,6 +51,7 @@ TOOLS = (
     ("slice", "Slice", "C"),
     ("spray", "Spray", "A"),
     ("lasso_poly", "Poly lasso", "D"),
+    ("text", "Text", "T"),
 )
 
 # Tools whose drag paints into the layer.
@@ -125,6 +126,18 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # here, and defaulted off because a dithered gradient is a pixel-art
     # decision rather than a better gradient -- on a photograph it is noise.
     "gradient_dither": "none",
+    # The text tool's three, per tool like everything else here even though one
+    # tool is the only one that reads them: a table with an exception in it is
+    # a table somebody has to remember the exception to.
+    #
+    # ``font`` is a *path*, and empty means the vendored Inter face -- resolved
+    # where the popup is drawn (``inker_canvas.font_choices``), because a
+    # default that named a file would be a default that can stop existing. The
+    # size is in pixels, which is what the rasteriser takes and what the canvas
+    # shows; a point size would be a number about paper.
+    "text_size": 24,
+    "font": "",
+    "aa": True,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -784,6 +797,34 @@ class InkerState:
     #: add into a replace that throws the selection away.
     gesture_combine: str = "replace"
 
+    # -- the text tool's open popup ----------------------------------------
+    #
+    # What is being typed, and where the click that opened the popup landed.
+    # Pure view state: a stamp is a floating buffer once it is made, so nothing
+    # here survives the OK button and nothing here may push an undo step.
+    #
+    # ``text_at`` is recorded at the *press* rather than read when OK is
+    # clicked, because by then the mouse is over a button in a popup somewhere
+    # else on the screen. The buffer is remembered across popups on purpose:
+    # retyping is how this editor re-edits text (there are no text objects), so
+    # a second stamp of the same word with a bigger size must not start empty.
+    text_buffer: str = ""
+    text_at: tuple[int, int] = (0, 0)
+    #: Whether the user has set the Antialias box themselves. Until they have,
+    #: the popup decides it from the document on every open -- off on an
+    #: indexed one, on everywhere else -- which is what the manual promises,
+    #: with no session in the sentence.
+    #:
+    #: A flag beside the option rather than a state *of* the option, and that
+    #: is the whole of the bug it fixes: ``options_for`` materialises all of a
+    #: tool's keys from the defaults the first time any one of them is read, so
+    #: "has this ever been set" is a question the stored dictionary cannot
+    #: answer. Asking it that way ("is there an entry for the text tool") made
+    #: the promise last exactly one popup -- after a single stamp on an RGB
+    #: document, every indexed document for the rest of the session opened with
+    #: antialiasing on.
+    text_aa_touched: bool = False
+
     # -- per-tool options ---------------------------------------------------
     #
     # Written out one per line rather than looped over TOOL_OPTION_DEFAULTS: a
@@ -807,6 +848,9 @@ class InkerState:
     paint_ink = _tool_option("paint_ink")
     spray_rate = _tool_option("spray_rate")
     gradient_dither = _tool_option("gradient_dither")
+    text_size = _tool_option("text_size")
+    font = _tool_option("font")
+    aa = _tool_option("aa")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.
@@ -822,7 +866,15 @@ class InkerState:
         return got
 
     def reset_tool_options(self, tool: str | None = None) -> None:
-        self.tool_options.pop(tool or self.tool, None)
+        tool = tool or self.tool
+        self.tool_options.pop(tool, None)
+        if tool == "text":
+            # ``text_aa_touched`` is part of the text tool's stored settings --
+            # it is only outside the dictionary because ``options_for`` cannot
+            # represent "unset" -- so a reset that left it standing would put
+            # the option back to its default and keep overriding it, which is a
+            # Reset button that does not reset.
+            self.text_aa_touched = False
 
     # -- documents ---------------------------------------------------------
 

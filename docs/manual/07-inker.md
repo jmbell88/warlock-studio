@@ -95,6 +95,7 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Slice | `C` | Names a rectangle on the canvas. |
 | Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
 | Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
+| Text | `T` | Stamps typed text onto the canvas as pixels. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -185,6 +186,34 @@ given a meaning where a wrong one cannot be taken back. Middle-drag still pans.
 one, and otherwise the whole layer while the Move tool is in your hand — each press is one undo
 step. Nudging is gated on the Move tool rather than global because quietly translating a layer
 because somebody pressed Right with the brush selected is not a trade worth making.
+
+## Text
+
+The `T` **Text** tool puts a word on the canvas. Click where you want it and a box opens: type the
+text (Enter starts a new line), choose a **font** and a **size** in pixels, and decide whether it is
+**antialiased**. It is stamped in the foreground colour.
+
+**There are no text objects and no text layers.** What you get is pixels — a floating selection, the
+same thing a paste gives you — so the Move tool is in your hand when the box closes, you drag the
+word where you want it, and it lands on the active layer as one undo step. Every tool and every
+filter then applies to it, with nothing to flatten first. The other side of that trade is that
+**re-editing text is retyping it**: the box remembers what you last typed, so a second stamp at a
+different size is a size change and an OK.
+
+The font list is every face in `C:\Windows\Fonts`, with the one that ships with Warlock (Inter) at
+the top and chosen by default — so the tool behaves the same on a machine with no fonts installed.
+The list is read the first time you open the box; a font installed while Warlock is running shows up
+after a restart.
+
+**Antialias** off renders whole pixels only, with no partial coverage anywhere — which is what pixel
+art wants, and what stops a stamp adding colours to an indexed drawing. On an indexed document it
+starts off for that reason, and on every other document it starts on. That is a starting point
+rather than a rule: set the box yourself once and it stays where you put it, on every document you
+open afterwards, until you press **Reset text** in the tools panel.
+
+If there is nothing to render — an empty box, or a font file the system lists but cannot be read —
+the stamp is refused with a message rather than putting an empty buffer on your canvas. A locked
+layer refuses the click before the box opens.
 
 ## Colour
 

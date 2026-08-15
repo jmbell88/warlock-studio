@@ -195,6 +195,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         sheetin,
         sheetout,
         slices,
+        textstamp,
         tiling,
         transform,
         undo,

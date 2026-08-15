@@ -25,6 +25,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
+from ..inker import textstamp
 from ..inker.slices import SliceKey, slice_props
 from ..inker.tiling import axes_of, canonical, tile_offset
 from ..inker_state import BG_BUTTON_TOOLS, PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
@@ -430,6 +431,9 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         hovered = imgui.is_item_hovered()
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
         _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
+        # Inside the child, because that is where ``_press`` opened it from and
+        # an imgui popup's id is computed off the id stack it was opened on.
+        _text_popup(ctx, state, tab)
     imgui.end_child()
     _status_bar(state, tab, origin, hovered)
 
@@ -792,6 +796,19 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             state.drag_kind = ""
         return
 
+    # The text tool, on the slice arm's shape and for its reasons: it returns
+    # before every paint branch so a click can never leave a dab behind, and it
+    # is inert on the right button rather than spending it. The lock is asked
+    # here rather than at the OK button -- offering a popup, a font list and a
+    # size, and only then saying the layer is locked, is a form the app knew
+    # the answer to before it drew it.
+    if tool == "text":
+        if state.drag_button == 0 and not _locked_out(ctx, state, tab):
+            state.text_at = ipoint
+            _open_text(state, tab)
+        state.drag_kind = ""
+        return
+
     # Alt over a paint tool picks the colour under the cursor, which is the one
     # convention a user coming from any other paint program reaches for without
     # thinking. Checked before the tool branches rather than inside the paint
@@ -1036,6 +1053,121 @@ def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
         # Fainter than the placed edges: it is what *would* happen, not what has.
         draw_list.add_line(tip, screen[0], _u32(theme.ACCENT, 0.4))
         draw_list.add_circle(screen[0], sp(POLY_CLOSE), colour)
+
+
+# --- the text tool ------------------------------------------------------------
+#
+# A popup on the canvas rather than a section in the tools panel, because the
+# gesture is "put a word *here*": the click chooses the spot and the popup is
+# the only thing between it and a floating buffer. Both halves live in this
+# module and neither may move to another pane -- an imgui popup is matched by an
+# id computed off the id stack, so an ``open_popup`` in the canvas child and a
+# ``begin_popup`` in a sidebar would never meet (the same trap
+# ``inker_bridge.CONVERT_POPUP`` is written up under).
+#
+# There is no live preview. A stamp *is* a floating buffer, which the canvas
+# already draws and the user can already drag, so previewing it before the OK
+# button would be a second, worse copy of what the next click gives them.
+
+TEXT_POPUP = "inker-text"
+
+#: How tall the typing box is, in design pixels: four lines and a bit, which is
+#: what a caption or a label takes and enough for a longer one to scroll in.
+TEXT_BOX_HEIGHT = 88.0
+
+#: The cap on what one stamp may hold. Generous rather than meaningful -- it is
+#: there so a paste of a whole file into the box cannot ask FreeType to lay out
+#: a megabyte on the frame thread.
+TEXT_MAX = 4000
+
+
+def _open_text(state: Any, tab: Any) -> None:
+    """Start a text stamp at the press that just landed.
+
+    The font scan happens here rather than at import: reading several hundred
+    directory entries is a frame's worth of work that a session which never
+    touches the tool must not pay, and ``font_choices`` caches it from the
+    first open onwards.
+
+    **Antialiasing follows the document until the user says otherwise**: off on
+    an indexed one, on everywhere else, decided here on every open. A palette
+    is a promise that the file holds exactly those colours, and an antialiased
+    edge is a rim of blends that each snap to the nearest slot -- so the
+    default that keeps the promise is the monochrome rasteriser.
+
+    It is a *default* and not a rule: an indexed document with a soft-edged
+    palette is a real thing, so ticking the box in the popup sets
+    ``text_aa_touched`` and this stops deciding anything. That flag is the
+    whole fix for what the first version got wrong -- it asked whether the text
+    tool had a stored options *entry*, which ``options_for`` creates on the
+    first read of any of the three, so one popup on an RGB document made every
+    indexed document for the rest of the session open with AA on. The manual
+    says "on an indexed document it starts off", with no session in the
+    sentence, and a promise that holds until you have used the tool once is not
+    the promise.
+    """
+    inker_mode.font_choices()
+    if not state.text_aa_touched:
+        state.aa = not tab.doc.palette
+    imgui.open_popup(TEXT_POPUP)
+
+
+def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """The typing box, the font, the size and the AA toggle.
+
+    Nothing to clean up when imgui closes it on a click outside -- unlike the
+    filter and conversion sessions this is cloned from, a text stamp previews
+    nothing and holds nothing on the document, so an unanswered popup is
+    simply a stamp that was never made. That is the whole of why there is no
+    ``text_open`` flag beside ``filter_open``.
+    """
+    if not imgui.begin_popup(TEXT_POPUP):
+        return
+    state.text_buffer = widgets.multiline(
+        "##inkertext", state.text_buffer, sp(TEXT_BOX_HEIGHT), TEXT_MAX
+    )
+    choices = inker_mode.font_choices()
+    if choices:
+        state.font = widgets.combo("##inkerfont", state.font, choices, sp(240))
+    else:
+        # Only reachable with the vendored face missing *and* no system font
+        # directory, i.e. a broken install. Said out loud rather than drawn as
+        # an empty combo the user would click at.
+        widgets.muted("No fonts found.")
+    changed, value = widgets.labeled_slider_int(
+        "Size", int(state.text_size), textstamp.MIN_SIZE, textstamp.MAX_SIZE
+    )
+    if changed:
+        state.text_size = int(value)
+    changed, value = imgui.checkbox("Antialias", bool(state.aa))
+    if changed:
+        state.aa = bool(value)
+        # The user has an opinion now, so ``_open_text`` stops forming one --
+        # in *both* directions. Ticking it on an indexed document keeps it
+        # ticked there, and unticking it on an RGB one keeps it unticked; a
+        # default that reasserted itself on the next click would be a checkbox
+        # the user cannot operate.
+        state.text_aa_touched = True
+    widgets.help_marker(
+        "Off renders the glyphs as whole pixels -- no partial coverage "
+        "anywhere -- which is what pixel art and an indexed palette want."
+    )
+    imgui.color_button(
+        "##inkertextfg", imgui.ImVec4(*[c / 255.0 for c in state.fg]), 0, (sp(16), sp(16))
+    )
+    imgui.same_line()
+    widgets.muted("the foreground colour")
+
+    imgui.dummy((0, 4))
+    if imgui.button("OK##inkertext", (sp(90), 0)):
+        # The tool becomes Move on success (``stamp_text``), so the popup must
+        # close either way: a refusal has already toasted why.
+        inker_mode.stamp_text(ctx, state, tab)
+        imgui.close_current_popup()
+    imgui.same_line()
+    if imgui.button("Cancel##inkertext", (sp(90), 0)):
+        imgui.close_current_popup()
+    imgui.end_popup()
 
 
 # --- slices -------------------------------------------------------------------
