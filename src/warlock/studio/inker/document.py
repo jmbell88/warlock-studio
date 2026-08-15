@@ -41,7 +41,7 @@ from ._doc_geometry import GeometryOps
 from ._doc_history import HistoryOps
 from ._doc_indexed import IndexedOps
 from ._doc_layers import LayerOps
-from ._doc_paint import SHAPES, PaintOps, normalise_rect
+from ._doc_paint import PATH_SHAPES, SHAPES, PaintOps, catmull_rom, normalise_rect
 from ._doc_ranges import RangeOps
 from ._doc_selection import SelectionOps
 from ._doc_slices import SliceOps
@@ -85,6 +85,8 @@ __all__ = [
     "OPAQUE_WHITE",
     "SHAPES",
     "normalise_rect",
+    "PATH_SHAPES",
+    "catmull_rom",
 ]
 
 

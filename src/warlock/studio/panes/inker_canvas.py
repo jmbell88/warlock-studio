@@ -26,10 +26,17 @@ from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
 from ..inker import textstamp
+from ..inker.document import catmull_rom
 from ..inker.indexed import shade_ramp
 from ..inker.slices import SliceKey, slice_props
 from ..inker.tiling import axes_of, canonical, tile_offset
-from ..inker_state import BG_BUTTON_TOOLS, PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..inker_state import (
+    BG_BUTTON_TOOLS,
+    PAINT_TOOLS,
+    PATH_SHAPE_TOOLS,
+    SELECT_TOOLS,
+    SHAPE_TOOLS,
+)
 from ..tokens import sp
 from . import inker_textures
 
@@ -878,7 +885,16 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # Before the shared selection branch and returning, because the whole
         # point of this tool is that it does *not* start a ``drag_kind="lasso"``
         # drag: its vertices are clicked, not dragged out.
-        _poly_press(ctx, state, tab, point)
+        _gesture_press(ctx, state, tab, point)
+        return
+    if tool in PATH_SHAPE_TOOLS:
+        # One branch up's reason, from the other side of the toolbox (Q-c):
+        # these are shape tools whose points are *clicked*, so they have to
+        # reach the gesture rather than the ``drag_kind="shape"`` drag below.
+        # They share the branch above's position and not its exemptions: these
+        # paint, so ``_locked_out`` has already refused the click on a locked
+        # layer and the right button has already gone inert.
+        _gesture_press(ctx, state, tab, point)
         return
     if tool in SELECT_TOOLS:
         doc.commit_floating()
@@ -978,7 +994,11 @@ def _dab_size(state: Any, spraying: bool) -> int:
 # and ``InkerState.gesture_pts`` is the whole of what survives between clicks.
 #
 # Built as the shared thing rather than the poly lasso's own, because the curve
-# and polygon shape tools are this gesture with a different landing.
+# and polygon shape tools are this gesture with a different landing -- and Q-c
+# is that landing: ``_gesture_press`` collects for all four tools, and
+# ``inker_mode.commit_gesture`` decides whether the vertices become a selection
+# or paint. The only thing they differ in on the way there is whether a click
+# back on the first point closes them (``CLOSES_ON_FIRST``).
 
 #: How near the first vertex a click has to land to close the polygon, in
 #: **screen** pixels before ``sp`` -- the slice handles' rule, for the slice
@@ -986,6 +1006,14 @@ def _dab_size(state: Any, spraying: bool) -> int:
 #: and half the canvas at 5%, so the target would be unhittable at one end of the
 #: zoom range and unavoidable at the other.
 POLY_CLOSE = 7.0
+
+#: The gesture tools whose path is **closed**, and which therefore end on a
+#: click back at the first vertex. The poly lasso (a polygon is what a selection
+#: is) and the polygon shape tool; the polyline and the curve are open paths, so
+#: a click near their first point is a click like any other and placing a vertex
+#: there is the only thing it can honestly mean. They end on a double-click or
+#: Enter instead, which every gesture tool answers.
+CLOSES_ON_FIRST = frozenset({"lasso_poly", "polygon"})
 
 
 def closes_gesture(points, point, zoom: float, radius: float) -> bool:
@@ -1006,8 +1034,14 @@ def closes_gesture(points, point, zoom: float, radius: float) -> bool:
     return math.dist(points[0], point) * zoom <= radius
 
 
-def _poly_press(ctx: Any, state: Any, tab: Any, point) -> None:
-    """One click of the polygonal lasso: open, extend, or close the polygon.
+def _gesture_press(ctx: Any, state: Any, tab: Any, point) -> None:
+    """One click of a multi-click gesture: open, extend, or close the path.
+
+    Shared by the polygonal lasso and by the three clicked shape tools (Q-c),
+    which differ only in what ``commit_gesture`` does with the vertices and in
+    whether a click back on the first one closes them. A second copy of this
+    arithmetic is exactly where the two would come to disagree about what a
+    double-click means.
 
     ``drag_kind`` is left empty on every arm, which is the load-bearing part:
     it keeps the next click out of the C12d guard, keeps ``_drag`` and
@@ -1018,17 +1052,21 @@ def _poly_press(ctx: Any, state: Any, tab: Any, point) -> None:
     doc = tab.doc
     if not state.gesture_pts:
         # The float lands on the first click, as it does for every other
-        # selection tool's press: the user has moved on from it.
+        # selection tool's press and every paint tool's -- the user has moved on
+        # from it.
         doc.commit_floating()
         # Captured once, here. ``state.combine`` is re-read at every press, and
         # letting go of Shift before the closing click would otherwise turn an
-        # add into a replace that throws the selection away.
+        # add into a replace that throws the selection away. Recorded for the
+        # painting shapes too, which have no use for it: one gesture has one
+        # opening arm, and a field left stale is a field the next tool reads.
         state.gesture_combine = state.combine
         state.gesture_pts = [point]
         state.drag_kind = ""
         return
-    if imgui.is_mouse_double_clicked(state.drag_button) or closes_gesture(
-        state.gesture_pts, point, tab.view.zoom, sp(POLY_CLOSE)
+    if imgui.is_mouse_double_clicked(state.drag_button) or (
+        state.tool in CLOSES_ON_FIRST
+        and closes_gesture(state.gesture_pts, point, tab.view.zoom, sp(POLY_CLOSE))
     ):
         # The closing click places no vertex of its own: a double-click's second
         # press lands on top of the first, and a click near vertex 0 *is*
@@ -1040,30 +1078,45 @@ def _poly_press(ctx: Any, state: Any, tab: Any, point) -> None:
 
 
 def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
-    """The open polygon, its rubber band, and where the closing click goes.
+    """The open path, its rubber band, and where the closing click goes.
 
     Through ``to_screen`` like every other overlay (Ink9), so the polygon is
     drawn on the turned or mirrored page rather than a quarter turn away from
     it. The rubber band follows the *snapped* cursor rather than the raw one,
     which is the rule ``_preview``'s shape branch already states: a band drawn
     somewhere the next vertex will not go is worse than no band at all.
+
+    The curve is previewed **segment by segment through the same
+    :func:`catmull_rom` the commit rasterises**, rather than as the straight
+    chords between its points: a spline preview that shows a polygon is a
+    preview of a different tool, and one that samples the curve its own way is
+    a promise the rasteriser has not made. The cursor rides along as a
+    provisional last point, so what is on screen is the curve *if you click
+    here* -- exactly what the polygon's rubber-band edge already means.
     """
     points = state.gesture_pts
     if not points:
         return
     view = tab.view
     colour = _u32(theme.ACCENT)
+    mouse = imgui.get_mouse_pos()
+    cursor = _snapped(
+        state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))
+    )
+    if state.tool == "curve":
+        curve = [
+            inker_state.to_screen(view, origin, x, y)
+            for x, y in catmull_rom([*points, cursor])
+        ]
+        for a, b in zip(curve, curve[1:], strict=False):
+            draw_list.add_line(a, b, colour)
+        return
     screen = [inker_state.to_screen(view, origin, x, y) for x, y in points]
     for a, b in zip(screen, screen[1:], strict=False):
         draw_list.add_line(a, b, colour)
-    mouse = imgui.get_mouse_pos()
-    tip = inker_state.to_screen(
-        view,
-        origin,
-        *_snapped(state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))),
-    )
+    tip = inker_state.to_screen(view, origin, *cursor)
     draw_list.add_line(screen[-1], tip, colour)
-    if len(screen) >= 3:
+    if state.tool in CLOSES_ON_FIRST and len(screen) >= 3:
         # The edge a commit would close with, and the target that closes it.
         # Fainter than the placed edges: it is what *would* happen, not what has.
         draw_list.add_line(tip, screen[0], _u32(theme.ACCENT, 0.4))

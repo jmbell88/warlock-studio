@@ -97,6 +97,9 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 | Text | `T` | Stamps typed text onto the canvas as pixels. |
 | Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
+| Polyline | `L` | A chain of straight segments, one click per corner. |
+| Polygon | `O` | The same, closed, and fillable. |
+| Curve | `F` | A smooth curve through the points you click. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -159,7 +162,18 @@ one. There is no **Opacity** for it either, for the same reason there is no hard
 nib — a shift lands on the next swatch exactly or it does not happen, and there is no partial
 version of it to scale.
 
-The shape tools have the size slider and, except for the line, a **Filled**
+Three of the shape tools are **clicked rather than dragged**, the way the poly lasso is. The
+**polyline** (`L`) drops a corner per click and joins them with straight segments; the **polygon**
+(`O`) does the same and closes the shape; the **curve** (`F`) runs a smooth curve **through every
+point you click** — not near them, through them, so a curve is placed by putting its points where
+you want the line to go. All three finish on a double-click or `Enter`, and the polygon also closes
+if you click back on its first point. `Esc` abandons the shape, and so does switching tools or tabs;
+nothing is painted until it lands, and when it does it is one undo step however many clicks it took.
+While you are drawing, the line from the last point follows the cursor — for the curve that preview
+is the curve itself, resampled as you move, so what is on screen is what will be painted.
+
+The shape tools have the size slider and, except for the open ones — the line, the polyline and the
+curve, which have no inside to fill — a **Filled**
 checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
 off acts on every similar pixel in the image, not just the ones touching where you clicked. The
 gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer

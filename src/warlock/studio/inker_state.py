@@ -57,11 +57,33 @@ TOOLS = (
     # letter in the word that reads as a mnemonic was taken (S is the ellipse
     # marquee, A the spray, D and T are spoken for elsewhere).
     ("shade", "Shading", "H"),
+    # The clicked shapes (Q-c). Their letters are what was left: of "polygon"
+    # only ``O`` is free (P is the line, G the fill, N the smudge), so the
+    # polygon takes it and the polyline takes ``L`` one word along. Not one
+    # letter of "curve" is free -- C is the slice, U the gradient, R the blur, V
+    # the move, E the eraser -- so the curve takes ``F``, for the *free-form*
+    # curve it draws.
+    ("polyline", "Polyline", "L"),
+    ("polygon", "Polygon", "O"),
+    ("curve", "Curve", "F"),
 )
 
 # Tools whose drag paints into the layer.
 PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray", "shade"})
-SHAPE_TOOLS = frozenset({"line", "rect", "ellipse"})
+SHAPE_TOOLS = frozenset({"line", "rect", "ellipse", "polyline", "polygon", "curve"})
+
+#: The shape tools whose points are **clicked** rather than dragged out (Q-c).
+#: They are shape tools in every way the options panel and the lock check care
+#: about -- a size, a fill, one write -- and not shape tools at all to the press
+#: dispatcher, which has to route them into the multi-click gesture instead of
+#: starting a ``drag_kind="shape"`` drag.
+PATH_SHAPE_TOOLS = frozenset({"polyline", "polygon", "curve"})
+
+#: The shape tools with no inside, and therefore no **Filled** checkbox. The
+#: line was the only one before Q-c; a polyline and a curve are open paths for
+#: the same reason it is, and a fill checkbox on a shape that encloses nothing
+#: is a control that does nothing.
+OPEN_SHAPE_TOOLS = frozenset({"line", "polyline", "curve"})
 SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand", "lasso_poly"})
 
 #: Tools a **right-click** drives, painting with the background colour instead

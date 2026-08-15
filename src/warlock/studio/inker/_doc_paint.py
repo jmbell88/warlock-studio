@@ -14,6 +14,7 @@ undo step is pushed.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -30,7 +31,26 @@ from .selection import magic_wand
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import RGBA, Document
 
-SHAPES = ("line", "rect", "ellipse")
+#: The shape kinds whose geometry is a **path** -- a run of points, however
+#: many -- rather than the two corners a drag produces (Q-c). Named as a group
+#: because that is exactly the set :meth:`PaintOps.shape_path` accepts and the
+#: set the pane collects by clicking instead of dragging; ``shape()`` takes them
+#: too, with the two points it was handed, so the two entry points cannot come
+#: to disagree about what a polyline is.
+PATH_SHAPES = ("polyline", "polygon", "curve")
+
+SHAPES = ("line", "rect", "ellipse", *PATH_SHAPES)
+
+#: How far apart, in image pixels, the samples of a rasterised curve are. A
+#: length rather than a per-segment count: a count that looks smooth on a 32px
+#: sprite is a visible chain of chords across a 2000px canvas, and one that is
+#: right at 2000px is hundreds of wasted points on the sprite.
+CURVE_STEP = 2.0
+#: The ceiling on one segment's samples, so a curve drawn corner to corner on a
+#: huge canvas cannot cost thousands of points for a smoothness no pixel can
+#: show. At 64 the worst chord on a 4096px span is under 32 pixels of a curve
+#: that is a *stroke* several pixels wide.
+CURVE_MAX_SAMPLES = 64
 
 
 def normalise_rect(p0: tuple[int, int], p1: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -38,6 +58,98 @@ def normalise_rect(p0: tuple[int, int], p1: tuple[int, int]) -> tuple[int, int, 
     x0, y0 = p0
     x1, y1 = p1
     return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _knot(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """The centripetal knot interval between two control points.
+
+    ``dist ** 0.5`` is the alpha=0.5 parameterisation, and it is the whole
+    reason this is centripetal Catmull-Rom rather than the uniform kind. A
+    clicked path is unevenly spaced by nature -- three quick clicks in a corner
+    and one across the canvas -- and uniform Catmull-Rom answers that with
+    overshoots and self-intersecting loops between the close pairs. Centripetal
+    is the standard cure and provably makes neither.
+
+    Floored away from zero because the spline divides by knot differences;
+    coincident points are collapsed before this is ever reached, so the floor is
+    a guard rather than a path anything takes.
+    """
+    return max(math.dist(a, b) ** 0.5, 1e-6)
+
+
+def _lerp(
+    a: tuple[float, float], b: tuple[float, float], ta: float, tb: float, t: float
+) -> tuple[float, float]:
+    """The point at ``t`` on the line through ``a`` at ``ta`` and ``b`` at ``tb``."""
+    span = tb - ta
+    u, v = (tb - t) / span, (t - ta) / span
+    return (a[0] * u + b[0] * v, a[1] * u + b[1] * v)
+
+
+def _curve_point(p0, p1, p2, p3, u: float) -> tuple[float, float]:
+    """One point of the Catmull-Rom segment from ``p1`` to ``p2``.
+
+    Barry-Goldman's pyramid rather than the matrix form, because it takes the
+    knot values directly and so is the same three lines whatever the
+    parameterisation is. At ``u == 0`` every lerp collapses onto ``p1`` and at
+    ``u == 1`` onto ``p2``, which is the property the tool is sold on: the curve
+    passes through **every point the user clicked**, not near them.
+    """
+    t0 = 0.0
+    t1 = t0 + _knot(p0, p1)
+    t2 = t1 + _knot(p1, p2)
+    t3 = t2 + _knot(p2, p3)
+    t = t1 + (t2 - t1) * u
+    a1 = _lerp(p0, p1, t0, t1, t)
+    a2 = _lerp(p1, p2, t1, t2, t)
+    a3 = _lerp(p2, p3, t2, t3, t)
+    b1 = _lerp(a1, a2, t0, t2, t)
+    b2 = _lerp(a2, a3, t1, t3, t)
+    return _lerp(b1, b2, t1, t2, t)
+
+
+def _mirrored(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+    """``a`` reflected through ``b`` -- the phantom control point past an end.
+
+    A Catmull-Rom segment needs a neighbour on each side, and the first and last
+    points have only one. Reflecting the inner neighbour makes the end segment
+    leave along its own chord, which is what a user drawing a curve expects: the
+    stroke starts off towards the second point rather than curling away from it.
+    """
+    return (2.0 * b[0] - a[0], 2.0 * b[1] - a[1])
+
+
+def catmull_rom(
+    points: Any, *, step: float = CURVE_STEP, samples: int = CURVE_MAX_SAMPLES
+) -> list[tuple[float, float]]:
+    """A smooth path **through** every one of ``points``, as a polyline.
+
+    A curve tool that interpolates is the only honest one for a click sequence:
+    a Bezier's handles are points the drawing never passes through, and there is
+    nowhere in a click-per-vertex gesture to put them. So the clicked points are
+    the curve's, and what is returned is the same chain of straight segments the
+    rasteriser and the on-canvas preview both draw -- one function, so the
+    preview cannot promise a curve the commit does not lay down.
+
+    Fewer than three points have no curvature to find and come back as they went
+    in: two points are a straight line and one is a dot. Consecutive duplicates
+    are collapsed first, because a double-click's second press lands on the
+    first and a zero-length knot interval is a division by zero.
+    """
+    pts: list[tuple[float, float]] = []
+    for x, y in points:
+        p = (float(x), float(y))
+        if not pts or p != pts[-1]:
+            pts.append(p)
+    if len(pts) < 3:
+        return pts
+    ext = [_mirrored(pts[1], pts[0]), *pts, _mirrored(pts[-2], pts[-1])]
+    out = [pts[0]]
+    for index in range(len(pts) - 1):
+        p0, p1, p2, p3 = ext[index : index + 4]
+        count = max(2, min(samples, math.ceil(math.dist(p1, p2) / max(step, 1e-6))))
+        out.extend(_curve_point(p0, p1, p2, p3, s / count) for s in range(1, count + 1))
+    return out
 
 
 def _translated(pixels: np.ndarray, dx: int, dy: int) -> np.ndarray:
@@ -778,6 +890,12 @@ class PaintOps:
     ) -> bool:
         """Line, rectangle or ellipse, antialiased through a coverage mask.
 
+        The two-point door, which is what a *drag* produces. A path shape
+        (:data:`PATH_SHAPES`) named here is routed to :meth:`shape_path` with
+        the two points rather than refused: they are all in ``SHAPES``, and one
+        list whose entries mean different things depending on who asks is worse
+        than either list on its own.
+
         With ``wrap`` on, the coverage is rasterised over a plane big enough to
         hold the whole gesture *and* the brush width that spills past the canvas
         edge, and then folded home by :func:`.tiling.fold_coverage`. Rasterising
@@ -790,6 +908,11 @@ class PaintOps:
         """
         if kind not in SHAPES:
             raise ValueError(f"unknown shape {kind!r}")
+        if kind in PATH_SHAPES:
+            # A path shape handed the two points a drag produces: a polyline of
+            # two is the line it draws, and routing rather than reimplementing
+            # is what keeps ``SHAPES`` one list with one meaning per entry.
+            return self.shape_path(kind, (p0, p1), colour, size, filled=filled, wrap=wrap)
         from PIL import Image, ImageDraw
 
         size = clamp_brush(size)
@@ -816,6 +939,87 @@ class PaintOps:
             return False
         rect, coverage = folded
         return self.write_colour(rect, colour, coverage.astype(np.float32) / 255.0)
+
+    def shape_path(
+        self: Document,
+        kind: str,
+        points: Any,
+        colour: RGBA,
+        size: int,
+        *,
+        filled: bool = False,
+        wrap: str | tuple[bool, bool] = "off",
+    ) -> bool:
+        """A polyline, a polygon or a curve through ``points`` (Q-c).
+
+        :meth:`shape`'s sibling for the shapes a *path* defines, and everything
+        below the rasterising is deliberately the same code: the same plane, the
+        same fold home for a wrapped axis, and the same single ``write_colour``
+        -- so a polygon honours the selection, the alpha lock and an indexed
+        document's palette exactly as a rectangle does, and however many clicks
+        it took it is **one undo step**.
+
+        ``curve`` is sampled to a polyline by :func:`catmull_rom` first, which
+        is the whole of the difference between it and ``polyline``. ``polygon``
+        is the closed one and the only one ``filled`` means anything to: an open
+        path has no inside, and rather than invent one the flag is ignored.
+
+        Two distinct points is the floor -- one point is a dot the brush would
+        draw better, and the antialiased coverage of a zero-length line is
+        nothing at all. It is deliberately *not* the poly-lasso's three: the
+        engine draws what it is given, and "a polygon of two clicks commits
+        nothing" is a rule about the gesture, kept where the gesture is.
+        """
+        if kind not in PATH_SHAPES:
+            raise ValueError(f"unknown path shape {kind!r}")
+        from PIL import Image, ImageDraw
+
+        size = clamp_brush(size)
+        path = catmull_rom(points) if kind == "curve" else list(points)
+        path = [(float(x), float(y)) for x, y in path]
+        if len(set(path)) < 2:
+            return False
+        axes = tiling.axes_of(wrap)
+        (ox, oy), (pw, ph) = self._path_plane(path, size, axes)
+        canvas = Image.new("L", (pw, ph), 0)
+        draw = ImageDraw.Draw(canvas)
+        local = [(x - ox, y - oy) for x, y in path]
+        closed = kind == "polygon"
+        if closed and filled:
+            # Fill first and stroke over it, which is the order ``shape`` draws
+            # a filled rectangle in: the outline is what carries the brush size,
+            # so a filled polygon is exactly its outlined self plus its inside.
+            draw.polygon(local, fill=255)
+        draw.line(
+            [*local, local[0]] if closed else local, fill=255, width=size, joint="curve"
+        )
+
+        folded = tiling.fold_coverage(
+            np.asarray(canvas, dtype=np.uint8), (ox, oy), self.size, axes
+        )
+        if folded is None:
+            return False
+        rect, coverage = folded
+        return self.write_colour(rect, colour, coverage.astype(np.float32) / 255.0)
+
+    def _path_plane(
+        self: Document,
+        points: Any,
+        size: int,
+        axes: tuple[bool, bool],
+    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        """:meth:`_shape_plane` for a path: its bounding box, then that.
+
+        A whole plane per shape rather than per segment, so a polyline that
+        crosses a wrapped seam twice is folded home once and lands as one
+        connected stroke -- folding segment by segment would rasterise each into
+        its own plane and lose the joins between them.
+        """
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        lo = (math.floor(min(xs)), math.floor(min(ys)))
+        hi = (math.ceil(max(xs)), math.ceil(max(ys)))
+        return self._shape_plane(lo, hi, size, axes)
 
     def _shape_plane(
         self: Document,

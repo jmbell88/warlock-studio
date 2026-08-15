@@ -1668,8 +1668,42 @@ def polygon_select(doc: Any, points: Any, op: str = "replace") -> bool:
     return True
 
 
+def paint_path(state: InkerState, tab: InkerDoc, tool: str, points: Any) -> bool:
+    """The multi-click gesture's *other* landing: a stroked path (Q-c).
+
+    ``polygon_select``'s opposite number. The poly lasso's clicks become a
+    selection; the polyline, polygon and curve tools' become **paint**, through
+    the same ``PaintOps`` machinery the dragged shapes go through -- so the
+    selection clip, the alpha lock, the indexed snap, tiled wrapping and the
+    single undo step are all the ones the rest of the toolbox already has, and
+    none of them is reimplemented here.
+
+    The floor is the poly lasso's, and for its reason: two clicks make a
+    polygon that is a line, and a tool asked to close a shape that does not
+    enclose anything commits nothing rather than leaving a mark the user has to
+    find and undo. An open path needs only its two points.
+
+    Never the background colour: a right press on a shape tool is inert and
+    never opens a gesture at all (see ``BG_BUTTON_TOOLS``).
+    -> whether anything was painted.
+    """
+    points = list(points)
+    if len(points) < (3 if tool == "polygon" else 2):
+        return False
+    return bool(
+        tab.doc.shape_path(
+            tool,
+            points,
+            state.fg,
+            state.brush_size,
+            filled=state.shape_filled,
+            wrap=tab.tiled,
+        )
+    )
+
+
 def commit_gesture(state: InkerState, tab: InkerDoc) -> bool:
-    """Land the open multi-click gesture and close it. -> whether it selected.
+    """Land the open multi-click gesture and close it. -> whether it landed.
 
     Three callers, all of which mean "finish it": the canvas's double-click and
     its click near the first vertex, and Enter. The gesture is closed either
@@ -1678,13 +1712,24 @@ def commit_gesture(state: InkerState, tab: InkerDoc) -> bool:
     never asked to lose.
 
     ``busy`` cancels rather than commits, for the reason the canvas refuses
-    input outright while a save is encoding the live document.
+    input outright while a save is encoding the live document. That is the
+    whole of the busy story for the painting shapes too (Q-c): a commit that
+    arrived mid-save would put half a polygon in the file, so it does not
+    arrive, and the vertices go with it rather than waiting to be finished
+    against a document that has moved on.
+
+    Which landing is decided by the tool **at the commit**, and that is safe
+    precisely because ``set_tool`` clears the gesture: the tool holding the
+    vertices is always the tool that placed them.
     """
     points, op = state.gesture_pts, state.gesture_combine
+    tool = state.tool
     state.clear_gesture()
     if tab.busy or not points:
         return False
     tab.doc.commit_floating()
+    if tool in inker_state.PATH_SHAPE_TOOLS:
+        return paint_path(state, tab, tool, points)
     return polygon_select(tab.doc, points, op)
 
 
@@ -1831,6 +1876,15 @@ TOOL_KEYS = {
     # ordinary brush rather than a tool -- so this is the first free letter of
     # the word; see ``inker_state.TOOLS``.
     "h": "shade",
+    # The clicked shapes (Q-c). Aseprite lends nothing here either -- its curve
+    # and polygon live on a right-click menu off the line tool rather than on
+    # letters -- so these are the free ones; see ``inker_state.TOOLS`` for which
+    # letter each word had left. All three are plain letters bound to nothing:
+    # Ctrl+O (open) and Ctrl+L are on the ctrl branch, and F is only ever
+    # "frame the viewer" in a mode Inker replaces.
+    "l": "polyline",
+    "o": "polygon",
+    "f": "curve",
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather

@@ -14,7 +14,7 @@ from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker import brush, transform
-from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..inker_state import OPEN_SHAPE_TOOLS, PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -53,6 +53,13 @@ TOOL_ICONS = {
     # colours it can produce are the swatches selected in the Colour panel and
     # nothing else.
     "shade": icons.PALETTE,
+    # The three clicked shapes (Q-c). Lucide's ``waypoints`` is a run of points
+    # joined by segments, which is the polyline exactly; ``pentagon`` is the
+    # closed one; and ``spline`` is a curve drawn with its control points *on*
+    # it, which is what a Catmull-Rom through clicked vertices is.
+    "polyline": icons.WAYPOINTS,
+    "polygon": icons.PENTAGON,
+    "curve": icons.SPLINE,
 }
 
 #: The shading tool's direction, as a radio pair for ``_ink``'s reason: two
@@ -231,7 +238,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         if changed:
             state.speed_taper = value
         widgets.help_marker("How much a fast stroke thins, for a pen-like flick.")
-    if tool in SHAPE_TOOLS and tool != "line":
+    if tool in SHAPE_TOOLS and tool not in OPEN_SHAPE_TOOLS:
         changed, filled = imgui.checkbox("Filled", state.shape_filled)
         if changed:
             state.shape_filled = filled
