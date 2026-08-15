@@ -13,6 +13,11 @@ middle, layers and the pipeline panel on the right. Several documents stay open 
 
 ## Starting a canvas
 
+**New**, **Open**, **Save**, **Save as** and **Export PNG** are in the **file** section at the top of
+the right-hand panel, where Plotter's and Packwright's have always been. The canvas's own row keeps
+only what acts on the drawing in front of you: undo and redo, the two view turns, the tiling control
+and the one word that says whether there is anything unsaved.
+
 **New** offers three square presets and, under them, width and height fields for anything else —
 1920 × 1080, a tall banner, a tile. Sizes are clamped rather than refused, up to 8192 px a side: the
 fields are being typed into, and there is nothing useful to show halfway through a number. The
@@ -24,8 +29,10 @@ room it has, with a 3 × 3 anchor saying where the old picture sits in the new s
 
 ## Turning the page
 
-Two buttons at the end of the file row change how the canvas is *shown*, and nothing else — no pixel
-moves, so there is nothing to undo and nothing to save.
+Two buttons on the canvas row change how the canvas is *shown*, and nothing else — no pixel
+moves, so there is nothing to undo and nothing to save. They are the one pair on that row that stays
+live while a save is running: refusing to let you *look* at a drawing while it writes a file would
+be an odd kind of care.
 
 - **Rotate the view** (`Ctrl+4`, `Ctrl+Shift+4` the other way) turns the canvas a quarter at a time.
 - **Flip the view** (`Ctrl+5`) mirrors it left to right. This is the oldest check there is on a
@@ -660,18 +667,25 @@ duplicate, reorder and delete. `,` and `.` step back and forward a frame.
 paint, and the first stroke on a blank frame creates the cel it needs. That is still one undo step,
 and a stroke that changes nothing leaves nothing behind.
 
-**Linked cels are one drawing in several frames.** *+ Link* adds a frame that shares the current
+**Linked cels are one drawing in several frames.** *Link* adds a frame that shares the current
 one's cels rather than copying them, so a background held across twenty frames is stored — and
 edited — once. Painting on any of them paints on all of them, which is the point. **Unlink** gives
-that one frame a private copy from then on. *+ Copy* is the other choice: an independent duplicate
+that one frame a private copy from then on. *Copy* is the other choice: an independent duplicate
 you can diverge immediately.
+
+The strip's controls are two rows. The top one is the frame you are on — the transport, the frame
+operations, the counter and that frame's duration — and the bottom one is what leaves the app: the
+three exports, with the onion-skin and thumbnail switches and the export magnification beside them.
+Both rows give up their labels for their icons before they give up any button, and drop what they
+can into a **…** menu after that, so nothing is ever pushed off the right-hand edge.
 
 **Durations are per frame**, in milliseconds, in the box on the transport row — so a held pose and
 a fast blink live in the same clip without anything having to be a frame rate.
 
 **Onion skin** shows the neighbouring frames beneath the one you are drawing, the previous tinted
-red and the next tinted green. Toggle it on the transport row; while it is on, **back**, **ahead**
-and **fade** set how many frames either side are drawn and how strongly. Both counts may be zero,
+red and the next tinted green. Toggle it on the strip's second row; while it is on, **back**,
+**ahead** and **fade** appear on a row of their own and set how many frames either side are drawn
+and how strongly. Both counts may be zero,
 which is how you see only what is behind or only what is ahead.
 
 **Playback** is the Play button or `Enter`; `Esc` or Play again stops it, leaving the playhead where

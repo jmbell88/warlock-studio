@@ -30,7 +30,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker_mode, theme, widgets
+from .. import icons, inker_mode, theme, toolbar, widgets
 from ..inker import animation
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -142,116 +142,231 @@ def _tick(tab: Any) -> None:
         inker_mode.tick_playback(tab, imgui.get_io().delta_time * 1000.0)
 
 
+#: The transport's five buttons, as ASCII rather than glyphs.
+#:
+#: ``icons.py`` is a *transcription* of lucide-static 0.525.0's codepoint
+#: assignments, and its docstring forbids guessing one -- so a name the vendored
+#: subset does not carry cannot simply be invented here. It has ``play`` and
+#: ``square``; it has no skip-back, no skip-forward and no chevron-left, which
+#: is four of the five. Two ASCII characters in a button that is already the
+#: width of a glyph is the honest fallback, and it is what a video editor's
+#: transport has always looked like anyway.
+_STEPS = (
+    ("first", "|<", "First frame"),
+    ("prev", "<", "Previous frame"),
+)
+_STEPS_AFTER = (
+    ("next", ">", "Next frame"),
+    ("last", ">|", "Last frame"),
+)
+
+
 def _transport(ctx: Any, tab: Any) -> None:
+    """Two rows, both laid out by :mod:`~warlock.studio.toolbar`.
+
+    This was the worst ``same_line`` chain in the app -- seventeen items across
+    one row, so at 150 % the export buttons were simply not on screen. It is
+    split by what the controls are *about*: the top row is the frame you are on
+    (transport, the frame operations, the counter and that frame's duration),
+    the bottom row is what leaves the app (the three exports, with the two view
+    toggles and the export scale beside them).
+
+    The transport is pinned, so it collapses to glyphs and stops -- a play
+    button that moves into an overflow menu when the window is dragged is not a
+    transport. **Delete frame** is pinned for the other half of the same rule.
+    The non-buttons -- the counter, the duration box, the toggles, the scale
+    combo, the (?) -- go in each row's ``trailing``, which is measured before
+    the tiers are chosen and so cannot be the thing that gets clipped.
+    """
     doc = tab.doc
     anim = doc.anim
     state = ctx.state.inker
     index = tab.play_index if tab.playing else anim.current
 
-    if widgets.disabled_button("|<", not tab.busy, (sp(28), 0)):
-        doc.set_current_frame(0)
-    imgui.same_line()
-    if widgets.disabled_button("<", not tab.busy, (sp(28), 0)):
-        inker_mode.step_frame(ctx, -1, tab)
-    imgui.same_line()
-    if widgets.disabled_button("Stop" if tab.playing else "Play", not tab.saving, (sp(48), 0)):
-        inker_mode.toggle_play(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button(">", not tab.busy, (sp(28), 0)):
-        inker_mode.step_frame(ctx, 1, tab)
-    imgui.same_line()
-    if widgets.disabled_button(">|", not tab.busy, (sp(28), 0)):
-        doc.set_current_frame(len(anim.frames) - 1)
-
-    imgui.same_line()
-    imgui.text(f"{index + 1}/{len(anim.frames)}")
-    imgui.same_line()
-    imgui.text(f"{anim.duration_ms()} ms")
-
-    imgui.same_line()
-    imgui.begin_disabled(tab.busy)
-    if imgui.button("+ Frame"):
-        doc.add_frame()
-    imgui.same_line()
-    if imgui.button("+ Copy"):
-        doc.add_frame(copy=True)
-    imgui.same_line()
-    if imgui.button("+ Link"):
-        doc.add_frame(link=True)
-    imgui.same_line()
-    if widgets.disabled_button("Delete", len(anim.frames) > 1):
-        doc.remove_frame()
-    imgui.end_disabled()
-
-    imgui.same_line()
-    changed, value = widgets.toggle("Onion", state.onion, tag="inker-onion")
-    if changed:
-        state.onion = value
-    imgui.same_line()
-    if widgets.disabled_button("Export sheet", not tab.busy):
-        inker_mode.export_sheet(ctx, tab)
-    widgets.help_marker(
-        "Writes a packed PNG of every frame plus a JSON sidecar naming the cells,"
-        " their durations and any tags."
+    items = [
+        toolbar.Item(key, label, tooltip=tip, enabled=not tab.busy, pinned=True)
+        for key, label, tip in _STEPS
+    ]
+    items.append(
+        toolbar.Item(
+            "play",
+            "Stop" if tab.playing else "Play",
+            icons.SQUARE if tab.playing else icons.PLAY,
+            tooltip="Stop playback" if tab.playing else "Play the clip (Space)",
+            enabled=not tab.saving,
+            pinned=True,
+        )
     )
-    imgui.same_line()
-    if widgets.disabled_button("Export GIF", not tab.busy):
-        inker_mode.export_gif(ctx, tab)
-    widgets.help_marker(
-        "Writes the whole timeline as an animated GIF, looping. A GIF holds no"
-        " partial transparency and times frames in hundredths of a second, so"
-        " soft edges become hard ones and a duration is rounded to the nearest"
-        " 10 ms."
-    )
-    imgui.same_line()
-    manual_render.help_button(ctx, "inker-timeline")
-
-    # The frame the counter above is naming, which during playback is the one
-    # going past rather than the one the playhead will come back to. Read-only
-    # while it moves: an edit box whose value changes ten times a second is not
-    # something a user can type into, and ``tick_playback`` deliberately does
-    # not move ``anim.current``, so a write here would land on a frame that is
-    # not the one on screen.
-    imgui.set_next_item_width(sp(90))
-    imgui.begin_disabled(tab.busy)
-    changed, value = imgui.input_int("ms", anim.frames[index].duration_ms, 10, 50)
-    if changed:
-        doc.set_frame_duration(index, value)
-    imgui.end_disabled()
-
-    # On the second row rather than the transport, for ``_onion_controls``'s
-    # reason: that row is already full and a ``same_line`` past the panel edge
-    # hides a control rather than wrapping it.
-    imgui.same_line()
-    changed, value = widgets.toggle("Thumbs", state.timeline_thumbs, tag="inker-thumbs")
-    if changed:
-        state.timeline_thumbs = value
-    widgets.help_marker(
-        "Draws each cel's picture in its timeline cell, and grows the cells to"
-        " fit. Linked cels share one thumbnail, so a link is visible as the same"
-        " drawing in several columns."
+    items += [
+        toolbar.Item(key, label, tooltip=tip, enabled=not tab.busy, pinned=True)
+        for key, label, tip in _STEPS_AFTER
+    ]
+    items += [
+        toolbar.Item(
+            "add", "Frame", icons.PLUS, tooltip="Add an empty frame",
+            enabled=not tab.busy, priority=1,
+        ),
+        toolbar.Item(
+            "copy", "Copy", icons.COPY, tooltip="Add a copy of this frame",
+            enabled=not tab.busy, priority=1,
+        ),
+        toolbar.Item(
+            "link", "Link",
+            tooltip="Add a frame whose cels are links to this one's",
+            enabled=not tab.busy, priority=1,
+        ),
+        toolbar.Item(
+            "remove", "Delete frame", icons.TRASH,
+            enabled=not tab.busy and len(anim.frames) > 1,
+            reason="A clip needs at least one frame.",
+            danger=True, pinned=True, priority=1,
+        ),
+    ]
+    toolbar.toolbar(
+        "inker-transport",
+        items,
+        lambda key: _frame_action(ctx, tab, key),
+        trailing=_frame_trailing(ctx, tab, index),
     )
 
-    imgui.same_line()
-    scale = widgets.combo(
-        "##inkerscale", str(int(state.export_scale)), list(EXPORT_SCALES), sp(64)
+    toolbar.toolbar(
+        "inker-timeline-out",
+        [
+            toolbar.Item(
+                "sheet", "Export sheet", icons.GRID,
+                tooltip="Writes a packed PNG of every frame plus a JSON sidecar "
+                "naming the cells, their durations and any tags.",
+                enabled=not tab.busy,
+            ),
+            toolbar.Item(
+                "gif", "Export GIF", icons.FILM,
+                tooltip="Writes the whole timeline as an animated GIF, looping. A "
+                "GIF holds no partial transparency and times frames in hundredths "
+                "of a second, so soft edges become hard ones and a duration is "
+                "rounded to the nearest 10 ms.",
+                enabled=not tab.busy,
+            ),
+            toolbar.Item(
+                "pngs", "Export PNGs", icons.IMAGE,
+                tooltip="Writes one numbered PNG per frame beside the name you "
+                "pick -- name_0000.png, name_0001.png and so on.",
+                enabled=not tab.busy,
+            ),
+        ],
+        lambda key: _export_action(ctx, tab, key),
+        trailing=_output_trailing(ctx, state),
     )
-    state.export_scale = max(1, int(scale))
-    widgets.help_marker(
-        "Magnifies every export by a whole number, nearest neighbour -- each"
-        " pixel drawn N times and nothing resampled. The sheet sidecar is built"
-        " on the scaled size, so its cells and trims describe the file that is"
-        " written; sidecars bound for Packwright are not scaled."
-    )
-    imgui.same_line()
-    if widgets.disabled_button("Export PNGs", not tab.busy):
-        inker_mode.export_pngs(ctx, tab)
-    widgets.help_marker(
-        "Writes one numbered PNG per frame beside the name you pick"
-        " -- name_0000.png, name_0001.png and so on."
-    )
-
     _onion_controls(state)
+
+
+def _frame_action(ctx: Any, tab: Any, key: str) -> None:
+    doc = tab.doc
+    anim = doc.anim
+    if key == "first":
+        doc.set_current_frame(0)
+    elif key == "prev":
+        inker_mode.step_frame(ctx, -1, tab)
+    elif key == "play":
+        inker_mode.toggle_play(ctx, tab)
+    elif key == "next":
+        inker_mode.step_frame(ctx, 1, tab)
+    elif key == "last":
+        doc.set_current_frame(len(anim.frames) - 1)
+    elif key == "add":
+        doc.add_frame()
+    elif key == "copy":
+        doc.add_frame(copy=True)
+    elif key == "link":
+        doc.add_frame(link=True)
+    elif key == "remove":
+        doc.remove_frame()
+
+
+def _export_action(ctx: Any, tab: Any, key: str) -> None:
+    if key == "sheet":
+        inker_mode.export_sheet(ctx, tab)
+    elif key == "gif":
+        inker_mode.export_gif(ctx, tab)
+    elif key == "pngs":
+        inker_mode.export_pngs(ctx, tab)
+
+
+def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
+    """Where you are in the clip, and how long this frame lasts."""
+    anim = tab.doc.anim
+    counter = f"{index + 1}/{len(anim.frames)} - {anim.duration_ms()} ms"
+    gap = imgui.get_style().item_spacing.x
+    width = (
+        imgui.calc_text_size(counter).x
+        + sp(90)
+        + imgui.calc_text_size("ms").x
+        + gap * 2
+    )
+
+    def draw_it() -> None:
+        imgui.text(counter)
+        imgui.same_line()
+        # The frame the counter is naming, which during playback is the one
+        # going past rather than the one the playhead will come back to.
+        # Read-only while it moves: an edit box whose value changes ten times a
+        # second is not something a user can type into, and ``tick_playback``
+        # deliberately does not move ``anim.current``, so a write here would
+        # land on a frame that is not the one on screen.
+        imgui.set_next_item_width(sp(90))
+        imgui.begin_disabled(tab.busy)
+        changed, value = imgui.input_int("ms", anim.frames[index].duration_ms, 10, 50)
+        if changed:
+            tab.doc.set_frame_duration(index, value)
+        imgui.end_disabled()
+
+    return (width, draw_it)
+
+
+def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
+    """The two view toggles, the export magnification, and the (?)."""
+    gap = imgui.get_style().item_spacing.x
+    switch = sp(32) + sp(6)
+    width = (
+        switch * 2
+        + imgui.calc_text_size("Onion").x
+        + imgui.calc_text_size("Thumbs").x
+        + sp(64)
+        + sp(26)
+        + gap * 4
+    )
+
+    def draw_it() -> None:
+        changed, value = widgets.toggle("Onion", state.onion, tag="inker-onion")
+        if changed:
+            state.onion = value
+        imgui.same_line()
+        changed, value = widgets.toggle(
+            "Thumbs", state.timeline_thumbs, tag="inker-thumbs"
+        )
+        if changed:
+            state.timeline_thumbs = value
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Draws each cel's picture in its timeline cell, and grows the "
+                "cells to fit. Linked cels share one thumbnail, so a link is "
+                "visible as the same drawing in several columns."
+            )
+        imgui.same_line()
+        scale = widgets.combo(
+            "##inkerscale", str(int(state.export_scale)), list(EXPORT_SCALES), sp(64)
+        )
+        state.export_scale = max(1, int(scale))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Magnifies every export by a whole number, nearest neighbour -- "
+                "each pixel drawn N times and nothing resampled. The sheet "
+                "sidecar is built on the scaled size, so its cells and trims "
+                "describe the file that is written; sidecars bound for "
+                "Packwright are not scaled."
+            )
+        manual_render.help_button(ctx, "inker-timeline")
+
+    return (width, draw_it)
 
 
 #: How many neighbours either side onion skinning will draw. A ceiling rather
@@ -271,13 +386,14 @@ def _onion_controls(state: Any) -> None:
     tool setting, because how far back a user wants to see is a property of how
     they work rather than of the drawing.
 
-    On the second row, after the duration box, rather than after the toggle:
-    the transport row is already full, and a ``same_line`` past the panel edge
-    does not wrap, it hides the control.
+    Its own row, rather than continuing one. It used to ``same_line`` after the
+    duration box because the transport row was already full and a ``same_line``
+    past the panel edge does not wrap, it hides the control; now the row above
+    ends in a right-aligned (?), so continuing it would put these three past
+    the edge for certain.
     """
     if not state.onion:
         return
-    imgui.same_line()
     imgui.set_next_item_width(sp(70))
     changed, value = imgui.input_int("back", state.onion_before, 1, 1)
     if changed:

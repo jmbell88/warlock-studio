@@ -9,6 +9,7 @@ the app, and there are eight panels.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ import numpy as np
 import pytest
 
 from warlock.service import jobs as svc_jobs
+from warlock.studio import icons, toolbar
 from warlock.studio.app_ctx import Ctx
 from warlock.studio.jobs_cache import JobsCache
 from warlock.studio.settings import Settings
@@ -3406,3 +3408,182 @@ def test_a_present_row_with_nothing_to_free_draws_no_trash_button(app_ctx, imgui
     rows[0]["removable"] = True
     app_settings._confirm_removal(app_ctx, rows[0])
     assert app_ctx.confirms.pending is not None
+
+
+# --- REDESIGN.md wave 4.2: the rows rewritten onto ``toolbar`` ---------------
+#
+# The rows wave 4.2 rewrote onto ``toolbar``, measured rather than eyeballed.
+#
+# Two questions, asked of every rewritten row.
+#
+# **Does it fit?** ``toolbar.plan`` is pure arithmetic over measured widths, so
+# the honest test is to measure the row's real items in a real font at each scale
+# the screenshot pass runs at, and then check the planned spread against a range
+# of pane widths. A row that fits is one whose drawn items plus the overflow
+# button are inside the region -- and the *only* legitimate way to exceed it is a
+# row whose pinned items alone are wider than the pane, which the module docstring
+# says out loud and which is asserted here as an exemption rather than assumed.
+#
+# **Is every key wired?** The rows are data now, and the failure that invites is
+# a key in the item list that no branch of the dispatcher matches -- a button that
+# draws, highlights, clicks and does nothing at all. So every key each row
+# publishes is checked against the source of the function that answers it.
+#
+# The item lists are rebuilt here rather than imported from the panes. Extracting
+# them into a shared table would make this test assert against a function written
+# for it; rebuilding them means a pane that renames a key without renaming it here
+# fails the second test, which is the point.
+
+SCALES = (1.0, 1.5, 1.75)
+#: The pane widths a row is asked about, in physical pixels. 320 is narrower
+#: than any real pane and is there to reach the all-pinned exemption; 1600 is a
+#: maximised centre column.
+WIDTHS = (320.0, 480.0, 720.0, 1000.0, 1600.0)
+
+
+def _canvas_items():
+    return [
+        toolbar.Item("undo", "Undo", icons.UNDO, pinned=True),
+        toolbar.Item("redo", "Redo", icons.REDO, pinned=True),
+        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW, priority=1),
+        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL, priority=1),
+        toolbar.Item("upright", "90 deg + flipped", priority=1),
+    ]
+
+
+def _transform_items():
+    return [
+        toolbar.Item("fliph", "Flip H", icons.FLIP_HORIZONTAL, priority=1),
+        toolbar.Item("flipv", "Flip V", priority=1),
+        toolbar.Item("ccw", "-90", priority=1),
+        toolbar.Item("cw", "+90", icons.ROTATE_CW, priority=1),
+        toolbar.Item("apply", "Apply", icons.CHECK, primary=True, pinned=True),
+        toolbar.Item("cancel", "Cancel", icons.X, pinned=True),
+    ]
+
+
+def _transport_items():
+    from warlock.studio.panes import inker_timeline
+
+    items = [
+        toolbar.Item(key, label, tooltip=tip, pinned=True)
+        for key, label, tip in inker_timeline._STEPS
+    ]
+    items.append(toolbar.Item("play", "Play", icons.PLAY, pinned=True))
+    items += [
+        toolbar.Item(key, label, tooltip=tip, pinned=True)
+        for key, label, tip in inker_timeline._STEPS_AFTER
+    ]
+    items += [
+        toolbar.Item("add", "Frame", icons.PLUS, priority=1),
+        toolbar.Item("copy", "Copy", icons.COPY, priority=1),
+        toolbar.Item("link", "Link", priority=1),
+        toolbar.Item(
+            "remove", "Delete frame", icons.TRASH, danger=True, pinned=True, priority=1
+        ),
+    ]
+    return items
+
+
+def _export_items():
+    return [
+        toolbar.Item("sheet", "Export sheet", icons.GRID),
+        toolbar.Item("gif", "Export GIF", icons.FILM),
+        toolbar.Item("pngs", "Export PNGs", icons.IMAGE),
+    ]
+
+
+def _bulk_items():
+    # The workshop shape, which is the wider of the two -- the trash's row is
+    # Clear/Restore/Delete permanently and is a subset of this one's demands.
+    return [
+        toolbar.Item("clear", "Clear", icons.X, pinned=True),
+        toolbar.Item("retry", "Try again (12)", icons.REFRESH),
+        toolbar.Item("zip", "Export zip...", icons.DOWNLOAD, priority=1),
+        toolbar.Item("folder", "Save to project", icons.SAVE, priority=1),
+        toolbar.Item("delete", "Delete", icons.TRASH, danger=True, pinned=True),
+    ]
+
+
+def _rows():
+    """``(label, items, dispatcher)`` for every row wave 4.2 rewrote."""
+    from warlock.studio.panes import inker_canvas, inker_timeline, library
+
+    return [
+        ("inker-canvas", _canvas_items(), inker_canvas._view_action),
+        ("inker-transform", _transform_items(), inker_canvas._transform_action),
+        ("inker-transport", _transport_items(), inker_timeline._frame_action),
+        ("inker-timeline-out", _export_items(), inker_timeline._export_action),
+        ("library-bulk", _bulk_items(), library._bulk_action),
+    ]
+
+
+def _spread(items, tiers, full, icon, overflow_w, gap):
+    shown = [i for i in range(len(items)) if tiers[i] != toolbar.MENU]
+    total = sum(full[i] if tiers[i] == toolbar.FULL else icon[i] for i in shown)
+    if shown:
+        total += gap * (len(shown) - 1)
+    if len(shown) != len(items):
+        total += overflow_w + (gap if shown else 0.0)
+    return total
+
+
+def _assert_fits(imgui, items, label, scale):
+    gap = imgui.get_style().item_spacing.x
+    overflow_w = imgui.get_frame_height()
+    full, icon = toolbar._measure(items)
+    pinned = [i for i, item in enumerate(items) if item.pinned]
+    # The narrowest the row can ever be: every pinned item as a glyph, plus the
+    # overflow button that holds everything else -- which is the width a row
+    # forgets to budget for, and the reason ``plan`` takes it as an argument.
+    floor = sum(icon[i] for i in pinned) + gap * max(len(pinned) - 1, 0)
+    if len(pinned) != len(items):
+        floor += overflow_w + (gap if pinned else 0.0)
+    for avail in WIDTHS:
+        tiers = toolbar.plan(
+            full,
+            icon,
+            [item.priority for item in items],
+            [item.pinned for item in items],
+            avail,
+            overflow_w,
+            gap=gap,
+        )
+        got = _spread(items, tiers, full, icon, overflow_w, gap)
+        if got > avail:
+            # The one documented way out: everything left is pinned, so there
+            # is nothing further to give and drawing the truth beats pretending.
+            assert floor > avail, (
+                f"{label} at scale {scale} overflows {avail:.0f} px by "
+                f"{got - avail:.0f} px with room still to give"
+            )
+
+
+@pytest.mark.parametrize("scale", SCALES)
+def test_every_rewritten_row_fits_or_is_all_pinned(imgui_ctx, scale):
+    from warlock.studio import theme, tokens
+
+    imgui, renderer = imgui_ctx
+    old = tokens.SCALE
+    tokens.set_scale(scale)
+    theme.apply(imgui)
+    try:
+        imgui.new_frame()
+        imgui.set_next_window_size((1200, 900))
+        imgui.begin("##host")
+        for label, items, _dispatch in _rows():
+            _assert_fits(imgui, items, label, scale)
+        imgui.end()
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+    finally:
+        tokens.set_scale(old)
+        theme.apply(imgui)
+
+
+def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
+    """A key with no branch is a button that draws, clicks and does nothing."""
+    for label, items, dispatch in _rows():
+        source = inspect.getsource(dispatch)
+        for item in items:
+            assert f'"{item.key}"' in source, f"{label}: nothing answers {item.key!r}"

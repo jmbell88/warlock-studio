@@ -76,6 +76,13 @@ class Item:
     enabled: bool = True
     reason: str = ""
     danger: bool = False
+    # The one thing this row is *for*, drawn in the accent (REDESIGN.md wave
+    # 4.2). At most one per row, and it should almost always be pinned as well:
+    # a row's answer moving into an overflow menu is the collapse doing the
+    # opposite of its job. Ignored when ``danger`` is set -- red already says
+    # "this is the consequential one", and an accent-filled destructive button
+    # says two things at once.
+    primary: bool = False
     # Higher collapses first. 0 is the row's reason for existing.
     priority: int = 0
     # Never hidden in the overflow menu; see the module docstring.
@@ -199,12 +206,23 @@ def toolbar(
                 f"{item.icon}{ident}",
                 item.tooltip or item.label,
                 danger=item.danger,
+                # A compacted primary keeps its frame where the others lose
+                # theirs: borderless is what makes a row of glyphs read as
+                # content rather than as boxes, and the one glyph that is the
+                # answer still has to be findable among them.
                 enabled=item.enabled,
-                borderless=True,
+                borderless=not item.primary,
             )
         elif item.danger:
             hit = widgets.destructive_button(
                 f"{item.label}{ident}", enabled=item.enabled
+            )
+        elif item.primary:
+            hit = widgets.primary_button(
+                f"{item.label}{ident}",
+                enabled=item.enabled,
+                reason=item.reason,
+                tooltip=item.tooltip,
             )
         else:
             hit = widgets.ghost_button(

@@ -18,7 +18,7 @@ from imgui_bundle import imgui
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
-from .. import dialogs, icons, jobs_cache, motion, theme, tokens, widgets
+from .. import dialogs, icons, jobs_cache, motion, theme, tokens, toolbar, widgets
 from ..manual import render as manual_render
 from ..state import ACTIONS, QUERY_FIELDS, SORTS, card_kind, primary_action, set_mode
 from ..tokens import sp
@@ -1135,6 +1135,13 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
     *Not shown* rather than *filtered out*: an id can also be here because its
     job fell off the newest-N window or was deleted from somewhere else, and
     the honest word covers all three.
+
+    Laid out through :mod:`~warlock.studio.toolbar` (REDESIGN.md wave 4.2), and
+    the count is drawn *before* it so the row's arithmetic sees the width the
+    sentence actually left. **Clear and Delete are pinned**, which is the two
+    halves of the pinning rule in one row: a destructive action behind ``...``
+    is one somebody finds by accident, and the escape from a selection has to
+    be at least as reachable as the thing that acts on it.
     """
     picked = sorted(ctx.state.checked)
     if not picked:
@@ -1144,55 +1151,82 @@ def _bulk(ctx: Any, jobs: list[Any]) -> None:
     imgui.separator()
     imgui.text(f"{len(picked)} selected" + (f" ({hidden} not shown)" if hidden else ""))
     imgui.same_line()
-    if imgui.small_button("Clear"):
-        ctx.state.checked.clear()
+    items = [
+        toolbar.Item(
+            "clear", "Clear", icons.X, tooltip="Untick everything.", pinned=True
+        )
+    ]
     if ctx.state.filters.trash:
         # The trash's own two, and *only* those two: exporting a zip of assets
         # the user has thrown away is not a thing anybody wants, and offering
         # it would put "Delete" beside "Export" in the one view where Delete
         # cannot be taken back.
-        if imgui.button("Restore##bulk"):
-            for job_id in picked:
-                restore_asset(ctx, job_id)
-        imgui.same_line()
-        if widgets.destructive_button("Delete permanently...", (0, 0)):
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Delete permanently?",
-                    message=_delete_message(len(picked), hidden)
-                    + " This cannot be undone.",
-                    confirm_label="Delete",
-                    cancel_label="Keep",
-                    on_confirm=lambda: [purge_asset(ctx, j) for j in picked],
-                )
+        items += [
+            toolbar.Item("restore", "Restore", icons.UNDO),
+            toolbar.Item(
+                "purge", "Delete permanently...", icons.TRASH, danger=True, pinned=True
+            ),
+        ]
+    else:
+        # The one bulk action the failures affordance sets you up for and never
+        # offered. "N jobs failed - show" filters the list, Select all ticks
+        # them, and then the bar had Export/Save/Delete -- nothing to *retry*
+        # with, so a user who had just been told about twelve failures retried
+        # them one card at a time (UX-14). ``run_action(..., "retry")`` already
+        # exists per job; this is a loop over it, and it picks remesh-or-reroll
+        # per job exactly as the single-job path does.
+        failed = [
+            job
+            for job in (ctx.cache.get(j) for j in picked)
+            if job and job["status"] == "error"
+        ]
+        if failed:
+            items.append(
+                toolbar.Item("retry", f"Try again ({len(failed)})", icons.REFRESH)
             )
-        return
-    # The one bulk action the failures affordance sets you up for and never
-    # offered. "N jobs failed - show" filters the list, Select all ticks them,
-    # and then the bar had Export/Save/Delete -- nothing to *retry* with, so a
-    # user who had just been told about twelve failures retried them one card
-    # at a time (UX-14). ``run_action(..., "retry")`` already exists per job;
-    # this is a loop over it, and it picks remesh-or-reroll per job exactly as
-    # the single-job path does.
-    failed = [job for job in (ctx.cache.get(j) for j in picked) if job and job["status"] == "error"]
-    if failed:
-        if imgui.button(f"Try again ({len(failed)})"):
-            for job in failed:
+        items.append(toolbar.Item("zip", "Export zip...", icons.DOWNLOAD, priority=1))
+        if ctx.export_dir:
+            # Only when one is configured: the feature is off unless
+            # WARLOCK_EXPORT_DIR is set, and a button that can only fail is
+            # worse than no button.
+            items.append(
+                toolbar.Item("folder", "Save to project", icons.SAVE, priority=1)
+            )
+        items.append(toolbar.Item("delete", "Delete", icons.TRASH, danger=True, pinned=True))
+    toolbar.toolbar(
+        "library-bulk", items, lambda key: _bulk_action(ctx, key, picked, hidden)
+    )
+
+
+def _bulk_action(ctx: Any, key: str, picked: list[str], hidden: int) -> None:
+    """What each key in the bulk row does. Its own function because the row is
+    now data, and because a confirm is worth reading beside the count it names."""
+    if key == "clear":
+        ctx.state.checked.clear()
+    elif key == "restore":
+        for job_id in picked:
+            restore_asset(ctx, job_id)
+    elif key == "purge":
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Delete permanently?",
+                message=_delete_message(len(picked), hidden) + " This cannot be undone.",
+                confirm_label="Delete",
+                cancel_label="Keep",
+                on_confirm=lambda: [purge_asset(ctx, j) for j in picked],
+            )
+        )
+    elif key == "retry":
+        for job in (ctx.cache.get(j) for j in picked):
+            if job and job["status"] == "error":
                 run_action(ctx, job, "retry")
-        imgui.same_line()
-    if imgui.button("Export zip..."):
+    elif key == "zip":
         _export_zip(ctx, picked)
-    if ctx.export_dir:
-        # Only when one is configured: the feature is off unless
-        # WARLOCK_EXPORT_DIR is set, and a button that can only fail is worse
-        # than no button.
-        imgui.same_line()
-        if imgui.button("Save to project"):
-            ctx.submit(
-                "export-folder", svc_export.export_to_folder, ctx.svc, picked, ["model.glb"]
-            )
-    imgui.same_line()
-    if imgui.button("Delete##bulk"):
+    elif key == "folder":
+        ctx.submit(
+            "export-folder", svc_export.export_to_folder, ctx.svc, picked, ["model.glb"]
+        )
+    elif key == "delete":
         # The confirm stays here where the per-card one went (J91): a bulk
         # action's count is the thing worth checking, and "not shown" in that
         # sentence is the case the whole message exists for.

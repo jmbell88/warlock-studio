@@ -16,7 +16,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import inker_mode, theme, widgets
+from .. import icons, inker_mode, theme, widgets
 from ..inker import transform
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -40,8 +40,12 @@ def _busy_why(tab: Any) -> str:
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("document")
+    widgets.section("file")
     manual_render.help_button(ctx, "inker-bridge")
+    _file(ctx, state, tab)
+
+    imgui.dummy((0, 8))
+    widgets.section("document")
     # Above the tab check: importing a sheet *makes* a document, so it has to
     # be reachable when there is none open, which is exactly the moment a user
     # is most likely to want it.
@@ -67,6 +71,69 @@ def draw(ctx: Any) -> None:
     _pipeline(ctx, tab)
     imgui.dummy((0, 8))
     _canvas_ops(ctx, tab)
+
+
+def _file_why(state: Any, tab: Any) -> str:
+    """Why the five file buttons are out, when they are.
+
+    A save commits the floating buffer, so saving mid-transform would land the
+    transform with no confirm and leave the mode pointing at nothing -- which
+    is a different sentence from "a save is already running", and the row used
+    to say neither.
+    """
+    if state.transforming:
+        return (
+            "A transform is still floating. Apply or cancel it first -- saving "
+            "would commit it with no confirm."
+        )
+    return _busy_why(tab)
+
+
+def _file(ctx: Any, state: Any, tab: Any) -> None:
+    """New/Open/Save/Save as/Export PNG, and the recent list.
+
+    Moved here from the canvas's own row in REDESIGN.md wave 4.2, and shaped
+    like ``plotter_bridge``'s file block on purpose: Inker was the one document
+    mode whose file actions did not live in its bridge panel, and the row they
+    were on was the app's worst clipping case -- eight labelled buttons plus a
+    combo plus a status word chained with ``same_line``, losing "Export PNG"
+    off the right edge at 150 %. A full-width button in a fixed-width sidebar
+    cannot clip, which is the other half of why they came here.
+    """
+    from pathlib import Path
+
+    from . import inker_canvas
+
+    width = widgets.grid_width(2)
+    if imgui.button(f"{icons.PLUS} New", (width, 0)):
+        imgui.open_popup("new-canvas")
+    imgui.same_line()
+    if imgui.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
+        inker_mode.ask_open(ctx)
+    # This pane's own registration of the shared popup: a popup belongs to the
+    # window that begins it, so the canvas's copy is not reachable from here.
+    inker_canvas.new_popup(ctx)
+
+    if tab is not None:
+        ready = not tab.busy and not state.transforming
+        why = _file_why(state, tab)
+        imgui.dummy((0, 4))
+        if widgets.disabled_button(
+            f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=why
+        ):
+            inker_mode.save(ctx, tab)
+        imgui.same_line()
+        if widgets.disabled_button("Save as...", ready, (width, 0), reason=why):
+            inker_mode.save_as(ctx, tab)
+        if widgets.disabled_button(
+            f"{icons.UPLOAD} Export PNG", ready, (-1, 0), reason=why
+        ):
+            inker_mode.export_png(ctx, tab)
+
+    widgets.recent_files(
+        inker_mode.recent_paths(ctx),
+        lambda path: inker_mode.open_path(ctx, Path(path)),
+    )
 
 
 def _animation(ctx: Any, tab: Any) -> None:

@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui
 
-from .. import ants, icons, inker_mode, inker_state, theme, widgets
+from .. import ants, icons, inker_mode, inker_state, theme, toolbar, widgets
 from ..inker import textstamp
 from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
@@ -125,110 +125,156 @@ def _blit(draw_list: Any, texture: Any, view: Any, origin, x0, y0, x1, y1, **kwa
 
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
-    _file_row(ctx, state)
     if not state.docs:
         _empty(ctx, state)
+        # Registered in this window whichever branch drew, because the empty
+        # state's "New custom size..." opens it by name and a popup belongs to
+        # the window that begins it.
+        new_popup(ctx)
         return
+    _file_row(ctx, state)
     _tab_bar(ctx, state)
     tab = state.active
     if tab is not None:
         _canvas(ctx, state, tab)
+    new_popup(ctx)
 
 
-# --- the file row -----------------------------------------------------------
+# --- the canvas's own row ----------------------------------------------------
+#
+# New/Open/Save/Save as/Export PNG used to be here, and moved to
+# ``inker_bridge`` in REDESIGN.md wave 4.2. That row was the worst clipping case
+# in the app -- eight labelled buttons plus a combo plus a status word, chained
+# with ``same_line``, losing "Export PNG" off the right edge at 150 % -- and it
+# was also the one document mode whose file actions did *not* live in its bridge
+# panel, where Plotter's and Packwright's do. Moving them fixed both at once.
+#
+# What stays is what acts on the canvas you are looking at: undo/redo (the
+# bridge panel's pair was three panels away from the stroke it reversed), the
+# two view turns, and the status word. Through ``toolbar`` now, so the row
+# degrades instead of clipping.
 
 
 def _file_row(ctx: Any, state: Any) -> None:
     tab = state.active
-    # Undo and redo live beside the canvas they act on; the bridge panel's
-    # pair was three panels away from the stroke it reversed.
-    doc = tab.doc if tab is not None else None
+    if tab is None:
+        return
+    doc = tab.doc
     # Undo can rebind the stack mid-write; the saving gate here matches the
     # keyboard path (_MUTATING_CTRL) and the bridge panel's own pair.
-    idle = tab is not None and not tab.busy
-    if widgets.icon_button(
-        icons.UNDO, "Undo (Ctrl+Z)", enabled=idle and doc.history.can_undo
-    ):
-        doc.undo()
-    imgui.same_line()
-    if widgets.icon_button(
-        icons.REDO, "Redo (Ctrl+Y)", enabled=idle and doc.history.can_redo
-    ):
-        doc.redo()
-    imgui.same_line()
-    if imgui.button("New"):
-        imgui.open_popup("new-canvas")
-    _new_popup(ctx)
-    imgui.same_line()
-    if imgui.button("Open"):
-        inker_mode.ask_open(ctx)
-    imgui.same_line()
-    if imgui.button("Recent"):
-        imgui.open_popup("inker-recent")
-    _recent_popup(ctx, state)
-    imgui.same_line()
-    # A save commits the floating buffer, so saving mid-transform would land
-    # the transform with no confirm and leave the mode pointing at nothing.
-    busy = tab is not None and (tab.busy or state.transforming)
-    if widgets.disabled_button("Save", tab is not None and not busy):
-        inker_mode.save(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button("Save as", tab is not None and not busy):
-        inker_mode.save_as(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button("Export PNG", tab is not None and not busy):
-        inker_mode.export_png(ctx, tab)
-    if tab is not None:
-        imgui.same_line()
-        _view_row(tab)
-        imgui.same_line()
-        if tab.saving:
-            widgets.muted("saving...")
-        elif tab.playing:
-            widgets.muted("playing...")
-        elif tab.dirty:
-            widgets.text_colored(theme.WARN, "unsaved")
-    imgui.separator()
-    if tab is not None and state.transforming:
-        _transform_row(ctx, state, tab)
-
-
-def _view_row(tab: Any) -> None:
-    """Turn the page, and mirror it. Never disabled while a save is running.
-
-    Everything else on this row is gated on ``busy`` because it changes the
-    document; these two change nothing at all -- no pixels move, no step is
-    pushed, nothing is written -- so gating them would be an editor that refuses
-    to let you *look* at your drawing while it writes a file.
-    """
+    idle = not tab.busy
     view = tab.view
-    if widgets.icon_button(icons.ROTATE_CW, "Rotate the view (Ctrl+4)"):
-        inker_state.rotate_view(view, 1)
-    imgui.same_line()
-    if widgets.icon_button(icons.FLIP_HORIZONTAL, "Flip the view (Ctrl+5)"):
-        inker_state.flip_view(view)
-    imgui.same_line()
-    # One control driving the view *and* the writes, deliberately: a canvas
-    # that showed its neighbours while the brush went on clamping at the edge
-    # would be a picture of a seamless tile you cannot paint.
-    tab.tiled = widgets.combo("##inkertiled", tab.tiled, list(TILED_LABELS), sp(104))
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Draws the eight neighbouring tiles around this one, and wraps "
-            "every stroke, fill and shape across the seams it shows."
-        )
+    items = [
+        toolbar.Item(
+            "undo",
+            "Undo",
+            icons.UNDO,
+            tooltip="Undo (Ctrl+Z)",
+            enabled=idle and doc.history.can_undo,
+            reason="Nothing to undo yet.",
+            pinned=True,
+        ),
+        toolbar.Item(
+            "redo",
+            "Redo",
+            icons.REDO,
+            tooltip="Redo (Ctrl+Y)",
+            enabled=idle and doc.history.can_redo,
+            reason="Nothing to redo: this is the newest step.",
+            pinned=True,
+        ),
+        # Never gated on ``busy``: these change nothing at all -- no pixels
+        # move, no step is pushed, nothing is written -- so gating them would
+        # be an editor that refuses to let you *look* at your drawing while it
+        # writes a file.
+        toolbar.Item(
+            "rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)",
+            priority=1,
+        ),
+        toolbar.Item(
+            "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)",
+            priority=1,
+        ),
+    ]
     if view.rotation or view.flipped:
-        imgui.same_line()
-        # Said out loud, because the two are invisible once you have looked away
-        # for a moment and a mirrored canvas silently teaches the wrong hand.
+        # Said out loud, because the two are invisible once you have looked
+        # away for a moment and a mirrored canvas silently teaches the wrong
+        # hand. No glyph, so it keeps its words at every tier -- the label *is*
+        # the state it is reporting.
         parts = ([f"{view.rotation} deg"] if view.rotation else []) + (
             ["flipped"] if view.flipped else []
         )
-        if imgui.small_button(f"{' + '.join(parts)}##inkerviewreset"):
-            view.rotation, view.flipped = 0, False
-            view.pending_zoom = view.zoom
+        items.append(
+            toolbar.Item(
+                "upright",
+                " + ".join(parts),
+                tooltip="The view only -- click to set it upright",
+                priority=1,
+            )
+        )
+    toolbar.toolbar(
+        "inker-canvas",
+        items,
+        lambda key: _view_action(ctx, tab, key),
+        trailing=_view_trailing(tab),
+    )
+    imgui.separator()
+    if state.transforming:
+        _transform_row(ctx, state, tab)
+
+
+def _view_action(ctx: Any, tab: Any, key: str) -> None:
+    view = tab.view
+    if key == "undo":
+        tab.doc.undo()
+    elif key == "redo":
+        tab.doc.redo()
+    elif key == "rotate":
+        inker_state.rotate_view(view, 1)
+    elif key == "flip":
+        inker_state.flip_view(view)
+    elif key == "upright":
+        view.rotation, view.flipped = 0, False
+        view.pending_zoom = view.zoom
+
+
+def _status(tab: Any) -> tuple[int, str] | None:
+    """The one word at the end of the row, or nothing. Pure, so the trailing
+    block can measure it before it draws it."""
+    if tab.saving:
+        return (theme.MUTED, "saving...")
+    if tab.playing:
+        return (theme.MUTED, "playing...")
+    if tab.dirty:
+        return (theme.WARN, "unsaved")
+    return None
+
+
+def _view_trailing(tab: Any) -> tuple[float, Any]:
+    """The tiling combo and the status word, as one non-collapsible block.
+
+    ``toolbar`` subtracts this before it chooses tiers, which is what stops the
+    combo being measured after the row has already claimed the space.
+    """
+    status = _status(tab)
+    gap = imgui.get_style().item_spacing.x
+    width = sp(104) + (imgui.calc_text_size(status[1]).x + gap if status else 0.0)
+
+    def draw_it() -> None:
+        # One control driving the view *and* the writes, deliberately: a canvas
+        # that showed its neighbours while the brush went on clamping at the
+        # edge would be a picture of a seamless tile you cannot paint.
+        tab.tiled = widgets.combo("##inkertiled", tab.tiled, list(TILED_LABELS), sp(104))
         if imgui.is_item_hovered():
-            imgui.set_tooltip("The view only -- click to set it upright")
+            imgui.set_tooltip(
+                "Draws the eight neighbouring tiles around this one, and wraps "
+                "every stroke, fill and shape across the seams it shows."
+            )
+        if status is not None:
+            imgui.same_line()
+            widgets.text_colored(status[0], status[1])
+
+    return (width, draw_it)
 
 
 def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
@@ -237,58 +283,33 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     A drag cannot express "exactly 90 degrees", and a rotation that is nearly
     square is worse than either -- so the buttons are not a convenience, they
     are the only way to get an exact one.
+
+    **Apply is the row's one primary and Cancel its ghost**, both pinned: this
+    row exists for as long as a transform is uncommitted, and the two ways out
+    of that state are the last things that should move house when the pane
+    narrows. The sliders go in ``trailing`` -- they are the numbers the buttons
+    are about, and measuring them first is what stops the link checkbox at the
+    end of them being drawn past the edge at 150 %.
     """
     doc = tab.doc
     widgets.text_colored(theme.ACCENT, "Transform")
     imgui.same_line()
-    if imgui.button("Flip H"):
-        doc.flip_floating("horizontal")
-    imgui.same_line()
-    if imgui.button("Flip V"):
-        doc.flip_floating("vertical")
-    imgui.same_line()
-    if imgui.button("-90"):
-        doc.rotate_floating(-90.0)
-    imgui.same_line()
-    if imgui.button("+90"):
-        doc.rotate_floating(90.0)
-    imgui.same_line()
-    if imgui.button("Apply"):
-        inker_mode.end_transform(ctx, commit=True)
-    imgui.same_line()
-    if imgui.button("Cancel"):
-        inker_mode.end_transform(ctx, commit=False)
-
+    items = [
+        toolbar.Item("fliph", "Flip H", icons.FLIP_HORIZONTAL, priority=1),
+        toolbar.Item("flipv", "Flip V", priority=1),
+        toolbar.Item("ccw", "-90", priority=1),
+        toolbar.Item("cw", "+90", icons.ROTATE_CW, priority=1),
+        toolbar.Item("apply", "Apply", icons.CHECK, primary=True, pinned=True),
+        toolbar.Item("cancel", "Cancel", icons.X, pinned=True),
+    ]
+    toolbar.toolbar(
+        "inker-transform",
+        items,
+        lambda key: _transform_action(ctx, doc, key),
+        trailing=_transform_trailing(state, doc),
+    )
     buf = doc.floating
-    if buf is None:
-        return
-    imgui.set_next_item_width(sp(160))
-    changed, angle = imgui.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
-    if changed:
-        doc.transform_floating(angle=angle, resample=state.resample)
-    imgui.same_line()
-    # Two sliders and a link, rather than the one that used to drive both axes
-    # from ``scale[0]``: the engine has taken a per-axis scale all along and
-    # the panel was the thing that could not express it.
-    # "%.2fx", not imgui's default "%.3f": a scale factor is a multiplier and
-    # reads as one with the unit attached, where a bare ``1.000`` beside an
-    # angle in degrees is a number with no stated dimension at all.
-    imgui.set_next_item_width(sp(110))
-    changed_x, fx = imgui.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx")
-    imgui.same_line()
-    imgui.set_next_item_width(sp(110))
-    changed_y, fy = imgui.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx")
-    imgui.same_line()
-    linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
-    if linked:
-        state.transform_link = value
-    if imgui.is_item_hovered():
-        imgui.set_tooltip("Scale both axes together. Shift does the same on a handle.")
-    if changed_x or changed_y:
-        if state.transform_link:
-            fx = fy = fx if changed_x else fy
-        doc.transform_floating(scale=(fx, fy), resample=state.resample)
-    if state.resample == "rotsprite":
+    if buf is not None and state.resample == "rotsprite":
         from ..inker import transform
 
         if not transform.rotsprite_fits(buf.size):
@@ -299,7 +320,85 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     imgui.separator()
 
 
-def _new_popup(ctx: Any) -> None:
+def _transform_action(ctx: Any, doc: Any, key: str) -> None:
+    if key == "fliph":
+        doc.flip_floating("horizontal")
+    elif key == "flipv":
+        doc.flip_floating("vertical")
+    elif key == "ccw":
+        doc.rotate_floating(-90.0)
+    elif key == "cw":
+        doc.rotate_floating(90.0)
+    elif key == "apply":
+        inker_mode.end_transform(ctx, commit=True)
+    elif key == "cancel":
+        inker_mode.end_transform(ctx, commit=False)
+
+
+def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
+    """Angle, the two scale axes and the link, measured before the buttons.
+
+    None while there is no floating buffer: the transform mode is entered a
+    frame before the buffer exists, and three sliders describing nothing is
+    worse than a row that grows.
+    """
+    buf = doc.floating
+    if buf is None:
+        return None
+    gap = imgui.get_style().item_spacing.x
+    # Each slider is its item width plus its own label, and imgui puts the
+    # label *outside* the box -- which is exactly the part every hand-counted
+    # reservation in this app has forgotten.
+    width = (
+        sp(160)
+        + sp(110) * 2
+        + imgui.calc_text_size("Angle").x
+        + imgui.calc_text_size("X").x
+        + imgui.calc_text_size("Y").x
+        + widgets.button_width("Link")
+        + gap * 5
+    )
+
+    def draw_it() -> None:
+        imgui.set_next_item_width(sp(160))
+        changed, angle = imgui.slider_float(
+            "Angle", buf.angle, -180.0, 180.0, "%.1f deg"
+        )
+        if changed:
+            doc.transform_floating(angle=angle, resample=state.resample)
+        imgui.same_line()
+        # Two sliders and a link, rather than the one that used to drive both
+        # axes from ``scale[0]``: the engine has taken a per-axis scale all
+        # along and the panel was the thing that could not express it.
+        # "%.2fx", not imgui's default "%.3f": a scale factor is a multiplier
+        # and reads as one with the unit attached, where a bare ``1.000``
+        # beside an angle in degrees is a number with no stated dimension.
+        imgui.set_next_item_width(sp(110))
+        changed_x, fx = imgui.slider_float(
+            "X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx"
+        )
+        imgui.same_line()
+        imgui.set_next_item_width(sp(110))
+        changed_y, fy = imgui.slider_float(
+            "Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx"
+        )
+        imgui.same_line()
+        linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
+        if linked:
+            state.transform_link = value
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Scale both axes together. Shift does the same on a handle."
+            )
+        if changed_x or changed_y:
+            if state.transform_link:
+                fx = fy = fx if changed_x else fy
+            doc.transform_floating(scale=(fx, fy), resample=state.resample)
+
+    return (width, draw_it)
+
+
+def new_popup(ctx: Any) -> None:
     """The presets, and the custom size the presets could not express.
 
     The other half of the 3x3 anchor grid's popup: a resize has taken typed
@@ -310,6 +409,12 @@ def _new_popup(ctx: Any) -> None:
     The fields are remembered per session in ``state.preview`` rather than per
     document, because there is no document yet -- and because reopening the
     dialog after a mistake should offer the number that was nearly right.
+
+    **Public, and drawn by two panes.** A popup belongs to the window that
+    begins it, so the bridge panel's New button (REDESIGN.md wave 4.2) cannot
+    open one registered here: each pane registers its own and opens that one.
+    The body is shared rather than copied, which is the whole reason this is
+    not a private helper.
     """
     if not imgui.begin_popup("new-canvas"):
         return
@@ -339,26 +444,6 @@ def _new_popup(ctx: Any) -> None:
     imgui.end_popup()
 
 
-def _recent_popup(ctx: Any, state: Any) -> None:
-    from pathlib import Path
-
-    if not imgui.begin_popup("inker-recent"):
-        return
-    found = inker_mode.recent_paths(ctx)
-    if not found:
-        widgets.muted("Nothing opened yet.")
-    for path in found:
-        # The full path in the id, not just the label: two files with the same
-        # basename in different directories are an ordinary thing to have open,
-        # and one imgui id between them is one row.
-        if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
-            inker_mode.open_path(ctx, Path(path))
-            imgui.close_current_popup()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(path)
-    imgui.end_popup()
-
-
 def _empty(ctx: Any, state: Any) -> None:
     from pathlib import Path
 
@@ -374,9 +459,10 @@ def _empty(ctx: Any, state: Any) -> None:
         for width, height in inker_mode.NEW_PRESETS
     ]
     actions += [
-        # The same popup the file row's New button opens, rather than a second
-        # set of fields: it is registered earlier in this window, so opening it
-        # by name from here is enough.
+        # The same popup the bridge panel's New button opens, rather than a
+        # second set of fields. ``draw`` registers it in *this* window on the
+        # empty branch too, which is what makes opening it by name from here
+        # enough.
         ("New custom size...", lambda: imgui.open_popup("new-canvas")),
         ("Open a file...", lambda: inker_mode.ask_open(ctx)),
     ]
