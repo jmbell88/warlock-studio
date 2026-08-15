@@ -22,6 +22,7 @@ from . import brush as brush_mod
 from . import composite as cp
 from . import filters
 from . import gradient as grad
+from ._doc_ranges import masked_apply
 from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
 from .layers import Layer
 from .selection import magic_wand
@@ -193,16 +194,16 @@ class PaintOps:
         else:
             filtered = filters.apply_named(name, before, **params)
             self._filter_memo = (key, filtered)
-        if self.mask is None:
-            layer.pixels[y0:y1, x0:x1] = filtered
-        else:
-            weight = self.mask.mask[y0:y1, x0:x1].astype(np.float32)[..., None] / 255.0
-            blended = before.astype(np.float32) + (
-                filtered.astype(np.float32) - before.astype(np.float32)
-            ) * weight
-            layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(blended)
-        if layer.alpha_lock:
-            layer.pixels[y0:y1, x0:x1, 3] = before[..., 3]
+        # ``masked_apply`` rather than the blend spelled out here: the range
+        # filter (``_doc_ranges.filter_range``) has to fade a filter into a
+        # selection by exactly the same rule, and two copies of it is how
+        # "feathering" comes to mean two things in one editor.
+        layer.pixels[y0:y1, x0:x1] = masked_apply(
+            before,
+            filtered,
+            None if self.mask is None else self.mask.mask[y0:y1, x0:x1],
+            alpha_lock=layer.alpha_lock,
+        )
         self.invalidate(box, layer_uid=layer.uid)
         return True
 

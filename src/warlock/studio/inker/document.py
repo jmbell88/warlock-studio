@@ -42,6 +42,7 @@ from ._doc_history import HistoryOps
 from ._doc_indexed import IndexedOps
 from ._doc_layers import LayerOps
 from ._doc_paint import SHAPES, PaintOps, normalise_rect
+from ._doc_ranges import RangeOps
 from ._doc_selection import SelectionOps
 from .anim_edits import CelSetEdit
 from .animation import Animation
@@ -95,7 +96,8 @@ def matte_for(pixels: np.ndarray) -> RGBA | None:
 
 @dataclass
 class Document(
-    AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps
+    AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps,
+    RangeOps,
 ):
     stack: LayerStack
     matte: RGBA | None = None

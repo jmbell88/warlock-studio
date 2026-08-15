@@ -43,6 +43,7 @@ __all__ = [
     "FrameAddEdit",
     "FrameDurationEdit",
     "FrameMoveEdit",
+    "FrameOrderEdit",
     "FrameRemoveEdit",
     "TagsEdit",
     "TrackAddEdit",
@@ -145,6 +146,35 @@ class FrameMoveEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._move_frame(self.frame_uid, self.to)
+
+
+@dataclass
+class FrameOrderEdit(Edit):
+    """The whole frame order, before and after, as uid sequences.
+
+    A reorder of a *range* is expressible as a chain of ``FrameMoveEdit``s and
+    that is what it must not be. Each of those ends in ``_move_frame``, which
+    ends in ``_anim_changed``, which stamps every frame and recomposites the
+    canvas -- so reversing a fifty-frame clip would rebuild the view fifty
+    times for one gesture, and a partial failure halfway through would leave an
+    order the user never asked for on screen.
+
+    Uids rather than indices, for the reason the module docstring gives: the
+    positions are what is being restored, but the *things* being positioned
+    have to survive an unrelated insert or delete underneath this step. Cost is
+    zero because a permutation moves no pixels at all -- the cels are keyed by
+    frame uid, so links survive a reorder without anything being said about
+    them.
+    """
+
+    before: list[int]
+    after: list[int]
+
+    def undo(self, doc: Any) -> None:
+        doc._set_frame_order(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_frame_order(self.after)
 
 
 @dataclass

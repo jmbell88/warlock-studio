@@ -175,6 +175,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
     """Importing every module is the cheapest possible smoke test that the
     lazy-import rule above is actually being followed."""
     from warlock.studio.inker import (  # noqa: F401
+        _doc_ranges,
         anim_edits,
         animation,
         brush,
