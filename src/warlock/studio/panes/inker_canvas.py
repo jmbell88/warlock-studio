@@ -25,6 +25,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
+from ..inker.indexed import shade_ramp
 from ..inker.slices import SliceKey, slice_props
 from ..inker.tiling import axes_of, canonical, tile_offset
 from ..inker_state import BG_BUTTON_TOOLS, PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
@@ -873,6 +874,15 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         state.drag_kind = "gradient"
         return
     if tool in PAINT_TOOLS:
+        # Said here rather than only in the tools panel: the panel greys the
+        # button, but a shortcut key selects a tool without asking the panel
+        # anything, so this is the door a shading press on a document with no
+        # palette actually arrives at.
+        refusal = inker_state.tool_reason(tool, doc)
+        if refusal:
+            ctx.toast(refusal, "warn")
+            state.drag_kind = ""
+            return
         doc.commit_floating()
         spraying = tool == "spray"
         doc.begin_stroke(
@@ -903,6 +913,11 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             # The determinism seam: the engine is a pure function of the seed
             # and the call sequence, and this is the one place entropy enters.
             seed=random.getrandbits(32) if spraying else 0,
+            # Read at the press and carried for the whole stroke, so selecting
+            # different slots mid-drag cannot change what the ramp is halfway
+            # along -- and so nothing about the ramp reaches the document.
+            ramp=shade_ramp(doc.palette, state.palette_slots) if tool == "shade" else (),
+            shade_dir=state.shade_dir,
         )
         state.spray_carry = 0.0
         state.drag_kind = "spray" if spraying else "paint"

@@ -621,6 +621,8 @@ class PaintOps:
         wrap: str | tuple[bool, bool] = "off",
         scatter: float = 0.0,
         seed: int = 0,
+        ramp: Any = (),
+        shade_dir: int = 1,
     ) -> bool:
         """Open a stroke on the active layer. False when the layer is locked.
 
@@ -630,6 +632,13 @@ class PaintOps:
         must not travel in a file. ``scatter``/``seed`` are the spray tool's
         emission; both default to the values that make this the stroke the
         editor has always opened.
+
+        ``ramp``/``shade_dir`` are the shading ink's, and they arrive the same
+        way and for the same reason: the ramp is a *selection in the palette
+        panel*, which is UI state the engine must not read. Passing it per
+        stroke also means no ramp is persisted anywhere -- the document keeps
+        the palette, and which run of it was being shaded along is a thing about
+        the gesture. See :meth:`.brush.StrokeState._shade`.
 
         The refusal comes *before* ``_ensure_active_cel``, so a brush-down on a
         locked track of an animated document does not autovivify a cel that
@@ -663,6 +672,8 @@ class PaintOps:
             wrap_axes=tiling.axes_of(wrap),
             scatter=scatter,
             seed=seed,
+            ramp=tuple(tuple(int(c) for c in colour) for colour in ramp),
+            shade_dir=shade_dir,
         )
         self._stroke.begin(point, layer.pixels)
         self._touch_stroke()

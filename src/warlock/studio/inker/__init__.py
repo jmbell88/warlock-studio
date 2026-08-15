@@ -70,6 +70,7 @@ from .document import (
 from .filters import FILTERS
 from .gradient import KINDS as GRADIENT_KINDS
 from .indexed import SORT_KEYS as PALETTE_SORT_KEYS
+from .indexed import shade_ramp
 from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
 from .selection import COMBINE_OPS, Clipboard, FloatingBuffer, SelectionMask, magic_wand
@@ -119,5 +120,6 @@ __all__ = [
     "normalise_rect",
     "ora_bytes",
     "read_ora",
+    "shade_ramp",
     "write_ora",
 ]

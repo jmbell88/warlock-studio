@@ -44,7 +44,20 @@ TOOL_ICONS = {
     # Not SPRAY_CAN, which the blur tool already carries: two tools drawn with
     # one glyph is a toolbox a user has to read the tooltips of.
     "spray": icons.SPARKLES,
+    # The palette, because that is literally what this tool paints with: the
+    # colours it can produce are the swatches selected in the Colour panel and
+    # nothing else.
+    "shade": icons.PALETTE,
 }
+
+#: The shading tool's direction, as a radio pair for ``_ink``'s reason: two
+#: options a user switches between constantly want to be two clicks apart
+#: rather than behind a dropdown. The keys are the ``shade_dir`` values the
+#: engine takes.
+SHADE_LABELS = (
+    (1, "Forward"),
+    (-1, "Back"),
+)
 
 #: The brush's ink, and only the brush's: this app has brush modes and layer
 #: locks where Aseprite has a per-tool ink selector, so offering it on every
@@ -81,7 +94,7 @@ def draw(ctx: Any) -> None:
     tab = state.active
     widgets.section("tools")
     manual_render.help_button(ctx, "inker-tools")
-    _grid(state)
+    _grid(state, None if tab is None else tab.doc)
     imgui.dummy((0, 6))
     if tab is None:
         widgets.muted("Open something to paint on.")
@@ -91,21 +104,37 @@ def draw(ctx: Any) -> None:
     _canvas_options(state)
 
 
-def _grid(state: Any) -> None:
+def _grid(state: Any, doc: Any = None) -> None:
+    """The icon grid, with any tool this document cannot use greyed out.
+
+    Greyed rather than hidden, and the tooltip carries the reason: a toolbox
+    that quietly loses a button when a document is not indexed is one where the
+    feature looks like it was imagined. ``allow_when_disabled`` is what makes
+    the tooltip reachable at all -- imgui swallows hover on a disabled item,
+    which is exactly the state whose explanation matters
+    (``widgets.disabled_button`` has the long version of this note).
+    """
     width = widgets.grid_width(COLUMNS)
     for index, (key, label, shortcut) in enumerate(inker_state.TOOLS):
         selected = state.tool == key
+        reason = inker_state.tool_reason(key, doc)
         if selected:
             imgui.push_style_color(
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
         icon = TOOL_ICONS.get(key) or label[:1]
-        if imgui.button(f"{icon}##tool{key}", (width, sp(30))):
+        if reason:
+            imgui.begin_disabled()
+        clicked = imgui.button(f"{icon}##tool{key}", (width, sp(30)))
+        if reason:
+            imgui.end_disabled()
+        if clicked and not reason:
             state.tool = key
         if selected:
             imgui.pop_style_color()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(f"{label}  ({shortcut})")
+        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+            note = f"{label}  ({shortcut})"
+            imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
         if index % COLUMNS != COLUMNS - 1:
             imgui.same_line()
     imgui.new_line()
@@ -152,9 +181,17 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
                 state.hardness = value
         if tool == "brush":
             _ink(state)
-        changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
-        if changed:
-            state.opacity = value
+        if tool == "shade":
+            _shading(state, doc)
+        if tool != "shade":
+            # Hidden for shading, for the reason hardness is hidden on a pixel
+            # nib: a shift lands on the next swatch of the ramp exactly or it
+            # does not happen, so there is no partial version of it for an
+            # opacity to scale, and a slider that changed nothing would read as
+            # the tool ignoring it.
+            changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
+            if changed:
+                state.opacity = value
     if tool == "spray":
         # Spacing, smoothing and the corner filter are all about a *line*, and
         # a spray does not walk one -- the canvas forces the last two off, so
@@ -379,6 +416,43 @@ def _ink(state: Any) -> None:
         "writes it exactly -- alpha included -- so it can paint transparency "
         "back down as well as up, which is what recolouring flat pixel art "
         "wants. A soft nib still feathers either way."
+    )
+
+
+def _shading(state: Any, doc: Any) -> None:
+    """The shading ink's direction, and which ramp it is walking.
+
+    The ramp is not edited here and deliberately has no control of its own: it
+    *is* the palette selection, which the Colour panel already shows in the one
+    place where the colours are visible. What this says is what that selection
+    currently amounts to, because "select some swatches" is the half of the tool
+    a user has to be told about.
+    """
+    reason = inker_state.tool_reason("shade", doc)
+    if reason:
+        widgets.muted(reason)
+        return
+    widgets.field_label("direction")
+    for index, (value, label) in enumerate(SHADE_LABELS):
+        if index:
+            imgui.same_line()
+        if imgui.radio_button(f"{label}##shadedir{value}", int(state.shade_dir) == value):
+            state.shade_dir = value
+    widgets.help_marker(
+        "Forward moves each pixel one swatch toward the end of the ramp, Back "
+        "toward its start. Either way it stops at the end rather than wrapping "
+        "round to the other one."
+    )
+    ramp = inker.shade_ramp(doc.palette, state.palette_slots)
+    if len(state.palette_slots) < 2:
+        widgets.muted(f"ramp: the whole palette ({len(ramp)})")
+    else:
+        widgets.muted(f"ramp: {len(ramp)} selected swatches")
+    widgets.help_marker(
+        "Select the swatches to shade along in the Colour panel -- Ctrl+click "
+        "for a few, Shift+click for a run. They are walked in palette order, "
+        "and a pixel painted in a colour that is not one of them is left alone. "
+        "With fewer than two selected the whole palette is the ramp."
     )
 
 

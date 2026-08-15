@@ -38,6 +38,7 @@ __all__ = [
     "nearest",
     "ramp_between",
     "remap",
+    "shade_ramp",
     "snap",
     "sort_order",
 ]
@@ -233,6 +234,39 @@ def ramp_between(start: RGBA, end: RGBA, steps: int) -> list[RGBA]:
             tuple(int(np.floor(x + (y - x) * t + 0.5)) for x, y in zip(a, b, strict=True))  # type: ignore[arg-type]
         )
     return out
+
+
+def shade_ramp(
+    palette: Sequence[RGBA] | None, slots: Sequence[int] | None = None
+) -> list[RGBA]:
+    """The ramp a slot selection describes, in **palette order**.
+
+    What the shading ink shifts along; see :meth:`.brush.StrokeState._shade`.
+    Two rules, and both are about the order rather than about the colours.
+
+    *Palette order, not click order.* The slots come back sorted by position in
+    the table, so a ramp is the run of swatches the user can see laid out left
+    to right -- picking the dark end first and the light end second describes
+    the same ramp as the other way round, and the direction toggle is what
+    reverses it. A click-ordered ramp would make the same five swatches mean
+    five different things depending on how they were picked.
+
+    *Adjacency is the selection's, not the table's.* Slots 2, 5 and 9 are three
+    **adjacent** steps of a three-colour ramp; the swatches between them are not
+    on it and a pixel painted in one is left alone. That is what makes a ramp
+    pickable out of a table holding several.
+
+    A selection of fewer than two slots falls back to the whole palette, which
+    is the useful answer for a table that *is* one ramp -- and the only answer
+    that makes the tool work before the user has selected anything.
+    """
+    table = [tuple(c) for c in (palette or ())]
+    if not table:
+        return []
+    wanted = sorted({int(i) for i in (slots or ()) if 0 <= int(i) < len(table)})
+    if len(wanted) < 2:
+        return list(table)
+    return [table[i] for i in wanted]
 
 
 def histogram(pixels: np.ndarray, palette: Sequence[RGBA]) -> list[int]:

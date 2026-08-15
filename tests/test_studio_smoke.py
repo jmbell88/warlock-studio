@@ -1089,6 +1089,17 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     assert tab.doc.insert_ramp(0, 1, 2)
     _frame(imgui_ctx, build)
+    # The shading tool's options, which only exist once a document has a table:
+    # the tool loop above ran before this one was indexed, so the live branch --
+    # the direction radios and the ramp note -- is drawn here and nowhere else.
+    # Both directions and both ramp notes, since each is a line the other frame
+    # does not draw.
+    state.tool = "shade"
+    _frame(imgui_ctx, build)
+    state.shade_dir = -1
+    state.palette_slots = []
+    _frame(imgui_ctx, build)
+    state.tool = "brush"
     assert inker_mode.index_to(app_ctx, tab, None)
     assert not tab.doc.is_indexed
     _frame(imgui_ctx, build)

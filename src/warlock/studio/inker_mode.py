@@ -1474,6 +1474,10 @@ TOOL_KEYS = {
     # was bound to nothing, and Ctrl+C is copy on a different branch entirely.
     "c": "slice",
     "a": "spray",
+    # Aseprite has no letter to lend for shading -- there it is an ink on the
+    # ordinary brush rather than a tool -- so this is the first free letter of
+    # the word; see ``inker_state.TOOLS``.
+    "h": "shade",
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather
