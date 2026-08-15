@@ -149,6 +149,33 @@ def test_an_unknown_stage_is_a_programming_error():
 # --- go ---------------------------------------------------------------------
 
 
+def test_the_stage_starts_at_the_front_of_the_pipeline():
+    assert AppState().create_stage == create_stages.STAGES[0]
+
+
+def test_go_is_the_only_thing_that_writes_the_stage():
+    """A source scan, ``test_mode_writes``'s idiom and for its reason: the
+    switch has obligations (move the selection, guard an unsaved pose) that a
+    bare assignment silently skips."""
+    import pathlib
+
+    root = pathlib.Path(create_stages.__file__).resolve().parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "create_stages.py":
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "create_stage" in line and "=" in line.split("create_stage")[1][:3]:
+                offenders.append(f"{path.name}:{number}")
+    assert offenders == []
+
+
+def test_go_records_where_it_arrived():
+    ctx = FakeCtx()
+    create_stages.go(ctx, "mesh")
+    assert ctx.state.create_stage == "mesh"
+
+
 def test_go_switches_the_mode_and_leaves_escape_a_way_back():
     ctx = FakeCtx()
     ctx.state.mode = "home"

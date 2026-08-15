@@ -50,6 +50,16 @@ def imgui_ctx(gl):
 
     imgui.create_context()
     io = imgui.get_io()
+    # **No ini.** imgui's default is to persist every window's position, size
+    # and *collapsed* flag to ``imgui.ini`` in the working directory, and to
+    # load it back on the next context -- so a test that synthesises a click
+    # which happens to land on a title bar twice inside the double-click window
+    # collapses the shared host window, writes that to disk, and every later
+    # run of the file finds a window that submits no items at all. That is
+    # eighteen failures in files nobody touched, reproducing from a gitignored
+    # artefact, which is the worst kind. Tests supply their own geometry
+    # anyway; nothing here wants last run's.
+    io.set_ini_filename(None)
     io.display_size = (1600, 950)
     io.delta_time = 1 / 60
     io.fonts.add_font_default()
@@ -3228,6 +3238,124 @@ def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
     )
 
 
+def _stage_items(blocked=()):
+    from warlock.studio import create_stages
+
+    return [
+        (
+            stage,
+            create_stages.LABELS[stage],
+            create_stages.ICONS[stage],
+            "a tile has no subject to reconstruct" if stage in blocked else None,
+        )
+        for stage in create_stages.STAGES
+    ]
+
+
+def _click(imgui_ctx, build, at):
+    """Press and release over ``at``, one frame each. -> what ``build`` returned.
+
+    imgui resolves a click on release over the item that was pressed, so a
+    button needs two frames to be clicked and a single-frame test would assert
+    that nothing is ever clickable.
+    """
+    imgui, renderer = imgui_ctx
+    io = imgui.get_io()
+    out = None
+    for down in (True, False):
+        io.add_mouse_pos_event(at[0], at[1])
+        io.add_mouse_button_event(0, down)
+        imgui.new_frame()
+        imgui.set_next_window_pos((0, 0))
+        imgui.set_next_window_size((1200, 900))
+        # Undecorated, and under its own name. The context is session-scoped,
+        # so a shared window that a synthetic double-click happened to collapse
+        # would stay collapsed for every later test in the file -- and a
+        # collapsed window submits no items at all, which reads as "nothing is
+        # ever clickable" rather than as a broken fixture.
+        imgui.begin("##click-host", None, imgui.WindowFlags_.no_decoration.value)
+        out = build()
+        imgui.end()
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+    return out
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5])
+def test_the_stage_rail_compacts_rather_than_clipping_a_stage(imgui_ctx, scale):
+    """``segmented_control``'s rule, asked of the rail that borrowed its idiom.
+
+    The stage rail sits above a settings column that is ~300 dp wide, so the
+    narrow case is the ordinary one rather than the edge -- and a stage drawn
+    off the edge of the column is a step of the pipeline with no way in.
+    """
+    imgui, renderer = imgui_ctx
+    from warlock.studio import tokens
+    from warlock.studio import widgets as widgets_mod
+
+    old_scale = tokens.SCALE
+    tokens.set_scale(scale)
+    try:
+        imgui.new_frame()
+        imgui.set_next_window_size((180, 200))
+        imgui.begin("##narrow")
+        available = imgui.get_content_region_avail().x
+        widgets_mod.stage_rail(
+            "rail-fit", _stage_items(), "reference", done="mesh", max_width=available
+        )
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        drawn = hi.x - lo.x
+        imgui.end()
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+    finally:
+        tokens.set_scale(old_scale)
+
+    assert drawn <= available, (
+        f"the rail is {drawn:.0f}px wide in a {available:.0f}px column at UI "
+        f"scale {scale}; a clipped stage is an unreachable stage"
+    )
+
+
+def _rail_probe(imgui_ctx, rail_id, items, current, done):
+    """A builder that draws the rail and records where its second segment is,
+    so a click is aimed at measured geometry rather than at a guess -- the
+    padding, the font and therefore the segment widths are all scale-dependent.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import widgets as widgets_mod
+
+    seen: dict[str, float] = {}
+
+    def build():
+        out = widgets_mod.stage_rail(rail_id, items, current, done=done)
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        seen["x"] = lo.x + (hi.x - lo.x) * 0.75
+        seen["y"] = (lo.y + hi.y) * 0.5
+        return out
+
+    return build, seen
+
+
+def test_a_stage_rail_segment_can_be_picked(imgui_ctx):
+    build, seen = _rail_probe(imgui_ctx, "rail-pick", _stage_items(), "reference", "mesh")
+    _click(imgui_ctx, build, (-100.0, -100.0))
+    assert seen, "the rail never drew"
+    assert _click(imgui_ctx, build, (seen["x"], seen["y"])) == "mesh"
+
+
+def test_a_blocked_stage_cannot_be_picked(imgui_ctx):
+    """The reason is a tooltip, not a refusal after the fact. A blocked
+    segment is still an item -- it has to be hoverable to carry its sentence --
+    so the click is *dropped* rather than the button not being drawn."""
+    build, seen = _rail_probe(
+        imgui_ctx, "rail-block", _stage_items(blocked={"mesh"}), "reference", "reference"
+    )
+    _click(imgui_ctx, build, (-100.0, -100.0))
+    assert seen, "the rail never drew"
+    assert _click(imgui_ctx, build, (seen["x"], seen["y"])) == "reference"
+
+
 # --- UX.md Phase 5: the GPU tier --------------------------------------------
 #
 # The rest of the phase's rules are assertable headlessly and live in
@@ -3647,3 +3775,4 @@ def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
         source = inspect.getsource(dispatch)
         for item in items:
             assert f'"{item.key}"' in source, f"{label}: nothing answers {item.key!r}"
+

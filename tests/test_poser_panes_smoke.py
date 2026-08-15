@@ -48,6 +48,9 @@ def imgui_ctx(gl):
 
     ctx = imgui.create_context()
     io = imgui.get_io()
+    # See ``test_studio_smoke``'s fixture: a persisted collapsed flag in
+    # ``imgui.ini`` survives the process and silently empties every window.
+    io.set_ini_filename(None)
     io.display_size = (1600, 950)
     io.delta_time = 1 / 60
     io.fonts.add_font_default()

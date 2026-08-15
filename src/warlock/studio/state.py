@@ -852,6 +852,14 @@ class AppState:
     # asks deliberately; the seam question already has the wrapped view.
     tile_preview: bool = False
     source_job: str | None = None  # the 2D asset the 3D pane starts from
+    # Where the user is standing in Create mode, one of
+    # ``create_stages.STAGES`` (REDESIGN.md wave 5). **Volatile and never
+    # persisted**, which is the same rule ``mode`` follows and for a stronger
+    # reason: a stage is a *derived* position over the selected asset, so a
+    # remembered one would be restored against whatever happens to be selected
+    # next launch and would routinely name a stage that asset has not reached.
+    # Written only by ``create_stages.go`` -- the one switch.
+    create_stage: str = "reference"
     # Every outstanding failure the banner is showing, oldest first. A list
     # rather than the single ``last_error`` slot it replaces: three writers
     # (a failed doctor check, a dead worker, a worker that never started) all

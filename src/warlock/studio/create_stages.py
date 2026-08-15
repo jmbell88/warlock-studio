@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..service.validation import not_done_message
+from . import icons
 
 # The stages, in the order the rail draws them and the order an asset passes
 # through them. **Ordered and monotone**: :func:`reached` walks this list and
@@ -45,6 +46,15 @@ STAGES: tuple[str, ...] = ("reference", "mesh")
 LABELS: dict[str, str] = {
     "reference": "Reference",
     "mesh": "Mesh",
+}
+
+# The compact face of each segment, for the rail's all-or-nothing fallback at
+# narrow widths. **Moved, not re-picked**: Reference and Mesh take the glyphs
+# the 2D and 3D modes wore in the rail, so a user who learned the pictures
+# keeps them across the merge.
+ICONS: dict[str, str] = {
+    "reference": icons.IMAGE,
+    "mesh": icons.BOX,
 }
 
 # The job-row ``stage`` values the Reference stage is *about*. Not a synonym
@@ -183,6 +193,7 @@ def go(ctx: Any, stage: str, *, select: str | None = None) -> None:
         target = _along_lineage(ctx, stage)
         if target is not None:
             library.select(ctx, target)
+    ctx.state.create_stage = stage
     state_mod.set_mode(ctx.state, _MODE_OF[stage])
 
 

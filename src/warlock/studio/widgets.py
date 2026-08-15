@@ -1545,6 +1545,140 @@ def segmented_control(
     return selected
 
 
+def stage_rail(
+    rail_id: str,
+    items: list[tuple[str, str, str, str | None]],
+    current: str,
+    *,
+    done: str | None = None,
+    max_width: float | None = None,
+) -> str:
+    """The Create mode's breadcrumb: where this asset is, and what is left.
+
+    ``items`` is ``(key, label, icon, blocked_reason)`` in pipeline order;
+    ``done`` names the furthest stage the asset has actually reached. ->
+    the key the user picked, or ``current``.
+
+    The segmented control's idiom deliberately -- one track, a sliding pill,
+    the same padding and radius -- because this *is* a switch between panels
+    and inventing a second visual language for it would say it was something
+    else. What it adds is a third segment state. A segment is one of:
+
+    * **done** -- the asset has been through it. A leading check, full text.
+    * **current** -- the pill is under it, wherever it is on the track. A
+      stage you have reached is not the stage you are looking at: standing on
+      Reference with a finished mesh in hand is the normal way to reroll.
+    * **blocked** -- dimmed, unclickable, and carrying its reason as a
+      tooltip. **Not hidden.** "Rig" missing entirely is a feature the user
+      concludes does not exist; "Rig -- Blender is not installed" is an
+      answer. The reason is the service's own sentence (see
+      ``create_stages.available``), so the tooltip and the refusal it predicts
+      cannot drift into two paraphrases of one rule.
+
+    The compact fallback is ``segmented_control``'s, for its reason and with
+    its all-or-nothing rule: below ``max_width`` every segment drops to its
+    glyph and keeps its label in a tooltip. A rail that abbreviated only the
+    segments that did not fit would change what it was saying as the window
+    was dragged, and a clipped segment is an unreachable stage.
+    """
+    draw = imgui.get_window_draw_list()
+    pad_x, pad_y = sp(12), sp(6)
+    keys = [key for key, _label, _icon, _reason in items]
+    order = {key: index for index, key in enumerate(keys)}
+    done_index = order.get(done, -1) if done is not None else -1
+    with fonts.label(imgui):
+        # What each segment actually reads as, before it is measured: a done
+        # stage carries a check, and the check is part of the width.
+        def faces(compact: bool) -> list[str]:
+            out = []
+            for index, (key, label, icon, _reason) in enumerate(items):
+                if compact:
+                    out.append(icon)
+                elif index <= done_index and key != current:
+                    out.append(f"{icons.CHECK} {label}")
+                else:
+                    out.append(label)
+            return out
+
+        def measure(labels: list[str]) -> list[float]:
+            return [imgui.calc_text_size(text).x + pad_x * 2 for text in labels]
+
+        titles: dict[str, str] = {}
+        shown = faces(False)
+        widths = measure(shown)
+        if max_width is not None and sum(widths) > max_width:
+            titles = {key: label for key, label, _icon, _reason in items}
+            shown = faces(True)
+            widths = measure(shown)
+        height = imgui.get_text_line_height() + pad_y * 2
+        origin = imgui.get_cursor_screen_pos()
+        offsets: list[float] = []
+        cursor = 0.0
+        for width in widths:
+            offsets.append(cursor)
+            cursor += width
+        total = cursor
+        draw.add_rect_filled(
+            (origin.x, origin.y),
+            (origin.x + total, origin.y + height),
+            imgui.get_color_u32(theme.rgba(theme.ELEV_1)),
+            height * 0.5,
+        )
+        index = order.get(current, 0)
+        # Sprung, ``segmented_control``'s way and for its reason: the target
+        # can change while the pill is still travelling (a click on Mesh
+        # followed by one on Export before it has arrived), and an eased
+        # approach has no velocity to carry through the re-aim.
+        x = motion.spring(f"{rail_id}/x", offsets[index], duration=tokens.DUR_BASE)
+        w = motion.spring(f"{rail_id}/w", widths[index], duration=tokens.DUR_BASE)
+        draw.add_rect_filled(
+            (origin.x + x + sp(2), origin.y + sp(2)),
+            (origin.x + x + w - sp(2), origin.y + height - sp(2)),
+            imgui.get_color_u32(theme.rgba(theme.ELEV_2)),
+            (height - sp(4)) * 0.5,
+        )
+        picked = current
+        for position, ((key, label, _icon, reason), text, width, offset) in enumerate(
+            zip(items, shown, widths, offsets, strict=True)
+        ):
+            imgui.set_cursor_screen_pos((origin.x + offset, origin.y))
+            # A blocked segment is still an *item*: it has to be hoverable to
+            # carry its tooltip, so it is clicked and the click is dropped,
+            # rather than not drawn as a button at all.
+            hit = imgui.invisible_button(f"{rail_id}/{key}", (width, height))
+            hovered = imgui.is_item_hovered()
+            if hit and reason is None:
+                picked = key
+            if hovered:
+                tip = titles.get(key)
+                if reason is not None:
+                    tip = f"{label} -- {reason}" if tip is None else f"{tip} -- {reason}"
+                if tip is not None:
+                    imgui.set_tooltip(tip)
+            active = key == current
+            if reason is not None:
+                alpha = tokens.DISABLED_ALPHA * 0.6
+            elif active:
+                alpha = 1.0
+            elif position <= done_index:
+                alpha = 0.85 if not hovered else 1.0
+            else:
+                alpha = 0.85 if hovered else 0.55
+            alpha = motion.value(f"{rail_id}/{key}/text", alpha, duration=tokens.DUR_FAST)
+            size = imgui.calc_text_size(text)
+            draw.add_text(
+                (
+                    origin.x + offset + (width - size.x) * 0.5,
+                    origin.y + (height - size.y) * 0.5,
+                ),
+                imgui.get_color_u32(theme.rgba(theme.TEXT, alpha)),
+                text,
+            )
+        imgui.set_cursor_screen_pos((origin.x, origin.y))
+        imgui.dummy((total, height))
+    return picked
+
+
 def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bool]:
     """An animated switch. -> (changed, value).
 
