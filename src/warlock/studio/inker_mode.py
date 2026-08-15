@@ -592,14 +592,25 @@ def _slice_filenames(entries: list[Any]) -> list[str]:
     shape ``tmx._stem`` uses for two tilesets that share a name, with a trailing
     counter rather than a leading index because a human picks these files off a
     folder listing instead of an engine matching them by position.
+
+    Every candidate is checked against **every name already handed out**, not
+    against other occurrences of the same sanitised base -- a counter kept per
+    base independently of the others can mint the same bumped name twice (a
+    third "Hitbox" landing on "Hitbox_2" a second slice already claimed, or a
+    literal "a_2" colliding with what a repeated "a" bumps to), which is a
+    silent overwrite in ``run()`` rather than a name a user ever sees.
     """
-    seen: dict[str, int] = {}
+    taken: set[str] = set()
     out = []
     for entry in entries:
-        safe = _SLICE_SAFE.sub("-", entry.name).strip("-") or "slice"
-        count = seen.get(safe, 0) + 1
-        seen[safe] = count
-        out.append(safe if count == 1 else f"{safe}_{count}")
+        base = _SLICE_SAFE.sub("-", entry.name).strip("-") or "slice"
+        candidate = base
+        counter = 2
+        while candidate in taken:
+            candidate = f"{base}_{counter}"
+            counter += 1
+        taken.add(candidate)
+        out.append(candidate)
     return out
 
 

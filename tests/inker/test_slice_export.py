@@ -16,6 +16,7 @@ run on.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -108,6 +109,29 @@ def test_duplicate_slice_names_get_a_numeric_suffix_rather_than_overwrite(
     assert (tmp_path / "Hitbox.png").exists()
     assert (tmp_path / "Hitbox_2.png").exists()
     assert (tmp_path / "Hitbox_3.png").exists()
+
+
+def test_a_bumped_name_does_not_collide_with_a_later_slices_own_bump():
+    """Reviewer repro: a per-base counter bumps every "Hitbox" independently of
+    what the *previous* one landed on, so the second slice claims "Hitbox_2"
+    and the third -- also counting from its own base -- claims "Hitbox_2"
+    again. Each candidate must be checked against every name already handed
+    out, not just against occurrences of its own base."""
+    entries = [SimpleNamespace(name=n) for n in ("Hitbox", "Hitbox_2", "Hitbox")]
+    names = inker_mode._slice_filenames(entries)
+    assert len(set(names)) == len(names)
+    assert names == ["Hitbox", "Hitbox_2", "Hitbox_3"]
+
+
+def test_a_literal_bumped_name_does_not_collide_with_a_repeats_bump():
+    """Reviewer repro: two slices literally named "a" bump the second to
+    "a_2" -- which collides with a third slice *already* named "a_2" outright,
+    an ordering the per-base counter never saw coming because "a" and "a_2"
+    are different bases to it."""
+    entries = [SimpleNamespace(name=n) for n in ("a", "a", "a_2")]
+    names = inker_mode._slice_filenames(entries)
+    assert len(set(names)) == len(names)
+    assert names == ["a", "a_2", "a_2_2"]
 
 
 def test_a_name_with_unsafe_characters_is_sanitised(monkeypatch, tmp_path):
