@@ -226,12 +226,26 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     imgui.set_next_item_width(sp(160))
     changed, angle = imgui.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
     if changed:
-        doc.transform_floating(angle=angle)
+        doc.transform_floating(angle=angle, resample=state.resample)
     imgui.same_line()
-    imgui.set_next_item_width(sp(160))
-    changed, factor = imgui.slider_float("Scale", buf.scale[0], 0.05, 8.0)
-    if changed:
-        doc.transform_floating(scale=(factor, factor))
+    # Two sliders and a link, rather than the one that used to drive both axes
+    # from ``scale[0]``: the engine has taken a per-axis scale all along and
+    # the panel was the thing that could not express it.
+    imgui.set_next_item_width(sp(110))
+    changed_x, fx = imgui.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(110))
+    changed_y, fy = imgui.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0)
+    imgui.same_line()
+    linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
+    if linked:
+        state.transform_link = value
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Scale both axes together. Shift does the same on a handle.")
+    if changed_x or changed_y:
+        if state.transform_link:
+            fx = fy = fx if changed_x else fy
+        doc.transform_floating(scale=(fx, fy), resample=state.resample)
     imgui.separator()
 
 
@@ -460,6 +474,17 @@ ROTATE_ARM = 28.0
 SYMMETRY_PIVOT_RADIUS = 7.0
 
 
+#: Which axes each grab point scales. The corners take both, the four edge
+#: handles take one -- which is the whole of what makes the scale non-uniform,
+#: and it is a table rather than a chain of ``if``s so a handle drawn by
+#: ``_transform_box`` cannot be one the drag code has no opinion about. The
+#: names are image-space compass points, as ``_handles`` builds them.
+HANDLE_AXES = {
+    "nw": "xy", "ne": "xy", "sw": "xy", "se": "xy",
+    "n": "y", "s": "y", "e": "x", "w": "x",
+}
+
+
 def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
     """Where the transform box's grab points are, in screen space."""
     buf = tab.doc.floating
@@ -471,6 +496,11 @@ def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
         "ne": (x + width, y),
         "sw": (x, y + height),
         "se": (x + width, y + height),
+        # The edge midpoints, which is what a per-axis scale is grabbed by.
+        "n": (x + width / 2.0, y),
+        "s": (x + width / 2.0, y + height),
+        "w": (x, y + height / 2.0),
+        "e": (x + width, y + height / 2.0),
     }
     out = {k: inker_state.to_screen(view, origin, *p) for k, p in corners.items()}
     # The arm points away from the box's top edge *in the image*, carried on to
@@ -502,11 +532,23 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         grab = min(handles, key=lambda k: math.dist(handles[k], (mouse.x, mouse.y)))
         near = math.dist(handles[grab], (mouse.x, mouse.y)) <= HANDLE * 2.5
         state.drag_anchor = point
+        state.transform_grab = grab
+        # Both axes' reference distances are in *image* space rather than
+        # screen space, and that is what makes a per-axis scale correct under a
+        # turned page: the view's rotation swaps which screen axis an image
+        # axis lands on, so measuring "how far across" on screen would scale
+        # the wrong one at 90 degrees. The screen distance stays beside them
+        # for the two gestures that are genuinely about the screen -- the
+        # uniform ratio and the rotate bearing.
+        cx, cy = buf.centre
         state.transform_ref = (
             buf.scale[0],
+            buf.scale[1],
             buf.angle,
             max(1.0, math.dist(centre, (mouse.x, mouse.y))),
             math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0])),
+            max(1e-3, abs(point[0] - cx)),
+            max(1e-3, abs(point[1] - cy)),
         )
         if near and grab == "rotate":
             state.drag_kind = "rotate"
@@ -526,11 +568,22 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         state.transform_ref = None
         return
 
-    scale0, angle0, dist0, bearing0 = state.transform_ref
+    scale0x, scale0y, angle0, dist0, bearing0, ref_x, ref_y = state.transform_ref
     if state.drag_kind == "scale":
-        ratio = math.dist(centre, (mouse.x, mouse.y)) / dist0
+        cx, cy = buf.centre
+        axes = HANDLE_AXES.get(state.transform_grab, "xy")
+        fx = abs(point[0] - cx) / ref_x if "x" in axes else 1.0
+        fy = abs(point[1] - cy) / ref_y if "y" in axes else 1.0
+        if imgui.get_io().key_shift:
+            # Shift constrains to uniform. For a corner that is the screen
+            # distance ratio (the same number the drag used to produce before
+            # there were two axes); for an edge handle there is only one live
+            # ratio, so it is simply applied to both.
+            fx = fy = (
+                math.dist(centre, (mouse.x, mouse.y)) / dist0 if axes == "xy" else fx * fy
+            )
         doc.transform_floating(
-            scale=(scale0 * ratio, scale0 * ratio), resample=state.resample
+            scale=(scale0x * fx, scale0y * fy), resample=state.resample
         )
     elif state.drag_kind == "rotate":
         bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))

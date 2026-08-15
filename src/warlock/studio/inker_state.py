@@ -535,8 +535,16 @@ class InkerState:
     # the tool list beside brush and fill.
     transforming: bool = False
     # What the handle was grabbed at, so a drag is measured against the press
-    # rather than against the previous frame.
-    transform_ref: tuple[float, float, float, float] | None = None
+    # rather than against the previous frame. Widened past four entries when
+    # the scale became per-axis; ``inker_canvas._transform_input`` names them.
+    transform_ref: tuple[float, ...] | None = None
+    # Which grab point the drag started on -- ``inker_canvas.HANDLE_AXES`` maps
+    # it to the axes it scales. A name rather than a second ``drag_kind``
+    # spelling, because every one of them is the same *kind* of drag.
+    transform_grab: str = ""
+    # Whether the numeric Scale X and Scale Y fields move together. A view
+    # preference, remembered across documents like every other tool setting.
+    transform_link: bool = True
 
     # -- per-tool options ---------------------------------------------------
     #
@@ -647,6 +655,7 @@ class InkerState:
         self.last_point = None
         self.lasso = []
         self.transform_ref = None
+        self.transform_grab = ""
 
     # -- colours ------------------------------------------------------------
 

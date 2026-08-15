@@ -13,6 +13,8 @@ is confined to these few lines.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from . import composite
@@ -131,6 +133,69 @@ def rotate(
             float(degrees),
             how,
             expand=expand,
+            fillcolor=0 if im.mode == "L" else (0, 0, 0, 0),
+        ),
+        straight=resample == "nearest",
+    )
+
+
+#: How far a shear may be pushed, per axis, in degrees. The limit is not
+#: cosmetic: a shear matrix is ``[[1, tan sx], [tan sy, 1]]`` and its
+#: determinant is ``1 - tan(sx)tan(sy)``, so the pair (45, 45) is singular --
+#: the plane collapses onto a line and there is no inverse to sample through.
+#: 60 degrees is well clear of that on both axes (``tan 60`` squared is 3, so
+#: the determinant is -2) and is already further than anybody italicises a
+#: sprite.
+SHEAR_MAX = 60.0
+
+
+def shear(
+    pixels: np.ndarray, degrees: tuple[float, float], *, resample: str = "smooth"
+) -> np.ndarray:
+    """Slant a plane: ``x' = x + tan(sx) y``, ``y' = tan(sy) x + y``.
+
+    Degrees rather than the tangents themselves, because that is what a user
+    means by "italic 15 degrees" and what the numeric field shows. The output
+    grows to hold the slanted rectangle -- a shear of a canvas-sized plane
+    would otherwise lose exactly the corners the shear created.
+
+    Pillow's ``AFFINE`` takes the *inverse* map (it walks the destination and
+    asks where each pixel came from), so the matrix below is inverted here
+    rather than at the call site: writing the forward matrix and handing it
+    over unchanged shears the picture the other way, which is a bug that looks
+    like a sign error in the UI.
+
+    It goes through ``_resample`` like every other filtered path here, so it
+    premultiplies and unpremultiplies around the interpolation -- a bilinear
+    mix with a fully transparent pixel drags that pixel's colour into the edge.
+    """
+    from PIL import Image
+
+    sx = max(-SHEAR_MAX, min(float(degrees[0]), SHEAR_MAX))
+    sy = max(-SHEAR_MAX, min(float(degrees[1]), SHEAR_MAX))
+    kx, ky = math.tan(math.radians(sx)), math.tan(math.radians(sy))
+    det = 1.0 - kx * ky
+    height, width = pixels.shape[:2]
+    if abs(det) < 1e-6 or (abs(kx) < 1e-9 and abs(ky) < 1e-9):
+        return pixels.copy()
+
+    xs = [x + kx * y for x, y in ((0, 0), (width, 0), (0, height), (width, height))]
+    ys = [ky * x + y for x, y in ((0, 0), (width, 0), (0, height), (width, height))]
+    min_x, min_y = min(xs), min(ys)
+    new_w = max(1, int(round(max(xs) - min_x)))
+    new_h = max(1, int(round(max(ys) - min_y)))
+
+    a, b = 1.0 / det, -kx / det
+    d, e = -ky / det, 1.0 / det
+    coeffs = (a, b, a * min_x + b * min_y, d, e, d * min_x + e * min_y)
+    how = _filter(resample, Image.BICUBIC)
+    return _resample(
+        pixels,
+        lambda im: im.transform(
+            (new_w, new_h),
+            Image.AFFINE,
+            coeffs,
+            how,
             fillcolor=0 if im.mode == "L" else (0, 0, 0, 0),
         ),
         straight=resample == "nearest",

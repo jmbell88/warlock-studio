@@ -401,11 +401,14 @@ class SelectionOps:
         *,
         angle: float | None = None,
         scale: tuple[float, float] | None = None,
+        shear: tuple[float, float] | None = None,
         resample: str = "smooth",
     ) -> bool:
         if self.floating is None:
             return False
-        self.floating.transform(angle=angle, scale=scale, resample=resample)
+        self.floating.transform(
+            angle=angle, scale=scale, shear=shear, resample=resample
+        )
         self.rev += 1
         return True
 
