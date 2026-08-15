@@ -66,6 +66,8 @@ from .document import (
     TRANSPARENT,
     Document,
     catmull_rom,
+    curve_points,
+    curve_spans,
     matte_for,
     normalise_rect,
 )
@@ -126,4 +128,6 @@ __all__ = [
     "write_ora",
     "PATH_SHAPES",
     "catmull_rom",
+    "curve_points",
+    "curve_spans",
 ]

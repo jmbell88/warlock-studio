@@ -86,7 +86,7 @@ def _lerp(
     return (a[0] * u + b[0] * v, a[1] * u + b[1] * v)
 
 
-def _curve_point(p0, p1, p2, p3, u: float) -> tuple[float, float]:
+def _curve_point(p0, p1, p2, p3, knots, u: float) -> tuple[float, float]:
     """One point of the Catmull-Rom segment from ``p1`` to ``p2``.
 
     Barry-Goldman's pyramid rather than the matrix form, because it takes the
@@ -94,11 +94,13 @@ def _curve_point(p0, p1, p2, p3, u: float) -> tuple[float, float]:
     parameterisation is. At ``u == 0`` every lerp collapses onto ``p1`` and at
     ``u == 1`` onto ``p2``, which is the property the tool is sold on: the curve
     passes through **every point the user clicked**, not near them.
+
+    ``knots`` arrives from :func:`_curve_span` rather than being derived here,
+    which is the whole reason it is a parameter: the four knot values are a
+    property of the *segment*, so computing them per sample was three square
+    roots per point -- 192 of them across a 64-sample segment where three do.
     """
-    t0 = 0.0
-    t1 = t0 + _knot(p0, p1)
-    t2 = t1 + _knot(p1, p2)
-    t3 = t2 + _knot(p2, p3)
+    t0, t1, t2, t3 = knots
     t = t1 + (t2 - t1) * u
     a1 = _lerp(p0, p1, t0, t1, t)
     a2 = _lerp(p1, p2, t1, t2, t)
@@ -106,6 +108,22 @@ def _curve_point(p0, p1, p2, p3, u: float) -> tuple[float, float]:
     b1 = _lerp(a1, a2, t0, t2, t)
     b2 = _lerp(a2, a3, t1, t3, t)
     return _lerp(b1, b2, t1, t2, t)
+
+
+def _curve_span(p0, p1, p2, p3, step: float, samples: int) -> list[tuple[float, float]]:
+    """The samples of one segment, from just after ``p1`` through ``p2``.
+
+    The knots are computed once here and handed down. The sample count is the
+    chord's length in ``step``-sized pieces, floored at two so even a tiny
+    segment bends, and capped so one segment cannot cost thousands of points.
+    """
+    t0 = 0.0
+    t1 = t0 + _knot(p0, p1)
+    t2 = t1 + _knot(p1, p2)
+    t3 = t2 + _knot(p2, p3)
+    knots = (t0, t1, t2, t3)
+    count = max(2, min(samples, math.ceil(math.dist(p1, p2) / max(step, 1e-6))))
+    return [_curve_point(p0, p1, p2, p3, knots, s / count) for s in range(1, count + 1)]
 
 
 def _mirrored(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
@@ -117,6 +135,51 @@ def _mirrored(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, fl
     stroke starts off towards the second point rather than curling away from it.
     """
     return (2.0 * b[0] - a[0], 2.0 * b[1] - a[1])
+
+
+def curve_points(points: Any) -> list[tuple[float, float]]:
+    """The control points a curve actually has: floats, duplicates collapsed.
+
+    Its own function because it decides *how many segments there are*, and a
+    caller splitting a curve by segment index has to be counting the same
+    points :func:`curve_spans` counted. Consecutive duplicates go because a
+    double-click's second press lands on the first and a zero-length knot
+    interval is a division by zero.
+    """
+    pts: list[tuple[float, float]] = []
+    for x, y in points:
+        p = (float(x), float(y))
+        if not pts or p != pts[-1]:
+            pts.append(p)
+    return pts
+
+
+def curve_spans(
+    points: Any, *, step: float = CURVE_STEP, samples: int = CURVE_MAX_SAMPLES
+) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]]]:
+    """``(control points, one sample list per segment between them)``.
+
+    :func:`catmull_rom` is this concatenated, and it is split out because a
+    *segment* is the unit the preview can cache by: segment ``j`` is a function
+    of the four control points ``j-1 .. j+2`` and of nothing else, so appending
+    a point to the end of a path leaves every earlier segment's samples
+    untouched -- which is what lets ``inker_canvas`` redraw a fifty-vertex curve
+    without resampling it (see ``_curve_path``).
+
+    The control points come back **collapsed** by :func:`curve_points` rather
+    than as they went in, because that collapse decides how many segments there
+    are. Fewer than three of them make no segments at all: two points are a
+    straight line and one is a dot.
+    """
+    pts = curve_points(points)
+    if len(pts) < 3:
+        return pts, []
+    ext = [_mirrored(pts[1], pts[0]), *pts, _mirrored(pts[-2], pts[-1])]
+    spans = [
+        _curve_span(*ext[index : index + 4], step, samples)
+        for index in range(len(pts) - 1)
+    ]
+    return pts, spans
 
 
 def catmull_rom(
@@ -136,19 +199,12 @@ def catmull_rom(
     are collapsed first, because a double-click's second press lands on the
     first and a zero-length knot interval is a division by zero.
     """
-    pts: list[tuple[float, float]] = []
-    for x, y in points:
-        p = (float(x), float(y))
-        if not pts or p != pts[-1]:
-            pts.append(p)
-    if len(pts) < 3:
+    pts, spans = curve_spans(points, step=step, samples=samples)
+    if not spans:
         return pts
-    ext = [_mirrored(pts[1], pts[0]), *pts, _mirrored(pts[-2], pts[-1])]
     out = [pts[0]]
-    for index in range(len(pts) - 1):
-        p0, p1, p2, p3 = ext[index : index + 4]
-        count = max(2, min(samples, math.ceil(math.dist(p1, p2) / max(step, 1e-6))))
-        out.extend(_curve_point(p0, p1, p2, p3, s / count) for s in range(1, count + 1))
+    for span in spans:
+        out.extend(span)
     return out
 
 

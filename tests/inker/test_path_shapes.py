@@ -155,6 +155,48 @@ def test_the_sample_spacing_is_the_declared_step():
     assert max(gaps) <= _doc_paint.CURVE_STEP + 1e-9
 
 
+def test_the_spans_are_the_curve_cut_at_its_control_points():
+    """``curve_spans`` is what makes the preview's memo possible, so the two
+    must be one arithmetic rather than two: concatenating the spans *is*
+    ``catmull_rom``, bit for bit."""
+    pts, spans = _doc_paint.curve_spans(BEND)
+    assert pts == [(float(x), float(y)) for x, y in BEND]
+    assert len(spans) == len(pts) - 1
+    flat = [pts[0]]
+    for span in spans:
+        flat.extend(span)
+    assert flat == _doc_paint.catmull_rom(BEND)
+    # Each span ends on the control point it runs to -- the property a caller
+    # splitting the curve by segment index relies on.
+    for index, span in enumerate(spans):
+        assert math.dist(span[-1], pts[index + 1]) < 1e-9
+
+
+def test_a_segment_s_knots_are_computed_once_rather_than_once_per_sample(monkeypatch):
+    """The cost fix, asserted as the contract rather than as a timing: the knot
+    vector is a property of the *segment*, so ``_curve_point`` is handed it.
+    Three square roots per segment, not three per sample -- which was 192 of
+    them across one 64-sample segment."""
+    calls: list[tuple] = []
+    real = _doc_paint._knot
+    monkeypatch.setattr(
+        _doc_paint, "_knot", lambda a, b: (calls.append((a, b)), real(a, b))[1]
+    )
+    _pts, spans = _doc_paint.curve_spans([(0.0, 0.0), (60.0, 40.0), (120.0, 0.0)])
+    assert len(calls) == 3 * len(spans)
+    assert sum(len(span) for span in spans) > 10 * len(spans)  # far more samples
+
+
+def test_the_collapse_is_the_one_function_both_callers_count_with():
+    """A caller splitting a curve by segment index has to be counting the same
+    control points ``curve_spans`` counted."""
+    assert _doc_paint.curve_points([(1, 1), (1, 1), (5, 9)]) == [(1.0, 1.0), (5.0, 9.0)]
+    assert _doc_paint.curve_points([]) == []
+    raw = [(1, 1), (1, 1), (5, 9), (2, 7)]
+    pts, _spans = _doc_paint.curve_spans(raw)
+    assert pts == _doc_paint.curve_points(raw)
+
+
 # --- the engine: shape_path --------------------------------------------------
 
 
@@ -697,3 +739,91 @@ def test_the_curve_preview_is_the_curve_rather_than_its_chords(overlay):
 def test_nothing_is_drawn_with_no_path_open(overlay):
     lines = _preview("curve", [])
     assert lines.lines == [] and lines.circles == []
+
+
+# --- the preview's memo -------------------------------------------------------
+#
+# The overlay runs on the pygame frame loop, which never blocks. Resampling a
+# fifty-vertex curve from scratch every frame is milliseconds of arithmetic for
+# a picture that changed in two segments, so the settled segments are memoised
+# -- and the whole of what that memo has to be worth is that nobody can tell.
+
+
+@pytest.fixture(autouse=True)
+def _cold_cache():
+    """Every test in this file starts with the memo empty, and leaves it so."""
+    inker_canvas._curve_settled = None
+    yield
+    inker_canvas._curve_settled = None
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 4, 5, 9, 20])
+def test_the_memoised_path_is_the_full_resample_bit_for_bit(count: int):
+    """The claim the memo lives or dies by, at every length: identical, not
+    close. The same control points in the same order through the same
+    arithmetic can only produce the same floats."""
+    points = [(4.0 * i, 6.0 + 5.0 * (i % 3)) for i in range(count)]
+    cursor = (4.0 * count + 3.0, 9.0)
+    assert inker_canvas._curve_path(points, cursor) == _doc_paint.catmull_rom(
+        [*points, cursor]
+    )
+    # And again with the memo warm, which is the case that actually skips work.
+    assert inker_canvas._curve_path(points, cursor) == _doc_paint.catmull_rom(
+        [*points, cursor]
+    )
+
+
+def test_a_moving_cursor_never_disturbs_the_settled_prefix():
+    """The cursor reaches exactly the last two segments -- the one that ends at
+    it and the one before, which has it as its far neighbour."""
+    points = [(4.0, 6.0), (14.0, 22.0), (24.0, 4.0), (30.0, 20.0), (40.0, 8.0)]
+    settled = len(_doc_paint.catmull_rom(points[:-2]))
+    first = inker_canvas._curve_path(points, (50.0, 20.0))
+    for cursor in ((51.0, 4.0), (12.0, 30.0), (44.0, 9.0)):
+        moved = inker_canvas._curve_path(points, cursor)
+        assert moved[:settled] == first[:settled]
+        assert moved == _doc_paint.catmull_rom([*points, cursor])
+
+
+def test_a_warm_memo_resamples_only_the_tail(monkeypatch):
+    """What the memo is *for*, counted rather than timed: with the vertices
+    unchanged, no frame resamples more than the four control points of the two
+    segments the cursor can move."""
+    points = [(3.0 * i, 6.0 + 7.0 * (i % 4)) for i in range(30)]
+    inker_canvas._curve_path(points, (95.0, 10.0))  # warms it
+    sizes: list[int] = []
+    real = inker_canvas.curve_spans
+    monkeypatch.setattr(
+        inker_canvas,
+        "curve_spans",
+        lambda pts, **kw: (sizes.append(len(list(pts))), real(pts, **kw))[1],
+    )
+    for step in range(10):
+        inker_canvas._curve_path(points, (95.0 + step, 10.0))
+    assert sizes == [4] * 10
+
+
+def test_adding_a_vertex_re_settles_the_prefix():
+    """A click is a new key, so the memo misses once and is right afterwards --
+    the only invalidation this needs, because a stale entry cannot be read."""
+    points = [(4.0, 6.0), (14.0, 22.0), (24.0, 4.0)]
+    cursor = (34.0, 18.0)
+    inker_canvas._curve_path(points, cursor)
+    grown = [*points, (34.0, 18.0)]
+    assert inker_canvas._curve_path(grown, (44.0, 6.0)) == _doc_paint.catmull_rom(
+        [*grown, (44.0, 6.0)]
+    )
+    # And back down again: undoing a click must not read the longer path's memo.
+    assert inker_canvas._curve_path(points, cursor) == _doc_paint.catmull_rom(
+        [*points, cursor]
+    )
+
+
+def test_a_repeated_vertex_or_a_cursor_on_the_last_point_still_agrees():
+    """The collapse happens before the split, so a double-clicked vertex cannot
+    put the memo's segment count out of step with the rasteriser's."""
+    points = [(4.0, 6.0), (14.0, 22.0), (14.0, 22.0), (24.0, 4.0), (30.0, 20.0)]
+    for cursor in ((30.0, 20.0), (40.0, 12.0), (4.0, 6.0)):
+        assert inker_canvas._curve_path(points, cursor) == _doc_paint.catmull_rom(
+            [*points, cursor]
+        )

@@ -26,7 +26,7 @@ from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
 from ..inker import textstamp
-from ..inker.document import catmull_rom
+from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
 from ..inker.slices import SliceKey, slice_props
 from ..inker.tiling import axes_of, canonical, tile_offset
@@ -1077,6 +1077,57 @@ def _gesture_press(ctx: Any, state: Any, tab: Any, point) -> None:
     state.drag_kind = ""
 
 
+#: The settled part of the previewed curve: ``(vertices, samples)``, or None.
+#:
+#: The frame loop never blocks, and this overlay runs on it: a fifty-vertex
+#: curve resampled from scratch every frame is milliseconds of pure arithmetic
+#: per frame for a picture that changed in two segments. Module-level rather
+#: than per-tab state because it is a *memo* of a pure function keyed on its own
+#: argument -- a stale entry cannot be read, only missed, so nothing has to
+#: invalidate it when the tab, the tool or the document changes.
+_curve_settled: tuple[tuple[tuple[float, float], ...], list[tuple[float, float]]] | None
+_curve_settled = None
+
+
+def _curve_path(points, cursor) -> list[tuple[float, float]]:
+    """The previewed curve through ``points`` and the cursor, resampling only
+    what the cursor can move.
+
+    A Catmull-Rom segment is a function of four consecutive control points, so
+    the provisional cursor point reaches exactly the last two segments -- the
+    one that ends at it and the one before, which has it as its far neighbour.
+    Everything earlier is settled, and settled is what is memoised.
+
+    The result is **identical** to ``catmull_rom([*points, cursor])``, sample
+    for sample and bit for bit, which it has to be: the same four control points
+    in the same order through the same arithmetic, and the tail is recomputed
+    from a four-point slice whose middle two segments have the same neighbours
+    they do in the whole path. That equality is the test.
+    """
+    global _curve_settled
+
+    pts = curve_points(points)  # collapsed exactly as ``catmull_rom`` does
+    if len(pts) < 3:
+        # One or two control points make no settled segment to keep; the whole
+        # path is at most the two segments this would recompute anyway.
+        return catmull_rom([*pts, cursor])
+    key = tuple(pts)
+    if _curve_settled is None or _curve_settled[0] != key:
+        _, spans = curve_spans(pts)
+        settled = [pts[0]]
+        # Segments 0 .. len(pts) - 3, which end at the second-to-last vertex.
+        for span in spans[: len(pts) - 2]:
+            settled.extend(span)
+        _curve_settled = (key, settled)
+    out = list(_curve_settled[1])
+    # The last three vertices plus the cursor: its middle two segments have
+    # exactly the neighbours they have in the whole path, so their samples are
+    # the whole path's. The first one is the settled tail already in ``out``.
+    for span in curve_spans([*pts[-3:], cursor])[1][1:]:
+        out.extend(span)
+    return out
+
+
 def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     """The open path, its rubber band, and where the closing click goes.
 
@@ -1086,13 +1137,14 @@ def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     which is the rule ``_preview``'s shape branch already states: a band drawn
     somewhere the next vertex will not go is worse than no band at all.
 
-    The curve is previewed **segment by segment through the same
-    :func:`catmull_rom` the commit rasterises**, rather than as the straight
-    chords between its points: a spline preview that shows a polygon is a
-    preview of a different tool, and one that samples the curve its own way is
-    a promise the rasteriser has not made. The cursor rides along as a
-    provisional last point, so what is on screen is the curve *if you click
-    here* -- exactly what the polygon's rubber-band edge already means.
+    The curve is previewed **segment by segment through the same arithmetic the
+    commit rasterises** (``_curve_path``, which is ``catmull_rom`` with the
+    settled segments memoised), rather than as the straight chords between its
+    points: a spline preview that shows a polygon is a preview of a different
+    tool, and one that samples the curve its own way is a promise the rasteriser
+    has not made. The cursor rides along as a provisional last point, so what is
+    on screen is the curve *if you click here* -- exactly what the polygon's
+    rubber-band edge already means.
     """
     points = state.gesture_pts
     if not points:
@@ -1106,7 +1158,7 @@ def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     if state.tool == "curve":
         curve = [
             inker_state.to_screen(view, origin, x, y)
-            for x, y in catmull_rom([*points, cursor])
+            for x, y in _curve_path(points, cursor)
         ]
         for a, b in zip(curve, curve[1:], strict=False):
             draw_list.add_line(a, b, colour)
