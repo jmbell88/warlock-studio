@@ -60,10 +60,14 @@ from .dither import METHODS as DITHER_METHODS
 from .dither import ORDERED as DITHER_ORDERED
 from .document import (
     OPAQUE_WHITE,
+    PATH_SHAPES,
     RGBA,
     SHAPES,
     TRANSPARENT,
     Document,
+    catmull_rom,
+    curve_points,
+    curve_spans,
     matte_for,
     normalise_rect,
 )
@@ -122,4 +126,8 @@ __all__ = [
     "read_ora",
     "shade_ramp",
     "write_ora",
+    "PATH_SHAPES",
+    "catmull_rom",
+    "curve_points",
+    "curve_spans",
 ]
