@@ -38,7 +38,7 @@ from .animation import (
 )
 from .layers import Layer, LayerStack
 
-__all__ = ["document_from_atlas", "walk_tags"]
+__all__ = ["document_from_atlas", "document_from_grid", "grid_rects", "walk_tags"]
 
 
 def walk_tags() -> list[Tag]:
@@ -84,9 +84,6 @@ def document_from_atlas(
     nothing. A draft on disk is not this document's file -- it is where this
     document came from.
     """
-    from .document import Document, matte_for
-    from .undo import UNDO_BYTES, UndoStack
-
     layout = DirectionalLayout.of(kind)
     if layout is None:
         raise ValueError(f"{kind!r} is not a sprite sheet layout this build knows")
@@ -96,8 +93,39 @@ def document_from_atlas(
             f"sidecar has {len(cells)}"
         )
 
+    return _document_from_rects(
+        atlas_rgba,
+        [_cell_rect(cell) for cell in cells],
+        # A turnaround is four still views, not a cycle: tagging it would put
+        # four one-frame loops in the timeline that mean nothing to play.
+        tags=walk_tags() if layout.kind == "walk" else [],
+        layout=layout,
+        track_name=track_name,
+    )
+
+
+def _document_from_rects(
+    atlas_rgba: np.ndarray,
+    rects: Sequence[tuple[int, int, int, int]],
+    *,
+    tags: Sequence[Tag] = (),
+    layout: DirectionalLayout | None = None,
+    track_name: str = "Sprite",
+) -> Any:
+    """The slicing itself, shared by both doors into this module.
+
+    Extracted rather than duplicated because the *refusals* are the valuable
+    part and they are the same either way: cells of differing sizes and a
+    rectangle off the edge of the atlas mean the same thing whether the
+    rectangles came from a sidecar or from a grid the user typed. What differs
+    between the callers is only how the rectangles were arrived at.
+    """
+    from .document import Document, matte_for
+    from .undo import UNDO_BYTES, UndoStack
+
+    if not rects:
+        raise ValueError("a sprite sheet needs at least one cell")
     height, width = atlas_rgba.shape[:2]
-    rects = [_cell_rect(cell) for cell in cells]
     sizes = {(w, h) for _, _, w, h in rects}
     if len(sizes) != 1:
         raise ValueError("every cell of a sprite sheet is the same size")
@@ -125,9 +153,7 @@ def document_from_atlas(
         tracks=[track],
         frames=frames,
         cels=cel_map,
-        # A turnaround is four still views, not a cycle: tagging it would put
-        # four one-frame loops in the timeline that mean nothing to play.
-        tags=walk_tags() if layout.kind == "walk" else [],
+        tags=list(tags),
         current=0,
         layout=layout,
     )
@@ -143,3 +169,86 @@ def document_from_atlas(
     doc.file_format = "ora"
     doc.path = None
     return doc
+
+
+def grid_rects(
+    size: tuple[int, int],
+    cell: tuple[int, int],
+    offset: tuple[int, int] = (0, 0),
+    padding: tuple[int, int] = (0, 0),
+    count: int | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """Row-major cell rectangles for a plain grid. Pure, so the popup can count.
+
+    **The last column and the last row carry no trailing padding**, and that
+    off-by-one is the whole of what makes this worth a function: a 4-across
+    sheet of 32px cells with 2px between them is 4*32 + 3*2 = 134 wide, not
+    4*34 = 136 -- so dividing by ``cell + padding`` finds three columns and
+    silently drops the fourth. The gaps are counted separately below.
+
+    Every refusal names what is wrong with the numbers rather than returning a
+    short list: a grid that produced two frames from a sixteen-frame sheet is a
+    document the user edits for ten minutes before noticing.
+    """
+    width, height = int(size[0]), int(size[1])
+    cell_w, cell_h = int(cell[0]), int(cell[1])
+    off_x, off_y = int(offset[0]), int(offset[1])
+    pad_x, pad_y = int(padding[0]), int(padding[1])
+    if cell_w < 1 or cell_h < 1:
+        raise ValueError("a cell has a positive size")
+    if off_x < 0 or off_y < 0:
+        raise ValueError("an offset is zero or more pixels in from the top left")
+    if pad_x < 0 or pad_y < 0:
+        raise ValueError("padding is zero or more pixels between cells")
+    # ``+ pad`` before the divide is the trailing-gap correction: it lends the
+    # last cell the padding it does not have so the division can assume every
+    # cell carries one.
+    columns = (width - off_x + pad_x) // (cell_w + pad_x)
+    rows = (height - off_y + pad_y) // (cell_h + pad_y)
+    if columns < 1 or rows < 1:
+        raise ValueError(
+            f"a {cell_w}x{cell_h} cell does not fit in the {width}x{height} image "
+            f"at that offset"
+        )
+    capacity = int(columns * rows)
+    total = capacity if count is None else int(count)
+    if total < 1:
+        raise ValueError("a sheet needs at least one frame")
+    if total > capacity:
+        raise ValueError(
+            f"that grid holds {capacity} cells and {total} were asked for"
+        )
+    return [
+        (
+            off_x + (index % columns) * (cell_w + pad_x),
+            off_y + (index // columns) * (cell_h + pad_y),
+            cell_w,
+            cell_h,
+        )
+        for index in range(total)
+    ]
+
+
+def document_from_grid(
+    atlas_rgba: np.ndarray,
+    cell: tuple[int, int],
+    offset: tuple[int, int] = (0, 0),
+    padding: tuple[int, int] = (0, 0),
+    count: int | None = None,
+    *,
+    track_name: str = "Sprite",
+) -> Any:
+    """A plain image sliced on a typed grid, row-major, as an animation.
+
+    ``document_from_atlas``'s sibling for a sheet that arrived from anywhere
+    else -- a download, another tool, a scan. The layout is **None** and that
+    is deliberate: a ``DirectionalLayout`` is a claim that these cells are four
+    named directions in a fixed grid, which is something the generator knows
+    and a user typing a cell size does not. Without it the document is an
+    ordinary animation, which is exactly what an arbitrary sheet is.
+    """
+    height, width = atlas_rgba.shape[:2]
+    rects = grid_rects(
+        (int(width), int(height)), cell, offset, padding, count
+    )
+    return _document_from_rects(atlas_rgba, rects, track_name=track_name)

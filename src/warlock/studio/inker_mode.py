@@ -232,6 +232,63 @@ def open_pixels(ctx: Any, pixels: Any, *, title: str = "Untitled") -> None:
     ctx.submit(f"inker-open:pixels:{title}", run)
 
 
+def ask_import_sheet(ctx: Any) -> None:
+    """Pick a sprite sheet off disk. The grid is asked for afterwards.
+
+    Two steps rather than one, and in this order deliberately: the popup that
+    asks for the cell size shows how many frames those numbers actually
+    produce, which it can only do once the image's size is known. Asking first
+    and opening second would mean typing a grid blind and finding out by
+    looking at the result.
+    """
+    ensure(ctx)
+
+    def run() -> dict[str, Any] | None:
+        import numpy as np
+        from PIL import Image
+
+        path = dialogs.open_file("Import sprite sheet", OPEN_FILTER)
+        if path is None:
+            return None
+        with Image.open(path) as opened:
+            opened.load()
+            atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        return {"atlas": atlas, "title": Path(path).stem}
+
+    ctx.submit("inker-sheetin", run)
+
+
+def import_sheet(ctx: Any) -> None:
+    """Slice the pending atlas on the typed grid and open it. Frame thread.
+
+    Cheap enough to stay here: it is a handful of array copies, and every
+    refusal is a message the user has to see beside the fields that caused it
+    rather than a toast arriving from a task some frames later.
+    """
+    from .inker import sheetin
+
+    state = ensure(ctx)
+    pending = state.sheet_import
+    if pending is None:
+        return
+    atlas, title = pending
+    try:
+        doc = sheetin.document_from_grid(
+            atlas,
+            state.sheet_cell,
+            state.sheet_offset,
+            state.sheet_padding,
+            state.sheet_count or None,
+        )
+    except ValueError as exc:
+        ctx.toast(f"Cannot import: {exc}.", "warn")
+        return
+    state.sheet_import = None
+    state.sheet_import_open = False
+    _adopt(ctx, state, doc, path=None, title=title, file_format="ora")
+    set_mode(ctx.state, "inker")
+
+
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
     """Open one candidate of a sprite draft as an editable animation.
 
@@ -449,6 +506,8 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     # export would otherwise be missing pixels the user is looking at.
     doc.commit_floating()
     suggested = tab.path.stem if tab.path else "untitled"
+    state = ctx.state.inker
+    scale = max(1, int(getattr(state, "export_scale", 1) or 1))
 
     def run() -> dict[str, Any] | None:
         dest = dialogs.save_file("Export flattened PNG", f"{suggested}.png", PNG_FILTER)
@@ -456,7 +515,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        dest.write_bytes(doc.png_bytes())
+        dest.write_bytes(doc.png_bytes(scale=scale))
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
@@ -504,6 +563,17 @@ def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
     which one.
     """
     _begin_export(ctx, tab, "gif")
+
+
+def export_pngs(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Every frame as its own numbered PNG, through the same stepper.
+
+    The plainest export there is, and the one an engine with its own importer
+    asks for: no atlas to slice, no sidecar to parse. The spread is untouched --
+    the frames are read exactly as the sheet and the GIF read them, and only
+    the write differs.
+    """
+    _begin_export(ctx, tab, "pngs")
 
 
 @dataclass
@@ -651,9 +721,15 @@ def pump_export(ctx: Any) -> None:
 def _submit_export(ctx: Any, export: _Export) -> None:
     """The work list is read; hand it to a task. Frame thread."""
     from .inker import gifout, sheetout
+    from .inker.transform import upscale
 
     tab, frames, suggested = export.tab, export.frames, export.suggested
     doc = tab.doc
+    state = ctx.state.inker
+    # Read here, on the frame thread, with the frames: an app-level setting the
+    # user could change while the encode is in flight would otherwise decide
+    # the file's size halfway through writing it.
+    scale = max(1, int(getattr(state, "export_scale", 1) or 1))
     durations, tags, layout = sheetout.timing(doc, export.span)
     if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
         # Refused on the frame thread, before the file dialog: the engine raises
@@ -677,8 +753,18 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
+        # Upscaled *before* ``compose``, so the plan is built on the scaled
+        # frame size and the cells, the trims and the sidecar all describe the
+        # atlas that is actually written. Scaling the finished atlas instead
+        # would leave every rectangle in the sidecar naming the wrong pixels.
+        # ``sheet.py`` stays the sole writer of the format; none of this is new
+        # code in it.
         image, plan, extra = sheetout.compose(
-            frames, durations, tags, layout, name=suggested
+            [upscale(plane, scale) for plane in frames],
+            durations,
+            tags,
+            layout,
+            name=suggested,
         )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -710,17 +796,45 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        gifout.write_gif(dest, frames, durations, loop=export.loop, palette=palette)
+        # Upscaled before the quantiser, not after: a GIF holds palette
+        # indices, so there is no "after" -- magnifying the indexed image would
+        # be magnifying a palette lookup rather than a picture.
+        gifout.write_gif(
+            dest,
+            [upscale(plane, scale) for plane in frames],
+            durations,
+            loop=export.loop,
+            palette=palette,
+        )
         return {"exported": dest}
 
+    def run_pngs() -> dict[str, Any] | None:
+        """One PNG per frame, numbered. The plainest thing an engine can eat.
+
+        Numbered from the chosen filename's stem rather than asking for a
+        directory: every tool that consumes a sequence wants ``name_0000.png``
+        beside its siblings, and a save dialog is the one place a user is
+        already picking both the folder and the name.
+        """
+        from PIL import Image
+
+        dest = dialogs.save_file("Export PNG sequence", f"{suggested}.png", PNG_FILTER)
+        if dest is None:
+            return None
+        stem = dest.stem
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        first = dest
+        for index, plane in enumerate(frames):
+            out = dest.parent / f"{stem}_{index:04d}.png"
+            Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
+            if index == 0:
+                first = out
+        return {"exported": first}
+
+    runners = {"sheet": run_sheet, "gif": run_gif, "pngs": run_pngs}
     # ``start_save`` rather than a bare submit, so a refused key clears the lock
     # this function did not set -- the tab has been locked since the click.
-    _start(
-        ctx,
-        tab,
-        f"inker-export:{tab.uid}",
-        run_sheet if export.kind == "sheet" else run_gif,
-    )
+    _start(ctx, tab, f"inker-export:{tab.uid}", runners.get(export.kind, run_gif))
 
 
 def _submit_write(ctx: Any, tab: InkerDoc, key: str, path: Path, file_format: str) -> None:
@@ -972,6 +1086,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
                     "warn",
                     action="log",
                 )
+        return
+
+    if name == "inker-sheetin":
+        # The picture only. The grid comes from the popup the bridge panel
+        # opens on the next frame, which is why nothing is adopted here.
+        if isinstance(result, dict):
+            state.sheet_import = (result["atlas"], result.get("title") or "Sheet")
+            state.sheet_import_open = False
+            set_mode(ctx.state, "inker")
         return
 
     if name == "inker-recover":

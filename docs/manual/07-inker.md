@@ -371,6 +371,14 @@ Two things are unavailable while a document is animated: **merge down** and **fl
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.
 
+**Import sprite sheet** in the document panel goes the other way: pick any image and give it a cell
+size, an offset, the padding between cells and how many frames to take, and it becomes one frame per
+cell, read row by row. The popup counts the frames your numbers produce as you type them, and says
+what is wrong rather than importing a short sheet — the last column and the last row carry no
+trailing padding, which is the arithmetic that otherwise quietly drops a frame. An imported sheet is
+an ordinary animation with no directions and no tags: a *layout* is something the generator knows
+about its own output, not something a cell size can imply.
+
 A document opened from a generated sprite sheet carries a **directional layout** as well: its frames
 are that sheet's cells in order, four directions with one or four frames each, and a walk sheet
 arrives with a tag per direction so playback loops one direction at a time. The layout is saved with
@@ -434,6 +442,15 @@ cells, because the engine playing it back knows nothing about links. And the cel
 transparency rather than being flattened onto the document's matte, which is what a sheet wants
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
 composited over whatever is behind it in the game.
+
+**Export PNGs** writes one numbered PNG per frame — `name_0000.png`, `name_0001.png` and so on,
+beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine
+with its own importer wants.
+
+The **scale** box on the timeline's second row magnifies every export by a whole number, nearest
+neighbour: each pixel is drawn N times and nothing is resampled, so a 32×32 sprite at 8× is the
+artwork at 256×256 rather than a blurred version of it. A sheet's sidecar is built on the scaled
+size, so its cells and trims describe the file that is actually written.
 
 **Export GIF** writes the same clip as an animated GIF, looping. That one is for showing the
 animation to a person rather than to an engine: it plays anywhere, on its own, with nothing needed

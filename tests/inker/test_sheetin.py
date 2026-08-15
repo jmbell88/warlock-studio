@@ -182,3 +182,117 @@ def test_the_exported_cells_carry_their_direction_and_frame():
         row, col, direction, yaw, frame = layout.cell(index)
         assert (cell.row, cell.column) == (row, col)
         assert (cell.pose_name, cell.yaw, cell.frame) == (direction, float(yaw), frame)
+
+
+# --- a typed grid (C13c) -----------------------------------------------------
+#
+# The other door in: an image from anywhere, sliced on numbers the user typed.
+# The arithmetic is worth its own tests for one reason -- the last column and
+# the last row carry no trailing padding, and every naive division gets that
+# wrong in the direction that silently drops a frame.
+
+
+def test_a_plain_grid_is_row_major_with_no_gaps():
+    rects = sheetin.grid_rects((64, 32), (32, 32))
+    assert rects == [(0, 0, 32, 32), (32, 0, 32, 32)]
+
+
+def test_the_last_column_carries_no_trailing_padding():
+    """4 cells of 32 with 2px between them is 4*32 + 3*2 = 134, not 4*34. A
+    134-wide sheet holds four columns, and dividing by 34 finds three."""
+    rects = sheetin.grid_rects((134, 32), (32, 32), padding=(2, 0))
+    assert len(rects) == 4
+    assert [x for x, _y, _w, _h in rects] == [0, 34, 68, 102]
+
+
+def test_the_last_row_carries_no_trailing_padding_either():
+    rects = sheetin.grid_rects((32, 100), (32, 32), padding=(0, 2))
+    assert len(rects) == 3
+    assert [y for _x, y, _w, _h in rects] == [0, 34, 68]
+
+
+def test_an_offset_shifts_the_whole_grid_and_costs_it_room():
+    rects = sheetin.grid_rects((70, 32), (32, 32), offset=(4, 0))
+    assert len(rects) == 2
+    assert rects[0] == (4, 0, 32, 32)
+
+
+def test_a_count_takes_the_first_n_cells_row_major():
+    rects = sheetin.grid_rects((64, 64), (32, 32), count=3)
+    assert rects == [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 32)]
+
+
+def test_a_count_past_the_grids_capacity_is_refused_by_name():
+    with pytest.raises(ValueError, match="4 cells and 9 were asked for"):
+        sheetin.grid_rects((64, 64), (32, 32), count=9)
+
+
+def test_a_cell_bigger_than_the_image_is_refused_by_name():
+    with pytest.raises(ValueError, match="does not fit"):
+        sheetin.grid_rects((16, 16), (32, 32))
+
+
+def test_a_zero_or_negative_cell_is_refused():
+    with pytest.raises(ValueError, match="positive size"):
+        sheetin.grid_rects((64, 64), (0, 32))
+
+
+def test_negative_offsets_and_padding_are_refused():
+    with pytest.raises(ValueError, match="offset"):
+        sheetin.grid_rects((64, 64), (32, 32), offset=(-1, 0))
+    with pytest.raises(ValueError, match="padding"):
+        sheetin.grid_rects((64, 64), (32, 32), padding=(0, -2))
+
+
+def test_a_count_of_zero_is_refused_rather_than_meaning_all():
+    """The popup spells "all" as None. Zero arriving here is a typed number and
+    a sheet of no frames is not a document."""
+    with pytest.raises(ValueError, match="at least one frame"):
+        sheetin.grid_rects((64, 64), (32, 32), count=0)
+
+
+def _striped(width: int, height: int) -> np.ndarray:
+    """An atlas whose every column is a different red, so a mis-sliced cell is
+    visible as the wrong number rather than as the wrong shape."""
+    out = np.zeros((height, width, 4), dtype=np.uint8)
+    out[..., 3] = 255
+    out[..., 0] = np.arange(width, dtype=np.uint8)[None, :]
+    return out
+
+
+def test_a_grid_document_slices_the_cells_it_says_it_will():
+    atlas = _striped(64, 32)
+    doc = sheetin.document_from_grid(atlas, (32, 32))
+    assert doc.anim is not None
+    assert len(doc.anim.frames) == 2
+    assert doc.size == (32, 32)
+    cels = list(doc.anim.unique_cel_layers())
+    assert np.array_equal(cels[0].pixels, atlas[0:32, 0:32])
+    assert np.array_equal(cels[1].pixels, atlas[0:32, 32:64])
+
+
+def test_a_grid_document_carries_no_directional_layout():
+    """A layout is a claim that these cells are four named directions in a
+    fixed grid -- something the generator knows and a typed cell size does
+    not."""
+    doc = sheetin.document_from_grid(_striped(64, 32), (32, 32))
+    assert doc.anim.layout is None
+    assert doc.anim.tags == []
+
+
+def test_a_grid_document_is_unsaved_but_clean():
+    doc = sheetin.document_from_grid(_striped(64, 32), (32, 32))
+    assert doc.path is None
+    assert doc.file_format == "ora"
+    assert len(doc.history) == 0
+
+
+def test_a_grid_document_copies_rather_than_viewing_the_atlas():
+    """A view would keep the whole atlas alive behind every frame and make two
+    overlapping cells share pixels -- a stroke on one frame appearing on
+    another with no link to explain it."""
+    atlas = _striped(64, 32)
+    doc = sheetin.document_from_grid(atlas, (32, 32))
+    cel = next(doc.anim.unique_cel_layers())
+    cel.pixels[0, 0] = (9, 9, 9, 9)
+    assert not np.array_equal(atlas[0, 0], np.array([9, 9, 9, 9], dtype=np.uint8))

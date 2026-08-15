@@ -591,6 +591,24 @@ class InkerState:
     # Nearest-neighbour multiplier applied to sheet, GIF and PNG exports.
     export_scale: int = 1
 
+    # -- importing a sprite sheet ------------------------------------------
+    #
+    # ``sheet_import`` is ``(atlas array, title)`` once a file has been chosen
+    # and decoded off-thread, and None the rest of the time. The picture is
+    # read *before* the grid is asked for, so the popup can say how many frames
+    # the numbers actually produce -- which is the one thing that stops a
+    # mistyped cell size becoming a document the user edits for ten minutes
+    # before noticing. ``sheet_import_open`` is what notices imgui closing the
+    # popup on a click outside, the ``filter_open`` idiom.
+    sheet_import: Any = None
+    sheet_import_open: bool = False
+    sheet_cell: tuple[int, int] = (32, 32)
+    sheet_offset: tuple[int, int] = (0, 0)
+    sheet_padding: tuple[int, int] = (0, 0)
+    #: 0 means "as many as the grid holds", so a user who never touches the
+    #: field gets the whole sheet rather than one frame.
+    sheet_count: int = 0
+
     # -- per-tool options ---------------------------------------------------
     #
     # Written out one per line rather than looped over TOOL_OPTION_DEFAULTS: a

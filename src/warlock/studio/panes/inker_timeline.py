@@ -46,6 +46,12 @@ THUMB_CELL = 36.0
 GUTTER = 2.0
 TRACK_LABEL_W = 96.0
 
+#: The whole-number magnifications the export combo offers. Whole numbers only,
+#: because the point of the setting is that nothing is resampled -- x1.5 would
+#: have to invent a rule for which source pixel a destination one comes from,
+#: which is exactly what ``transform.upscale`` exists not to do.
+EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x"))
+
 
 def _u32(value: int, alpha: float = 1.0) -> int:
     return imgui.color_convert_float4_to_u32(theme.rgba(value, alpha))
@@ -199,6 +205,25 @@ def _transport(ctx: Any, tab: Any) -> None:
         "Draws each cel's picture in its timeline cell, and grows the cells to"
         " fit. Linked cels share one thumbnail, so a link is visible as the same"
         " drawing in several columns."
+    )
+
+    imgui.same_line()
+    scale = widgets.combo(
+        "##inkerscale", str(int(state.export_scale)), list(EXPORT_SCALES), sp(64)
+    )
+    state.export_scale = max(1, int(scale))
+    widgets.help_marker(
+        "Magnifies every export by a whole number, nearest neighbour -- each"
+        " pixel drawn N times and nothing resampled. The sheet sidecar is built"
+        " on the scaled size, so its cells and trims describe the file that is"
+        " written; sidecars bound for Packwright are not scaled."
+    )
+    imgui.same_line()
+    if widgets.disabled_button("Export PNGs", not tab.busy):
+        inker_mode.export_pngs(ctx, tab)
+    widgets.help_marker(
+        "Writes one numbered PNG per frame beside the name you pick"
+        " -- name_0000.png, name_0001.png and so on."
     )
 
     _onion_controls(state)
@@ -618,6 +643,8 @@ def _range_export_items(ctx: Any, tab: Any, f0: int, f1: int) -> None:
         inker_mode.export_range(ctx, tab, "sheet", (f0, f1))
     if imgui.menu_item_simple("Export range → GIF"):
         inker_mode.export_range(ctx, tab, "gif", (f0, f1))
+    if imgui.menu_item_simple("Export range → PNG sequence"):
+        inker_mode.export_range(ctx, tab, "pngs", (f0, f1))
 
 
 def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:

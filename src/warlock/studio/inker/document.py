@@ -252,14 +252,24 @@ class Document(
     def flatten(self, *, matte: bool = True) -> np.ndarray:
         return cp.flatten_onto(self._composite.copy(), self.matte if matte else None)
 
-    def png_bytes(self) -> bytes:
-        """The flattened document as a PNG. Blocking; callers go off-thread."""
+    def png_bytes(self, *, scale: int = 1) -> bytes:
+        """The flattened document as a PNG. Blocking; callers go off-thread.
+
+        ``scale`` is a whole-number nearest-neighbour magnification, applied
+        after the flatten -- which is the only order that is exact: magnifying
+        each layer first and compositing the results would blend at the
+        magnified resolution and put half-covered pixels along every block
+        edge. The default is 1 and takes the untouched path, so every existing
+        caller writes the bytes it always did.
+        """
         import io
 
         from PIL import Image
 
+        from .transform import upscale
+
         buf = io.BytesIO()
-        Image.fromarray(self.flatten(), "RGBA").save(buf, "PNG")
+        Image.fromarray(upscale(self.flatten(), scale), "RGBA").save(buf, "PNG")
         return buf.getvalue()
 
     # -- the composite cache -----------------------------------------------
