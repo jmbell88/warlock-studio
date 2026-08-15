@@ -620,6 +620,29 @@ it. See [From a single drawing](06-sprite-sheets.md#from-a-single-drawing).
 Moving the playhead is not an edit. It pushes no undo step and does not make the document unsaved —
 looking at another frame is looking, not drawing.
 
+### From an Aseprite file
+
+**Import Aseprite file** opens an `.aseprite` or `.ase` and rebuilds it here: the layers with their
+opacities, blend modes and locks, the layer groups with their nesting, every frame with its own
+duration, the tags with their spans, directions and repeat counts, and the slices with their pivots
+and nine-slice centres. A cel that Aseprite shares between frames arrives shared here too, so
+editing it changes every frame it appears on — the same *linked cel* it was in the file it came
+from. An indexed file brings its palette across and the document opens indexed; a greyscale one is
+converted exactly, since grey is only a colour with its three channels equal.
+
+Reading only, and it shows in one place: the import opens as an **unsaved** document, so the first
+`Ctrl+S` asks where to put it and writes an `.ora`. Nothing this app does can write back over the
+`.aseprite`, which is deliberate — a format read by one program and written by another is how a
+day's work goes missing.
+
+Two kinds of thing do not come across, and they are told apart on purpose. Anything that would
+change what the pixels *mean* is a refusal that names itself and opens nothing: a tilemap layer,
+whose pixels live in a tileset; a colour depth this build cannot read; a cel linked to a frame that
+holds none. Anything cosmetic is a message and the file still opens: colour profiles (this app
+assumes sRGB throughout), user data and timeline colours, a per-cel opacity (opacity is a layer
+property here), a cel's z-index (layer order is stacking order). A reference layer opens hidden,
+which is what exporting from Aseprite would do with it.
+
 ## Slices
 
 The `C` **Slice** tool names a rectangle on the canvas. A slice carries no pixels — it is a note

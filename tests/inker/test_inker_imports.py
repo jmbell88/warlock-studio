@@ -179,6 +179,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         _doc_slices,
         anim_edits,
         animation,
+        asein,
         brush,
         composite,
         dither,

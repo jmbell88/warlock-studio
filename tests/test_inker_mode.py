@@ -967,3 +967,119 @@ def test_an_over_wound_multiple_of_ninety_still_turns_from_where_it_reads():
     assert inker_state.basis(view) == inker_state.basis(_view(90))
     inker_state.rotate_view(view)
     assert view.rotation == 180
+
+
+# --- importing an Aseprite file (Q-d) ----------------------------------------
+
+
+class _ImportCtx:
+    """Enough of Ctx for the import door, running its task inline."""
+
+    def __init__(self) -> None:
+        from warlock.studio.state import AppState
+
+        self.state = AppState()
+        self.settings = _MemorySettings()
+        self.submitted: list[str] = []
+        self.toasts: list[tuple[str, str, str | None]] = []
+        self.result = None
+
+    def submit(self, key, run, *args):
+        self.submitted.append(key)
+        self.result = run(*args)
+        return True
+
+    def toast(self, message, level="info", action=None, action_arg=None) -> None:
+        self.toasts.append((message, level, action))
+
+
+def _ase_bytes() -> bytes:
+    """The smallest Aseprite file: one layer, one frame, one flat cel."""
+    import struct
+
+    def string(text):
+        raw = text.encode("utf-8")
+        return struct.pack("<H", len(raw)) + raw
+
+    def chunk(kind, payload):
+        return struct.pack("<IH", len(payload) + 6, kind) + payload
+
+    layer = chunk(
+        0x2004,
+        struct.pack("<HHHHHHB3s", 3, 0, 0, 0, 0, 0, 255, b"\0\0\0") + string("Art"),
+    )
+    cel = chunk(
+        0x2005,
+        struct.pack("<HhhBHh5s", 0, 0, 0, 255, 0, 0, b"\0" * 5)
+        + struct.pack("<HH", 1, 1)
+        + bytes((1, 2, 3, 255)),
+    )
+    body = layer + cel
+    frame = struct.pack("<IHHHHI", len(body) + 16, 0xF1FA, 2, 100, 0, 0) + body
+    head = struct.pack(
+        "<IHHHHHIHIIB3sHBBhhHH",
+        0, 0xA5E0, 1, 1, 1, 32, 1, 100, 0, 0, 0, b"\0\0\0", 0, 1, 1, 0, 0, 0, 0,
+    ) + b"\0" * 84
+    whole = head + frame
+    return struct.pack("<I", len(whole)) + whole[4:]
+
+
+def test_an_imported_aseprite_document_points_at_no_file(tmp_path):
+    """The whole read-only guarantee, and it is structural rather than a flag:
+    this app reads the format and cannot write it, so a tab pointing at the
+    source would let one Ctrl+S put ORA bytes over somebody's artwork."""
+    from warlock.studio import inker_mode
+
+    path = tmp_path / "hero.aseprite"
+    path.write_bytes(_ase_bytes())
+    result = inker_mode._load_aseprite(path)
+    assert result["path"] is None
+    assert result["format"] == "ora"
+    assert result["title"] == "hero"
+    assert result["doc"].path is None
+
+
+def test_dropping_an_aseprite_file_imports_it_rather_than_refusing_it(tmp_path):
+    """``.aseprite`` is deliberately not in ``OPENABLE`` -- that tuple is what
+    the app can write back -- so the drop route has to know about it or the
+    user is told the app cannot do something it can."""
+    from warlock.studio import inker_mode
+
+    path = tmp_path / "hero.ase"
+    path.write_bytes(_ase_bytes())
+    ctx = _ImportCtx()
+    inker_mode.open_path(ctx, path)
+    assert ctx.submitted and ctx.submitted[0].startswith("inker-open:aseprite")
+    assert ctx.result["doc"].size == (1, 1)
+    assert not ctx.toasts
+
+
+def test_the_aseprite_picker_never_runs_on_the_frame_thread(monkeypatch):
+    from warlock.studio import dialogs, inker_mode
+
+    opened: list[str] = []
+
+    def fake_open(title, filters=None):
+        opened.append(title)
+        return None
+
+    monkeypatch.setattr(dialogs, "open_file", fake_open)
+    ctx = _ImportCtx()
+    inker_mode.ask_import_aseprite(ctx)
+    assert ctx.submitted == ["inker-open:aseprite"]
+    assert opened, "the picker ran, on the task thread the submit stands in for"
+
+
+def test_what_an_import_dropped_is_one_toast_and_every_line_in_the_log():
+    """A toast per warning is a stack of them for one file; silence is worse
+    still, since a drawing that quietly lost something looks merely wrong."""
+    from warlock.studio import inker_mode
+
+    ctx = _ImportCtx()
+    inker_mode._report_import_warnings(ctx, [])
+    assert not ctx.toasts
+    inker_mode._report_import_warnings(ctx, ["a colour profile was dropped", "and more"])
+    assert len(ctx.toasts) == 1
+    message, level, action = ctx.toasts[0]
+    assert "colour profile" in message and "+1 more" in message
+    assert (level, action) == ("warn", "log")
